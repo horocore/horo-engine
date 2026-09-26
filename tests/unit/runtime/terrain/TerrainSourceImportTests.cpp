@@ -208,6 +208,12 @@ namespace Horo::Terrain {
         request.limits.maximumSamples = 3;
         RequireError(NormalizeTerrainSource(request, {}), TerrainSourceErrors::LimitExceeded);
         request = Request(height, TerrainRasterFormat::RawU16);
+        request.limits.maximumSourceBytes = 7;
+        RequireError(NormalizeTerrainSource(request, {}), TerrainSourceErrors::LimitExceeded);
+        request = Request(height, TerrainRasterFormat::RawU16);
+        request.limits.maximumWorkItems = 3;
+        RequireError(NormalizeTerrainSource(request, {}), TerrainSourceErrors::LimitExceeded);
+        request = Request(height, TerrainRasterFormat::RawU16);
         request.coordinates.space = TerrainCoordinateSpace::GeographicDegrees;
         RequireError(NormalizeTerrainSource(request, {}), TerrainSourceErrors::InvalidCoordinates);
         request = Request(height, TerrainRasterFormat::RawU16);

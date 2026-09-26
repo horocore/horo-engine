@@ -155,56 +155,77 @@ namespace Horo::Terrain {
                    (std::to_integer<std::uint32_t>(bytes[offset + 2]) << 8U) | std::to_integer<std::uint32_t>(bytes[offset + 3]);
         }
 
-        [[nodiscard]] Result<DecodedPngRaster> DecodePngGray(const TerrainRasterInput &source, const std::uint64_t maximumDecodedBytes) {
+        /** @brief Verifies the PNG envelope and exact grayscale shape before stb can allocate pixels. */
+        [[nodiscard]] Result<std::uint8_t> ValidatePngHeader(const TerrainRasterInput &source, const std::uint64_t maximumDecodedBytes) {
             static constexpr std::array<std::uint8_t, 8> signature{137, 80, 78, 71, 13, 10, 26, 10};
             if (source.bytes.size() < 33 || source.bytes.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
-                return Failed<DecodedPngRaster>(TerrainSourceErrors::InvalidBytes);
+                return Failed<std::uint8_t>(TerrainSourceErrors::InvalidBytes);
             for (std::size_t i = 0; i < signature.size(); ++i) {
                 if (std::to_integer<std::uint8_t>(source.bytes[i]) != signature[i])
-                    return Failed<DecodedPngRaster>(TerrainSourceErrors::InvalidBytes);
+                    return Failed<std::uint8_t>(TerrainSourceErrors::InvalidBytes);
             }
             if (ReadBig32(source.bytes, 8) != 13 || source.bytes[12] != std::byte{'I'} || source.bytes[13] != std::byte{'H'} ||
                 source.bytes[14] != std::byte{'D'} || source.bytes[15] != std::byte{'R'})
-                return Failed<DecodedPngRaster>(TerrainSourceErrors::InvalidBytes);
+                return Failed<std::uint8_t>(TerrainSourceErrors::InvalidBytes);
             const std::uint32_t width = ReadBig32(source.bytes, 16);
             const std::uint32_t height = ReadBig32(source.bytes, 20);
             const std::uint8_t bitDepth = std::to_integer<std::uint8_t>(source.bytes[24]);
             const std::uint8_t colorType = std::to_integer<std::uint8_t>(source.bytes[25]);
             if (colorType != 0 || (bitDepth != 8 && bitDepth != 16) || source.bytes[26] != std::byte{0} ||
                 source.bytes[27] != std::byte{0} || source.bytes[28] != std::byte{0})
-                return Failed<DecodedPngRaster>(TerrainSourceErrors::UnsupportedFormat,
-                                                "Only non-interlaced grayscale PNG with 8 or 16-bit samples is supported.");
+                return Failed<std::uint8_t>(TerrainSourceErrors::UnsupportedFormat,
+                                            "Only non-interlaced grayscale PNG with 8 or 16-bit samples is supported.");
             if (width != source.width || height != source.height)
-                return Failed<DecodedPngRaster>(TerrainSourceErrors::InvalidDimensions);
+                return Failed<std::uint8_t>(TerrainSourceErrors::InvalidDimensions);
             const std::uint64_t decodedBytes = static_cast<std::uint64_t>(width) * height * (bitDepth / 8U);
             if (decodedBytes > maximumDecodedBytes)
-                return Failed<DecodedPngRaster>(TerrainSourceErrors::LimitExceeded);
+                return Failed<std::uint8_t>(TerrainSourceErrors::LimitExceeded);
+            return Result<std::uint8_t>::Success(bitDepth);
+        }
+
+        /** @brief Copies decoded byte grayscale pixels into operation-owned canonical bytes. */
+        [[nodiscard]] bool DecodePng8(const TerrainRasterInput &source, DecodedPngRaster &result, int &width, int &height,
+                                      int &components) {
             const auto *input = reinterpret_cast<const stbi_uc *>(source.bytes.data());
+            stbi_uc *pixels = stbi_load_from_memory(input, static_cast<int>(source.bytes.size()), &width, &height, &components, 1);
+            if (pixels == nullptr)
+                return false;
+            std::copy_n(reinterpret_cast<const std::byte *>(pixels), result.bytes.size(), result.bytes.begin());
+            stbi_image_free(pixels);
+            return true;
+        }
+
+        /** @brief Converts decoded host-order 16-bit PNG samples to canonical little-endian bytes. */
+        [[nodiscard]] bool DecodePng16(const TerrainRasterInput &source, DecodedPngRaster &result, int &width, int &height,
+                                       int &components) {
+            const auto *input = reinterpret_cast<const stbi_uc *>(source.bytes.data());
+            stbi_us *pixels = stbi_load_16_from_memory(input, static_cast<int>(source.bytes.size()), &width, &height, &components, 1);
+            if (pixels == nullptr)
+                return false;
+            for (std::size_t i = 0; i < result.bytes.size() / 2; ++i) {
+                result.bytes[2 * i] = static_cast<std::byte>(pixels[i] & 0xFFU);
+                result.bytes[2 * i + 1] = static_cast<std::byte>(pixels[i] >> 8U);
+            }
+            stbi_image_free(pixels);
+            return true;
+        }
+
+        /** @brief Decodes only a preflighted grayscale PNG into detached raw scalar bytes. */
+        [[nodiscard]] Result<DecodedPngRaster> DecodePngGray(const TerrainRasterInput &source, const std::uint64_t maximumDecodedBytes) {
+            auto bitDepth = ValidatePngHeader(source, maximumDecodedBytes);
+            if (bitDepth.HasError())
+                return Result<DecodedPngRaster>::Failure(bitDepth.ErrorValue());
+            DecodedPngRaster result;
+            result.format = bitDepth.Value() == 8 ? TerrainRasterFormat::RawU8 : TerrainRasterFormat::RawU16;
+            result.bytes.resize(
+                static_cast<std::size_t>(static_cast<std::uint64_t>(source.width) * source.height * (bitDepth.Value() / 8U)));
             int decodedWidth = 0;
             int decodedHeight = 0;
             int components = 0;
-            DecodedPngRaster result;
-            result.format = bitDepth == 8 ? TerrainRasterFormat::RawU8 : TerrainRasterFormat::RawU16;
-            result.bytes.resize(static_cast<std::size_t>(decodedBytes));
-            if (bitDepth == 8) {
-                stbi_uc *pixels =
-                    stbi_load_from_memory(input, static_cast<int>(source.bytes.size()), &decodedWidth, &decodedHeight, &components, 1);
-                if (pixels == nullptr)
-                    return Failed<DecodedPngRaster>(TerrainSourceErrors::InvalidBytes);
-                std::copy_n(reinterpret_cast<const std::byte *>(pixels), result.bytes.size(), result.bytes.begin());
-                stbi_image_free(pixels);
-            } else {
-                stbi_us *pixels =
-                    stbi_load_16_from_memory(input, static_cast<int>(source.bytes.size()), &decodedWidth, &decodedHeight, &components, 1);
-                if (pixels == nullptr)
-                    return Failed<DecodedPngRaster>(TerrainSourceErrors::InvalidBytes);
-                for (std::uint64_t i = 0; i < static_cast<std::uint64_t>(width) * height; ++i) {
-                    result.bytes[static_cast<std::size_t>(2 * i)] = static_cast<std::byte>(pixels[i] & 0xFFU);
-                    result.bytes[static_cast<std::size_t>(2 * i + 1)] = static_cast<std::byte>(pixels[i] >> 8U);
-                }
-                stbi_image_free(pixels);
-            }
-            if (decodedWidth != static_cast<int>(width) || decodedHeight != static_cast<int>(height) || components != 1)
+            const bool decoded = bitDepth.Value() == 8 ? DecodePng8(source, result, decodedWidth, decodedHeight, components)
+                                                       : DecodePng16(source, result, decodedWidth, decodedHeight, components);
+            if (!decoded || decodedWidth != static_cast<int>(source.width) || decodedHeight != static_cast<int>(source.height) ||
+                components != 1)
                 return Failed<DecodedPngRaster>(TerrainSourceErrors::InvalidBytes);
             return Result<DecodedPngRaster>::Success(std::move(result));
         }
@@ -268,6 +289,247 @@ namespace Horo::Terrain {
             return Result<std::uint32_t>::Success(bytesPerSample);
         }
 
+        struct PreparedRasters final {
+            TerrainRasterInput height;
+            std::vector<TerrainRasterInput> weights;
+            std::optional<TerrainRasterInput> holes;
+            std::vector<std::vector<std::byte>> decodedStorage;
+            std::uint32_t heightBytes{};
+        };
+
+        /** @brief Checks identity, grid, work, source bytes and candidate/decode overlap before allocation. */
+        [[nodiscard]] Result<std::uint64_t> AdmitImport(const TerrainSourceImportRequest &request) {
+            if (!request.dataset.IsValid() || !request.sourceAsset.IsValid() || !request.revision.IsValid() ||
+                !request.capability.IsValid())
+                return Failed<std::uint64_t>(TerrainErrors::IdentityInvalid);
+            const std::uint32_t width = request.height.width;
+            const std::uint32_t height = request.height.height;
+            if (width < 2 || height < 2 || width > TerrainDescriptorHardLimits::SamplesPerAxis ||
+                height > TerrainDescriptorHardLimits::SamplesPerAxis || width > request.limits.maximumSamplesPerAxis ||
+                height > request.limits.maximumSamplesPerAxis)
+                return Failed<std::uint64_t>(TerrainSourceErrors::InvalidDimensions);
+            if (!ValidCoordinates(request.coordinates, width, height))
+                return Failed<std::uint64_t>(TerrainSourceErrors::InvalidCoordinates);
+            const std::uint64_t samples = static_cast<std::uint64_t>(width) * height;
+            const std::uint64_t layers = request.weights.size();
+            const std::uint64_t workPerSample = 1U + layers + (request.holes ? 1U : 0U);
+            if (layers > TerrainDescriptorHardLimits::LayersPerTile || layers > request.limits.maximumLayers ||
+                samples > request.limits.maximumSamples || samples > request.limits.maximumWorkItems / workPerSample ||
+                samples > TerrainDescriptorHardLimits::WorkItems / workPerSample)
+                return Failed<std::uint64_t>(TerrainSourceErrors::LimitExceeded);
+            const std::uint64_t candidateBytes =
+                samples * (sizeof(float) + layers * sizeof(std::uint16_t) + (request.holes ? sizeof(std::uint8_t) : 0U));
+            const std::uint64_t stagingLimit = std::min(request.limits.maximumCanonicalBytes, TerrainDescriptorHardLimits::StagingBytes);
+            if (candidateBytes > stagingLimit)
+                return Failed<std::uint64_t>(TerrainSourceErrors::LimitExceeded);
+            return Result<std::uint64_t>::Success(stagingLimit - candidateBytes);
+        }
+
+        /** @brief Adds borrowed source sizes without overflow and within the captured source-byte ceiling. */
+        [[nodiscard]] Result<void> ValidateSourceBytes(const TerrainSourceImportRequest &request) {
+            const std::uint64_t limit = std::min(request.limits.maximumSourceBytes, TerrainDescriptorHardLimits::StagingBytes);
+            std::uint64_t total = 0;
+            const auto add = [&](const std::size_t bytes) {
+                if (bytes > limit - total)
+                    return false;
+                total += bytes;
+                return true;
+            };
+            if (!add(request.height.bytes.size()))
+                return Failed<void>(TerrainSourceErrors::LimitExceeded);
+            for (const TerrainRasterInput &weight : request.weights) {
+                if (!add(weight.bytes.size()))
+                    return Failed<void>(TerrainSourceErrors::LimitExceeded);
+            }
+            if (request.holes && !add(request.holes->bytes.size()))
+                return Failed<void>(TerrainSourceErrors::LimitExceeded);
+            return Result<void>::Success();
+        }
+
+        /** @brief Gives a contribution only pre-admitted output storage and translates callback failures. */
+        [[nodiscard]] Result<void> PrepareExternalRaster(const TerrainSourceImportRequest &request, TerrainRasterInput &raster,
+                                                         const std::uint64_t samples, const std::uint64_t maximumDecoded,
+                                                         std::vector<std::vector<std::byte>> &storage,
+                                                         const CancellationToken &cancellation) {
+            if (raster.formatId.empty() || !request.decoder)
+                return Failed<void>(TerrainSourceErrors::UnsupportedFormat);
+            try {
+                auto info = request.decoder->Probe(raster, cancellation);
+                if (info.HasError())
+                    return Result<void>::Failure(info.ErrorValue());
+                const TerrainRasterDecodeInfo decoded = info.Value();
+                const std::uint64_t bytesPerSample = decoded.format == TerrainRasterFormat::RawU8    ? 1U
+                                                     : decoded.format == TerrainRasterFormat::RawU16 ? 2U
+                                                     : decoded.format == TerrainRasterFormat::RawF32 ? 4U
+                                                                                                     : 0U;
+                if (bytesPerSample == 0 || decoded.byteOrder == TerrainByteOrder::Count)
+                    return Failed<void>(TerrainSourceErrors::UnsupportedFormat);
+                if (decoded.decodedBytes != samples * bytesPerSample)
+                    return Failed<void>(TerrainSourceErrors::InvalidBytes);
+                if (decoded.decodedBytes > maximumDecoded)
+                    return Failed<void>(TerrainSourceErrors::LimitExceeded);
+                storage.emplace_back(static_cast<std::size_t>(decoded.decodedBytes));
+                if (auto written = request.decoder->DecodeInto(raster, storage.back(), cancellation); written.HasError())
+                    return written;
+                raster.format = decoded.format;
+                raster.byteOrder = decoded.byteOrder;
+                return Result<void>::Success();
+            } catch (...) {
+                return Failed<void>(TerrainSourceErrors::DecoderFailed);
+            }
+        }
+
+        /** @brief Resolves one format into owned raw bytes while charging candidate and decoder overlap. */
+        [[nodiscard]] Result<void> PrepareOneRaster(const TerrainSourceImportRequest &request, TerrainRasterInput &raster,
+                                                    const std::uint64_t samples, std::uint64_t &decodeBudget,
+                                                    std::vector<std::vector<std::byte>> &storage, const CancellationToken &cancellation) {
+            if (raster.format != TerrainRasterFormat::PngGray && raster.format != TerrainRasterFormat::External)
+                return Result<void>::Success();
+            if (raster.rowOrder == TerrainRowOrder::Count)
+                return Failed<void>(TerrainSourceErrors::UnsupportedFormat);
+            // stb temporarily owns a second pixel buffer while PNG output is copied.
+            const std::uint64_t maximumDecoded =
+                std::min<std::uint64_t>(raster.format == TerrainRasterFormat::PngGray ? decodeBudget / 2U : decodeBudget,
+                                        samples * sizeof(float));
+            if (raster.format == TerrainRasterFormat::PngGray) {
+                auto decoded = DecodePngGray(raster, maximumDecoded);
+                if (decoded.HasError())
+                    return Result<void>::Failure(decoded.ErrorValue());
+                DecodedPngRaster value = std::move(decoded).Value();
+                raster.format = value.format;
+                raster.byteOrder = TerrainByteOrder::Little;
+                storage.push_back(std::move(value.bytes));
+            } else if (auto result = PrepareExternalRaster(request, raster, samples, maximumDecoded, storage, cancellation);
+                       result.HasError()) {
+                return result;
+            }
+            decodeBudget -= storage.back().size();
+            raster.bytes = storage.back();
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves all format contributions and validates each channel before sample allocation. */
+        [[nodiscard]] Result<PreparedRasters> PrepareRasters(const TerrainSourceImportRequest &request, std::uint64_t decodeBudget,
+                                                             const CancellationToken &cancellation) {
+            const std::uint64_t samples = static_cast<std::uint64_t>(request.height.width) * request.height.height;
+            PreparedRasters prepared{.height = request.height,
+                                     .weights = request.weights,
+                                     .holes = request.holes,
+                                     .decodedStorage = {},
+                                     .heightBytes = 0};
+            prepared.decodedStorage.reserve(2 + request.weights.size());
+            auto prepare = [&](TerrainRasterInput &raster) {
+                return PrepareOneRaster(request, raster, samples, decodeBudget, prepared.decodedStorage, cancellation);
+            };
+            if (auto result = prepare(prepared.height); result.HasError())
+                return Result<PreparedRasters>::Failure(result.ErrorValue());
+            for (TerrainRasterInput &weight : prepared.weights) {
+                if (auto result = prepare(weight); result.HasError())
+                    return Result<PreparedRasters>::Failure(result.ErrorValue());
+            }
+            if (prepared.holes) {
+                if (auto result = prepare(*prepared.holes); result.HasError())
+                    return Result<PreparedRasters>::Failure(result.ErrorValue());
+            }
+            if (cancellation.IsCancellationRequested())
+                return Failed<PreparedRasters>(TerrainSourceErrors::Cancelled);
+            auto heightBytes = ValidateRaster(prepared.height, request.height.width, request.height.height, false, true);
+            if (heightBytes.HasError())
+                return Result<PreparedRasters>::Failure(heightBytes.ErrorValue());
+            prepared.heightBytes = heightBytes.Value();
+            for (const TerrainRasterInput &weight : prepared.weights) {
+                if (auto result = ValidateRaster(weight, request.height.width, request.height.height, true, false); result.HasError())
+                    return Result<PreparedRasters>::Failure(result.ErrorValue());
+            }
+            if (prepared.holes) {
+                if (auto result = ValidateRaster(*prepared.holes, request.height.width, request.height.height, true, false);
+                    result.HasError())
+                    return Result<PreparedRasters>::Failure(result.ErrorValue());
+                if (prepared.holes->format != TerrainRasterFormat::RawU8)
+                    return Failed<PreparedRasters>(TerrainSourceErrors::UnsupportedFormat);
+            }
+            return Result<PreparedRasters>::Success(std::move(prepared));
+        }
+
+        /** @brief Applies the explicit vertical transform and float32 precision policy to one height. */
+        [[nodiscard]] Result<float> NormalizeHeight(const TerrainRasterInput &height, const TerrainSourceCoordinates &coordinates,
+                                                    const std::uint32_t bytesPerSample, const std::uint32_t x, const std::uint32_t z) {
+            const std::uint32_t bits = ReadBits(height, SourceIndex(height, x, z), bytesPerSample);
+            const double raw =
+                height.format == TerrainRasterFormat::RawF32 ? static_cast<double>(std::bit_cast<float>(bits)) : static_cast<double>(bits);
+            const double meters = raw * coordinates.heightScale + coordinates.heightOffset;
+            if (!std::isfinite(raw) || !std::isfinite(meters) || std::abs(meters) > static_cast<double>(std::numeric_limits<float>::max()))
+                return Failed<float>(TerrainSourceErrors::InvalidSample);
+            const float canonical = static_cast<float>(meters);
+            if (std::abs(static_cast<double>(canonical) - meters) > coordinates.maximumPrecisionError)
+                return Failed<float>(TerrainSourceErrors::PrecisionLost);
+            return Result<float>::Success(canonical);
+        }
+
+        /** @brief Converts one authored weight pixel to an exact 16-bit sum with stable remainder ties. */
+        [[nodiscard]] Result<void> NormalizeWeights(const std::vector<TerrainRasterInput> &weights, const std::uint32_t x,
+                                                    const std::uint32_t z, const std::span<std::uint16_t> output) {
+            if (weights.empty())
+                return Result<void>::Success();
+            std::array<std::uint32_t, TerrainDescriptorHardLimits::LayersPerTile> raw{};
+            std::array<std::uint64_t, TerrainDescriptorHardLimits::LayersPerTile> remainders{};
+            std::uint64_t sum = 0;
+            for (std::size_t layer = 0; layer < weights.size(); ++layer) {
+                const auto &raster = weights[layer];
+                raw[layer] = ReadBits(raster, SourceIndex(raster, x, z), raster.format == TerrainRasterFormat::RawU8 ? 1U : 2U);
+                sum += raw[layer];
+            }
+            if (sum == 0)
+                return Failed<void>(TerrainSourceErrors::InvalidSample);
+            std::uint32_t assigned = 0;
+            for (std::size_t layer = 0; layer < weights.size(); ++layer) {
+                const std::uint64_t numerator = static_cast<std::uint64_t>(raw[layer]) * 65'535U;
+                output[layer] = static_cast<std::uint16_t>(numerator / sum);
+                remainders[layer] = numerator % sum;
+                assigned += output[layer];
+            }
+            while (assigned < 65'535U) {
+                const auto best = std::max_element(remainders.begin(), remainders.begin() + static_cast<std::ptrdiff_t>(weights.size()));
+                const std::size_t layer = static_cast<std::size_t>(best - remainders.begin());
+                ++output[layer];
+                *best = 0;
+                ++assigned;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Fills a detached candidate, abandoning it at any invalid sample or cancellation boundary. */
+        [[nodiscard]] Result<void> FillSamples(const TerrainSourceImportRequest &request, const PreparedRasters &rasters,
+                                               TerrainCanonicalSource &candidate, const CancellationToken &cancellation) {
+            for (std::uint32_t z = 0; z < candidate.height; ++z) {
+                if (cancellation.IsCancellationRequested())
+                    return Failed<void>(TerrainSourceErrors::Cancelled);
+                for (std::uint32_t x = 0; x < candidate.width; ++x) {
+                    const std::size_t index = static_cast<std::size_t>(z) * candidate.width + x;
+                    auto height = NormalizeHeight(rasters.height, request.coordinates, rasters.heightBytes, x, z);
+                    if (height.HasError())
+                        return Result<void>::Failure(height.ErrorValue());
+                    candidate.heightsMeters[index] = height.Value();
+                    if (rasters.holes) {
+                        const std::uint32_t hole = ReadBits(*rasters.holes, SourceIndex(*rasters.holes, x, z), 1);
+                        if (hole > 1)
+                            return Failed<void>(TerrainSourceErrors::InvalidSample);
+                        candidate.holes[index] = static_cast<std::uint8_t>(hole);
+                    }
+                    if (!rasters.weights.empty()) {
+                        const std::size_t offset = index * rasters.weights.size();
+                        if (auto weights = NormalizeWeights(rasters.weights, x, z,
+                                                            std::span{candidate.weights}.subspan(offset, rasters.weights.size()));
+                            weights.HasError())
+                            return weights;
+                    }
+                }
+            }
+            if (cancellation.IsCancellationRequested())
+                return Failed<void>(TerrainSourceErrors::Cancelled);
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] bool ValidCandidate(const TerrainCanonicalSource &candidate) noexcept {
             const std::uint64_t samples = static_cast<std::uint64_t>(candidate.width) * candidate.height;
             if (!(candidate.dataset.IsValid() && candidate.sourceAsset.IsValid() && candidate.revision.IsValid() &&
@@ -299,208 +561,31 @@ namespace Horo::Terrain {
                                                           const CancellationToken &cancellation) {
         if (cancellation.IsCancellationRequested())
             return Failed<TerrainCanonicalSource>(TerrainSourceErrors::Cancelled);
-        if (!request.dataset.IsValid() || !request.sourceAsset.IsValid() || !request.revision.IsValid() || !request.capability.IsValid())
-            return Failed<TerrainCanonicalSource>(TerrainErrors::IdentityInvalid);
-        const std::uint32_t width = request.height.width;
-        const std::uint32_t height = request.height.height;
-        if (width < 2 || height < 2 || width > TerrainDescriptorHardLimits::SamplesPerAxis ||
-            height > TerrainDescriptorHardLimits::SamplesPerAxis || width > request.limits.maximumSamplesPerAxis ||
-            height > request.limits.maximumSamplesPerAxis)
-            return Failed<TerrainCanonicalSource>(TerrainSourceErrors::InvalidDimensions);
-        if (!ValidCoordinates(request.coordinates, width, height))
-            return Failed<TerrainCanonicalSource>(TerrainSourceErrors::InvalidCoordinates);
-
-        const std::uint64_t samples = static_cast<std::uint64_t>(width) * height;
-        const std::uint64_t layers = request.weights.size();
-        if (layers > TerrainDescriptorHardLimits::LayersPerTile || layers > request.limits.maximumLayers ||
-            samples > TerrainDescriptorHardLimits::WorkItems || samples > request.limits.maximumSamples ||
-            samples > request.limits.maximumWorkItems / (1U + layers + (request.holes ? 1U : 0U)) ||
-            samples > TerrainDescriptorHardLimits::WorkItems / (1U + layers + (request.holes ? 1U : 0U)))
-            return Failed<TerrainCanonicalSource>(TerrainSourceErrors::LimitExceeded);
-
-        const std::uint64_t candidateBytes =
-            samples * (sizeof(float) + layers * sizeof(std::uint16_t) + (request.holes ? sizeof(std::uint8_t) : 0U));
-        const std::uint64_t stagingLimit = std::min(request.limits.maximumCanonicalBytes, TerrainDescriptorHardLimits::StagingBytes);
-        if (candidateBytes > stagingLimit)
-            return Failed<TerrainCanonicalSource>(TerrainSourceErrors::LimitExceeded);
-        std::uint64_t decodeBudget = stagingLimit - candidateBytes;
-
-        std::uint64_t originalBytes = request.height.bytes.size();
-        if (originalBytes > TerrainDescriptorHardLimits::StagingBytes)
-            return Failed<TerrainCanonicalSource>(TerrainSourceErrors::LimitExceeded);
-        for (const TerrainRasterInput &weight : request.weights) {
-            if (weight.bytes.size() > TerrainDescriptorHardLimits::StagingBytes - originalBytes)
-                return Failed<TerrainCanonicalSource>(TerrainSourceErrors::LimitExceeded);
-            originalBytes += weight.bytes.size();
-        }
-        if (request.holes) {
-            if (request.holes->bytes.size() > TerrainDescriptorHardLimits::StagingBytes - originalBytes)
-                return Failed<TerrainCanonicalSource>(TerrainSourceErrors::LimitExceeded);
-            originalBytes += request.holes->bytes.size();
-        }
-        if (originalBytes > request.limits.maximumSourceBytes || originalBytes > TerrainDescriptorHardLimits::StagingBytes)
-            return Failed<TerrainCanonicalSource>(TerrainSourceErrors::LimitExceeded);
-
-        std::vector<std::vector<std::byte>> decodedStorage;
-        decodedStorage.reserve(2 + request.weights.size());
-        auto prepare = [&](TerrainRasterInput &raster) -> Result<void> {
-            if (raster.format != TerrainRasterFormat::PngGray && raster.format != TerrainRasterFormat::External)
-                return Result<void>::Success();
-            if (raster.rowOrder == TerrainRowOrder::Count)
-                return Failed<void>(TerrainSourceErrors::UnsupportedFormat);
-            // PNG decoding temporarily owns a second pixel buffer inside stb; reserve both copies.
-            const std::uint64_t maximumDecoded =
-                std::min<std::uint64_t>(raster.format == TerrainRasterFormat::PngGray ? decodeBudget / 2U : decodeBudget,
-                                        samples * sizeof(float));
-            if (raster.format == TerrainRasterFormat::PngGray) {
-                auto decoded = DecodePngGray(raster, maximumDecoded);
-                if (decoded.HasError())
-                    return Result<void>::Failure(decoded.ErrorValue());
-                DecodedPngRaster value = std::move(decoded).Value();
-                decodeBudget -= value.bytes.size();
-                raster.format = value.format;
-                raster.byteOrder = TerrainByteOrder::Little;
-                decodedStorage.push_back(std::move(value.bytes));
-            } else {
-                if (raster.formatId.empty() || !request.decoder)
-                    return Failed<void>(TerrainSourceErrors::UnsupportedFormat);
-                try {
-                    auto info = request.decoder->Probe(raster, cancellation);
-                    if (info.HasError())
-                        return Result<void>::Failure(info.ErrorValue());
-                    const TerrainRasterDecodeInfo decoded = info.Value();
-                    const std::uint64_t bytesPerSample = decoded.format == TerrainRasterFormat::RawU8    ? 1U
-                                                         : decoded.format == TerrainRasterFormat::RawU16 ? 2U
-                                                         : decoded.format == TerrainRasterFormat::RawF32 ? 4U
-                                                                                                         : 0U;
-                    if (bytesPerSample == 0 || decoded.byteOrder == TerrainByteOrder::Count)
-                        return Failed<void>(TerrainSourceErrors::UnsupportedFormat);
-                    if (decoded.decodedBytes != samples * bytesPerSample)
-                        return Failed<void>(TerrainSourceErrors::InvalidBytes);
-                    if (decoded.decodedBytes > maximumDecoded)
-                        return Failed<void>(TerrainSourceErrors::LimitExceeded);
-                    decodedStorage.emplace_back(static_cast<std::size_t>(decoded.decodedBytes));
-                    if (auto decodedResult = request.decoder->DecodeInto(raster, decodedStorage.back(), cancellation);
-                        decodedResult.HasError())
-                        return decodedResult;
-                    decodeBudget -= decoded.decodedBytes;
-                    raster.format = decoded.format;
-                    raster.byteOrder = decoded.byteOrder;
-                } catch (...) {
-                    return Failed<void>(TerrainSourceErrors::DecoderFailed);
-                }
-            }
-            raster.bytes = decodedStorage.back();
-            return Result<void>::Success();
-        };
-        TerrainRasterInput heightRaster = request.height;
-        std::vector<TerrainRasterInput> weightRasters = request.weights;
-        std::optional<TerrainRasterInput> holeRaster = request.holes;
-        if (auto prepared = prepare(heightRaster); prepared.HasError())
-            return Result<TerrainCanonicalSource>::Failure(prepared.ErrorValue());
-        for (TerrainRasterInput &weight : weightRasters) {
-            if (auto prepared = prepare(weight); prepared.HasError())
-                return Result<TerrainCanonicalSource>::Failure(prepared.ErrorValue());
-        }
-        if (holeRaster) {
-            if (auto prepared = prepare(*holeRaster); prepared.HasError())
-                return Result<TerrainCanonicalSource>::Failure(prepared.ErrorValue());
-        }
-        if (cancellation.IsCancellationRequested())
-            return Failed<TerrainCanonicalSource>(TerrainSourceErrors::Cancelled);
-
-        auto heightBytes = ValidateRaster(heightRaster, width, height, false, true);
-        if (heightBytes.HasError())
-            return Result<TerrainCanonicalSource>::Failure(heightBytes.ErrorValue());
-        std::uint64_t inputBytes = heightRaster.bytes.size();
-        for (const TerrainRasterInput &weight : weightRasters) {
-            auto valid = ValidateRaster(weight, width, height, true, false);
-            if (valid.HasError())
-                return Result<TerrainCanonicalSource>::Failure(valid.ErrorValue());
-            inputBytes += weight.bytes.size();
-        }
-        if (holeRaster) {
-            auto valid = ValidateRaster(*holeRaster, width, height, true, false);
-            if (valid.HasError())
-                return Result<TerrainCanonicalSource>::Failure(valid.ErrorValue());
-            if (holeRaster->format != TerrainRasterFormat::RawU8)
-                return Failed<TerrainCanonicalSource>(TerrainSourceErrors::UnsupportedFormat);
-            inputBytes += holeRaster->bytes.size();
-        }
-        if (inputBytes > request.limits.maximumSourceBytes || inputBytes > TerrainDescriptorHardLimits::StagingBytes)
-            return Failed<TerrainCanonicalSource>(TerrainSourceErrors::LimitExceeded);
+        auto budget = AdmitImport(request);
+        if (budget.HasError())
+            return Result<TerrainCanonicalSource>::Failure(budget.ErrorValue());
+        if (auto bytes = ValidateSourceBytes(request); bytes.HasError())
+            return Result<TerrainCanonicalSource>::Failure(bytes.ErrorValue());
+        auto rasters = PrepareRasters(request, budget.Value(), cancellation);
+        if (rasters.HasError())
+            return Result<TerrainCanonicalSource>::Failure(rasters.ErrorValue());
 
         TerrainCanonicalSource candidate;
         candidate.dataset = request.dataset;
         candidate.sourceAsset = request.sourceAsset;
         candidate.revision = request.revision;
         candidate.capability = request.capability;
-        candidate.width = width;
-        candidate.height = height;
+        candidate.width = request.height.width;
+        candidate.height = request.height.height;
         candidate.coordinates = request.coordinates;
-        candidate.layerCount = static_cast<std::uint8_t>(layers);
-        candidate.heightsMeters.resize(static_cast<std::size_t>(samples));
-        candidate.weights.resize(static_cast<std::size_t>(samples * layers));
-        if (holeRaster)
-            candidate.holes.resize(static_cast<std::size_t>(samples));
-
-        std::array<std::uint32_t, TerrainDescriptorHardLimits::LayersPerTile> rawWeights{};
-        std::array<std::uint64_t, TerrainDescriptorHardLimits::LayersPerTile> remainders{};
-        for (std::uint32_t z = 0; z < height; ++z) {
-            if (cancellation.IsCancellationRequested())
-                return Failed<TerrainCanonicalSource>(TerrainSourceErrors::Cancelled);
-            for (std::uint32_t x = 0; x < width; ++x) {
-                const std::size_t index = static_cast<std::size_t>(z) * width + x;
-                const std::uint32_t heightBits = ReadBits(heightRaster, SourceIndex(heightRaster, x, z), heightBytes.Value());
-                const double rawHeight = heightRaster.format == TerrainRasterFormat::RawF32
-                                             ? static_cast<double>(std::bit_cast<float>(heightBits))
-                                             : static_cast<double>(heightBits);
-                const double meters = rawHeight * request.coordinates.heightScale + request.coordinates.heightOffset;
-                if (!std::isfinite(rawHeight) || !std::isfinite(meters) ||
-                    std::abs(meters) > static_cast<double>(std::numeric_limits<float>::max()))
-                    return Failed<TerrainCanonicalSource>(TerrainSourceErrors::InvalidSample);
-                const float canonical = static_cast<float>(meters);
-                if (std::abs(static_cast<double>(canonical) - meters) > request.coordinates.maximumPrecisionError)
-                    return Failed<TerrainCanonicalSource>(TerrainSourceErrors::PrecisionLost);
-                candidate.heightsMeters[index] = canonical;
-
-                if (holeRaster) {
-                    const std::uint32_t hole = ReadBits(*holeRaster, SourceIndex(*holeRaster, x, z), 1);
-                    if (hole > 1)
-                        return Failed<TerrainCanonicalSource>(TerrainSourceErrors::InvalidSample);
-                    candidate.holes[index] = static_cast<std::uint8_t>(hole);
-                }
-                if (layers == 0)
-                    continue;
-
-                std::uint64_t sum = 0;
-                for (std::size_t layer = 0; layer < layers; ++layer) {
-                    const auto &raster = weightRasters[layer];
-                    const std::uint32_t raw =
-                        ReadBits(raster, SourceIndex(raster, x, z), raster.format == TerrainRasterFormat::RawU8 ? 1U : 2U);
-                    rawWeights[layer] = raw;
-                    sum += raw;
-                }
-                if (sum == 0)
-                    return Failed<TerrainCanonicalSource>(TerrainSourceErrors::InvalidSample);
-                std::uint32_t assigned = 0;
-                for (std::size_t layer = 0; layer < layers; ++layer) {
-                    const std::uint64_t numerator = static_cast<std::uint64_t>(rawWeights[layer]) * 65'535U;
-                    candidate.weights[index * layers + layer] = static_cast<std::uint16_t>(numerator / sum);
-                    remainders[layer] = numerator % sum;
-                    assigned += candidate.weights[index * layers + layer];
-                }
-                while (assigned < 65'535U) {
-                    const auto best = std::max_element(remainders.begin(), remainders.begin() + static_cast<std::ptrdiff_t>(layers));
-                    const std::size_t layer = static_cast<std::size_t>(best - remainders.begin());
-                    ++candidate.weights[index * layers + layer];
-                    *best = 0;
-                    ++assigned;
-                }
-            }
-        }
-        if (cancellation.IsCancellationRequested())
-            return Failed<TerrainCanonicalSource>(TerrainSourceErrors::Cancelled);
+        candidate.layerCount = static_cast<std::uint8_t>(request.weights.size());
+        const std::size_t samples = static_cast<std::size_t>(candidate.width) * candidate.height;
+        candidate.heightsMeters.resize(samples);
+        candidate.weights.resize(samples * candidate.layerCount);
+        if (request.holes)
+            candidate.holes.resize(samples);
+        if (auto filled = FillSamples(request, rasters.Value(), candidate, cancellation); filled.HasError())
+            return Result<TerrainCanonicalSource>::Failure(filled.ErrorValue());
         return Result<TerrainCanonicalSource>::Success(std::move(candidate));
     }
 
