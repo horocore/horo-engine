@@ -5,6 +5,7 @@
  * @brief Deterministic pre-compile PCG graph validation and ordering contract.
  */
 
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/PCG/PCGGraphAsset.h"
 #include "Horo/PCG/PCGRegistry.h"
 
@@ -41,11 +42,13 @@ namespace Horo::PCG {
         [[nodiscard]] constexpr auto operator<=>(const PCGValidatedNode &) const noexcept = default;
     };
 
-    /** @brief Immutable graph validation output safe to hand to the canonical compiler. */
+    /** @brief Immutable graph validation output with exact source digest safe to hand to the canonical compiler. */
     class PCGValidatedGraph final {
     public:
         /** @brief Returns the exact graph source generation. @return Durable graph generation. */
         [[nodiscard]] GraphGeneration Generation() const noexcept;
+        /** @brief Returns the digest of exact canonical source bytes used by validation. @return Source digest. */
+        [[nodiscard]] Sha256Digest SourceDigest() const noexcept;
         /** @brief Returns the registry generation that supplied capabilities and runtimes. @return Registry generation. */
         [[nodiscard]] std::uint64_t RegistryGeneration() const noexcept;
         /** @brief Returns the exact graph-registry handle validated for compilation. @return Generation-safe graph handle. */
@@ -54,10 +57,11 @@ namespace Horo::PCG {
         [[nodiscard]] std::span<const PCGValidatedNode> Nodes() const noexcept;
 
     private:
-        PCGValidatedGraph(GraphGeneration generation, std::uint64_t registryGeneration, const PCGGraphHandle &registryGraph,
-                          std::vector<PCGValidatedNode> nodes) noexcept;
+        PCGValidatedGraph(GraphGeneration generation, Sha256Digest sourceDigest, std::uint64_t registryGeneration,
+                          const PCGGraphHandle &registryGraph, std::vector<PCGValidatedNode> nodes) noexcept;
 
         GraphGeneration generation_{};
+        Sha256Digest sourceDigest_{};
         std::uint64_t registryGeneration_{};
         PCGGraphHandle registryGraph_{};
         std::vector<PCGValidatedNode> nodes_;

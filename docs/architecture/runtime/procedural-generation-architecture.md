@@ -524,7 +524,9 @@ grants, and one exact runtime handle for every node. Success owns a compact node
 in deterministic dependency-first order; stable node identity breaks ties between
 independent nodes. Every handle is fenced to the returned registry generation, so a
 compiler must retain the issuing snapshot and must not resolve the handle through a
-replacement generation.
+replacement generation. The result also captures a SHA-256 digest of canonical
+source bytes; compilation checks this against its source rather than trusting only
+the durable revision identifier.
 
 Malformed topology and unknown-node policy are rejected by `PCGGraphAsset::Create`
 before this boundary. Missing runtime evidence is accumulated in stable node order with
@@ -532,6 +534,24 @@ graph/revision/node provenance up to the admitted diagnostic ceiling. Capacity,
 cancellation and shutdown reject without partial validated output. Retained snapshots
 remain valid after replacement or registry shutdown, while new validation against a
 replacement snapshot requires the replacement graph revision and runtime contracts.
+
+## Canonical Cooked Graph Plan
+
+`Horo/PCG/PCGCookedPlan.h` is the PCG-2.4 lowering boundary. `CompilePCGGraph`
+requires the same canonical source and retained registry snapshot that produced a
+`PCGValidatedGraph`. It checks exact graph and provider-generation handles, then
+copies dependency-first nodes, pin schemas, semantic payloads, provider contract
+versions, capability requirements, plan-local pin routes, input constants and
+exposed-input defaults. The result owns its data and canonical network-order bytes;
+it retains no authoring, registry, backend or process-local handles. The byte
+contract records plan/compiler/source schemas, graph revision and provider semantic
+contract versions plus the SHA-256 digest of exact canonical source bytes captured
+by pre-compile validation; even same-revision altered source is rejected.
+Caller-lowered and tier plan-byte bounds reject output before publication. The
+plan is a cook result, not an editable source or a command to
+mutate Scene or another target owner. An exposed binding supplies that input's
+fallback and excludes its authored pin default from constants; a simultaneous
+incoming edge to the same input is rejected as ambiguous routing.
 
 ## Related Documents
 
