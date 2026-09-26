@@ -689,6 +689,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroEditorViewportOpenGL)
 horo_configure_target_header_boundary(HoroEditorViewportMetal)
 horo_configure_target_header_boundary(HoroInputSdl)
+horo_configure_target_header_boundary(HoroRuntimeUiInput)
 horo_configure_target_header_boundary(HoroGui PUBLIC_HEADERS
     Horo/Editor/AssetImportModal.h
     Horo/Editor/DefaultScreenFactories.h

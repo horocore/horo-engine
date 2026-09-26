@@ -189,9 +189,26 @@ add_executable(HoroInputTests
         unit/runtime/input/GameplayInputFrameTests.cpp
         unit/runtime/input/InputTests.cpp
         unit/runtime/input/InputContextTests.cpp
+        unit/runtime/input/TextInputTests.cpp
 )
 target_compile_features(HoroInputTests PRIVATE cxx_std_20)
 target_link_libraries(HoroInputTests PRIVATE HoroEngine::Input)
+add_executable(HoroRuntimeUiInputTests
+        unit/runtime/input/RuntimeUiTextInputTests.cpp
+)
+target_compile_features(HoroRuntimeUiInputTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiInputTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/ui/input)
+target_link_libraries(HoroRuntimeUiInputTests PRIVATE HoroEngine::RuntimeUiInput)
+horo_register_catch_test(HoroRuntimeUiInputTests LABELS "unit;input;runtime_ui;headless")
+if (HORO_BUILD_INPUT_SDL3)
+    add_executable(HoroInputSdlTests
+            unit/runtime/input/SdlTextInputTests.cpp
+    )
+    target_compile_features(HoroInputSdlTests PRIVATE cxx_std_20)
+    target_include_directories(HoroInputSdlTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/input/sdl)
+    target_link_libraries(HoroInputSdlTests PRIVATE HoroEngine::InputSdl ${HORO_SDL3_TARGET})
+    horo_register_catch_test(HoroInputSdlTests LABELS "unit;input;sdl;headless")
+endif ()
 add_executable(HoroNetworkApiTests
         unit/runtime/networking/MessageEnvelopeTests.cpp
         unit/runtime/networking/NetworkAddressTests.cpp
