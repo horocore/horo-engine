@@ -107,9 +107,11 @@ namespace Horo::Terrain {
             const bool available = EffectiveAvailable(facts.Value(), fact.capability);
             if (requirement == Requirement::Required && !available)
                 return Result<TerrainComposition>::Failure(MakeError(TerrainErrors::CapabilityUnsupported));
-            const TerrainCapabilityState state = requirement == Requirement::Omitted ? TerrainCapabilityState::Omitted
-                                                 : available                         ? TerrainCapabilityState::Bound
-                                                                                     : TerrainCapabilityState::Unavailable;
+            TerrainCapabilityState state = TerrainCapabilityState::Unavailable;
+            if (requirement == Requirement::Omitted)
+                state = TerrainCapabilityState::Omitted;
+            else if (available)
+                state = TerrainCapabilityState::Bound;
             decisions[index] = {fact.capability, requirement, state,
                                 state == TerrainCapabilityState::Bound ? fact.revision : TerrainHostCapabilityRevision{}};
         }
@@ -157,13 +159,14 @@ namespace Horo::Terrain {
     Result<void> ValidateTerrainCompositionAdmission(const TerrainComposition &composition, const TerrainCapabilityRevision currentRevision,
                                                      const TerrainCompositionLifecycle lifecycle,
                                                      const TerrainFoliageCapabilitySet required) {
+        using enum TerrainCompositionLifecycle;
         if (!currentRevision.IsValid() || !IsKnown(lifecycle) || !required.IsValid())
             return Result<void>::Failure(MakeError(TerrainErrors::CompositionInvalid));
         if (composition.Revision() != currentRevision)
             return Result<void>::Failure(MakeError(TerrainErrors::RevisionStale));
-        if (lifecycle == TerrainCompositionLifecycle::Cancelling)
+        if (lifecycle == Cancelling)
             return Result<void>::Failure(MakeError(TerrainErrors::CompositionCancelled));
-        if (lifecycle == TerrainCompositionLifecycle::ShuttingDown || lifecycle == TerrainCompositionLifecycle::Closed)
+        if (lifecycle == ShuttingDown || lifecycle == Closed)
             return Result<void>::Failure(MakeError(TerrainErrors::LifecycleUnavailable));
         if (composition.Policy().profile == TerrainProductProfile::Unsupported)
             return Result<void>::Failure(MakeError(TerrainErrors::CompositionProfileUnsupported));
