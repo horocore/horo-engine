@@ -1,6 +1,8 @@
 #include "Horo/Cli/CliDispatcher.h"
 #include "Horo/Cli/CliErrors.h"
+#include "Horo/Platform/ExternalProcess.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <memory>
@@ -72,7 +74,10 @@ namespace Horo::Cli {
             bool observedWrite{};
             ConfigurationRevision revision{};
             CancellationSource *cancelDuringExecution{};
+            CliInvocationStopController *interruptDuringExecution{};
             std::uint64_t delayMilliseconds{};
+            bool acknowledgeStop{};
+            IExternalProcessRunner *processRunner{};
         };
 
         class IProjectInspectionUseCase {
@@ -130,8 +135,21 @@ namespace Horo::Cli {
                     return Result<CliCommandResult>::Failure(inspected.ErrorValue());
                 if (state_.cancelDuringExecution != nullptr)
                     state_.cancelDuringExecution->RequestCancellation();
+                if (state_.interruptDuringExecution != nullptr)
+                    state_.interruptDuringExecution->Interrupt();
                 if (state_.delayMilliseconds != 0)
                     std::this_thread::sleep_for(std::chrono::milliseconds(state_.delayMilliseconds));
+                if (state_.acknowledgeStop && context.IsStopRequested())
+                    return Result<CliCommandResult>::Failure(MakeError(CliErrors::ExecutionCancelled));
+                if (state_.processRunner != nullptr) {
+                    ExternalProcessRequest process{.executable = "test-child", .timeout = std::chrono::seconds{10}};
+                    if (const auto remaining = context.RemainingTimeout(); remaining.has_value())
+                        process.timeout = std::min(process.timeout, *remaining);
+                    process.forceCancellation = context.ForceCancellation();
+                    auto child = state_.processRunner->Run(process, context.Cancellation());
+                    if (child.HasError())
+                        return Result<CliCommandResult>::Failure(child.ErrorValue());
+                }
                 std::string value = std::move(inspected).Value();
                 if (state_.oversizedResult)
                     value = "oversized";
@@ -144,15 +162,21 @@ namespace Horo::Cli {
             UseCaseState &state_;
         };
 
-        class ProgressSink final : public ICliProgressSink {
+        class RecordingProcessRunner final : public IExternalProcessRunner {
         public:
-            void Report(const CliProgressEvent &event) override {
+            [[nodiscard]] Result<ExternalProcessResult> Run(const ExternalProcessRequest &request,
+                                                            const CancellationToken &cancellation) override {
                 ++calls;
-                lastPhase = event.phase;
+                timeout = request.timeout;
+                cooperative = cancellation;
+                forced = request.forceCancellation;
+                return Result<ExternalProcessResult>::Success({.reason = ProcessTerminationReason::Exited});
             }
 
             std::size_t calls{};
-            std::string lastPhase;
+            std::chrono::milliseconds timeout{};
+            CancellationToken cooperative;
+            CancellationToken forced;
         };
 
         [[nodiscard]] Result<CliDispatcher> MakeDispatcher(
@@ -168,7 +192,7 @@ namespace Horo::Cli {
             return CliDispatcher::Create(std::move(registry), std::move(registrations), std::move(policy));
         }
 
-        [[nodiscard]] CliInvocationContext Invocation(const ConfigurationSnapshot &configuration, ProgressSink *progress = nullptr) {
+        [[nodiscard]] CliInvocationContext Invocation(const ConfigurationSnapshot &configuration, CliProgressMailbox *progress = nullptr) {
             return {.invocation = {11},
                     .configuration = &configuration,
                     .progress = progress,
@@ -197,7 +221,7 @@ namespace Horo::Cli {
 
     TEST_CASE("CLI dispatch exposes only declared capabilities and preserves complete correlation") {
         DispatcherFixture fixture;
-        ProgressSink progress;
+        CliProgressMailbox progress;
 
         const CliTerminalResult terminal = fixture.dispatcher.Dispatch(Request(), Invocation(fixture.configuration, &progress));
 
@@ -206,8 +230,9 @@ namespace Horo::Cli {
         CHECK(fixture.state.observedRead);
         CHECK_FALSE(fixture.state.observedWrite);
         CHECK(fixture.state.revision == 17);
-        CHECK(progress.calls == 1);
-        CHECK(progress.lastPhase == "inspect");
+        const auto update = progress.Take();
+        REQUIRE(update.has_value());
+        CHECK(update->phase == "inspect");
         CHECK(terminal.Correlation().invocation == CliInvocationId{11});
         CHECK(terminal.Correlation().operation == CliOperationId{41});
         CHECK(terminal.Correlation().job == CliJobId{73});
@@ -332,14 +357,22 @@ namespace Horo::Cli {
         fixture.state.cancelDuringExecution = &duringExecution;
         invocation = Invocation(fixture.configuration);
         invocation.cancellation = duringExecution.Token();
+        const CliTerminalResult completedBeforeAcknowledgement = fixture.dispatcher.Dispatch(Request(), invocation);
+        REQUIRE(completedBeforeAcknowledgement.Outcome().HasValue());
+        CHECK(completedBeforeAcknowledgement.Correlation().operation == CliOperationId{41});
+
+        fixture.state.acknowledgeStop = true;
+        CancellationSource acknowledgedCancellation;
+        fixture.state.cancelDuringExecution = &acknowledgedCancellation;
+        invocation.cancellation = acknowledgedCancellation.Token();
         const CliTerminalResult cancelledDuringExecution = fixture.dispatcher.Dispatch(Request(), invocation);
         RequireError(cancelledDuringExecution, CliErrors::ExecutionCancelled);
-        CHECK(cancelledDuringExecution.Correlation().operation == CliOperationId{41});
     }
 
     TEST_CASE("CLI dispatcher applies the descriptor deadline to terminal production") {
         UseCaseState state;
         state.delayMilliseconds = 5;
+        state.acknowledgeStop = true;
         ProjectInspectionUseCase useCase(state);
         CliCommandDescriptor descriptor = Descriptor();
         descriptor.timeout = {.defaultMilliseconds = 1, .maximumMilliseconds = 10};
@@ -352,6 +385,40 @@ namespace Horo::Cli {
         RequireError(timedOut, CliErrors::ExecutionTimedOut);
         CHECK(timedOut.Correlation().operation == CliOperationId{41});
         CHECK(timedOut.Correlation().job == CliJobId{73});
+
+        state.acknowledgeStop = false;
+        const CliTerminalResult completed = dispatcher.Dispatch(Request(), Invocation(configuration));
+        REQUIRE(completed.Outcome().HasValue());
+
+        state.acknowledgeStop = true;
+        CliInvocationStopController interrupted{std::chrono::seconds{5}};
+        state.interruptDuringExecution = &interrupted;
+        CliInvocationContext invocation = Invocation(configuration);
+        invocation.cancellation = interrupted.Token();
+        invocation.stopControl = &interrupted;
+        const CliTerminalResult cancelled = dispatcher.Dispatch(Request(), invocation);
+        RequireError(cancelled, CliErrors::ExecutionCancelled);
+    }
+
+    TEST_CASE("CLI process adapter caps its timeout and propagates both stop tokens") {
+        DispatcherFixture fixture;
+        RecordingProcessRunner runner;
+        fixture.state.processRunner = &runner;
+        CliInvocationStopController stop{std::chrono::seconds{5}};
+        CliInvocationContext invocation = Invocation(fixture.configuration);
+        invocation.cancellation = stop.Token();
+        invocation.forceCancellation = stop.ForceToken();
+        invocation.stopControl = &stop;
+        const CliTerminalResult result = fixture.dispatcher.Dispatch(Request(), invocation);
+        REQUIRE(result.Outcome().HasValue());
+        REQUIRE(runner.calls == 1);
+        CHECK(runner.timeout > std::chrono::milliseconds::zero());
+        CHECK(runner.timeout <= std::chrono::seconds{1});
+        stop.Interrupt();
+        CHECK(runner.cooperative.IsCancellationRequested());
+        CHECK_FALSE(runner.forced.IsCancellationRequested());
+        stop.Interrupt();
+        CHECK(runner.forced.IsCancellationRequested());
     }
 
     TEST_CASE("CLI dispatcher enforces progress result and correlation bounds") {

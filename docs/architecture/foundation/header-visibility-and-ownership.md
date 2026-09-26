@@ -108,6 +108,19 @@ solver header is introduced in the public include graph. The generated
 `HoroPhysicsPublicHeaderConsumer` compiles the new contract with only the Physics
 target's declared public dependencies.
 
+## CLI-001.6 Process Boundary Migration Notes
+
+`HoroEngine::CliHost` remains Foundation-only. Its existing `CliDispatcher.h`
+now carries portable cooperative and escalation tokens plus a remaining-deadline
+value; the invocation's progress destination is a bounded mailbox. Existing
+adapters that use a process runner should be composed by an application target
+that links both CliHost and Platform. They cap `ExternalProcessRequest::timeout`
+to the remaining CLI deadline, copy the escalation token into the request, and
+pass the cooperative token to their injected `IExternalProcessRunner`. Native
+handles and termination policy stay private to Platform. No public header changes
+owner or include spelling; the generated CliHost and Platform header consumers
+continue to compile independently.
+
 ## Build-Tree Contract
 
 `cmake/HoroPublicHeaderOwnership.cmake` assigns each public header to one real

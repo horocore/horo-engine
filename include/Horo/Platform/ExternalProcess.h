@@ -54,13 +54,23 @@ namespace Horo {
         Exited,
         Signalled,
         Cancelled,
-        TimedOut
+        TimedOut,
+        Forced
+    };
+
+    /** @brief Trigger that initiated termination before any forced escalation. */
+    enum class ProcessStopCause : std::uint8_t {
+        None,
+        Cancellation,
+        Timeout,
+        DescendantCleanup
     };
 
     /** @brief Terminal native-process result after every pipe has been drained. */
     struct ExternalProcessResult {
         ProcessTerminationReason reason{ProcessTerminationReason::Exited};
         int exitCode{};
+        ProcessStopCause stopCause{ProcessStopCause::None};
     };
 
     /** @brief Complete shell-free request for one child process. */
@@ -73,6 +83,9 @@ namespace Horo {
         std::chrono::milliseconds gracefulTermination{std::chrono::seconds{2}};
         std::size_t maximumLineBytes{16U * 1024U};
         std::function<void(ProcessOutputLine)> onOutput;
+        std::size_t maximumOutputBytes{4U * 1024U * 1024U}; /**< Per-stream callback byte budget; excess is drained and discarded. */
+        std::chrono::milliseconds maximumDrainDuration{std::chrono::seconds{1}}; /**< Final drain bound after forced termination. */
+        CancellationToken forceCancellation; /**< Repeated-interrupt policy; bypasses the graceful period. */
     };
 
     /** @brief Blocking portable execution capability intended to run on an owned worker. */

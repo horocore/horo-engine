@@ -1188,10 +1188,11 @@ target_include_directories(HoroFoundationResultTests PRIVATE "${PROJECT_SOURCE_D
 add_executable(HoroCliCommandRegistryTests
         unit/cli/CliCommandRegistryTests.cpp
         unit/cli/CliDispatcherTests.cpp
+        unit/cli/CliProgressLifecycleTests.cpp
         unit/cli/CliOptionParserTests.cpp
 )
 target_compile_features(HoroCliCommandRegistryTests PRIVATE cxx_std_20)
-target_link_libraries(HoroCliCommandRegistryTests PRIVATE HoroEngine::CliHost)
+target_link_libraries(HoroCliCommandRegistryTests PRIVATE HoroEngine::CliHost HoroEngine::Platform)
 horo_register_catch_test(HoroCliCommandRegistryTests LABELS "unit;cli;headless")
 
 add_executable(HoroFoundationErrorCodeRegistryTests
@@ -1259,6 +1260,11 @@ target_link_libraries(HoroFoundationJobSystemTests PRIVATE HoroEngine::Foundatio
 add_executable(HoroPlatformTests
         unit/foundation/PlatformTests.cpp
 )
+
+add_executable(HoroProcessTestChild helpers/platform/ProcessTreeChild.cpp)
+target_compile_features(HoroProcessTestChild PRIVATE cxx_std_20)
+add_dependencies(HoroPlatformTests HoroProcessTestChild)
+target_compile_definitions(HoroPlatformTests PRIVATE HORO_PROCESS_TEST_CHILD="$<TARGET_FILE:HoroProcessTestChild>")
 
 target_compile_features(HoroPlatformTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPlatformTests PRIVATE HoroEngine::Platform)
