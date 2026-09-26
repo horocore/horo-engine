@@ -1,5 +1,21 @@
 # PCG Generation Plan Migration
 
+## CPU evaluator migration (HORO-2019)
+
+The pure `EvaluatePCGCpu` boundary dispatches only explicit version-1 PCG built-ins
+over cooked pins and one validated immutable spatial snapshot. Hosts must compose
+matching inert runtime descriptors, declare one bounded PointSet output shape per
+cooked output pin, grant every required capability, and supply a nonzero numeric
+profile fingerprint when a profile-deterministic node is present. The cooked plan
+now exposes its already-encoded authored seed without changing canonical bytes.
+
+The result owns detached immutable point candidates plus exact source, seed, snapshot
+and profile evidence; it is not an authority to publish scene or target state. A
+generation-plan adapter must still derive typed target intents and exact ownership
+receipts at the later host/commit boundary. Old snapshots and candidates remain
+valid after a source/provider replacement; callers charge old/new overlap and do not
+reinterpret an old candidate as current merely because its storage remains alive.
+
 ## Point-cloud workspace migration (HORO-2022)
 
 PCG evaluators obtain one `PCGPointCloudWorkspace` per admitted operation from the

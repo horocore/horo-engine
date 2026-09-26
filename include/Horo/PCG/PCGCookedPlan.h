@@ -83,6 +83,8 @@ namespace Horo::PCG {
         [[nodiscard]] GraphGeneration Generation() const noexcept;
         /** @brief Returns the operational tier captured from the graph source. @return Exact tier. */
         [[nodiscard]] PCGOperationalTier Tier() const noexcept;
+        /** @brief Returns the authored deterministic seed captured at cook. @return Exact seed, including zero. */
+        [[nodiscard]] std::uint64_t Seed() const noexcept;
         /** @brief Returns source schema bound into this plan. @return Exact graph schema. */
         [[nodiscard]] PCGGraphSchemaVersion SourceSchema() const noexcept;
         /** @brief Returns digest of exact canonical source bytes. @return Source content digest. */
@@ -108,6 +110,7 @@ namespace Horo::PCG {
         struct Data final {
             GraphGeneration generation{};
             PCGOperationalTier tier{};
+            std::uint64_t seed{};
             PCGGraphSchemaVersion sourceSchema{};
             Sha256Digest sourceDigest{};
             PCGCapabilitySet requiredCapabilities{};

@@ -53,6 +53,32 @@ releases every slot. A new workspace is required for a new evaluation, source
 revision, or replacement. The cooked plan exposes its captured operational tier for
 this admission; its portable byte format and compiler version are unchanged.
 
+`EvaluatePCGCpu` is the first built-in, backend-neutral cooked-plan evaluator. It
+consumes one immutable `PCGSpatialSnapshot`, the exact cooked plan, typed exposed
+overrides and one finite workspace/candidate envelope. Dispatch recognizes only
+PCG-owned version-1 built-in IDs. Snapshot-grid nodes read one stable grid identity
+from an eight-byte network-order payload; density-filter nodes take one PointSet
+and one Scalar threshold; merge nodes take two PointSets in input-pin identity order;
+forward nodes take one PointSet. Each produces one PointSet output, and every routed
+point schema must match its output schema exactly. Unknown type/version/payload,
+unbound scalar, absent grid, unsupported determinism or capability, closed lifecycle
+and over-budget output fail before any candidate is returned. Snapshot-grid requires
+profile determinism and an exact nonzero numeric-profile fingerprint.
+
+The evaluator derives contiguous logical partitions from the caller's supported
+worker count. A Foundation `TaskGroup` computes density-filter selection counts over
+disjoint immutable input spans, joins every child, then the operation owner writes
+and merges in stable point-index order. Snapshot-grid generation and final writes
+stay on the owner lane. Worker count changes partition boundaries, never semantic
+point or output order; children cannot access writable workspace columns or target
+owners. Multiworker evaluation requires an explicitly borrowed host scheduler that
+outlives the synchronous call.
+It returns detached immutable final point columns, exact graph source digest,
+authored seed, snapshot identity and numeric profile. These are candidate values
+only: no node receives a scene, terrain, physics, navigation, renderer or editor
+mutation interface. Host-controlled output-intent adaptation and commit remain
+separate from this pure point-evaluation contract.
+
 ### Graph Source Schema 1.1
 
 `PCGGraphAsset` is the implemented bounded semantic source value. It owns stable graph,
