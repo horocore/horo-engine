@@ -1158,28 +1158,58 @@ namespace Horo::Input {
         return snapshot;
     }
 
+    /** @copydoc GameplayInputFrameBuilder::GameplayInputFrameBuilder */
     GameplayInputFrameBuilder::GameplayInputFrameBuilder(ActionId move, ActionId look, ActionId jump, ActionId interact)
         : move_(std::move(move)), look_(std::move(look)), jump_(std::move(jump)), interact_(std::move(interact)) {}
 
-    GameplayInputFrame GameplayInputFrameBuilder::Consume(InputRouter &router, const InputContextToken &context, const SimulationTick tick,
-                                                          const std::optional<PlayerId> player) {
-        if (edgeFrame_ != router.Snapshot().frame) {
-            edgeFrame_ = router.Snapshot().frame;
-            interactConsumed_ = false;
-            jumpConsumed_ = false;
+    /** @copydoc GameplayInputFrameBuilder::Capture */
+    void GameplayInputFrameBuilder::Capture(InputRouter &router, const InputContextToken &context, const std::optional<PlayerId> player) {
+        const RawInputSnapshot &snapshot = router.Snapshot();
+        if (hasCapturedFrame_ && capturedFrame_ == snapshot.frame)
+            return;
+        capturedFrame_ = snapshot.frame;
+        hasCapturedFrame_ = true;
+        if (!snapshot.window.focused || !router.IsContextActive(context)) {
+            moveX_ = moveY_ = lookX_ = lookY_ = 0.0F;
+            pendingJump_ = pendingInteract_ = false;
+            moveDown_ = pendingMovePressed_ = pendingMoveReleased_ = false;
+            return;
         }
         const ActionValue move = router.ReadAction(context, move_, player);
         const ActionValue look = router.ReadAction(context, look_, player);
         const ActionValue jump = router.ReadAction(context, jump_, player);
         const ActionValue interact = router.ReadAction(context, interact_, player);
-        GameplayInputFrame frame{tick,
-                                 move.x,
-                                 move.y,
-                                 look.x,
-                                 look.y,
-                                 jump.pressed && !std::exchange(jumpConsumed_, jump.pressed || jumpConsumed_),
-                                 interact.pressed && !std::exchange(interactConsumed_, interact.pressed || interactConsumed_)};
-        return frame;
+        moveX_ = move.x;
+        moveY_ = move.y;
+        lookX_ = look.x;
+        lookY_ = look.y;
+        pendingJump_ = pendingJump_ || jump.pressed;
+        pendingInteract_ = pendingInteract_ || interact.pressed;
+        moveDown_ = move.down;
+        pendingMovePressed_ = pendingMovePressed_ || move.pressed;
+        pendingMoveReleased_ = pendingMoveReleased_ || move.released;
+    }
+
+    /** @copydoc GameplayInputFrameBuilder::Consume */
+    GameplayInputFrame GameplayInputFrameBuilder::Consume(const SimulationTick tick) noexcept {
+        return GameplayInputFrame{tick,
+                                  moveX_,
+                                  moveY_,
+                                  lookX_,
+                                  lookY_,
+                                  std::exchange(pendingJump_, false),
+                                  std::exchange(pendingInteract_, false),
+                                  moveDown_,
+                                  std::exchange(pendingMovePressed_, false),
+                                  std::exchange(pendingMoveReleased_, false)};
+    }
+
+    /** @copydoc GameplayInputFrameBuilder::Reset */
+    void GameplayInputFrameBuilder::Reset() noexcept {
+        hasCapturedFrame_ = false;
+        moveX_ = moveY_ = lookX_ = lookY_ = 0.0F;
+        pendingJump_ = pendingInteract_ = false;
+        moveDown_ = pendingMovePressed_ = pendingMoveReleased_ = false;
     }
 
     void GameplayInputRecording::Record(const GameplayInputFrame &frame) {

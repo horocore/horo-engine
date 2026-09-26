@@ -783,6 +783,7 @@ namespace Horo::Editor {
                         p_->inputRouter.BeginFrame(p_->inputBackend.Commit());
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::ApplyQueuedOwnerThreadCommands:
+                        screenHost_->OnInputSnapshot();
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::VariableUpdate:
                         return UpdatePresentation(context);
@@ -817,7 +818,8 @@ namespace Horo::Editor {
             }
 
             Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
-                screenHost_->OnFixedUpdate(static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0);
+                screenHost_->OnFixedUpdate(context.simulationTick,
+                                           static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0);
                 return Result<void>::Success();
             }
 

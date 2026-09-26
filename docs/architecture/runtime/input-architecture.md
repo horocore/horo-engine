@@ -236,6 +236,54 @@ run during one presentation frame, edge-triggered actions are consumed according
 to the action's declared policy and do not fire accidentally on every catch-up
 tick.
 
+`GameplayInputFrameBuilder` is owned per player by the host input boundary. After
+the snapshot is committed and higher-priority UI consumers have updated the
+consumption ledger, the host calls `Capture(router, gameplayContext, player)`
+once, before `FixedUpdate`. Fixed simulation calls only `Consume(simulationTick)`
+and receives a value frame; it never receives the router, collector, snapshot,
+or mutable device state. `Consume` is allocation-free and uses the scheduler's
+one-based tick ordinal. The host must call it once for each attempted tick in
+strict tick order, and owns retry/rollback policy if a fixed-update participant
+fails.
+
+Held axes use the latest admitted capture for every catch-up tick. Press edges
+are latched across presentation frames with no fixed tick, then assigned to the
+next tick exactly once. A second capture of the same committed snapshot is
+ignored. Losing focus or gameplay context ownership clears both held values and
+pending edges so input cannot leak through a modal or resume later. `Reset()`
+clears a builder at player/session ownership changes. Recording stores the
+already assigned value frames; replay feeds those frames directly to simulation,
+without repeating action routing or OS events.
+
+The concrete frame also carries the move action's `down`, `pressed`, and
+`released` bits. These preserve existing semantic callbacks even when opposing
+movement bindings cancel the axis value; their edges follow the same once-per-
+tick latch policy.
+
+Migration from the initial `Consume(router, context, tick, player)` API: move
+routing to the host's pre-fixed-update phase using `Capture`, then replace the
+fixed-update call with `Consume(tick)`. No production caller of the initial API
+existed when this contract was qualified; the input unit test was updated. The
+editor play screen also moves its old fixed-update `ReadAction` call to a
+pre-fixed `OnInputSnapshot` callback and passes the scheduler tick through
+`GuiScreenHost::OnFixedUpdate`. Screen implementations overriding that callback
+must accept the new tick argument.
+
+### INP-001.5 qualification
+
+| Acceptance criterion | Executable or audit evidence |
+| --- | --- |
+| Recorded replay has identical commands | `Gameplay Commands Survive Zero Tick Frames And Match Different Presentation Cadences` records and replays the full tick-stamped sequence; `Recording Replays Exactly` covers cursor exhaustion/reset. |
+| Tick assignment is cadence-independent | The same test compares a zero-tick-then-catch-up schedule against one tick per presentation. `Actions And Fixed Tick Edges Resolve Once` checks held/edge behavior across two catch-up ticks. |
+| Move semantic transitions survive projection | `Tick Frames Preserve Move Action Edges When Opposing Axes Cancel` checks pressed/released independently of net movement. |
+| Fixed simulation does not read raw device state | `GameplayInputFrameBuilder::Consume` takes only `SimulationTick`; the router is limited to `Capture`. An audit of `src/runtime`, `src/editor`, `apps`, and `tests/fixtures/gameplay_e2e` found raw input collection in adapters/router/editor presentation only, not fixed-update implementations. The editor play screen's former fixed-update `ReadAction` call was moved to `OnInputSnapshot`. `Gameplay Capture Uses The Consumption Ledger Before Tick Production` verifies the routing boundary. |
+
+The focused local command is `ctest --test-dir build/skeleton -R
+'^(HoroInputTests|HoroGuiScreenHostLifecycleTests|HoroEditorPlaySessionControllerTests)::'
+--output-on-failure --parallel 2` (35/35 on Linux). The hosted current-head
+status remains the source of truth for the full platform matrix; see the PR
+checks rather than preserving a stale status in this document.
+
 This representation supports recording, replay, tests, and future networking
 without replaying OS events.
 
