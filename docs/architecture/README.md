@@ -154,6 +154,10 @@ dependency direction in [System Design](./foundation/system-design.md).
   timing, and physics/render handoff.
 - [VFX And Particles Architecture](./runtime/vfx-and-particles-architecture.md):
   CPU/GPU particle systems, VFX graphs, decals, and volumetric effects.
+- [VFX Foundation Contract Qualification](./runtime/vfx-foundation-contract-qualification.md):
+  determinism, allocation, parser, identity, buffer, tier, path, and platform evidence.
+- [Cinematic Foundation Contract Qualification](./runtime/cinematic-foundation-contract-qualification.md):
+  identity byte order, hostile sequence parsing, deterministic sampling, allocation budget, and platform matrix.
 - [Character Controller Architecture](./runtime/character-controller-architecture.md):
   kinematic capsule controller, slopes, steps, moving platforms, surface
   materials, and surface events.

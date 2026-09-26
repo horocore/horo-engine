@@ -238,9 +238,11 @@ namespace Horo::Cinematic {
         CHECK(rollbackProbe.acquired == 1);
         CHECK(rollbackProbe.released == 1);
         auto invalidLease = SequencePlaybackActivation{{Handle(71), 10, 0, {1, 1}}, Plan()};
-        invalidLease.coordination.pauseGameplay = true;
-        invalidLease.coordinationHooks = {nullptr, InvalidCoordination, ReleaseCoordination};
+        invalidLease.coordination = {SequenceClockSource::UnscaledFixedControl, SequencePausePolicy::PlayerOnly,
+                                     SequenceDilationPolicy::SourceNative, true, false};
+        invalidLease.coordinationHooks = {&rollbackProbe, InvalidCoordination, ReleaseCoordination};
         RequireError(service.Activate(std::move(invalidLease)), SequencePlaybackRuntimeErrors::ActivationInvalid);
+        CHECK(rollbackProbe.released == 2);
         auto failedFirstLease = SequencePlaybackActivation{{Handle(72), 10, 0, {1, 1}}, Plan()};
         failedFirstLease.coordination = {SequenceClockSource::UnscaledFixedControl, SequencePausePolicy::PlayerOnly,
                                          SequenceDilationPolicy::SourceNative, true, false};

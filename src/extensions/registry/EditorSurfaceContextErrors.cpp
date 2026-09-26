@@ -54,4 +54,94 @@ namespace Horo::Extensions::ExtensionErrors {
         .retryable = true,
         .userActionable = false,
     };
+
+    const ErrorCodeDescriptor EditorSurfaceRegistryInvalid{
+        .domain = EditorSurfaceContextDomain,
+        .code = ErrorCode{"editor_surface_registry_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The external editor-surface registry input is malformed.",
+        .remediationHint = "Use a validated persistent panel or tab descriptor and bounded workspace state.",
+        .retryable = false,
+        .userActionable = true,
+    };
+
+    const ErrorCodeDescriptor EditorSurfaceRegistryDuplicate{
+        .domain = EditorSurfaceContextDomain,
+        .code = ErrorCode{"editor_surface_registry_duplicate"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The external editor-surface contribution is already registered.",
+        .remediationHint = "Withdraw the old contribution or use a globally unique surface identity.",
+        .retryable = false,
+        .userActionable = true,
+    };
+
+    const ErrorCodeDescriptor EditorSurfaceRegistryCapacityExceeded{
+        .domain = EditorSurfaceContextDomain,
+        .code = ErrorCode{"editor_surface_registry_capacity_exceeded"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The external editor-surface registry reached a finite host bound.",
+        .remediationHint = "Close or withdraw a contribution before registering another surface.",
+        .retryable = true,
+        .userActionable = true,
+    };
+
+    const ErrorCodeDescriptor EditorSurfaceRegistryShutdown{
+        .domain = EditorSurfaceContextDomain,
+        .code = ErrorCode{"editor_surface_registry_shutdown"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "External editor-surface admission is closed.",
+        .remediationHint = "Wait for the next editor session/provider activation.",
+        .retryable = true,
+        .userActionable = false,
+    };
+
+    const ErrorCodeDescriptor EditorSurfaceRegistryUnknown{
+        .domain = EditorSurfaceContextDomain,
+        .code = ErrorCode{"editor_surface_registry_unknown"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The requested external editor surface is not registered.",
+        .remediationHint = "Use a live contribution identity from the current editor session.",
+        .retryable = false,
+        .userActionable = true,
+    };
+
+    const ErrorCodeDescriptor EditorSurfaceRegistryProviderDisabled{
+        .domain = EditorSurfaceContextDomain,
+        .code = ErrorCode{"editor_surface_registry_provider_disabled"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The external editor-surface provider is disabled.",
+        .remediationHint = "Enable the provider or keep the bounded presentation state deferred.",
+        .retryable = true,
+        .userActionable = true,
+    };
+
+    const ErrorCodeDescriptor EditorSurfaceRegistryProviderMissing{
+        .domain = EditorSurfaceContextDomain,
+        .code = ErrorCode{"editor_surface_registry_provider_missing"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The external editor-surface provider is missing or unloaded.",
+        .remediationHint = "Restore the provider before opening or focusing the surface.",
+        .retryable = true,
+        .userActionable = false,
+    };
+
+    const ErrorCodeDescriptor EditorSurfaceRegistrySurfaceClosed{
+        .domain = EditorSurfaceContextDomain,
+        .code = ErrorCode{"editor_surface_registry_surface_closed"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The external editor surface is closed.",
+        .remediationHint = "Open the surface before requesting focus.",
+        .retryable = true,
+        .userActionable = true,
+    };
+
+    const ErrorCodeDescriptor EditorSurfaceRegistryStateInvalid{
+        .domain = EditorSurfaceContextDomain,
+        .code = ErrorCode{"editor_surface_registry_state_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "External editor-surface workspace state is invalid or oversized.",
+        .remediationHint = "Discard the malformed state and restore only bounded presentation data.",
+        .retryable = false,
+        .userActionable = true,
+    };
 }  // namespace Horo::Extensions::ExtensionErrors

@@ -104,7 +104,7 @@ namespace Horo::Physics {
         }
 
         TEST_CASE("Physics errors have unique definitive identities and actionable diagnostics", "[physics][errors]") {
-            const std::array<std::pair<const ErrorCodeDescriptor *, std::string_view>, 17> cases{{
+            const std::array<std::pair<const ErrorCodeDescriptor *, std::string_view>, 18> cases{{
                 {&PhysicsErrors::WorldInvalid, "physics.world.invalid"},
                 {&PhysicsErrors::HandleMalformed, "physics.handle.malformed"},
                 {&PhysicsErrors::HandleWorldMismatch, "physics.handle.world_mismatch"},
@@ -121,6 +121,7 @@ namespace Horo::Physics {
                 {&PhysicsErrors::ProfileUnsupported, "physics.profile.unsupported"},
                 {&PhysicsErrors::CapacityExceeded, "physics.capacity.exceeded"},
                 {&PhysicsErrors::CapabilityStale, "physics.capability.stale"},
+                {&PhysicsErrors::CapabilityRevoked, "physics.capability.revoked"},
                 {&PhysicsErrors::InitializationFailed, "physics.initialization.failed"},
             }};
             std::set<std::string_view> unique;

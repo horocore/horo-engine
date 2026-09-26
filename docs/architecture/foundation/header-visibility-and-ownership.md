@@ -20,6 +20,19 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## PLS-002.3 Migration Notes
+
+`HoroEngine::Extensions` owns the additive `ExtensionPlatformProvider.h` candidate
+handoff and the 1.2 tail of `ExtensionAbi.h`; existing 1.1 modules negotiate their
+original host-table prefix without source changes. A provider module that opts in
+requires the new callback and version-1 factory descriptor. The new
+`HoroEngine::PlatformServicesExtension` composition target owns
+`Horo/PlatformServices/PlatformProviderAdmission.h` and publicly links only
+Platform Services and Extensions. Hosts adopting provider packages construct
+that bridge beside their two existing registries and call owner-thread retirement
+finalization before releasing the bridge. Importer-only callers do not migrate.
+The generated public-header consumers cover both newly owned headers.
+
 ## EXT-002.11 Migration Notes
 
 `HoroEngine::Extensions` owns the new
@@ -71,6 +84,18 @@ Existing Physics structural-command callers migrate from one admission-ordered
 sequence to the complete tick/world/scene/target/source key; no second legacy
 ordering authority remains. Consumers continue linking `HoroEngine::Physics`, and
 native solver identities or random providers are not exposed.
+
+## PHY-004.9 Query And Event Capability Boundary
+
+`HoroEngine::Physics` owns `Horo/Physics/PhysicsQueryEventCapability.h`.
+It introduces an owner-thread, world-generation-bound client interface over the
+existing immediate query descriptor and copied completed-tick event records.
+Existing direct `PhysicsWorld::Query` callers continue to compile; hosts that
+hand query/event access to another client should issue and revoke this capability
+and carry its exact publication identity. No gameplay host, module permission or
+solver header is introduced in the public include graph. The generated
+`HoroPhysicsPublicHeaderConsumer` compiles the new contract with only the Physics
+target's declared public dependencies.
 
 ## Build-Tree Contract
 
@@ -198,6 +223,17 @@ finding through a module-owned descriptor, then return
 `Result<ValidationResult>`. Existing non-validation `Result<T>` APIs and
 `Error::diagnostics` callers do not change.
 
+## ERR-001.6 Migration Notes
+
+`HoroEngine::Foundation` owns the new
+`Horo/Foundation/Assertions.h` contract. Foundation runtime assertions migrate
+to `HORO_ASSERT` for debug-only programmer preconditions and `HORO_INVARIANT`
+for checks required in every build. Existing valid `Result` callers keep their
+source unchanged; invalid `Value()` or `ErrorValue()` access now fails through
+the always-on invariant boundary in every configuration. Boundary input remains
+typed `Result`/diagnostic validation. The generated Foundation public-header
+consumer compiles the new header through its sole owning target.
+
 ## GAM-001.5 Migration Notes
 
 `HoroEngine::Foundation` owns the canonical
@@ -310,9 +346,10 @@ remain outside this public definition contract.
 
 `HoroEngine::PlatformServices` additionally owns
 `Horo/PlatformServices/PlatformDefinitionRegistries.h`. The shared
-`ProgressionAuthorityMode` now lives in `PlatformServiceInterfaces.h`, its lowest
-backend-neutral owner, so achievement, stat and leaderboard definitions use one type
-without depending on one another. Project/cook composition builds stats first, then
+`ProgressionAuthorityMode`, `ProgressionValueKind` and `LeaderboardOrdering` now live
+in `PlatformServiceInterfaces.h`, their lowest backend-neutral owner, so achievement,
+stat and leaderboard definitions use shared types without depending on one another.
+Project/cook composition builds stats first, then
 leaderboards against that immutable stat snapshot, and presence independently; all
 three candidates reference the same captured ADR-132 ledger fingerprint. Public
 callers consume only typed definitions and immutable spans. Provider-native mapping,
@@ -331,6 +368,32 @@ identities, and validation admits only bounded inert contributions from those mo
 Constructing or validating policy performs no discovery, registration, lifecycle call,
 SDK initialization or ambient-state mutation. Existing callers require no signature
 migration because this is the first published project configuration contract.
+
+## PLS-003.6 Migration Notes
+
+`HoroEngine::PlatformServices` additionally owns
+`Horo/PlatformServices/PlatformProviderManifestCook.h`. Cook composition passes
+validated immutable ledger, definition and policy snapshots with one exact mapping
+revision. The synchronous cook owns both output buffers; no borrowed snapshot or
+adapter value survives in them. Hosts recheck the captured source revisions and
+atomically publish the two outputs together. Existing callers have no signature
+migration. Provider adapters retain native values and produce their private manifests
+from the canonical mapping handoff; SDK loading is outside this cook boundary.
+
+## PLS-004.3 Migration Notes
+
+The leaderboard/stat service contract adds typed ranked-page, around-subject and
+friends-page queries, explicit finite bounds, signed/unsigned score values, per-kind
+capability facts and best-effort frontend cancellation. Provider adapters can now
+request cancellation in `PlatformRequestStore` by Horo request ID/generation without
+knowing the terminal value type. They must update to
+`PlatformServicesBackendInterfaceVersion` 1.1, advertise only query kinds they
+implement, preserve the authored score ordering and competition-rank tie semantics,
+and validate result pages before terminal publication. Old 1.0 adapters are rejected
+by the exact-version activation check; they must not infer support or fall back to a
+different provider/query kind. The existing public header owner remains
+`HoroEngine::PlatformServices`, whose generated consumer target covers the changed
+interfaces.
 
 ## PLS-006.2 Migration Notes
 

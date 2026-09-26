@@ -1,156 +1,7 @@
-#include "Horo/PlatformServices/PlatformServicesFrontend.h"
-#include "PlatformServicesTestSupport.h"
-
-#include <algorithm>
-#include <array>
-#include <catch2/catch_test_macros.hpp>
-#include <memory>
-#include <stdexcept>
+#include "PlatformServicesFrontendTestSupport.h"
 
 namespace Horo::PlatformServices {
-    using TestSupport::AvailableCapabilities;
-    using TestSupport::RequireError;
-
     namespace {
-        constexpr std::size_t ServiceCount = static_cast<std::size_t>(PlatformServiceKind::Count);
-
-        class RoutingBackend final : public IPlatformServicesBackend {
-        public:
-            PlatformServiceCapabilitySnapshot snapshot;
-            PlatformRequestStore requests{{.activeCapacity = 32, .terminalCapacity = 32, .observerCapacity = 32, .generation = {19}}};
-            std::array<std::uint32_t, ServiceCount> calls{};
-            mutable std::uint32_t inspectCalls{};
-            std::uint32_t shutdownCalls{};
-            bool shutdownFails{};
-            bool shutdownThrows{};
-            bool shutdownThrowsNonStandard{};
-            bool malformedHandle{};
-
-            Result<PlatformServiceCapabilitySnapshot> InspectCapabilities() const override {
-                ++inspectCalls;
-                return Result<PlatformServiceCapabilitySnapshot>::Success(snapshot);
-            }
-
-            Result<void> Activate(const PlatformServicesBackendConfig &) override {
-                return Result<void>::Success();
-            }
-
-            Result<void> RequestCancel(PlatformRequestId, PlatformRequestGeneration) override {
-                return Result<void>::Success();
-            }
-
-            Result<void> Shutdown() override {
-                ++shutdownCalls;
-                if (shutdownThrows)
-                    throw std::runtime_error("test backend shutdown failure");
-                if (shutdownThrowsNonStandard)
-                    throw 17;
-                if (shutdownFails)
-                    return Result<void>::Failure(MakeError(BackendErrors::ServiceUnavailable));
-                return Result<void>::Success();
-            }
-
-            Result<PlatformRequestHandle<void>> UnlockAchievement(AchievementUnlockRequest) override {
-                return Admit<void>(PlatformServiceKind::Achievements);
-            }
-
-            Result<PlatformRequestHandle<void>> SubmitScore(LeaderboardScoreRequest) override {
-                return Admit<void>(PlatformServiceKind::LeaderboardsAndStats);
-            }
-
-            Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest) override {
-                return Admit<void>(PlatformServiceKind::LeaderboardsAndStats);
-            }
-
-            Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest) override {
-                return Admit<CloudReadResult>(PlatformServiceKind::Cloud);
-            }
-
-            Result<PlatformRequestHandle<CloudObjectPage>> ListCloudObjects(CloudListRequest) override {
-                return Admit<CloudObjectPage>(PlatformServiceKind::Cloud);
-            }
-
-            Result<PlatformRequestHandle<CloudBlobReadResult>> ReadCloudObject(CloudBlobReadRequest) override {
-                return Admit<CloudBlobReadResult>(PlatformServiceKind::Cloud);
-            }
-
-            Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest) override {
-                return Admit<CloudMutationResult>(PlatformServiceKind::Cloud);
-            }
-
-            Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest) override {
-                return Admit<CloudMutationResult>(PlatformServiceKind::Cloud);
-            }
-
-            Result<PlatformRequestHandle<CloudQuotaObservation>> QueryCloudQuota(PlatformSubjectHandle) override {
-                return Admit<CloudQuotaObservation>(PlatformServiceKind::Cloud);
-            }
-
-            Result<PlatformRequestHandle<void>> SetPresence(PresenceUpdateRequest) override {
-                return Admit<void>(PlatformServiceKind::Presence);
-            }
-
-            Result<PlatformRequestHandle<void>> ClearPresence(PlatformSubjectHandle) override {
-                return Admit<void>(PlatformServiceKind::Presence);
-            }
-
-            Result<PlatformRequestHandle<FriendsPage>> QueryFriends(FriendsQuery) override {
-                return Admit<FriendsPage>(PlatformServiceKind::Friends);
-            }
-
-            Result<PlatformRequestHandle<PlatformSessionSnapshot>> QueryCurrentSession() override {
-                return Admit<PlatformSessionSnapshot>(PlatformServiceKind::Session);
-            }
-
-            [[nodiscard]] std::uint32_t TotalCalls() const noexcept {
-                std::uint32_t result{};
-                for (const auto count : calls)
-                    result += count;
-                return result;
-            }
-
-        private:
-            template <typename T> Result<PlatformRequestHandle<T>> Admit(const PlatformServiceKind service) {
-                ++calls[static_cast<std::size_t>(service)];
-                if (malformedHandle)
-                    return Result<PlatformRequestHandle<T>>::Success({});
-                return requests.Admit<T>();
-            }
-        };
-
-        PlatformServiceCapabilitySnapshot Capabilities(const PlatformProviderGeneration generation = {7}) {
-            return AvailableCapabilities(generation, {.maxConcurrentRequests = 16, .maxPageEntries = 4, .maxPayloadBytes = 4});
-        }
-
-        PlatformSessionSnapshot Session(const PlatformProviderGeneration provider = {7}, const PlatformSessionGeneration generation = {5},
-                                        const PlatformSessionPhase phase = PlatformSessionPhase::Active,
-                                        const PlatformSessionAccessState access = PlatformSessionAccessState::Granted,
-                                        const std::byte nonce = std::byte{1}) {
-            PlatformSessionCandidate candidate{.phase = phase,
-                                               .generation = generation,
-                                               .providerGeneration = provider,
-                                               .accessRevision = {3},
-                                               .reason = phase == PlatformSessionPhase::Active ? PlatformSessionReason::None
-                                                                                               : PlatformSessionReason::UserSignedOut};
-            candidate.capabilities.services.fill(phase == PlatformSessionPhase::Active ? access : PlatformSessionAccessState::Unavailable);
-            if (phase == PlatformSessionPhase::Active) {
-                PlatformSubjectNonce subject;
-                subject.bytes.back() = nonce;
-                candidate.subjectNonce = subject;
-            }
-            auto built = BuildPlatformSessionSnapshot(candidate);
-            REQUIRE(built.HasValue());
-            return std::move(built).Value();
-        }
-
-        PlatformServicesFrontend Frontend(const std::shared_ptr<RoutingBackend> &backend, PlatformSessionSnapshot session,
-                                          PlatformServicesOperationPolicy policy = {}) {
-            backend->snapshot = Capabilities(session.ProviderGeneration());
-            auto result = PlatformServicesFrontend::Create(backend, backend->snapshot, std::move(session), std::move(policy));
-            REQUIRE(result.HasValue());
-            return std::move(result).Value();
-        }
-
         CloudBlobWriteRequest MutationWrite(const PlatformSubjectHandle &subject) {
             const auto key = CloudSaveObjectKey::Copy(std::array{std::byte{4}});
             const std::array bytes{std::byte{1}, std::byte{2}};
@@ -186,7 +37,15 @@ namespace Horo::PlatformServices {
         auto frontend = Frontend(backend, session);
 
         REQUIRE(frontend.UnlockAchievement({subject, {1}}).HasValue());
-        REQUIRE(frontend.SubmitScore({subject, {2}, -9}).HasValue());
+        auto scoreRequest = frontend.SubmitScore({subject, {2}, std::int64_t{-9}});
+        REQUIRE(scoreRequest.HasValue());
+        CHECK(frontend.RequestCancel(scoreRequest.Value()).HasValue());
+        CHECK(backend->cancelCalls == 1);
+        CHECK(backend->requests.Query(scoreRequest.Value()).Value().state == PlatformRequestState::Cancelling);
+        REQUIRE(frontend.SubmitScore({subject, {2}, std::uint64_t{123}}).HasValue());
+        REQUIRE(frontend.QueryRankedLeaderboard({subject, {2}, 12, 4}).HasValue());
+        REQUIRE(frontend.QueryLeaderboardAroundSubject({subject, {2}, 1, 2}).HasValue());
+        REQUIRE(frontend.QueryFriendsLeaderboard({subject, {2}, 8, 3}).HasValue());
         REQUIRE(frontend.WriteStat({subject, {3}, 17}).HasValue());
         REQUIRE(frontend.ReadCloudObject({subject, {4}}).HasValue());
         REQUIRE(frontend.ListCloudObjects({.subject = subject, .pageSize = 2}).HasValue());
@@ -198,10 +57,19 @@ namespace Horo::PlatformServices {
         REQUIRE(frontend.QueryFriends({subject, 4}).HasValue());
         REQUIRE(frontend.QueryCurrentSession().HasValue());
 
-        CHECK(backend->TotalCalls() == 10);
-        CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::LeaderboardsAndStats)] == 2);
+        CHECK(backend->TotalCalls() == 14);
+        CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::LeaderboardsAndStats)] == 6);
         CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Cloud)] == 3);
         CHECK(backend->calls[static_cast<std::size_t>(PlatformServiceKind::Presence)] == 2);
+        REQUIRE(backend->lastRankedQuery);
+        CHECK(backend->lastRankedQuery->startIndex == 12);
+        CHECK(backend->lastRankedQuery->pageSize == 4);
+        REQUIRE(backend->lastAroundSubjectQuery);
+        CHECK(backend->lastAroundSubjectQuery->entriesBefore == 1);
+        CHECK(backend->lastAroundSubjectQuery->entriesAfter == 2);
+        REQUIRE(backend->lastFriendsLeaderboardQuery);
+        CHECK(backend->lastFriendsLeaderboardQuery->startIndex == 8);
+        CHECK(backend->lastFriendsLeaderboardQuery->pageSize == 3);
     }
 
     TEST_CASE("Platform Services frontend rejects malformed identities and bounds before dispatch",
@@ -212,7 +80,10 @@ namespace Horo::PlatformServices {
         auto frontend = Frontend(backend, session);
 
         RequireError(frontend.UnlockAchievement({subject, {}}), FrontendErrors::InvalidRequest);
-        RequireError(frontend.SubmitScore({subject, {}, 0}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.SubmitScore({subject, {}, std::int64_t{0}}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryRankedLeaderboard({subject, {}, 0, 1}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryLeaderboardAroundSubject({subject, {}, 0, 0}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryFriendsLeaderboard({subject, {}, 0, 1}), FrontendErrors::InvalidRequest);
         RequireError(frontend.WriteStat({subject, {}, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.ReadCloudObject(CloudReadRequest{subject, {}}), FrontendErrors::InvalidRequest);
         RequireError(frontend.ListCloudObjects({.subject = subject, .pageSize = 0}), FrontendErrors::InvalidRequest);
@@ -223,41 +94,89 @@ namespace Horo::PlatformServices {
         RequireError(frontend.SetPresence({subject, {1}, "12345"}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 0}), FrontendErrors::InvalidRequest);
         RequireError(frontend.QueryFriends({subject, 5}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryRankedLeaderboard({subject, {2}, 0, 0}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryRankedLeaderboard({subject, {2}, 0, 5}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryRankedLeaderboard({subject, {2}, std::numeric_limits<std::uint32_t>::max(), 1}),
+                     FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryLeaderboardAroundSubject({subject, {2}, 2, 2}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryLeaderboardAroundSubject({subject, {2}, std::numeric_limits<std::uint32_t>::max(), 1}),
+                     FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryFriendsLeaderboard({subject, {2}, 0, 0}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryFriendsLeaderboard({subject, {2}, 0, 5}), FrontendErrors::InvalidRequest);
+        RequireError(frontend.QueryFriendsLeaderboard({subject, {2}, std::numeric_limits<std::uint32_t>::max(), 1}),
+                     FrontendErrors::InvalidRequest);
+        const PlatformRequestHandle<void> invalidHandle;
+        RequireError(frontend.RequestCancel(invalidHandle), FrontendErrors::InvalidRequest);
         CHECK(backend->TotalCalls() == 0);
+        CHECK(backend->cancelCalls == 0);
         CHECK(backend->requests.RecordCount() == 0);
     }
 
-    TEST_CASE("Platform Services frontend fails closed for session capability and product policy",
+    TEST_CASE("Platform Services frontend rejects stale session handles", "[platform-services][frontend][admission]") {
+        auto backend = std::make_shared<RoutingBackend>();
+        const auto oldSession = Session({7}, {4}, PlatformSessionPhase::Active, PlatformSessionAccessState::Granted, std::byte{2});
+        const auto currentSession = Session();
+        auto frontend = Frontend(backend, currentSession);
+        RequireError(frontend.UnlockAchievement({*oldSession.Subject(), {1}}), PlatformSessionErrors::StaleSession);
+        RequireError(frontend.QueryRankedLeaderboard({*oldSession.Subject(), {2}, 0, 1}), PlatformSessionErrors::StaleSession);
+        CHECK(backend->TotalCalls() == 0);
+    }
+
+    TEST_CASE("Platform Services frontend rejects denied session access", "[platform-services][frontend][admission]") {
+        auto backend = std::make_shared<RoutingBackend>();
+        const auto denied = Session({7}, {5}, PlatformSessionPhase::Active, PlatformSessionAccessState::Denied);
+        auto frontend = Frontend(backend, denied);
+        RequireError(frontend.QueryFriends({*denied.Subject(), 1}), PlatformSessionErrors::AccessDenied);
+        RequireError(frontend.QueryFriendsLeaderboard({*denied.Subject(), {2}, 0, 1}), PlatformSessionErrors::AccessDenied);
+        CHECK(backend->TotalCalls() == 0);
+    }
+
+    TEST_CASE("Friends leaderboard requires the separate friends consent grant", "[platform-services][frontend][admission]") {
+        auto backend = std::make_shared<RoutingBackend>();
+        PlatformSessionCandidate candidate{.phase = PlatformSessionPhase::Active,
+                                           .generation = {5},
+                                           .providerGeneration = {7},
+                                           .accessRevision = {3}};
+        PlatformSubjectNonce nonce;
+        nonce.bytes.back() = std::byte{1};
+        candidate.subjectNonce = nonce;
+        candidate.capabilities.services.fill(PlatformSessionAccessState::Granted);
+        candidate.capabilities.services[static_cast<std::size_t>(PlatformServiceKind::Friends)] =
+            PlatformSessionAccessState::ConsentRequired;
+        auto built = BuildPlatformSessionSnapshot(candidate);
+        REQUIRE(built.HasValue());
+        const auto session = std::move(built).Value();
+        auto frontend = Frontend(backend, session);
+        RequireError(frontend.QueryFriendsLeaderboard({*session.Subject(), {2}, 0, 1}), PlatformSessionErrors::ConsentRequired);
+        CHECK(backend->TotalCalls() == 0);
+    }
+
+    TEST_CASE("Platform Services frontend rejects subject operations without an active session",
               "[platform-services][frontend][admission]") {
-        SECTION("stale session") {
-            auto backend = std::make_shared<RoutingBackend>();
-            const auto oldSession = Session({7}, {4}, PlatformSessionPhase::Active, PlatformSessionAccessState::Granted, std::byte{2});
-            const auto currentSession = Session();
-            auto frontend = Frontend(backend, currentSession);
-            RequireError(frontend.UnlockAchievement({*oldSession.Subject(), {1}}), PlatformSessionErrors::StaleSession);
-            CHECK(backend->TotalCalls() == 0);
-        }
-        SECTION("denied access") {
-            auto backend = std::make_shared<RoutingBackend>();
-            const auto denied = Session({7}, {5}, PlatformSessionPhase::Active, PlatformSessionAccessState::Denied);
-            auto frontend = Frontend(backend, denied);
-            RequireError(frontend.QueryFriends({*denied.Subject(), 1}), PlatformSessionErrors::AccessDenied);
-            CHECK(backend->TotalCalls() == 0);
-        }
-        SECTION("inactive session") {
-            auto backend = std::make_shared<RoutingBackend>();
-            const auto active = Session();
-            auto frontend = Frontend(backend, Session({7}, {5}, PlatformSessionPhase::NoSubject));
-            RequireError(frontend.ClearPresence(*active.Subject()), PlatformSessionErrors::NoSubject);
-            CHECK(backend->TotalCalls() == 0);
-        }
-        SECTION("product policy") {
+        auto backend = std::make_shared<RoutingBackend>();
+        const auto active = Session();
+        auto frontend = Frontend(backend, Session({7}, {5}, PlatformSessionPhase::NoSubject));
+        RequireError(frontend.ClearPresence(*active.Subject()), PlatformSessionErrors::NoSubject);
+        CHECK(backend->TotalCalls() == 0);
+    }
+
+    TEST_CASE("Friends leaderboard honors leaderboard and Friends operation policies", "[platform-services][frontend][admission]") {
+        SECTION("leaderboard policy") {
             auto backend = std::make_shared<RoutingBackend>();
             const auto session = Session();
             PlatformServicesOperationPolicy policy;
-            policy.deniedServices[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = true;
+            policy.deniedServices[static_cast<std::size_t>(PlatformServiceKind::LeaderboardsAndStats)] = true;
             auto frontend = Frontend(backend, session, policy);
-            RequireError(frontend.UnlockAchievement({*session.Subject(), {1}}), FrontendErrors::OperationDenied);
+            RequireError(frontend.QueryFriendsLeaderboard({*session.Subject(), {2}, 0, 1}), FrontendErrors::OperationDenied);
+            CHECK(backend->TotalCalls() == 0);
+        }
+        SECTION("Friends policy") {
+            auto backend = std::make_shared<RoutingBackend>();
+            const auto session = Session();
+            PlatformServicesOperationPolicy policy;
+            policy.deniedServices[static_cast<std::size_t>(PlatformServiceKind::Friends)] = true;
+            auto frontend = Frontend(backend, session, policy);
+            RequireError(frontend.QueryFriendsLeaderboard({*session.Subject(), {2}, 0, 1}), FrontendErrors::OperationDenied);
             CHECK(backend->TotalCalls() == 0);
         }
     }
@@ -290,6 +209,24 @@ namespace Horo::PlatformServices {
         auto nullFrontend = std::move(nullCreated).Value();
         RequireError(nullFrontend.ReadCloudObject({*session.Subject(), {1}}), FrontendErrors::NullProvider);
         CHECK(backend->TotalCalls() == 0);
+    }
+
+    TEST_CASE("Platform Services frontend rejects only the explicitly unsupported leaderboard query kinds",
+              "[platform-services][frontend][capability]") {
+        auto backend = std::make_shared<RoutingBackend>();
+        const auto session = Session();
+        backend->snapshot = Capabilities();
+        backend->snapshot.services[static_cast<std::size_t>(PlatformServiceKind::LeaderboardsAndStats)].leaderboardQueries = {};
+        auto created = PlatformServicesFrontend::Create(backend, backend->snapshot, session);
+        REQUIRE(created.HasValue());
+        auto frontend = std::move(created).Value();
+
+        RequireError(frontend.QueryRankedLeaderboard({*session.Subject(), {2}, 0, 1}), BackendErrors::UnsupportedOperation);
+        RequireError(frontend.QueryLeaderboardAroundSubject({*session.Subject(), {2}, 0, 0}), BackendErrors::UnsupportedOperation);
+        RequireError(frontend.QueryFriendsLeaderboard({*session.Subject(), {2}, 0, 1}), BackendErrors::UnsupportedOperation);
+        REQUIRE(frontend.SubmitScore({*session.Subject(), {2}, std::int64_t{10}}).HasValue());
+        CHECK(backend->TotalCalls() == 1);
+        CHECK(backend->requests.RecordCount() == 1);
     }
 
     TEST_CASE("Platform Services frontend rejects invalid or stale composition without request side effects",
@@ -343,6 +280,7 @@ namespace Horo::PlatformServices {
         CHECK(backend->TotalCalls() == 0);
 
         REQUIRE(frontend.Close().HasValue());
+        backend = std::make_shared<RoutingBackend>();
         backend->snapshot = Capabilities();
         backend->snapshot.services[static_cast<std::size_t>(PlatformServiceKind::Cloud)].cloudMutation = MutationFacts();
         auto created = PlatformServicesFrontend::Create(backend, backend->snapshot, session);
@@ -371,13 +309,20 @@ namespace Horo::PlatformServices {
         auto backend = std::make_shared<RoutingBackend>();
         const auto session = Session();
         auto frontend = Frontend(backend, session);
+        auto scoreRequest = frontend.SubmitScore({*session.Subject(), {2}, std::int64_t{10}});
+        REQUIRE(scoreRequest.HasValue());
         CHECK(frontend.IsOpen());
         REQUIRE(frontend.Close().HasValue());
         CHECK_FALSE(frontend.IsOpen());
         REQUIRE(frontend.Close().HasValue());
         CHECK(backend->shutdownCalls == 1);
         RequireError(frontend.QueryCurrentSession(), FrontendErrors::Unavailable);
-        CHECK(backend->TotalCalls() == 0);
+        RequireError(frontend.QueryRankedLeaderboard({*session.Subject(), {2}, 0, 1}), FrontendErrors::Unavailable);
+        RequireError(frontend.QueryLeaderboardAroundSubject({*session.Subject(), {2}, 0, 0}), FrontendErrors::Unavailable);
+        RequireError(frontend.QueryFriendsLeaderboard({*session.Subject(), {2}, 0, 1}), FrontendErrors::Unavailable);
+        RequireError(frontend.RequestCancel(scoreRequest.Value()), FrontendErrors::Unavailable);
+        CHECK(backend->TotalCalls() == 1);
+        CHECK(backend->cancelCalls == 0);
 
         backend = std::make_shared<RoutingBackend>();
         backend->shutdownFails = true;
@@ -415,4 +360,5 @@ namespace Horo::PlatformServices {
         CHECK(backend->TotalCalls() == 1);
         CHECK(backend->requests.RecordCount() == 0);
     }
+
 }  // namespace Horo::PlatformServices

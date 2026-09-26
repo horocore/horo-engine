@@ -222,13 +222,41 @@ display name, traversal order, native ID or solver-owned pointer participates in
 identity. World anchors are transient runtime intent; origin rebasing must rebind
 or reject queued intent rather than treating numeric coordinates as durable identity.
 
-`PhysicsFixedConstraint` and `PhysicsDistanceConstraint` are the initial typed
-parameter vocabulary. Validation proves representation and owner consistency only;
+`PhysicsFixedConstraint`, `PhysicsDistanceConstraint`, `PhysicsHingeConstraint` and
+`PhysicsSliderConstraint` are typed runtime parameter policies. A hinge rotates
+around each anchor frame's local `+Y`, with local `+X` defining the zero-angle
+reference. A slider translates along each frame's local `+X`, with local `+Y`
+fixing orientation. Hinge limits are finite within `[-pi, 0]` and `[0, pi]`;
+slider limits are finite and bracket zero. The limits are hard; motors, springs,
+friction and break behavior are not exposed. `ReadSceneJointState` returns a
+non-owning owner-thread copy of the current signed angle in radians or displacement
+in meters. Fixed and distance joints return `OperationUnsupported` for that query.
+The serializable Scene producer still supports fixed and distance only; hinge and
+slider are runtime-only until a separate authored schema and migration are defined.
+
+Validation proves representation and owner consistency only;
 admission separately requires exact-revision `PhysicsCapability::Constraints`
 evidence before body resolution, lease retention or native creation. Unsupported,
-temporarily unavailable and stale evidence remain distinct typed failures. Hinge,
-slider, cone-twist, six-DOF, motor, break and spring behavior must gain typed policy
-and qualification rather than being approximated by fixed or distance constraints.
+temporarily unavailable and stale evidence remain distinct typed failures. Other
+joint kinds need typed policy and qualification rather than approximation.
+
+Canonical scene admission resolves both live body handles and converts each body-local
+frame through that body's staged pose. Fixed joints preserve both frame orientations;
+distance joints enforce their finite ordered minimum/maximum interval. Hinge and
+slider joints use both complete frames and retain the declared signed axis. A joint owns
+one native solver constraint until explicit owner-thread destruction or world reset,
+unload or shutdown. Destruction checks the exact world and handle generation, removes
+native ownership before its endpoints retire, and never revives an old handle.
+Multiple joints on one body pair retain collision suppression until the last
+suppressed joint is removed. The collision-pair lookup is immutable during a joined
+solver tick; structural changes occur only outside that tick.
+
+`PhysicsJointCollisionPolicy` defaults to disabling contacts between two connected
+bodies. CanonicalV1's current scene object-layer filters are closed, so a request
+to allow contacts between two body endpoints fails with `OperationUnsupported`;
+it cannot silently claim to enable contacts. World-anchor joints have no second
+body to filter. When scene collision profiles are enabled, their implementation
+must qualify persistent-contact invalidation before enabling the allow policy.
 
 Constraint solving inherits the immutable world's `PhysicsStepPolicy`. CanonicalV1
 uses the qualified 10 velocity and 2 position iterations for the complete world;
@@ -570,6 +598,29 @@ do not extend world, schema, shape or material leases. A missing geometric hit i
 a successful zero-hit result; stale world/scene/filter generations and malformed
 evidence are typed errors.
 
+The Physics-owned query/event capability is issued by an active canonical world.
+Each copy names one exact world generation and a never-reused capability generation.
+At most 256 usable capability states may be issued by one world at once; expired or
+explicitly revoked states release their admission slot.
+The host decides which client receives it and may explicitly revoke it; Physics
+does not decide module permissions. A command carries that identity and the exact
+completed publication revision. Query submission is synchronous owner-thread
+immediate execution and returns the completed tick/revision with bounded hit
+metadata. Snapshot and asynchronous submission remain unsupported until a
+qualified snapshot provider exists. World reset, retirement or replacement makes
+retained capabilities stale; explicit revocation returns a distinct error.
+The query revision prevents an unnoticed fixed-tick publication change between
+capture and admission; the query still samples the current owner-thread
+broadphase, whose own generation is reported in `PhysicsQueryResult`.
+
+The event reader accepts only the latest completed tick and revision, copying at
+most the caller's bound into caller-owned records and reporting truncation and
+the published dropped-record count. Earlier ticks are not readable through this
+capability. It cannot run during stepping or from a solver/tick callback, and
+returns no borrowed projection span. Both paths validate capability and world identity on
+every access. They share Physics's owner-thread boundary; no client handle extends
+the world or solver lifetime.
+
 Immediate queries execute on the physics owner thread outside a step. Parallel
 or asynchronous queries use a read-only broadphase snapshot with documented
 staleness.
@@ -691,6 +742,32 @@ definition. Stopping play destroys it without modifying authoring transforms.
 
 Reload rebuilds physics state by default. Preservation of velocity or sleep
 state requires a typed policy keyed by stable object ID.
+
+`PhysicsPlayWorldSession` supplies the Physics-owned part of this contract. A host
+passes a matching immutable `RuntimeSceneDefinition` and resolved
+`RuntimeSceneView` to `Prepare` between fixed ticks. Physics builds an unpublished
+candidate with its own world identity and copied body poses; it retains neither
+the source view nor an editor document pointer. The host keeps the original view's
+scene alive and passes that view back to `Commit` so structural invalidation and
+definition/asset generation changes reject publication. The host calls `Commit` only at
+`CommitDeferredLifecycleChanges`, after fixed work and queries have drained. A
+reload prepares a second candidate while the old world remains active; failed
+preparation or publication validation retires only that candidate. Successful
+commit retires the previous world and invalidates its handles. `Stop` at the same
+safe point retires active and pending worlds; repeated stop is harmless. The host
+must keep the process `PhysicsRuntime` alive through session destruction and
+destroy the session on its owner thread after all work has joined.
+
+The initial reload policy is a cold rebuild. Native solver state, velocity, sleep
+state and contact caches are not transferred. The session can advance its active
+world for an exact host fixed tick, but this API does not publish dynamic poses to
+RuntimeScene or apply them to authoring data. The graphical editor currently
+composes an explicit Null Physics runtime and clones only core scene storage for
+play, without cloning activation participants. A later editor composition ticket
+must select an available solver, create a separate play-scene aggregate with this
+Physics lifecycle, route fixed ticks and runtime transform publication, and stop
+the aggregate before returning to edit mode. This Physics-owned contract alone
+does not make editor Play simulate rigid bodies.
 
 ## Floating Origin Rebasing
 

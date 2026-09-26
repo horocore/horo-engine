@@ -152,6 +152,21 @@ player generation. Repeating an already-satisfied Play, Pause, Stop, Close or Fa
 an explicit no-change result and emits no signal. Invalid transitions fail without
 changing state or control revision.
 
+For a finite `Once` activation, Cinematic Runtime retains the owner's captured
+pre-playback scalar values in the player instance. Blend-in and blend-out sample
+weights are clamped linear functions of distance from the directional playback
+edges; overlapping windows use the smaller weight. Sampling and blending use
+caller-owned frame storage and allocate nothing. The snapshot belongs to the
+activation, even when terminal policy keeps the final state. Loop and PingPong
+activations cannot request finite edge blend windows.
+
+At a terminal owner safe point, `RestorePrePlayback` preflights every surviving
+target's generation and owner revision before applying captured values. If any
+target was destroyed or replaced, the entire activation keeps its final state,
+with typed per-target diagnostics including the surviving targets skipped by the
+fallback. `KeepFinalState` does not invoke restore accessors. Snapshot storage is
+released with the player after its terminal restore decision.
+
 Stop and close deliberately differ. Stop closes future evaluation/event admission and
 drains occurrences already admitted by the owning boundary. Close is cancellation,
 scene/session loss or shutdown: it closes admission immediately and discards pending,
@@ -164,6 +179,30 @@ directly; it never advances from the prior cursor. Its signal resets event trave
 without dispatching the crossed interval. Playback rate is a bounded exact rational.
 Zero rate leaves a player `Playing` with a frozen clock and is observably different
 from `Paused`; negative rate remains available for reverse-capable clocks.
+
+### End behavior and completion notification
+
+The compiled `Once` mode is the Stop end behavior. A forward player completes at
+`duration`; a reverse player completes at zero. The final crossed interval dispatches
+its events, then the runtime service publishes `Stopped`, releases coordination
+leases, and invokes the optional `finishedHook` once for that player generation.
+Repeated evaluation cannot finish it again because `Stopped` is terminal. Explicit
+Stop/FinishStop, cancellation, failure, and owner shutdown are disposal paths, not
+natural completion; they do not invoke `finishedHook`.
+
+`Loop` and `PingPong` have no natural end and never invoke `finishedHook`. Loop
+dispatches the arriving end key and the next traversal's start key with distinct
+traversal ordinals; each crossed interior key retriggers on every pass. PingPong
+changes direction at each end; a turn key belongs only to the arriving interval,
+while reverse travel fires only keys marked `fireInReverse`. Both modes remain owned
+by their runtime service until explicit stop, cancellation, failure, or session/scene
+shutdown. Scene replacement closes the old service before admitting a new session,
+and old generation handles cannot address the replacement.
+
+Migration: existing callers may keep their four-field `SequenceFrameHooks`
+initializers and receive no completion callback. Callers that observe completion
+append `finishedContext` and `finishedHook`; they must keep that context alive
+through the evaluating owner boundary. The hook is not retained by the service.
 
 ## Trigger Sources And Admission
 
@@ -475,6 +514,14 @@ The following are schematic domain contracts, not implemented public headers.
 finite authoring times to it once. Tick-derived advancement uses checked arithmetic
 and retained fractional remainder, not repeated accumulation of float frame deltas.
 
+Sequence source schema 1.0 now accepts optional boolean `playback.pauseGameplay`
+and `playback.hideHUD` fields, both defaulting to false for existing assets. The
+model validates `pauseGameplay` with PlayerOnly and a non-simulation clock before
+cook. Host activation copies these authored settings into its runtime coordination
+request and resolves the required owner adapters before acquiring leases. No
+persisted setting is a live pause or HUD token; the session player owns those
+leases, and asset reload never restores a stale token.
+
 ```cpp
 enum class SequenceClockSource : uint8_t {
     CommittedSimulation,
@@ -534,6 +581,47 @@ pause must use PlayerOnly with a non-simulation source, otherwise activation ret
 `InvalidClockSettings` rather than creating a self-pausing cutscene.
 
 ### Gameplay Pause Authority
+
+The implemented `CinematicRuntimeService::EvaluateClock` accepts a host-issued
+`SequenceClockSample` with an absolute source position, source epoch, rational
+gameplay scale, and suspension state. The service rejects mismatched domains,
+regressing positions, and malformed scales. Its per-player baseline advances only
+after a successful evaluation. Fractional scale remainder is retained between
+boundaries and retained across pause, suspension, and epoch rebases when the scale
+is unchanged. It resets when the scale changes. The host must submit a sample at
+every gameplay-scale change before advancing that source clock again; otherwise
+the service necessarily applies the newly observed scale to the entire elapsed
+interval since the prior sample. The first sample
+establishes a baseline; hosts must provide it before the first desired advancement.
+The older delta-oriented `Evaluate` remains the frame-core entry for tests and
+already-authorized callers; host compositions that need pause/dilation guarantees
+must use `EvaluateClock`.
+
+The host samples cumulative committed simulation time after successful fixed-tick
+commit and never includes failed or paused ticks. It samples the unscaled control
+clock in the service phase, even while gameplay is paused; wall and external
+sources likewise supply monotonic admitted positions. On host suspension, provider
+replacement, external seek, or discontinuity, the host supplies suspended evidence
+or a new epoch, and the service rebases without traversing skipped time. The host
+owns external-provider pause/rate/seek acknowledgement and must not report a new
+epoch until the provider confirms it. Host compositions also own the aggregate
+gameplay-pause authority and Runtime UI HUD suppression policy; their acquire
+callbacks return per-player owner tokens and their release callbacks remove only
+that token. They publish the resulting gameplay pause revision through
+`ResolveGameplayPause` at the same owner safe point before evaluation. A granted
+pause token holds the whole simulation domain. A granted HUD token suppresses only
+the selected HUD band/route generation and preserves other suppression owners.
+Headless hosts can provide a no-op HUD owner only when there is no HUD to suppress.
+
+An incoming gameplay pause holds `FollowGameplay` players and reports
+`HeldByGameplayPause`; `PlayerOnly` players report
+`ContinuedDuringGameplayPause` and keep consuming their own source clock. A newer
+unpause reports `Resumed` only for a player that was held. Repeated and stale
+authority revisions return typed `Unchanged` and `StaleAuthority` outcomes. Explicit
+player pause and host suspension still hold both policies. Terminal players reject
+late pause observations. Pause/HUD tokens are retained through explicit player
+pause, then released on natural completion, stop completion, cancellation, failure,
+shutdown, or service destruction; activation failure rolls back acquired tokens.
 
 `pauseGameplay` requests a scoped token from the host Runtime's gameplay pause
 authority; SequencePlayer never sets scheduler booleans directly. Tokens compose

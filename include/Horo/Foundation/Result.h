@@ -1,8 +1,8 @@
 #pragma once
 
+#include "Horo/Foundation/Assertions.h"
 #include "Horo/Foundation/ErrorCode.h"
 
-#include <cassert>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -27,25 +27,43 @@ namespace Horo {
             return !HasValue();
         }
 
+        /**
+         * @brief Returns the successful value by immutable reference.
+         * @pre HasValue() is true.
+         * @return Borrowed value.
+         */
         [[nodiscard]] const T &Value() const & {
-            assert(HasValue());
+            HORO_INVARIANT_MSG(HasValue(), "Result::Value requires a successful result.");
             return std::get<T>(m_value);
         }
 
+        /**
+         * @brief Transfers the successful value from an expiring result.
+         * @pre HasValue() is true.
+         * @return Owned value for immediate move.
+         */
         [[nodiscard]] T &&Value() && {
-            assert(HasValue());
+            HORO_INVARIANT_MSG(HasValue(), "Result::Value requires a successful result.");
             return std::move(std::get<T>(m_value));
         }
 
-        /** @brief Returns the stored error by immutable reference. @return Borrowed error. */
+        /**
+         * @brief Returns the stored error by immutable reference.
+         * @pre HasError() is true.
+         * @return Borrowed error.
+         */
         [[nodiscard]] const Error &ErrorValue() const & {
-            assert(HasError());
+            HORO_INVARIANT_MSG(HasError(), "Result::ErrorValue requires a failed result.");
             return std::get<Error>(m_value);
         }
 
-        /** @brief Transfers the stored error from an expiring result. @return Owned error reference for immediate move. */
+        /**
+         * @brief Transfers the stored error from an expiring result.
+         * @pre HasError() is true.
+         * @return Owned error reference for immediate move.
+         */
         [[nodiscard]] Error &&ErrorValue() && {
-            assert(HasError());
+            HORO_INVARIANT_MSG(HasError(), "Result::ErrorValue requires a failed result.");
             return std::move(std::get<Error>(m_value));
         }
 
@@ -76,15 +94,23 @@ namespace Horo {
             return !HasValue();
         }
 
-        /** @brief Returns the stored error by immutable reference. @return Borrowed error. */
+        /**
+         * @brief Returns the stored error by immutable reference.
+         * @pre HasError() is true.
+         * @return Borrowed error.
+         */
         [[nodiscard]] const Error &ErrorValue() const & {
-            assert(HasError());
+            HORO_INVARIANT_MSG(HasError(), "Result::ErrorValue requires a failed result.");
             return *m_error;
         }
 
-        /** @brief Transfers the stored error from an expiring result. @return Owned error reference for immediate move. */
+        /**
+         * @brief Transfers the stored error from an expiring result.
+         * @pre HasError() is true.
+         * @return Owned error reference for immediate move.
+         */
         [[nodiscard]] Error &&ErrorValue() && {
-            assert(HasError());
+            HORO_INVARIANT_MSG(HasError(), "Result::ErrorValue requires a failed result.");
             return std::move(*m_error);
         }
 

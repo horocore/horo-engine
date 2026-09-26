@@ -144,14 +144,31 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc ComposeHostModules */
-    Result<std::unique_ptr<ModuleHost>> ComposeHostModules(const HostModuleSelection &selection) {
+    Result<std::unique_ptr<ModuleHost>> ComposeHostModules(const HostModuleSelection &selection,
+                                                           const std::span<const ModuleConfigurationContribution> contributions) {
         auto described = DescribeHostModules(selection);
         if (described.HasError())
             return Result<std::unique_ptr<ModuleHost>>::Failure(described.ErrorValue());
 
+        for (const ModuleConfigurationContribution &contribution : contributions) {
+            if (std::ranges::count_if(described.Value(),
+                                      [&contribution](const ModuleDescriptor &descriptor) {
+                return descriptor.id == contribution.module;
+            }) != 1 ||
+                std::ranges::count_if(contributions, [&contribution](const ModuleConfigurationContribution &other) {
+                return other.module == contribution.module;
+            }) != 1)
+                return InvalidSelection<std::unique_ptr<ModuleHost>>("Settings contribution requires exactly one selected module: " +
+                                                                     contribution.module.value);
+        }
         auto host = std::make_unique<ModuleHost>();
         for (const ModuleDescriptor &descriptor : described.Value()) {
-            if (const Result<void> registered = host->Register(descriptor); registered.HasError())
+            const auto contribution = std::ranges::find_if(contributions, [&descriptor](const ModuleConfigurationContribution &candidate) {
+                return candidate.module == descriptor.id;
+            });
+            const Result<void> registered =
+                contribution == contributions.end() ? host->Register(descriptor) : host->Register(descriptor, *contribution);
+            if (registered.HasError())
                 return Result<std::unique_ptr<ModuleHost>>::Failure(registered.ErrorValue());
         }
         if (const Result<std::size_t> activated = host->ActivateRegistered(nullptr); activated.HasError())

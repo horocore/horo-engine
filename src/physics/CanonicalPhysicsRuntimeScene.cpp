@@ -2,10 +2,19 @@
 
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <limits>
 
 namespace Horo::Physics::Detail {
     namespace {
+        /** @brief Stable pair key includes Jolt's native body reuse sequence. */
+        [[nodiscard]] std::uint64_t CollisionPairKey(const JPH::BodyID first, const JPH::BodyID second) noexcept {
+            const auto low = std::min(first.GetIndexAndSequenceNumber(), second.GetIndexAndSequenceNumber());
+            const auto high = std::max(first.GetIndexAndSequenceNumber(), second.GetIndexAndSequenceNumber());
+            return (static_cast<std::uint64_t>(low) << 32U) | high;
+        }
+
         [[nodiscard]] const CanonicalSceneShapeRecord *FindSceneShape(const CanonicalWorld &world, const ShapeHandle handle) {
             const auto found = std::ranges::find_if(world.scene.shapes, [handle](const auto &shape) {
                 return shape.handle == handle;
@@ -109,18 +118,57 @@ namespace Horo::Physics::Detail {
             return settings.Create(body1, body2);
         }
 
+        /** @brief Maps two explicit anchor frames to Jolt's world-space hinge axes. */
+        [[nodiscard]] JPH::Ref<JPH::Constraint> CreateNativeHingeConstraint(JPH::Body &body1, JPH::Body &body2,
+                                                                            const PhysicsPose &firstFrame, const PhysicsPose &secondFrame,
+                                                                            const PhysicsHingeConstraint &hinge) {
+            JPH::HingeConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mPoint1 = ToNativePoint(firstFrame.translation);
+            settings.mHingeAxis1 = ToNative(firstFrame.rotation.Rotate({0.0F, 1.0F, 0.0F}));
+            settings.mNormalAxis1 = ToNative(firstFrame.rotation.Rotate({1.0F, 0.0F, 0.0F}));
+            settings.mPoint2 = ToNativePoint(secondFrame.translation);
+            settings.mHingeAxis2 = ToNative(secondFrame.rotation.Rotate({0.0F, 1.0F, 0.0F}));
+            settings.mNormalAxis2 = ToNative(secondFrame.rotation.Rotate({1.0F, 0.0F, 0.0F}));
+            settings.mLimitsMin = hinge.minimumRadians;
+            settings.mLimitsMax = hinge.maximumRadians;
+            return settings.Create(body1, body2);
+        }
+
+        /** @brief Maps two explicit anchor frames to Jolt's world-space slider axes. */
+        [[nodiscard]] JPH::Ref<JPH::Constraint> CreateNativeSliderConstraint(JPH::Body &body1, JPH::Body &body2,
+                                                                             const PhysicsPose &firstFrame, const PhysicsPose &secondFrame,
+                                                                             const PhysicsSliderConstraint &slider) {
+            JPH::SliderConstraintSettings settings;
+            settings.mSpace = JPH::EConstraintSpace::WorldSpace;
+            settings.mAutoDetectPoint = false;
+            settings.mPoint1 = ToNativePoint(firstFrame.translation);
+            settings.mSliderAxis1 = ToNative(firstFrame.rotation.Rotate({1.0F, 0.0F, 0.0F}));
+            settings.mNormalAxis1 = ToNative(firstFrame.rotation.Rotate({0.0F, 1.0F, 0.0F}));
+            settings.mPoint2 = ToNativePoint(secondFrame.translation);
+            settings.mSliderAxis2 = ToNative(secondFrame.rotation.Rotate({1.0F, 0.0F, 0.0F}));
+            settings.mNormalAxis2 = ToNative(secondFrame.rotation.Rotate({0.0F, 1.0F, 0.0F}));
+            settings.mLimitsMin = slider.minimumMeters;
+            settings.mLimitsMax = slider.maximumMeters;
+            return settings.Create(body1, body2);
+        }
+
         [[nodiscard]] Result<JPH::Ref<JPH::Constraint>> CreateNativeSceneConstraint(
             const JPH::BodyLockWrite &firstLock, const JPH::BodyLockWrite &secondLock, const CanonicalSceneBodyRecord *second,
             const PhysicsPose &firstFrame, const PhysicsPose &secondFrame,
-            const std::variant<PhysicsFixedConstraint, PhysicsDistanceConstraint> &parameters) {
+            const decltype(PhysicsConstraintDescriptor::parameters) &parameters) {
             JPH::Body &body1 = firstLock.GetBody();
             JPH::Body &body2 = second != nullptr ? secondLock.GetBody() : JPH::Body::sFixedToWorld;
             JPH::Ref<JPH::Constraint> nativeConstraint = std::visit([&]<typename Parameter>(const Parameter &value) {
                 using ParameterType = std::decay_t<Parameter>;
                 if constexpr (std::is_same_v<ParameterType, PhysicsFixedConstraint>)
                     return CreateNativeFixedConstraint(body1, body2, firstFrame, secondFrame);
-                else
+                else if constexpr (std::is_same_v<ParameterType, PhysicsDistanceConstraint>)
                     return CreateNativeDistanceConstraint(body1, body2, firstFrame, secondFrame, value);
+                else if constexpr (std::is_same_v<ParameterType, PhysicsHingeConstraint>)
+                    return CreateNativeHingeConstraint(body1, body2, firstFrame, secondFrame, value);
+                else
+                    return CreateNativeSliderConstraint(body1, body2, firstFrame, secondFrame, value);
             }, parameters);
             if (nativeConstraint == nullptr)
                 return Result<JPH::Ref<JPH::Constraint>>::Failure(
@@ -254,11 +302,77 @@ namespace Horo::Physics::Detail {
         if (nativeConstraint.HasError())
             return Result<ConstraintHandle>::Failure(nativeConstraint.ErrorValue());
 
+        const JPH::BodyID secondNativeBody = second == nullptr ? JPH::BodyID{} : second->nativeBody;
+        if (second != nullptr && descriptor.collisionPolicy == PhysicsJointCollisionPolicy::DisableBetweenBodies) {
+            const std::uint64_t key = CollisionPairKey(first->nativeBody, secondNativeBody);
+            const auto insertion = std::ranges::lower_bound(canonical.scene.disabledJointCollisionPairs, key);
+            if (insertion == canonical.scene.disabledJointCollisionPairs.end() || *insertion != key)
+                canonical.scene.disabledJointCollisionPairs.insert(insertion, key);
+        }
         canonical.native.system->AddConstraint(nativeConstraint.Value().GetPtr());
         const std::uint32_t slot = canonical.scene.nextConstraintSlot++;
         const ConstraintHandle identity{owner, {slot, 1}};
-        canonical.scene.constraints.emplace_back(
-            CanonicalSceneConstraintRecord{.handle = identity, .constraint = nativeConstraint.Value()});
+        canonical.scene.constraints.emplace_back(CanonicalSceneConstraintRecord{.handle = identity,
+                                                                                .constraint = nativeConstraint.Value(),
+                                                                                .firstBody = first->nativeBody,
+                                                                                .secondBody = secondNativeBody,
+                                                                                .collisionPolicy = descriptor.collisionPolicy});
         return Result<ConstraintHandle>::Success(identity);
+    }
+
+    /** @copydoc DestroyCanonicalSceneConstraint */
+    Result<void> DestroyCanonicalSceneConstraint(const CanonicalWorldHandle world, const ConstraintHandle constraint) {
+        if (world.value == nullptr)
+            return Result<void>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        auto &canonical = *static_cast<CanonicalWorld *>(world.value);
+        const auto found = std::ranges::find_if(canonical.scene.constraints, [constraint](const auto &record) {
+            return record.handle == constraint;
+        });
+        if (found == canonical.scene.constraints.end())
+            return Result<void>::Failure(MakeError(PhysicsErrors::HandleStale));
+        const JPH::BodyID firstBody = found->firstBody;
+        const JPH::BodyID secondBody = found->secondBody;
+        const bool disabledCollision =
+            secondBody.IsInvalid() == false && found->collisionPolicy == PhysicsJointCollisionPolicy::DisableBetweenBodies;
+        canonical.native.system->RemoveConstraint(found->constraint.GetPtr());
+        canonical.scene.constraints.erase(found);
+        if (disabledCollision) {
+            const bool stillDisabled = std::ranges::any_of(canonical.scene.constraints, [firstBody, secondBody](const auto &record) {
+                return !record.secondBody.IsInvalid() && record.collisionPolicy == PhysicsJointCollisionPolicy::DisableBetweenBodies &&
+                       CollisionPairKey(record.firstBody, record.secondBody) == CollisionPairKey(firstBody, secondBody);
+            });
+            if (!stillDisabled) {
+                const std::uint64_t key = CollisionPairKey(firstBody, secondBody);
+                const auto pair = std::ranges::lower_bound(canonical.scene.disabledJointCollisionPairs, key);
+                if (pair != canonical.scene.disabledJointCollisionPairs.end() && *pair == key)
+                    canonical.scene.disabledJointCollisionPairs.erase(pair);
+            }
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ReadCanonicalSceneJointState */
+    Result<PhysicsJointState> ReadCanonicalSceneJointState(const CanonicalWorldHandle world, const ConstraintHandle constraint) {
+        if (world.value == nullptr)
+            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        const auto &canonical = *static_cast<const CanonicalWorld *>(world.value);
+        const auto found = std::ranges::find_if(canonical.scene.constraints, [constraint](const auto &record) {
+            return record.handle == constraint;
+        });
+        if (found == canonical.scene.constraints.end())
+            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::HandleStale));
+        switch (found->constraint->GetSubType()) {
+            case JPH::EConstraintSubType::Hinge:
+                return Result<PhysicsJointState>::Success(
+                    {PhysicsJointCoordinateKind::AngleRadians,
+                     static_cast<const JPH::HingeConstraint *>(found->constraint.GetPtr())->GetCurrentAngle()});
+            case JPH::EConstraintSubType::Slider:
+                return Result<PhysicsJointState>::Success(
+                    {PhysicsJointCoordinateKind::PositionMeters,
+                     static_cast<const JPH::SliderConstraint *>(found->constraint.GetPtr())->GetCurrentPosition()});
+            default:
+                return Result<PhysicsJointState>::Failure(
+                    MakeError(PhysicsErrors::OperationUnsupported, "Only hinge and slider joints expose a single-axis coordinate."));
+        }
     }
 }  // namespace Horo::Physics::Detail

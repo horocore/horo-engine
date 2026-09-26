@@ -7,6 +7,7 @@ namespace Horo::Editor::SceneDocumentDetail {
         std::size_t total = behaviors.size() * sizeof(Gameplay::BehaviorComponent);
         for (const Gameplay::BehaviorComponent &behavior : behaviors) {
             total += behavior.typeId.Value().size();
+            total += behavior.fields.size() * sizeof(Gameplay::BehaviorField);
             for (const Gameplay::BehaviorField &field : behavior.fields) {
                 total += field.name.size();
                 if (const auto *text = std::get_if<std::string>(&field.value))
@@ -25,13 +26,32 @@ namespace Horo::Editor::SceneDocumentDetail {
         return surfaceProfiles + linkProfiles;
     }
 
+    [[nodiscard]] inline std::size_t EstimateSerializedComponentMemoryBytes(
+        const std::vector<Gameplay::SerializedComponent> &components) noexcept {
+        std::size_t bytes = components.size() * sizeof(Gameplay::SerializedComponent);
+        for (const Gameplay::SerializedComponent &component : components)
+            bytes += component.typeId.Value().size() + component.payload.size();
+        return bytes;
+    }
+
+    [[nodiscard]] inline std::size_t EstimateSceneObjectOwnedMemoryBytes(const SceneObjectSnapshot &object) noexcept {
+        const SceneObjectComponentSet &components = object.components;
+        std::size_t bytes = object.name.size() + EstimateBehaviorMemoryBytes(components.behaviors) +
+                            EstimateNavigationComponentMemoryBytes(components) +
+                            components.colliders.size() * sizeof(Runtime::ColliderComponent) +
+                            components.physicsConstraints.size() * sizeof(Runtime::PhysicsConstraintComponent) +
+                            EstimateSerializedComponentMemoryBytes(components.gameplayComponents);
+        for (const Runtime::ColliderComponent &collider : components.colliders)
+            bytes += collider.materials.size() * sizeof(Runtime::PhysicsColliderMaterialBinding);
+        return bytes;
+    }
+
     template <typename Delta> [[nodiscard]] std::size_t EstimateTypedDeltaMemoryBytes(const Delta &) noexcept {
         return sizeof(Delta);
     }
 
     [[nodiscard]] inline std::size_t EstimateTypedDeltaMemoryBytes(const CreatedObjectDelta &delta) noexcept {
-        return sizeof(delta) + delta.object.name.size() + EstimateBehaviorMemoryBytes(delta.object.components.behaviors) +
-               EstimateNavigationComponentMemoryBytes(delta.object.components);
+        return sizeof(delta) + EstimateSceneObjectOwnedMemoryBytes(delta.object);
     }
 
     [[nodiscard]] inline std::size_t EstimateTypedDeltaMemoryBytes(const RenamedObjectDelta &delta) noexcept {
@@ -39,15 +59,9 @@ namespace Horo::Editor::SceneDocumentDetail {
     }
 
     [[nodiscard]] inline std::size_t EstimateTypedDeltaMemoryBytes(const DeletedObjectsDelta &delta) noexcept {
-        std::size_t bytes = sizeof(delta) + delta.objects.size() * sizeof(IndexedSceneObject);
-        for (const IndexedSceneObject &object : delta.objects) {
-            bytes += object.object.name.size() + EstimateBehaviorMemoryBytes(object.object.components.behaviors) +
-                     EstimateNavigationComponentMemoryBytes(object.object.components) +
-                     object.object.components.colliders.size() * sizeof(Runtime::ColliderComponent) +
-                     object.object.components.physicsConstraints.size() * sizeof(Runtime::PhysicsConstraintComponent);
-            for (const Runtime::ColliderComponent &collider : object.object.components.colliders)
-                bytes += collider.materials.size() * sizeof(Runtime::PhysicsColliderMaterialBinding);
-        }
+        std::size_t bytes = sizeof(delta) + delta.roots.size() * sizeof(SceneObjectId) + delta.objects.size() * sizeof(IndexedSceneObject);
+        for (const IndexedSceneObject &object : delta.objects)
+            bytes += EstimateSceneObjectOwnedMemoryBytes(object.object);
         return bytes + delta.prefabInstances.size() * sizeof(IndexedPrefabInstance);
     }
 
@@ -64,13 +78,7 @@ namespace Horo::Editor::SceneDocumentDetail {
     }
 
     [[nodiscard]] inline std::size_t EstimateTypedDeltaMemoryBytes(const GameplayComponentsChangedDelta &delta) noexcept {
-        const auto payloadBytes = [](const std::vector<Gameplay::SerializedComponent> &components) {
-            std::size_t bytes = components.size() * sizeof(Gameplay::SerializedComponent);
-            for (const Gameplay::SerializedComponent &component : components)
-                bytes += component.typeId.Value().size() + component.payload.size();
-            return bytes;
-        };
-        return sizeof(delta) + payloadBytes(delta.before) + payloadBytes(delta.after);
+        return sizeof(delta) + EstimateSerializedComponentMemoryBytes(delta.before) + EstimateSerializedComponentMemoryBytes(delta.after);
     }
 
     [[nodiscard]] inline std::size_t EstimateTypedDeltaMemoryBytes(const NavigationComponentsChangedDelta &delta) noexcept {
