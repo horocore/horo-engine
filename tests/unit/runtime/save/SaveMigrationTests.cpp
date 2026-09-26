@@ -305,6 +305,9 @@ namespace {
         CHECK(exhausted.ErrorValue().diagnostics.front().code.Value() == "save.migration.limit.cumulative_work");
         limits.maximumCumulativeWorkBytes = std::numeric_limits<std::uint64_t>::max();
         CHECK(SaveMigrationExecutor::Migrate(Source(), plan.Value(), limits).HasError());
+        limits = {};
+        limits.maximumPlanSteps = MaximumSaveMigrationPlanSteps + 1;
+        CHECK(SaveMigrationExecutor::Migrate(Source(), plan.Value(), limits).HasError());
     }
 
     TEST_CASE("Executor rejects participant steps that modify unrelated state", "[runtime][save][migration]") {
