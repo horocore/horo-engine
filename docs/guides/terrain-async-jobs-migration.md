@@ -13,6 +13,10 @@ lease, parent cancellation and optional operation/configuration correlation
 through `SubmitCook`, `SubmitLoad` or `SubmitEditPreview` respectively.
 Worker callbacks return typed `Result<void>` and acknowledge cooperative abort
 with `JobCancelled()`; ordinary typed failures remain failures.
+`Create` and `ReplaceFence` borrow the input fence for the call and retain their
+own copy. `RequestCancel` is a const handle operation over shared cancellation
+state, but still requires the creating owner thread. There are no production
+TerrainRuntime callers to migrate from an earlier signature.
 
 At the Terrain owner safe point, `Advance` checks the exact fence and runs only
 the successful current candidate's atomic publication callback. That callback

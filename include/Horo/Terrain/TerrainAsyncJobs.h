@@ -122,7 +122,7 @@ namespace Horo::Terrain {
          * @param limits Finite host admission limits.
          * @return Coordinator or a typed invalid descriptor failure.
          */
-        [[nodiscard]] static Result<std::unique_ptr<TerrainAsyncJobs>> Create(JobSystem &jobs, TerrainAsyncWorkFence fence,
+        [[nodiscard]] static Result<std::unique_ptr<TerrainAsyncJobs>> Create(JobSystem &jobs, const TerrainAsyncWorkFence &fence,
                                                                               TerrainFoliageCapabilitySet available,
                                                                               TerrainAsyncJobLimits limits = {});
 
@@ -158,9 +158,10 @@ namespace Horo::Terrain {
         /** @brief Reads the last owner-lane state without advancing or publishing it. @param id Accepted item identity. @return Last
          * snapshot or a typed unknown/affinity error. */
         [[nodiscard]] Result<TerrainAsyncWorkSnapshot> Snapshot(TerrainAsyncWorkId id) const;
-        /** @brief Requests cooperative cancellation without turning a completed result into failure. @param id Accepted item identity.
+        /** @brief Requests cooperative cancellation through the shared job handle without changing the retained snapshot.
+         * @param id Accepted item identity.
          * @return Success or a typed unknown/affinity error. */
-        [[nodiscard]] Result<void> RequestCancel(TerrainAsyncWorkId id);
+        [[nodiscard]] Result<void> RequestCancel(TerrainAsyncWorkId id) const;
         /**
          * @brief Replaces the exact publication fence and cancels all older candidates.
          * @param fence New incarnation and revision fence for the same stable dataset. Revisions cannot regress within an incarnation.
@@ -168,7 +169,7 @@ namespace Horo::Terrain {
          * @return Success or typed invalid/stale/active-publication owner failure without changing current state. Grant changes need a
          * new capability revision.
          */
-        [[nodiscard]] Result<void> ReplaceFence(TerrainAsyncWorkFence fence, TerrainFoliageCapabilitySet available);
+        [[nodiscard]] Result<void> ReplaceFence(const TerrainAsyncWorkFence &fence, TerrainFoliageCapabilitySet available);
         /** @brief Closes admission and publication and requests cancellation of accepted work; owner-lane only and idempotent. */
         void BeginShutdown();
         /** @brief Reports whether every accepted Foundation job has terminated; never waits. @return True only on the owner lane after all

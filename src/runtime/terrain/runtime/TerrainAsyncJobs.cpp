@@ -3,7 +3,6 @@
 #include "Horo/Terrain/TerrainErrors.h"
 
 #include <algorithm>
-#include <exception>
 #include <limits>
 #include <ranges>
 #include <thread>
@@ -43,7 +42,7 @@ namespace Horo::Terrain {
         };
 
         JobSystem &jobs;
-        const std::thread::id ownerThread;
+        const std::thread::id ownerThread{std::this_thread::get_id()};
         TerrainAsyncWorkFence currentFence;
         TerrainFoliageCapabilitySet available;
         TerrainAsyncJobLimits limits;
@@ -52,9 +51,9 @@ namespace Horo::Terrain {
         bool accepting{true};
         bool publishing{false};
 
-        Impl(JobSystem &scheduler, const TerrainAsyncWorkFence fence, const TerrainFoliageCapabilitySet capabilities,
+        Impl(JobSystem &scheduler, const TerrainAsyncWorkFence &fence, const TerrainFoliageCapabilitySet capabilities,
              const TerrainAsyncJobLimits bounds)
-            : jobs(scheduler), ownerThread(std::this_thread::get_id()), currentFence(fence), available(capabilities), limits(bounds) {}
+            : jobs(scheduler), currentFence(fence), available(capabilities), limits(bounds) {}
 
         [[nodiscard]] bool OnOwnerThread() const noexcept {
             return std::this_thread::get_id() == ownerThread;
@@ -69,22 +68,19 @@ namespace Horo::Terrain {
 
         /** @brief Runs one prepared candidate's owner callback and records its exact terminal result. */
         void Publish(Record &record) {
-            record.snapshot.state = TerrainAsyncWorkState::Prepared;
+            using enum TerrainAsyncWorkState;
+            record.snapshot.state = Prepared;
             publishing = true;
             try {
                 const Result<void> published = record.publish(record.cancellation.Token());
                 if (published.HasError()) {
-                    record.snapshot.state =
-                        IsJobCancelled(published.ErrorValue()) ? TerrainAsyncWorkState::Cancelled : TerrainAsyncWorkState::Failed;
+                    record.snapshot.state = IsJobCancelled(published.ErrorValue()) ? Cancelled : Failed;
                     record.snapshot.error = published.ErrorValue();
                 } else {
-                    record.snapshot.state = TerrainAsyncWorkState::Succeeded;
+                    record.snapshot.state = Succeeded;
                 }
-            } catch (const std::exception &) {
-                record.snapshot.state = TerrainAsyncWorkState::Failed;
-                record.snapshot.error = MakeError(TerrainErrors::WorkPublicationFailed);
-            } catch (...) {  // NOSONAR(cpp:S1181) Contain foreign callback exceptions at the owner boundary.
-                record.snapshot.state = TerrainAsyncWorkState::Failed;
+            } catch (...) {  // NOSONAR(cpp:S1181) User callbacks can throw non-std exceptions; none may escape the owner boundary.
+                record.snapshot.state = Failed;
                 record.snapshot.error = MakeError(TerrainErrors::WorkPublicationFailed);
             }
             publishing = false;
@@ -98,13 +94,15 @@ namespace Horo::Terrain {
     }
 
     /** @copydoc TerrainAsyncJobs::Create */
-    Result<std::unique_ptr<TerrainAsyncJobs>> TerrainAsyncJobs::Create(JobSystem &jobs, const TerrainAsyncWorkFence fence,
+    Result<std::unique_ptr<TerrainAsyncJobs>> TerrainAsyncJobs::Create(JobSystem &jobs, const TerrainAsyncWorkFence &fence,
                                                                        const TerrainFoliageCapabilitySet available,
                                                                        const TerrainAsyncJobLimits limits) {
         if (!fence.IsValid() || !available.IsValid() || !limits.IsValid())
             return Result<std::unique_ptr<TerrainAsyncJobs>>::Failure(MakeError(TerrainErrors::WorkInvalid));
-        return Result<std::unique_ptr<TerrainAsyncJobs>>::Success(
-            std::unique_ptr<TerrainAsyncJobs>(new TerrainAsyncJobs(std::make_unique<Impl>(jobs, fence, available, limits))));
+        std::unique_ptr<TerrainAsyncJobs> owner{
+            new TerrainAsyncJobs(  // NOSONAR(cpp:S5950) make_unique cannot access the validated private constructor.
+                std::make_unique<Impl>(jobs, fence, available, limits))};
+        return Result<std::unique_ptr<TerrainAsyncJobs>>::Success(std::move(owner));
     }
 
     /** @copydoc TerrainAsyncJobs::SubmitCook */
@@ -223,10 +221,10 @@ namespace Horo::Terrain {
     }
 
     /** @copydoc TerrainAsyncJobs::RequestCancel */
-    Result<void> TerrainAsyncJobs::RequestCancel(const TerrainAsyncWorkId id) {
+    Result<void> TerrainAsyncJobs::RequestCancel(const TerrainAsyncWorkId id) const {
         if (!impl_->OnOwnerThread())
             return Result<void>::Failure(MakeError(TerrainErrors::WorkWrongThread));
-        Impl::Record *const record = impl_->Find(id);
+        const Impl::Record *const record = impl_->Find(id);
         if (record == nullptr)
             return Result<void>::Failure(MakeError(TerrainErrors::WorkUnknown));
         if (!record->snapshot.IsTerminal()) {
@@ -237,7 +235,7 @@ namespace Horo::Terrain {
     }
 
     /** @copydoc TerrainAsyncJobs::ReplaceFence */
-    Result<void> TerrainAsyncJobs::ReplaceFence(const TerrainAsyncWorkFence fence, const TerrainFoliageCapabilitySet available) {
+    Result<void> TerrainAsyncJobs::ReplaceFence(const TerrainAsyncWorkFence &fence, const TerrainFoliageCapabilitySet available) {
         if (!impl_->OnOwnerThread())
             return Result<void>::Failure(MakeError(TerrainErrors::WorkWrongThread));
         if (!impl_->accepting)

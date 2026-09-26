@@ -350,7 +350,8 @@ namespace Horo::Terrain {
             }));
             REQUIRE(submitted.HasValue());
             gate.WaitUntilEntered();
-            REQUIRE(jobs->RequestCancel(submitted.Value()).HasValue());
+            const TerrainAsyncJobs &owner = *jobs;
+            REQUIRE(owner.RequestCancel(submitted.Value()).HasValue());
             gate.Release();
             const auto terminal = AdvanceUntilTerminal(*jobs, submitted.Value());
             REQUIRE(terminal.state == TerrainAsyncWorkState::Cancelled);
