@@ -106,6 +106,18 @@ namespace Horo::Physics::Detail {
     /** @brief Admits one scene body after its shape has been staged. */
     [[nodiscard]] Result<BodyHandle> CreateCanonicalSceneBody(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                               const PhysicsSceneBodyDescriptor &descriptor);
+    /** @brief Validates one resident body replacement before queue admission or any tick mutation. */
+    [[nodiscard]] Result<PhysicsBodyDescriptor> ResolveCanonicalBodyMutation(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                                             const PhysicsBodyMutation &mutation);
+    /** @brief Applies one prevalidated owner-thread replacement and reconciles retained policy. */
+    [[nodiscard]] Result<void> ApplyCanonicalBodyMutation(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                          const PhysicsBodyMutation &mutation);
+    /** @brief Copies the last applied policy for one exact resident scene body. */
+    [[nodiscard]] Result<PhysicsBodyDescriptor> ReadCanonicalSceneBodyPolicy(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                                             BodyHandle body);
+    /** @brief Reads translated native state alongside retained body policy on the owner thread. */
+    [[nodiscard]] Result<PhysicsBodyReconciliation> ReadCanonicalSceneBodyReconciliation(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                                                         BodyHandle body);
     /** @brief Admits one scene constraint after both body endpoints have been staged. */
     [[nodiscard]] Result<ConstraintHandle> CreateCanonicalSceneConstraint(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                                           const PhysicsConstraintDescriptor &descriptor);

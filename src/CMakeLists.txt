@@ -690,6 +690,7 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
         physics/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/CanonicalPhysicsRuntimeReadback.cpp
         physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp)
@@ -700,6 +701,7 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
         physics/CanonicalPhysicsRuntimeQueryBridge.cpp
+        physics/CanonicalPhysicsRuntimeReadback.cpp
         physics/CanonicalPhysicsRuntimeScene.cpp
         physics/CanonicalSolver.cpp
         physics/CanonicalWorldSettings.cpp
