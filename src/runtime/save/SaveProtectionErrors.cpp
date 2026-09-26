@@ -27,4 +27,10 @@ namespace Horo::Runtime::SaveErrors {
     const ErrorCodeDescriptor ProtectionAuthenticationFailed{kDomain, ErrorCode{"save.protection.authentication_failed"}, kError,
                                                              "Protected save authentication failed.",
                                                              "Reject the archive without decoding or exposing plaintext."};
+    const ErrorCodeDescriptor SignatureRequired{kDomain, ErrorCode{"save.signature.required"}, kError,
+                                                "Trusted save policy requires a valid signature.",
+                                                "Use a scope-authorized signed archive; do not downgrade policy."};
+    const ErrorCodeDescriptor SignatureDisallowed{kDomain, ErrorCode{"save.signature.disallowed"}, kError,
+                                                  "Trusted local save policy disallows signed archives.",
+                                                  "Use the explicitly selected verifying policy for signed input."};
 }  // namespace Horo::Runtime::SaveErrors

@@ -562,6 +562,16 @@ as authentication. Provider error text and key material cannot enter the returne
 diagnostic; stable unavailable, rotated, revoked, unsupported and authentication
 failures remain distinguishable.
 
+`SaveArchiveAuthenticity.h` adds the separate v1 signature-verifier seam.
+Disabled rejects signed input, Optional verifies every present signature, and
+Required rejects missing signatures. A bounded trailer preflight constructs the
+exact ADR-112 Ed25519 signature message and calls a host-selected verifier with
+host-selected scope before the archive reader can decode metadata. The reader
+then checks the signed `ArchiveContentHash` against exact bytes before decode.
+The verifier owns trusted roots, key rotation/revocation and cryptographic work;
+Runtime Save exposes no public key source supplied by the archive. This does not
+add a signing backend or make a signed archive fresh or semantically valid.
+
 This seam is not a `.horosave` encryption format, key store, production crypto
 backend or encrypted storage integration. A separately reviewed envelope and
 vetted platform/credential provider are required before shipping encrypted saves;

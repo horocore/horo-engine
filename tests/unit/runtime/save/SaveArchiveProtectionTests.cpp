@@ -1,12 +1,15 @@
+#include "Horo/Runtime/Save/SaveArchiveAuthenticity.h"
 #include "Horo/Runtime/Save/SaveArchiveProtection.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -60,6 +63,52 @@ namespace {
         CHECK(error.code.Value() == expected.code.Value());
         CHECK(error.message.find("private-token-must-not-escape") == std::string::npos);
     }
+
+    void PutLe(std::vector<std::byte> &bytes, const std::size_t offset, const std::uint32_t value) {
+        for (std::size_t index = 0; index < sizeof(value); ++index)
+            bytes[offset + index] = static_cast<std::byte>(value >> (index * 8U));
+    }
+
+    std::vector<std::byte> SignedFixture(const bool signedArchive) {
+        std::vector<std::byte> bytes(SaveArchivePreambleByteLength +
+                                     (signedArchive ? SaveArchiveSignedTrailerByteLength : SaveArchiveUnsignedTrailerByteLength));
+        constexpr std::array magic{std::byte{'H'}, std::byte{'O'}, std::byte{'R'}, std::byte{'O'},
+                                   std::byte{'S'}, std::byte{'A'}, std::byte{'V'}, std::byte{'E'}};
+        std::copy(magic.begin(), magic.end(), bytes.begin());
+        PutLe(bytes, 8, 1);
+        PutLe(bytes, 24, signedArchive ? SaveArchiveSignedTrailerByteLength : SaveArchiveUnsignedTrailerByteLength);
+        if (signedArchive) {
+            const auto trailer = SaveArchivePreambleByteLength;
+            bytes[trailer + 32] = std::byte{1};
+            bytes[trailer + 34] = std::byte{7};
+            bytes[trailer + 50] = std::byte{64};
+        }
+        return bytes;
+    }
+
+    class MockSignatureProvider final : public SaveArchiveSignatureProvider {
+    public:
+        bool SupportsEd25519() const noexcept override {
+            return supported;
+        }
+
+        Result<void> Verify(const std::array<std::uint8_t, 16> keyId, std::span<const std::byte> scope, std::span<const std::byte> message,
+                            std::span<const std::byte> signature) override {
+            ++verifyCalls;
+            CHECK(keyId.front() == 7);
+            CHECK(scope.size() == AssociatedData.size());
+            CHECK(std::equal(scope.begin(), scope.end(), AssociatedData.begin(), AssociatedData.end()));
+            CHECK(signature.size() == 64);
+            CHECK(message.size() == std::string_view("HoroSave.Signature.v1").size() + 1 + 2 + 16 + 2 + 32);
+            if (failure)
+                return Result<void>::Failure(MakeError(SaveErrors::ProtectionAuthenticationFailed, "private-token-must-not-escape"));
+            return Result<void>::Success();
+        }
+
+        bool supported{true};
+        bool failure{true};
+        int verifyCalls{};
+    };
 }  // namespace
 
 TEST_CASE("Save protection rejects plaintext unless local policy explicitly permits it") {
@@ -162,4 +211,44 @@ TEST_CASE("Save protection validates provider output before protected publicatio
     REQUIRE(invalid.HasError());
     CheckCode(invalid.ErrorValue(), SaveErrors::ProtectionInvalid);
     CHECK(provider.sealCalls == 2);
+}
+
+TEST_CASE("Save signature policy rejects unsigned downgrade and ignores no present signature") {
+    SaveArchiveReader reader;
+    auto required = AdmitSignedSaveArchive(SignedFixture(false), SaveSignaturePolicy::Required, AssociatedData, nullptr, reader);
+    REQUIRE(required.HasError());
+    CheckCode(required.ErrorValue(), SaveErrors::SignatureRequired);
+
+    auto disabled = AdmitSignedSaveArchive(SignedFixture(true), SaveSignaturePolicy::Disabled, AssociatedData, nullptr, reader);
+    REQUIRE(disabled.HasError());
+    CheckCode(disabled.ErrorValue(), SaveErrors::SignatureDisallowed);
+}
+
+TEST_CASE("Save signature verification precedes archive metadata decode and sanitizes provider diagnostics") {
+    SaveArchiveReader reader;
+    MockSignatureProvider provider;
+    auto failed = AdmitSignedSaveArchive(SignedFixture(true), SaveSignaturePolicy::Required, AssociatedData, &provider, reader);
+    REQUIRE(failed.HasError());
+    CheckCode(failed.ErrorValue(), SaveErrors::ProtectionAuthenticationFailed);
+    CHECK(provider.verifyCalls == 1);
+
+    provider.failure = false;
+    auto admitted = AdmitSignedSaveArchive(SignedFixture(true), SaveSignaturePolicy::Required, AssociatedData, &provider, reader);
+    REQUIRE(admitted.HasError());
+    CHECK(admitted.ErrorValue().code.Value() == SaveErrors::ArchiveContentHashMismatch.code.Value());
+    CHECK(provider.verifyCalls == 2);
+}
+
+TEST_CASE("Save signature admission rejects missing verifier and unsupported capability") {
+    SaveArchiveReader reader;
+    auto missing = AdmitSignedSaveArchive(SignedFixture(true), SaveSignaturePolicy::Optional, AssociatedData, nullptr, reader);
+    REQUIRE(missing.HasError());
+    CheckCode(missing.ErrorValue(), SaveErrors::ProtectionUnavailable);
+
+    MockSignatureProvider provider;
+    provider.supported = false;
+    auto unsupported = AdmitSignedSaveArchive(SignedFixture(true), SaveSignaturePolicy::Optional, AssociatedData, &provider, reader);
+    REQUIRE(unsupported.HasError());
+    CheckCode(unsupported.ErrorValue(), SaveErrors::ProtectionUnsupported);
+    CHECK(provider.verifyCalls == 0);
 }

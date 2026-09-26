@@ -240,6 +240,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveArchiveReader.cpp
         runtime/save/SaveArchiveReaderValidation.cpp
         runtime/save/SaveArchiveProtection.cpp
+        runtime/save/SaveArchiveAuthenticity.cpp
         runtime/save/SaveCanonicalCodec.cpp
         runtime/save/SaveCanonicalScalarCodec.cpp
         runtime/save/SaveCanonicalCompositeWriter.cpp

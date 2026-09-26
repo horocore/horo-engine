@@ -318,4 +318,8 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor ProtectionKeyRevoked;
     /** @brief Authentication failed without exposing plaintext. */
     extern const ErrorCodeDescriptor ProtectionAuthenticationFailed;
+    /** @brief Host policy requires a signature but the archive is unsigned. */
+    extern const ErrorCodeDescriptor SignatureRequired;
+    /** @brief Host policy forbids a present signature in unsigned-only mode. */
+    extern const ErrorCodeDescriptor SignatureDisallowed;
 }  // namespace Horo::Runtime::SaveErrors
