@@ -57,7 +57,12 @@ namespace Horo::Vfx {
         auto unusedDelayBudget = budget;
         unusedDelayBudget.maximumDelayed = 5;
         CHECK(Pool(Descriptor(9), unusedDelayBudget).Statistics().plan.delayedCapacity == 0);
+    }
 
+    TEST_CASE("Effect pool rejects capacity inputs that cannot satisfy the budget", "[unit][vfx][effect-pool]") {
+        const auto exactThreeBytes = Pool(Descriptor(3), Budget(3)).Statistics().plan.reservedBytes;
+        auto budget = Budget(7);
+        budget.maximumEmitterSlots = 12;
         budget.maximumBytes = exactThreeBytes - 1U;
         budget.requiredReserve = 0;
         CHECK(Pool(Descriptor(9), budget).Statistics().plan.capacity == 2);
@@ -69,18 +74,46 @@ namespace Horo::Vfx {
         CHECK(HasErrorCode(EffectInstancePool::Prepare(Descriptor(0), Budget(), {}), VfxErrors::EffectPoolInvalid));
         CHECK(HasErrorCode(EffectInstancePool::Prepare(Descriptor(), Budget(), {.overBudget = EffectPoolOverBudgetPolicy::DelayBounded}),
                            VfxErrors::EffectPoolInvalid));
-        for (std::size_t successfulAllocations = 0; successfulAllocations < 3; ++successfulAllocations) {
-            Tests::AllocationProbe::ScopedFailure failOnePreparationAllocation{successfulAllocations};
-            CHECK(HasErrorCode(EffectInstancePool::Prepare(Descriptor(), Budget(), {}), VfxErrors::EffectPoolAllocationFailed));
+    }
+
+    TEST_CASE("Effect pool reports allocation failure at every required preparation allocation", "[unit][vfx][effect-pool]") {
+        const auto descriptor = Descriptor();
+        const auto budget = Budget();
+        const auto before = Tests::AllocationProbe::Count();
+        const auto prepared = EffectInstancePool::Prepare(descriptor, budget, {});
+        const auto preparationAllocations = Tests::AllocationProbe::Count() - before;
+        REQUIRE(prepared.HasValue());
+        REQUIRE(preparationAllocations >= 3);
+        REQUIRE(preparationAllocations <= 16);
+        for (std::size_t successfulAllocations = 0; successfulAllocations < preparationAllocations; ++successfulAllocations) {
+            bool allocationFailed = false;
+            {
+                Tests::AllocationProbe::ScopedFailure failOnePreparationAllocation{successfulAllocations};
+                allocationFailed = HasErrorCode(EffectInstancePool::Prepare(descriptor, budget, {}), VfxErrors::EffectPoolAllocationFailed);
+            }
+            CHECK(allocationFailed);
         }
+    }
+
+    TEST_CASE("Effect pool reports allocation failure for bounded delay storage", "[unit][vfx][effect-pool]") {
+        const auto descriptor = Descriptor();
         auto delayedBudget = Budget();
         delayedBudget.maximumDelayed = 1;
-        for (std::size_t successfulAllocations = 0; successfulAllocations < 4; ++successfulAllocations) {
-            Tests::AllocationProbe::ScopedFailure failOnePreparationAllocation{successfulAllocations};
-            CHECK(
-                HasErrorCode(EffectInstancePool::Prepare(Descriptor(), delayedBudget,
-                                                         {.overBudget = EffectPoolOverBudgetPolicy::DelayBounded, .maximumDelayTicks = 2}),
-                             VfxErrors::EffectPoolAllocationFailed));
+        const EffectPoolPolicy delayedPolicy{.overBudget = EffectPoolOverBudgetPolicy::DelayBounded, .maximumDelayTicks = 2};
+        const auto before = Tests::AllocationProbe::Count();
+        const auto prepared = EffectInstancePool::Prepare(descriptor, delayedBudget, delayedPolicy);
+        const auto preparationAllocations = Tests::AllocationProbe::Count() - before;
+        REQUIRE(prepared.HasValue());
+        REQUIRE(preparationAllocations >= 4);
+        REQUIRE(preparationAllocations <= 16);
+        for (std::size_t successfulAllocations = 0; successfulAllocations < preparationAllocations; ++successfulAllocations) {
+            bool allocationFailed = false;
+            {
+                Tests::AllocationProbe::ScopedFailure failOnePreparationAllocation{successfulAllocations};
+                allocationFailed = HasErrorCode(EffectInstancePool::Prepare(descriptor, delayedBudget, delayedPolicy),
+                                                VfxErrors::EffectPoolAllocationFailed);
+            }
+            CHECK(allocationFailed);
         }
     }
 
