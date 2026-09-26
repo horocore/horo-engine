@@ -252,7 +252,7 @@ namespace Horo::Editor {
 
     void GlobalDockBuildOutputPane::DrawActiveBuild(const Application::GameplayBuildSnapshot &snapshot,
                                                     const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
-                                                    const EditorGuiContext &context, const float height) {
+                                                    const EditorGuiContext &context, const float height) const {
         const GlobalDockToolbarChipProps cancel{
             .id = "BuildCancelActive",
             .label = context.localization.Get("editor", snapshot.cancellationRequested ? "workspace.global_dock.build_output.cancelling"
