@@ -1,5 +1,6 @@
 #include "Horo/Destruction/OfflineVoronoi.h"
 
+#include "OfflineVoronoiProvenance.h"
 #include "PreFracturedIntersection.h"
 
 #include <algorithm>
@@ -77,25 +78,6 @@ namespace Horo::Destruction {
             return {static_cast<double>(value[0]), static_cast<double>(value[1]), static_cast<double>(value[2])};
         }
 
-        void AppendU64(std::vector<std::byte> &bytes, std::uint64_t value) {
-            for (int shift = 56; shift >= 0; shift -= 8)
-                bytes.push_back(static_cast<std::byte>(value >> shift));
-        }
-
-        void AppendU32(std::vector<std::byte> &bytes, std::uint32_t value) {
-            AppendU64(bytes, value);
-        }
-
-        void AppendDigest(std::vector<std::byte> &bytes, const Sha256Digest &digest) {
-            for (const auto value : digest.bytes)
-                bytes.push_back(static_cast<std::byte>(value));
-        }
-
-        void AppendPoint(std::vector<std::byte> &bytes, const Point &point) {
-            for (const double value : point)
-                AppendU64(bytes, std::bit_cast<std::uint64_t>(value));
-        }
-
         [[nodiscard]] bool NonzeroDigest(const Sha256Digest &digest) {
             return std::any_of(digest.bytes.begin(), digest.bytes.end(), [](const std::uint8_t value) {
                 return value != 0;
@@ -168,30 +150,11 @@ namespace Horo::Destruction {
                    recipe.maximumConvexRegions > 0 && recipe.maximumConvexRegions <= DestructionHardLimits::ChunksPerDestructible;
         }
 
-        [[nodiscard]] Result<std::vector<Face>> ValidateSource(const OfflineVoronoiSource &source, Budget &budget,
-                                                               const CancellationToken &cancellation) {
-            if (source.positions.size() < 4 || source.indices.size() < 12 || source.indices.size() % 3 != 0 ||
-                source.materialSlots.size() != source.indices.size() / 3 || source.positions.size() > budget.vertexLimit ||
-                source.indices.size() / 3 > budget.triangleLimit)
-                return Result<std::vector<Face>>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
+        [[nodiscard]] Result<std::vector<Face>> ValidateSourceTriangles(const OfflineVoronoiSource &source, const double tolerance,
+                                                                        Budget &budget, const CancellationToken &cancellation) {
             std::map<std::pair<std::uint32_t, std::uint32_t>, std::pair<unsigned, int>> edges;
             std::vector<Face> faces;
             faces.reserve(source.indices.size() / 3);
-            Point lower = Position(source.positions.front());
-            Point upper = lower;
-            for (const auto &position : source.positions) {
-                const Point point = Position(position);
-                if (!Finite(point))
-                    return Result<std::vector<Face>>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
-                for (std::size_t axis = 0; axis < 3; ++axis) {
-                    lower[axis] = std::min(lower[axis], point[axis]);
-                    upper[axis] = std::max(upper[axis], point[axis]);
-                }
-            }
-            const double extent = Length(Sub(upper, lower));
-            if (!(extent > 0.0) || !std::isfinite(extent) || extent > 1.0e7)
-                return Result<std::vector<Face>>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
-            const double tolerance = std::max(1.0e-8, extent * 1.0e-8);
             for (std::size_t offset = 0; offset < source.indices.size(); offset += 3) {
                 if (cancellation.IsCancellationRequested())
                     return Result<std::vector<Face>>::Failure(MakeError(OfflineVoronoiErrors::Cancelled));
@@ -221,6 +184,33 @@ namespace Horo::Destruction {
                 if (incidence.first != 2 || incidence.second != 0)
                     return Result<std::vector<Face>>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
             }
+            return Result<std::vector<Face>>::Success(std::move(faces));
+        }
+
+        [[nodiscard]] Result<std::vector<Face>> ValidateSource(const OfflineVoronoiSource &source, Budget &budget,
+                                                               const CancellationToken &cancellation) {
+            if (source.positions.size() < 4 || source.indices.size() < 12 || source.indices.size() % 3 != 0 ||
+                source.materialSlots.size() != source.indices.size() / 3 || source.positions.size() > budget.vertexLimit ||
+                source.indices.size() / 3 > budget.triangleLimit)
+                return Result<std::vector<Face>>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
+            Point lower = Position(source.positions.front());
+            Point upper = lower;
+            for (const auto &position : source.positions) {
+                const Point point = Position(position);
+                if (!Finite(point))
+                    return Result<std::vector<Face>>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    lower[axis] = std::min(lower[axis], point[axis]);
+                    upper[axis] = std::max(upper[axis], point[axis]);
+                }
+            }
+            const double extent = Length(Sub(upper, lower));
+            if (!(extent > 0.0) || !std::isfinite(extent) || extent > 1.0e7)
+                return Result<std::vector<Face>>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
+            const double tolerance = std::max(1.0e-8, extent * 1.0e-8);
+            auto faces = ValidateSourceTriangles(source, tolerance, budget, cancellation);
+            if (faces.HasError())
+                return faces;
             Assets::PreFracturedSourceNode node;
             node.positions = source.positions;
             node.triangleIndices = source.indices;
@@ -236,7 +226,7 @@ namespace Horo::Destruction {
                     break;
             }
             budget.work = budget.workLimit - remainingWork;
-            return Result<std::vector<Face>>::Success(std::move(faces));
+            return faces;
         }
 
         [[nodiscard]] bool ConvexSource(const OfflineVoronoiSource &source, const std::vector<Face> &faces, const double tolerance,
@@ -356,6 +346,85 @@ namespace Horo::Destruction {
             vertices = std::move(unique);
         }
 
+        [[nodiscard]] Result<Face> ClipFace(const Face &face, const Point &normal, const double planeOffset, const double tolerance,
+                                            std::vector<Point> &cap, Budget &budget) {
+            Face next{{}, face.material, face.neighbor, face.visible};
+            next.vertices.reserve(face.vertices.size() + 1);
+            for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+                if (!budget.ChargeWork())
+                    return Result<Face>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+                const Point &a = face.vertices[index];
+                const Point &b = face.vertices[(index + 1) % face.vertices.size()];
+                const double da = Dot(normal, a) - planeOffset;
+                const double db = Dot(normal, b) - planeOffset;
+                const bool insideA = da <= tolerance;
+                const bool insideB = db <= tolerance;
+                if (insideA)
+                    next.vertices.push_back(a);
+                if (insideA != insideB) {
+                    const double fraction = std::clamp(da / (da - db), 0.0, 1.0);
+                    const Point crossing = Add(a, Scale(Sub(b, a), fraction));
+                    next.vertices.push_back(crossing);
+                    cap.push_back(crossing);
+                }
+            }
+            RemoveAdjacentDuplicates(next.vertices, tolerance);
+            return Result<Face>::Success(std::move(next));
+        }
+
+        void AppendClipCap(std::vector<Face> &clipped, std::vector<Point> cap, const Point &normal, const double normalLength,
+                           const double tolerance, const std::uint32_t interiorMaterial, const std::uint32_t otherIndex) {
+            std::sort(cap.begin(), cap.end());
+            cap.erase(std::unique(cap.begin(), cap.end(),
+                                  [&](const Point &a, const Point &b) {
+                return Near(a, b, tolerance);
+            }),
+                      cap.end());
+            if (cap.size() < 3)
+                return;
+            Point center{};
+            for (const Point &point : cap)
+                center = Add(center, point);
+            center = Scale(center, 1.0 / static_cast<double>(cap.size()));
+            const Point axis = std::abs(normal[0]) < std::abs(normal[1]) ? Point{1, 0, 0} : Point{0, 1, 0};
+            const Point u = Scale(Cross(axis, normal), 1.0 / Length(Cross(axis, normal)));
+            const Point v = Scale(Cross(normal, u), 1.0 / normalLength);
+            std::sort(cap.begin(), cap.end(), [&](const Point &a, const Point &b) {
+                const Point aa = Sub(a, center);
+                const Point bb = Sub(b, center);
+                const double angleA = std::atan2(Dot(aa, v), Dot(aa, u));
+                const double angleB = std::atan2(Dot(bb, v), Dot(bb, u));
+                return angleA == angleB ? a < b : angleA < angleB;
+            });
+            clipped.push_back(Face{std::move(cap), interiorMaterial, otherIndex, otherIndex != 0});
+        }
+
+        [[nodiscard]] Result<void> ValidateClippedVolume(std::vector<Face> &clipped, Budget &budget) {
+            if (clipped.size() > budget.triangleLimit)
+                return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+            std::uint64_t scratchVertices{};
+            for (const auto &face : clipped) {
+                scratchVertices += face.vertices.size();
+                if (scratchVertices > budget.vertexLimit)
+                    return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+            }
+            if (clipped.empty())
+                return Result<void>::Success();
+            const Point reference = clipped.front().vertices.front();
+            double volume6{};
+            for (const auto &face : clipped) {
+                for (std::size_t index = 1; index + 1 < face.vertices.size(); ++index) {
+                    if (!budget.ChargeWork())
+                        return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+                    volume6 += Dot(Sub(face.vertices[0], reference),
+                                   Cross(Sub(face.vertices[index], reference), Sub(face.vertices[index + 1U], reference)));
+                }
+            }
+            if (std::abs(volume6) <= 1.0e-12)
+                clipped.clear();
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> Clip(std::vector<Face> &faces, const Point &site, const Point &other, const std::uint32_t otherIndex,
                                         const std::uint32_t interiorMaterial, Budget &budget, const CancellationToken &cancellation) {
             const Point normal = Sub(other, site);
@@ -369,85 +438,26 @@ namespace Horo::Destruction {
             for (const auto &face : faces) {
                 if (cancellation.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(OfflineVoronoiErrors::Cancelled));
-                Face next{{}, face.material, face.neighbor, face.visible};
-                next.vertices.reserve(face.vertices.size() + 1);
-                for (std::size_t index = 0; index < face.vertices.size(); ++index) {
-                    if (!budget.ChargeWork())
-                        return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-                    const Point &a = face.vertices[index];
-                    const Point &b = face.vertices[(index + 1) % face.vertices.size()];
-                    const double da = Dot(normal, a) - planeOffset;
-                    const double db = Dot(normal, b) - planeOffset;
-                    const bool insideA = da <= tolerance;
-                    const bool insideB = db <= tolerance;
-                    if (insideA)
-                        next.vertices.push_back(a);
-                    if (insideA != insideB) {
-                        const double fraction = std::clamp(da / (da - db), 0.0, 1.0);
-                        const Point crossing = Add(a, Scale(Sub(b, a), fraction));
-                        next.vertices.push_back(crossing);
-                        cap.push_back(crossing);
-                    }
-                }
-                RemoveAdjacentDuplicates(next.vertices, tolerance);
-                if (next.vertices.size() >= 3) {
-                    const bool bisectorFace =
-                        otherIndex != 0 && std::all_of(next.vertices.begin(), next.vertices.end(), [&](const Point &point) {
-                        return std::abs(Dot(normal, point) - planeOffset) <= tolerance;
-                    });
-                    if (bisectorFace) {
-                        next.material = interiorMaterial;
-                        next.neighbor = otherIndex;
-                        next.visible = true;
-                    }
-                    clipped.push_back(std::move(next));
-                }
-            }
-            std::sort(cap.begin(), cap.end());
-            cap.erase(std::unique(cap.begin(), cap.end(),
-                                  [&](const Point &a, const Point &b) {
-                return Near(a, b, tolerance);
-            }),
-                      cap.end());
-            if (cap.size() >= 3) {
-                Point center{};
-                for (const Point &point : cap)
-                    center = Add(center, point);
-                center = Scale(center, 1.0 / static_cast<double>(cap.size()));
-                const Point axis = std::abs(normal[0]) < std::abs(normal[1]) ? Point{1, 0, 0} : Point{0, 1, 0};
-                const Point u = Scale(Cross(axis, normal), 1.0 / Length(Cross(axis, normal)));
-                const Point v = Scale(Cross(normal, u), 1.0 / normalLength);
-                std::sort(cap.begin(), cap.end(), [&](const Point &a, const Point &b) {
-                    const Point aa = Sub(a, center);
-                    const Point bb = Sub(b, center);
-                    const double angleA = std::atan2(Dot(aa, v), Dot(aa, u));
-                    const double angleB = std::atan2(Dot(bb, v), Dot(bb, u));
-                    return angleA == angleB ? a < b : angleA < angleB;
+                auto next = ClipFace(face, normal, planeOffset, tolerance, cap, budget);
+                if (next.HasError())
+                    return Result<void>::Failure(next.ErrorValue());
+                Face clippedFace = std::move(next.Value());
+                if (clippedFace.vertices.size() < 3)
+                    continue;
+                const bool bisectorFace =
+                    otherIndex != 0 && std::all_of(clippedFace.vertices.begin(), clippedFace.vertices.end(), [&](const Point &point) {
+                    return std::abs(Dot(normal, point) - planeOffset) <= tolerance;
                 });
-                clipped.push_back(Face{std::move(cap), interiorMaterial, otherIndex, otherIndex != 0});
-            }
-            if (clipped.size() > budget.triangleLimit)
-                return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-            std::uint64_t scratchVertices{};
-            for (const auto &face : clipped) {
-                scratchVertices += face.vertices.size();
-                if (scratchVertices > budget.vertexLimit)
-                    return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-            }
-            if (!clipped.empty()) {
-                const Point reference = clipped.front().vertices.front();
-                double volume6{};
-                for (const auto &face : clipped) {
-                    for (std::size_t index = 1; index + 1 < face.vertices.size(); ++index) {
-                        if (!budget.ChargeWork())
-                            return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-                        volume6 += Dot(Sub(face.vertices[0], reference),
-                                       Cross(Sub(face.vertices[index], reference), Sub(face.vertices[index + 1U], reference)));
-                    }
+                if (bisectorFace) {
+                    clippedFace.material = interiorMaterial;
+                    clippedFace.neighbor = otherIndex;
+                    clippedFace.visible = true;
                 }
-                if (std::abs(volume6) <= 1.0e-12)
-                    clipped.clear();
+                clipped.push_back(std::move(clippedFace));
             }
+            AppendClipCap(clipped, std::move(cap), normal, normalLength, tolerance, interiorMaterial, otherIndex);
+            if (auto checked = ValidateClippedVolume(clipped, budget); checked.HasError())
+                return checked;
             faces = std::move(clipped);
             return Result<void>::Success();
         }
@@ -509,15 +519,11 @@ namespace Horo::Destruction {
             return Clip(faces, Sub(center, Scale(normal, 0.5)), Add(center, Scale(normal, 0.5)), 0, 0, budget, cancellation);
         }
 
-        [[nodiscard]] Result<std::vector<std::vector<Face>>> ConvexRegions(const OfflineVoronoiSource &source,
-                                                                           const std::vector<Face> &surface,
-                                                                           const OfflineVoronoiRecipe &recipe, Budget &budget,
-                                                                           const CancellationToken &cancellation) {
-            std::vector<std::vector<Face>> regions{BoundingBox(source)};
-            const auto planes = SourcePlanes(surface);
+        [[nodiscard]] Result<void> SplitRegions(std::vector<std::vector<Face>> &regions, const std::vector<Plane> &planes,
+                                                const std::uint32_t maximumRegions, Budget &budget, const CancellationToken &cancellation) {
             for (const auto &plane : planes) {
                 if (cancellation.IsCancellationRequested())
-                    return Result<std::vector<std::vector<Face>>>::Failure(MakeError(OfflineVoronoiErrors::Cancelled));
+                    return Result<void>::Failure(MakeError(OfflineVoronoiErrors::Cancelled));
                 std::vector<std::vector<Face>> next;
                 for (const auto &region : regions) {
                     bool negative = false;
@@ -525,7 +531,7 @@ namespace Horo::Destruction {
                     for (const auto &face : region) {
                         for (const auto &point : face.vertices) {
                             if (!budget.ChargeWork())
-                                return Result<std::vector<std::vector<Face>>>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+                                return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
                             const double side = Dot(plane.normal, point) - plane.offset;
                             negative |= side < -1.0e-8;
                             positive |= side > 1.0e-8;
@@ -537,17 +543,28 @@ namespace Horo::Destruction {
                         auto left = region;
                         auto right = region;
                         if (auto clipped = ClipPlane(left, plane, false, budget, cancellation); clipped.HasError())
-                            return Result<std::vector<std::vector<Face>>>::Failure(clipped.ErrorValue());
+                            return clipped;
                         if (auto clipped = ClipPlane(right, plane, true, budget, cancellation); clipped.HasError())
-                            return Result<std::vector<std::vector<Face>>>::Failure(clipped.ErrorValue());
+                            return clipped;
                         next.push_back(std::move(left));
                         next.push_back(std::move(right));
                     }
-                    if (next.size() > recipe.maximumConvexRegions)
-                        return Result<std::vector<std::vector<Face>>>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+                    if (next.size() > maximumRegions)
+                        return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
                 }
                 regions = std::move(next);
             }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<std::vector<std::vector<Face>>> ConvexRegions(const OfflineVoronoiSource &source,
+                                                                           const std::vector<Face> &surface,
+                                                                           const OfflineVoronoiRecipe &recipe, Budget &budget,
+                                                                           const CancellationToken &cancellation) {
+            std::vector<std::vector<Face>> regions{BoundingBox(source)};
+            if (auto split = SplitRegions(regions, SourcePlanes(surface), recipe.maximumConvexRegions, budget, cancellation);
+                split.HasError())
+                return Result<std::vector<std::vector<Face>>>::Failure(split.ErrorValue());
             std::vector<std::vector<Face>> inside;
             for (auto &region : regions) {
                 Point center{};
@@ -570,6 +587,26 @@ namespace Horo::Destruction {
             if (inside.empty())
                 return Result<std::vector<std::vector<Face>>>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
             return Result<std::vector<std::vector<Face>>>::Success(std::move(inside));
+        }
+
+        [[nodiscard]] Result<void> ValidateCollisionEdges(const OfflineVoronoiCollisionPiece &piece, Budget &budget) {
+            std::map<std::pair<std::uint32_t, std::uint32_t>, std::pair<unsigned, int>> edges;
+            for (const auto &triangle : piece.triangles) {
+                for (const auto [from, to] :
+                     {std::pair{triangle[0], triangle[1]}, std::pair{triangle[1], triangle[2]}, std::pair{triangle[2], triangle[0]}}) {
+                    if (!budget.ChargeWork())
+                        return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+                    auto &record = edges[std::minmax(from, to)];
+                    ++record.first;
+                    record.second += from < to ? 1 : -1;
+                }
+            }
+            for (const auto &[edge, incidence] : edges) {
+                (void)edge;
+                if (incidence.first != 2 || incidence.second != 0)
+                    return Result<void>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
+            }
+            return Result<void>::Success();
         }
 
         [[nodiscard]] Result<void> CloseCollisionPiece(OfflineVoronoiCollisionPiece &piece, Budget &budget) {
@@ -615,23 +652,73 @@ namespace Horo::Destruction {
                 if (!split)
                     ++triangleIndex;
             }
-            std::map<std::pair<std::uint32_t, std::uint32_t>, std::pair<unsigned, int>> edges;
-            for (const auto &triangle : piece.triangles) {
-                for (const auto [from, to] :
-                     {std::pair{triangle[0], triangle[1]}, std::pair{triangle[1], triangle[2]}, std::pair{triangle[2], triangle[0]}}) {
-                    if (!budget.ChargeWork())
+            return ValidateCollisionEdges(piece, budget);
+        }
+
+        [[nodiscard]] std::size_t FaceRoot(const Face &face) {
+            for (std::size_t vertex = 0; vertex < face.vertices.size(); ++vertex) {
+                const Point before = face.vertices[(vertex + face.vertices.size() - 1U) % face.vertices.size()];
+                const Point after = face.vertices[(vertex + 1U) % face.vertices.size()];
+                if (Length(Cross(Sub(before, face.vertices[vertex]), Sub(after, face.vertices[vertex]))) > 1.0e-14)
+                    return vertex;
+            }
+            return face.vertices.size();
+        }
+
+        [[nodiscard]] Result<void> AppendChunkTriangle(const std::array<Point, 3> &triangle, const Face &face, const Point &reference,
+                                                       double &sixVolume, Point &weightedCenter, OfflineVoronoiChunk &chunk,
+                                                       OfflineVoronoiCollisionPiece &piece,
+                                                       std::map<std::array<float, 3>, std::uint32_t> &collisionVertices, Budget &budget) {
+            const double volume6 = Dot(Sub(triangle[0], reference), Cross(Sub(triangle[1], reference), Sub(triangle[2], reference)));
+            if (!std::isfinite(volume6) || volume6 < -1.0e-12)
+                return Result<void>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
+            if (volume6 <= 1.0e-12)
+                return Result<void>::Success();
+            if (!budget.ChargeWork())
+                return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+            sixVolume += volume6;
+            const Point tetraCenter = Scale(Add(Add(Add(reference, triangle[0]), triangle[1]), triangle[2]), 0.25);
+            weightedCenter = Add(weightedCenter, Scale(tetraCenter, volume6));
+            const std::uint32_t renderFirst = static_cast<std::uint32_t>(chunk.positions.size());
+            std::array<std::uint32_t, 3> collisionIndices{};
+            std::size_t vertexIndex{};
+            for (const Point &point : triangle) {
+                std::array<float, 3> value{};
+                for (std::size_t axis = 0; axis < 3; ++axis)
+                    value[axis] = static_cast<float>(point[axis]);
+                if (!std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
+                    return Result<void>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
+                const auto existing = collisionVertices.find(value);
+                if (existing == collisionVertices.end()) {
+                    if (!budget.ChargeGeometry(1, 0))
                         return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-                    auto &record = edges[std::minmax(from, to)];
-                    ++record.first;
-                    record.second += from < to ? 1 : -1;
+                    collisionIndices[vertexIndex] = static_cast<std::uint32_t>(piece.positions.size());
+                    collisionVertices.emplace(value, collisionIndices[vertexIndex]);
+                    piece.positions.push_back(value);
+                } else {
+                    collisionIndices[vertexIndex] = existing->second;
+                }
+                if (face.visible)
+                    chunk.positions.push_back(value);
+                ++vertexIndex;
+            }
+            if (!budget.ChargeGeometry(face.visible ? 3 : 0, face.visible ? 2 : 1))
+                return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+            piece.triangles.push_back(collisionIndices);
+            if (face.visible)
+                chunk.triangles.push_back({{renderFirst, renderFirst + 1U, renderFirst + 2U}, face.material, face.neighbor != 0});
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Point FaceReference(const std::vector<Face> &faces, std::size_t &count) {
+            Point reference{};
+            for (const auto &face : faces) {
+                for (const auto &point : face.vertices) {
+                    reference = Add(reference, point);
+                    ++count;
                 }
             }
-            for (const auto &[edge, incidence] : edges) {
-                (void)edge;
-                if (incidence.first != 2 || incidence.second != 0)
-                    return Result<void>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
-            }
-            return Result<void>::Success();
+            return count == 0 ? reference : Scale(reference, 1.0 / static_cast<double>(count));
         }
 
         [[nodiscard]] Result<OfflineVoronoiChunk> MakeChunk(const std::vector<Face> &faces, const Point &site,
@@ -644,17 +731,10 @@ namespace Horo::Destruction {
             if (!budget.ChargeBytes(sizeof(OfflineVoronoiCollisionPiece)))
                 return Result<OfflineVoronoiChunk>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
             std::map<std::array<float, 3>, std::uint32_t> collisionVertices;
-            Point reference{};
             std::size_t referenceCount{};
-            for (const auto &face : faces) {
-                for (const auto &point : face.vertices) {
-                    reference = Add(reference, point);
-                    ++referenceCount;
-                }
-            }
+            const Point reference = FaceReference(faces, referenceCount);
             if (referenceCount == 0)
                 return Result<OfflineVoronoiChunk>::Failure(MakeError(OfflineVoronoiErrors::InvalidSites));
-            reference = Scale(reference, 1.0 / static_cast<double>(referenceCount));
             double sixVolume{};
             Point weightedCenter{};
             for (const auto &face : faces) {
@@ -665,59 +745,16 @@ namespace Horo::Destruction {
                         return Result<OfflineVoronoiChunk>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
                     chunk.neighbors.push_back(siteIds[face.neighbor - 1U]);
                 }
-                std::size_t root = face.vertices.size();
-                for (std::size_t vertex = 0; vertex < face.vertices.size(); ++vertex) {
-                    const Point before = face.vertices[(vertex + face.vertices.size() - 1U) % face.vertices.size()];
-                    const Point after = face.vertices[(vertex + 1U) % face.vertices.size()];
-                    if (Length(Cross(Sub(before, face.vertices[vertex]), Sub(after, face.vertices[vertex]))) > 1.0e-14) {
-                        root = vertex;
-                        break;
-                    }
-                }
+                const std::size_t root = FaceRoot(face);
                 if (root == face.vertices.size())
                     return Result<OfflineVoronoiChunk>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
                 for (std::size_t offset = 1; offset + 1 < face.vertices.size(); ++offset) {
                     const std::array<Point, 3> triangle{face.vertices[root], face.vertices[(root + offset) % face.vertices.size()],
                                                         face.vertices[(root + offset + 1U) % face.vertices.size()]};
-                    const double volume6 =
-                        Dot(Sub(triangle[0], reference), Cross(Sub(triangle[1], reference), Sub(triangle[2], reference)));
-                    if (!std::isfinite(volume6) || volume6 < -1.0e-12)
-                        return Result<OfflineVoronoiChunk>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
-                    if (volume6 <= 1.0e-12)
-                        continue;
-                    if (!budget.ChargeWork())
-                        return Result<OfflineVoronoiChunk>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-                    sixVolume += volume6;
-                    const Point tetraCenter = Scale(Add(Add(Add(reference, triangle[0]), triangle[1]), triangle[2]), 0.25);
-                    weightedCenter = Add(weightedCenter, Scale(tetraCenter, volume6));
-                    const std::uint32_t renderFirst = static_cast<std::uint32_t>(chunk.positions.size());
-                    std::array<std::uint32_t, 3> collisionIndices{};
-                    std::size_t vertexIndex{};
-                    for (const Point &point : triangle) {
-                        std::array<float, 3> value{};
-                        for (std::size_t axis = 0; axis < 3; ++axis)
-                            value[axis] = static_cast<float>(point[axis]);
-                        if (!std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]))
-                            return Result<OfflineVoronoiChunk>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
-                        const auto existing = collisionVertices.find(value);
-                        if (existing == collisionVertices.end()) {
-                            if (!budget.ChargeGeometry(1, 0))
-                                return Result<OfflineVoronoiChunk>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-                            collisionIndices[vertexIndex] = static_cast<std::uint32_t>(piece.positions.size());
-                            collisionVertices.emplace(value, collisionIndices[vertexIndex]);
-                            piece.positions.push_back(value);
-                        } else {
-                            collisionIndices[vertexIndex] = existing->second;
-                        }
-                        if (face.visible)
-                            chunk.positions.push_back(value);
-                        ++vertexIndex;
-                    }
-                    if (!budget.ChargeGeometry(face.visible ? 3 : 0, face.visible ? 2 : 1))
-                        return Result<OfflineVoronoiChunk>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-                    piece.triangles.push_back(collisionIndices);
-                    if (face.visible)
-                        chunk.triangles.push_back({{renderFirst, renderFirst + 1U, renderFirst + 2U}, face.material, face.neighbor != 0});
+                    if (auto appended = AppendChunkTriangle(triangle, face, reference, sixVolume, weightedCenter, chunk, piece,
+                                                            collisionVertices, budget);
+                        appended.HasError())
+                        return Result<OfflineVoronoiChunk>::Failure(appended.ErrorValue());
                 }
             }
             if (!(sixVolume > 0.0) || !std::isfinite(sixVolume))
@@ -749,40 +786,46 @@ namespace Horo::Destruction {
             target.neighbors.insert(target.neighbors.end(), piece.neighbors.begin(), piece.neighbors.end());
         }
 
+        [[nodiscard]] Result<std::vector<Point>> ClipExteriorToSite(std::vector<Point> polygon, const std::vector<Point> &sites,
+                                                                    const std::uint32_t index, Budget &budget) {
+            for (std::uint32_t other = 0; other < sites.size() && polygon.size() >= 3; ++other) {
+                if (other == index)
+                    continue;
+                const Point normal = Sub(sites[other], sites[index]);
+                const double planeOffset = Dot(normal, Scale(Add(sites[other], sites[index]), 0.5));
+                const double tolerance = std::max(1.0e-10, Length(normal) * 1.0e-9);
+                std::vector<Point> next;
+                next.reserve(polygon.size() + 1);
+                for (std::size_t vertex = 0; vertex < polygon.size(); ++vertex) {
+                    if (!budget.ChargeWork())
+                        return Result<std::vector<Point>>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+                    const Point &a = polygon[vertex];
+                    const Point &b = polygon[(vertex + 1U) % polygon.size()];
+                    const double da = Dot(normal, a) - planeOffset;
+                    const double db = Dot(normal, b) - planeOffset;
+                    const bool insideA = da <= tolerance;
+                    const bool insideB = db <= tolerance;
+                    if (insideA)
+                        next.push_back(a);
+                    if (insideA != insideB)
+                        next.push_back(Add(a, Scale(Sub(b, a), std::clamp(da / (da - db), 0.0, 1.0))));
+                }
+                RemoveAdjacentDuplicates(next, tolerance);
+                polygon = std::move(next);
+            }
+            return Result<std::vector<Point>>::Success(std::move(polygon));
+        }
+
         [[nodiscard]] Result<void> AppendExterior(OfflineVoronoiChunk &chunk, const std::vector<Face> &sourceFaces,
                                                   const std::vector<Point> &sites, const std::uint32_t index, Budget &budget,
                                                   const CancellationToken &cancellation) {
             for (const auto &sourceFace : sourceFaces) {
                 if (cancellation.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(OfflineVoronoiErrors::Cancelled));
-                std::vector<Point> polygon = sourceFace.vertices;
-                for (std::uint32_t other = 0; other < sites.size() && polygon.size() >= 3; ++other) {
-                    if (other == index)
-                        continue;
-                    const Point normal = Sub(sites[other], sites[index]);
-                    const double planeOffset = Dot(normal, Scale(Add(sites[other], sites[index]), 0.5));
-                    const double tolerance = std::max(1.0e-10, Length(normal) * 1.0e-9);
-                    std::vector<Point> next;
-                    next.reserve(polygon.size() + 1);
-                    for (std::size_t vertex = 0; vertex < polygon.size(); ++vertex) {
-                        if (!budget.ChargeWork())
-                            return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-                        const Point &a = polygon[vertex];
-                        const Point &b = polygon[(vertex + 1U) % polygon.size()];
-                        const double da = Dot(normal, a) - planeOffset;
-                        const double db = Dot(normal, b) - planeOffset;
-                        const bool insideA = da <= tolerance;
-                        const bool insideB = db <= tolerance;
-                        if (insideA)
-                            next.push_back(a);
-                        if (insideA != insideB)
-                            next.push_back(Add(a, Scale(Sub(b, a), std::clamp(da / (da - db), 0.0, 1.0))));
-                    }
-                    RemoveAdjacentDuplicates(next, tolerance);
-                    polygon = std::move(next);
-                }
-                if (polygon.size() < 3)
-                    continue;
+                auto clipped = ClipExteriorToSite(sourceFace.vertices, sites, index, budget);
+                if (clipped.HasError())
+                    return Result<void>::Failure(clipped.ErrorValue());
+                const auto &polygon = clipped.Value();
                 for (std::size_t offset = 1; offset + 1 < polygon.size(); ++offset) {
                     const std::array<Point, 3> triangle{polygon[0], polygon[offset], polygon[offset + 1U]};
                     const double area = Length(Cross(Sub(triangle[1], triangle[0]), Sub(triangle[2], triangle[0])));
@@ -803,139 +846,95 @@ namespace Horo::Destruction {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Sha256Digest Fingerprint(const OfflineVoronoiSource &source, const OfflineVoronoiRecipe &recipe,
-                                               const std::vector<Point> &sites) {
-            std::vector<std::byte> bytes;
-            AppendU32(bytes, OfflineVoronoiSchemaVersion);
-            for (const auto value : source.asset.Bytes())
-                bytes.push_back(static_cast<std::byte>(value));
-            AppendU64(bytes, source.revision);
-            AppendDigest(bytes, source.digest);
-            AppendU64(bytes, recipe.id);
-            AppendU64(bytes, recipe.revision);
-            AppendU64(bytes, recipe.seed);
-            AppendU32(bytes, recipe.siteCount);
-            for (const auto id : recipe.siteIds)
-                AppendU64(bytes, id.Value());
-            for (const auto &site : sites)
-                AppendPoint(bytes, site);
-            AppendU32(bytes, recipe.interiorMaterialSlot);
-            AppendU32(bytes, recipe.toolchainVersion);
-            AppendDigest(bytes, recipe.toolchainDigest);
-            AppendU32(bytes, static_cast<std::uint32_t>(recipe.tier));
-            const auto &limits = recipe.limits;
-            for (const auto value :
-                 {static_cast<std::uint64_t>(limits.maximumChunksPerDestructible), static_cast<std::uint64_t>(limits.maximumHierarchyDepth),
-                  static_cast<std::uint64_t>(limits.maximumActiveChunkBodies),
-                  static_cast<std::uint64_t>(limits.maximumEventsPerTransition),
-                  static_cast<std::uint64_t>(limits.maximumEventJournalEntries),
-                  static_cast<std::uint64_t>(limits.maximumCosmeticDebrisParticles), limits.maximumArtifactBytes,
-                  limits.maximumTransitionBytes, limits.maximumResidentBytes, limits.maximumWorkItemsPerTransition, recipe.maximumVertices,
-                  recipe.maximumTriangles, recipe.maximumWorkItems, static_cast<std::uint64_t>(recipe.maximumConvexRegions)})
-                AppendU64(bytes, value);
-            return ComputeSha256(bytes);
+        [[nodiscard]] Result<void> ValidateGenerationInput(const OfflineVoronoiSource &source, const OfflineVoronoiRecipe &recipe,
+                                                           const CancellationToken &cancellation) {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(OfflineVoronoiErrors::Cancelled));
+            if (!source.asset.IsValid() || source.revision == 0 || recipe.id == 0 || recipe.revision == 0 || recipe.toolchainVersion == 0 ||
+                !NonzeroDigest(recipe.toolchainDigest) || recipe.siteIds.size() != recipe.siteCount ||
+                (!recipe.sites.empty() && recipe.sites.size() != recipe.siteCount))
+                return Result<void>::Failure(MakeError(OfflineVoronoiErrors::InvalidInput));
+            if (!ValidLimits(recipe))
+                return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+            std::vector<DestructionChunkId> sortedIds = recipe.siteIds;
+            std::sort(sortedIds.begin(), sortedIds.end());
+            if (std::any_of(sortedIds.begin(), sortedIds.end(),
+                            [](const DestructionChunkId id) {
+                return !id.IsValid();
+            }) ||
+                std::adjacent_find(sortedIds.begin(), sortedIds.end()) != sortedIds.end())
+                return Result<void>::Failure(MakeError(OfflineVoronoiErrors::InvalidInput));
+            if (source.positions.size() > recipe.maximumVertices || source.indices.size() / 3 > recipe.maximumTriangles ||
+                source.positions.size() > recipe.limits.maximumArtifactBytes / sizeof(std::array<float, 3>) ||
+                source.indices.size() > recipe.limits.maximumArtifactBytes / sizeof(std::uint32_t) ||
+                source.materialSlots.size() > recipe.limits.maximumArtifactBytes / sizeof(std::uint32_t))
+                return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+            if (source.positions.size() > recipe.maximumWorkItems ||
+                source.indices.size() > recipe.maximumWorkItems - source.positions.size() ||
+                source.materialSlots.size() > recipe.maximumWorkItems - source.positions.size() - source.indices.size())
+                return Result<void>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
+            if (source.digest != ComputeOfflineVoronoiSourceDigest(source))
+                return Result<void>::Failure(MakeError(OfflineVoronoiErrors::InvalidInput));
+            return Result<void>::Success();
         }
 
-        [[nodiscard]] std::uint64_t OutputChecksum(const OfflineVoronoiCandidate &candidate) {
-            std::uint64_t hash = 14695981039346656037ULL;
-            const auto mix = [&](const std::uint64_t value) {
-                for (unsigned shift = 0; shift < 64; shift += 8) {
-                    hash ^= static_cast<std::uint8_t>(value >> shift);
-                    hash *= 1099511628211ULL;
+        [[nodiscard]] Result<OfflineVoronoiChunk> GenerateSiteChunk(const std::uint32_t index, const std::vector<Point> &sites,
+                                                                    const std::vector<std::vector<Face>> &regions,
+                                                                    const std::vector<Face> &sourceFaces,
+                                                                    const OfflineVoronoiRecipe &recipe, Budget &budget,
+                                                                    const CancellationToken &cancellation) {
+            if (cancellation.IsCancellationRequested())
+                return Result<OfflineVoronoiChunk>::Failure(MakeError(OfflineVoronoiErrors::Cancelled));
+            OfflineVoronoiChunk aggregate;
+            aggregate.id = recipe.siteIds[index];
+            aggregate.site = sites[index];
+            for (const auto &region : regions) {
+                auto faces = region;
+                for (std::uint32_t other = 0; other < sites.size(); ++other) {
+                    if (other == index)
+                        continue;
+                    auto clipped = Clip(faces, sites[index], sites[other], other + 1U, recipe.interiorMaterialSlot, budget, cancellation);
+                    if (clipped.HasError())
+                        return Result<OfflineVoronoiChunk>::Failure(clipped.ErrorValue());
+                    if (faces.empty())
+                        break;
                 }
-            };
-            mix(candidate.estimatedBytes);
-            mix(candidate.workItems);
-            mix(candidate.chunks.size());
-            for (const auto &chunk : candidate.chunks) {
-                mix(chunk.id.Value());
-                for (const double coordinate : chunk.site)
-                    mix(std::bit_cast<std::uint64_t>(coordinate));
-                mix(chunk.positions.size());
-                for (const auto &position : chunk.positions) {
-                    for (const float coordinate : position)
-                        mix(std::bit_cast<std::uint32_t>(coordinate));
-                }
-                mix(chunk.triangles.size());
-                for (const auto &triangle : chunk.triangles) {
-                    for (const auto index : triangle.indices)
-                        mix(index);
-                    mix(triangle.materialSlot);
-                    mix(triangle.interior ? 1U : 0U);
-                }
-                mix(chunk.collisionPieces.size());
-                for (const auto &piece : chunk.collisionPieces) {
-                    mix(piece.positions.size());
-                    for (const auto &position : piece.positions) {
-                        for (const float coordinate : position)
-                            mix(std::bit_cast<std::uint32_t>(coordinate));
-                    }
-                    mix(piece.triangles.size());
-                    for (const auto &triangle : piece.triangles) {
-                        for (const auto index : triangle)
-                            mix(index);
-                    }
-                    mix(std::bit_cast<std::uint64_t>(piece.volume));
-                }
-                mix(chunk.neighbors.size());
-                for (const auto neighbor : chunk.neighbors)
-                    mix(neighbor.Value());
-                mix(std::bit_cast<std::uint64_t>(chunk.volume));
-                for (const double coordinate : chunk.centerOfMass)
-                    mix(std::bit_cast<std::uint64_t>(coordinate));
+                if (faces.empty())
+                    continue;
+                auto chunk = MakeChunk(faces, sites[index], recipe.siteIds, index, budget);
+                if (chunk.HasError())
+                    return chunk;
+                MergeChunk(aggregate, std::move(chunk.Value()));
             }
-            return hash;
+            if (!(aggregate.volume > 0.0))
+                return Result<OfflineVoronoiChunk>::Failure(MakeError(OfflineVoronoiErrors::InvalidSites));
+            if (auto exterior = AppendExterior(aggregate, sourceFaces, sites, index, budget, cancellation); exterior.HasError())
+                return Result<OfflineVoronoiChunk>::Failure(exterior.ErrorValue());
+            std::sort(aggregate.neighbors.begin(), aggregate.neighbors.end());
+            aggregate.neighbors.erase(std::unique(aggregate.neighbors.begin(), aggregate.neighbors.end()), aggregate.neighbors.end());
+            return Result<OfflineVoronoiChunk>::Success(std::move(aggregate));
         }
-    }  // namespace
 
-    /** @copydoc ComputeOfflineVoronoiSourceDigest */
-    Sha256Digest ComputeOfflineVoronoiSourceDigest(const OfflineVoronoiSource &source) {
-        std::vector<std::byte> bytes;
-        AppendU32(bytes, OfflineVoronoiSchemaVersion);
-        AppendU64(bytes, source.positions.size());
-        for (const auto &point : source.positions) {
-            for (const float value : point)
-                AppendU32(bytes, std::bit_cast<std::uint32_t>(value));
+        [[nodiscard]] Result<void> ValidateNeighbors(const std::vector<OfflineVoronoiChunk> &chunks) {
+            for (const auto &chunk : chunks) {
+                for (const auto neighbor : chunk.neighbors) {
+                    const auto other = std::find_if(chunks.begin(), chunks.end(), [&](const auto &candidateChunk) {
+                        return candidateChunk.id == neighbor;
+                    });
+                    if (other == chunks.end() || !std::binary_search(other->neighbors.begin(), other->neighbors.end(), chunk.id))
+                        return Result<void>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
+                }
+            }
+            return Result<void>::Success();
         }
-        AppendU64(bytes, source.indices.size());
-        for (const auto value : source.indices)
-            AppendU32(bytes, value);
-        AppendU64(bytes, source.materialSlots.size());
-        for (const auto value : source.materialSlots)
-            AppendU32(bytes, value);
-        return ComputeSha256(bytes);
-    }
+
+    }  // namespace
 
     /** @copydoc GenerateOfflineVoronoi */
     Result<OfflineVoronoiCandidate> GenerateOfflineVoronoi(const OfflineVoronoiSource &source, const OfflineVoronoiRecipe &recipe,
                                                            const CancellationToken &cancellation) {
-        if (cancellation.IsCancellationRequested())
-            return Result<OfflineVoronoiCandidate>::Failure(MakeError(OfflineVoronoiErrors::Cancelled));
-        if (!source.asset.IsValid() || source.revision == 0 || recipe.id == 0 || recipe.revision == 0 || recipe.toolchainVersion == 0 ||
-            !NonzeroDigest(recipe.toolchainDigest) || recipe.siteIds.size() != recipe.siteCount ||
-            (!recipe.sites.empty() && recipe.sites.size() != recipe.siteCount))
-            return Result<OfflineVoronoiCandidate>::Failure(MakeError(OfflineVoronoiErrors::InvalidInput));
-        if (!ValidLimits(recipe))
-            return Result<OfflineVoronoiCandidate>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-        std::vector<DestructionChunkId> sortedIds = recipe.siteIds;
-        std::sort(sortedIds.begin(), sortedIds.end());
-        if (std::any_of(sortedIds.begin(), sortedIds.end(),
-                        [](const DestructionChunkId id) {
-            return !id.IsValid();
-        }) ||
-            std::adjacent_find(sortedIds.begin(), sortedIds.end()) != sortedIds.end())
-            return Result<OfflineVoronoiCandidate>::Failure(MakeError(OfflineVoronoiErrors::InvalidInput));
-        if (source.positions.size() > recipe.maximumVertices || source.indices.size() / 3 > recipe.maximumTriangles ||
-            source.positions.size() > recipe.limits.maximumArtifactBytes / sizeof(std::array<float, 3>) ||
-            source.indices.size() > recipe.limits.maximumArtifactBytes / sizeof(std::uint32_t) ||
-            source.materialSlots.size() > recipe.limits.maximumArtifactBytes / sizeof(std::uint32_t))
-            return Result<OfflineVoronoiCandidate>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-        if (source.positions.size() > recipe.maximumWorkItems ||
-            source.indices.size() > recipe.maximumWorkItems - source.positions.size() ||
-            source.materialSlots.size() > recipe.maximumWorkItems - source.positions.size() - source.indices.size())
-            return Result<OfflineVoronoiCandidate>::Failure(MakeError(OfflineVoronoiErrors::LimitExceeded));
-        if (source.digest != ComputeOfflineVoronoiSourceDigest(source))
-            return Result<OfflineVoronoiCandidate>::Failure(MakeError(OfflineVoronoiErrors::InvalidInput));
+        if (auto validated = ValidateGenerationInput(source, recipe, cancellation); validated.HasError())
+            return Result<OfflineVoronoiCandidate>::Failure(validated.ErrorValue());
         Budget budget{.workLimit = recipe.maximumWorkItems,
                       .byteLimit = recipe.limits.maximumArtifactBytes,
                       .vertexLimit = recipe.maximumVertices,
@@ -966,55 +965,20 @@ namespace Horo::Destruction {
         candidate.sourceDigest = source.digest;
         candidate.recipeId = recipe.id;
         candidate.recipeRevision = recipe.revision;
-        candidate.semanticFingerprint = Fingerprint(source, recipe, sites.Value());
+        candidate.semanticFingerprint = Detail::VoronoiFingerprint(source, recipe, sites.Value());
         candidate.toolchainDigest = recipe.toolchainDigest;
         candidate.chunks.reserve(sites.Value().size());
         for (std::uint32_t index = 0; index < sites.Value().size(); ++index) {
-            if (cancellation.IsCancellationRequested())
-                return Result<OfflineVoronoiCandidate>::Failure(MakeError(OfflineVoronoiErrors::Cancelled));
-            OfflineVoronoiChunk aggregate;
-            aggregate.id = recipe.siteIds[index];
-            aggregate.site = sites.Value()[index];
-            for (const auto &region : regions) {
-                auto faces = region;
-                for (std::uint32_t other = 0; other < sites.Value().size(); ++other) {
-                    if (other == index)
-                        continue;
-                    auto clipped = Clip(faces, sites.Value()[index], sites.Value()[other], other + 1U, recipe.interiorMaterialSlot, budget,
-                                        cancellation);
-                    if (clipped.HasError())
-                        return Result<OfflineVoronoiCandidate>::Failure(clipped.ErrorValue());
-                    if (faces.empty())
-                        break;
-                }
-                if (faces.empty())
-                    continue;
-                auto chunk = MakeChunk(faces, sites.Value()[index], recipe.siteIds, index, budget);
-                if (chunk.HasError())
-                    return Result<OfflineVoronoiCandidate>::Failure(chunk.ErrorValue());
-                MergeChunk(aggregate, std::move(chunk.Value()));
-            }
-            if (!(aggregate.volume > 0.0))
-                return Result<OfflineVoronoiCandidate>::Failure(MakeError(OfflineVoronoiErrors::InvalidSites));
-            if (auto exterior = AppendExterior(aggregate, sourceFaces.Value(), sites.Value(), index, budget, cancellation);
-                exterior.HasError())
-                return Result<OfflineVoronoiCandidate>::Failure(exterior.ErrorValue());
-            std::sort(aggregate.neighbors.begin(), aggregate.neighbors.end());
-            aggregate.neighbors.erase(std::unique(aggregate.neighbors.begin(), aggregate.neighbors.end()), aggregate.neighbors.end());
-            candidate.chunks.push_back(std::move(aggregate));
+            auto chunk = GenerateSiteChunk(index, sites.Value(), regions, sourceFaces.Value(), recipe, budget, cancellation);
+            if (chunk.HasError())
+                return Result<OfflineVoronoiCandidate>::Failure(chunk.ErrorValue());
+            candidate.chunks.push_back(std::move(chunk.Value()));
         }
-        for (const auto &chunk : candidate.chunks) {
-            for (const auto neighbor : chunk.neighbors) {
-                const auto other = std::find_if(candidate.chunks.begin(), candidate.chunks.end(), [&](const auto &candidateChunk) {
-                    return candidateChunk.id == neighbor;
-                });
-                if (other == candidate.chunks.end() || !std::binary_search(other->neighbors.begin(), other->neighbors.end(), chunk.id))
-                    return Result<OfflineVoronoiCandidate>::Failure(MakeError(OfflineVoronoiErrors::InvalidMesh));
-            }
-        }
+        if (auto neighbors = ValidateNeighbors(candidate.chunks); neighbors.HasError())
+            return Result<OfflineVoronoiCandidate>::Failure(neighbors.ErrorValue());
         candidate.estimatedBytes = budget.bytes;
         candidate.workItems = budget.work;
-        candidate.outputChecksum_ = OutputChecksum(candidate);
+        candidate.outputChecksum_ = Detail::VoronoiOutputChecksum(candidate);
         return Result<OfflineVoronoiCandidate>::Success(std::move(candidate));
     }
 
@@ -1023,7 +987,7 @@ namespace Horo::Destruction {
                                              const OfflineVoronoiSource &currentSource, const OfflineVoronoiRecipe &currentRecipe) {
         if (shutdown_)
             return Result<void>::Failure(MakeError(OfflineVoronoiErrors::Shutdown));
-        if (candidate.outputChecksum_ != OutputChecksum(candidate))
+        if (candidate.outputChecksum_ != Detail::VoronoiOutputChecksum(candidate))
             return Result<void>::Failure(MakeError(OfflineVoronoiErrors::InvalidInput));
         if (!ValidLimits(currentRecipe) || currentRecipe.siteIds.size() != currentRecipe.siteCount ||
             (!currentRecipe.sites.empty() && currentRecipe.sites.size() != currentRecipe.siteCount))
@@ -1039,7 +1003,7 @@ namespace Horo::Destruction {
         sites.reserve(candidate.chunks.size());
         for (const auto &chunk : candidate.chunks)
             sites.push_back(chunk.site);
-        if (candidate.semanticFingerprint != Fingerprint(currentSource, currentRecipe, sites) ||
+        if (candidate.semanticFingerprint != Detail::VoronoiFingerprint(currentSource, currentRecipe, sites) ||
             (!currentRecipe.sites.empty() && currentRecipe.sites != sites))
             return Result<void>::Failure(MakeError(OfflineVoronoiErrors::Stale));
         if (revision_ == std::numeric_limits<std::uint64_t>::max())

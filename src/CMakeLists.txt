@@ -822,6 +822,7 @@ target_link_libraries(HoroDestructionApi PUBLIC HoroEngine::Foundation HoroEngin
 
 add_library(HoroDestructionCook STATIC
         runtime/destruction/cook/OfflineVoronoi.cpp
+        runtime/destruction/cook/OfflineVoronoiProvenance.cpp
         runtime/destruction/cook/PreFracturedIntersection.cpp
         runtime/destruction/cook/PreFracturedImport.cpp
 )

@@ -306,21 +306,6 @@ namespace Horo::Destruction {
         CHECK(token.IsCancellationRequested());
         const auto published = owner.Snapshot();
         REQUIRE(published != nullptr);
-        auto modified = GenerateOfflineVoronoi(source, recipe, CancellationToken{});
-        REQUIRE(modified.HasValue());
-        auto tampered = modified.Value();
-        REQUIRE_FALSE(tampered.chunks[0].triangles.empty());
-        ++tampered.chunks[0].triangles[0].materialSlot;
-        auto invalid = owner.Accept(std::move(tampered), owner.Revision(), source, recipe);
-        REQUIRE(invalid.HasError());
-        CHECK(invalid.ErrorValue().code.Value() == OfflineVoronoiErrors::InvalidInput.code.Value());
-        CHECK(owner.Snapshot() == published);
-        auto alteredTotals = modified.Value();
-        ++alteredTotals.workItems;
-        auto invalidTotals = owner.Accept(std::move(alteredTotals), owner.Revision(), source, recipe);
-        REQUIRE(invalidTotals.HasError());
-        CHECK(invalidTotals.ErrorValue().code.Value() == OfflineVoronoiErrors::InvalidInput.code.Value());
-        CHECK(owner.Snapshot() == published);
         auto stale = GenerateOfflineVoronoi(source, recipe, CancellationToken{});
         REQUIRE(stale.HasValue());
         source.revision++;
@@ -343,6 +328,31 @@ namespace Horo::Destruction {
         auto afterShutdown = GenerateOfflineVoronoi(source, recipe, CancellationToken{});
         REQUIRE(afterShutdown.HasValue());
         CHECK(owner.Accept(std::move(afterShutdown.Value()), owner.Revision(), source, recipe).HasError());
+        CHECK(owner.Snapshot() == published);
+    }
+
+    TEST_CASE("Offline Voronoi owner rejects mutated detached candidates", "[destruction][voronoi]") {
+        const auto source = Cube();
+        const auto recipe = Recipe();
+        OfflineVoronoiOwner owner;
+        auto original = GenerateOfflineVoronoi(source, recipe, owner.Token());
+        REQUIRE(original.HasValue());
+        REQUIRE(owner.Accept(std::move(original.Value()), owner.Revision(), source, recipe).HasValue());
+        const auto published = owner.Snapshot();
+        auto generated = GenerateOfflineVoronoi(source, recipe, CancellationToken{});
+        REQUIRE(generated.HasValue());
+        auto tampered = generated.Value();
+        REQUIRE_FALSE(tampered.chunks[0].triangles.empty());
+        ++tampered.chunks[0].triangles[0].materialSlot;
+        auto invalid = owner.Accept(std::move(tampered), owner.Revision(), source, recipe);
+        REQUIRE(invalid.HasError());
+        CHECK(invalid.ErrorValue().code.Value() == OfflineVoronoiErrors::InvalidInput.code.Value());
+        CHECK(owner.Snapshot() == published);
+        auto alteredTotals = generated.Value();
+        ++alteredTotals.workItems;
+        auto invalidTotals = owner.Accept(std::move(alteredTotals), owner.Revision(), source, recipe);
+        REQUIRE(invalidTotals.HasError());
+        CHECK(invalidTotals.ErrorValue().code.Value() == OfflineVoronoiErrors::InvalidInput.code.Value());
         CHECK(owner.Snapshot() == published);
     }
 }  // namespace Horo::Destruction
