@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <format>
 #include <limits>
 #include <new>
@@ -13,7 +14,8 @@
 
 namespace Horo::Runtime {
     struct CanonicalReadState final {
-        std::size_t decodedBytes{};
+        std::atomic<std::size_t> decodedBytes{};
+        std::atomic<std::size_t> readWorkBytes{};
     };
 
     namespace {
@@ -177,10 +179,27 @@ namespace Horo::Runtime {
     }
 
     Result<void> CanonicalValueReader::Charge(const std::size_t bytes) const {
-        if (state_->decodedBytes > limits_.maximumDecodedBytes || bytes > limits_.maximumDecodedBytes - state_->decodedBytes)
-            return Result<void>::Failure(ErrorAt(SaveErrors::CanonicalCodecLimitExceeded));
-        state_->decodedBytes += bytes;
-        return Result<void>::Success();
+        std::size_t used = state_->decodedBytes.load(std::memory_order_relaxed);
+        while (true) {
+            if (used > limits_.maximumDecodedBytes || bytes > limits_.maximumDecodedBytes - used)
+                return Result<void>::Failure(ErrorAt(SaveErrors::CanonicalCodecLimitExceeded));
+            if (state_->decodedBytes.compare_exchange_weak(used, used + bytes, std::memory_order_relaxed))
+                return Result<void>::Success();
+        }
+    }
+
+    Result<void> CanonicalValueReader::ChargeReadWork(const std::size_t bytes) const {
+        std::size_t used = state_->readWorkBytes.load(std::memory_order_relaxed);
+        while (true) {
+            if (used > limits_.maximumReadWorkBytes || bytes > limits_.maximumReadWorkBytes - used) {
+                Error error = ErrorAt(SaveErrors::CanonicalCodecLimitExceeded);
+                error.diagnostics.front().code = DiagnosticCode{"save.canonical_codec.limit.read_work"};
+                error.diagnostics.front().message = "Canonical read work budget exceeded.";
+                return Result<void>::Failure(std::move(error));
+            }
+            if (state_->readWorkBytes.compare_exchange_weak(used, used + bytes, std::memory_order_relaxed))
+                return Result<void>::Success();
+        }
     }
 
     Result<void> CanonicalValueReader::ChargeElements(const std::size_t count, const std::size_t elementSize) const {
@@ -207,6 +226,8 @@ namespace Horo::Runtime {
     Result<std::span<const std::byte>> CanonicalValueReader::ReadExactBytes(const std::size_t count) {
         if (offset_ > bytes_.size() || count > bytes_.size() - offset_)
             return Result<std::span<const std::byte>>::Failure(ErrorAt(SaveErrors::CanonicalCodecCorrupt));
+        if (auto charged = ChargeReadWork(count); charged.HasError())
+            return Result<std::span<const std::byte>>::Failure(charged.ErrorValue());
         const auto value = bytes_.subspan(offset_, count);
         offset_ += count;
         return Result<std::span<const std::byte>>::Success(value);

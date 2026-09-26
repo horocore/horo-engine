@@ -147,7 +147,9 @@ namespace Horo::Runtime::SaveMigrationDetail {
     [[nodiscard]] inline bool ValidLimits(const SaveMigrationLimits &limits) noexcept {
         return limits.maximumDefinitions != 0 && limits.maximumPlanSteps != 0 && limits.maximumParticipants != 0 &&
                limits.maximumArchiveBytes != 0 && limits.maximumParticipantPayloadBytes != 0 && limits.maximumTotalPayloadBytes != 0 &&
-               limits.maximumParticipantPayloadBytes <= limits.maximumTotalPayloadBytes;
+               limits.maximumParticipantPayloadBytes <= limits.maximumTotalPayloadBytes && limits.maximumArchiveBytes <= (4ULL << 30U) &&
+               limits.maximumTotalPayloadBytes <= (1ULL << 30U) && limits.maximumCumulativeWorkBytes != 0 &&
+               limits.maximumCumulativeWorkBytes <= (16ULL << 30U);
     }
 
     template <typename Tag> [[nodiscard]] inline bool IsValidSupport(const SaveVersionSupport<Tag> &support) noexcept {

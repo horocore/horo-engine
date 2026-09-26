@@ -318,6 +318,13 @@ retry counts and stage/readback/signing deadlines. Aggregate admission counts ol
 and new snapshots/runtimes/retired resources together; declared local participant
 limits are not extra capacity. Exceeding a bound fails or defers explicitly, never
 silently unbounds a worker or guarantees a frame-time target.
+Parser profile overrides may lower or raise individual bounds only within compiled
+secure ceilings. Archive admission reserves cumulative validation work before hashing
+and shares the remaining allowance with repeated chunk selections. Canonical child
+readers share decoded-memory and byte-inspection counters even when reopened; migration
+charges source staging and each step's input, declared work, and output against one
+operation budget. A bounded failure reports a stable category and trusted structural
+location, never untrusted text or payload bytes.
 Serialization, compression, hashing, signing, quota queries, directory scans, flush,
 AtomicReplace, deletion and cleanup run on admitted worker/storage roles. No normal
 owner/render/transport frame waits for them. ADR-010 governs allowed teardown drains.
@@ -911,6 +918,10 @@ non-equivalent checkpoints. `SaveMigrationExecutor` copies the validated source
 into bounded detached staging and returns a new candidate; callbacks cannot
 receive a mutable source or live runtime reference, and the source is checked
 again before success.
+The step context carries remaining operation work and candidate byte ceilings so
+callbacks can reject expansion before allocating. The executor charges source
+staging, each step's input and declared work, and each bounded output against one
+operation budget.
 
 Compatibility preflight proceeds through framing/limits, archive version, outer
 integrity/signature, save schema, required participant set/schema, then semantic

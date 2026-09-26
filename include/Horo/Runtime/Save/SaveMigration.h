@@ -104,6 +104,10 @@ namespace Horo::Runtime {
         SaveMigrationAxis axis{SaveMigrationAxis::ArchiveFormat};
         SaveMigrationStepKind kind{SaveMigrationStepKind::Sequential};
         std::optional<SaveParticipantId> participant;
+        std::uint64_t remainingWorkBytes{};  /**< Remaining operation work before callback expansion; output is charged on return. */
+        std::uint64_t maximumArchiveBytes{}; /**< Trusted archive candidate ceiling. */
+        std::uint64_t maximumParticipantPayloadBytes{}; /**< Trusted per-participant candidate ceiling. */
+        std::uint64_t maximumTotalPayloadBytes{};       /**< Trusted aggregate participant candidate ceiling. */
     };
 
     /** @brief Function receiving ownership of the current detached candidate and returning its replacement. */
@@ -197,6 +201,7 @@ namespace Horo::Runtime {
         std::uint64_t maximumArchiveBytes{4ULL * 1024ULL * 1024ULL * 1024ULL};
         std::uint64_t maximumParticipantPayloadBytes{MaximumSaveMigrationParticipantPayloadBytes};
         std::uint64_t maximumTotalPayloadBytes{MaximumSaveMigrationTotalPayloadBytes};
+        std::uint64_t maximumCumulativeWorkBytes{8ULL * 1024ULL * 1024ULL * 1024ULL}; /**< Source, step input/output and declared work. */
     };
 
     /** @brief Registration evidence tied to the mutable registry generation. */

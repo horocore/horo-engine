@@ -27,6 +27,13 @@ namespace Horo::Runtime {
         using SaveArchiveReaderDetail::RawEntry;
         using SaveArchiveReaderDetail::ReaderError;
 
+        [[nodiscard]] Error ReadWorkError(const std::size_t offset, const std::string_view path) {
+            Error error = ReaderError(SaveErrors::ArchiveFramingLimitExceeded, offset, path);
+            error.diagnostics.front().code = DiagnosticCode{"save.archive.limit.read_work"};
+            error.diagnostics.front().message = "Archive read work budget exceeded.";
+            return error;
+        }
+
         template <typename Value>
         [[nodiscard]] bool ReadLittleEndian(const std::span<const std::byte> bytes, std::size_t &offset, Value &value) noexcept {
             static_assert(std::is_unsigned_v<Value>);
@@ -58,16 +65,21 @@ namespace Horo::Runtime {
 
         [[nodiscard]] bool HasValidArchiveLimits(const SaveArchiveReaderLimits &limits) noexcept {
             return limits.maximumArchiveBytes != 0 && limits.maximumStoredPayloadBytes != 0 &&
-                   limits.maximumStoredPayloadBytes <= limits.maximumArchiveBytes && limits.maximumDecodedBytes != 0;
+                   limits.maximumStoredPayloadBytes <= limits.maximumArchiveBytes && limits.maximumDecodedBytes != 0 &&
+                   limits.maximumArchiveBytes <= (4ULL << 30U) && limits.maximumDecodedBytes <= (1ULL << 30U) &&
+                   limits.maximumReadWorkBytes != 0 && limits.maximumReadWorkBytes <= (16ULL << 30U);
         }
 
         [[nodiscard]] bool HasValidStructuralLimits(const SaveArchiveReaderLimits &limits) noexcept {
             return limits.maximumEntries != 0 && limits.maximumNestingDepth != 0 &&
-                   limits.maximumNestingDepth <= MaximumContainerNestingDepth && limits.maximumExpansionRatio != 0;
+                   limits.maximumNestingDepth <= MaximumContainerNestingDepth && limits.maximumExpansionRatio != 0 &&
+                   limits.maximumExpansionRatio <= 64 && limits.maximumEntries <= 65'536;
         }
 
         [[nodiscard]] bool HasValidNestedLimits(const SaveArchiveReaderLimits &limits) noexcept {
-            return limits.metadata.maximumNestingDepth <= limits.maximumNestingDepth &&
+            return limits.metadata.maximumNestingDepth <= limits.maximumNestingDepth && limits.metadata.maximumHeaderBytes <= (1U << 20U) &&
+                   limits.metadata.maximumManifestBytes <= (4U << 20U) && limits.metadata.maximumTextBytes <= 4'096 &&
+                   limits.metadata.maximumParticipants <= 4'096 && limits.metadata.maximumTotalChunks <= limits.maximumEntries &&
                    limits.chunks.maximumEntries <= limits.maximumEntries &&
                    limits.chunks.maximumPayloadBytes <= limits.maximumStoredPayloadBytes &&
                    limits.chunks.maximumDecodedChunkBytes <= limits.maximumDecodedBytes;
@@ -163,6 +175,8 @@ namespace Horo::Runtime {
             if (archive.size() > limits.maximumArchiveBytes)
                 return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(
                     ReaderError(SaveErrors::ArchiveFramingLimitExceeded, 0, "envelope/archiveBytes"));
+            if (archive.size() > limits.maximumReadWorkBytes)
+                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(ReadWorkError(0, "envelope/readWork"));
             auto fields = ReadEnvelopeHeader(archive);
             if (fields.HasError())
                 return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(fields.ErrorValue());
@@ -430,6 +444,10 @@ namespace Horo::Runtime {
                     if (envelope.HasError())
                         return Result<ValidatedSaveArchive>::Failure(envelope.ErrorValue());
                     auto [preamble, integrity] = std::move(envelope).Value();
+                    // The integrity pass, container/metadata pass and directory pass can each
+                    // inspect the stored archive once. Reserve that cumulative work up front.
+                    if (archive.size() > limits.maximumReadWorkBytes / 3)
+                        return Result<ValidatedSaveArchive>::Failure(ReadWorkError(0, "envelope/readWork"));
                     if (auto verified = VerifySaveArchiveIntegrity(integrity, archive); verified.HasError())
                         return Result<ValidatedSaveArchive>::Failure(verified.ErrorValue());
 
@@ -447,6 +465,8 @@ namespace Horo::Runtime {
                     if (validatedDirectory.HasError())
                         return Result<ValidatedSaveArchive>::Failure(validatedDirectory.ErrorValue());
                     auto validated = std::move(validatedDirectory).Value();
+                    auto remainingReadWork = std::make_shared<std::atomic<std::uint64_t>>(limits.maximumReadWorkBytes -
+                                                                                          static_cast<std::uint64_t>(archive.size()) * 3);
                     return Result<ValidatedSaveArchive>::Success(
                         ValidatedSaveArchive{ValidatedSaveArchive::Contents{.archive = archive,
                                                                             .ownedArchive = std::move(ownedArchive),
@@ -455,7 +475,8 @@ namespace Horo::Runtime {
                                                                             .signature = signature,
                                                                             .header = std::move(metadataValue.header),
                                                                             .manifest = std::move(metadataValue.manifest),
-                                                                            .directory = std::move(validated)}});
+                                                                            .directory = std::move(validated),
+                                                                            .remainingReadWork = std::move(remainingReadWork)}});
                 } catch (const std::bad_alloc &) {
                     return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::ArchiveAllocationFailed));
                 }
@@ -467,7 +488,8 @@ namespace Horo::Runtime {
         : archive_(contents.archive), ownedArchive_(std::move(contents.ownedArchive)), preamble_(std::move(contents.preamble)),
           integrity_(std::move(contents.integrity)), signature_(std::move(contents.signature)), header_(std::move(contents.header)),
           manifest_(std::move(contents.manifest)), directory_(std::move(contents.directory)),
-          payload_(archive_.subspan(SaveArchivePreambleByteLength, static_cast<std::size_t>(preamble_.payloadByteLength))) {}
+          payload_(archive_.subspan(SaveArchivePreambleByteLength, static_cast<std::size_t>(preamble_.payloadByteLength))),
+          remainingReadWork_(std::move(contents.remainingReadWork)) {}
 
     const SaveArchivePreamble &ValidatedSaveArchive::Preamble() const noexcept {
         return preamble_;
@@ -498,6 +520,17 @@ namespace Horo::Runtime {
     }
 
     Result<std::optional<std::span<const std::byte>>> ValidatedSaveArchive::SelectChunk(const SaveRecordId record) const {
+        const auto entries = directory_.Entries();
+        const auto found = std::ranges::lower_bound(entries, record, {}, &SaveChunkDirectoryEntry::record);
+        if (found != entries.end() && found->record == record) {
+            std::uint64_t remaining = remainingReadWork_->load(std::memory_order_relaxed);
+            while (true) {
+                if (found->storedByteLength > remaining)
+                    return Result<std::optional<std::span<const std::byte>>>::Failure(ReadWorkError(found->offset, "chunk/readWork"));
+                if (remainingReadWork_->compare_exchange_weak(remaining, remaining - found->storedByteLength, std::memory_order_relaxed))
+                    break;
+            }
+        }
         return SelectSaveChunkPayload(payload_, directory_, record);
     }
 
