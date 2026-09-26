@@ -212,6 +212,14 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor CloudMetadataLimitExceeded;
     /** @brief A bounded cloud metadata snapshot could not be allocated. */
     extern const ErrorCodeDescriptor CloudMetadataAllocationFailed;
+    /** @brief Save-manager source, revision, filter, or command arguments are invalid. */
+    extern const ErrorCodeDescriptor ManagerProjectionInvalid;
+    /** @brief Save-manager source or page request exceeds a qualified finite bound. */
+    extern const ErrorCodeDescriptor ManagerProjectionLimitExceeded;
+    /** @brief A page cursor, assessment, or command no longer matches the current publication. */
+    extern const ErrorCodeDescriptor ManagerProjectionStale;
+    /** @brief Detached save-manager presentation storage could not be allocated. */
+    extern const ErrorCodeDescriptor ManagerProjectionAllocationFailed;
     /** @brief A local storage operation request, address, payload, or configured limit is invalid. */
     extern const ErrorCodeDescriptor StorageOperationInvalid;
     /** @brief The selected storage provider does not implement the requested operation. */
@@ -312,4 +320,22 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor DiagnosticUnsupported;
     /** @brief Diagnostic correlation does not match the expected active save generations. */
     extern const ErrorCodeDescriptor DiagnosticCorrelationStale;
+    /** @brief A protection descriptor is malformed or exceeds finite bounds. */
+    extern const ErrorCodeDescriptor ProtectionInvalid;
+    /** @brief Trusted policy forbids plaintext or a protection downgrade. */
+    extern const ErrorCodeDescriptor ProtectionRequired;
+    /** @brief The selected provider or algorithm is unsupported. */
+    extern const ErrorCodeDescriptor ProtectionUnsupported;
+    /** @brief The selected protection provider is unavailable. */
+    extern const ErrorCodeDescriptor ProtectionUnavailable;
+    /** @brief The selected key was rotated and cannot open this generation. */
+    extern const ErrorCodeDescriptor ProtectionKeyRotated;
+    /** @brief The selected key was revoked. */
+    extern const ErrorCodeDescriptor ProtectionKeyRevoked;
+    /** @brief Authentication failed without exposing plaintext. */
+    extern const ErrorCodeDescriptor ProtectionAuthenticationFailed;
+    /** @brief Host policy requires a signature but the archive is unsigned. */
+    extern const ErrorCodeDescriptor SignatureRequired;
+    /** @brief Host policy forbids a present signature in unsigned-only mode. */
+    extern const ErrorCodeDescriptor SignatureDisallowed;
 }  // namespace Horo::Runtime::SaveErrors

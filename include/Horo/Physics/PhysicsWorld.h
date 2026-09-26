@@ -81,6 +81,16 @@ namespace Horo::Physics {
         bool sensor{};
     };
 
+    /** @brief Owner-thread reconciliation of retained policy against current native body evidence. */
+    struct PhysicsBodyReconciliation final {
+        PhysicsBodyDescriptor policy;                                /**< Last applied intent; pose and velocities are not live values. */
+        PhysicsBodyState state;                                      /**< Current solver pose, velocity and activity. */
+        PhysicsMotionType observedMotion{PhysicsMotionType::Static}; /**< Native motion mode translated to Horo. */
+        ShapeHandle observedShape;                                   /**< Resident Horo shape matching the native shape object. */
+        std::optional<float> observedMassKilograms;                  /**< Native dynamic mass when translation is unlocked. */
+        Math::Vec3 observedBoundsExtent;                             /**< Native broadphase AABB full extents in world units. */
+    };
+
     /**
      * @brief Process-composition owner for canonical native registration or explicit Null behavior.
      *
@@ -124,7 +134,7 @@ namespace Horo::Physics {
         [[nodiscard]] PhysicsAvailability Availability() const noexcept;
         /** @brief Reports current implemented support; Null reports every known feature Unsupported.
          * @param capability Known Horo feature to inspect.
-         * @return WorldCreation, rigid bodies, immutable analytic shapes, constraints and immediate queries
+         * @return WorldCreation, rigid bodies, body mutation, immutable analytic shapes, constraints and immediate queries
          * are available only while Canonical is ready; snapshot, origin-rebasing and other future features remain unsupported.
          */
         [[nodiscard]] PhysicsCapabilitySupport Capability(PhysicsCapability capability) const noexcept;
@@ -191,8 +201,22 @@ namespace Horo::Physics {
          * Destruction may consume the reserved final slot; if completely full it returns DestructionRetryRequired
          * and is never silently dropped. Commands carry their exact future tick and are canonically sorted at that tick;
          * admission or worker completion order has no semantic authority.
+         * A Change/Body command may own a PhysicsBodyMutation. It is validated against the resident
+         * body on admission between ticks, applied before the native step, and revalidated at that safe point.
          */
         [[nodiscard]] Result<PhysicsCommandAdmission> QueueStructuralCommand(const PhysicsStructuralCommand &command);
+        /** @brief Reads the last applied policy for a resident scene body on the owner thread.
+         * @param body Exact current world-scoped body handle.
+         * @return Owned descriptor reflecting completed body mutations, or a typed lifecycle/handle error.
+         * The pose and velocities in this policy are creation intent, not a live solver-state snapshot.
+         */
+        [[nodiscard]] Result<PhysicsBodyDescriptor> ReadSceneBodyPolicy(BodyHandle body) const;
+        /** @brief Reconciles one exact resident body against owner-thread native solver state.
+         * @param body Exact current world-scoped body handle.
+         * @return Owned policy and observed state, or a typed lifecycle, handle or native-consistency error.
+         * @pre Owner thread, active canonical world, outside a fixed step. This is not a cross-thread snapshot.
+         */
+        [[nodiscard]] Result<PhysicsBodyReconciliation> ReadSceneBodyReconciliation(BodyHandle body) const;
         /**
          * @brief Admits one explicit analytic query fixture on the owner thread.
          * @param fixture Complete geometry, pose and stable query-filter evidence.

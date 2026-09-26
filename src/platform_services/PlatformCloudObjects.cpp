@@ -90,10 +90,45 @@ namespace Horo::PlatformServices {
         const ErrorCodeDescriptor UnsupportedCapability{Domain,
                                                         ErrorCode{"platform.cloud.unsupported_capability"},
                                                         ErrorSeverity::Error,
-                                                        "The selected provider does not expose opaque cloud metadata or reads.",
+                                                        "The selected provider does not expose the requested opaque cloud operation.",
                                                         "Select a provider that advertises the cloud object capability.",
                                                         false,
                                                         false};
+        const ErrorCodeDescriptor AlreadyExists{Domain,
+                                                ErrorCode{"platform.cloud.already_exists"},
+                                                ErrorSeverity::Error,
+                                                "An object already exists at the conditional create key.",
+                                                "Read and reclassify the current object before another intent.",
+                                                false,
+                                                false};
+        const ErrorCodeDescriptor PreconditionFailed{Domain,
+                                                     ErrorCode{"platform.cloud.precondition_failed"},
+                                                     ErrorSeverity::Error,
+                                                     "The expected object revision is no longer current.",
+                                                     "Read and reclassify the current object before another intent.",
+                                                     false,
+                                                     false};
+        const ErrorCodeDescriptor QuotaExceeded{Domain,
+                                                ErrorCode{"platform.cloud.quota_exceeded"},
+                                                ErrorSeverity::Error,
+                                                "The provider quota cannot accept this mutation.",
+                                                "Present quota pressure to the coordinator without deleting objects.",
+                                                false,
+                                                true};
+        const ErrorCodeDescriptor IdempotencyConflict{Domain,
+                                                      ErrorCode{"platform.cloud.idempotency_conflict"},
+                                                      ErrorSeverity::Error,
+                                                      "A mutation identity was reused with different intent.",
+                                                      "Reuse the identity only with the exact original request.",
+                                                      false,
+                                                      false};
+        const ErrorCodeDescriptor InvalidProviderResponse{Domain,
+                                                          ErrorCode{"platform.cloud.invalid_provider_response"},
+                                                          ErrorSeverity::Error,
+                                                          "The mutation completion lacks required commit evidence.",
+                                                          "Reject the completion and inspect the provider adapter.",
+                                                          false,
+                                                          false};
     }  // namespace CloudObjectErrors
 
     /** @copydoc ValidateCloudObjectContractLimits */
@@ -178,5 +213,128 @@ namespace Horo::PlatformServices {
         if (result.head.transportDigest.has_value() && ComputeSha256(result.bytes.Bytes()) != *result.head.transportDigest)
             return Failure(CloudObjectErrors::IntegrityMismatch);
         return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateCloudMutationCapability */
+    Result<void> ValidateCloudMutationCapability(const CloudMutationCapability &capability, const CloudObjectContractLimits &limits) {
+        using enum CloudMutationAtomicity;
+        if (ValidateCloudObjectContractLimits(limits).HasError() ||
+            (capability.atomicity != ConditionalAtomicObject && capability.atomicity != UncoordinatedBlob) ||
+            capability.maxNamespaceBytes == 0 || capability.maxNamespaceBytes > (1ULL << 40U) || capability.maxObjectCount == 0 ||
+            capability.maxObjectCount > (1U << 20U) || capability.maxConcurrentMutations == 0 ||
+            capability.maxConcurrentMutations > (1U << 20U) ||
+            (capability.atomicity == ConditionalAtomicObject && (!capability.createIfAbsent || !capability.replaceIfRevision ||
+                                                                 !capability.deleteIfRevision || !capability.durableMutationDedupe)) ||
+            (capability.atomicity == UncoordinatedBlob && (capability.createIfAbsent || capability.replaceIfRevision ||
+                                                           capability.deleteIfRevision || capability.durableMutationDedupe)))
+            return Failure(CloudObjectErrors::InvalidLimits);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateCloudQuotaObservation */
+    Result<void> ValidateCloudQuotaObservation(const CloudQuotaObservation &observation, const CloudMutationCapability &capability,
+                                               const PlatformSubjectHandle &currentSubject) {
+        if (!currentSubject.IsValid() || observation.subject != currentSubject ||
+            observation.sessionGeneration != currentSubject.SessionGeneration())
+            return Failure(CloudObjectErrors::StaleSession);
+        if (ValidateCloudMutationCapability(capability, {}).HasError() ||
+            (observation.usedBytes.has_value() && *observation.usedBytes > capability.maxNamespaceBytes) ||
+            (observation.objectCount.has_value() && *observation.objectCount > capability.maxObjectCount))
+            return Failure(CloudObjectErrors::InvalidLimits);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateCloudBlobWriteRequest */
+    Result<void> ValidateCloudBlobWriteRequest(const CloudBlobWriteRequest &request, const CloudMutationCapability &capability,
+                                               const CloudObjectContractLimits &limits) {
+        if (auto valid = ValidateCloudMutationCapability(capability, limits); valid.HasError())
+            return valid;
+        if (capability.atomicity != CloudMutationAtomicity::ConditionalAtomicObject || !capability.durableMutationDedupe)
+            return Failure(CloudObjectErrors::UnsupportedCapability);
+        if (!request.subject.IsValid() || !request.key.IsValid() || request.key.Bytes().size() > limits.maxKeyBytes ||
+            request.bytes.Bytes().empty() || !request.mutation.IsValid() || std::holds_alternative<std::monostate>(request.precondition) ||
+            (std::holds_alternative<CloudMatchProviderRevision>(request.precondition) &&
+             (!std::get<CloudMatchProviderRevision>(request.precondition).revision.IsValid() ||
+              std::get<CloudMatchProviderRevision>(request.precondition).revision.Bytes().size() > limits.maxRevisionBytes)))
+            return Failure(CloudObjectErrors::InvalidRequest);
+        if (request.bytes.Bytes().size() > limits.maxObjectBytes || request.bytes.Bytes().size() > capability.maxNamespaceBytes)
+            return Failure(CloudObjectErrors::PayloadTooLarge);
+        if (ComputeSha256(request.bytes.Bytes()) != request.expectedDigest)
+            return Failure(CloudObjectErrors::IntegrityMismatch);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateCloudBlobDeleteRequest */
+    Result<void> ValidateCloudBlobDeleteRequest(const CloudBlobDeleteRequest &request, const CloudMutationCapability &capability,
+                                                const CloudObjectContractLimits &limits) {
+        if (auto valid = ValidateCloudMutationCapability(capability, limits); valid.HasError())
+            return valid;
+        if (capability.atomicity != CloudMutationAtomicity::ConditionalAtomicObject || !capability.durableMutationDedupe)
+            return Failure(CloudObjectErrors::UnsupportedCapability);
+        if (!request.subject.IsValid() || !request.key.IsValid() || request.key.Bytes().size() > limits.maxKeyBytes ||
+            !request.expectedRevision.IsValid() || request.expectedRevision.Bytes().size() > limits.maxRevisionBytes ||
+            !request.mutation.IsValid())
+            return Failure(CloudObjectErrors::InvalidRequest);
+        return Result<void>::Success();
+    }
+
+    /** @brief Checks the immutable session and intent identity shared by both mutation completions. */
+    [[nodiscard]] static bool SameMutation(const CloudMutationResult &result, const PlatformSubjectHandle &subject,
+                                           const CloudSaveObjectKey &key, const CloudMutationId &mutation,
+                                           const PlatformSubjectHandle &currentSubject) {
+        return currentSubject.IsValid() && currentSubject == subject && result.subject == subject &&
+               result.sessionGeneration == subject.SessionGeneration() && result.key == key && result.mutation == mutation;
+    }
+
+    /** @copydoc ValidateCloudWriteCompletion */
+    Result<void> ValidateCloudWriteCompletion(const CloudMutationResult &result, const CloudBlobWriteRequest &request,
+                                              const PlatformSubjectHandle &currentSubject, const CloudObjectContractLimits &limits) {
+        if (!SameMutation(result, request.subject, request.key, request.mutation, currentSubject))
+            return Failure(CloudObjectErrors::StaleSession);
+        if (!result.committedObject || !ValidHead(*result.committedObject, limits) || result.committedObject->key != request.key ||
+            result.committedObject->sizeBytes != request.bytes.Bytes().size() ||
+            result.committedObject->transportDigest != std::optional{request.expectedDigest})
+            return Failure(CloudObjectErrors::InvalidProviderResponse);
+        if (const auto *matched = std::get_if<CloudMatchProviderRevision>(&request.precondition);
+            matched && result.committedObject->revision == matched->revision)
+            return Failure(CloudObjectErrors::InvalidProviderResponse);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ValidateCloudDeleteCompletion */
+    Result<void> ValidateCloudDeleteCompletion(const CloudMutationResult &result, const CloudBlobDeleteRequest &request,
+                                               const PlatformSubjectHandle &currentSubject) {
+        if (!SameMutation(result, request.subject, request.key, request.mutation, currentSubject))
+            return Failure(CloudObjectErrors::StaleSession);
+        if (result.committedObject)
+            return Failure(CloudObjectErrors::InvalidProviderResponse);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc SameCloudWriteIntent */
+    bool SameCloudWriteIntent(const CloudBlobWriteRequest &left, const CloudBlobWriteRequest &right) noexcept {
+        return left.subject == right.subject && left.key == right.key && left.bytes == right.bytes &&
+               left.expectedDigest == right.expectedDigest && left.precondition == right.precondition && left.mutation == right.mutation;
+    }
+
+    /** @copydoc SameCloudDeleteIntent */
+    bool SameCloudDeleteIntent(const CloudBlobDeleteRequest &left, const CloudBlobDeleteRequest &right) noexcept {
+        return left.subject == right.subject && left.key == right.key && left.expectedRevision == right.expectedRevision &&
+               left.mutation == right.mutation;
+    }
+
+    /** @copydoc ValidateCloudMutationReplay */
+    Result<void> ValidateCloudMutationReplay(const CloudMutationIntent &committed, const CloudMutationIntent &replay) {
+        if (const auto *write = std::get_if<CloudBlobWriteRequest>(&committed)) {
+            const auto *retried = std::get_if<CloudBlobWriteRequest>(&replay);
+            if (retried && SameCloudWriteIntent(*write, *retried))
+                return Result<void>::Success();
+        } else {
+            const auto *remove = std::get_if<CloudBlobDeleteRequest>(&committed);
+            const auto *retried = std::get_if<CloudBlobDeleteRequest>(&replay);
+            if (retried && SameCloudDeleteIntent(*remove, *retried))
+                return Result<void>::Success();
+        }
+        return Failure(CloudObjectErrors::IdempotencyConflict);
     }
 }  // namespace Horo::PlatformServices

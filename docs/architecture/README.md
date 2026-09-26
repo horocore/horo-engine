@@ -190,6 +190,9 @@ dependency direction in [System Design](./foundation/system-design.md).
 - [Physics Determinism Capability and Support Tiers](../adr/088-physics-determinism-capability-and-support-tiers.md):
   fail-closed tier negotiation, exact execution fingerprints, same-build/platform
   support target, future cross-platform groups, exclusions and evidence gates.
+- [Physics Material, Surface and Cross-System Identity](../adr/181-physics-material-surface-and-cross-system-identity.md):
+  distinct physical and semantic IDs, explicit collider-slot mapping, committed
+  surface evidence and downstream consumer ownership.
 - [Audio Architecture](./runtime/audio-architecture.md): ADR-backed ownership,
   clocks, formats, assets, mixer, spatial, devices, tooling and explicit 1.0 versus
   Post-1.0 product boundaries.

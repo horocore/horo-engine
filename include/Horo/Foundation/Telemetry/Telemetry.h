@@ -37,7 +37,8 @@ namespace Horo::Telemetry {
         Count,
         Bytes,
         Seconds,
-        Ratio
+        Ratio,
+        Milliseconds /**< Milliseconds; appended to preserve existing numeric unit identities. */
     };
 
     /** @brief Host-selected amount of metric instrumentation admitted at registration. */

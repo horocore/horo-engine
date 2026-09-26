@@ -3,6 +3,7 @@
 #include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <algorithm>
+#include <memory>
 #include <new>
 #include <utility>
 
@@ -30,6 +31,7 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<void> ValidateRecord(const SaveCloudGenerationRecord &record, const SaveCloudRevisionMetadataLimits &limits) {
+            using enum SaveCloudGenerationState;
             if (!record.slot.IsValid() || !record.generation.IsValid() || !KnownState(record.state) ||
                 (record.lastConfirmed && !record.lastConfirmed->IsValid()))
                 return Result<void>::Failure(MakeError(SaveErrors::CloudMetadataInvalid));
@@ -40,8 +42,7 @@ namespace Horo::Runtime {
                     (record.object->revision && record.object->revision->size() > limits.maximumRevisionBytes))
                     return Result<void>::Failure(MakeError(SaveErrors::CloudMetadataLimitExceeded));
             }
-            if ((record.state == SaveCloudGenerationState::Clean || record.state == SaveCloudGenerationState::Downloading ||
-                 record.state == SaveCloudGenerationState::Conflicted) &&
+            if ((record.state == Clean || record.state == Downloading || record.state == Conflicted) &&
                 (!record.object || !record.object->revision))
                 return Result<void>::Failure(MakeError(SaveErrors::CloudMetadataInvalid));
             return Result<void>::Success();
@@ -67,11 +68,8 @@ namespace Horo::Runtime {
 
         [[nodiscard]] const SaveCloudGenerationRecord *FindPrevious(const SaveCloudRevisionMetadata &previous,
                                                                     const SaveGameSlotId &slot) noexcept {
-            const auto found = std::lower_bound(previous.records.begin(), previous.records.end(), slot,
-                                                [](const SaveCloudGenerationRecord &record, const SaveGameSlotId &value) {
-                return record.slot < value;
-            });
-            return found != previous.records.end() && found->slot == slot ? &*found : nullptr;
+            const auto found = std::ranges::lower_bound(previous.records, slot, {}, &SaveCloudGenerationRecord::slot);
+            return found != previous.records.end() && found->slot == slot ? std::to_address(found) : nullptr;
         }
     }  // namespace
 
@@ -103,6 +101,9 @@ namespace Horo::Runtime {
     }
 
     struct SaveCloudRevisionSnapshot::Data final {
+        Data(SaveSlotIndex indexValue, SaveCloudRevisionMetadata metadataValue)
+            : index(std::move(indexValue)), metadata(std::move(metadataValue)) {}
+
         SaveSlotIndex index;
         SaveCloudRevisionMetadata metadata;
     };
@@ -117,7 +118,7 @@ namespace Horo::Runtime {
             return Result<SaveCloudRevisionSnapshot>::Failure(valid.ErrorValue());
         try {
             return Result<SaveCloudRevisionSnapshot>::Success(
-                SaveCloudRevisionSnapshot{std::make_shared<const Data>(Data{std::move(index), std::move(metadata)})});
+                SaveCloudRevisionSnapshot{std::make_shared<const Data>(std::move(index), std::move(metadata))});
         } catch (const std::bad_alloc &) {
             return Result<SaveCloudRevisionSnapshot>::Failure(MakeError(SaveErrors::CloudMetadataAllocationFailed));
         }
@@ -153,13 +154,14 @@ namespace Horo::Runtime {
                                             .scope = scope};
         try {
             candidate.records.reserve(index.entries.size());
+            using enum SaveCloudGenerationState;
             for (const auto &entry : index.entries) {
                 const auto slot = entry.publication.slot;
                 const auto *found = validPrevious ? FindPrevious(*previous, slot) : nullptr;
                 if (found && Matches(*found, entry)) {
                     candidate.records.push_back(*found);
                     auto &record = candidate.records.back();
-                    if (record.state == SaveCloudGenerationState::Uploading || record.state == SaveCloudGenerationState::Downloading)
+                    if (record.state == Uploading || record.state == Downloading)
                         record.state = SaveCloudGenerationState::Unknown;
                 } else {
                     candidate.records.push_back(
