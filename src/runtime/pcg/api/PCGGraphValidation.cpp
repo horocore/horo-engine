@@ -142,13 +142,20 @@ namespace Horo::PCG {
         }
     }  // namespace
 
-    PCGValidatedGraph::PCGValidatedGraph(const GraphGeneration generation, const std::uint64_t registryGeneration,
-                                         const PCGGraphHandle &registryGraph, std::vector<PCGValidatedNode> nodes) noexcept
-        : generation_(generation), registryGeneration_(registryGeneration), registryGraph_(registryGraph), nodes_(std::move(nodes)) {}
+    PCGValidatedGraph::PCGValidatedGraph(const GraphGeneration generation, const Sha256Digest &sourceDigest,
+                                         const std::uint64_t registryGeneration, const PCGGraphHandle &registryGraph,
+                                         std::vector<PCGValidatedNode> nodes) noexcept
+        : generation_(generation), sourceDigest_(sourceDigest), registryGeneration_(registryGeneration), registryGraph_(registryGraph),
+          nodes_(std::move(nodes)) {}
 
     /** @copydoc PCGValidatedGraph::Generation */
     GraphGeneration PCGValidatedGraph::Generation() const noexcept {
         return generation_;
+    }
+
+    /** @copydoc PCGValidatedGraph::SourceDigest */
+    Sha256Digest PCGValidatedGraph::SourceDigest() const noexcept {
+        return sourceDigest_;
     }
 
     /** @copydoc PCGValidatedGraph::RegistryGeneration */
@@ -195,7 +202,11 @@ namespace Horo::PCG {
         auto ordered = TopologicalOrder(graph.Data(), std::move(nodes).Value());
         if (ordered.HasError())
             return ValidationFailure(ordered.ErrorValue());
-        return Result<PCGValidatedGraph>::Success(
-            PCGValidatedGraph{graph.Data().generation, registry.Generation(), descriptor.Value().handle, std::move(ordered).Value()});
+        auto sourceBytes = SerializePCGGraphAsset(graph);
+        if (sourceBytes.HasError())
+            return ValidationFailure(sourceBytes.ErrorValue());
+        const Sha256Digest digest = ComputeSha256(std::as_bytes(std::span<const std::uint8_t>(sourceBytes.Value())));
+        return Result<PCGValidatedGraph>::Success(PCGValidatedGraph{graph.Data().generation, digest, registry.Generation(),
+                                                                    descriptor.Value().handle, std::move(ordered).Value()});
     }
 }  // namespace Horo::PCG

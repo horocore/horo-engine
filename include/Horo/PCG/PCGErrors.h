@@ -84,6 +84,12 @@ namespace Horo::PCG::PCGErrors {
     extern const ErrorCodeDescriptor GraphValidationFailed;
     /** @brief Pre-compile graph validation exceeded a finite work or diagnostic ceiling. */
     extern const ErrorCodeDescriptor GraphValidationCapacityExceeded;
+    /** @brief Canonical graph compilation found inconsistent validated source or routing evidence. */
+    extern const ErrorCodeDescriptor CookedPlanInvalid;
+    /** @brief Canonical graph compilation was given a different graph or registry generation. */
+    extern const ErrorCodeDescriptor CookedPlanStale;
+    /** @brief Canonical plan encoding exceeded its finite tier or caller byte ceiling. */
+    extern const ErrorCodeDescriptor CookedPlanCapacityExceeded;
     /** @brief A generation plan, output operation, receipt, or provenance tuple is malformed. */
     extern const ErrorCodeDescriptor GenerationPlanInvalid;
     /** @brief A generation plan exceeds its finite operation, dependency, or resource envelope. */

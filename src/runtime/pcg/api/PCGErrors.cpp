@@ -218,6 +218,22 @@ namespace Horo::PCG::PCGErrors {
                                         .defaultSeverity = ErrorSeverity::Error,
                                         .summary = "The PCG graph validation pass exceeded a finite ceiling.",
                                         .remediationHint = "Reduce the graph or select an explicitly larger admitted validation bound."};
+    const ErrorCodeDescriptor CookedPlanInvalid{.domain = PcgDomain,
+                                                .code = ErrorCode{"pcg.cooked_plan.invalid"},
+                                                .defaultSeverity = ErrorSeverity::Error,
+                                                .summary = "The validated PCG graph cannot be lowered to a coherent plan.",
+                                                .remediationHint = "Revalidate the exact source and registry snapshot before compilation."};
+    const ErrorCodeDescriptor CookedPlanStale{.domain = PcgDomain,
+                                              .code = ErrorCode{"pcg.cooked_plan.stale"},
+                                              .defaultSeverity = ErrorSeverity::Warning,
+                                              .summary = "The graph or node-runtime snapshot differs from validated compilation input.",
+                                              .remediationHint = "Retain the original immutable snapshot or revalidate against a new one."};
+    const ErrorCodeDescriptor CookedPlanCapacityExceeded{.domain = PcgDomain,
+                                                         .code = ErrorCode{"pcg.cooked_plan.capacity_exceeded"},
+                                                         .defaultSeverity = ErrorSeverity::Error,
+                                                         .summary = "The canonical PCG plan exceeds its admitted byte envelope.",
+                                                         .remediationHint =
+                                                             "Reduce graph complexity or select a larger admitted tier bound."};
     const ErrorCodeDescriptor GenerationPlanInvalid{.domain = PcgDomain,
                                                     .code = ErrorCode{"pcg.generation_plan.invalid"},
                                                     .defaultSeverity = ErrorSeverity::Error,

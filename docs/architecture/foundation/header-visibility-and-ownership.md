@@ -20,6 +20,16 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## PCG-2.4 Cooked Plan Boundary
+
+`HoroEngine::PCG` owns the additive `Horo/PCG/PCGCookedPlan.h` contract. Callers
+retain the exact immutable registry snapshot used by `ValidatePCGGraph` through
+`CompilePCGGraph`, then may release the graph source and registry: the resulting
+plan owns its nodes, pin schemas, routes, defaults, capability requirements, and
+canonical bytes. No existing PCG caller changes signature. Future evaluators must
+consume the validated cooked plan, not source graph references or runtime handles.
+The generated PCG public-header consumer covers the new sole-owned header.
+
 ## PCG-1.5 Provenance Boundary
 
 `HoroEngine::PCG` owns the additive `Horo/PCG/PCGProvenance.h` contract. PCG evaluation
