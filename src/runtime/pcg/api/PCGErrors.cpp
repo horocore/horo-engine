@@ -315,15 +315,16 @@ namespace Horo::PCG::PCGErrors {
                                             .code = ErrorCode{"pcg.async.not_ready"},
                                             .defaultSeverity = ErrorSeverity::Warning,
                                             .summary = "PCG async work or owner publication has not fully drained.",
-                                            .remediationHint = "Advance completions and retain dependent owners until all work terminates."};
+                                            .remediationHint =
+                                                "Advance completions and retain dependent owners until all work terminates."};
     const ErrorCodeDescriptor AsyncPublicationFailed{.domain = PcgDomain,
                                                      .code = ErrorCode{"pcg.async.publication_failed"},
                                                      .defaultSeverity = ErrorSeverity::Error,
                                                      .summary = "PCG async owner publication threw an exception.",
                                                      .remediationHint = "Reject the candidate and inspect its publication callback."};
     const ErrorCodeDescriptor AsyncGenerationExhausted{.domain = PcgDomain,
-                                                      .code = ErrorCode{"pcg.async.generation_exhausted"},
-                                                      .defaultSeverity = ErrorSeverity::Critical,
-                                                      .summary = "PCG async operation identity space is exhausted.",
-                                                      .remediationHint = "Retire this coordinator without reusing an operation identity."};
+                                                       .code = ErrorCode{"pcg.async.generation_exhausted"},
+                                                       .defaultSeverity = ErrorSeverity::Critical,
+                                                       .summary = "PCG async operation identity space is exhausted.",
+                                                       .remediationHint = "Retire this coordinator without reusing an operation identity."};
 }  // namespace Horo::PCG::PCGErrors
