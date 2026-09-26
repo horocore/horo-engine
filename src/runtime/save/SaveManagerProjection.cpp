@@ -112,29 +112,15 @@ namespace Horo::Runtime {
             }
             return Result<void>::Success();
         }
-    }  // namespace
 
-    SaveManagerProjection::SaveManagerProjection(std::shared_ptr<const Data> data) noexcept : data_(std::move(data)) {}
-
-    /** @copydoc SaveManagerProjection::Create */
-    Result<SaveManagerProjection> SaveManagerProjection::Create(const SaveManagerProjectionInput &input,
-                                                                const SaveManagerProjectionLimits limits) {
-        if (auto validated = ValidateInput(input, limits); validated.HasError())
-            return Result<SaveManagerProjection>::Failure(validated.ErrorValue());
-        try {
-            auto data = std::make_shared<Data>();
-            data->id = {.namespaceId = *input.binding.active,
-                        .bindingRevision = input.binding.revision,
-                        .catalogRevision = input.catalog.revision,
-                        .publicationRevision = input.publicationRevision};
-            data->limits = limits;
-            data->profiles.reserve(input.profiles.size());
-            data->slots.reserve(input.catalog.entries.size());
-            data->operations.reserve(input.operations.size());
-            data->diagnostics.reserve(input.diagnostics.size());
-
+        /** @brief Copies validated opaque profile summaries into detached view rows. */
+        void AppendProfiles(std::vector<SaveManagerProfileRow> &rows, const SaveManagerProjectionInput &input) {
             for (const auto &profile : input.profiles)
-                data->profiles.push_back({profile.namespaceId, profile.available, profile.namespaceId == *input.binding.active});
+                rows.push_back({profile.namespaceId, profile.available, profile.namespaceId == *input.binding.active});
+        }
+
+        /** @brief Combines validated catalog facts with generation-matched assessments. */
+        void AppendSlots(std::vector<SaveManagerSlotRow> &rows, const SaveManagerProjectionInput &input) {
             std::size_t assessmentPosition = 0;
             for (const auto &entry : input.catalog.entries) {
                 const auto &publication = entry.publication;
@@ -156,24 +142,53 @@ namespace Horo::Runtime {
                     row.integrity = input.assessments[assessmentPosition].integrity;
                     ++assessmentPosition;
                 }
-                data->slots.push_back(std::move(row));
+                rows.push_back(std::move(row));
             }
+        }
+
+        /** @brief Copies progress facts without retaining raw terminal errors. */
+        [[nodiscard]] bool AppendOperations(std::vector<SaveManagerOperationRow> &rows, const SaveManagerProjectionInput &input) {
             for (const auto &source : input.operations) {
                 const auto &operation = source.snapshot;
-                data->operations.push_back({.operation = operation.operation,
-                                            .kind = operation.kind,
-                                            .state = operation.state,
-                                            .stage = operation.stage,
-                                            .progress = operation.progress,
-                                            .commit = operation.commit,
-                                            .slot = source.slot,
-                                            .generation = source.generation,
-                                            .failureCategory = source.failureCategory});
+                rows.push_back({.operation = operation.operation,
+                                .kind = operation.kind,
+                                .state = operation.state,
+                                .stage = operation.stage,
+                                .progress = operation.progress,
+                                .commit = operation.commit,
+                                .slot = source.slot,
+                                .generation = source.generation,
+                                .failureCategory = source.failureCategory});
             }
-            std::ranges::sort(data->operations, {}, &SaveManagerOperationRow::operation);
-            if (std::adjacent_find(data->operations.begin(), data->operations.end(), [](const auto &left, const auto &right) {
+            std::ranges::sort(rows, {}, &SaveManagerOperationRow::operation);
+            return std::adjacent_find(rows.begin(), rows.end(), [](const auto &left, const auto &right) {
                 return left.operation == right.operation;
-            }) != data->operations.end())
+            }) == rows.end();
+        }
+    }  // namespace
+
+    SaveManagerProjection::SaveManagerProjection(std::shared_ptr<const Data> data) noexcept : data_(std::move(data)) {}
+
+    /** @copydoc SaveManagerProjection::Create */
+    Result<SaveManagerProjection> SaveManagerProjection::Create(const SaveManagerProjectionInput &input,
+                                                                const SaveManagerProjectionLimits limits) {
+        if (auto validated = ValidateInput(input, limits); validated.HasError())
+            return Result<SaveManagerProjection>::Failure(validated.ErrorValue());
+        try {
+            auto data = std::make_shared<Data>();
+            data->id = {.namespaceId = *input.binding.active,
+                        .bindingRevision = input.binding.revision,
+                        .catalogRevision = input.catalog.revision,
+                        .publicationRevision = input.publicationRevision};
+            data->limits = limits;
+            data->profiles.reserve(input.profiles.size());
+            data->slots.reserve(input.catalog.entries.size());
+            data->operations.reserve(input.operations.size());
+            data->diagnostics.reserve(input.diagnostics.size());
+
+            AppendProfiles(data->profiles, input);
+            AppendSlots(data->slots, input);
+            if (!AppendOperations(data->operations, input))
                 return Result<SaveManagerProjection>::Failure(MakeError(SaveErrors::ManagerProjectionInvalid));
             data->diagnostics.assign(input.diagnostics.begin(), input.diagnostics.end());
             return Result<SaveManagerProjection>::Success(SaveManagerProjection{std::move(data)});
