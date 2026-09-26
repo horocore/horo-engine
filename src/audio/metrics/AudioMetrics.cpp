@@ -84,26 +84,27 @@ namespace Horo::Audio {
 
     /** @copydoc AudioMetrics::ObserveCommandAdmission */
     bool AudioMetrics::ObserveCommandAdmission(const AudioCommandStagingStatus status) noexcept {
+        using enum AudioCommandStagingStatus;
         if (!IsCollecting())
             return false;
         switch (status) {
-            case AudioCommandStagingStatus::OrdinaryFull:
+            case OrdinaryFull:
                 AddSaturating(current_.counters[Index(AudioMetricCounter::CommandOrdinaryRejections)], 1, current_.saturated);
                 return true;
-            case AudioCommandStagingStatus::CriticalRetry:
+            case CriticalRetry:
                 AddSaturating(current_.counters[Index(AudioMetricCounter::CommandCriticalRetries)], 1, current_.saturated);
                 return true;
-            case AudioCommandStagingStatus::Ok:
-            case AudioCommandStagingStatus::Coalesced:
-            case AudioCommandStagingStatus::Busy:
-            case AudioCommandStagingStatus::InvalidCommand:
-            case AudioCommandStagingStatus::InvalidScene:
-            case AudioCommandStagingStatus::Closed:
-            case AudioCommandStagingStatus::SequenceExhausted:
-            case AudioCommandStagingStatus::AlreadyStaged:
-            case AudioCommandStagingStatus::OutputFull:
-            case AudioCommandStagingStatus::Inactive:
-            case AudioCommandStagingStatus::ProtocolError:
+            case Ok:
+            case Coalesced:
+            case Busy:
+            case InvalidCommand:
+            case InvalidScene:
+            case Closed:
+            case SequenceExhausted:
+            case AlreadyStaged:
+            case OutputFull:
+            case Inactive:
+            case ProtocolError:
                 return true;
         }
         return Invalid();
@@ -111,33 +112,35 @@ namespace Horo::Audio {
 
     /** @copydoc AudioMetrics::ObserveCommandPump */
     bool AudioMetrics::ObserveCommandPump(const AudioCommandStagingStatus status) noexcept {
+        using enum AudioCommandStagingStatus;
         if (!IsCollecting())
             return false;
-        if (status == AudioCommandStagingStatus::OutputFull) {
+        if (status == OutputFull) {
             AddSaturating(current_.counters[Index(AudioMetricCounter::CommandOutputStalls)], 1, current_.saturated);
             return true;
         }
-        if (status == AudioCommandStagingStatus::Ok || status == AudioCommandStagingStatus::Busy ||
-            status == AudioCommandStagingStatus::ProtocolError || status == AudioCommandStagingStatus::Inactive)
+        if (status == Ok || status == Busy || status == ProtocolError || status == Inactive)
             return true;
         return Invalid();
     }
 
     /** @copydoc AudioMetrics::ObserveControlEvent */
     bool AudioMetrics::ObserveControlEvent(const AudioControlEventRecord &record) noexcept {
+        using enum AudioMetricCounter;
         if (!IsCollecting())
             return false;
         const auto *event = std::get_if<AudioCallbackEvent>(&record.event);
         if (!event)
             return true;
         if (std::holds_alternative<AudioCallbackUnderrun>(event->fact))
-            AddSaturating(current_.counters[Index(AudioMetricCounter::Underruns)], 1, current_.saturated);
+            AddSaturating(current_.counters[Index(Underruns)], 1, current_.saturated);
         if (const auto *fault = std::get_if<AudioCallbackFault>(&event->fact)) {
-            if (fault->code == AudioCallbackFaultCode::None || fault->code > AudioCallbackFaultCode::BackendFailure)
+            using enum AudioCallbackFaultCode;
+            if (fault->code == None || fault->code > BackendFailure)
                 return Invalid();
-            AddSaturating(current_.counters[Index(AudioMetricCounter::CallbackFaults)], 1, current_.saturated);
-            if (fault->code == AudioCallbackFaultCode::BackendFailure)
-                AddSaturating(current_.counters[Index(AudioMetricCounter::BackendFailures)], 1, current_.saturated);
+            AddSaturating(current_.counters[Index(CallbackFaults)], 1, current_.saturated);
+            if (fault->code == BackendFailure)
+                AddSaturating(current_.counters[Index(BackendFailures)], 1, current_.saturated);
         }
         return true;
     }
@@ -178,7 +181,7 @@ namespace Horo::Audio {
                 return Invalid();
             priorInputGeneration = source.sourceGeneration;
             const auto delta = FailureDeltaForSource(source);
-            if (!delta)
+            if (!delta.has_value())
                 return Invalid();
             nextHighest = std::max(nextHighest, source.sourceGeneration);
             AddSaturating(failureDelta, *delta, aggregateSaturated);
@@ -215,13 +218,12 @@ namespace Horo::Audio {
 
     /** @copydoc AudioMetrics::ObserveGauge */
     bool AudioMetrics::ObserveGauge(const AudioMetricGauge kind, const double value) noexcept {
+        using enum AudioMetricGauge;
         if (!IsCollecting())
             return false;
         if (!Known(kind) || !std::isfinite(value) || value < 0.0)
             return Invalid();
-        if ((kind == AudioMetricGauge::StreamFillRatio || kind == AudioMetricGauge::BusPeakRatio ||
-             kind == AudioMetricGauge::BusRmsRatio) &&
-            value > 1.0)
+        if ((kind == StreamFillRatio || kind == BusPeakRatio || kind == BusRmsRatio) && value > 1.0)
             return Invalid();
         current_.gauges[Index(kind)] = value;
         current_.gaugeAvailable[Index(kind)] = true;
@@ -230,13 +232,14 @@ namespace Horo::Audio {
 
     /** @copydoc AudioMetrics::ObserveFailure */
     bool AudioMetrics::ObserveFailure(const AudioMetricCounter kind, const std::uint64_t count) noexcept {
+        using enum AudioMetricCounter;
         if (!IsCollecting())
             return false;
         switch (kind) {
-            case AudioMetricCounter::VoiceRejections:
-            case AudioMetricCounter::SpatialFallbacks:
-            case AudioMetricCounter::ParameterLookupFailures:
-            case AudioMetricCounter::EventLookupFailures:
+            case VoiceRejections:
+            case SpatialFallbacks:
+            case ParameterLookupFailures:
+            case EventLookupFailures:
                 AddSaturating(current_.counters[Index(kind)], count, current_.saturated);
                 return true;
             default:

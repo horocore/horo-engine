@@ -101,17 +101,16 @@ namespace Horo::Audio {
 
     /** @copydoc RegisterAudioMetricHandles */
     AudioMetricHandles RegisterAudioMetricHandles(const Telemetry::MetricCollectionLevel level) {
+        using enum Telemetry::InstrumentKind;
         AudioMetricHandles handles{};
         if (level == Telemetry::MetricCollectionLevel::Off)
             return handles;
         for (std::size_t index = 0; index < AudioMetricCounterCount; ++index)
-            handles.counters[index] =
-                Telemetry::Runtime::RegisterCounter(Descriptor(CounterSpecs[index], Telemetry::InstrumentKind::Counter));
+            handles.counters[index] = Telemetry::Runtime::RegisterCounter(Descriptor(CounterSpecs[index], Counter));
         for (std::size_t index = 0; index < AudioMetricGaugeCount; ++index)
-            handles.gauges[index] = Telemetry::Runtime::RegisterGauge(Descriptor(GaugeSpecs[index], Telemetry::InstrumentKind::Gauge));
+            handles.gauges[index] = Telemetry::Runtime::RegisterGauge(Descriptor(GaugeSpecs[index], Gauge));
         for (std::size_t index = 0; index < AudioMetricTimingCount; ++index)
-            handles.timings[index] =
-                Telemetry::Runtime::RegisterHistogram(Descriptor(TimingSpecs[index], Telemetry::InstrumentKind::Histogram));
+            handles.timings[index] = Telemetry::Runtime::RegisterHistogram(Descriptor(TimingSpecs[index], Histogram));
         return handles;
     }
 
