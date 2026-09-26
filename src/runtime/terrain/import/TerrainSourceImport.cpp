@@ -7,6 +7,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <numeric>
 #include <string_view>
@@ -20,7 +21,7 @@ namespace Horo::Terrain {
 
         [[nodiscard]] std::uint32_t ReadBits(const TerrainRasterInput &raster, const std::uint64_t sourceIndex,
                                              const std::uint32_t bytesPerSample) noexcept {
-            const std::size_t offset = static_cast<std::size_t>(sourceIndex * bytesPerSample);
+            const auto offset = static_cast<std::size_t>(sourceIndex * bytesPerSample);
             std::uint32_t bits = 0;
             if (raster.byteOrder == TerrainByteOrder::Little) {
                 for (std::uint32_t i = 0; i < bytesPerSample; ++i)
@@ -47,9 +48,10 @@ namespace Horo::Terrain {
 
         [[nodiscard]] bool ValidCoordinates(const TerrainSourceCoordinates &coordinates, const std::uint32_t width,
                                             const std::uint32_t height) noexcept {
-            if (coordinates.space == TerrainCoordinateSpace::GeographicDegrees || coordinates.space == TerrainCoordinateSpace::Count ||
-                (coordinates.space == TerrainCoordinateSpace::LocalMeters && !coordinates.projectedCrs.empty()) ||
-                (coordinates.space == TerrainCoordinateSpace::ProjectedMeters && !ValidProjectedCrs(coordinates.projectedCrs)))
+            using enum TerrainCoordinateSpace;
+            if (coordinates.space == GeographicDegrees || coordinates.space == Count ||
+                (coordinates.space == LocalMeters && !coordinates.projectedCrs.empty()) ||
+                (coordinates.space == ProjectedMeters && !ValidProjectedCrs(coordinates.projectedCrs)))
                 return false;
             if (!std::isfinite(coordinates.originX) || !std::isfinite(coordinates.originZ) || !std::isfinite(coordinates.spacingX) ||
                 !std::isfinite(coordinates.spacingZ) || !std::isfinite(coordinates.heightScale) ||
@@ -68,25 +70,25 @@ namespace Horo::Terrain {
             if (raster.rowOrder == TerrainRowOrder::Count || raster.byteOrder == TerrainByteOrder::Count)
                 return Failed<std::uint32_t>(TerrainSourceErrors::UnsupportedFormat);
             std::uint32_t bytesPerSample = 0;
+            using enum TerrainRasterFormat;
             switch (raster.format) {
-                case TerrainRasterFormat::RawU8:
+                case RawU8:
                     bytesPerSample = allowU8 ? 1U : 0U;
                     break;
-                case TerrainRasterFormat::RawU16:
+                case RawU16:
                     bytesPerSample = 2U;
                     break;
-                case TerrainRasterFormat::RawF32:
+                case RawF32:
                     bytesPerSample = allowF32 ? 4U : 0U;
                     break;
-                case TerrainRasterFormat::PngGray:
-                case TerrainRasterFormat::External:
-                case TerrainRasterFormat::Count:
+                case PngGray:
+                case External:
+                case Count:
                     break;
             }
             if (bytesPerSample == 0)
                 return Failed<std::uint32_t>(TerrainSourceErrors::UnsupportedFormat);
-            const std::uint64_t required = static_cast<std::uint64_t>(width) * height * bytesPerSample;
-            if (raster.bytes.size() != required)
+            if (const auto required = static_cast<std::uint64_t>(width) * height * bytesPerSample; raster.bytes.size() != required)
                 return Failed<std::uint32_t>(TerrainSourceErrors::InvalidBytes);
             return Result<std::uint32_t>::Success(bytesPerSample);
         }
@@ -114,8 +116,8 @@ namespace Horo::Terrain {
                 return Failed<std::uint64_t>(TerrainSourceErrors::InvalidCoordinates);
             const std::uint64_t samples = static_cast<std::uint64_t>(width) * height;
             const std::uint64_t layers = request.weights.size();
-            const std::uint64_t workPerSample = 1U + layers + (request.holes ? 1U : 0U);
-            if (layers > TerrainDescriptorHardLimits::LayersPerTile || layers > request.limits.maximumLayers ||
+            if (const auto workPerSample = 1U + layers + (request.holes ? 1U : 0U);
+                layers > TerrainDescriptorHardLimits::LayersPerTile || layers > request.limits.maximumLayers ||
                 samples > request.limits.maximumSamples || samples > request.limits.maximumWorkItems / workPerSample ||
                 samples > TerrainDescriptorHardLimits::WorkItems / workPerSample)
                 return Failed<std::uint64_t>(TerrainSourceErrors::LimitExceeded);
@@ -160,10 +162,23 @@ namespace Horo::Terrain {
                 if (info.HasError())
                     return Result<void>::Failure(info.ErrorValue());
                 const TerrainRasterDecodeInfo decoded = info.Value();
-                const std::uint64_t bytesPerSample = decoded.format == TerrainRasterFormat::RawU8    ? 1U
-                                                     : decoded.format == TerrainRasterFormat::RawU16 ? 2U
-                                                     : decoded.format == TerrainRasterFormat::RawF32 ? 4U
-                                                                                                     : 0U;
+                std::uint64_t bytesPerSample{};
+                using enum TerrainRasterFormat;
+                switch (decoded.format) {
+                    case RawU8:
+                        bytesPerSample = 1;
+                        break;
+                    case RawU16:
+                        bytesPerSample = 2;
+                        break;
+                    case RawF32:
+                        bytesPerSample = 4;
+                        break;
+                    case PngGray:
+                    case External:
+                    case Count:
+                        break;
+                }
                 if (bytesPerSample == 0 || decoded.byteOrder == TerrainByteOrder::Count)
                     return Failed<void>(TerrainSourceErrors::UnsupportedFormat);
                 if (decoded.decodedBytes != samples * bytesPerSample)
@@ -176,7 +191,9 @@ namespace Horo::Terrain {
                 raster.format = decoded.format;
                 raster.byteOrder = decoded.byteOrder;
                 return Result<void>::Success();
-            } catch (...) {
+            } catch (const std::exception &) {
+                return Failed<void>(TerrainSourceErrors::DecoderFailed);
+            } catch (...) {  // NOSONAR(cpp:S2738) Contain even non-standard exceptions from optional decoder contributions.
                 return Failed<void>(TerrainSourceErrors::DecoderFailed);
             }
         }
@@ -262,7 +279,7 @@ namespace Horo::Terrain {
             const double meters = raw * coordinates.heightScale + coordinates.heightOffset;
             if (!std::isfinite(raw) || !std::isfinite(meters) || std::abs(meters) > static_cast<double>(std::numeric_limits<float>::max()))
                 return Failed<float>(TerrainSourceErrors::InvalidSample);
-            const float canonical = static_cast<float>(meters);
+            const auto canonical = static_cast<float>(meters);
             if (std::abs(static_cast<double>(canonical) - meters) > coordinates.maximumPrecisionError)
                 return Failed<float>(TerrainSourceErrors::PrecisionLost);
             return Result<float>::Success(canonical);
@@ -292,10 +309,34 @@ namespace Horo::Terrain {
             }
             while (assigned < 65'535U) {
                 const auto best = std::max_element(remainders.begin(), remainders.begin() + static_cast<std::ptrdiff_t>(weights.size()));
-                const std::size_t layer = static_cast<std::size_t>(best - remainders.begin());
+                const auto layer = static_cast<std::size_t>(best - remainders.begin());
                 ++output[layer];
                 *best = 0;
                 ++assigned;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Normalizes one detached sample, including its optional hole and layer weights. */
+        [[nodiscard]] Result<void> FillSample(const TerrainSourceImportRequest &request, const PreparedRasters &rasters,
+                                              TerrainCanonicalSource &candidate, const std::uint32_t x, const std::uint32_t z) {
+            const auto index = static_cast<std::size_t>(z) * candidate.width + x;
+            auto height = NormalizeHeight(rasters.height, request.coordinates, rasters.heightBytes, x, z);
+            if (height.HasError())
+                return Result<void>::Failure(height.ErrorValue());
+            candidate.heightsMeters[index] = height.Value();
+            if (rasters.holes) {
+                const auto hole = ReadBits(*rasters.holes, SourceIndex(*rasters.holes, x, z), 1);
+                if (hole > 1)
+                    return Failed<void>(TerrainSourceErrors::InvalidSample);
+                candidate.holes[index] = static_cast<std::uint8_t>(hole);
+            }
+            if (!rasters.weights.empty()) {
+                const auto offset = index * rasters.weights.size();
+                if (auto weights =
+                        NormalizeWeights(rasters.weights, x, z, std::span{candidate.weights}.subspan(offset, rasters.weights.size()));
+                    weights.HasError())
+                    return weights;
             }
             return Result<void>::Success();
         }
@@ -307,24 +348,8 @@ namespace Horo::Terrain {
                 if (cancellation.IsCancellationRequested())
                     return Failed<void>(TerrainSourceErrors::Cancelled);
                 for (std::uint32_t x = 0; x < candidate.width; ++x) {
-                    const std::size_t index = static_cast<std::size_t>(z) * candidate.width + x;
-                    auto height = NormalizeHeight(rasters.height, request.coordinates, rasters.heightBytes, x, z);
-                    if (height.HasError())
-                        return Result<void>::Failure(height.ErrorValue());
-                    candidate.heightsMeters[index] = height.Value();
-                    if (rasters.holes) {
-                        const std::uint32_t hole = ReadBits(*rasters.holes, SourceIndex(*rasters.holes, x, z), 1);
-                        if (hole > 1)
-                            return Failed<void>(TerrainSourceErrors::InvalidSample);
-                        candidate.holes[index] = static_cast<std::uint8_t>(hole);
-                    }
-                    if (!rasters.weights.empty()) {
-                        const std::size_t offset = index * rasters.weights.size();
-                        if (auto weights = NormalizeWeights(rasters.weights, x, z,
-                                                            std::span{candidate.weights}.subspan(offset, rasters.weights.size()));
-                            weights.HasError())
-                            return weights;
-                    }
+                    if (auto result = FillSample(request, rasters, candidate, x, z); result.HasError())
+                        return result;
                 }
             }
             if (cancellation.IsCancellationRequested())
