@@ -2,6 +2,91 @@ include(FetchContent)
 
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "" FORCE)
 
+if(HORO_BUILD_NETWORK_GNS)
+    # The native transport and its DNS/protobuf dependencies are opt-in. None
+    # is downloaded, configured, or linked by disabled/headless-null hosts.
+    set(HORO_CARES_REVISION "c7a3138dcfe3bb0eaaf10c0c24c36dc66dc790ab") # v1.34.8
+    set(CARES_STATIC ON CACHE BOOL "" FORCE)
+    set(CARES_SHARED OFF CACHE BOOL "" FORCE)
+    set(CARES_INSTALL OFF CACHE BOOL "" FORCE)
+    set(CARES_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(CARES_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(horo_cares
+        GIT_REPOSITORY https://github.com/c-ares/c-ares.git
+        GIT_TAG "${HORO_CARES_REVISION}"
+        GIT_SHALLOW FALSE)
+    FetchContent_MakeAvailable(horo_cares)
+    # Git's Windows checkout may materialize CRLF; pin the notice content,
+    # not the host-specific line-ending representation.
+    file(READ "${horo_cares_SOURCE_DIR}/LICENSE.md" horo_cares_license_text)
+    string(REPLACE "\r\n" "\n" horo_cares_license_text "${horo_cares_license_text}")
+    string(SHA256 horo_cares_license_digest "${horo_cares_license_text}")
+    if(NOT horo_cares_license_digest STREQUAL "460f5e768fda3752ca2169a95df062578a10fb126bfd65f3b9b1a1bed2f84807")
+        message(FATAL_ERROR "Pinned c-ares license differs from the reviewed MIT notice")
+    endif()
+    install(FILES "${horo_cares_SOURCE_DIR}/LICENSE.md"
+            DESTINATION "${CMAKE_INSTALL_DATADIR}/horo-engine/licenses"
+            RENAME "c-ares.txt" COMPONENT Network)
+
+    set(HORO_PROTOBUF_REVISION "f0dc78d7e6e331b8c6bb2d5283e06aa26883ca7c") # v3.21.12
+    set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(protobuf_BUILD_PROTOC_BINARIES ON CACHE BOOL "" FORCE)
+    set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    # The host's MSVC targets use the dynamic CRT; protobuf defaults to /MT.
+    set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
+    # GNS otherwise marks protobuf references as DLL imports on MSVC even
+    # though this optional profile builds and links libprotobuf statically.
+    set(Protobuf_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+    set(protobuf_WITH_ZLIB OFF CACHE BOOL "" FORCE)
+    set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(horo_protobuf
+        GIT_REPOSITORY https://github.com/protocolbuffers/protobuf.git
+        GIT_TAG "${HORO_PROTOBUF_REVISION}"
+        GIT_SHALLOW FALSE
+        SOURCE_SUBDIR .horo-no-add-subdirectory)
+    FetchContent_MakeAvailable(horo_protobuf)
+    # Upstream protobuf's CMake target names are fixed to `protobuf`; adding it
+    # directly avoids requiring a system protoc or a preinstalled package.
+    add_subdirectory("${horo_protobuf_SOURCE_DIR}" "${horo_protobuf_BINARY_DIR}")
+
+    # GNS calls find_package(Protobuf CONFIG) to obtain protobuf_generate_cpp.
+    # Give it only the already-created in-tree target and an in-tree protoc rule.
+    set(_horo_protobuf_config_dir "${CMAKE_CURRENT_BINARY_DIR}/horo-gns-protobuf")
+    file(MAKE_DIRECTORY "${_horo_protobuf_config_dir}")
+    configure_file("${CMAKE_CURRENT_LIST_DIR}/HoroGnsProtobufConfig.cmake"
+                   "${_horo_protobuf_config_dir}/ProtobufConfig.cmake" COPYONLY)
+    set(Protobuf_DIR "${_horo_protobuf_config_dir}" CACHE PATH "GNS in-tree protobuf package" FORCE)
+
+    set(HORO_GNS_REVISION "2cb93a06350bb065db53abdb0d87cf297e0bfd34") # v1.6.0
+    set(BUILD_STATIC_LIB ON CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIB OFF CACHE BOOL "" FORCE)
+    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_ICE OFF CACHE BOOL "" FORCE)
+    set(USE_STEAMWEBRTC OFF CACHE BOOL "" FORCE)
+    set(WERROR OFF CACHE BOOL "" FORCE)
+    if(WIN32)
+        set(USE_CRYPTO BCrypt CACHE STRING "" FORCE)
+    else()
+        find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+        set(USE_CRYPTO OpenSSL CACHE STRING "" FORCE)
+    endif()
+    FetchContent_Declare(horo_gns
+        GIT_REPOSITORY https://github.com/ValveSoftware/GameNetworkingSockets.git
+        GIT_TAG "${HORO_GNS_REVISION}"
+        GIT_SHALLOW FALSE)
+    FetchContent_MakeAvailable(horo_gns)
+    # GNS installs an export even when embedded as a source-only private
+    # dependency. Its export must not claim our non-installed protobuf target;
+    # the in-tree link still receives protobuf through BUILD_INTERFACE.
+    get_target_property(_horo_gns_interface GameNetworkingSockets_s INTERFACE_LINK_LIBRARIES)
+    list(REMOVE_ITEM _horo_gns_interface protobuf::libprotobuf)
+    list(APPEND _horo_gns_interface "$<BUILD_INTERFACE:protobuf::libprotobuf>")
+    set_property(TARGET GameNetworkingSockets_s PROPERTY INTERFACE_LINK_LIBRARIES "${_horo_gns_interface}")
+    unset(_horo_gns_interface)
+endif()
+
 if(HORO_BUILD_PHYSICS_NATIVE)
     include(HoroPhysicsDependency)
     horo_add_canonical_physics_dependency()

@@ -220,6 +220,17 @@ add_executable(HoroNetworkTransportNullTests
 target_compile_features(HoroNetworkTransportNullTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkTransportNullTests PRIVATE HoroEngine::NetworkTransportNull)
 horo_register_catch_test(HoroNetworkTransportNullTests LABELS "unit;network;headless")
+if(HORO_BUILD_NETWORK_GNS)
+    add_executable(HoroNetworkTransportGnsTests
+            unit/runtime/networking/GnsTransportTests.cpp
+    )
+    target_compile_features(HoroNetworkTransportGnsTests PRIVATE cxx_std_20)
+    target_include_directories(HoroNetworkTransportGnsTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/networking/gns)
+    target_compile_definitions(HoroNetworkTransportGnsTests PRIVATE $<$<PLATFORM_ID:Windows>:NOMINMAX>)
+    target_link_libraries(HoroNetworkTransportGnsTests PRIVATE GameNetworkingSockets::static c-ares::cares)
+    target_link_libraries(HoroNetworkTransportGnsTests PRIVATE HoroEngine::NetworkTransportGNS)
+    horo_register_catch_test(HoroNetworkTransportGnsTests LABELS "unit;network;gns;socket")
+endif()
 add_executable(HoroNetworkRuntimeTests
         unit/runtime/networking/AuthenticationSessionAdapterTests.cpp
         unit/runtime/networking/HandshakeNegotiationTests.cpp

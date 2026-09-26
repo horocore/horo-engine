@@ -270,6 +270,7 @@ add_library(HoroNetworkApi STATIC
         runtime/networking/api/MessageCodecRegistry.cpp
         runtime/networking/api/NetworkAddress.cpp
         runtime/networking/api/NetworkErrors.cpp
+        runtime/networking/api/NetworkTransportErrors.cpp
         runtime/networking/api/NetworkFailure.cpp
         runtime/networking/api/NetworkIoService.cpp
         runtime/networking/api/NetworkLifecycle.cpp
@@ -304,6 +305,27 @@ add_library(HoroNetworkTransportNull STATIC
 add_library(HoroEngine::NetworkTransportNull ALIAS HoroNetworkTransportNull)
 target_compile_features(HoroNetworkTransportNull PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
+
+if(HORO_BUILD_NETWORK_GNS)
+    add_library(HoroNetworkTransportGNSFactoryInternal INTERFACE)
+    target_include_directories(HoroNetworkTransportGNSFactoryInternal INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/networking/gns/factory>)
+    target_link_libraries(HoroNetworkTransportGNSFactoryInternal INTERFACE HoroEngine::NetworkApi)
+    add_library(HoroNetworkTransportGNS STATIC
+        runtime/networking/gns/GnsAddressResolution.h
+        runtime/networking/gns/GnsAddressResolution.cpp
+        runtime/networking/gns/factory/GnsTransportFactory.h
+        runtime/networking/gns/GnsTransportInternal.h
+        runtime/networking/gns/GnsTransport.cpp
+        runtime/networking/gns/GnsTransportPackets.cpp
+        runtime/networking/gns/GnsTransportDiagnostics.cpp
+    )
+    add_library(HoroEngine::NetworkTransportGNS ALIAS HoroNetworkTransportGNS)
+    target_compile_features(HoroNetworkTransportGNS PUBLIC cxx_std_20)
+    target_compile_definitions(HoroNetworkTransportGNS PRIVATE $<$<PLATFORM_ID:Windows>:NOMINMAX>)
+    target_link_libraries(HoroNetworkTransportGNS PUBLIC HoroNetworkTransportGNSFactoryInternal
+        PRIVATE GameNetworkingSockets::static c-ares::cares)
+endif()
 
 add_library(HoroRuntimeUi STATIC
         runtime/ui/UiAssetDependencyInternal.h

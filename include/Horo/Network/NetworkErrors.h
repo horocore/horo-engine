@@ -156,6 +156,12 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor TransportOperationCancelled;
     /** @brief Caller-owned shutdown state rejected transport admission before queue mutation. */
     extern const ErrorCodeDescriptor TransportShuttingDown;
+    /** @brief Native transport initialization, bind, or connect could not establish the requested endpoint. */
+    extern const ErrorCodeDescriptor TransportNativeUnavailable;
+    /** @brief A native connection ended before an owner-controlled close completed. */
+    extern const ErrorCodeDescriptor TransportConnectionFailed;
+    /** @brief Native receive data violated the bounded packet contract. */
+    extern const ErrorCodeDescriptor TransportMalformedPacket;
     /** @brief Host-scoped network I/O service construction or call bounds are invalid. */
     extern const ErrorCodeDescriptor NetworkIoServiceInvalid;
     /** @brief Prepared network I/O service storage could not be allocated. */
