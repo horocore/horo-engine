@@ -189,7 +189,7 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> RenameWindowsFile(HANDLE file, HANDLE directory, const std::wstring &destination) {
+        [[nodiscard]] Result<void> RenameWindowsFile(HANDLE file, const std::wstring &destination) {
             if (destination.empty() || destination.size() > (std::numeric_limits<DWORD>::max() / sizeof(wchar_t)))
                 return Result<void>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows destination length"));
             const std::size_t byteLength = destination.size() * sizeof(wchar_t);
@@ -202,7 +202,9 @@ namespace Horo::Runtime {
             std::vector<std::uint64_t> buffer(words);
             auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(buffer.data());
             rename->ReplaceIfExists = TRUE;
-            rename->RootDirectory = directory;
+            // A simple name with no RootDirectory renames within the open file's parent.
+            // Supplying that same parent as RootDirectory is invalid for this operation.
+            rename->RootDirectory = nullptr;
             rename->FileNameLength = static_cast<DWORD>(byteLength);
             std::copy(destination.begin(), destination.end(), rename->FileName);
             if (!::SetFileInformationByHandle(file, FileRenameInfo, rename, static_cast<DWORD>(size)))
@@ -506,7 +508,7 @@ namespace Horo::Runtime {
             return valid;
         if (auto safe = ExistingWindowsTargetSafe(Slots(), destination); safe.HasError())
             return safe;
-        if (auto renamed = RenameWindowsFile(file.Get(), Slots().Get(), destination); renamed.HasError())
+        if (auto renamed = RenameWindowsFile(file.Get(), destination); renamed.HasError())
             return renamed;
         cleanup.Published();
         if (!::FlushFileBuffers(file.Get()))
