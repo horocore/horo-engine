@@ -122,10 +122,14 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 const auto &module = info.payloadModules[index];
                 if (module.stage != CpuParticleStage::Integrate)
                     return PayloadModuleFailure(VfxErrors::ParticleStageContractViolation, index, "stage");
+                if (module.operation >= CpuParticlePayloadOperation::Count)
+                    return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "operation");
+                if (!Finite(module.scale) || !Finite(module.bias) || !Finite(module.threshold) || !Finite(module.belowValue) ||
+                    !Finite(module.atOrAboveValue))
+                    return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "parameters");
                 const std::size_t read = PayloadChannelIndex(info.payloadChannels, module.readChannel);
                 const std::size_t write = PayloadChannelIndex(info.payloadChannels, module.writeChannel);
-                if (read == info.payloadChannels.size() || write == info.payloadChannels.size() || !Finite(module.scale) ||
-                    !Finite(module.bias))
+                if (read == info.payloadChannels.size() || write == info.payloadChannels.size())
                     return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "channels");
                 if (info.payloadChannels[read].classification != CpuParticlePayloadClass::GameplayInput ||
                     info.payloadChannels[write].classification != CpuParticlePayloadClass::GameplayOutput)
@@ -135,10 +139,17 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 writerSeen[write] = true;
                 const auto &source = info.payloadChannels[read];
                 const auto &target = info.payloadChannels[write];
-                const double low = (static_cast<double>(source.minimum) * module.scale) + module.bias;
-                const double high = (static_cast<double>(source.maximum) * module.scale) + module.bias;
-                if (std::min(low, high) < target.minimum || std::max(low, high) > target.maximum)
-                    return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "range");
+                if (module.operation == CpuParticlePayloadOperation::Affine) {
+                    const double low = (static_cast<double>(source.minimum) * module.scale) + module.bias;
+                    const double high = (static_cast<double>(source.maximum) * module.scale) + module.bias;
+                    if (std::min(low, high) < target.minimum || std::max(low, high) > target.maximum)
+                        return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "range");
+                } else {
+                    if (module.threshold < source.minimum || module.threshold > source.maximum || module.belowValue < target.minimum ||
+                        module.belowValue > target.maximum || module.atOrAboveValue < target.minimum ||
+                        module.atOrAboveValue > target.maximum)
+                        return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "range");
+                }
             }
             return Result<void>::Success();
         }
@@ -226,12 +237,16 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 const std::size_t read = PayloadChannelIndex(channels, module.readChannel);
                 const std::size_t write = PayloadChannelIndex(channels, module.writeChannel);
                 state.payloadModules[index] = {.stage = module.stage,
+                                               .operation = module.operation,
                                                .readChannel = module.readChannel,
                                                .writeChannel = module.writeChannel,
                                                .readStream = channels[read].customFloatStream,
                                                .writeStream = channels[write].customFloatStream,
                                                .scale = module.scale,
-                                               .bias = module.bias};
+                                               .bias = module.bias,
+                                               .threshold = module.threshold,
+                                               .belowValue = module.belowValue,
+                                               .atOrAboveValue = module.atOrAboveValue};
                 state.outputHasModule[write] = true;
             }
         }

@@ -137,6 +137,43 @@ namespace Horo::Vfx {
         CHECK(IsError(simulator.ReadGameplayOutput(2, 0, view.committedGeneration - 1), VfxErrors::ParticleGenerationStale));
     }
 
+    TEST_CASE("Gameplay descriptors compose affine and threshold payload writers", "[unit][vfx][payload]") {
+        const std::array channels{Channels[0], Channels[1], Channels[2], Channels[3],
+                                  CpuParticlePayloadChannel{.channel = 5,
+                                                            .classification = CpuParticlePayloadClass::GameplayOutput,
+                                                            .customFloatStream = 4,
+                                                            .minimum = 0.0F,
+                                                            .maximum = 1.0F}};
+        const std::array modules{Modules[0], CpuParticlePayloadModule{.operation = CpuParticlePayloadOperation::Threshold,
+                                                                      .readChannel = 1,
+                                                                      .writeChannel = 5,
+                                                                      .threshold = 0.5F,
+                                                                      .belowValue = 0.25F,
+                                                                      .atOrAboveValue = 0.75F}};
+        auto info = Info(11);
+        info.payloadChannels = channels;
+        info.payloadModules = modules;
+        auto created = CpuParticleSimulator::Create(Descriptor(), info);
+        REQUIRE(created.HasValue());
+        auto simulator = std::move(created).Value();
+        REQUIRE(simulator.SubmitGameplayInput(1, 0.25F).HasValue());
+        REQUIRE(simulator.Advance({.deltaSeconds = 1.0F, .burstCount = 1, .tick = 0}).HasValue());
+        const auto lowAffine = simulator.ReadGameplayOutput(2, 0, 1);
+        const auto lowThreshold = simulator.ReadGameplayOutput(5, 0, 1);
+        REQUIRE(lowAffine.HasValue());
+        REQUIRE(lowThreshold.HasValue());
+        CHECK(lowAffine.Value() == Catch::Approx(0.5F));
+        CHECK(lowThreshold.Value() == Catch::Approx(0.25F));
+        REQUIRE(simulator.SubmitGameplayInput(1, 0.5F).HasValue());
+        REQUIRE(simulator.Advance({.deltaSeconds = 1.0F, .tick = 1}).HasValue());
+        const auto highAffine = simulator.ReadGameplayOutput(2, 0, 2);
+        const auto highThreshold = simulator.ReadGameplayOutput(5, 0, 2);
+        REQUIRE(highAffine.HasValue());
+        REQUIRE(highThreshold.HasValue());
+        CHECK(highAffine.Value() == Catch::Approx(1.0F));
+        CHECK(highThreshold.Value() == Catch::Approx(0.75F));
+    }
+
     TEST_CASE("Payload module contracts fail preparation with typed diagnostics", "[unit][vfx][payload]") {
         const auto descriptor = Descriptor();
         auto rejects = [&descriptor](const std::span<const CpuParticlePayloadChannel> channels,
@@ -155,12 +192,20 @@ namespace Horo::Vfx {
         const std::array unknownRead{CpuParticlePayloadModule{.readChannel = 99, .writeChannel = 2}};
         const std::array duplicateWriters{Modules[0], Modules[0]};
         const std::array outOfRange{CpuParticlePayloadModule{.readChannel = 1, .writeChannel = 2, .scale = 3.0F}};
+        const std::array unknownOperation{
+            CpuParticlePayloadModule{.operation = CpuParticlePayloadOperation::Count, .readChannel = 1, .writeChannel = 2}};
+        const std::array invalidThreshold{CpuParticlePayloadModule{.operation = CpuParticlePayloadOperation::Threshold,
+                                                                   .readChannel = 1,
+                                                                   .writeChannel = 2,
+                                                                   .threshold = 1.5F}};
         rejects(Channels, wrongStage, VfxErrors::ParticleStageContractViolation);
         rejects(Channels, privateRead, VfxErrors::ParticleGameplayAccessDenied);
         rejects(Channels, renderWrite, VfxErrors::ParticleGameplayAccessDenied);
         rejects(Channels, unknownRead, VfxErrors::ParticlePayloadSchemaMismatch);
         rejects(Channels, duplicateWriters, VfxErrors::ParticleStageContractViolation);
         rejects(Channels, outOfRange, VfxErrors::ParticlePayloadSchemaMismatch);
+        rejects(Channels, unknownOperation, VfxErrors::ParticlePayloadSchemaMismatch);
+        rejects(Channels, invalidThreshold, VfxErrors::ParticlePayloadSchemaMismatch);
 
         auto aliased = Channels;
         aliased[1].customFloatStream = aliased[0].customFloatStream;

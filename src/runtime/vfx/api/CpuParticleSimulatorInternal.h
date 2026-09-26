@@ -33,12 +33,16 @@ namespace Horo::Vfx::Detail {
 
     struct CpuParticleCompiledPayloadModule final {
         CpuParticleStage stage{CpuParticleStage::Integrate};
+        CpuParticlePayloadOperation operation{CpuParticlePayloadOperation::Affine};
         std::uint16_t readChannel{};
         std::uint16_t writeChannel{};
         std::uint32_t readStream{};
         std::uint32_t writeStream{};
         float scale{1.0F};
         float bias{};
+        float threshold{0.5F};
+        float belowValue{};
+        float atOrAboveValue{1.0F};
     };
 
     struct CpuParticleSimulatorState final {

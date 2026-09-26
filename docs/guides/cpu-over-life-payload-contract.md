@@ -18,15 +18,18 @@ size multipliers, and color/opacity values outside [0, 1] are now rejected at
 preparation. Re-author those curves with strict ages and bounded values; the
 current in-repository callers use no such keys.
 
-Each `CpuParticlePayloadModule` records an Integrate-stage read channel and write
-channel. Preparation resolves those semantic IDs to distinct preallocated streams,
-requires `GameplayInput` → `GameplayOutput`, checks that no second module writes the
-same channel, and proves the affine output range `input * scale + bias` fits the
-declared output range. A module writes only its output stream after age integration;
+Each `CpuParticlePayloadModule` records an Integrate-stage operation, read channel,
+and write channel. Gameplay descriptors can select an affine transform or a
+threshold selector and provide their parameters; two modules may read one input
+and write separate outputs in descriptor order. Preparation resolves semantic IDs
+to distinct preallocated streams, requires `GameplayInput` → `GameplayOutput`,
+checks that no second module writes the same channel, and proves affine endpoint
+or threshold output values fit the declared output range. A module writes only its
+output stream after age integration;
 it cannot receive a mutable particle span or callback into gameplay. A malformed
 stage returns `ParticleStageContractViolation`; wrong access class returns
 `ParticleGameplayAccessDenied`; missing channel, aliased stream, or invalid range
-returns `ParticlePayloadSchemaMismatch`. Module failures include a structured
+or operation returns `ParticlePayloadSchemaMismatch`. Module failures include a structured
 `payloadModules[index].field` diagnostic. GameplayInput writes during an active
 step fail with a stage diagnostic and cannot change that step's frozen input.
 
@@ -47,7 +50,7 @@ required by ADR-123. Stage and payload failure paths preserve the previous
 committed generation.
 
 The focused suite covers analytic curve samples and packed color, same-build
-determinism, zero steady-state allocations, all four access classes, invalid
-stage/class/channel/writer/range contracts, reentrant write rejection, and
+determinism, zero steady-state allocations, both authored operations, all four
+access classes, invalid stage/class/channel/writer/operation/range contracts, reentrant write rejection, and
 stale-generation output reads. Linux/macOS/Windows hosted test results must be
 read from the PR checks; no cross-platform float bit-exactness is claimed.
