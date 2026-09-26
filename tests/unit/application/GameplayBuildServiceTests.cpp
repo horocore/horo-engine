@@ -322,6 +322,7 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
         REQUIRE(snapshot.records.back().code.Value() == expectedCode);
     }
 
+    /** @brief Verifies navigable location data from a real failed gameplay compilation. */
     void AssertCompilerErrorLocation(const BuildOutputSnapshot &snapshot, const GameplayBuildSnapshot &failure,
                                      const std::filesystem::path &sourcePath) {
         const auto compilerError = std::ranges::find_if(snapshot.records, [&](const BuildOutputRecord &record) {
