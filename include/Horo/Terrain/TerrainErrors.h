@@ -68,6 +68,12 @@ namespace Horo::Terrain::TerrainErrors {
     extern const ErrorCodeDescriptor RegistryHandleStale;
     /** @brief A requested Terrain/Foliage capability is not explicitly installed. */
     extern const ErrorCodeDescriptor CapabilityUnsupported;
+    /** @brief A Terrain product composition has malformed version, profile, revision, facts, or lifecycle evidence. */
+    extern const ErrorCodeDescriptor CompositionInvalid;
+    /** @brief The explicitly selected unsupported product profile admits no Terrain work. */
+    extern const ErrorCodeDescriptor CompositionProfileUnsupported;
+    /** @brief Cancellation closed admission for a captured Terrain composition. */
+    extern const ErrorCodeDescriptor CompositionCancelled;
     /** @brief A bounded asynchronous Terrain work request or owner fence is malformed. */
     extern const ErrorCodeDescriptor WorkInvalid;
     /** @brief A Terrain work identity is not retained by this owner. */

@@ -271,6 +271,33 @@ namespace Horo::Terrain::TerrainErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor CompositionInvalid{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.composition.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain product composition contains malformed profile or capability evidence.",
+        .remediationHint = "Supply one complete typed host fact per capability and a valid version, profile, and revision.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor CompositionProfileUnsupported{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.composition.profile_unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "This product profile explicitly does not support Terrain work.",
+        .remediationHint = "Select a supported profile explicitly; no renderer or authoring fallback is installed.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor CompositionCancelled{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.composition.cancelled"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "Terrain composition work was cancelled before admission.",
+        .remediationHint = "Start a new operation against the current active composition when needed.",
+        .retryable = true,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor WorkInvalid{
         .domain = TerrainDomain,
         .code = ErrorCode{"terrain.work.invalid"},
@@ -349,6 +376,9 @@ namespace Horo::Terrain::TerrainErrors {
             &RegistryHandleInvalid,
             &RegistryHandleStale,
             &CapabilityUnsupported,
+            &CompositionInvalid,
+            &CompositionProfileUnsupported,
+            &CompositionCancelled,
             &WorkInvalid,
             &WorkUnknown,
             &WorkNotReady,

@@ -143,6 +143,38 @@ producers remain TRF-006.2 and later. Those producers compose this lifecycle
 boundary when their typed payloads and owners exist; this slice does not claim
 to cook, decode or preview terrain assets by itself.
 
+### TRF-001.6 Product Composition Boundary
+
+`TerrainComposition` is an inert, fixed-size `TerrainApi` decision, not a service
+installer. A host provides exactly one typed availability fact and implementation
+revision for every closed Terrain/Foliage capability. The exact Null, Headless,
+Editor, Runtime or Unsupported policy resolves each fact to omitted, unavailable
+or bound. Missing required capabilities fail composition; optional capabilities
+remain explicitly unavailable. Null and Unsupported bind nothing even if a host
+has implementations installed elsewhere. Unsupported is inspectable but rejects
+work with a typed error.
+Foliage runtime requires effective Terrain runtime, and CPU/GPU culling or wind
+cannot report an effective grant without the required render/foliage path. Such
+dependent optional grants report unavailable rather than pretending to run.
+
+Headless omits all render extraction, culling, wind and authoring grants; Runtime
+requires render extraction but omits authoring; Editor requires both authoring
+grants while render extraction remains optional. Profile names do not select a
+renderer, create an authoring document, choose a provider, or imply tier fallback.
+The host alone owns construction and lifetime of any concrete service. New
+TerrainAuthoring and FoliageAuthoring capability bits append to the existing
+closed vocabulary without changing prior bit identities.
+
+One immutable decision carries a non-wrapping `TerrainCapabilityRevision` and
+source revisions for bound facts. Work admission checks the current revision,
+explicit lifecycle and exact required grants; replacement returns a detached
+newer decision and never mutates the old one on failure. Cancelling, shutdown,
+stale and unsupported-profile paths have typed results. Existing registry and
+async-job users may continue to supply their exact grants, but hosts that select
+a product profile must derive those grants from the resolved decision, not from
+profile-name strings or ambient discovery. No public contract gains a native
+handle, renderer dependency or implicit global ownership.
+
 ## Terrain System
 
 ### Heightfield Model
