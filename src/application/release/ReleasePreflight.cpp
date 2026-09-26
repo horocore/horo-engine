@@ -39,8 +39,7 @@ namespace Horo::Release {
         [[nodiscard]] bool ContainsPath(const std::filesystem::path &ancestor, const std::filesystem::path &path) {
             const auto normalizedAncestor = ancestor.lexically_normal();
             const auto normalizedPath = path.lexically_normal();
-            return std::mismatch(normalizedAncestor.begin(), normalizedAncestor.end(), normalizedPath.begin(), normalizedPath.end())
-                       .first == normalizedAncestor.end();
+            return std::ranges::mismatch(normalizedAncestor, normalizedPath).in1 == normalizedAncestor.end();
         }
 
         /** @brief Appends one independently actionable validation failure. */
@@ -126,6 +125,19 @@ namespace Horo::Release {
             return ValidateReleaseVersionAuthority(std::span{&requested, 1U}, version.sourceRevision).HasValue();
         }
 
+        /** @brief Checks the bounded credential list without hiding duplicate or invalid handles. */
+        void ValidateCredentialHandles(const std::vector<ReleaseCredentialHandle> &credentials,
+                                       std::vector<ReleasePreflightIssue> &issues) {
+            using enum ReleasePreflightIssueCode;
+            for (std::size_t index = 0; index < std::min(credentials.size(), MaximumReleaseCredentialHandles); ++index) {
+                if (credentials[index].value == 0)
+                    AddIssue(issues, InvalidRequest, "credentials", "A credential handle is invalid.");
+                if (std::ranges::find(credentials.begin(), credentials.begin() + static_cast<std::ptrdiff_t>(index), credentials[index]) !=
+                    credentials.begin() + static_cast<std::ptrdiff_t>(index))
+                    AddIssue(issues, InvalidRequest, "credentials", "Credential handles must be unique.");
+            }
+        }
+
         /** @brief Collects every independent malformed request field before reading facts. */
         void ValidateRequest(const ReleasePreflightRequest &request, std::vector<ReleasePreflightIssue> &issues) {
             using enum ReleasePreflightIssueCode;
@@ -155,13 +167,7 @@ namespace Horo::Release {
                     std::ranges::find(eligible, *request.publicationDestination) == eligible.end())
                     AddIssue(issues, InvalidRequest, "publication", "Publication destination is not allowed by the profile.");
             }
-            for (std::size_t index = 0; index < std::min(request.credentials.size(), MaximumReleaseCredentialHandles); ++index) {
-                if (request.credentials[index].value == 0)
-                    AddIssue(issues, InvalidRequest, "credentials", "A credential handle is invalid.");
-                if (std::ranges::find(request.credentials.begin(), request.credentials.begin() + static_cast<std::ptrdiff_t>(index),
-                                      request.credentials[index]) != request.credentials.begin() + static_cast<std::ptrdiff_t>(index))
-                    AddIssue(issues, InvalidRequest, "credentials", "Credential handles must be unique.");
-            }
+            ValidateCredentialHandles(request.credentials, issues);
         }
 
         /** @brief Checks bounded host capabilities and credential handles against the selected profile. */
