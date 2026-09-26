@@ -807,6 +807,7 @@ add_library(HoroPCG STATIC
         runtime/pcg/api/PCGProvenance.cpp
         runtime/pcg/api/PCGSpatialSnapshot.cpp
         runtime/pcg/api/PCGRegistry.cpp
+        runtime/pcg/api/PCGAsyncOperation.cpp
 )
 add_library(HoroEngine::PCG ALIAS HoroPCG)
 target_compile_features(HoroPCG PUBLIC cxx_std_20)

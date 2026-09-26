@@ -415,6 +415,7 @@ horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
     Horo/PCG/PCGProvenance.h
     Horo/PCG/PCGSpatialSnapshot.h
     Horo/PCG/PCGRegistry.h
+    Horo/PCG/PCGAsyncOperation.h
 )
 horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
     Horo/Vfx/CpuParticleBuffer.h
