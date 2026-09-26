@@ -198,6 +198,7 @@ add_library(HoroApplication STATIC
         application/release/ReleaseErrors.cpp
         application/release/ReleaseProfile.cpp
         application/release/ReleasePreflight.cpp
+        application/release/ReleaseTargetMatrix.cpp
         application/release/ReleaseVersion.cpp
 )
 add_library(HoroEngine::Application ALIAS HoroApplication)
