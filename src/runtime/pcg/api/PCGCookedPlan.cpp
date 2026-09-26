@@ -298,6 +298,11 @@ namespace Horo::PCG {
         return data_.generation;
     }
 
+    /** @copydoc PCGCookedPlan::Tier */
+    PCGOperationalTier PCGCookedPlan::Tier() const noexcept {
+        return data_.tier;
+    }
+
     /** @copydoc PCGCookedPlan::SourceSchema */
     PCGGraphSchemaVersion PCGCookedPlan::SourceSchema() const noexcept {
         return data_.sourceSchema;
@@ -385,6 +390,7 @@ namespace Horo::PCG {
         if (bytes.HasError())
             return Result<PCGCookedPlan>::Failure(bytes.ErrorValue());
         PCGCookedPlan::Data data{source.generation,
+                                 source.tier,
                                  source.version,
                                  sourceDigest,
                                  capabilities.Value(),
