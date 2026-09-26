@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <fstream>
+#include <iterator>
 #include <nlohmann/json.hpp>
 #include <vector>
 
@@ -75,6 +76,12 @@ namespace {
         REQUIRE((output.good()));
     }
 
+    [[nodiscard]] std::string ReadBytes(const std::filesystem::path &path) {
+        std::ifstream input(path, std::ios::binary);
+        REQUIRE((input.good()));
+        return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    }
+
     struct BackendProjectOpen {
         BackendProjectOpen()
             : jobs({.workerCount = 3, .maxQueuedJobs = 32}), mutations(files), transactions(files, clock, mutations, jobs),
@@ -137,6 +144,13 @@ namespace {
 
     void RequireProjectOpenFailureWithoutMutation(ProjectMigrationTestFixture &project) {
         const std::string metadata = project.ReadProjectBytes();
+        const auto prefabPath = project.Root() / "assets/prefabs/player.prefab";
+        const auto sidecarPath = project.Root() / "assets/prefabs/player.prefab.horo";
+        const auto scenePath = project.Root() / "assets/scenes/main.horo";
+        const std::string prefab = ReadBytes(prefabPath);
+        const std::string scene = ReadBytes(scenePath);
+        const bool hasSidecar = std::filesystem::exists(sidecarPath);
+        const std::string sidecar = hasSidecar ? ReadBytes(sidecarPath) : std::string{};
         BackendProjectOpen backend;
         const auto opened = OpenProject(backend, project);
         REQUIRE((opened.outcome == ProjectOpenOutcome::Failed));
@@ -145,6 +159,11 @@ namespace {
         REQUIRE_FALSE((opened.diagnostic->message.empty()));
         REQUIRE_FALSE((opened.readySession.has_value()));
         REQUIRE((project.ReadProjectBytes() == metadata));
+        REQUIRE((ReadBytes(prefabPath) == prefab));
+        REQUIRE((ReadBytes(scenePath) == scene));
+        REQUIRE((std::filesystem::exists(sidecarPath) == hasSidecar));
+        if (hasSidecar)
+            REQUIRE((ReadBytes(sidecarPath) == sidecar));
         REQUIRE_FALSE((std::filesystem::exists(project.Root() / ".horo/migration_history.json")));
     }
 }  // namespace
