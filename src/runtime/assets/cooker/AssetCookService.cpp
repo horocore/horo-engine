@@ -265,7 +265,8 @@ namespace Horo::Assets {
 
         /** @brief Runs uncached cook slots as a fail-fast group while preserving cancellation causes. */
         Result<void> CookUncachedSlots(JobSystem &jobs, const CookerCatalogSnapshot &catalog, const AssetCookRequest &request,
-                                       std::span<CookSlot> slots, const CancellationToken &cancellation, CookOperationScope &operation) {
+                                       std::span<CookSlot> slots, const CancellationToken &cancellation,
+                                       const CookOperationScope &operation) {
             TaskGroup group(jobs, TaskGroupFailurePolicy::FailFast, cancellation);
             std::optional<Error> admissionError;
             for (CookSlot &slot : slots) {
