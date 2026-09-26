@@ -7,7 +7,9 @@
 #include <bit>
 #include <map>
 #include <tuple>
+#include <type_traits>
 #include <utility>
+#include <variant>
 
 namespace Horo::PCG {
     namespace {
@@ -75,32 +77,27 @@ namespace Horo::PCG {
             [[nodiscard]] bool Value(const PCGGraphValue &value) {
                 if (value.index() == 0 || !Integer(value.index(), 1))
                     return false;
-                switch (value.index()) {
-                    case 1:
-                        return Integer(std::get<bool>(value) ? 1 : 0, 1);
-                    case 2:
-                        return Integer(static_cast<std::uint64_t>(std::get<std::int64_t>(value)), 8);
-                    case 3:
-                        return Integer(std::get<std::uint64_t>(value), 8);
-                    case 4:
-                        return Integer(std::bit_cast<std::uint64_t>(std::get<double>(value)), 8);
-                    case 5: {
-                        const auto vector = std::get<Math::Vec2>(value);
-                        return Integer(std::bit_cast<std::uint32_t>(vector.x), 4) && Integer(std::bit_cast<std::uint32_t>(vector.y), 4);
-                    }
-                    case 6: {
-                        const auto vector = std::get<Math::Vec3>(value);
-                        return Integer(std::bit_cast<std::uint32_t>(vector.x), 4) && Integer(std::bit_cast<std::uint32_t>(vector.y), 4) &&
-                               Integer(std::bit_cast<std::uint32_t>(vector.z), 4);
-                    }
-                    case 7: {
-                        const auto vector = std::get<Math::Vec4>(value);
-                        return Integer(std::bit_cast<std::uint32_t>(vector.x), 4) && Integer(std::bit_cast<std::uint32_t>(vector.y), 4) &&
-                               Integer(std::bit_cast<std::uint32_t>(vector.z), 4) && Integer(std::bit_cast<std::uint32_t>(vector.w), 4);
-                    }
-                    default:
+                return std::visit([this](const auto &typed) -> bool {
+                    using T = std::decay_t<decltype(typed)>;
+                    if constexpr (std::is_same_v<T, bool>)
+                        return Integer(typed ? 1 : 0, 1);
+                    else if constexpr (std::is_same_v<T, std::int64_t>)
+                        return Integer(static_cast<std::uint64_t>(typed), 8);
+                    else if constexpr (std::is_same_v<T, std::uint64_t>)
+                        return Integer(typed, 8);
+                    else if constexpr (std::is_same_v<T, double>)
+                        return Integer(std::bit_cast<std::uint64_t>(typed), 8);
+                    else if constexpr (std::is_same_v<T, Math::Vec2>)
+                        return Integer(std::bit_cast<std::uint32_t>(typed.x), 4) && Integer(std::bit_cast<std::uint32_t>(typed.y), 4);
+                    else if constexpr (std::is_same_v<T, Math::Vec3>)
+                        return Integer(std::bit_cast<std::uint32_t>(typed.x), 4) && Integer(std::bit_cast<std::uint32_t>(typed.y), 4) &&
+                               Integer(std::bit_cast<std::uint32_t>(typed.z), 4);
+                    else if constexpr (std::is_same_v<T, Math::Vec4>)
+                        return Integer(std::bit_cast<std::uint32_t>(typed.x), 4) && Integer(std::bit_cast<std::uint32_t>(typed.y), 4) &&
+                               Integer(std::bit_cast<std::uint32_t>(typed.z), 4) && Integer(std::bit_cast<std::uint32_t>(typed.w), 4);
+                    else
                         return false;
-                }
+                }, value);
             }
 
             [[nodiscard]] std::vector<std::uint8_t> Take() && {
@@ -112,9 +109,15 @@ namespace Horo::PCG {
             std::vector<std::uint8_t> bytes_;
         };
 
-        [[nodiscard]] bool WriteHeader(BoundedWriter &writer, const PCGGraphSourceData &source, const Sha256Digest sourceDigest,
-                                       const PCGCapabilitySet capabilities, const std::size_t nodeCount, const std::size_t routeCount,
-                                       const std::size_t constantCount, const std::size_t exposedCount) {
+        struct PlanSections final {
+            std::span<const PCGCookedNode> nodes;
+            std::span<const PCGCookedRoute> routes;
+            std::span<const PCGCookedConstant> constants;
+            std::span<const PCGCookedExposedInput> exposed;
+        };
+
+        [[nodiscard]] bool WriteHeader(BoundedWriter &writer, const PCGGraphSourceData &source, const Sha256Digest &sourceDigest,
+                                       const PCGCapabilitySet capabilities, const PlanSections &sections) {
             constexpr std::array<std::uint8_t, 4> magic{'H', 'P', 'C', 'P'};
             bool valid = writer.Bytes(magic) && writer.Integer(CurrentPCGCookedPlanVersion.major, 2) &&
                          writer.Integer(CurrentPCGCookedPlanVersion.minor, 2) && writer.Integer(CurrentPCGCompilerVersion, 4) &&
@@ -125,8 +128,8 @@ namespace Horo::PCG {
                          writer.Bytes(sourceDigest.bytes);
             for (const PCGCapability capability : AllCapabilities)
                 valid = valid && writer.Integer(capabilities.Contains(capability) ? 1 : 0, 1);
-            return valid && writer.Integer(nodeCount, 4) && writer.Integer(routeCount, 4) && writer.Integer(constantCount, 4) &&
-                   writer.Integer(exposedCount, 4);
+            return valid && writer.Integer(sections.nodes.size(), 4) && writer.Integer(sections.routes.size(), 4) &&
+                   writer.Integer(sections.constants.size(), 4) && writer.Integer(sections.exposed.size(), 4);
         }
 
         [[nodiscard]] bool WriteNode(BoundedWriter &writer, const PCGCookedNode &node) {
@@ -161,29 +164,25 @@ namespace Horo::PCG {
                    writer.Integer(static_cast<std::uint8_t>(input.type), 1) && writer.Value(input.defaultValue);
         }
 
-        [[nodiscard]] Result<std::vector<std::uint8_t>> Encode(const PCGGraphSourceData &source, const Sha256Digest sourceDigest,
-                                                               const PCGCapabilitySet capabilities,
-                                                               const std::span<const PCGCookedNode> nodes,
-                                                               const std::span<const PCGCookedRoute> routes,
-                                                               const std::span<const PCGCookedConstant> constants,
-                                                               const std::span<const PCGCookedExposedInput> exposed,
+        [[nodiscard]] Result<std::vector<std::uint8_t>> Encode(const PCGGraphSourceData &source, const Sha256Digest &sourceDigest,
+                                                               const PCGCapabilitySet capabilities, const PlanSections &sections,
                                                                const std::size_t maximumBytes) {
             BoundedWriter writer(maximumBytes);
-            if (!WriteHeader(writer, source, sourceDigest, capabilities, nodes.size(), routes.size(), constants.size(), exposed.size()))
+            if (!WriteHeader(writer, source, sourceDigest, capabilities, sections))
                 return Reject<std::vector<std::uint8_t>>(PCGErrors::CookedPlanCapacityExceeded);
-            for (const PCGCookedNode &node : nodes) {
+            for (const PCGCookedNode &node : sections.nodes) {
                 if (!WriteNode(writer, node))
                     return Reject<std::vector<std::uint8_t>>(PCGErrors::CookedPlanCapacityExceeded);
             }
-            for (const PCGCookedRoute &route : routes) {
+            for (const PCGCookedRoute &route : sections.routes) {
                 if (!WriteRoute(writer, route))
                     return Reject<std::vector<std::uint8_t>>(PCGErrors::CookedPlanCapacityExceeded);
             }
-            for (const PCGCookedConstant &constant : constants) {
+            for (const PCGCookedConstant &constant : sections.constants) {
                 if (!WriteConstant(writer, constant))
                     return Reject<std::vector<std::uint8_t>>(PCGErrors::CookedPlanCapacityExceeded);
             }
-            for (const PCGCookedExposedInput &input : exposed) {
+            for (const PCGCookedExposedInput &input : sections.exposed) {
                 if (!WriteExposedInput(writer, input))
                     return Reject<std::vector<std::uint8_t>>(PCGErrors::CookedPlanCapacityExceeded);
             }
@@ -237,7 +236,7 @@ namespace Horo::PCG {
                 const auto targetIndex = indexes.find(edge.targetNode);
                 if (sourceIndex == indexes.end() || targetIndex == indexes.end() || sourceIndex->second >= targetIndex->second)
                     return Reject<std::vector<PCGCookedRoute>>(PCGErrors::CookedPlanInvalid);
-                routes.push_back({edge.id, sourceIndex->second, edge.sourcePin, targetIndex->second, edge.targetPin});
+                routes.emplace_back(edge.id, sourceIndex->second, edge.sourcePin, targetIndex->second, edge.targetPin);
             }
             std::ranges::sort(routes, {}, [](const PCGCookedRoute &route) {
                 return std::tuple(route.targetNode, route.targetPin, route.sourceNode, route.sourcePin, route.id);
@@ -259,7 +258,7 @@ namespace Horo::PCG {
                         return input.pin == pin.id;
                     });
                     if (!connected && !exposed)
-                        constants.push_back({indexes.at(node.id), pin.id, pin.type, *pin.defaultValue});
+                        constants.emplace_back(indexes.at(node.id), pin.id, pin.type, *pin.defaultValue);
                 }
             }
             std::ranges::sort(constants, {}, [](const PCGCookedConstant &constant) {
@@ -283,7 +282,7 @@ namespace Horo::PCG {
                 const auto pin = std::ranges::lower_bound(sourceNode->pins, input.pin, {}, &PCGGraphPin::id);
                 if (pin == sourceNode->pins.end() || pin->id != input.pin)
                     return Reject<std::vector<PCGCookedExposedInput>>(PCGErrors::CookedPlanInvalid);
-                exposed.push_back({input.id, input.key, indexes.at(input.node), input.pin, pin->type, input.defaultValue});
+                exposed.emplace_back(input.id, input.key, indexes.at(input.node), input.pin, pin->type, input.defaultValue);
             }
             return Result<std::vector<PCGCookedExposedInput>>::Success(std::move(exposed));
         }
@@ -378,8 +377,8 @@ namespace Horo::PCG {
         auto capabilities = RequiredCapabilities(*graphDescriptor.Value(), requiredCapabilities, resolved.Value().runtimes);
         if (capabilities.HasError() || !registry.Capabilities().granted.ContainsAll(capabilities.Value()))
             return Reject<PCGCookedPlan>(PCGErrors::UnsupportedCapability);
-        auto bytes = Encode(source, sourceDigest, capabilities.Value(), resolved.Value().nodes, routes.Value(), constants, exposed.Value(),
-                            effectiveMaximum);
+        const PlanSections sections{resolved.Value().nodes, routes.Value(), constants, exposed.Value()};
+        auto bytes = Encode(source, sourceDigest, capabilities.Value(), sections, effectiveMaximum);
         if (bytes.HasError())
             return Result<PCGCookedPlan>::Failure(bytes.ErrorValue());
         PCGCookedPlan::Data data{source.generation,

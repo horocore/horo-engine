@@ -142,7 +142,7 @@ namespace Horo::PCG {
         }
     }  // namespace
 
-    PCGValidatedGraph::PCGValidatedGraph(const GraphGeneration generation, const Sha256Digest sourceDigest,
+    PCGValidatedGraph::PCGValidatedGraph(const GraphGeneration generation, const Sha256Digest &sourceDigest,
                                          const std::uint64_t registryGeneration, const PCGGraphHandle &registryGraph,
                                          std::vector<PCGValidatedNode> nodes) noexcept
         : generation_(generation), sourceDigest_(sourceDigest), registryGeneration_(registryGeneration), registryGraph_(registryGraph),

@@ -9,6 +9,7 @@
 #include <set>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace Horo::PCG {
     namespace {
@@ -172,6 +173,40 @@ namespace Horo::PCG {
         REQUIRE(providerChanged.HasValue());
         CHECK(providerChanged.Value().Nodes()[0].runtimeContractVersion == 2);
         CHECK_FALSE(std::ranges::equal(first.Value().CanonicalBytes(), providerChanged.Value().CanonicalBytes()));
+    }
+
+    TEST_CASE("PCG cooked constants encode every typed value in network byte order", "[unit][pcg][cook][canonical]") {
+        struct ValueCase final {
+            PCGPinType type;
+            PCGGraphValue value;
+            std::vector<std::uint8_t> encoded;
+        };
+
+        const std::array cases{
+            ValueCase{PCGPinType::Boolean, true, {1, 1}},
+            ValueCase{PCGPinType::SignedInteger, std::int64_t{-2}, {2, 255, 255, 255, 255, 255, 255, 255, 254}},
+            ValueCase{PCGPinType::UnsignedInteger, std::uint64_t{0x0102030405060708}, {3, 1, 2, 3, 4, 5, 6, 7, 8}},
+            ValueCase{PCGPinType::Scalar, 2.5, {4, 0x40, 0x04, 0, 0, 0, 0, 0, 0}},
+            ValueCase{PCGPinType::Vector2, Math::Vec2{1.0f, -2.0f}, {5, 0x3f, 0x80, 0, 0, 0xc0, 0, 0, 0}},
+            ValueCase{PCGPinType::Vector3, Math::Vec3{1.0f, -2.0f, 0.5f}, {6, 0x3f, 0x80, 0, 0, 0xc0, 0, 0, 0, 0x3f, 0, 0, 0}},
+            ValueCase{PCGPinType::Vector4,
+                      Math::Vec4{1.0f, -2.0f, 0.5f, 3.0f},
+                      {7, 0x3f, 0x80, 0, 0, 0xc0, 0, 0, 0, 0x3f, 0, 0, 0, 0x40, 0x40, 0, 0}},
+        };
+        auto registry = Registry();
+        const auto snapshot = registry.Snapshot().Value();
+        for (const ValueCase &valueCase : cases) {
+            auto source = Source();
+            source.nodes.front().pins.front().type = valueCase.type;
+            source.nodes.front().pins.front().defaultValue = valueCase.value;
+            const auto graph = Asset(std::move(source));
+            const auto compiled = Compile(graph, snapshot);
+            REQUIRE(compiled.HasValue());
+            REQUIRE(compiled.Value().Constants().size() == 1);
+            CHECK(compiled.Value().Constants().front().value == valueCase.value);
+            const auto bytes = compiled.Value().CanonicalBytes();
+            CHECK(std::search(bytes.begin(), bytes.end(), valueCase.encoded.begin(), valueCase.encoded.end()) != bytes.end());
+        }
     }
 
     TEST_CASE("PCG cooked plan rejects stale snapshot and finite byte overflow", "[unit][pcg][cook][failure]") {
