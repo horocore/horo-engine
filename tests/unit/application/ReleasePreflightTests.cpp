@@ -153,6 +153,23 @@ TEST_CASE("Release preflight aggregates independent failures without creating ou
     CHECK_FALSE(std::filesystem::exists(request.outputRoot));
 }
 
+TEST_CASE("Release output cannot contain or be contained by the project source", "[unit][application][release][preflight]") {
+    const ReleasePreflightRequest request = Request();
+    for (const std::filesystem::path &unsafe : {request.projectRoot, request.projectRoot / "releases", request.projectRoot.parent_path()}) {
+        ReleasePreflightFacts facts = Facts(request);
+        facts.canonicalOutputRoot = unsafe;
+        const ReleasePreflightOutcome outcome = PreflightRelease(request, facts);
+        CHECK_FALSE(outcome.plan.has_value());
+        CHECK(HasIssue(outcome, ReleasePreflightIssueCode::OutputUnavailable));
+    }
+
+    ReleasePreflightFacts sibling = Facts(request);
+    sibling.canonicalOutputRoot = request.projectRoot.parent_path() / (request.projectRoot.filename().string() + "-releases");
+    const ReleasePreflightOutcome accepted = PreflightRelease(request, sibling);
+    CHECK(accepted.issues.empty());
+    CHECK(accepted.plan.has_value());
+}
+
 TEST_CASE("Release plan rejects changed source and dependency identities before execution", "[unit][application][release][preflight]") {
     const ReleasePreflightRequest request = Request();
     ReleasePreflightFacts facts = Facts(request);

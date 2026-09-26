@@ -35,6 +35,14 @@ namespace Horo::Release {
             });
         }
 
+        /** @brief Finds a component-aligned ancestor, including the path itself. */
+        [[nodiscard]] bool ContainsPath(const std::filesystem::path &ancestor, const std::filesystem::path &path) {
+            const auto normalizedAncestor = ancestor.lexically_normal();
+            const auto normalizedPath = path.lexically_normal();
+            return std::mismatch(normalizedAncestor.begin(), normalizedAncestor.end(), normalizedPath.begin(), normalizedPath.end())
+                       .first == normalizedAncestor.end();
+        }
+
         /** @brief Appends one independently actionable validation failure. */
         void AddIssue(std::vector<ReleasePreflightIssue> &issues, const ReleasePreflightIssueCode code, std::string field,
                       std::string message) {
@@ -197,7 +205,10 @@ namespace Horo::Release {
             if (facts.outputExists)
                 AddIssue(issues, OutputCollision, "output", "The output path already exists.");
             if (!facts.outputWritable || !ValidAbsolutePath(facts.canonicalOutputRoot) ||
-                facts.canonicalOutputRoot == facts.canonicalProjectRoot || !facts.availableBytes.has_value())
+                (ValidAbsolutePath(facts.canonicalProjectRoot) && ValidAbsolutePath(facts.canonicalOutputRoot) &&
+                 (ContainsPath(facts.canonicalProjectRoot, facts.canonicalOutputRoot) ||
+                  ContainsPath(facts.canonicalOutputRoot, facts.canonicalProjectRoot))) ||
+                !facts.availableBytes.has_value())
                 AddIssue(issues, OutputUnavailable, "output", "Output root is unavailable or unsafe.");
             if (facts.availableBytes.has_value() && *facts.availableBytes < request.requiredFreeBytes)
                 AddIssue(issues, InsufficientSpace, "output", "Output root does not have enough free space.");
