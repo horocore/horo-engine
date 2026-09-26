@@ -100,7 +100,7 @@ namespace Horo::Cinematic {
 
         [[nodiscard]] Result<SequencePlaybackSettings> DecodePlayback(const Json &value) {
             using enum SequenceClockSource;
-            if (!HasAllowedFields(value, {"loopMode", "clockSource", "pausePolicy", "dilationPolicy"}))
+            if (!HasAllowedFields(value, {"loopMode", "clockSource", "pausePolicy", "dilationPolicy"}, {"pauseGameplay", "hideHUD"}))
                 return Failed<SequencePlaybackSettings>(CinematicErrors::SequenceSchemaMalformed, "playback has an invalid shape.");
             constexpr std::array loopModes{std::pair{"once"sv, SequenceLoopMode::Once}, std::pair{"loop"sv, SequenceLoopMode::Loop},
                                            std::pair{"pingPong"sv, SequenceLoopMode::PingPong}};
@@ -117,7 +117,12 @@ namespace Horo::Cinematic {
             auto dilation = DecodeEnum(value.at("dilationPolicy"), "playback.dilationPolicy", std::span{dilations});
             if (loop.HasError() || clock.HasError() || pause.HasError() || dilation.HasError())
                 return Failed<SequencePlaybackSettings>(CinematicErrors::SequenceSchemaMalformed, "playback contains an unknown policy.");
-            return Result<SequencePlaybackSettings>::Success({loop.Value(), clock.Value(), pause.Value(), dilation.Value()});
+            if ((value.contains("pauseGameplay") && !value.at("pauseGameplay").is_boolean()) ||
+                (value.contains("hideHUD") && !value.at("hideHUD").is_boolean()))
+                return Failed<SequencePlaybackSettings>(CinematicErrors::SequenceSchemaMalformed,
+                                                        "playback coordination flags must be boolean.");
+            return Result<SequencePlaybackSettings>::Success({loop.Value(), clock.Value(), pause.Value(), dilation.Value(),
+                                                              value.value("pauseGameplay", false), value.value("hideHUD", false)});
         }
 
         [[nodiscard]] Result<SequenceAssetReference> DecodeReference(const Json &value) {
@@ -254,10 +259,11 @@ namespace Horo::Cinematic {
                 return false;
             if (settings.clockSource == SequenceClockSource::CommittedSimulation)
                 return settings.pausePolicy == SequencePausePolicy::FollowGameplay &&
-                       settings.dilationPolicy == SequenceDilationPolicy::SourceNative;
+                       settings.dilationPolicy == SequenceDilationPolicy::SourceNative && !settings.pauseGameplay;
             if (settings.clockSource == SequenceClockSource::External)
-                return settings.dilationPolicy == SequenceDilationPolicy::SourceNative;
-            return true;
+                return settings.dilationPolicy == SequenceDilationPolicy::SourceNative &&
+                       (!settings.pauseGameplay || settings.pausePolicy == SequencePausePolicy::PlayerOnly);
+            return !settings.pauseGameplay || settings.pausePolicy == SequencePausePolicy::PlayerOnly;
         }
 
         [[nodiscard]] Result<void> ValidateAssetHeader(const SequenceAssetData &data, const SequenceSchemaLimits &limits) {

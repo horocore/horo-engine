@@ -121,6 +121,7 @@ target_link_libraries(HoroPlatform PUBLIC HoroEngine::Foundation HoroEngine::Sec
 
 add_library(HoroPlatformServices STATIC
         platform_services/AchievementDefinitionRegistry.cpp
+        platform_services/PlatformCloudObjects.cpp
         platform_services/PlatformAchievementCoordinator.cpp
         platform_services/PlatformOfflineQueue.cpp
         platform_services/PlatformOfflineQueueAdmission.cpp
@@ -671,6 +672,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsStepPolicy.cpp
         physics/PhysicsTransformAuthority.cpp
         physics/PhysicsWorld.cpp
+        physics/PhysicsQueryEventCapability.cpp
         physics/PhysicsWorldInternal.h
         physics/PhysicsWorldScene.cpp
         physics/PhysicsWorldTickHelpers.h

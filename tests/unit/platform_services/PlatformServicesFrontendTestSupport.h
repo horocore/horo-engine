@@ -6,6 +6,7 @@
 #include "PlatformServicesTestSupport.h"
 
 #include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <condition_variable>
@@ -103,6 +104,14 @@ namespace Horo::PlatformServices {
 
             Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest) override {
                 return Admit<CloudReadResult>(PlatformServiceKind::Cloud);
+            }
+
+            Result<PlatformRequestHandle<CloudObjectPage>> ListCloudObjects(CloudListRequest) override {
+                return Admit<CloudObjectPage>(PlatformServiceKind::Cloud);
+            }
+
+            Result<PlatformRequestHandle<CloudBlobReadResult>> ReadCloudObject(CloudBlobReadRequest) override {
+                return Admit<CloudBlobReadResult>(PlatformServiceKind::Cloud);
             }
 
             Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest) override {

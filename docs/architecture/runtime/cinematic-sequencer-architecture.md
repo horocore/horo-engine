@@ -514,6 +514,14 @@ The following are schematic domain contracts, not implemented public headers.
 finite authoring times to it once. Tick-derived advancement uses checked arithmetic
 and retained fractional remainder, not repeated accumulation of float frame deltas.
 
+Sequence source schema 1.0 now accepts optional boolean `playback.pauseGameplay`
+and `playback.hideHUD` fields, both defaulting to false for existing assets. The
+model validates `pauseGameplay` with PlayerOnly and a non-simulation clock before
+cook. Host activation copies these authored settings into its runtime coordination
+request and resolves the required owner adapters before acquiring leases. No
+persisted setting is a live pause or HUD token; the session player owns those
+leases, and asset reload never restores a stale token.
+
 ```cpp
 enum class SequenceClockSource : uint8_t {
     CommittedSimulation,
@@ -573,6 +581,47 @@ pause must use PlayerOnly with a non-simulation source, otherwise activation ret
 `InvalidClockSettings` rather than creating a self-pausing cutscene.
 
 ### Gameplay Pause Authority
+
+The implemented `CinematicRuntimeService::EvaluateClock` accepts a host-issued
+`SequenceClockSample` with an absolute source position, source epoch, rational
+gameplay scale, and suspension state. The service rejects mismatched domains,
+regressing positions, and malformed scales. Its per-player baseline advances only
+after a successful evaluation. Fractional scale remainder is retained between
+boundaries and retained across pause, suspension, and epoch rebases when the scale
+is unchanged. It resets when the scale changes. The host must submit a sample at
+every gameplay-scale change before advancing that source clock again; otherwise
+the service necessarily applies the newly observed scale to the entire elapsed
+interval since the prior sample. The first sample
+establishes a baseline; hosts must provide it before the first desired advancement.
+The older delta-oriented `Evaluate` remains the frame-core entry for tests and
+already-authorized callers; host compositions that need pause/dilation guarantees
+must use `EvaluateClock`.
+
+The host samples cumulative committed simulation time after successful fixed-tick
+commit and never includes failed or paused ticks. It samples the unscaled control
+clock in the service phase, even while gameplay is paused; wall and external
+sources likewise supply monotonic admitted positions. On host suspension, provider
+replacement, external seek, or discontinuity, the host supplies suspended evidence
+or a new epoch, and the service rebases without traversing skipped time. The host
+owns external-provider pause/rate/seek acknowledgement and must not report a new
+epoch until the provider confirms it. Host compositions also own the aggregate
+gameplay-pause authority and Runtime UI HUD suppression policy; their acquire
+callbacks return per-player owner tokens and their release callbacks remove only
+that token. They publish the resulting gameplay pause revision through
+`ResolveGameplayPause` at the same owner safe point before evaluation. A granted
+pause token holds the whole simulation domain. A granted HUD token suppresses only
+the selected HUD band/route generation and preserves other suppression owners.
+Headless hosts can provide a no-op HUD owner only when there is no HUD to suppress.
+
+An incoming gameplay pause holds `FollowGameplay` players and reports
+`HeldByGameplayPause`; `PlayerOnly` players report
+`ContinuedDuringGameplayPause` and keep consuming their own source clock. A newer
+unpause reports `Resumed` only for a player that was held. Repeated and stale
+authority revisions return typed `Unchanged` and `StaleAuthority` outcomes. Explicit
+player pause and host suspension still hold both policies. Terminal players reject
+late pause observations. Pause/HUD tokens are retained through explicit player
+pause, then released on natural completion, stop completion, cancellation, failure,
+shutdown, or service destruction; activation failure rolls back acquired tokens.
 
 `pauseGameplay` requests a scoped token from the host Runtime's gameplay pause
 authority; SequencePlayer never sets scheduler booleans directly. Tokens compose

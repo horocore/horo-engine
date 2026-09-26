@@ -85,6 +85,18 @@ sequence to the complete tick/world/scene/target/source key; no second legacy
 ordering authority remains. Consumers continue linking `HoroEngine::Physics`, and
 native solver identities or random providers are not exposed.
 
+## PHY-004.9 Query And Event Capability Boundary
+
+`HoroEngine::Physics` owns `Horo/Physics/PhysicsQueryEventCapability.h`.
+It introduces an owner-thread, world-generation-bound client interface over the
+existing immediate query descriptor and copied completed-tick event records.
+Existing direct `PhysicsWorld::Query` callers continue to compile; hosts that
+hand query/event access to another client should issue and revoke this capability
+and carry its exact publication identity. No gameplay host, module permission or
+solver header is introduced in the public include graph. The generated
+`HoroPhysicsPublicHeaderConsumer` compiles the new contract with only the Physics
+target's declared public dependencies.
+
 ## Build-Tree Contract
 
 `cmake/HoroPublicHeaderOwnership.cmake` assigns each public header to one real

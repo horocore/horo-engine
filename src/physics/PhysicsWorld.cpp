@@ -14,12 +14,12 @@ namespace Horo::Physics {
     namespace {
         /** @brief Runs the joined native step and translates callback diagnostics into world state. */
         [[nodiscard]] Result<Detail::CanonicalStepOutcome> StepCanonicalWorldForTick(auto &impl, const PhysicsFixedTickInput &input) {
-            impl.events.BeginTick(input.simulationTick);
-            const Detail::CanonicalContactSink contactSink{.context = &impl.events, .append = CaptureCanonicalContact};
+            impl.queryEvents.events.BeginTick(input.simulationTick);
+            const Detail::CanonicalContactSink contactSink{.context = &impl.queryEvents.events, .append = CaptureCanonicalContact};
             const auto stepped = Detail::StepCanonicalWorld(impl.native, static_cast<float>(impl.settings.Values().world.fixedDeltaSeconds),
                                                             input.simulationTick, contactSink);
             if (stepped.HasError()) {
-                impl.events.AbortTick();
+                impl.queryEvents.events.AbortTick();
                 impl.Fail(stepped.ErrorValue(), input.sceneGeneration, input.simulationTick);
                 return Result<Detail::CanonicalStepOutcome>::Failure(stepped.ErrorValue());
             }

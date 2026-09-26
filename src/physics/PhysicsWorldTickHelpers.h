@@ -222,12 +222,13 @@ namespace Horo::Physics::Detail {
     }
 
     [[nodiscard]] Result<PhysicsEventProjectionResult> CompleteEventProjection(auto &impl, const PhysicsFixedTickInput &input) {
-        const Result<PhysicsEventProjectionResult> result = impl.events.CompleteTick(input.simulationTick);
+        const Result<PhysicsEventProjectionResult> result = impl.queryEvents.events.CompleteTick(input.simulationTick);
         if (result.HasError()) {
-            impl.statistics.droppedEventCount = SaturatingAdd(impl.statistics.droppedEventCount, impl.events.DroppedRecordCount());
-            if (impl.events.DroppedRecordCount() != 0)
+            impl.statistics.droppedEventCount =
+                SaturatingAdd(impl.statistics.droppedEventCount, impl.queryEvents.events.DroppedRecordCount());
+            if (impl.queryEvents.events.DroppedRecordCount() != 0)
                 impl.RecordEventOverflowDiagnostic(input.sceneGeneration, input.simulationTick);
-            impl.events.AbortTick();
+            impl.queryEvents.events.AbortTick();
             return result;
         }
         impl.statistics.droppedEventCount = SaturatingAdd(impl.statistics.droppedEventCount, result.Value().droppedRecordCount);

@@ -233,6 +233,48 @@ jobs:
           SCCACHE_GHA_ENABLED: 'true'
           SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
 
+  cinematic-foundation-windows:
+    name: Cinematic Foundation · Windows / MSVC
+    runs-on: windows-2022
+    needs: [format]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+
+      - uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67
+
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.17.0
+
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: fetchcontent-cinematic-windows-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
+          restore-keys: fetchcontent-cinematic-windows-
+
+      - name: Build and test cinematic foundation contracts
+        shell: bash
+        run: |
+          cmake -S . -B build/cinematic-windows -G Ninja \
+            -DBUILD_TESTING=ON \
+            -DHORO_BUILD_EDITOR_GUI=OFF \
+            -DHORO_BUILD_RENDER_OPENGL=OFF \
+            -DHORO_ENABLE_OPENTELEMETRY=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+          cmake --build build/cinematic-windows --target HoroCinematicModelTests HoroCinematicRuntimeTests --parallel 2
+          ctest --test-dir build/cinematic-windows -R '^HoroCinematic(Model|Runtime)Tests::' --output-on-failure -j 2
+        env:
+          CC: cl
+          CXX: cl
+          FETCHCONTENT_BASE_DIR: ${{ github.workspace }}/.cmake/fetchcontent
+          SCCACHE_GHA_ENABLED: 'true'
+          SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
+
   navigation-compositions:
     name: Navigation Provider Compositions
     runs-on: ubuntu-24.04

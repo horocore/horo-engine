@@ -689,6 +689,17 @@ Cloud save is authenticated transport of opaque complete objects. It is not a
 replacement for the local save system and owns no local generation, archive parsing,
 lineage, merge, winner, retention or conflict policy.
 
+Implementation status for PLS-005.2: `PlatformCloudObjects.h` publishes the bounded
+provider-neutral metadata/list/read contract. Object keys, prefixes, cursors and
+provider revisions are distinct opaque value types; capability limits are validated
+against finite Horo ceilings before admission. List pages are session-tagged,
+strictly key-ordered and duplicate-free. Complete read evidence owns bounded bytes,
+requires an exact size and optional SHA-256 transport digest, and must pass the
+captured-subject/session-generation fence before it can be published. The existing
+`PlatformRequestHandle` lifecycle supplies cooperative cancellation and shutdown
+retirement; unsupported older providers return a typed capability failure rather than
+falling back to another provider or exposing a partial result.
+
 ```cpp
 struct CloudSaveObjectKey { BoundedOpaqueBytes value; };
 struct CloudSaveObjectPrefix { BoundedOpaqueBytes value; };
