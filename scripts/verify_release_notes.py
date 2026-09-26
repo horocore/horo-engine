@@ -2,13 +2,12 @@
 """Fail a published binary build when tag, product, body, and compiled notes diverge."""
 
 import argparse
+import http.client
 import json
 import os
 import re
 import sys
-from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import Request, urlopen
 from pathlib import Path
 
 from parse_changelog import NotesError, MAX_SNAPSHOT_BYTES, version_parts
@@ -47,15 +46,23 @@ def release_body(tag: str) -> str:
     if (len(parts) != 2 or not all(part and all(char.isascii() and
         (char.isalnum() or char in "._-") for char in part) for part in parts) or not token):
         raise NotesError("GITHUB_REPOSITORY and GH_TOKEN are required for release verification")
-    address = f"https://api.github.com/repos/{repository}/releases/tags/{quote(tag, safe='')}"
-    request = Request(address, headers={"Accept": "application/vnd.github+json",
-                                        "Authorization": f"Bearer {token}",
-                                        "User-Agent": "horo-release-notes-verifier"})
+    path = f"/repos/{repository}/releases/tags/{quote(tag, safe='')}"
+    connection = http.client.HTTPSConnection("api.github.com", timeout=30)
     try:
-        with urlopen(request, timeout=30) as response:
-            data = json.load(response)
-    except (HTTPError, URLError, ValueError) as error:
+        connection.request("GET", path, headers={"Accept": "application/vnd.github+json",
+                                                 "Authorization": f"Bearer {token}",
+                                                 "User-Agent": "horo-release-notes-verifier"})
+        response = connection.getresponse()
+        if response.status != 200:
+            raise NotesError(f"GitHub Release lookup failed with HTTP {response.status}")
+        body = response.read(131073)
+        if len(body) > 131072:
+            raise NotesError("GitHub Release response exceeds 128 KiB")
+        data = json.loads(body)
+    except (OSError, http.client.HTTPException, ValueError) as error:
         raise NotesError(f"cannot read GitHub Release for {tag}: {error}") from error
+    finally:
+        connection.close()
     if not isinstance(data, dict) or not isinstance(data.get("body"), str):
         raise NotesError(f"GitHub Release for {tag} has no reviewed body")
     return data["body"]

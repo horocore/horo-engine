@@ -119,20 +119,18 @@ class ReleaseNotesTests(unittest.TestCase):
                 verify_archive(snapshot, duplicate)
 
     def test_release_body_fetch_uses_bounded_authenticated_api_request(self):
-        class Response(io.BytesIO):
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_):
-                self.close()
-
-        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "horocore/horo-engine", "GH_TOKEN": "test-token"}):
-            with patch("verify_release_notes.urlopen", return_value=Response(b'{"body":"Reviewed"}')) as fetch:
+        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "horocore/horo-engine", "GH_TOKEN": str(id(self))}):
+            with patch("verify_release_notes.http.client.HTTPSConnection") as constructor:
+                connection = constructor.return_value
+                connection.getresponse.return_value.status = 200
+                connection.getresponse.return_value.read.return_value = b'{"body":"Reviewed"}'
                 self.assertEqual(release_body("v0.2.0"), "Reviewed")
-                request = fetch.call_args.args[0]
-                self.assertEqual(request.full_url,
-                                 "https://api.github.com/repos/horocore/horo-engine/releases/tags/v0.2.0")
-                self.assertEqual(fetch.call_args.kwargs["timeout"], 30)
+                constructor.assert_called_once_with("api.github.com", timeout=30)
+                self.assertEqual(connection.request.call_args.args[:2],
+                                 ("GET", "/repos/horocore/horo-engine/releases/tags/v0.2.0"))
+                self.assertEqual(connection.request.call_args.kwargs["headers"]["Accept"],
+                                 "application/vnd.github+json")
+                connection.close.assert_called_once()
 
 
 if __name__ == "__main__":
