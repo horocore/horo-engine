@@ -51,6 +51,7 @@ namespace Horo::Assets::CookErrors {
     extern const ErrorCodeDescriptor DependencyUnsupported;
     extern const ErrorCodeDescriptor SourceReadFailed;
     extern const ErrorCodeDescriptor OutputIdentityExhausted;
+    extern const ErrorCodeDescriptor OperationAdmissionFailed;
 }  // namespace Horo::Assets::CookErrors
 
 namespace Horo::Assets::ImportErrors {

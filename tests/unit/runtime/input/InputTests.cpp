@@ -62,6 +62,9 @@ namespace {
         REQUIRE((owner.cancelled == CaptureCancellationReason::ModalOpened));
         REQUIRE((!router.IsContextActive(workspace) && router.IsContextActive(modal) && !router.HasCapture()));
         modal.Reset();
+        REQUIRE_FALSE(router.IsContextActive(workspace));
+        collector.BeginFrame(2);
+        router.BeginFrame(collector.Commit());
         REQUIRE((router.IsContextActive(workspace)));
         auto firstWidget = router.PushContext(InputContextId{"widget.first"}, InputContextKind::FocusedGuiWidget);
         auto secondWidget = router.PushContext(InputContextId{"widget.second"}, InputContextKind::FocusedGuiWidget);
@@ -72,7 +75,7 @@ namespace {
         owner.cancelled.reset();
         auto escapeCapture = router.CapturePointer(firstWidget, PointerButton::Primary, owner);
         REQUIRE((escapeCapture.HasValue()));
-        collector.BeginFrame(2);
+        collector.BeginFrame(3);
         collector.SetKey(Key::Escape, true);
         router.BeginFrame(collector.Commit());
         REQUIRE((owner.cancelled == CaptureCancellationReason::Escape && !router.HasCapture()));
@@ -80,23 +83,23 @@ namespace {
         owner.cancelled.reset();
         auto deviceCapture = router.CapturePointer(firstWidget, PointerButton::Primary, owner);
         REQUIRE((deviceCapture.HasValue()));
-        collector.BeginFrame(3);
+        collector.BeginFrame(4);
         collector.SetWindowState({.focused = true, .pointerInside = true, .pointerDeviceAvailable = false});
         router.BeginFrame(collector.Commit());
         REQUIRE((owner.cancelled == CaptureCancellationReason::DeviceDisconnected && !router.HasCapture()));
 
         owner.cancelled.reset();
-        collector.BeginFrame(4);
+        collector.BeginFrame(5);
         collector.SetWindowState({.focused = true, .pointerInside = true, .pointerDeviceAvailable = true});
         router.BeginFrame(collector.Commit());
         auto focusCapture = router.CapturePointer(firstWidget, PointerButton::Primary, owner);
         REQUIRE((focusCapture.HasValue()));
-        collector.BeginFrame(5);
+        collector.BeginFrame(6);
         collector.SetWindowState({.focused = false, .pointerInside = true, .pointerDeviceAvailable = true});
         router.BeginFrame(collector.Commit());
         REQUIRE((owner.cancelled == CaptureCancellationReason::FocusLost && !router.HasCapture()));
 
-        collector.BeginFrame(6);
+        collector.BeginFrame(7);
         collector.SetWindowState({.focused = true, .pointerInside = true, .pointerDeviceAvailable = true});
         router.BeginFrame(collector.Commit());
         for (const CaptureCancellationReason reason : {CaptureCancellationReason::Explicit, CaptureCancellationReason::OwnerDestroyed}) {

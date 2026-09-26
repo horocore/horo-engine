@@ -172,6 +172,13 @@ namespace Horo::Input {
         bool active{false};
     };
 
+    /** @brief Text and pre-edit state delivered once to the explicitly focused text context. */
+    struct TextInputDelivery {
+        std::string committed;
+        TextCompositionState composition;
+        bool compositionChanged{false}; /**< Includes cancellation and completed composition. */
+    };
+
     /** @brief Slot plus session generation handle that rejects stale device access. */
     struct GamepadDeviceId {
         std::uint32_t slot{0};
@@ -203,6 +210,7 @@ namespace Horo::Input {
         std::vector<GamepadState> gamepads;
         std::string text;
         TextCompositionState composition{};
+        std::uint64_t compositionRevision{0}; /**< Advances on native pre-edit updates and cancellation. */
         ModifierState modifiers{};
         WindowInputState window{};
 
@@ -429,22 +437,33 @@ namespace Horo::Input {
     /** @brief Deterministic reason delivered when exclusive capture is cancelled. */
     enum class CaptureCancellationReason : std::uint8_t {
         Explicit,
+        Released,
         Escape,
         FocusLost,
         ModalOpened,
+        ContextPreempted,
         OwnerDestroyed,
         DeviceDisconnected,
         ContextRemoved,
     };
 
+    class InputRouter;
+
     /** @brief Narrow callback implemented by an interaction that owns capture. */
     class IInputCaptureOwner {
     public:
-        virtual ~IInputCaptureOwner() = default;
+        IInputCaptureOwner() = default;
+        virtual ~IInputCaptureOwner();
+        IInputCaptureOwner(const IInputCaptureOwner &) = delete;
+        IInputCaptureOwner &operator=(const IInputCaptureOwner &) = delete;
+        IInputCaptureOwner(IInputCaptureOwner &&) = delete;
+        IInputCaptureOwner &operator=(IInputCaptureOwner &&) = delete;
         virtual void OnInputCaptureCancelled(CaptureCancellationReason reason) noexcept = 0;
-    };
 
-    class InputRouter;
+    private:
+        friend class InputRouter;
+        InputRouter *capturingRouter_{nullptr};
+    };
 
     /** @brief Move-only RAII registration for one live routing context. */
     class InputContextToken {
@@ -498,6 +517,8 @@ namespace Horo::Input {
 
         /** @brief Installs the committed snapshot and clears per-frame consumption. */
         void BeginFrame(const RawInputSnapshot &snapshot);
+        /** @brief Cancels any capture still held after its initiating button release was delivered to handlers. */
+        void EndFrame() noexcept;
         /** @brief Registers a context until the returned move-only token is destroyed. */
         [[nodiscard]] InputContextToken PushContext(InputContextId id, InputContextKind kind);
         /** @brief Acquires exclusive pointer capture for the currently eligible context. */
@@ -511,6 +532,22 @@ namespace Horo::Input {
         [[nodiscard]] bool HasHigherPriorityContext(InputContextKind kind) const noexcept;
         /** @brief Reports whether this token is the highest-priority, most-recent eligible context. */
         [[nodiscard]] bool IsContextActive(const InputContextToken &context) const noexcept;
+        /**
+         * @brief Grants text focus to one eligible GUI, modal, or native-dialog context.
+         * @param context Exact live context owning the focused text surface.
+         * @return False for inactive or non-text contexts; otherwise true. A focus transfer discards
+         *         already-collected text and pre-edit for the current frame.
+         */
+        [[nodiscard]] bool FocusText(const InputContextToken &context) noexcept;
+        /** @brief Releases text focus only if @p context still owns it. */
+        void BlurText(const InputContextToken &context) noexcept;
+        /**
+         * @brief Takes this frame's committed text and current pre-edit at most once for the focus owner.
+         * @param context Exact context previously passed to FocusText.
+         * @return No delivery for an inactive, unfocused, preempted, or already-served context.
+         *         Pre-edit from an earlier focus owner is never transferred.
+         */
+        [[nodiscard]] std::optional<TextInputDelivery> TakeText(const InputContextToken &context);
         /** @brief Returns the current committed snapshot, or an empty snapshot before the first frame. */
         [[nodiscard]] const RawInputSnapshot &Snapshot() const noexcept;
         /** @brief Atomically validates and replaces action descriptors and the active profile. */
@@ -536,10 +573,12 @@ namespace Horo::Input {
         [[nodiscard]] std::optional<PlayerId> PlayerForGamepad(GamepadDeviceId gamepad) const noexcept;
 
     private:
+        friend class IInputCaptureOwner;
         friend class InputContextToken;
         friend class PointerCaptureToken;
         void RemoveContext(std::uint64_t token) noexcept;
         void ReleaseCapture(std::uint64_t token) noexcept;
+        void OnCaptureOwnerDestroyed(const IInputCaptureOwner *owner) noexcept;
         [[nodiscard]] bool TokenActive(std::uint64_t token) const noexcept;
         [[nodiscard]] bool CaptureActive(std::uint64_t token) const noexcept;
         struct Impl;

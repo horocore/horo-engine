@@ -56,6 +56,7 @@ add_library(HoroCliHost STATIC
         cli/CliCommandRegistry.cpp
         cli/CliCommonOptions.cpp
         cli/CliDispatcher.cpp
+        cli/CliExecutionLifecycle.cpp
         cli/CliErrors.cpp
         cli/CliOptionParser.cpp
 )
@@ -65,6 +66,17 @@ target_link_libraries(HoroCliHost
         PUBLIC HoroEngine::Foundation
         PRIVATE nlohmann_json::nlohmann_json
 )
+
+add_library(HoroMcpSession STATIC
+        mcp/McpErrors.cpp
+        mcp/McpJsonBounds.cpp
+        mcp/McpSession.cpp
+        mcp/McpInProcessAdapter.cpp
+        mcp/McpLocalTransport.cpp
+)
+add_library(HoroEngine::McpSession ALIAS HoroMcpSession)
+target_compile_features(HoroMcpSession PUBLIC cxx_std_20)
+target_link_libraries(HoroMcpSession PUBLIC HoroEngine::Foundation nlohmann_json::nlohmann_json)
 
 if (HORO_ENABLE_OPENTELEMETRY)
     add_library(HoroOpenTelemetry STATIC
@@ -185,6 +197,7 @@ add_library(HoroApplication STATIC
         application/release/DistributionModel.cpp
         application/release/ReleaseErrors.cpp
         application/release/ReleaseProfile.cpp
+        application/release/ReleasePreflight.cpp
         application/release/ReleaseVersion.cpp
 )
 add_library(HoroEngine::Application ALIAS HoroApplication)
@@ -270,13 +283,20 @@ add_library(HoroNetworkApi STATIC
         runtime/networking/api/MessageCodecRegistry.cpp
         runtime/networking/api/NetworkAddress.cpp
         runtime/networking/api/NetworkErrors.cpp
+        runtime/networking/api/NetworkTransportErrors.cpp
         runtime/networking/api/NetworkFailure.cpp
         runtime/networking/api/NetworkIoService.cpp
         runtime/networking/api/NetworkLifecycle.cpp
+        runtime/networking/api/NetworkMetrics.cpp
+        runtime/networking/api/NetworkMetricTelemetry.cpp
+        runtime/networking/api/NetworkMetricTransport.cpp
         runtime/networking/api/NetworkObjectIdentity.cpp
         runtime/networking/api/NetworkProjectSettings.cpp
         runtime/networking/api/NetworkProjectSettingsSchema.cpp
         runtime/networking/api/NetworkProjectSettingsErrors.cpp
+        runtime/networking/api/NetworkTargetCapabilities.cpp
+        runtime/networking/api/NetworkTargetManifest.cpp
+        runtime/networking/api/NetworkTargetManifestErrors.cpp
         runtime/networking/api/PacketBuffer.cpp
         runtime/networking/api/PacketQueue.cpp
         runtime/networking/api/ProtocolIdentityRegistry.cpp
@@ -304,6 +324,27 @@ add_library(HoroNetworkTransportNull STATIC
 add_library(HoroEngine::NetworkTransportNull ALIAS HoroNetworkTransportNull)
 target_compile_features(HoroNetworkTransportNull PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
+
+if(HORO_BUILD_NETWORK_GNS)
+    add_library(HoroNetworkTransportGNSFactoryInternal INTERFACE)
+    target_include_directories(HoroNetworkTransportGNSFactoryInternal INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/networking/gns/factory>)
+    target_link_libraries(HoroNetworkTransportGNSFactoryInternal INTERFACE HoroEngine::NetworkApi)
+    add_library(HoroNetworkTransportGNS STATIC
+        runtime/networking/gns/GnsAddressResolution.h
+        runtime/networking/gns/GnsAddressResolution.cpp
+        runtime/networking/gns/factory/GnsTransportFactory.h
+        runtime/networking/gns/GnsTransportInternal.h
+        runtime/networking/gns/GnsTransport.cpp
+        runtime/networking/gns/GnsTransportPackets.cpp
+        runtime/networking/gns/GnsTransportDiagnostics.cpp
+    )
+    add_library(HoroEngine::NetworkTransportGNS ALIAS HoroNetworkTransportGNS)
+    target_compile_features(HoroNetworkTransportGNS PUBLIC cxx_std_20)
+    target_compile_definitions(HoroNetworkTransportGNS PRIVATE $<$<PLATFORM_ID:Windows>:NOMINMAX>)
+    target_link_libraries(HoroNetworkTransportGNS PUBLIC HoroNetworkTransportGNSFactoryInternal
+        PRIVATE GameNetworkingSockets::static c-ares::cares)
+endif()
 
 add_library(HoroRuntimeUi STATIC
         runtime/ui/UiAssetDependencyInternal.h
@@ -442,9 +483,12 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::Foundation HoroEngine:
 
 add_library(HoroNetworkRuntime STATIC
         runtime/networking/TransportBackendComposition.cpp
+        runtime/networking/TransportTargetComposition.cpp
+        runtime/networking/NetworkDiagnostics.cpp
         runtime/networking/AuthenticationSessionAdapter.cpp
         runtime/networking/HandshakeNegotiation.cpp
         runtime/networking/NetworkObjectMapping.cpp
+        runtime/networking/NetworkTickAlignment.cpp
         runtime/networking/PeerSessionLifecycle.cpp
         runtime/networking/ReplicationWorldLifecycle.cpp
 )
@@ -487,6 +531,8 @@ add_library(HoroGameplayLua STATIC
 
 add_library(HoroGameplayBuild STATIC
         application/gameplay/CompilerDiagnosticParser.cpp
+        application/gameplay/GameplayBuildInputs.cpp
+        application/gameplay/GameplayBuildInvocation.cpp
         application/gameplay/GameplayBuildService.cpp
 )
 add_library(HoroEngine::GameplayBuild ALIAS HoroGameplayBuild)
@@ -742,8 +788,13 @@ add_library(HoroAI STATIC
         runtime/ai/api/BlackboardSchema.cpp
         runtime/ai/api/DecisionAssetPlan.cpp
         runtime/ai/api/DecisionAssetValidation.cpp
+        runtime/ai/api/EnvironmentQueryAsset.cpp
+        runtime/ai/api/EnvironmentQueryErrors.cpp
+        runtime/ai/api/EnvironmentQueryRegistry.cpp
         runtime/ai/api/NullAIRuntime.cpp
         runtime/ai/api/PerceptionDescriptorRegistry.cpp
+        runtime/ai/api/PerceptionErrors.cpp
+        runtime/ai/api/PerceptionMemory.cpp
 )
 add_library(HoroEngine::AI ALIAS HoroAI)
 target_compile_features(HoroAI PUBLIC cxx_std_20)
@@ -752,7 +803,8 @@ target_link_libraries(HoroAI PUBLIC HoroEngine::Foundation)
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::AI)
 
 add_library(HoroAISceneIntegration STATIC
-        runtime/ai/integration/AISceneActivation.cpp)
+        runtime/ai/integration/AISceneActivation.cpp
+        runtime/ai/integration/AIScenePerceptionSource.cpp)
 add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
 target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroAISceneIntegration PUBLIC HoroEngine::AI HoroEngine::RuntimeScene)
@@ -772,6 +824,7 @@ target_compile_features(HoroAnimationApi PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
 add_library(HoroPCG STATIC
+        runtime/pcg/api/PCGCookedPlan.cpp
         runtime/pcg/api/PCGErrors.cpp
         runtime/pcg/api/PCGGenerationPlan.cpp
         runtime/pcg/api/PCGGraphAsset.cpp
@@ -780,8 +833,11 @@ add_library(HoroPCG STATIC
         runtime/pcg/api/PCGGraphValidation.cpp
         runtime/pcg/api/PCGIdentity.cpp
         runtime/pcg/api/PCGPointSchema.cpp
+        runtime/pcg/api/PCGPointCloudWorkspace.cpp
+        runtime/pcg/api/PCGProvenance.cpp
         runtime/pcg/api/PCGSpatialSnapshot.cpp
         runtime/pcg/api/PCGRegistry.cpp
+        runtime/pcg/api/PCGAsyncOperation.cpp
 )
 add_library(HoroEngine::PCG ALIAS HoroPCG)
 target_compile_features(HoroPCG PUBLIC cxx_std_20)
@@ -817,6 +873,13 @@ add_library(HoroDestructionApi STATIC
 add_library(HoroEngine::DestructionApi ALIAS HoroDestructionApi)
 target_compile_features(HoroDestructionApi PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
+
+add_library(HoroDestructionRuntime STATIC
+        runtime/destruction/runtime/DestructionDamageRuntime.cpp
+)
+add_library(HoroEngine::DestructionRuntime ALIAS HoroDestructionRuntime)
+target_compile_features(HoroDestructionRuntime PUBLIC cxx_std_20)
+target_link_libraries(HoroDestructionRuntime PUBLIC HoroEngine::DestructionApi)
 
 add_library(HoroCinematicModel STATIC
         runtime/cinematic/model/CurveSampling.cpp
@@ -875,10 +938,14 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::NavigationApi)
 
 add_library(HoroNavigationRuntime STATIC
         runtime/navigation/runtime/NavigationBakeJobs.cpp
+        runtime/navigation/runtime/NavigationCrowdSnapshot.cpp
+        runtime/navigation/runtime/NavigationCrowdSnapshotGather.cpp
+        runtime/navigation/runtime/NavigationCrowdSnapshotPartition.cpp
         runtime/navigation/runtime/NavigationDynamicRegistry.cpp
         runtime/navigation/runtime/NavigationDynamicRegistryCommit.cpp
         runtime/navigation/runtime/NavigationDynamicRegistrySnapshot.cpp
         runtime/navigation/runtime/NavigationAgentRegistry.cpp
+        runtime/navigation/runtime/NavigationPathPolicy.cpp
         runtime/navigation/runtime/NavigationRuntimeQueues.cpp
         runtime/navigation/runtime/NavigationWorldLifecycle.cpp
 )
@@ -907,6 +974,7 @@ target_link_libraries(HoroXRApi PUBLIC HoroEngine::Foundation HoroEngine::Render
 
 add_library(HoroTerrainApi STATIC
         runtime/terrain/api/FoliageDefinition.cpp
+        runtime/terrain/api/TerrainComposition.cpp
         runtime/terrain/api/TerrainDescriptor.cpp
         runtime/terrain/api/TerrainErrors.cpp
         runtime/terrain/api/TerrainFoliageRegistry.cpp
@@ -925,6 +993,12 @@ add_library(HoroEngine::TerrainImport ALIAS HoroTerrainImport)
 target_compile_features(HoroTerrainImport PUBLIC cxx_std_20)
 target_include_directories(HoroTerrainImport PRIVATE ${PROJECT_SOURCE_DIR}/vendor/stb)
 target_link_libraries(HoroTerrainImport PUBLIC HoroEngine::TerrainApi HoroEngine::Assets)
+add_library(HoroTerrainRuntime STATIC
+        runtime/terrain/runtime/TerrainAsyncJobs.cpp
+)
+add_library(HoroEngine::TerrainRuntime ALIAS HoroTerrainRuntime)
+target_compile_features(HoroTerrainRuntime PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainRuntime PUBLIC HoroEngine::TerrainApi HoroEngine::Foundation)
 
 add_library(HoroNavigationNull STATIC
         runtime/navigation/backends/null/NullProvider.cpp
@@ -1051,6 +1125,15 @@ add_library(HoroEngine::Input ALIAS HoroInput)
 target_compile_features(HoroInput PUBLIC cxx_std_20)
 target_include_directories(HoroInput PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(HoroInput PUBLIC HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
+
+# Host-facing bridge: Input remains independent of Runtime UI, and Runtime UI
+# retains its Foundation/Assets-only contract.
+add_library(HoroRuntimeUiInput STATIC
+        runtime/ui/input/UiTextInputAdapter.cpp
+)
+add_library(HoroEngine::RuntimeUiInput ALIAS HoroRuntimeUiInput)
+target_compile_features(HoroRuntimeUiInput PUBLIC cxx_std_20)
+target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::RuntimeUi)
 
 add_library(HoroRenderApi STATIC
         runtime/renderer/api/MotionHistory.cpp
@@ -1509,7 +1592,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_OPENGL)
 
 endif ()
 
-if (HORO_BUILD_EDITOR_GUI)
+if (HORO_BUILD_INPUT_SDL3)
     add_library(HoroInputSdl STATIC
             runtime/input/sdl/SdlInputBackend.cpp
     )
@@ -1517,7 +1600,9 @@ if (HORO_BUILD_EDITOR_GUI)
     target_compile_features(HoroInputSdl PUBLIC cxx_std_20)
     target_include_directories(HoroInputSdl PUBLIC ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
     target_link_libraries(HoroInputSdl PUBLIC HoroEngine::Input PRIVATE ${HORO_SDL3_TARGET})
+endif ()
 
+if (HORO_BUILD_EDITOR_GUI)
     add_library(HoroGui STATIC
             editor/design_system/components/EditorUiComponents.cpp
             editor/design_system/icons/EditorIcons.cpp
@@ -1573,6 +1658,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserToolbar.cpp
             editor/screens/workspace/panels/global_dock/panes/audio/GlobalDockAudioPane.cpp
             editor/screens/workspace/panels/global_dock/panes/build_output/GlobalDockBuildOutputPane.cpp
+            editor/screens/workspace/panels/global_dock/panes/build_output/GlobalDockBuildOutputPaneToolbar.cpp
             editor/screens/workspace/panels/global_dock/panes/console/GlobalDockConsolePane.cpp
             editor/screens/workspace/panels/global_dock/panes/mcp/GlobalDockMcpPane.cpp
             editor/screens/workspace/panels/global_dock/panes/network/GlobalDockNetworkPane.cpp

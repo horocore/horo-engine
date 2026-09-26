@@ -217,6 +217,35 @@ bindings. Active text widgets consume editing commands before global shortcuts.
 IME composition is owned by the focused text surface and is cancelled or
 committed according to platform policy when focus scope changes.
 
+The Input router grants text focus to one eligible GUI, modal, or native-dialog
+context. Committed text is taken at most once in its collection frame; a context
+without text focus, including gameplay, cannot take it. A text-focus transfer,
+context destruction, window-focus loss, or modal preemption cancels the old
+pre-edit and discards already-collected committed text for that frame. Pre-edit
+is never copied to the new owner: only a subsequent native composition update
+can establish it there. A native commit clears the previous pre-edit. The raw
+snapshot remains immutable evidence, not permission to deliver text to a widget.
+
+SDL hosts that own their own text surfaces start native text input and update its
+candidate area in logical window coordinates through `SdlInputBackend`; they stop
+it when focus leaves that window. The SDL collector is bound to one exact window
+ID and discards keyboard, pointer, text, and focus events from other windows.
+HoroEditor's ImGui SDL adapter already owns
+those native start/stop and candidate-position hooks for editor fields, so the
+editor does not also invoke the Input SDL hook on the same window. The editor
+forwards all non-committed-text SDL events to ImGui unchanged; committed text
+enters ImGui once from the bounded Input snapshot, where ImGui selects its
+focused editor field.
+
+The target-private `HoroRuntimeUiInput` adapter is the downstream composition
+seam for Runtime UI text controls: it requires both the router's exact text-focus
+context and an exact `UiActionSource`, then passes committed text to the focused
+`UiControlStateMachine` only. It exposes pre-edit evidence to its caller without
+pretending that the control model owns native candidate presentation. No packaged
+Runtime UI host is currently composed; a future host must bind this seam to its
+presented focus, modal transitions, native text-input lifecycle, and candidate
+geometry rather than bypassing Input or adding an Input-to-RuntimeUi dependency.
+
 ## Gameplay Input Frames
 
 The runtime transforms action state into a simulation input frame:
@@ -573,6 +602,27 @@ inversion only, and directs binding edits to this panel so there is no second
 string-based shortcut authority.
 
 ## Testing
+
+### INP-001.3 Context, Focus, Capture, and Modal Evidence
+
+The editor router admits exactly one highest-priority, most-recent context for
+keyboard focus and pointer acquisition at a time. The Runtime UI focus graph
+retains one target per exact player/presentation scope, so a modal in one
+split-screen scope does not overwrite another player's focus. There is no
+process-global focus pointer. A modal's router token and the editor screen
+host's disabled presentation/menu gate block workspace handlers before
+dispatch; gameplay action reads are neutral while their context is ineligible.
+
+| Acceptance criterion | Executable evidence |
+|---|---|
+| Modal/native-dialog transitions never reach lower contexts, including open/close frames | `InputContextTests`, `EditorModalHostTests`, `GuiScreenHostLifecycleTests` |
+| One eligible focus/capture owner and owner/context destruction safety | `InputContextTests`, `UiFocusGraphTests` |
+| Release, Escape, focus/device loss, modal open, preemption, owner removal, context removal, and explicit cancellation | `InputTests`, `InputContextTests`, `ViewportPanelRenderTests` |
+| Workspace gesture cancelled before modal `OnOpen` | `EditorModalHostTests`, `ViewportPanelRenderTests` |
+
+The PR's current-head [GitHub checks](https://github.com/horocore/horo-engine/pulls?q=is%3Apr+HORO-1792)
+provide Linux/macOS/Windows and hosted quality-gate evidence; this document
+does not assert a platform result before those checks complete.
 
 Required tests cover:
 

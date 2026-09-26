@@ -20,6 +20,8 @@
 #include <vector>
 
 namespace Horo::Network {
+    class NetworkMetrics;
+
     namespace Detail {
         struct ReplicationWorldRecord;
     }
@@ -183,8 +185,13 @@ namespace Horo::Network {
         ReplicationWorldLifecycle &operator=(ReplicationWorldLifecycle &&) = delete;
         ~ReplicationWorldLifecycle();
 
-        /** @brief Creates an empty lifecycle with prepared finite retirement/object bounds. */
-        [[nodiscard]] static Result<ReplicationWorldLifecycle> Create(ReplicationWorldLimits limits = {});
+        /** @brief Creates an empty lifecycle with prepared bounds and optional owner-thread metrics observer.
+         * @param limits Finite retirement/object capacity.
+         * @param metrics Borrowed observer kept alive until this lifecycle is destroyed.
+         * @return Prepared lifecycle or typed capacity/invalid error.
+         */
+        [[nodiscard]] static Result<ReplicationWorldLifecycle> Create(ReplicationWorldLimits limits = {},
+                                                                      NetworkMetrics *metrics = nullptr);
 
         /** @brief Stages a complete world candidate without changing the active world. */
         [[nodiscard]] Result<void> Stage(const ReplicationWorldActivationDescriptor &descriptor,
@@ -231,8 +238,8 @@ namespace Horo::Network {
         [[nodiscard]] bool HasStagedCandidate() const noexcept;
 
     private:
-        ReplicationWorldLifecycle(ReplicationWorldLimits limits,
-                                  std::vector<std::shared_ptr<Detail::ReplicationWorldRecord>> retired) noexcept;
+        ReplicationWorldLifecycle(ReplicationWorldLimits limits, std::vector<std::shared_ptr<Detail::ReplicationWorldRecord>> retired,
+                                  NetworkMetrics *metrics) noexcept;
         [[nodiscard]] bool CanRetireActive() const noexcept;
         [[nodiscard]] Result<ReplicationWorldReadLease> AcquireInternal(const ReplicationWorldWorkRequest &request,
                                                                         const ReplicationWorldCapability *capability) const;
@@ -246,5 +253,6 @@ namespace Horo::Network {
         std::shared_ptr<Detail::ReplicationWorldRecord> active_;
         std::vector<std::shared_ptr<Detail::ReplicationWorldRecord>> retired_;
         ReplicationWorldLifecycleState state_{ReplicationWorldLifecycleState::Empty};
+        NetworkMetrics *metrics_{};
     };
 }  // namespace Horo::Network

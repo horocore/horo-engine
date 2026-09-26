@@ -518,6 +518,42 @@ namespace Horo::Network::NetworkErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor NetworkClockInvalid{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.clock.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The fixed-tick alignment policy, sample, or advance order is invalid.",
+        .remediationHint = "Use committed consecutive local ticks and bounded in-order fixed-tick samples.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor NetworkClockSampleStale{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.clock.sample_stale"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The fixed-tick sample belongs to an older session, epoch, sequence, or server tick.",
+        .remediationHint = "Discard the sample and request a new measurement for the current connection and clock epoch.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor NetworkClockUnavailable{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.clock.unavailable"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The session's fixed-tick mapping is not ready or is frozen.",
+        .remediationHint = "Wait for an accepted current-epoch sample or resume the owner clock before assigning ticks.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor NetworkClockOverflow{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.clock.overflow"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A fixed-tick or clock epoch cannot advance without wrapping.",
+        .remediationHint = "Retire the exhausted session mapper instead of wrapping a tick or epoch.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor ProtocolIdentityDescriptorInvalid{
         .domain = NetworkDomain,
         .code = ErrorCode{"network.protocol.identity_descriptor_invalid"},

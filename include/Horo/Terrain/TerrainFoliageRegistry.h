@@ -43,6 +43,8 @@ namespace Horo::Terrain {
         CpuCulling,
         GpuIndirectCulling,
         VertexWind,
+        TerrainAuthoring,
+        FoliageAuthoring,
         Count,
     };
     static_assert(static_cast<std::uint8_t>(TerrainFoliageCapability::Count) <= 32);
