@@ -7,6 +7,16 @@ namespace Horo::Network {
     namespace {
         using enum NetworkTargetCapabilityKind;
         using enum NetworkTargetFailureReason;
+        // Both failure and remediation define None; import only the used remediations.
+        using NetworkTargetRemediation::ChooseSupportedHost;
+        using NetworkTargetRemediation::ConfigureProject;
+        using NetworkTargetRemediation::CorrectInput;
+        using NetworkTargetRemediation::InstallTarget;
+        using NetworkTargetRemediation::RebuildPackage;
+        using NetworkTargetRemediation::RefreshSnapshot;
+        using NetworkTargetRemediation::SelectAvailableCapability;
+        using NetworkTargetRemediation::UpgradeProtocol;
+        using NetworkTargetRemediation::WaitForRestart;
 
         constexpr auto AllRoles = static_cast<std::uint32_t>(NetworkProjectRoleSet::Standalone | NetworkProjectRoleSet::Client |
                                                              NetworkProjectRoleSet::ListenServer | NetworkProjectRoleSet::DedicatedServer);
@@ -190,7 +200,6 @@ namespace Horo::Network {
 
         Rejection CheckPackageInventory(const NetworkTargetAssessment &assessment, const NetworkProductCapabilityManifest &product,
                                         const NetworkTargetPackageInventory &inventory) {
-            using enum NetworkTargetRemediation;
             if (inventory.build != product.build)
                 return Reject(assessment, {PackageInventory, PackageMismatch, RebuildPackage});
             if (inventory.platform != product.platform)
@@ -221,7 +230,6 @@ namespace Horo::Network {
         Rejection CheckPublication(const NetworkTargetAssessment &assessment, const NetworkProjectSettings &project,
                                    const NetworkProductCapabilityManifest &product, const NetworkTargetPackageInventory &inventory,
                                    const NetworkTargetHostFacts &host, const NetworkTargetSelection &selection) {
-            using enum NetworkTargetRemediation;
             if (selection.lifecycle != NetworkTargetLifecycle::Active)
                 return Reject(assessment, {Lifecycle, selection.lifecycle == NetworkTargetLifecycle::Cancelling ? Cancelled : ShuttingDown,
                                            WaitForRestart});
@@ -241,7 +249,6 @@ namespace Horo::Network {
         Rejection CheckRequirements(const NetworkTargetAssessment &assessment, const NetworkProjectSettings &project,
                                     const NetworkProductCapabilityManifest &product, const NetworkTargetHostFacts &host,
                                     const NetworkTargetRequirements &requirements) {
-            using enum NetworkTargetRemediation;
             for (const auto &role : assessment.matrix.roles) {
                 if (!role.projectRequired)
                     continue;
@@ -270,7 +277,6 @@ namespace Horo::Network {
         Rejection CheckSelectedRole(const NetworkTargetAssessment &assessment, const NetworkProjectSettings &project,
                                     const NetworkProductCapabilityManifest &product, const NetworkTargetHostFacts &host,
                                     const NetworkTargetSelection &selection) {
-            using enum NetworkTargetRemediation;
             const auto role = selection.role;
             if (!ContainsNetworkProjectRole(project.SupportedRoles(), role))
                 return Reject(assessment, {Role, ProjectUnavailable, ConfigureProject, role});
@@ -284,7 +290,6 @@ namespace Horo::Network {
         Rejection CheckSelectedTransport(const NetworkTargetAssessment &assessment, const NetworkProjectSettings &project,
                                          const NetworkProductCapabilityManifest &product, const NetworkTargetHostFacts &host,
                                          const NetworkTargetSelection &selection) {
-            using enum NetworkTargetRemediation;
             const auto role = selection.role;
             const auto *packaged = FindProduct(product, selection.provider);
             if (!packaged)
@@ -308,7 +313,6 @@ namespace Horo::Network {
         Rejection CheckSelectedProtocol(const NetworkTargetAssessment &assessment, const NetworkProjectSettings &project,
                                         const NetworkProductCapabilityManifest &product, const NetworkTargetHostFacts &host,
                                         const NetworkTargetSelection &selection) {
-            using enum NetworkTargetRemediation;
             if (!SameProtocol(project.Protocol(), product.protocol, selection.protocolVersion))
                 return Reject(assessment,
                               {Protocol, Incompatible, RebuildPackage, selection.role, selection.provider, project.Protocol().protocol});
@@ -329,7 +333,6 @@ namespace Horo::Network {
     NetworkTargetAssessment AssessNetworkTarget(const NetworkProjectSettings &project, const NetworkProductCapabilityManifest &product,
                                                 const NetworkTargetPackageInventory &inventory, const NetworkTargetHostFacts &host,
                                                 const NetworkTargetRequirements &requirements, const NetworkTargetSelection &selection) {
-        using enum NetworkTargetRemediation;
         NetworkTargetAssessment assessment{};
         if (!ValidManifest(product) || !ValidInventory(inventory) || !ValidHost(host) || !ValidRoles(requirements.requiredRoles) ||
             selection.role >= NetworkProjectRole::Count || selection.lifecycle >= NetworkTargetLifecycle::Count)
