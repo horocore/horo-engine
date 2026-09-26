@@ -1170,9 +1170,15 @@ namespace Horo::Input {
         capturedFrame_ = snapshot.frame;
         hasCapturedFrame_ = true;
         if (!snapshot.window.focused || !router.IsContextActive(context)) {
-            moveX_ = moveY_ = lookX_ = lookY_ = 0.0F;
-            pendingJump_ = pendingInteract_ = false;
-            moveDown_ = pendingMovePressed_ = pendingMoveReleased_ = false;
+            moveX_ = 0.0F;
+            moveY_ = 0.0F;
+            lookX_ = 0.0F;
+            lookY_ = 0.0F;
+            pendingJump_ = false;
+            pendingInteract_ = false;
+            moveDown_ = false;
+            pendingMovePressed_ = false;
+            pendingMoveReleased_ = false;
             return;
         }
         const ActionValue move = router.ReadAction(context, move_, player);
@@ -1207,9 +1213,15 @@ namespace Horo::Input {
     /** @copydoc GameplayInputFrameBuilder::Reset */
     void GameplayInputFrameBuilder::Reset() noexcept {
         hasCapturedFrame_ = false;
-        moveX_ = moveY_ = lookX_ = lookY_ = 0.0F;
-        pendingJump_ = pendingInteract_ = false;
-        moveDown_ = pendingMovePressed_ = pendingMoveReleased_ = false;
+        moveX_ = 0.0F;
+        moveY_ = 0.0F;
+        lookX_ = 0.0F;
+        lookY_ = 0.0F;
+        pendingJump_ = false;
+        pendingInteract_ = false;
+        moveDown_ = false;
+        pendingMovePressed_ = false;
+        pendingMoveReleased_ = false;
     }
 
     void GameplayInputRecording::Record(const GameplayInputFrame &frame) {
