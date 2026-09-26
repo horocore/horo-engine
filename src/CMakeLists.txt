@@ -295,6 +295,16 @@ add_library(HoroEngine::NetworkTransportNull ALIAS HoroNetworkTransportNull)
 target_compile_features(HoroNetworkTransportNull PUBLIC cxx_std_20)
 target_link_libraries(HoroNetworkTransportNull PUBLIC HoroEngine::NetworkApi)
 
+if(HORO_BUILD_NETWORK_GNS)
+    add_library(HoroNetworkTransportGNS STATIC
+        runtime/networking/gns/GnsTransport.cpp
+    )
+    add_library(HoroEngine::NetworkTransportGNS ALIAS HoroNetworkTransportGNS)
+    target_compile_features(HoroNetworkTransportGNS PUBLIC cxx_std_20)
+    target_link_libraries(HoroNetworkTransportGNS PUBLIC HoroEngine::NetworkApi
+        PRIVATE GameNetworkingSockets::static)
+endif()
+
 add_library(HoroRuntimeUi STATIC
         runtime/ui/UiAssetDependencyInternal.h
         runtime/ui/UiErrors.cpp

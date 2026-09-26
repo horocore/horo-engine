@@ -1,0 +1,114 @@
+name: Network GNS
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/ci-network-gns.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/Dependencies.cmake'
+      - 'cmake/HoroGnsProtobufConfig.cmake'
+      - 'cmake/HoroPublicHeaderOwnership.cmake'
+      - 'cmake/HoroDependencyPolicy.cmake'
+      - 'include/Horo/Network/**'
+      - 'src/runtime/networking/**'
+      - 'src/CMakeLists.txt'
+      - 'tests/unit/runtime/networking/**'
+      - 'tests/CMakeLists.txt'
+  pull_request:
+    paths:
+      - '.github/workflows/ci-network-gns.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/Dependencies.cmake'
+      - 'cmake/HoroGnsProtobufConfig.cmake'
+      - 'cmake/HoroPublicHeaderOwnership.cmake'
+      - 'cmake/HoroDependencyPolicy.cmake'
+      - 'include/Horo/Network/**'
+      - 'src/runtime/networking/**'
+      - 'src/CMakeLists.txt'
+      - 'tests/unit/runtime/networking/**'
+      - 'tests/CMakeLists.txt'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  disabled-graph:
+    name: Network disabled · no production dependency
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Configure headless network-disabled composition
+        run: |
+          cmake -S . -B build/network-disabled -G Ninja \
+            -DBUILD_TESTING=OFF \
+            -DHORO_BUILD_NETWORK_GNS=OFF \
+            -DHORO_BUILD_EDITOR_GUI=OFF \
+            -DHORO_BUILD_RENDER_OPENGL=OFF \
+            -DHORO_BUILD_AUDIO_SDL3=OFF \
+            -DHORO_BUILD_PHYSICS_NATIVE=OFF \
+            -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF \
+            -DHORO_BUILD_EXAMPLES=OFF
+      - name: Assert GNS and protobuf absent from target graph and FetchContent
+        run: |
+          if ninja -C build/network-disabled -t targets all | grep -E 'HoroNetworkTransportGNS|GameNetworkingSockets_s|libprotobuf|(^|/)protoc:'; then
+            echo 'Production transport or protobuf unexpectedly present in disabled graph' >&2
+            exit 1
+          fi
+          test ! -e build/network-disabled/_deps/horo_gns-src
+          test ! -e build/network-disabled/_deps/horo_protobuf-src
+
+  focused:
+    name: Network GNS · ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux / GCC
+            runner: ubuntu-24.04
+          - name: macOS / Clang
+            runner: macos-latest
+          - name: Windows / MSVC
+            runner: windows-2022
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Install Linux crypto headers and Ninja
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libssl-dev ninja-build
+      - name: Install macOS crypto headers and Ninja
+        if: runner.os == 'macOS'
+        run: brew install openssl@3 ninja
+      - name: Setup MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+      - name: Setup Ninja on Windows
+        if: runner.os == 'Windows'
+        uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67
+      - name: Configure optional production transport
+        shell: bash
+        run: |
+          crypto_args=()
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            crypto_args=(-DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)")
+          fi
+          cmake -S . -B build/network-gns -G Ninja \
+            -DBUILD_TESTING=ON \
+            -DHORO_BUILD_NETWORK_GNS=ON \
+            -DHORO_BUILD_EDITOR_GUI=OFF \
+            -DHORO_BUILD_RENDER_OPENGL=OFF \
+            -DHORO_BUILD_AUDIO_SDL3=OFF \
+            -DHORO_BUILD_PHYSICS_NATIVE=OFF \
+            -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF \
+            -DHORO_BUILD_EXAMPLES=OFF \
+            "${crypto_args[@]}"
+      - name: Build focused production transport tests
+        shell: bash
+        run: cmake --build build/network-gns --target HoroNetworkTransportGnsTests HoroNetworkTransportGNSPublicHeaderConsumer --parallel 2
+      - name: Test direct-IP, DNS, delivery and lifecycle
+        shell: bash
+        run: ctest --test-dir build/network-gns -R '^HoroNetworkTransportGnsTests::' --output-on-failure
