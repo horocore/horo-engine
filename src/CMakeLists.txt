@@ -2079,6 +2079,7 @@ target_link_libraries(HoroExtensions
 # Host composition bridge: neither Platform Services nor Extensions depends on the other.
 add_library(HoroPlatformServicesExtension STATIC
         platform_services/PlatformProviderAdmission.cpp
+        platform_services/PlatformProviderLifecycleDispatch.cpp
         platform_services/PlatformProviderLifecycleHost.cpp)
 add_library(HoroEngine::PlatformServicesExtension ALIAS HoroPlatformServicesExtension)
 target_compile_features(HoroPlatformServicesExtension PUBLIC cxx_std_20)
