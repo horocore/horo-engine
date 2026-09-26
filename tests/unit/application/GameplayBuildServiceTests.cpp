@@ -550,6 +550,31 @@ TEST_CASE("Gameplay build cancellation and shutdown publish one terminal outcome
     AssertTerminalOperation(fixture.operations, *terminal, OperationState::Cancelled);
 }
 
+TEST_CASE("Active gameplay build projection survives readers and clears at cancellation", "[unit][gameplay][build][cancellation]") {
+    CancellationWaitingProcessRunner processes;
+    GameplayBuildFixture fixture{processes};
+    const auto started = fixture.service.Start(fixture.Request());
+    REQUIRE(started.HasValue());
+    REQUIRE(processes.WaitUntilRunning());
+
+    const auto active = fixture.service.QueryActiveProject(fixture.project.root);
+    REQUIRE(active.has_value());
+    REQUIRE(active->id == started.Value());
+    REQUIRE(active->startedAt <= std::chrono::steady_clock::now());
+    REQUIRE(active->progress.has_value());
+    REQUIRE(*active->progress > 0.0F);
+    REQUIRE_FALSE(active->cancellationRequested);
+    REQUIRE_FALSE(fixture.service.QueryActiveProject(fixture.project.root / "other-project").has_value());
+
+    REQUIRE(fixture.service.RequestCancel(active->id));
+    const auto cancelling = fixture.service.QueryActiveProject(fixture.project.root);
+    if (cancelling.has_value())
+        REQUIRE(cancelling->cancellationRequested);
+    REQUIRE_FALSE(fixture.service.RequestCancel(active->id));
+    REQUIRE(AwaitTerminal(fixture.service, active->id).state == GameplayBuildState::Cancelled);
+    REQUIRE_FALSE(fixture.service.QueryActiveProject(fixture.project.root).has_value());
+}
+
 TEST_CASE("Gameplay build service maps process timeout to one correlated terminal record", "[unit][gameplay][build][timeout]") {
     TerminalProcessRunner processes{ProcessTerminationReason::TimedOut};
     GameplayBuildFixture fixture{processes};

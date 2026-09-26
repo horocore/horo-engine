@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Foundation/BuildOutputStore.h"
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <imgui.h>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -50,7 +52,8 @@ namespace Horo::Editor {
         };
 
         /** @brief Binds the shared typed build-output query source. */
-        void Attach(const IBuildOutputQuery *buildOutputQuery) noexcept;
+        void Attach(const IBuildOutputQuery *buildOutputQuery, const Application::GameplayBuildService *gameplayBuilds,
+                    std::string_view projectRoot);
 
         /** @brief Releases the shared query source and transient state. */
         void Detach() noexcept;
@@ -109,8 +112,12 @@ namespace Horo::Editor {
                           ImDrawList &drawList) const;
         void DrawFooter(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context,
                         std::size_t errorCount, std::size_t warningCount);
+        void DrawActiveBuild(const Application::GameplayBuildSnapshot &snapshot, const GlobalDockPaneRegions &regions,
+                             const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context, float height);
 
         const IBuildOutputQuery *m_buildOutputQuery{nullptr};
+        const Application::GameplayBuildService *m_gameplayBuilds{nullptr};
+        std::string m_projectRoot;
         BuildOutputSnapshot m_snapshot;
         std::uint64_t m_revision{};
         std::array<char, 160> m_search{};
