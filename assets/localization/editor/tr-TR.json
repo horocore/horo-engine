@@ -1035,6 +1035,12 @@
     "workspace.global_dock.build_output.clear": {
       "text": "Temizle"
     },
+    "workspace.global_dock.build_output.filters": {"text": "Filtreler"},
+    "workspace.global_dock.build_output.filter.status": {"text": "Durum"},
+    "workspace.global_dock.build_output.filter.severity": {"text": "Önem"},
+    "workspace.global_dock.build_output.filter.stage": {"text": "Aşama"},
+    "workspace.global_dock.build_output.filter.session": {"text": "Oturum"},
+    "workspace.global_dock.build_output.filter.any": {"text": "Tümü"},
     "workspace.global_dock.build_output.columns": {
       "text": "Sütunlar"
     },
@@ -1070,6 +1076,7 @@
     "workspace.global_dock.build_output.footer.diagnostics": {"text": "tanı"},
     "workspace.global_dock.build_output.footer.errors": {"text": "hata"},
     "workspace.global_dock.build_output.footer.warnings": {"text": "uyarı"},
+    "workspace.global_dock.build_output.footer.dropped": {"text": "eski kayıt çıkarıldı"},
     "workspace.global_dock.build_output.footer.last_build": {"text": "Son derleme"},
     "workspace.global_dock.build_output.row_status.info": {"text": "Bilgi"},
     "workspace.global_dock.build_output.row_status.warning": {"text": "Uyarı"},
