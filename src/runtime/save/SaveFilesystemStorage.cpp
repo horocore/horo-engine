@@ -117,8 +117,8 @@ namespace Horo::Runtime {
             if (length == 0)
                 return Result<Handle>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows name inspection", ::GetLastError()));
             std::wstring finalName(length + 1, L'\0');
-            const DWORD written = ::GetFinalPathNameByHandleW(value.Get(), finalName.data(), static_cast<DWORD>(finalName.size()),
-                                                              FILE_NAME_NORMALIZED);
+            const DWORD written =
+                ::GetFinalPathNameByHandleW(value.Get(), finalName.data(), static_cast<DWORD>(finalName.size()), FILE_NAME_NORMALIZED);
             if (written == 0 || written >= finalName.size())
                 return Result<Handle>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows name inspection", ::GetLastError()));
             finalName.resize(written);
@@ -154,9 +154,9 @@ namespace Horo::Runtime {
             object.ObjectName = &text;
             IO_STATUS_BLOCK status{};
             HANDLE opened = INVALID_HANDLE_VALUE;
-            const NTSTATUS result = create(&opened, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &object, &status, nullptr,
-                                           FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                           kOpen, kNonDirectoryFile | kOpenReparsePoint | kSynchronousIo, nullptr, 0);
+            const NTSTATUS result = create(&opened, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &object, &status, nullptr, FILE_ATTRIBUTE_NORMAL,
+                                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, kOpen,
+                                           kNonDirectoryFile | kOpenReparsePoint | kSynchronousIo, nullptr, 0);
             if (static_cast<std::uint32_t>(result) == 0xC0000034U)
                 return Result<void>::Success();
             if (result < 0)
@@ -451,15 +451,17 @@ namespace Horo::Runtime {
                                        std::to_wstring(sequence.fetch_add(1, std::memory_order_relaxed)) + L".temporary";
         const std::size_t size = offsetof(FILE_RENAME_INFO, FileName) + destination.size() * sizeof(wchar_t);
         std::vector<std::uint64_t> buffer((size + sizeof(std::uint64_t) - 1) / sizeof(std::uint64_t));
-        auto created = RelativeOpen(state_->Slots(), temporary, GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE, kCreate,
-                                    kNonDirectoryFile, FILE_ATTRIBUTE_NORMAL);
+        auto created = RelativeOpen(state_->Slots(), temporary, GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE, kCreate, kNonDirectoryFile,
+                                    FILE_ATTRIBUTE_NORMAL);
         if (created.HasError())
             return Result<void>::Failure(created.ErrorValue());
         Handle file = std::move(created).Value();
         bool published = false;
+
         struct TemporaryCleanup {
             HANDLE file;
             bool &published;
+
             ~TemporaryCleanup() {
                 if (!published) {
                     FILE_DISPOSITION_INFO disposition{TRUE};
@@ -467,6 +469,7 @@ namespace Horo::Runtime {
                 }
             }
         };
+
         TemporaryCleanup cleanup{file.Get(), published};
         std::size_t offset = 0;
         while (offset < bytes.size()) {
