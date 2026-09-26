@@ -282,6 +282,7 @@ add_library(HoroNetworkApi STATIC
         runtime/networking/api/RpcDescriptorErrors.cpp
         runtime/networking/api/RpcDescriptorRegistry.cpp
         runtime/networking/api/TransportCapabilities.cpp
+        runtime/networking/api/TransportBackendErrors.cpp
         runtime/networking/api/TransportBudget.cpp
 )
 add_library(HoroEngine::NetworkApi ALIAS HoroNetworkApi)
@@ -290,6 +291,7 @@ target_link_libraries(HoroNetworkApi PUBLIC HoroEngine::Foundation)
 
 add_library(HoroNetworkTransportNull STATIC
         runtime/networking/null/DeterministicTransport.cpp
+        runtime/networking/null/NullTransportBackend.cpp
 )
 add_library(HoroEngine::NetworkTransportNull ALIAS HoroNetworkTransportNull)
 target_compile_features(HoroNetworkTransportNull PUBLIC cxx_std_20)
@@ -431,6 +433,7 @@ target_include_directories(HoroRuntimeScene PUBLIC ${PROJECT_SOURCE_DIR}/include
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::Foundation HoroEngine::Runtime HoroEngine::GameplayApi HoroEngine::RuntimeUi)
 
 add_library(HoroNetworkRuntime STATIC
+        runtime/networking/TransportBackendComposition.cpp
         runtime/networking/AuthenticationSessionAdapter.cpp
         runtime/networking/HandshakeNegotiation.cpp
         runtime/networking/NetworkObjectMapping.cpp
