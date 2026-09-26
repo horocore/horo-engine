@@ -34,7 +34,8 @@ namespace Horo::Extensions {
         HoroPlatformProviderCreateFunc createCandidate{};
         HoroPlatformProviderRetireFunc retireCandidate{};
         HoroPlatformProviderDestroyFunc destroyCandidate{};
-        std::shared_ptr<void> moduleCodeLease; /**< Holds native code through candidate retirement. */
+        HoroPlatformProviderOperations operations{}; /**< Empty for legacy factory-only profile. */
+        std::shared_ptr<void> moduleCodeLease;       /**< Holds native code through candidate retirement. */
     };
 
     /** @brief Host-owned publication revoked before the manager releases the module lease. */

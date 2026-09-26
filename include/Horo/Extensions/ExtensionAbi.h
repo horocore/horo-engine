@@ -27,9 +27,11 @@
 
 enum {  // NOSONAR(cpp:S3642) C ABI constant group
     HORO_EXTENSION_ABI_VERSION = 1,
-    HORO_EXTENSION_ABI_MINOR_VERSION = 2,
+    HORO_EXTENSION_ABI_MINOR_VERSION = 3,
     HORO_ASSET_IMPORTER_ABI_VERSION = 1,
     HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION = 1,
+    HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION_2 = 2,
+    HORO_PLATFORM_SERVICES_PROVIDER_OPERATIONS_VERSION = 1,
 };
 
 enum HoroExtensionStatusCode {  // NOSONAR(cpp:S3642) C ABI constants; wire values use uint32_t.
@@ -253,11 +255,83 @@ typedef HoroExtensionStatus (*HoroPlatformProviderRetireFunc)(void *candidate); 
 /** @brief Destroy a fully retired candidate on its required owner thread. */
 typedef void (*HoroPlatformProviderDestroyFunc)(void *candidate);  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
 
+/** @brief One bounded, host-owned completion copied before this callback returns.
+ * @details A zero resultCode is success; nonzero is normalized provider failure.
+ *          The service and nonzero operation must match one admitted request exactly.
+ */
+struct HoroPlatformProviderCompletion {
+    uint32_t structSize;
+    uint64_t requestId;
+    uint64_t requestGeneration;
+    uint64_t sessionRevision;
+    uint32_t service;
+    uint32_t operation;
+    uint32_t resultCode;
+    const uint8_t *payload;
+    uint32_t payloadSize;
+};
+typedef struct HoroPlatformProviderCompletion HoroPlatformProviderCompletion;
+
+/** @brief Host sink valid until closeIngress and drain both succeed.
+ * @details Session phases use Horo's NoSubject=0, Authenticating=1, Active=2,
+ *          Closing=3 and Failed=4; revisions increase within this candidate.
+ */
+struct HoroPlatformProviderSink {
+    uint32_t structSize;
+    void *context;
+    HoroExtensionStatus (*sessionChanged)(void *context, uint64_t revision, uint32_t phase);
+    HoroExtensionStatus (*complete)(void *context, const HoroPlatformProviderCompletion *completion);
+};
+typedef struct HoroPlatformProviderSink HoroPlatformProviderSink;
+
+enum HoroPlatformProviderOperationCode {
+    /** @brief Achievement service, with one nonzero Horo AchievementId as little-endian uint64 payload. */
+    HORO_PLATFORM_OPERATION_ACHIEVEMENT_UNLOCK = 1,
+};
+
+/** @brief Borrowed, bounded Horo operation input; native handles never cross this profile.
+ * @details The first profile supports achievement unlock with an exact eight-byte
+ *          canonical Horo ID. Native values and retained payload pointers are forbidden.
+ */
+struct HoroPlatformProviderOperation {
+    uint32_t structSize;
+    uint64_t requestId;
+    uint64_t requestGeneration;
+    uint64_t sessionRevision;
+    uint32_t service;
+    uint32_t operation;
+    const uint8_t *payload;
+    uint32_t payloadSize;
+};
+typedef struct HoroPlatformProviderOperation HoroPlatformProviderOperation;
+
 /**
- * @brief Borrowed provider contribution copied during module load; version 1 is a factory/lifetime profile.
+ * @brief Versioned operation and callback lifecycle; all calls are on the host owner lane except sink callbacks.
+ * @details Every successful stage owns its matching reverse teardown. A failing stage may have partial state and must
+ * tolerate its reverse teardown. closeIngress prevents new callbacks; drain returns BUSY until all callbacks and
+ * native operations have retired. Candidate retire/destroy remain forbidden until drain succeeds.
+ */
+struct HoroPlatformProviderOperations {
+    uint32_t structSize;
+    uint32_t version;
+    HoroExtensionStatus (*initializeServices)(void *candidate, uint32_t requiredServiceMask, uint32_t *outAvailableServiceMask);
+    HoroExtensionStatus (*beginSession)(void *candidate, const HoroPlatformProviderSink *sink);
+    HoroExtensionStatus (*openIngress)(void *candidate, const HoroPlatformProviderSink *sink);
+    HoroExtensionStatus (*submit)(void *candidate, const HoroPlatformProviderOperation *operation);
+    HoroExtensionStatus (*cancel)(void *candidate, uint64_t requestId, uint64_t requestGeneration);
+    HoroExtensionStatus (*closeAdmission)(void *candidate);
+    HoroExtensionStatus (*closeIngress)(void *candidate);
+    HoroExtensionStatus (*drain)(void *candidate);
+    HoroExtensionStatus (*stopSession)(void *candidate);
+    HoroExtensionStatus (*shutdownServices)(void *candidate);
+};
+typedef struct HoroPlatformProviderOperations HoroPlatformProviderOperations;
+
+/**
+ * @brief Borrowed provider contribution copied during module load; version 1 is factory/lifetime and version 2 adds operations.
  * @details The host copies every claim and retains module code across candidate creation and retirement. A candidate must not
- * be destroyed or its code unloaded while Retire returns BUSY. This profile does not expose service operation pointers;
- * those belong to a separately versioned operation profile.
+ * be destroyed or its code unloaded while Retire returns BUSY. The version-1 prefix has no operation pointer;
+ * version 2 appends a separately versioned operation profile.
  */
 struct HoroPlatformServicesProviderDescriptor {
     uint32_t structSize;
@@ -278,6 +352,8 @@ struct HoroPlatformServicesProviderDescriptor {
     HoroPlatformProviderCreateFunc createCandidate;
     HoroPlatformProviderRetireFunc retireCandidate;
     HoroPlatformProviderDestroyFunc destroyCandidate;
+    /** @brief Appended in descriptor version 2; absent from the version-1 struct prefix. */
+    const HoroPlatformProviderOperations *operations;
 };
 typedef struct HoroPlatformServicesProviderDescriptor  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
     HoroPlatformServicesProviderDescriptor;
