@@ -489,6 +489,7 @@ horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/FoliageDefinition.h
+    Horo/Terrain/TerrainComposition.h
     Horo/Terrain/TerrainDescriptor.h
     Horo/Terrain/TerrainErrors.h
     Horo/Terrain/TerrainFoliageRegistry.h

@@ -938,6 +938,7 @@ target_link_libraries(HoroXRApi PUBLIC HoroEngine::Foundation HoroEngine::Render
 
 add_library(HoroTerrainApi STATIC
         runtime/terrain/api/FoliageDefinition.cpp
+        runtime/terrain/api/TerrainComposition.cpp
         runtime/terrain/api/TerrainDescriptor.cpp
         runtime/terrain/api/TerrainErrors.cpp
         runtime/terrain/api/TerrainFoliageRegistry.cpp
