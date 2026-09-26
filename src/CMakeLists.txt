@@ -1113,6 +1113,15 @@ target_compile_features(HoroInput PUBLIC cxx_std_20)
 target_include_directories(HoroInput PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(HoroInput PUBLIC HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
 
+# Host-facing bridge: Input remains independent of Runtime UI, and Runtime UI
+# retains its Foundation/Assets-only contract.
+add_library(HoroRuntimeUiInput STATIC
+        runtime/ui/input/UiTextInputAdapter.cpp
+)
+add_library(HoroEngine::RuntimeUiInput ALIAS HoroRuntimeUiInput)
+target_compile_features(HoroRuntimeUiInput PUBLIC cxx_std_20)
+target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::RuntimeUi)
+
 add_library(HoroRenderApi STATIC
         runtime/renderer/api/MotionHistory.cpp
         runtime/renderer/api/MotionHistoryErrors.cpp
@@ -1570,7 +1579,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_OPENGL)
 
 endif ()
 
-if (HORO_BUILD_EDITOR_GUI)
+if (HORO_BUILD_INPUT_SDL3)
     add_library(HoroInputSdl STATIC
             runtime/input/sdl/SdlInputBackend.cpp
     )
@@ -1578,7 +1587,9 @@ if (HORO_BUILD_EDITOR_GUI)
     target_compile_features(HoroInputSdl PUBLIC cxx_std_20)
     target_include_directories(HoroInputSdl PUBLIC ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
     target_link_libraries(HoroInputSdl PUBLIC HoroEngine::Input PRIVATE ${HORO_SDL3_TARGET})
+endif ()
 
+if (HORO_BUILD_EDITOR_GUI)
     add_library(HoroGui STATIC
             editor/design_system/components/EditorUiComponents.cpp
             editor/design_system/icons/EditorIcons.cpp

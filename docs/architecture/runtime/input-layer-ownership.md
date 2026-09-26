@@ -268,17 +268,19 @@ focus, device, modal, Escape, or context loss remains immediate.
 Within one editor frame the following order is enforced:
 
 ```text
-1. PollPlatformEvents()
-   - process SDL events → inputBackend.ProcessEvent()
-   - process native menu invocations and engine data-bus events
-
-2. inputBackend.BeginFrame(frameNumber)
+1. inputBackend.BeginFrame(frameNumber)
    - reset per-frame edge state in the collector
+
+2. PollPlatformEvents()
+   - process SDL events → inputBackend.ProcessEvent()
+   - forward non-committed-text events to ImGui's SDL adapter
+   - process native menu invocations and engine data-bus events
 
 3. inputBackend.Commit() → RawInputSnapshot sealed
 
 4. inputRouter.BeginFrame(snapshot)
    - install snapshot, clear per-frame consumption map
+   - queue bounded committed snapshot text for ImGui's focused editor field
 
 5. (modal host reads interaction scope; stack is stable at this point)
 
