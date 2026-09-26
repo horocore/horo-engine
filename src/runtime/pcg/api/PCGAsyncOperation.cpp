@@ -381,7 +381,7 @@ namespace Horo::PCG {
             return Result<void>::Failure(MakeError(PCGErrors::AsyncWrongThread));
         if (impl_->publishing)
             return Result<void>::Failure(MakeError(PCGErrors::AsyncNotReady));
-        Impl::Record *const record = impl_->FindRecord(id);
+        const Impl::Record *const record = impl_->FindRecord(id);
         if (record == nullptr)
             return Result<void>::Failure(MakeError(PCGErrors::AsyncUnknown));
         impl_->Cancel(*record);
