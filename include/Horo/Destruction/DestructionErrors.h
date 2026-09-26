@@ -42,6 +42,8 @@ namespace Horo::Destruction::DestructionErrors {
     extern const ErrorCodeDescriptor StateInvalid;
     /** @brief A damage command contains a zero, negative, or non-finite amount. */
     extern const ErrorCodeDescriptor InvalidDamage;
+    /** @brief A new damage command arrived before the configured fixed-tick cooldown elapsed. */
+    extern const ErrorCodeDescriptor DamageCooldownActive;
     /** @brief A reused command identity carries different revision, kind, or payload semantics. */
     extern const ErrorCodeDescriptor DuplicateCommand;
     /** @brief A command attempted to mutate the terminal Destroyed state. */

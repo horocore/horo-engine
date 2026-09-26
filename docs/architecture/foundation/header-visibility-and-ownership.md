@@ -20,6 +20,24 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## DFR-003.2 Migration Notes
+
+`HoroEngine::DestructionRuntime` owns the new
+`Horo/Destruction/DestructionDamageRuntime.h` contract and publicly links only
+`HoroEngine::DestructionApi`. The generated runtime public-header consumer checks this
+boundary. Hosts that process typed damage or post-step collision commands should link
+the runtime target and replace direct health/state-machine mutation with detached
+`Prepare` and owner-safe `Commit`, publishing the returned value with their aggregate
+Scene/Physics/Render transaction. The API exposes only Horo identities, typed commands,
+revisions and results, with no native Physics handle or callback.
+
+`DestructibleDescriptorData` is now contract version 2. Producers of version-1
+descriptors must explicitly migrate to version 2 and set
+`behavior.minimumDamageIntervalTicks` (zero preserves the prior no-cooldown behavior)
+before validation. Version-1 data is rejected; there is no second legacy policy path.
+Existing `HoroEngine::DestructionApi` consumers continue linking their current target
+for the identity, descriptor and state-machine contracts.
+
 ## PLS-002.3 Migration Notes
 
 `HoroEngine::Extensions` owns the additive `ExtensionPlatformProvider.h` candidate

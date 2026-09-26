@@ -97,6 +97,11 @@ namespace Horo::Destruction::DestructionErrors {
                                             .defaultSeverity = ErrorSeverity::Error,
                                             .summary = "The destruction damage command is zero, negative, or non-finite.",
                                             .remediationHint = "Submit finite positive canonical health units."};
+    const ErrorCodeDescriptor DamageCooldownActive{.domain = DestructionDomain,
+                                                   .code = ErrorCode{"destruction.damage.cooldown_active"},
+                                                   .defaultSeverity = ErrorSeverity::Warning,
+                                                   .summary = "The destructible has not reached its next admitted damage tick.",
+                                                   .remediationHint = "Retry at or after the configured fixed-tick interval."};
     const ErrorCodeDescriptor DuplicateCommand{.domain = DestructionDomain,
                                                .code = ErrorCode{"destruction.command.duplicate_conflict"},
                                                .defaultSeverity = ErrorSeverity::Warning,
