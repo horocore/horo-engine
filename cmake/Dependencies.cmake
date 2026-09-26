@@ -16,7 +16,11 @@ if(HORO_BUILD_NETWORK_GNS)
         GIT_TAG "${HORO_CARES_REVISION}"
         GIT_SHALLOW FALSE)
     FetchContent_MakeAvailable(horo_cares)
-    file(SHA256 "${horo_cares_SOURCE_DIR}/LICENSE.md" horo_cares_license_digest)
+    # Git's Windows checkout may materialize CRLF; pin the notice content,
+    # not the host-specific line-ending representation.
+    file(READ "${horo_cares_SOURCE_DIR}/LICENSE.md" horo_cares_license_text)
+    string(REPLACE "\r\n" "\n" horo_cares_license_text "${horo_cares_license_text}")
+    string(SHA256 horo_cares_license_digest "${horo_cares_license_text}")
     if(NOT horo_cares_license_digest STREQUAL "460f5e768fda3752ca2169a95df062578a10fb126bfd65f3b9b1a1bed2f84807")
         message(FATAL_ERROR "Pinned c-ares license differs from the reviewed MIT notice")
     endif()

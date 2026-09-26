@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstring>
+#include <type_traits>
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -27,8 +29,10 @@ namespace Horo::Network::GnsDetail {
             if (node.ai_family == AF_INET && node.ai_addrlen >= sizeof(sockaddr_in)) {
                 sockaddr_in address{};
                 std::memcpy(&address, node.ai_addr, sizeof(address));
-                std::array<std::byte, 4> bytes{};
-                std::memcpy(bytes.data(), &address.sin_addr, bytes.size());
+                static_assert(sizeof(decltype(address.sin_addr)) == 4);
+                static_assert(std::is_trivially_copyable_v<decltype(address.sin_addr)>);
+                // Preserve network-order bytes, not host-endian integer order.
+                const auto bytes = std::bit_cast<std::array<std::byte, 4>>(address.sin_addr);
                 const std::uint32_t ipv4 = (std::to_integer<std::uint32_t>(bytes[0]) << 24) |
                                            (std::to_integer<std::uint32_t>(bytes[1]) << 16) |
                                            (std::to_integer<std::uint32_t>(bytes[2]) << 8) | std::to_integer<std::uint32_t>(bytes[3]);
@@ -38,8 +42,9 @@ namespace Horo::Network::GnsDetail {
             if (node.ai_family == AF_INET6 && node.ai_addrlen >= sizeof(sockaddr_in6)) {
                 sockaddr_in6 address{};
                 std::memcpy(&address, node.ai_addr, sizeof(address));
-                std::array<std::uint8_t, 16> bytes{};
-                std::memcpy(bytes.data(), &address.sin6_addr, bytes.size());
+                static_assert(sizeof(decltype(address.sin6_addr)) == 16);
+                static_assert(std::is_trivially_copyable_v<decltype(address.sin6_addr)>);
+                const auto bytes = std::bit_cast<std::array<std::uint8_t, 16>>(address.sin6_addr);
                 numeric.SetIPv6(bytes.data(), port);
                 return numeric;
             }

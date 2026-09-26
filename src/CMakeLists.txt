@@ -307,6 +307,7 @@ if(HORO_BUILD_NETWORK_GNS)
         runtime/networking/gns/factory/GnsTransportFactory.h
         runtime/networking/gns/GnsTransportInternal.h
         runtime/networking/gns/GnsTransport.cpp
+        runtime/networking/gns/GnsTransportPackets.cpp
         runtime/networking/gns/GnsTransportDiagnostics.cpp
     )
     add_library(HoroEngine::NetworkTransportGNS ALIAS HoroNetworkTransportGNS)
