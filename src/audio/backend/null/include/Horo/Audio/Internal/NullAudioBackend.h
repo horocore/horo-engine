@@ -120,6 +120,13 @@ namespace Horo::Audio::Backend {
         static constexpr std::size_t MaximumEvents = 64;
         static constexpr std::size_t MaximumInjectedEvents = 60;
 
+        /** @brief One deterministic callback clock cursor; reset and advanced as a unit per render epoch. */
+        struct ClockCursor final {
+            std::uint64_t sampleFrame{};
+            std::uint64_t nanoseconds{};
+            std::uint64_t remainder{};
+        };
+
         NullAudioBackendConfig config_;
         AudioDeviceId device_;
         NullAudioBackendState state_{NullAudioBackendState::Closed};
@@ -134,9 +141,7 @@ namespace Horo::Audio::Backend {
         RenderPort render_;
         AudioCallbackWatchdog watchdog_;
         bool ready_{};
-        std::uint64_t sampleFrame_{};
-        std::uint64_t clockNanoseconds_{};
-        std::uint64_t clockRemainder_{};
+        ClockCursor clock_;
         std::vector<AudioSample> samples_;
         std::vector<AudioSample *> planes_;
         std::array<Event, MaximumEvents> events_{};

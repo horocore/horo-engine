@@ -260,8 +260,9 @@ namespace Horo::Audio::Backend {
             }
             const bool submitted = SDL_PutAudioStreamData(nativeStream, interleaved.data(), bytesPerBlock);
 #if !defined(NDEBUG)
-            const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
-            if (elapsed > 0)
+            if (const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
+                elapsed > 0)
                 watchdog.ObserveDuration(epoch, frame, static_cast<std::uint64_t>(elapsed));
 #endif
             if (!submitted)

@@ -80,6 +80,9 @@ namespace Horo::Audio::Backend {
         static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
         static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
         std::array<AudioCallbackViolation, Capacity> records_{};
+        // Single-producer/single-consumer indices publish a record with release/acquire and
+        // release a consumed slot in the opposite direction. Loss/sample counters are independent
+        // summaries, so relaxed ordering cannot expose an unpublished record or overwrite a live slot.
         std::atomic<std::uint32_t> write_{};
         std::atomic<std::uint32_t> read_{};
         std::atomic<std::uint64_t> dropped_{};

@@ -4,8 +4,10 @@
 
 namespace Horo::Audio::Backend {
     namespace {
+        // Mutable thread-local scope is required to route static hooks to the active callback;
+        // Invoke restores the previous value before returning, including nested invocations.
         constinit thread_local AudioCallbackWatchdog *activeWatchdog{};
-    }
+    }  // namespace
 
     /** @copydoc AudioCallbackWatchdog::Configure */
     void AudioCallbackWatchdog::Configure(const std::uint64_t deadlineNanoseconds,
@@ -68,8 +70,7 @@ namespace Horo::Audio::Backend {
         const RenderResult result = port.process(port.context, invocation);
         const auto end = std::chrono::steady_clock::now();
         activeWatchdog = previous;
-        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
-        if (elapsed > 0)
+        if (const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count(); elapsed > 0)
             ObserveDuration(invocation.epoch, invocation.sampleFrame, static_cast<std::uint64_t>(elapsed));
         return result;
 #endif
