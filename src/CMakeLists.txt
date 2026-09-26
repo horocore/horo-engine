@@ -56,6 +56,7 @@ add_library(HoroCliHost STATIC
         cli/CliCommandRegistry.cpp
         cli/CliCommonOptions.cpp
         cli/CliDispatcher.cpp
+        cli/CliExecutionLifecycle.cpp
         cli/CliErrors.cpp
         cli/CliOptionParser.cpp
 )
@@ -196,6 +197,7 @@ add_library(HoroApplication STATIC
         application/release/DistributionModel.cpp
         application/release/ReleaseErrors.cpp
         application/release/ReleaseProfile.cpp
+        application/release/ReleasePreflight.cpp
         application/release/ReleaseVersion.cpp
 )
 add_library(HoroEngine::Application ALIAS HoroApplication)
@@ -520,6 +522,8 @@ add_library(HoroGameplayLua STATIC
 
 add_library(HoroGameplayBuild STATIC
         application/gameplay/CompilerDiagnosticParser.cpp
+        application/gameplay/GameplayBuildInputs.cpp
+        application/gameplay/GameplayBuildInvocation.cpp
         application/gameplay/GameplayBuildService.cpp
 )
 add_library(HoroEngine::GameplayBuild ALIAS HoroGameplayBuild)
@@ -805,6 +809,7 @@ target_compile_features(HoroAnimationApi PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
 add_library(HoroPCG STATIC
+        runtime/pcg/api/PCGCookedPlan.cpp
         runtime/pcg/api/PCGErrors.cpp
         runtime/pcg/api/PCGGenerationPlan.cpp
         runtime/pcg/api/PCGGraphAsset.cpp
@@ -816,6 +821,7 @@ add_library(HoroPCG STATIC
         runtime/pcg/api/PCGProvenance.cpp
         runtime/pcg/api/PCGSpatialSnapshot.cpp
         runtime/pcg/api/PCGRegistry.cpp
+        runtime/pcg/api/PCGAsyncOperation.cpp
 )
 add_library(HoroEngine::PCG ALIAS HoroPCG)
 target_compile_features(HoroPCG PUBLIC cxx_std_20)
@@ -851,6 +857,13 @@ add_library(HoroDestructionApi STATIC
 add_library(HoroEngine::DestructionApi ALIAS HoroDestructionApi)
 target_compile_features(HoroDestructionApi PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
+
+add_library(HoroDestructionRuntime STATIC
+        runtime/destruction/runtime/DestructionDamageRuntime.cpp
+)
+add_library(HoroEngine::DestructionRuntime ALIAS HoroDestructionRuntime)
+target_compile_features(HoroDestructionRuntime PUBLIC cxx_std_20)
+target_link_libraries(HoroDestructionRuntime PUBLIC HoroEngine::DestructionApi)
 
 add_library(HoroCinematicModel STATIC
         runtime/cinematic/model/CurveSampling.cpp
@@ -941,6 +954,7 @@ target_link_libraries(HoroXRApi PUBLIC HoroEngine::Foundation HoroEngine::Render
 
 add_library(HoroTerrainApi STATIC
         runtime/terrain/api/FoliageDefinition.cpp
+        runtime/terrain/api/TerrainComposition.cpp
         runtime/terrain/api/TerrainDescriptor.cpp
         runtime/terrain/api/TerrainErrors.cpp
         runtime/terrain/api/TerrainFoliageRegistry.cpp
@@ -949,6 +963,13 @@ add_library(HoroTerrainApi STATIC
 add_library(HoroEngine::TerrainApi ALIAS HoroTerrainApi)
 target_compile_features(HoroTerrainApi PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainApi PUBLIC HoroEngine::Foundation)
+
+add_library(HoroTerrainRuntime STATIC
+        runtime/terrain/runtime/TerrainAsyncJobs.cpp
+)
+add_library(HoroEngine::TerrainRuntime ALIAS HoroTerrainRuntime)
+target_compile_features(HoroTerrainRuntime PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainRuntime PUBLIC HoroEngine::TerrainApi HoroEngine::Foundation)
 
 add_library(HoroNavigationNull STATIC
         runtime/navigation/backends/null/NullProvider.cpp
@@ -1597,6 +1618,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserToolbar.cpp
             editor/screens/workspace/panels/global_dock/panes/audio/GlobalDockAudioPane.cpp
             editor/screens/workspace/panels/global_dock/panes/build_output/GlobalDockBuildOutputPane.cpp
+            editor/screens/workspace/panels/global_dock/panes/build_output/GlobalDockBuildOutputPaneToolbar.cpp
             editor/screens/workspace/panels/global_dock/panes/console/GlobalDockConsolePane.cpp
             editor/screens/workspace/panels/global_dock/panes/mcp/GlobalDockMcpPane.cpp
             editor/screens/workspace/panels/global_dock/panes/network/GlobalDockNetworkPane.cpp

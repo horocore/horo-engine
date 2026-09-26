@@ -30,6 +30,16 @@ approved admission snapshots, and retain ownership of process I/O; domain
 targets do not link MCP. The generated standalone `HoroMcpSession` public-header
 consumer verifies each header with only declared public dependencies.
 
+## PCG-2.4 Cooked Plan Boundary
+
+`HoroEngine::PCG` owns the additive `Horo/PCG/PCGCookedPlan.h` contract. Callers
+retain the exact immutable registry snapshot used by `ValidatePCGGraph` through
+`CompilePCGGraph`, then may release the graph source and registry: the resulting
+plan owns its nodes, pin schemas, routes, defaults, capability requirements, and
+canonical bytes. No existing PCG caller changes signature. Future evaluators must
+consume the validated cooked plan, not source graph references or runtime handles.
+The generated PCG public-header consumer covers the new sole-owned header.
+
 ## PCG-1.5 Provenance Boundary
 
 `HoroEngine::PCG` owns the additive `Horo/PCG/PCGProvenance.h` contract. PCG evaluation
@@ -117,6 +127,19 @@ and carry its exact publication identity. No gameplay host, module permission or
 solver header is introduced in the public include graph. The generated
 `HoroPhysicsPublicHeaderConsumer` compiles the new contract with only the Physics
 target's declared public dependencies.
+
+## CLI-001.6 Process Boundary Migration Notes
+
+`HoroEngine::CliHost` remains Foundation-only. Its existing `CliDispatcher.h`
+now carries portable cooperative and escalation tokens plus a remaining-deadline
+value; the invocation's progress destination is a bounded mailbox. Existing
+adapters that use a process runner should be composed by an application target
+that links both CliHost and Platform. They cap `ExternalProcessRequest::timeout`
+to the remaining CLI deadline, copy the escalation token into the request, and
+pass the cooperative token to their injected `IExternalProcessRunner`. Native
+handles and termination policy stay private to Platform. No public header changes
+owner or include spelling; the generated CliHost and Platform header consumers
+continue to compile independently.
 
 ## Build-Tree Contract
 
@@ -475,6 +498,24 @@ only the fixed-width stable identity or dataset-plus-tile-coordinate encodings.
 be resolved again after replacement, world unload or shutdown; they are deliberately
 excluded from the serialization surface.
 
+## TRF-001.5 Migration Notes
+
+`HoroEngine::TerrainRuntime` now owns `Horo/Terrain/TerrainAsyncJobs.h`. Its public
+dependencies are TerrainApi and Foundation; the new target does not publish a
+repository-wide source root or native Render/Physics/Navigation headers. Host
+compositions that schedule terrain cook, load or edit-preview work must link
+TerrainRuntime explicitly and inject their JobSystem, exact runtime/registry
+revision fence and capability grants. Existing TerrainApi metadata callers do
+not change. No production TerrainRuntime caller exists yet to migrate.
+
+Future producers pass owned immutable candidate inputs to `SubmitCook`,
+`SubmitLoad` or `SubmitEditPreview`, then call
+`Advance` on the Terrain owner lane at a safe point. They retain candidate and
+provider leases until `IsDrained` and consumer retirement acknowledge release;
+they do not publish from worker callbacks or reuse a stale result after
+`ReplaceFence`. The dedicated public-header consumer is
+`HoroTerrainAsyncJobsTests`.
+
 ## CIN-001.3 Migration Notes
 
 `HoroEngine::CinematicModel` now owns `Horo/Cinematic/SequenceAsset.h` and has the
@@ -761,6 +802,24 @@ revalidate generation/state/capability revisions before live operations. Ad-hoc 
 registries, mutable record exposure, native handles and silently widened queries have no
 compatibility path.
 
+## DFR-003.2 Migration Notes
+
+`HoroEngine::DestructionRuntime` owns the new
+`Horo/Destruction/DestructionDamageRuntime.h` contract and publicly links only
+`HoroEngine::DestructionApi`. The generated runtime public-header consumer checks this
+boundary. Hosts that process typed damage or post-step collision commands should link
+the runtime target and replace direct health/state-machine mutation with detached
+`Prepare` and owner-safe `Commit`, publishing the returned value with their aggregate
+Scene/Physics/Render transaction. The API exposes only Horo identities, typed commands,
+revisions and results, with no native Physics handle or callback.
+
+`DestructibleDescriptorData` is now contract version 2. Producers of version-1
+descriptors must explicitly migrate to version 2 and set
+`behavior.minimumDamageIntervalTicks` (zero preserves the prior no-cooldown behavior)
+before validation. Version-1 data is rejected; there is no second legacy policy path.
+Existing `HoroEngine::DestructionApi` consumers continue linking their current target
+for the identity, descriptor and state-machine contracts.
+
 ## NAV-002.7 Migration Notes
 
 `HoroEngine::NavigationApi` additionally owns `Horo/Navigation/NavMeshData.h`.
@@ -905,3 +964,20 @@ after the corresponding cost query and reservation succeed. Existing host calls 
 retain the finite default memory configuration, while product composition should
 provide its explicit envelope and default scope. Editor viewport and GUI textures use
 separate explicit scopes in the shared frontend ledger.
+
+## PCG-1.6 Async Operation Migration Notes
+
+`HoroEngine::PCG` owns the additive public `Horo/PCG/PCGAsyncOperation.h`
+contract. No existing PCG caller changes signature. A future host evaluator or
+asset cook/load producer must register an exact scene/cell/graph fence, submit
+owned immutable work through the injected Foundation `JobSystem`, and advance
+the result on its owner lane. Existing graph revision alone is insufficient:
+capture the exact canonical source digest and current runtime, input and
+authority generations. A producer may publish only an immutable PCG candidate;
+Scene and other target commits remain separate transactions. Teardown callers
+invalidate the appropriate graph, cell, scene or host scope and retain dependent
+owners until the nonblocking completion sweep and scope drain checks confirm
+worker, child and completion drain. Closed scopes are retired after their
+terminal records are released. The generated standalone PCG public-header
+consumer covers the new header through
+its sole owning target.

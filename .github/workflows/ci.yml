@@ -191,6 +191,29 @@ jobs:
           path: ${{ github.workspace }}/${{ matrix.build_dir }}/test-results/
           retention-days: 14
 
+  cli-process-windows:
+    name: CLI and Process · Windows / MSVC
+    runs-on: windows-2022
+    needs: [format]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+
+      - uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67
+
+      - name: Build and test CLI cancellation and process termination
+        shell: bash
+        run: |
+          cmake -S . -B build/cli-process-windows -G Ninja \
+            -DBUILD_TESTING=ON \
+            -DHORO_BUILD_EDITOR_GUI=OFF \
+            -DHORO_BUILD_RENDER_OPENGL=OFF \
+            -DHORO_ENABLE_OPENTELEMETRY=OFF
+          cmake --build build/cli-process-windows --target HoroCliCommandRegistryTests HoroPlatformTests --parallel 2
+          ctest --test-dir build/cli-process-windows -R '^Horo(CliCommandRegistry|Platform)Tests::' --output-on-failure
+
   vfx-foundation-windows:
     name: VFX Foundation · Windows / MSVC
     runs-on: windows-2022

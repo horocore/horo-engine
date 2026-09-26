@@ -102,7 +102,10 @@ namespace Horo::Destruction {
 
     TEST_CASE("Descriptor identity version and feature failures are typed", "[unit][destruction][descriptor]") {
         auto data = ValidData();
-        data.contractVersion = 2;
+        data.contractVersion = 1;
+        CheckError(DestructibleDescriptor::Create(data), DestructionErrors::DescriptorInvalid);
+        data = ValidData();
+        data.contractVersion = CurrentDestructibleDescriptorContractVersion + 1;
         CheckError(DestructibleDescriptor::Create(data), DestructionErrors::DescriptorInvalid);
         data = ValidData();
         data.configurationRevision = {};

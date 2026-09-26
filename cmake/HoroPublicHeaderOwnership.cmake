@@ -119,6 +119,7 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/DistributionModel.h
     Horo/Release/ReleaseErrors.h
     Horo/Release/ReleaseProfile.h
+    Horo/Release/ReleasePreflight.h
     Horo/Release/ReleaseVersion.h
 )
 horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
@@ -412,6 +413,7 @@ horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/SkeletalMeshSkinning.h
 )
 horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
+    Horo/PCG/PCGCookedPlan.h
     Horo/PCG/PCGErrors.h
     Horo/PCG/PCGGenerationPlan.h
     Horo/PCG/PCGGraphAsset.h
@@ -421,6 +423,7 @@ horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
     Horo/PCG/PCGProvenance.h
     Horo/PCG/PCGSpatialSnapshot.h
     Horo/PCG/PCGRegistry.h
+    Horo/PCG/PCGAsyncOperation.h
 )
 horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
     Horo/Vfx/CpuParticleBuffer.h
@@ -439,6 +442,9 @@ horo_configure_target_header_boundary(HoroDestructionApi PUBLIC_HEADERS
     Horo/Destruction/DestructionIdentity.h
     Horo/Destruction/DestructionRegistry.h
     Horo/Destruction/DestructionStateMachine.h
+)
+horo_configure_target_header_boundary(HoroDestructionRuntime PUBLIC_HEADERS
+    Horo/Destruction/DestructionDamageRuntime.h
 )
 horo_configure_target_header_boundary(HoroCinematicModel PUBLIC_HEADERS
     Horo/Cinematic/CurveSampling.h
@@ -493,10 +499,14 @@ horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/FoliageDefinition.h
+    Horo/Terrain/TerrainComposition.h
     Horo/Terrain/TerrainDescriptor.h
     Horo/Terrain/TerrainErrors.h
     Horo/Terrain/TerrainFoliageRegistry.h
     Horo/Terrain/TerrainIdentity.h
+)
+horo_configure_target_header_boundary(HoroTerrainRuntime PUBLIC_HEADERS
+    Horo/Terrain/TerrainAsyncJobs.h
 )
 horo_configure_target_header_boundary(HoroNavigationNull PUBLIC_HEADERS
     Horo/Navigation/Backends/NullProvider.h
