@@ -996,17 +996,27 @@ namespace Horo::Application {
         if (error)
             return std::nullopt;
         const std::string projectKey = absolute.lexically_normal().generic_string();
-        std::lock_guard lock(state_->Mutex());
+        std::shared_ptr<State::Session> session;
+        GameplayBuildSessionId sessionId{};
+        {
+            std::lock_guard lock(state_->Mutex());
+            const auto active = state_->activeProjects.find(projectKey);
+            if (active == state_->activeProjects.end())
+                return std::nullopt;
+            const auto found = state_->sessions.find(active->second);
+            if (found == state_->sessions.end())
+                return std::nullopt;
+            sessionId = active->second;
+            session = found->second;
+        }
+        std::scoped_lock lock(state_->Mutex(), session->Mutex());
         const auto active = state_->activeProjects.find(projectKey);
-        if (active == state_->activeProjects.end())
+        if (active == state_->activeProjects.end() || active->second != sessionId)
             return std::nullopt;
-        const auto session = state_->sessions.find(active->second);
-        if (session == state_->sessions.end())
+        const auto found = state_->sessions.find(sessionId);
+        if (found == state_->sessions.end() || found->second != session || IsTerminal(session->snapshot.state))
             return std::nullopt;
-        std::lock_guard sessionLock(session->second->Mutex());
-        if (IsTerminal(session->second->snapshot.state))
-            return std::nullopt;
-        return session->second->snapshot;
+        return session->snapshot;
     }
 
     bool GameplayBuildService::RequestCancel(const GameplayBuildSessionId id) const {

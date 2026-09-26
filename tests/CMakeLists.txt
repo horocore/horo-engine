@@ -1125,6 +1125,7 @@ if (HORO_BUILD_EDITOR_GUI)
             HoroEngine::Gui
     )
     add_executable(HoroGlobalDockPanelRenderTests
+            unit/editor/GlobalDockBuildActiveRenderTests.cpp
             unit/editor/GlobalDockBuildOutputPaneTests.cpp
             unit/editor/GlobalDockBuildOutputToolbarRenderTests.cpp
             unit/editor/GlobalDockPanelRenderTests.cpp
