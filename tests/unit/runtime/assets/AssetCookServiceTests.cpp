@@ -103,6 +103,21 @@ namespace {
         }
     };
 
+    /** @brief Adds a second distinct source asset for concurrent cancellation checks. */
+    AssetRecord AddSecondMesh(TestProject &project) {
+        const std::filesystem::path sourceFile = project.assetsDir / "second_mesh.fbx";
+        std::filesystem::copy_file(project.sourceFile, sourceFile);
+        const std::string sidecarJson = SidecarJson("00000000-0000-0000-0000-0000000000a2", "core.mesh");
+        const auto sidecarBytes =
+            std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(sidecarJson.data()), sidecarJson.size());
+        WriteFile(std::string(sourceFile.string()) + ".horo", sidecarBytes);
+        AssetRecord record = TestMeshRecord();
+        record.id = Id("00000000-0000-0000-0000-0000000000a2");
+        record.sourcePath = ProjectPath::Parse("assets/second_mesh.fbx").Value();
+        record.metadataPath = ProjectPath::Parse("assets/second_mesh.fbx.horo").Value();
+        return record;
+    }
+
     /** @brief Requests cancellation while returning either an acknowledged cook cancellation or a real failure. */
     class CancellingCooker final : public ICookerStrategy {
     public:
@@ -118,6 +133,7 @@ namespace {
         bool fail_;
     };
 
+    /** @brief Verifies that the initial cook and later cache hit retain source attribution. */
     void AssertCachedCookOutput(const BuildOutputSnapshot &first, const BuildOutputSnapshot &second,
                                 const std::filesystem::path &sourcePath) {
         const auto cached = std::ranges::find_if(second.records, [](const BuildOutputRecord &record) {
@@ -239,11 +255,11 @@ TEST_CASE("AssetCookService keeps cook cancellation separate from concurrent fai
         TestProject project;
         TempDir cacheDir;
         TempDir cookedDir;
-        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 1}};
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 4}};
         CancellationSource source;
 
         AssetRegistry registry;
-        REQUIRE(registry.Publish({TestMeshRecord()}).status == AssetRegistryBuildStatus::Complete);
+        REQUIRE(registry.Publish({TestMeshRecord(), AddSecondMesh(project)}).status == AssetRegistryBuildStatus::Complete);
 
         CookerCatalog catalog;
         REQUIRE(catalog
@@ -255,7 +271,7 @@ TEST_CASE("AssetCookService keeps cook cancellation separate from concurrent fai
         const auto catalogSnapshot = catalog.Publish();
         REQUIRE(catalogSnapshot.HasValue());
         AssetCookService service(jobs, catalogSnapshot.Value());
-        BuildOutputStore output{8};
+        BuildOutputStore output{16};
         OperationStore operations{4, 4};
         AssetCookRequest request{.sourceRoot = project.dir.path,
                                  .cacheRoot = cacheDir.path,
@@ -284,6 +300,11 @@ TEST_CASE("AssetCookService keeps cook cancellation separate from concurrent fai
         REQUIRE(assetFailure->source->absolutePath == project.sourceFile.string());
         REQUIRE(assetFailure->operationId == operationSnapshot->operations.front().id);
         REQUIRE(assetFailure->sessionId == outputSnapshot->records.back().sessionId);
+        const std::filesystem::path secondSource = project.assetsDir / "second_mesh.fbx";
+        REQUIRE(std::ranges::count_if(outputSnapshot->records, [&](const BuildOutputRecord &record) {
+            return record.source.has_value() && record.source->absolutePath == secondSource.string() &&
+                   record.result == BuildOutputResult::Cancelled;
+        }) == 1);
         jobs.Shutdown(ShutdownPolicy::Drain);
     }
 }
