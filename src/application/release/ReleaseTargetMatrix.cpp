@@ -11,7 +11,7 @@ namespace Horo::Release {
         /** @brief Appends a stable, field-specific admission failure. */
         void AddIssue(std::vector<ReleaseTargetIssue> &issues, const ReleaseTargetIssueCode code, const std::string_view targetId,
                       std::string field, std::string message) {
-            issues.push_back({code, std::string{targetId}, std::move(field), std::move(message)});
+            issues.emplace_back(code, std::string{targetId}, std::move(field), std::move(message));
         }
 
         /** @brief Checks the closed platform identity range before any enum-based lookup. */
@@ -83,14 +83,132 @@ namespace Horo::Release {
                 cell.minimumPlatform > selected->sdk.newestSupportedPlatform)
                 AddIssue(issues, SdkUnavailable, cell.targetId, "sdk", "Matching SDK does not support the minimum platform.");
 
-            const DistributionPackageFormat format = cell.request.profile.PackageFormat();
-            if (std::ranges::find(selected->packageFormats, format) == selected->packageFormats.end() ||
+            if (const DistributionPackageFormat format = cell.request.profile.PackageFormat();
+                std::ranges::find(selected->packageFormats, format) == selected->packageFormats.end() ||
                 ValidateDistributionProductPackageFormat(cell.request.profile.Product(), cell.request.profile.ArtifactClass(),
                                                          target.platform, format)
                     .HasError())
                 AddIssue(issues, PackageFormatUnsupported, cell.targetId, "packageFormat",
                          "Selected package format is unsupported by the target or toolchain.");
             return selected;
+        }
+
+        /** @brief Rejects duplicate identities, equivalent target tuples, and colliding output roots. */
+        void ValidateCellIdentity(const ReleaseMatrixCellRequest &cell, const std::span<const ReleaseMatrixCellRequest> previousRequests,
+                                  const std::vector<ReleaseMatrixCellPlan> &previousPlans, std::vector<ReleaseTargetIssue> &issues) {
+            using enum ReleaseTargetIssueCode;
+            if (!IsValidDistributionIdentity(cell.jobId))
+                AddIssue(issues, InvalidTarget, cell.targetId, "jobId", "Job identity is invalid.");
+            if (!IsValidDistributionIdentity(cell.targetId))
+                AddIssue(issues, InvalidTarget, cell.targetId, "targetId", "Target identity is invalid.");
+            if (cell.requirement != ReleaseMatrixRequirement::Required && cell.requirement != ReleaseMatrixRequirement::Optional)
+                AddIssue(issues, InvalidTarget, cell.targetId, "requirement", "Target requirement is invalid.");
+            if (std::ranges::any_of(previousPlans, [&cell](const ReleaseMatrixCellPlan &previous) {
+                return previous.targetId == cell.targetId;
+            }))
+                AddIssue(issues, InvalidTarget, cell.targetId, "targetId", "Target identity is duplicated in the group.");
+            if (std::ranges::any_of(previousPlans, [&cell](const ReleaseMatrixCellPlan &previous) {
+                return previous.jobId == cell.jobId;
+            }))
+                AddIssue(issues, InvalidTarget, cell.targetId, "jobId", "Job identity is duplicated in the group.");
+            for (const ReleaseMatrixCellRequest &previous : previousRequests) {
+                if (previous.request.projectId == cell.request.projectId && previous.request.profile.Id() == cell.request.profile.Id() &&
+                    previous.request.profile.Platform() == cell.request.profile.Platform() &&
+                    previous.request.architecture == cell.request.architecture &&
+                    previous.request.configuration == cell.request.configuration &&
+                    previous.request.toolchainId == cell.request.toolchainId)
+                    AddIssue(issues, InvalidTarget, cell.targetId, "target", "Target tuple is duplicated in the group.");
+                if (previous.facts.canonicalOutputRoot.lexically_normal() == cell.facts.canonicalOutputRoot.lexically_normal())
+                    AddIssue(issues, InvalidTarget, cell.targetId, "output", "Target output root is duplicated in the group.");
+            }
+        }
+
+        /** @brief Admits one cell only after identity, toolchain, and preflight evidence agree. */
+        [[nodiscard]] ReleaseMatrixCellPlan PlanCell(const ReleaseMatrixCellRequest &cell, const ReleaseMachine host,
+                                                     const std::span<const ReleaseMatrixCellRequest> previousRequests,
+                                                     const std::vector<ReleaseMatrixCellPlan> &previousPlans,
+                                                     const std::span<const ReleaseToolchainDescriptor> toolchains) {
+            ReleaseMatrixCellPlan planned{cell.jobId, cell.targetId, cell.requirement, std::nullopt, std::nullopt, {}};
+            ValidateCellIdentity(cell, previousRequests, previousPlans, planned.issues);
+            const ReleaseToolchainDescriptor *selected = ValidateToolchain(cell, host, toolchains, planned.issues);
+            ReleasePreflightOutcome preflight = PreflightRelease(cell.request, cell.facts);
+            for (const ReleasePreflightIssue &issue : preflight.issues)
+                AddIssue(planned.issues, ReleaseTargetIssueCode::PreflightFailed, cell.targetId, issue.field, issue.message);
+            if (!planned.issues.empty() || !selected)
+                return planned;
+
+            planned.plan = std::move(preflight.plan);
+            const auto capabilities =
+                ValidateDistributionProductPackageFormat(cell.request.profile.Product(), cell.request.profile.ArtifactClass(),
+                                                         cell.request.profile.Platform(), cell.request.profile.PackageFormat());
+            planned.validatedTarget = ReleaseValidatedTarget{{cell.request.profile.Platform(), cell.request.architecture},
+                                                             cell.minimumPlatform,
+                                                             selected->sdk.id,
+                                                             selected->sdk.version,
+                                                             selected->sdk.oldestSupportedPlatform,
+                                                             selected->sdk.newestSupportedPlatform,
+                                                             cell.request.profile.PackageFormat(),
+                                                             capabilities.Value(),
+                                                             selected->digest};
+            return planned;
+        }
+
+        /** @brief Finds the exact job/target terminal and rejects duplicate evidence. */
+        [[nodiscard]] const ReleaseTargetTerminal *FindTerminal(const ReleaseMatrixCellPlan &cell,
+                                                                const std::span<const ReleaseTargetTerminal> terminals,
+                                                                std::vector<ReleaseTargetIssue> &issues, bool &invalidEvidence) {
+            const ReleaseTargetTerminal *matched = nullptr;
+            for (const ReleaseTargetTerminal &terminal : terminals) {
+                if (terminal.jobId != cell.jobId || terminal.targetId != cell.targetId)
+                    continue;
+                if (matched) {
+                    AddIssue(issues, ReleaseTargetIssueCode::InvalidMatrix, cell.targetId, "terminal",
+                             "Target has more than one terminal result.");
+                    invalidEvidence = true;
+                    break;
+                }
+                matched = &terminal;
+            }
+            return matched;
+        }
+
+        /** @brief Maps and validates one admitted job's terminal evidence. */
+        void ApplyTerminal(const ReleaseMatrixCellPlan &cell, const ReleaseTargetTerminal &terminal, ReleaseMatrixMemberResult &member,
+                           std::vector<ReleaseTargetIssue> &issues, bool &invalidEvidence) {
+            member.terminal = terminal;
+            if (cell.plan) {
+                switch (terminal.state) {
+                    case ReleaseTargetTerminalState::Succeeded:
+                        member.state = ReleaseMatrixMemberState::Succeeded;
+                        break;
+                    case ReleaseTargetTerminalState::Failed:
+                        member.state = ReleaseMatrixMemberState::Failed;
+                        break;
+                    case ReleaseTargetTerminalState::Cancelled:
+                        member.state = ReleaseMatrixMemberState::Cancelled;
+                        break;
+                }
+            }
+            if (terminal.state != ReleaseTargetTerminalState::Succeeded && terminal.state != ReleaseTargetTerminalState::Failed &&
+                terminal.state != ReleaseTargetTerminalState::Cancelled) {
+                AddIssue(issues, ReleaseTargetIssueCode::InvalidMatrix, cell.targetId, "terminal", "Target has an invalid terminal state.");
+                invalidEvidence = true;
+            }
+            if (!cell.plan) {
+                AddIssue(issues, ReleaseTargetIssueCode::InvalidMatrix, cell.targetId, "terminal",
+                         "Rejected target cannot have an execution result.");
+                invalidEvidence = true;
+            }
+            if (terminal.state == ReleaseTargetTerminalState::Succeeded && !terminal.candidateFinalVerified) {
+                AddIssue(issues, ReleaseTargetIssueCode::InvalidMatrix, cell.targetId, "candidate",
+                         "Successful target lacks a final-verified candidate.");
+                invalidEvidence = true;
+            }
+            if (terminal.state != ReleaseTargetTerminalState::Succeeded && terminal.candidateFinalVerified) {
+                AddIssue(issues, ReleaseTargetIssueCode::InvalidMatrix, cell.targetId, "candidate",
+                         "Non-successful target cannot claim a successful candidate result.");
+                invalidEvidence = true;
+            }
         }
     }  // namespace
 
@@ -111,53 +229,7 @@ namespace Horo::Release {
 
         matrix.cells.reserve(cells.size());
         for (std::size_t index = 0; index < cells.size(); ++index) {
-            const ReleaseMatrixCellRequest &cell = cells[index];
-            ReleaseMatrixCellPlan planned{cell.jobId, cell.targetId, cell.requirement, std::nullopt, std::nullopt, {}};
-            if (!IsValidDistributionIdentity(cell.jobId))
-                AddIssue(planned.issues, InvalidTarget, cell.targetId, "jobId", "Job identity is invalid.");
-            if (!IsValidDistributionIdentity(cell.targetId))
-                AddIssue(planned.issues, InvalidTarget, cell.targetId, "targetId", "Target identity is invalid.");
-            if (cell.requirement != ReleaseMatrixRequirement::Required && cell.requirement != ReleaseMatrixRequirement::Optional)
-                AddIssue(planned.issues, InvalidTarget, cell.targetId, "requirement", "Target requirement is invalid.");
-            if (std::ranges::any_of(matrix.cells, [&cell](const ReleaseMatrixCellPlan &previous) {
-                return previous.targetId == cell.targetId;
-            }))
-                AddIssue(planned.issues, InvalidTarget, cell.targetId, "targetId", "Target identity is duplicated in the group.");
-            if (std::ranges::any_of(matrix.cells, [&cell](const ReleaseMatrixCellPlan &previous) {
-                return previous.jobId == cell.jobId;
-            }))
-                AddIssue(planned.issues, InvalidTarget, cell.targetId, "jobId", "Job identity is duplicated in the group.");
-            for (const ReleaseMatrixCellRequest &previous : cells.first(index)) {
-                if (previous.request.projectId == cell.request.projectId && previous.request.profile.Id() == cell.request.profile.Id() &&
-                    previous.request.profile.Platform() == cell.request.profile.Platform() &&
-                    previous.request.architecture == cell.request.architecture &&
-                    previous.request.configuration == cell.request.configuration &&
-                    previous.request.toolchainId == cell.request.toolchainId)
-                    AddIssue(planned.issues, InvalidTarget, cell.targetId, "target", "Target tuple is duplicated in the group.");
-                if (previous.facts.canonicalOutputRoot.lexically_normal() == cell.facts.canonicalOutputRoot.lexically_normal())
-                    AddIssue(planned.issues, InvalidTarget, cell.targetId, "output", "Target output root is duplicated in the group.");
-            }
-
-            const ReleaseToolchainDescriptor *selected = ValidateToolchain(cell, host, toolchains, planned.issues);
-            ReleasePreflightOutcome preflight = PreflightRelease(cell.request, cell.facts);
-            for (const ReleasePreflightIssue &issue : preflight.issues)
-                AddIssue(planned.issues, PreflightFailed, cell.targetId, issue.field, issue.message);
-            if (planned.issues.empty() && selected) {
-                planned.plan = std::move(preflight.plan);
-                const auto capabilities =
-                    ValidateDistributionProductPackageFormat(cell.request.profile.Product(), cell.request.profile.ArtifactClass(),
-                                                             cell.request.profile.Platform(), cell.request.profile.PackageFormat());
-                planned.validatedTarget = ReleaseValidatedTarget{{cell.request.profile.Platform(), cell.request.architecture},
-                                                                 cell.minimumPlatform,
-                                                                 selected->sdk.id,
-                                                                 selected->sdk.version,
-                                                                 selected->sdk.oldestSupportedPlatform,
-                                                                 selected->sdk.newestSupportedPlatform,
-                                                                 cell.request.profile.PackageFormat(),
-                                                                 capabilities.Value(),
-                                                                 selected->digest};
-            }
-            matrix.cells.push_back(std::move(planned));
+            matrix.cells.push_back(PlanCell(cells[index], host, cells.first(index), matrix.cells, toolchains));
         }
         return matrix;
     }
@@ -184,55 +256,9 @@ namespace Horo::Release {
                          "Admitted target plan and validation evidence disagree.");
                 requiredFailed = true;
             }
-            const ReleaseTargetTerminal *matched = nullptr;
-            for (const ReleaseTargetTerminal &terminal : terminals) {
-                if (terminal.jobId != cell.jobId || terminal.targetId != cell.targetId)
-                    continue;
-                if (matched) {
-                    AddIssue(summary.issues, ReleaseTargetIssueCode::InvalidMatrix, cell.targetId, "terminal",
-                             "Target has more than one terminal result.");
-                    requiredFailed = true;
-                    break;
-                }
-                matched = &terminal;
-            }
-            if (matched) {
-                member.terminal = *matched;
-                if (cell.plan) {
-                    switch (matched->state) {
-                        case ReleaseTargetTerminalState::Succeeded:
-                            member.state = ReleaseMatrixMemberState::Succeeded;
-                            break;
-                        case ReleaseTargetTerminalState::Failed:
-                            member.state = ReleaseMatrixMemberState::Failed;
-                            break;
-                        case ReleaseTargetTerminalState::Cancelled:
-                            member.state = ReleaseMatrixMemberState::Cancelled;
-                            break;
-                    }
-                }
-                if (matched->state != ReleaseTargetTerminalState::Succeeded && matched->state != ReleaseTargetTerminalState::Failed &&
-                    matched->state != ReleaseTargetTerminalState::Cancelled) {
-                    AddIssue(summary.issues, ReleaseTargetIssueCode::InvalidMatrix, cell.targetId, "terminal",
-                             "Target has an invalid terminal state.");
-                    requiredFailed = true;
-                }
-                if (!cell.plan) {
-                    AddIssue(summary.issues, ReleaseTargetIssueCode::InvalidMatrix, cell.targetId, "terminal",
-                             "Rejected target cannot have an execution result.");
-                    requiredFailed = true;
-                }
-                if (matched->state == ReleaseTargetTerminalState::Succeeded && !matched->candidateFinalVerified) {
-                    AddIssue(summary.issues, ReleaseTargetIssueCode::InvalidMatrix, cell.targetId, "candidate",
-                             "Successful target lacks a final-verified candidate.");
-                    requiredFailed = true;
-                }
-                if (matched->state != ReleaseTargetTerminalState::Succeeded && matched->candidateFinalVerified) {
-                    AddIssue(summary.issues, ReleaseTargetIssueCode::InvalidMatrix, cell.targetId, "candidate",
-                             "Non-successful target cannot claim a successful candidate result.");
-                    requiredFailed = true;
-                }
-            }
+            const ReleaseTargetTerminal *matched = FindTerminal(cell, terminals, summary.issues, requiredFailed);
+            if (matched)
+                ApplyTerminal(cell, *matched, member, summary.issues, requiredFailed);
             if (cell.requirement == ReleaseMatrixRequirement::Required) {
                 requiredFailed |= !cell.plan || (matched && matched->state != ReleaseTargetTerminalState::Succeeded);
             }
@@ -248,9 +274,12 @@ namespace Horo::Release {
                 requiredFailed = true;
             }
         }
-        summary.state = requiredFailed ? ReleaseMatrixState::Failed
-                        : pending      ? ReleaseMatrixState::Incomplete
-                                       : ReleaseMatrixState::Succeeded;
+        if (requiredFailed)
+            summary.state = ReleaseMatrixState::Failed;
+        else if (pending)
+            summary.state = ReleaseMatrixState::Incomplete;
+        else
+            summary.state = ReleaseMatrixState::Succeeded;
         return summary;
     }
 }  // namespace Horo::Release

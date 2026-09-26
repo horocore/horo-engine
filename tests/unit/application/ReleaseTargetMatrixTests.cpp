@@ -269,3 +269,33 @@ TEST_CASE("Duplicate cells and terminal results cannot produce a successful grou
                                                        {"job-one", "one", ReleaseTargetTerminalState::Succeeded, true}};
     CHECK(SummarizeReleaseTargetMatrix(valid, duplicate).state == ReleaseMatrixState::Failed);
 }
+
+TEST_CASE("Invalid, foreign and rejected terminal evidence cannot produce a successful group", "[unit][application][release][matrix]") {
+    const ReleaseMachine host{DistributionPlatform::Linux, DistributionArchitecture::X64};
+    const ReleaseMatrixCellRequest cell = Cell("one", host.platform, host.architecture, DistributionPackageFormat::TarGzip);
+    const ReleaseToolchainDescriptor toolchain = Toolchain(host, host, DistributionPackageFormat::TarGzip);
+    const ReleaseTargetMatrixPlan valid = PlanReleaseTargetMatrix("release-1", host, std::span{&cell, 1U}, std::span{&toolchain, 1U});
+    REQUIRE(valid.cells.size() == 1);
+    REQUIRE(valid.cells[0].plan.has_value());
+
+    const ReleaseTargetTerminal invalid{"job-one", "one", static_cast<ReleaseTargetTerminalState>(255), false};
+    const ReleaseMatrixSummary invalidSummary = SummarizeReleaseTargetMatrix(valid, std::span{&invalid, 1U});
+    CHECK(invalidSummary.state == ReleaseMatrixState::Failed);
+    REQUIRE(invalidSummary.members.size() == 1);
+    CHECK(invalidSummary.members[0].terminal.has_value());
+    CHECK(invalidSummary.members[0].state == ReleaseMatrixMemberState::Pending);
+
+    const std::vector<ReleaseTargetTerminal> foreign{{"job-one", "one", ReleaseTargetTerminalState::Succeeded, true},
+                                                     {"job-foreign", "one", ReleaseTargetTerminalState::Succeeded, true}};
+    CHECK(SummarizeReleaseTargetMatrix(valid, foreign).state == ReleaseMatrixState::Failed);
+
+    ReleaseMatrixCellRequest rejectedCell = cell;
+    rejectedCell.sdkId = "missing-sdk";
+    const ReleaseTargetMatrixPlan rejected =
+        PlanReleaseTargetMatrix("release-2", host, std::span{&rejectedCell, 1U}, std::span{&toolchain, 1U});
+    REQUIRE_FALSE(rejected.cells[0].plan.has_value());
+    const ReleaseTargetTerminal claimed{"job-one", "one", ReleaseTargetTerminalState::Succeeded, true};
+    const ReleaseMatrixSummary rejectedSummary = SummarizeReleaseTargetMatrix(rejected, std::span{&claimed, 1U});
+    CHECK(rejectedSummary.state == ReleaseMatrixState::Failed);
+    CHECK(rejectedSummary.members[0].state == ReleaseMatrixMemberState::ValidationFailed);
+}
