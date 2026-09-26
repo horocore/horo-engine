@@ -70,7 +70,9 @@ namespace Horo::Vfx {
      * @brief Immutable force parameters captured during simulation preparation.
      *
      * Gravity and Wind use `vector * strength`. Attraction points at `center`; `falloff` is
-     * the distance attenuation coefficient. Noise uses the versioned per-particle counter stream.
+     * the distance attenuation coefficient. Noise uses the versioned per-particle counter stream;
+     * `strength * frequency` scales its acceleration. Noise channels 1-9 are reserved for
+     * initialization, and each noise module in a stack requires a distinct channel.
      */
     struct CpuParticleForceModule final {
         CpuParticleForceKind kind{CpuParticleForceKind::Gravity};
@@ -79,7 +81,7 @@ namespace Horo::Vfx {
         float strength{1.0F};
         float falloff{};
         float frequency{1.0F};
-        std::uint8_t randomChannel{1};
+        std::uint8_t randomChannel{16};
     };
 
     /** @brief One scalar over-life curve key in normalized age space. */
