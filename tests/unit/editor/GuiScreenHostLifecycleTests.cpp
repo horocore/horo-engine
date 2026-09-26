@@ -72,6 +72,21 @@ namespace {
         ScreenStats &stats_;
     };
 
+    void VerifyMenuInputBarrier(GuiScreenHost &host, Input::InputRouter &input, const ScreenStats &stats) {
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
+        REQUIRE(stats.menuInvocations == 1);
+        auto modalContext = input.PushContext(Input::InputContextId{"test.modal"}, Input::InputContextKind::ModalRoot);
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
+        REQUIRE(stats.menuInvocations == 1);
+        modalContext.Reset();
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
+        REQUIRE(stats.menuInvocations == 1);
+        const Input::RawInputSnapshot nextFrame;
+        input.BeginFrame(nextFrame);
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
+        REQUIRE(stats.menuInvocations == 2);
+    }
+
     TEST_CASE("Shutdown Leaves Once Destroys Screen And Revokes Services", "[unit][editor]") {
         EngineDataBus engineEvents;
         EditorDataBus editorEvents;
@@ -105,18 +120,7 @@ namespace {
         REQUIRE((stats.enters == 1));
         REQUIRE((!host.Services().Empty()));
 
-        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
-        REQUIRE(stats.menuInvocations == 1);
-        auto modalContext = input.PushContext(Input::InputContextId{"test.modal"}, Input::InputContextKind::ModalRoot);
-        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
-        REQUIRE(stats.menuInvocations == 1);
-        modalContext.Reset();
-        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
-        REQUIRE(stats.menuInvocations == 1);
-        const Input::RawInputSnapshot nextFrame;
-        input.BeginFrame(nextFrame);
-        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
-        REQUIRE(stats.menuInvocations == 2);
+        VerifyMenuInputBarrier(host, input, stats);
 
         const Result<void> invalidRoute = host.Navigate(GuiRoute{GuiRouteKind::Welcome, ProjectCreationRouteParameters{}});
         REQUIRE((invalidRoute.HasError()));
