@@ -635,8 +635,8 @@ namespace Horo::PlatformServices {
 
     namespace {
         [[nodiscard]] HoroExtensionStatus ObserveSession(
-            void *context, const std::uint64_t revision,
-            const std::uint32_t phase) noexcept {  // NOSONAR(cpp:S5008) The callback context is opaque by C ABI contract.
+            void *context, const std::uint64_t revision,  // NOSONAR(cpp:S5008) The callback context is opaque by C ABI contract.
+            const std::uint32_t phase) noexcept {
             auto &state = *static_cast<PlatformProviderLifecycleState *>(context);
             std::scoped_lock lock{state.mutex};
             if (!state.callbackOpen || revision == 0 || revision <= state.session.revision || phase > 4)
@@ -646,9 +646,8 @@ namespace Horo::PlatformServices {
         }
 
         [[nodiscard]] HoroExtensionStatus ReceiveCompletion(
-            void *context,
-            const HoroPlatformProviderCompletion
-                *completion) noexcept {  // NOSONAR(cpp:S5008) The callback context is opaque by C ABI contract.
+            void *context,  // NOSONAR(cpp:S5008) The callback context is opaque by C ABI contract.
+            const HoroPlatformProviderCompletion *completion) noexcept {
             if (completion == nullptr || completion->structSize != sizeof(HoroPlatformProviderCompletion) || completion->requestId == 0 ||
                 completion->requestGeneration == 0 || completion->sessionRevision == 0 ||
                 completion->service >= static_cast<std::uint32_t>(PlatformServiceKind::Count) ||
@@ -807,8 +806,8 @@ namespace Horo::PlatformServices {
                        .context = state.get(),
                        .sessionChanged = ObserveSession,
                        .complete = ReceiveCompletion};
-        // NOSONAR(cpp:S5950) The private constructor is accessible here but not inside std::make_unique.
-        auto host = std::unique_ptr<PlatformProviderLifecycleHost>(new PlatformProviderLifecycleHost(state));
+        auto host = std::unique_ptr<PlatformProviderLifecycleHost>(
+            new PlatformProviderLifecycleHost(state));  // NOSONAR(cpp:S5950) The private constructor is inaccessible to make_unique.
         if (!StartNativeLifecycle(*state, descriptor, configuration, requiredMask)) {
             static_cast<void>(host->Close());
             return HostResult::Failure(MakeError(PlatformProviderLifecycleErrors::InitializationFailed));
@@ -827,9 +826,9 @@ namespace Horo::PlatformServices {
     }
 
     /** @brief Sends one validated Horo operation through the selected native candidate. */
-    Result<PlatformProviderLifecycleHost::RequestHandle> PlatformProviderLifecycleHost::Submit(
-        const PlatformServiceKind service, const std::uint32_t operation,
-        const std::span<const std::byte> payload) {  // NOSONAR(cpp:S5817) This operation intentionally mutates the shared request state.
+    Result<PlatformProviderLifecycleHost::RequestHandle> PlatformProviderLifecycleHost::Submit(  // NOSONAR(cpp:S5817) Mutates shared
+                                                                                                 // request state.
+        const PlatformServiceKind service, const std::uint32_t operation, const std::span<const std::byte> payload) {
         using SubmitResult = Result<RequestHandle>;
         auto &state = *state_;
         const auto serviceIndex = static_cast<std::uint32_t>(service);
@@ -862,8 +861,8 @@ namespace Horo::PlatformServices {
                                                   .sessionRevision = sessionRevision,
                                                   .service = serviceIndex,
                                                   .operation = operation,
-                                                  // NOSONAR(cpp:S6022) The public C ABI explicitly requires a uint8_t byte span.
-                                                  .payload = reinterpret_cast<const std::uint8_t *>(payload.data()),
+                                                  .payload = reinterpret_cast<const std::uint8_t *>(
+                                                      payload.data()),  // NOSONAR(cpp:S6022) C ABI requires uint8_t.
                                                   .payloadSize = static_cast<std::uint32_t>(payload.size())};
         if (const auto status = InvokeProvider(state.operations.submit, state.candidate, &input); status != HORO_EXTENSION_SUCCESS) {
             static_cast<void>(state.requests.CompleteFailure(handle, MakeError(BackendErrors::ServiceUnavailable)));
@@ -873,8 +872,8 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformProviderLifecycleHost::DispatchCompletions */
-    std::size_t PlatformProviderLifecycleHost::DispatchCompletions(
-        const std::size_t maximum) {  // NOSONAR(cpp:S5817) Completion dispatch intentionally mutates shared lifecycle state.
+    std::size_t PlatformProviderLifecycleHost::DispatchCompletions(  // NOSONAR(cpp:S5817) Mutates shared lifecycle state.
+        const std::size_t maximum) {
         auto &state = *state_;
         std::size_t processed{};
         while (processed < maximum) {
@@ -919,9 +918,8 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc PlatformProviderLifecycleHost::OnComplete */
-    Result<PlatformRequestSubscription> PlatformProviderLifecycleHost::OnComplete(
-        const RequestHandle &request, std::function<void(const PlatformRequestSnapshot<void> &)>
-                                          observer) {  // NOSONAR(cpp:S5817) Subscription changes the request store owned by this host.
+    Result<PlatformRequestSubscription> PlatformProviderLifecycleHost::OnComplete(  // NOSONAR(cpp:S5817) Mutates owned request store.
+        const RequestHandle &request, std::function<void(const PlatformRequestSnapshot<void> &)> observer) {
         return state_->requests.OnComplete(request, std::move(observer));
     }
 

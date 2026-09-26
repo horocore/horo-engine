@@ -251,12 +251,10 @@ enum HoroPlatformProviderProfileBits {  // NOSONAR(cpp:S3642) Shared C11 ABI req
 typedef HoroExtensionStatus (*HoroPlatformProviderCreateFunc)(  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
     void *factoryContext, void **outCandidate);                 // NOSONAR(cpp:S5416) Public extension ABI must remain C-compatible.
 /** @brief Close candidate admission, cancel work and report success only after callbacks have drained. */
-typedef HoroExtensionStatus (*HoroPlatformProviderRetireFunc)(
-    void *candidate);  // NOSONAR(cpp:S5416) Public extension ABI must remain C-compatible.  // NOSONAR(cpp:S5416) Shared C11 ABI requires
-                       // typedef.
+typedef HoroExtensionStatus (*HoroPlatformProviderRetireFunc)(  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+    void *candidate);
 /** @brief Destroy a fully retired candidate on its required owner thread. */
-typedef void (*HoroPlatformProviderDestroyFunc)(void *candidate);  // NOSONAR(cpp:S5416) Public extension ABI must remain C-compatible.  //
-                                                                   // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+typedef void (*HoroPlatformProviderDestroyFunc)(void *candidate);  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
 
 /** @brief One bounded, host-owned completion copied before this callback returns.
  * @details A zero resultCode is success; nonzero is normalized provider failure.
@@ -273,8 +271,8 @@ struct HoroPlatformProviderCompletion {
     const uint8_t *payload;
     uint32_t payloadSize;
 };
-typedef struct HoroPlatformProviderCompletion
-    HoroPlatformProviderCompletion;  // NOSONAR(cpp:S5416) Public extension ABI must remain C-compatible.
+typedef struct HoroPlatformProviderCompletion  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+    HoroPlatformProviderCompletion;
 
 /** @brief Host sink valid until closeIngress and drain both succeed.
  * @details Session phases use Horo's NoSubject=0, Authenticating=1, Active=2,
@@ -307,8 +305,8 @@ struct HoroPlatformProviderOperation {
     const uint8_t *payload;
     uint32_t payloadSize;
 };
-typedef struct HoroPlatformProviderOperation
-    HoroPlatformProviderOperation;  // NOSONAR(cpp:S5416) Public extension ABI must remain C-compatible.
+typedef struct HoroPlatformProviderOperation  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+    HoroPlatformProviderOperation;
 
 /**
  * @brief Versioned operation and callback lifecycle; all calls are on the host owner lane except sink callbacks.
@@ -330,7 +328,7 @@ struct HoroPlatformProviderOperations {
     HoroExtensionStatus (*stopSession)(void *candidate);
     HoroExtensionStatus (*shutdownServices)(void *candidate);
 };
-typedef struct HoroPlatformProviderOperations HoroPlatformProviderOperations;
+typedef struct HoroPlatformProviderOperations HoroPlatformProviderOperations;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
 
 /**
  * @brief Borrowed provider contribution copied during module load; version 1 is factory/lifetime and version 2 adds operations.

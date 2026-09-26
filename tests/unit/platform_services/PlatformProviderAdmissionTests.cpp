@@ -43,6 +43,16 @@ namespace Horo::PlatformServices::Tests {
             return manifest.good();
         }
 
+        /** @brief Removes a staged native provider package after an integration case. */
+        struct PackageCleanup final {
+            std::filesystem::path path;
+
+            ~PackageCleanup() {
+                std::error_code error;
+                std::filesystem::remove_all(path, error);
+            }
+        };
+
         /** @brief Builds the exact-provider configuration used by the operations ABI integration case. */
         [[nodiscard]] Result<PlatformProjectConfiguration> OptionalAchievementConfiguration() {
             PlatformProjectConfigurationCandidate draft{.projectId = "example.project",
@@ -331,14 +341,7 @@ namespace Horo::PlatformServices::Tests {
             fs::temp_directory_path() / ("horo-provider-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         REQUIRE(fs::create_directory(root));
 
-        struct Cleanup final {
-            fs::path path;
-
-            ~Cleanup() {
-                std::error_code error;
-                fs::remove_all(path, error);
-            }
-        } cleanup{root};
+        PackageCleanup cleanup{root};
 
         REQUIRE(WriteProviderPackage(root, HORO_PLATFORM_PROVIDER_FIXTURE));
         Extensions::ApplicationCapabilityRegistry capabilities;
@@ -382,14 +385,7 @@ namespace Horo::PlatformServices::Tests {
                               ("horo-provider-ops-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         REQUIRE(fs::create_directory(root));
 
-        struct Cleanup final {
-            fs::path path;
-
-            ~Cleanup() {
-                std::error_code error;
-                fs::remove_all(path, error);
-            }
-        } cleanup{root};
+        PackageCleanup cleanup{root};
 
         REQUIRE(WriteProviderPackage(root, HORO_PLATFORM_PROVIDER_OPERATIONS_FIXTURE));
         Extensions::ApplicationCapabilityRegistry capabilities;
