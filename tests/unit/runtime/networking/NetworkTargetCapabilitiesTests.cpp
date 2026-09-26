@@ -129,7 +129,7 @@ namespace {
         REQUIRE(fixture.Assess().diagnostic.reason == NetworkTargetFailureReason::NotPackaged);
     }
 
-    TEST_CASE("Network target distinguishes absent composition package host and project capabilities", "[unit][network][target]") {
+    TEST_CASE("Network target reports missing project product and host roles", "[unit][network][target]") {
         Fixture fixture;
         fixture.product.supportedRoles =
             NetworkProjectRoleSet::Standalone | NetworkProjectRoleSet::ListenServer | NetworkProjectRoleSet::DedicatedServer;
@@ -153,10 +153,12 @@ namespace {
         assessment = fixture.Assess();
         REQUIRE(assessment.diagnostic.capability == NetworkTargetCapabilityKind::Input);
         REQUIRE(assessment.diagnostic.reason == NetworkTargetFailureReason::Invalid);
+    }
 
-        fixture = Fixture{};
+    TEST_CASE("Network target rejects package role protocol and provider inventory mismatch", "[unit][network][target]") {
+        Fixture fixture;
         fixture.inventory.supportedRoles = NetworkProjectRoleSet::Standalone;
-        assessment = fixture.Assess();
+        auto assessment = fixture.Assess();
         REQUIRE(assessment.diagnostic.capability == NetworkTargetCapabilityKind::Role);
         REQUIRE(assessment.diagnostic.reason == NetworkTargetFailureReason::PackageMismatch);
         REQUIRE(assessment.diagnostic.role == NetworkProjectRole::Client);
@@ -182,12 +184,14 @@ namespace {
         REQUIRE(assessment.diagnostic.capability == NetworkTargetCapabilityKind::Provider);
         REQUIRE(assessment.diagnostic.reason == NetworkTargetFailureReason::PackageMismatch);
         REQUIRE(assessment.diagnostic.provider == fixture.selection.provider);
+    }
 
-        fixture = Fixture{};
+    TEST_CASE("Network target reports installed supported configured and runtime host states", "[unit][network][target]") {
+        Fixture fixture;
         fixture.host.providers[0].installed = false;
         fixture.host.providers[0].hostSupported = false;
         fixture.host.providers[0].configured = false;
-        assessment = fixture.Assess();
+        auto assessment = fixture.Assess();
         REQUIRE(assessment.diagnostic.reason == NetworkTargetFailureReason::NotInstalled);
         REQUIRE(assessment.diagnostic.provider == fixture.selection.provider);
         REQUIRE(assessment.diagnostic.remediation == NetworkTargetRemediation::InstallTarget);
@@ -209,10 +213,12 @@ namespace {
         assessment = fixture.Assess();
         REQUIRE(assessment.diagnostic.capability == NetworkTargetCapabilityKind::NetworkRuntime);
         REQUIRE(assessment.diagnostic.reason == NetworkTargetFailureReason::NotInstalled);
+    }
 
-        fixture = Fixture{};
+    TEST_CASE("Network target requires exact packaged and selected provider", "[unit][network][target]") {
+        Fixture fixture;
         fixture.requirements.requiredProvider = NetworkTransportProviderId::Create(8).Value();
-        assessment = fixture.Assess();
+        auto assessment = fixture.Assess();
         REQUIRE(assessment.diagnostic.reason == NetworkTargetFailureReason::NotPackaged);
         REQUIRE(assessment.diagnostic.provider == fixture.requirements.requiredProvider);
 
