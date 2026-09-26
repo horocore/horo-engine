@@ -2,6 +2,7 @@
 #include "Horo/Vfx/VfxErrors.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <new>
 #include <utility>
@@ -41,12 +42,13 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
         }
 
         [[nodiscard]] bool ValidForce(const CpuParticleForceModule &force) noexcept {
-            if (force.kind >= CpuParticleForceKind::Count || !Finite(force.vector) || !Finite(force.center) || !Finite(force.strength) ||
+            using enum CpuParticleForceKind;
+            if (force.kind >= Count || !Finite(force.vector) || !Finite(force.center) || !Finite(force.strength) ||
                 !Finite(force.falloff) || !Finite(force.frequency) || force.falloff < 0.0F || force.frequency < 0.0F)
                 return false;
-            if (force.kind == CpuParticleForceKind::Noise)
+            if (force.kind == Noise)
                 return force.randomChannel >= 10 && Finite(force.strength * force.frequency);
-            if (force.kind == CpuParticleForceKind::Gravity || force.kind == CpuParticleForceKind::Wind)
+            if (force.kind == Gravity || force.kind == Wind)
                 return Finite(force.vector * force.strength);
             return true;
         }
@@ -66,15 +68,14 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
         }
 
         [[nodiscard]] Result<void> ValidateForces(const std::span<const CpuParticleForceModule> forces) {
-            for (std::size_t index = 0; index < forces.size(); ++index) {
-                const auto &force = forces[index];
+            std::array<bool, 256> noiseChannelSeen{};
+            for (const auto &force : forces) {
                 if (!ValidForce(force))
                     return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
                 if (force.kind == CpuParticleForceKind::Noise) {
-                    for (std::size_t earlier = 0; earlier < index; ++earlier) {
-                        if (forces[earlier].kind == CpuParticleForceKind::Noise && forces[earlier].randomChannel == force.randomChannel)
-                            return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
-                    }
+                    if (noiseChannelSeen[force.randomChannel])
+                        return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
+                    noiseChannelSeen[force.randomChannel] = true;
                 }
             }
             return Result<void>::Success();

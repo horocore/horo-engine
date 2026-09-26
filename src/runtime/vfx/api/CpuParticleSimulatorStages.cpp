@@ -163,6 +163,17 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             }
         }
 
+        /** @brief Returns zero at the attraction center and otherwise applies radial attenuation. */
+        [[nodiscard]] Math::Vec3 AttractionContribution(const CpuParticleForceModule &force, const Math::Vec3 position) noexcept {
+            const Math::Vec3 delta = force.center - position;
+            const float lengthSquared = Math::LengthSquared(delta);
+            if (lengthSquared <= std::numeric_limits<float>::epsilon())
+                return {};
+            const float length = std::sqrt(lengthSquared);
+            const float attenuation = 1.0F / (1.0F + (force.falloff * length));
+            return (delta / length) * (force.strength * attenuation);
+        }
+
         [[nodiscard]] Result<CpuParticleCollisionSelection> QueryPlanes(const Detail::CpuParticleSimulatorState &state,
                                                                         const Math::Vec3 previous, const Math::Vec3 position) {
             CpuParticleCollisionSelection selection{};
@@ -342,13 +353,7 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 case CpuParticleForceKind::Attraction:
                     for (std::uint32_t dense = 0; dense < view.positionX.size(); ++dense) {
                         const Math::Vec3 position{view.positionX[dense], view.positionY[dense], view.positionZ[dense]};
-                        const Math::Vec3 delta = force.center - position;
-                        const float lengthSquared = Math::LengthSquared(delta);
-                        if (lengthSquared <= std::numeric_limits<float>::epsilon())
-                            continue;
-                        const float length = std::sqrt(lengthSquared);
-                        const float attenuation = 1.0F / (1.0F + (force.falloff * length));
-                        state.acceleration[dense] += (delta / length) * (force.strength * attenuation);
+                        state.acceleration[dense] += AttractionContribution(force, position);
                     }
                     break;
                 case CpuParticleForceKind::Noise:
