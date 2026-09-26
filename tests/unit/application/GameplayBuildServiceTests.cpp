@@ -508,11 +508,25 @@ TEST_CASE("Active gameplay build projection survives readers and clears at cance
     REQUIRE_FALSE(active->cancellationRequested);
     REQUIRE_FALSE(fixture.service.QueryActiveProject(fixture.project.root / "other-project").has_value());
 
-    REQUIRE(fixture.service.RequestCancel(active->id));
+    std::atomic<bool> reading{true};
+    std::atomic<bool> invalidSnapshot{false};
+    std::thread reader{[&] {
+        while (reading.load(std::memory_order_relaxed)) {
+            const auto snapshot = fixture.service.QueryActiveProject(fixture.project.root);
+            if (snapshot.has_value() && (snapshot->id != started.Value() || snapshot->state == GameplayBuildState::Cancelled))
+                invalidSnapshot.store(true, std::memory_order_relaxed);
+        }
+    }};
+    const bool requested = fixture.service.RequestCancel(active->id);
     const auto cancelling = fixture.service.QueryActiveProject(fixture.project.root);
+    const bool duplicateRequest = fixture.service.RequestCancel(active->id);
+    reading.store(false, std::memory_order_relaxed);
+    reader.join();
+    REQUIRE(requested);
     if (cancelling.has_value())
         REQUIRE(cancelling->cancellationRequested);
-    REQUIRE_FALSE(fixture.service.RequestCancel(active->id));
+    REQUIRE_FALSE(duplicateRequest);
+    REQUIRE_FALSE(invalidSnapshot.load(std::memory_order_relaxed));
     REQUIRE(AwaitTerminal(fixture.service, active->id).state == GameplayBuildState::Cancelled);
     REQUIRE_FALSE(fixture.service.QueryActiveProject(fixture.project.root).has_value());
 }
