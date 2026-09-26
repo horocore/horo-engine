@@ -355,7 +355,7 @@ namespace Horo::Terrain {
 
     TEST_CASE("Terrain descriptor errors participate in the stable registry", "[unit][terrain][descriptor]") {
         const auto descriptors = TerrainErrors::Descriptors();
-        CHECK(descriptors.size() == 29);
+        CHECK(descriptors.size() == 34);
         CHECK(std::ranges::find(descriptors, &TerrainErrors::DescriptorInvalid) != descriptors.end());
         CHECK(std::ranges::find(descriptors, &TerrainErrors::TierUnsupported) != descriptors.end());
         CHECK(std::ranges::find(descriptors, &TerrainErrors::RevisionStale) != descriptors.end());

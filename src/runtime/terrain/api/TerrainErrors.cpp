@@ -271,6 +271,51 @@ namespace Horo::Terrain::TerrainErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor WorkInvalid{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.work.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain/Foliage background-work request or owner fence is malformed.",
+        .remediationHint = "Provide complete typed identities, finite work limits and owned preparation/publication callbacks.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor WorkUnknown{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.work.unknown"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The Terrain work identity is not retained by this owner.",
+        .remediationHint = "Use the exact accepted work identity before releasing its terminal record.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor WorkNotReady{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.work.not_ready"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "Terrain work has not finished and cannot be released.",
+        .remediationHint = "Advance the owner at its safe point and wait for the accepted Foundation job to terminate.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor WorkWrongThread{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.work.wrong_thread"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain work owner method ran outside its creating owner lane.",
+        .remediationHint = "Marshal admission, invalidation and publication to the TerrainRuntime owner thread.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor WorkPublicationFailed{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.work.publication_failed"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Terrain candidate publication threw at the owner boundary.",
+        .remediationHint = "Make publication an atomic no-throw swap over previously validated candidate state.",
+        .retryable = false,
+        .userActionable = false,
+    };
 
     /** @copydoc Descriptors */
     std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
@@ -304,6 +349,11 @@ namespace Horo::Terrain::TerrainErrors {
             &RegistryHandleInvalid,
             &RegistryHandleStale,
             &CapabilityUnsupported,
+            &WorkInvalid,
+            &WorkUnknown,
+            &WorkNotReady,
+            &WorkWrongThread,
+            &WorkPublicationFailed,
         };
         return descriptors;
     }

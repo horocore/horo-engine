@@ -916,6 +916,13 @@ add_library(HoroEngine::TerrainApi ALIAS HoroTerrainApi)
 target_compile_features(HoroTerrainApi PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainApi PUBLIC HoroEngine::Foundation)
 
+add_library(HoroTerrainRuntime STATIC
+        runtime/terrain/runtime/TerrainAsyncJobs.cpp
+)
+add_library(HoroEngine::TerrainRuntime ALIAS HoroTerrainRuntime)
+target_compile_features(HoroTerrainRuntime PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainRuntime PUBLIC HoroEngine::TerrainApi HoroEngine::Foundation)
+
 add_library(HoroNavigationNull STATIC
         runtime/navigation/backends/null/NullProvider.cpp
 )
