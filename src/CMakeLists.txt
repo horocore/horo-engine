@@ -218,6 +218,7 @@ add_library(HoroRuntime STATIC
         runtime/lifecycle/RuntimeHost.cpp
         runtime/lifecycle/RuntimeErrors.cpp
         runtime/save/SaveErrors.cpp
+        runtime/save/SaveProtectionErrors.cpp
         runtime/save/SaveDiagnostics.cpp
         runtime/save/SaveIdentity.cpp
         runtime/save/SaveRootResolver.cpp
