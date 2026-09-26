@@ -102,13 +102,18 @@ namespace {
         return payload;
     }
 
+    struct EntryEncoding final {
+        SaveChunkCodec codec{SaveChunkCodec::Raw};
+        std::uint64_t decodedLength{};
+        Sha256Digest decodedHash{};
+    };
+
     void WriteEntry(std::vector<std::byte> &payload, const std::size_t index, const SaveArchiveEntryKind kind, const std::uint64_t offset,
                     const std::span<const std::byte> data, const SaveRecordId record, const SaveParticipantId *owner,
-                    const SaveChunkCodec codec = SaveChunkCodec::Raw, const std::uint64_t decodedLength = 0,
-                    const Sha256Digest decodedHash = {}) {
+                    const EntryEncoding encoding = {}) {
         const std::size_t entry = EntryOffset(index);
         payload[entry] = static_cast<std::byte>(kind);
-        PutLittleEndian(payload, entry + 2, static_cast<std::uint16_t>(codec));
+        PutLittleEndian(payload, entry + 2, static_cast<std::uint16_t>(encoding.codec));
         if (owner != nullptr) {
             const auto &ownerText = owner->Value();
             PutLittleEndian(payload, entry + 24, static_cast<std::uint16_t>(ownerText.size()));
@@ -118,9 +123,10 @@ namespace {
             PutBytes(payload, entry + 8, record.Bytes());
         PutLittleEndian(payload, entry + 124, offset);
         PutLittleEndian(payload, entry + 132, static_cast<std::uint64_t>(data.size()));
-        PutLittleEndian(payload, entry + 140, decodedLength == 0 ? static_cast<std::uint64_t>(data.size()) : decodedLength);
+        PutLittleEndian(payload, entry + 140,
+                        encoding.decodedLength == 0 ? static_cast<std::uint64_t>(data.size()) : encoding.decodedLength);
         PutLittleEndian(payload, entry + 148, std::uint32_t{1});
-        PutBytes(payload, entry + 156, (decodedLength == 0 ? ComputeSha256(data) : decodedHash).bytes);
+        PutBytes(payload, entry + 156, (encoding.decodedLength == 0 ? ComputeSha256(data) : encoding.decodedHash).bytes);
     }
 
     ArchiveFixture FinalizeArchive(std::vector<std::byte> payload, const std::uint32_t version = 1) {
@@ -165,7 +171,7 @@ namespace {
         WriteEntry(payload, 0, SaveArchiveEntryKind::Header, 0, std::as_bytes(std::span{header}), {}, nullptr);
         WriteEntry(payload, 1, SaveArchiveEntryKind::Manifest, header.size(), std::as_bytes(std::span{manifest}), {}, nullptr);
         WriteEntry(payload, 2, SaveArchiveEntryKind::Chunk, header.size() + manifest.size(), encoded.stored, Id<SaveRecordId>(20), &owner,
-                   encoded.codec, encoded.decodedByteLength, encoded.decodedHash);
+                   {.codec = encoded.codec, .decodedLength = encoded.decodedByteLength, .decodedHash = encoded.decodedHash});
         return FinalizeArchive(std::move(payload), 2);
     }
 
