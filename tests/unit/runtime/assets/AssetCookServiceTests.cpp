@@ -156,6 +156,25 @@ namespace {
         REQUIRE(cooked->source->absolutePath == sourcePath.string());
     }
 
+    /** @brief Checks that both a failed or cancelled cook and its cancelled sibling retain source attribution. */
+    void AssertCancelledSiblingOutput(const BuildOutputSnapshot &snapshot, const OperationRecord &operation, const TestProject &project,
+                                      const bool fail) {
+        REQUIRE(snapshot.records.back().result == (fail ? BuildOutputResult::Failed : BuildOutputResult::Cancelled));
+        const auto assetFailure = std::ranges::find_if(snapshot.records, [](const BuildOutputRecord &record) {
+            return record.source.has_value();
+        });
+        REQUIRE(assetFailure != snapshot.records.end());
+        REQUIRE(assetFailure->result == (fail ? BuildOutputResult::Failed : BuildOutputResult::Cancelled));
+        REQUIRE(assetFailure->source->absolutePath == project.sourceFile.string());
+        REQUIRE(assetFailure->operationId == operation.id);
+        REQUIRE(assetFailure->sessionId == snapshot.records.back().sessionId);
+        const std::filesystem::path secondSource = project.assetsDir / "second_mesh.fbx";
+        REQUIRE(std::ranges::count_if(snapshot.records, [&](const BuildOutputRecord &record) {
+            return record.source.has_value() && record.source->absolutePath == secondSource.string() &&
+                   record.result == BuildOutputResult::Cancelled;
+        }) == 1);
+    }
+
 }  // namespace
 
 TEST_CASE("AssetCookService empty registry publishes empty generation", "[native]") {
@@ -291,20 +310,7 @@ TEST_CASE("AssetCookService keeps cook cancellation separate from concurrent fai
         REQUIRE(operationSnapshot->operations.front().state == (fail ? OperationState::Failed : OperationState::Cancelled));
         const auto outputSnapshot = output.SnapshotIfChanged(0);
         REQUIRE(outputSnapshot.has_value());
-        REQUIRE(outputSnapshot->records.back().result == (fail ? BuildOutputResult::Failed : BuildOutputResult::Cancelled));
-        const auto assetFailure = std::ranges::find_if(outputSnapshot->records, [](const BuildOutputRecord &record) {
-            return record.source.has_value();
-        });
-        REQUIRE(assetFailure != outputSnapshot->records.end());
-        REQUIRE(assetFailure->result == (fail ? BuildOutputResult::Failed : BuildOutputResult::Cancelled));
-        REQUIRE(assetFailure->source->absolutePath == project.sourceFile.string());
-        REQUIRE(assetFailure->operationId == operationSnapshot->operations.front().id);
-        REQUIRE(assetFailure->sessionId == outputSnapshot->records.back().sessionId);
-        const std::filesystem::path secondSource = project.assetsDir / "second_mesh.fbx";
-        REQUIRE(std::ranges::count_if(outputSnapshot->records, [&](const BuildOutputRecord &record) {
-            return record.source.has_value() && record.source->absolutePath == secondSource.string() &&
-                   record.result == BuildOutputResult::Cancelled;
-        }) == 1);
+        AssertCancelledSiblingOutput(*outputSnapshot, operationSnapshot->operations.front(), project, fail);
         jobs.Shutdown(ShutdownPolicy::Drain);
     }
 }
