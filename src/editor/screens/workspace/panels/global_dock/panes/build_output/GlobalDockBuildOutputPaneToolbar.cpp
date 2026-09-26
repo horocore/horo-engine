@@ -58,7 +58,7 @@ namespace Horo::Editor {
 
     void GlobalDockBuildOutputPane::DrawActiveBuild(const Application::GameplayBuildSnapshot &snapshot,
                                                     const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
-                                                    const EditorGuiContext &context, const float height) {
+                                                    const EditorGuiContext &context, const float height) const {
         const GlobalDockToolbarChipProps cancel{
             .id = "BuildCancelActive",
             .label = context.localization.Get("editor", snapshot.cancellationRequested ? "workspace.global_dock.build_output.cancelling"
@@ -259,6 +259,7 @@ namespace Horo::Editor {
     }
 
     void GlobalDockBuildOutputPane::DrawStatusFilter(const EditorGuiContext &context) {
+        using enum StatusFilter;
         DrawFilterLabel(context, "workspace.global_dock.build_output.filter.status");
         const std::vector<std::string> statuses{
             context.localization.Get("editor", "workspace.global_dock.build_output.status.all"),
@@ -269,34 +270,33 @@ namespace Horo::Editor {
         };
         int statusIndex = 0;
         switch (m_statusFilter) {
-            case StatusFilter::All:
+            case All:
                 break;
-            case StatusFilter::Ok:
+            case Ok:
                 statusIndex = 1;
                 break;
-            case StatusFilter::Failed:
-            case StatusFilter::Errors:
+            case Failed:
+            case Errors:
                 statusIndex = 2;
                 break;
-            case StatusFilter::Cached:
+            case Cached:
                 statusIndex = 3;
                 break;
-            case StatusFilter::Warning:
+            case Warning:
                 statusIndex = 4;
                 break;
         }
         if (DrawFilterCombo(context, "##BuildStatusFilter", statusIndex, statuses)) {
-            constexpr std::array filters{StatusFilter::All, StatusFilter::Ok, StatusFilter::Errors, StatusFilter::Cached,
-                                         StatusFilter::Warning};
+            constexpr std::array filters{All, Ok, Errors, Cached, Warning};
             m_statusFilter = filters[static_cast<std::size_t>(statusIndex)];
             m_filterDirty = true;
         }
     }
 
     void GlobalDockBuildOutputPane::DrawSeverityFilter(const EditorGuiContext &context) {
+        using enum DiagnosticSeverity;
         DrawFilterLabel(context, "workspace.global_dock.build_output.filter.severity");
-        constexpr std::array severities{DiagnosticSeverity::Note, DiagnosticSeverity::Warning, DiagnosticSeverity::Error,
-                                        DiagnosticSeverity::Fatal};
+        constexpr std::array severities{Note, Warning, Error, Fatal};
         const std::vector<std::string> severityLabels{
             context.localization.Get("editor", "workspace.global_dock.build_output.filter.any"),
             context.localization.Get("editor", "workspace.global_dock.build_output.row_status.info"),
@@ -322,7 +322,7 @@ namespace Horo::Editor {
         if (!m_stageFilter.empty())
             stages.push_back(m_stageFilter);
         std::ranges::sort(stages);
-        stages.erase(std::unique(stages.begin(), stages.end()), stages.end());
+        stages.erase(std::ranges::unique(stages).begin(), stages.end());
         int stageIndex = 0;
         if (!m_stageFilter.empty()) {
             const auto selected = std::ranges::find(stages, m_stageFilter);
@@ -346,7 +346,7 @@ namespace Horo::Editor {
         if (m_sessionFilter.has_value())
             sessions.push_back(*m_sessionFilter);
         std::ranges::sort(sessions);
-        sessions.erase(std::unique(sessions.begin(), sessions.end()), sessions.end());
+        sessions.erase(std::ranges::unique(sessions).begin(), sessions.end());
         std::vector<std::string> sessionLabels{context.localization.Get("editor", "workspace.global_dock.build_output.filter.any")};
         int sessionIndex = 0;
         for (std::size_t index = 0; index < sessions.size(); ++index) {
