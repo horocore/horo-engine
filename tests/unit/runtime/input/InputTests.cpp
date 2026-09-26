@@ -140,8 +140,9 @@ namespace {
         router.BeginFrame(snapshot);
         auto gameplay = router.PushContext(gameplayId, InputContextKind::Gameplay);
         GameplayInputFrameBuilder builder{ActionId{"move"}, ActionId{"look"}, ActionId{"jump"}, ActionId{"interact"}};
-        const GameplayInputFrame first = builder.Consume(router, gameplay, 100);
-        const GameplayInputFrame catchup = builder.Consume(router, gameplay, 101);
+        builder.Capture(router, gameplay);
+        const GameplayInputFrame first = builder.Consume(100);
+        const GameplayInputFrame catchup = builder.Consume(101);
         REQUIRE((first.moveY == 1.0F && first.jumpPressed));
         REQUIRE((catchup.moveY == 1.0F && !catchup.jumpPressed));
     }

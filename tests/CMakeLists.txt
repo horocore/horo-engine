@@ -186,6 +186,7 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
 endif ()
 
 add_executable(HoroInputTests
+        unit/runtime/input/GameplayInputFrameTests.cpp
         unit/runtime/input/InputTests.cpp
 )
 target_compile_features(HoroInputTests PRIVATE cxx_std_20)
