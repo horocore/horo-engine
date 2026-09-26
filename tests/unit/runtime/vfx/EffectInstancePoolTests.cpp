@@ -7,8 +7,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <new>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace Horo::Vfx {
     namespace {
@@ -76,6 +79,25 @@ namespace Horo::Vfx {
                            VfxErrors::EffectPoolInvalid));
     }
 
+    TEST_CASE("Allocation failure probe unwinds a standard vector allocation", "[unit][vfx][effect-pool]") {
+        std::vector<std::uint32_t> values;
+        bool allocationFailed = false;
+        std::fputs("effect-pool standard vector failure probe begin\n", stderr);
+        std::fflush(stderr);
+        {
+            Tests::AllocationProbe::ScopedFailure failNextAllocation{0};
+            try {
+                values.resize(8);
+            } catch (const std::bad_alloc &) {
+                allocationFailed = true;
+            }
+        }
+        std::fputs("effect-pool standard vector failure probe end\n", stderr);
+        std::fflush(stderr);
+        CHECK(allocationFailed);
+        CHECK(values.empty());
+    }
+
     TEST_CASE("Effect pool reports allocation failure at every required preparation allocation", "[unit][vfx][effect-pool]") {
         const auto descriptor = Descriptor();
         const auto budget = Budget();
@@ -86,11 +108,15 @@ namespace Horo::Vfx {
         REQUIRE(preparationAllocations >= 3);
         REQUIRE(preparationAllocations <= 16);
         for (std::size_t successfulAllocations = 0; successfulAllocations < preparationAllocations; ++successfulAllocations) {
+            std::fprintf(stderr, "effect-pool preparation failure probe begin: %zu/%zu\n", successfulAllocations, preparationAllocations);
+            std::fflush(stderr);
             bool allocationFailed = false;
             {
                 Tests::AllocationProbe::ScopedFailure failOnePreparationAllocation{successfulAllocations};
                 allocationFailed = HasErrorCode(EffectInstancePool::Prepare(descriptor, budget, {}), VfxErrors::EffectPoolAllocationFailed);
             }
+            std::fprintf(stderr, "effect-pool preparation failure probe end: %zu/%zu\n", successfulAllocations, preparationAllocations);
+            std::fflush(stderr);
             CHECK(allocationFailed);
         }
     }
@@ -107,12 +133,16 @@ namespace Horo::Vfx {
         REQUIRE(preparationAllocations >= 4);
         REQUIRE(preparationAllocations <= 16);
         for (std::size_t successfulAllocations = 0; successfulAllocations < preparationAllocations; ++successfulAllocations) {
+            std::fprintf(stderr, "effect-pool delayed failure probe begin: %zu/%zu\n", successfulAllocations, preparationAllocations);
+            std::fflush(stderr);
             bool allocationFailed = false;
             {
                 Tests::AllocationProbe::ScopedFailure failOnePreparationAllocation{successfulAllocations};
                 allocationFailed = HasErrorCode(EffectInstancePool::Prepare(descriptor, delayedBudget, delayedPolicy),
                                                 VfxErrors::EffectPoolAllocationFailed);
             }
+            std::fprintf(stderr, "effect-pool delayed failure probe end: %zu/%zu\n", successfulAllocations, preparationAllocations);
+            std::fflush(stderr);
             CHECK(allocationFailed);
         }
     }
