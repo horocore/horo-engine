@@ -1068,6 +1068,15 @@ snapshot and implement its own pathfinder, step physics or mutate sensory memory
 
 ### EQS Asset, Context And Extension Contracts
 
+`Horo/AI/EnvironmentQuerySchema.h` implements the Foundation-only authoring schema
+slice: stable typed identities, explicit stage order, bounded typed properties,
+versioned inert provider descriptors, and a read-only admitted plan. Authoring capture
+preserves unavailable/unknown contributions for editor round-trip. Compilation of an
+executable plan fails with typed errors if any required contribution, version, or
+stage kind is unavailable; it never skips a stage. This is schema admission, not the
+AssetRegistry mapping, cooker artifact, provider implementation, or runtime executor
+described below. Host composition supplies descriptor contributions explicitly.
+
 EnvironmentQueryTemplate is an authoring asset with stable AssetId metadata in
 AssetRegistry. Its immutable cooked EnvironmentQueryPlan contains stable StageIds,
 ordered stages, typed context/parameter schemas, provider dependencies, scoring and
@@ -1803,6 +1812,25 @@ When that backend is composed, group coordination may request:
 - Local steering and dynamic avoidance
 - Safe-velocity evaluation for Gameplay-authored formation/lane preferred velocities
 - Bounded density facts used only by the local solver
+
+`NavigationCrowdSnapshot` is the NAV-006.2 owner-safe-point fact boundary below
+the coordinator. It combines an exact immutable logical-agent publication,
+the same Scene/world dynamic-registry publication, committed per-agent motion
+samples, and authored profile fact caps. It owns contiguous agent, neighbor,
+boundary, and cell arrays; workers retain the snapshot, not Scene/registry
+pointers. Ground-plane XZ cells, distance ties, and source identity order are
+stable for both best-effort and deterministic-qualified capture modes. Searches
+scan occupied cells rather than walking empty coordinates, so a neighborhood
+radius may exceed the cell size. Enabled
+obstacles and exclusion modifiers contribute finite planar segments; cylinders
+use a conservative enclosing square, not provider-native geometry. Segment
+selection also respects the source's vertical extent. Missing or
+malformed samples, mismatched generations, and work/storage ceiling failures
+reject the whole capture. Per-agent and per-profile omitted-fact counts expose
+quality-cap truncation; capture never silently truncates global storage. Result
+publication still rechecks the captured Scene/world binding, dynamic revision,
+agent generation, and tick. This additive runtime contract does not change
+existing agent-registry callers; hosts opt in at their fixed-tick capture point.
 
 ```cpp
 struct CrowdAgentConfig {

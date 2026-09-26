@@ -64,6 +64,13 @@ horo_configure_target_header_boundary(HoroCliHost PUBLIC_HEADERS
     Horo/Cli/CliOptionParser.h
 )
 
+horo_configure_target_header_boundary(HoroMcpSession PUBLIC_HEADERS
+    Horo/Mcp/McpErrors.h
+    Horo/Mcp/McpSession.h
+    Horo/Mcp/McpInProcessAdapter.h
+    Horo/Mcp/McpLocalTransport.h
+)
+
 horo_configure_target_header_boundary(HoroOpenTelemetry PUBLIC_HEADERS
     Horo/Foundation/Telemetry/OpenTelemetrySink.h)
 
@@ -112,6 +119,7 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/DistributionModel.h
     Horo/Release/ReleaseErrors.h
     Horo/Release/ReleaseProfile.h
+    Horo/Release/ReleasePreflight.h
     Horo/Release/ReleaseVersion.h
 )
 horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
@@ -205,6 +213,8 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/NetworkErrors.h
     Horo/Network/NetworkFailure.h
     Horo/Network/NetworkIoService.h
+    Horo/Network/NetworkMetrics.h
+    Horo/Network/NetworkMetricTransport.h
     Horo/Network/NetworkLifecycle.h
     Horo/Network/NetworkHandles.h
     Horo/Network/NetworkObjectIdentity.h
@@ -227,9 +237,11 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
     Horo/Network/TransportBackendComposition.h
+    Horo/Network/NetworkDiagnostics.h
     Horo/Network/AuthenticationSessionAdapter.h
     Horo/Network/HandshakeNegotiation.h
     Horo/Network/NetworkObjectMapping.h
+    Horo/Network/NetworkTickAlignment.h
     Horo/Network/PeerSessionLifecycle.h
     Horo/Network/ReplicationWorldLifecycle.h
 )
@@ -388,6 +400,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/BlackboardInstance.h
     Horo/AI/BlackboardSchema.h
     Horo/AI/DecisionAssetValidation.h
+    Horo/AI/EnvironmentQuerySchema.h
     Horo/AI/NullAIRuntime.h
     Horo/AI/PerceptionDescriptorRegistry.h
     Horo/AI/PerceptionMemory.h
@@ -407,15 +420,18 @@ horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/SkeletalMeshSkinning.h
 )
 horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
+    Horo/PCG/PCGCookedPlan.h
     Horo/PCG/PCGErrors.h
     Horo/PCG/PCGGenerationPlan.h
     Horo/PCG/PCGGraphAsset.h
     Horo/PCG/PCGGraphValidation.h
     Horo/PCG/PCGIdentity.h
     Horo/PCG/PCGPointSchema.h
+    Horo/PCG/PCGPointCloudWorkspace.h
     Horo/PCG/PCGProvenance.h
     Horo/PCG/PCGSpatialSnapshot.h
     Horo/PCG/PCGRegistry.h
+    Horo/PCG/PCGAsyncOperation.h
 )
 horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
     Horo/Vfx/CpuParticleBuffer.h
@@ -471,6 +487,7 @@ horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationBakeJobs.h
+    Horo/Navigation/NavigationCrowdSnapshot.h
     Horo/Navigation/NavigationDynamicRegistry.h
     Horo/Navigation/NavigationAgentRegistry.h
     Horo/Navigation/NavigationRuntimeQueues.h

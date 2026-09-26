@@ -72,6 +72,18 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor PerceptionMemoryInvalid;
     /** @brief Perception memory received a backward committed simulation tick. */
     extern const ErrorCodeDescriptor PerceptionMemoryTimeInvalid;
+    /** @brief An environment-query asset or descriptor has an invalid typed representation. */
+    extern const ErrorCodeDescriptor EnvironmentQuerySchemaInvalid;
+    /** @brief Environment-query metadata exceeds a fixed admission bound. */
+    extern const ErrorCodeDescriptor EnvironmentQueryLimitExceeded;
+    /** @brief Stable environment-query stage, property, or descriptor identity is duplicated. */
+    extern const ErrorCodeDescriptor EnvironmentQueryIdentityConflict;
+    /** @brief A required environment-query descriptor is not registered. */
+    extern const ErrorCodeDescriptor EnvironmentQueryDescriptorUnavailable;
+    /** @brief A registered environment-query descriptor has an incompatible schema version. */
+    extern const ErrorCodeDescriptor EnvironmentQueryVersionIncompatible;
+    /** @brief An unknown environment-query stage was retained for authoring but cannot execute. */
+    extern const ErrorCodeDescriptor EnvironmentQueryStageUnsupported;
     /** @brief A behavior-tree schema version, identity, or typed node/property contract is malformed. */
     extern const ErrorCodeDescriptor BehaviorTreeSchemaInvalid;
     /** @brief A behavior-tree source exceeds one of its finite node, edge, pin, or payload bounds. */

@@ -20,6 +20,26 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## MCP-001.2 Session Boundary
+
+`HoroEngine::McpSession` owns the additive `Horo/Mcp/McpErrors.h`,
+`McpSession.h`, `McpInProcessAdapter.h`, and `McpLocalTransport.h` public
+contracts. There are no prior MCP session callers to migrate. Future executable
+hosts link this target at their composition root, supply the controller and
+approved admission snapshots, and retain ownership of process I/O; domain
+targets do not link MCP. The generated standalone `HoroMcpSession` public-header
+consumer verifies each header with only declared public dependencies.
+
+## PCG-2.4 Cooked Plan Boundary
+
+`HoroEngine::PCG` owns the additive `Horo/PCG/PCGCookedPlan.h` contract. Callers
+retain the exact immutable registry snapshot used by `ValidatePCGGraph` through
+`CompilePCGGraph`, then may release the graph source and registry: the resulting
+plan owns its nodes, pin schemas, routes, defaults, capability requirements, and
+canonical bytes. No existing PCG caller changes signature. Future evaluators must
+consume the validated cooked plan, not source graph references or runtime handles.
+The generated PCG public-header consumer covers the new sole-owned header.
+
 ## PCG-1.5 Provenance Boundary
 
 `HoroEngine::PCG` owns the additive `Horo/PCG/PCGProvenance.h` contract. PCG evaluation
@@ -641,6 +661,15 @@ adapter. Both headers are registered to their actual targets and exercised by th
 generated public-header consumers. This is a new contract with no production caller
 migration; future sense producers and scene activation must compose these APIs
 instead of adding a reverse RuntimeScene dependency to HoroAI.
+`Horo/AI/EnvironmentQuerySchema.h` is owned by the same Foundation-only AI target.
+It defines bounded, versioned EQS authoring metadata and inert native/script/package
+descriptor snapshots. Stable query, result, item, context, generator, test, stage,
+and property IDs are independent of editor labels and source-vector order; explicit
+stage execution order is part of semantic meaning. Authoring capture retains unknown
+stages and missing contributions for degraded editing, while plan admission rejects
+every unavailable, incompatible, or unsupported stage before execution. AssetRegistry
+binding, cooking, scheduling, and provider execution remain in their owning later
+composition boundaries; this header adds no backend or scene dependency.
 
 ## PCG Identity Boundary
 
@@ -953,3 +982,32 @@ after the corresponding cost query and reservation succeed. Existing host calls 
 retain the finite default memory configuration, while product composition should
 provide its explicit envelope and default scope. Editor viewport and GUI textures use
 separate explicit scopes in the shared frontend ledger.
+
+## PCG-1.6 Async Operation Migration Notes
+
+`HoroEngine::PCG` owns the additive public `Horo/PCG/PCGAsyncOperation.h`
+contract. No existing PCG caller changes signature. A future host evaluator or
+asset cook/load producer must register an exact scene/cell/graph fence, submit
+owned immutable work through the injected Foundation `JobSystem`, and advance
+the result on its owner lane. Existing graph revision alone is insufficient:
+capture the exact canonical source digest and current runtime, input and
+authority generations. A producer may publish only an immutable PCG candidate;
+Scene and other target commits remain separate transactions. Teardown callers
+invalidate the appropriate graph, cell, scene or host scope and retain dependent
+owners until the nonblocking completion sweep and scope drain checks confirm
+worker, child and completion drain. Closed scopes are retired after their
+terminal records are released. The generated standalone PCG public-header
+consumer covers the new header through
+its sole owning target.
+
+## NET-005.2 Fixed-Tick Alignment Boundary
+
+`HoroEngine::NetworkRuntime` solely owns the additive public
+`Horo/Network/NetworkTickAlignment.h` contract. It consumes NetworkApi connection
+and session generations and returns value snapshots; it does not move the host
+fixed-step clock, simulation input, canonical state or restore authority into
+NetworkRuntime. Existing callers require no signature migration. Hosts that opt
+in must supply owner-stamped fixed-tick samples, advance only after committed
+local fixed ticks, and treat stale quality as evidence rather than permission to
+run extra simulation steps. The generated standalone NetworkRuntime public-header
+consumer and `HoroNetworkRuntimeTests` cover the new boundary.

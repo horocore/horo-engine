@@ -69,6 +69,7 @@ enum class MetricUnit {
     Bytes,
     Seconds,
     Ratio,
+    Milliseconds,
 };
 
 struct MetricDimensionDescriptor {

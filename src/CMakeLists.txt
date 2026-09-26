@@ -67,6 +67,17 @@ target_link_libraries(HoroCliHost
         PRIVATE nlohmann_json::nlohmann_json
 )
 
+add_library(HoroMcpSession STATIC
+        mcp/McpErrors.cpp
+        mcp/McpJsonBounds.cpp
+        mcp/McpSession.cpp
+        mcp/McpInProcessAdapter.cpp
+        mcp/McpLocalTransport.cpp
+)
+add_library(HoroEngine::McpSession ALIAS HoroMcpSession)
+target_compile_features(HoroMcpSession PUBLIC cxx_std_20)
+target_link_libraries(HoroMcpSession PUBLIC HoroEngine::Foundation nlohmann_json::nlohmann_json)
+
 if (HORO_ENABLE_OPENTELEMETRY)
     add_library(HoroOpenTelemetry STATIC
             foundation/telemetry/OpenTelemetrySink.cpp
@@ -186,6 +197,7 @@ add_library(HoroApplication STATIC
         application/release/DistributionModel.cpp
         application/release/ReleaseErrors.cpp
         application/release/ReleaseProfile.cpp
+        application/release/ReleasePreflight.cpp
         application/release/ReleaseVersion.cpp
 )
 add_library(HoroEngine::Application ALIAS HoroApplication)
@@ -275,6 +287,9 @@ add_library(HoroNetworkApi STATIC
         runtime/networking/api/NetworkFailure.cpp
         runtime/networking/api/NetworkIoService.cpp
         runtime/networking/api/NetworkLifecycle.cpp
+        runtime/networking/api/NetworkMetrics.cpp
+        runtime/networking/api/NetworkMetricTelemetry.cpp
+        runtime/networking/api/NetworkMetricTransport.cpp
         runtime/networking/api/NetworkObjectIdentity.cpp
         runtime/networking/api/NetworkProjectSettings.cpp
         runtime/networking/api/NetworkProjectSettingsSchema.cpp
@@ -465,9 +480,11 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::Foundation HoroEngine:
 
 add_library(HoroNetworkRuntime STATIC
         runtime/networking/TransportBackendComposition.cpp
+        runtime/networking/NetworkDiagnostics.cpp
         runtime/networking/AuthenticationSessionAdapter.cpp
         runtime/networking/HandshakeNegotiation.cpp
         runtime/networking/NetworkObjectMapping.cpp
+        runtime/networking/NetworkTickAlignment.cpp
         runtime/networking/PeerSessionLifecycle.cpp
         runtime/networking/ReplicationWorldLifecycle.cpp
 )
@@ -510,6 +527,8 @@ add_library(HoroGameplayLua STATIC
 
 add_library(HoroGameplayBuild STATIC
         application/gameplay/CompilerDiagnosticParser.cpp
+        application/gameplay/GameplayBuildInputs.cpp
+        application/gameplay/GameplayBuildInvocation.cpp
         application/gameplay/GameplayBuildService.cpp
 )
 add_library(HoroEngine::GameplayBuild ALIAS HoroGameplayBuild)
@@ -765,6 +784,9 @@ add_library(HoroAI STATIC
         runtime/ai/api/BlackboardSchema.cpp
         runtime/ai/api/DecisionAssetPlan.cpp
         runtime/ai/api/DecisionAssetValidation.cpp
+        runtime/ai/api/EnvironmentQueryAsset.cpp
+        runtime/ai/api/EnvironmentQueryErrors.cpp
+        runtime/ai/api/EnvironmentQueryRegistry.cpp
         runtime/ai/api/NullAIRuntime.cpp
         runtime/ai/api/PerceptionDescriptorRegistry.cpp
         runtime/ai/api/PerceptionErrors.cpp
@@ -798,6 +820,7 @@ target_compile_features(HoroAnimationApi PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
 add_library(HoroPCG STATIC
+        runtime/pcg/api/PCGCookedPlan.cpp
         runtime/pcg/api/PCGErrors.cpp
         runtime/pcg/api/PCGGenerationPlan.cpp
         runtime/pcg/api/PCGGraphAsset.cpp
@@ -806,9 +829,11 @@ add_library(HoroPCG STATIC
         runtime/pcg/api/PCGGraphValidation.cpp
         runtime/pcg/api/PCGIdentity.cpp
         runtime/pcg/api/PCGPointSchema.cpp
+        runtime/pcg/api/PCGPointCloudWorkspace.cpp
         runtime/pcg/api/PCGProvenance.cpp
         runtime/pcg/api/PCGSpatialSnapshot.cpp
         runtime/pcg/api/PCGRegistry.cpp
+        runtime/pcg/api/PCGAsyncOperation.cpp
 )
 add_library(HoroEngine::PCG ALIAS HoroPCG)
 target_compile_features(HoroPCG PUBLIC cxx_std_20)
@@ -909,6 +934,9 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::NavigationApi)
 
 add_library(HoroNavigationRuntime STATIC
         runtime/navigation/runtime/NavigationBakeJobs.cpp
+        runtime/navigation/runtime/NavigationCrowdSnapshot.cpp
+        runtime/navigation/runtime/NavigationCrowdSnapshotGather.cpp
+        runtime/navigation/runtime/NavigationCrowdSnapshotPartition.cpp
         runtime/navigation/runtime/NavigationDynamicRegistry.cpp
         runtime/navigation/runtime/NavigationDynamicRegistryCommit.cpp
         runtime/navigation/runtime/NavigationDynamicRegistrySnapshot.cpp
@@ -1605,6 +1633,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserToolbar.cpp
             editor/screens/workspace/panels/global_dock/panes/audio/GlobalDockAudioPane.cpp
             editor/screens/workspace/panels/global_dock/panes/build_output/GlobalDockBuildOutputPane.cpp
+            editor/screens/workspace/panels/global_dock/panes/build_output/GlobalDockBuildOutputPaneToolbar.cpp
             editor/screens/workspace/panels/global_dock/panes/console/GlobalDockConsolePane.cpp
             editor/screens/workspace/panels/global_dock/panes/mcp/GlobalDockMcpPane.cpp
             editor/screens/workspace/panels/global_dock/panes/network/GlobalDockNetworkPane.cpp
