@@ -78,37 +78,24 @@ namespace Horo::Runtime::SaveMigrationDetail {
     [[nodiscard]] inline StepView View(const SaveMigrationDefinition &definition) {
         return std::visit([](const auto &step) -> StepView {
             using Step = std::decay_t<decltype(step)>;
+            SaveMigrationAxis axis = SaveMigrationAxis::ParticipantSchema;
+            std::optional<SaveParticipantId> participant;
             if constexpr (std::is_same_v<Step, ArchiveMigrationStep>) {
-                return {.id = step.id,
-                        .axis = SaveMigrationAxis::ArchiveFormat,
-                        .kind = step.kind,
-                        .from = step.from.Value(),
-                        .to = step.to.Value(),
-                        .participant = std::nullopt,
-                        .migrate = &step.migrate,
-                        .equivalentSequentialSteps = &step.equivalentSequentialSteps,
-                        .estimatedWork = step.estimatedWork};
+                axis = SaveMigrationAxis::ArchiveFormat;
             } else if constexpr (std::is_same_v<Step, SaveSchemaMigrationStep>) {
-                return {.id = step.id,
-                        .axis = SaveMigrationAxis::SaveSchema,
-                        .kind = step.kind,
-                        .from = step.from.Value(),
-                        .to = step.to.Value(),
-                        .participant = std::nullopt,
-                        .migrate = &step.migrate,
-                        .equivalentSequentialSteps = &step.equivalentSequentialSteps,
-                        .estimatedWork = step.estimatedWork};
+                axis = SaveMigrationAxis::SaveSchema;
             } else {
-                return {.id = step.id,
-                        .axis = SaveMigrationAxis::ParticipantSchema,
-                        .kind = step.kind,
-                        .from = step.from.Value(),
-                        .to = step.to.Value(),
-                        .participant = step.participant,
-                        .migrate = &step.migrate,
-                        .equivalentSequentialSteps = &step.equivalentSequentialSteps,
-                        .estimatedWork = step.estimatedWork};
+                participant = step.participant;
             }
+            return {.id = step.id,
+                    .axis = axis,
+                    .kind = step.kind,
+                    .from = step.from.Value(),
+                    .to = step.to.Value(),
+                    .participant = std::move(participant),
+                    .migrate = &step.migrate,
+                    .equivalentSequentialSteps = &step.equivalentSequentialSteps,
+                    .estimatedWork = step.estimatedWork};
         }, definition);
     }
 
@@ -145,9 +132,13 @@ namespace Horo::Runtime::SaveMigrationDetail {
     }
 
     [[nodiscard]] inline bool ValidLimits(const SaveMigrationLimits &limits) noexcept {
-        return limits.maximumDefinitions != 0 && limits.maximumPlanSteps != 0 && limits.maximumParticipants != 0 &&
-               limits.maximumArchiveBytes != 0 && limits.maximumParticipantPayloadBytes != 0 && limits.maximumTotalPayloadBytes != 0 &&
-               limits.maximumParticipantPayloadBytes <= limits.maximumTotalPayloadBytes;
+        return limits.maximumDefinitions != 0 && limits.maximumDefinitions <= MaximumSaveMigrationDefinitions &&
+               limits.maximumPlanSteps != 0 && limits.maximumPlanSteps <= MaximumSaveMigrationPlanSteps &&
+               limits.maximumParticipants != 0 && limits.maximumParticipants <= 4'096 && limits.maximumArchiveBytes != 0 &&
+               limits.maximumParticipantPayloadBytes != 0 && limits.maximumTotalPayloadBytes != 0 &&
+               limits.maximumParticipantPayloadBytes <= limits.maximumTotalPayloadBytes && limits.maximumArchiveBytes <= (4ULL << 30U) &&
+               limits.maximumTotalPayloadBytes <= (1ULL << 30U) && limits.maximumCumulativeWorkBytes != 0 &&
+               limits.maximumCumulativeWorkBytes <= (16ULL << 30U);
     }
 
     template <typename Tag> [[nodiscard]] inline bool IsValidSupport(const SaveVersionSupport<Tag> &support) noexcept {

@@ -139,6 +139,14 @@ namespace Horo::Cinematic {
     };
 
     /**
+     * @brief Maps validated authored playback defaults to the live activation contract.
+     * @param settings Validated sequence playback settings.
+     * @return Immutable owner-coordination settings; the host still supplies clock evidence and owner hooks.
+     */
+    [[nodiscard]] SequencePlaybackCoordinationSettings MakeSequencePlaybackCoordinationSettings(
+        const SequencePlaybackSettings &settings) noexcept;
+
+    /**
      * @brief Validates clock and pause-domain combinations before owner admission.
      * @param settings Candidate coordination policy.
      * @return Success or a typed invalid activation failure.
@@ -159,6 +167,15 @@ namespace Horo::Cinematic {
         std::uint64_t authorityRevision{};
 
         [[nodiscard]] constexpr auto operator<=>(const SequenceGameplayPauseResult &) const noexcept = default;
+    };
+
+    /** @brief One host-owned absolute clock observation at an owner boundary. */
+    struct SequenceClockSample final {
+        SequenceClockSource source{SequenceClockSource::CommittedSimulation};
+        SequenceTime position{};              /**< Non-negative cumulative time in the selected source domain. */
+        std::uint64_t epoch{1};               /**< Changes on source replacement, seek, or external discontinuity. */
+        SequencePlaybackRate gameplayScale{}; /**< Non-negative rational host scale, used only by ApplyGameplayScale. */
+        bool hostSuspended{};                 /**< Suspended boundaries establish a fresh baseline without evaluation. */
     };
 
     /** @brief Kind of host-owned lease acquired by one playback activation. */
@@ -218,6 +235,7 @@ namespace Horo::Cinematic {
         TargetMissing,
         StaleGeneration,
         WriteRejected,
+        KeptFinalDueToMissingTarget,
         Count
     };
 
@@ -236,6 +254,7 @@ namespace Horo::Cinematic {
         std::size_t missing{};
         std::size_t stale{};
         std::size_t rejected{};
+        std::size_t keptFinal{}; /**< Surviving targets left untouched because another target was lost. */
 
         [[nodiscard]] constexpr auto operator<=>(const SequenceRestoreResult &) const noexcept = default;
     };
@@ -270,7 +289,7 @@ namespace Horo::Cinematic {
      * @param targets Current owner-safe-point target views; order need not match snapshot entries.
      * @param diagnostics Caller storage with at least snapshot.Size() entries.
      * @return Per-entry typed outcomes; destroyed or replaced targets are never dereferenced.
-     * @note Valid targets may restore when another target was destroyed; no allocation occurs.
+     * @note A missing or stale target leaves all surviving targets at their final values; no allocation occurs.
      */
     [[nodiscard]] Result<SequenceRestoreResult> ApplySequenceRestoreSnapshot(const SequenceRestoreSnapshot &snapshot,
                                                                              std::span<const SequenceRestoreTargetSnapshot> targets,
@@ -480,10 +499,28 @@ namespace Horo::Cinematic {
          * @param sourceDelta Non-negative source-clock delta.
          * @param scratch Caller-owned bounded values/events/camera storage.
          * @param hooks Typed destination seams; required only for crossed occurrences.
-         * @return Atomic frame result; Once players terminalize after reaching their end.
+         * @return Atomic frame result; Once players terminalize and invoke finishedHook once after reaching their directional end.
+         * @note Loop and PingPong repeat indefinitely until their owner stops or cancels them. Neither they nor explicit
+         * stop, cancel, failure, or shutdown invoke finishedHook. The hook runs after terminal publication and token release.
          */
         [[nodiscard]] Result<SequenceFrameEvaluationResult> Evaluate(const SequencePlayerHandle &handle, SequenceTime sourceDelta,
                                                                      const SequenceFrameScratch &scratch, const SequenceFrameHooks &hooks);
+
+        /**
+         * @brief Evaluates from one absolute host clock sample with domain, pause, and dilation coordination.
+         * @param handle Exact player handle.
+         * @param sample Host-owned cumulative source clock, epoch, scale, and suspension state.
+         * @param scratch Caller-owned bounded frame storage.
+         * @param hooks Typed destination seams.
+         * @return Evaluated frame or typed invalid-clock/evaluation failure; failed attempts do not advance the baseline.
+         * @note The host samples every active non-simulation clock while gameplay is held, supplies committed simulation
+         * time only after a successful tick, and keeps the source monotonic within an epoch. On suspend/resume or an
+         * external discontinuity, a new baseline suppresses skipped time and events.
+         */
+        [[nodiscard]] Result<SequenceFrameEvaluationResult> EvaluateClock(const SequencePlayerHandle &handle,
+                                                                          const SequenceClockSample &sample,
+                                                                          const SequenceFrameScratch &scratch,
+                                                                          const SequenceFrameHooks &hooks);
 
         /**
          * @brief Applies one newer host gameplay-pause observation to the active player.
@@ -552,19 +589,26 @@ namespace Horo::Cinematic {
             SequencePlaybackBlendSettings blend;
             std::optional<SequenceAuthorityPlan> authority;
             std::optional<SequenceRestoreSnapshot> restore;
+            std::vector<float> blendBaselines; /**< Track-order values compiled once at activation. */
             SequencePlaybackCoordinationSettings coordination;
             SequencePlaybackCoordinationHooks coordinationHooks;
             std::optional<SequenceCoordinationLease> gameplayPauseLease;
             std::optional<SequenceCoordinationLease> hudSuppressionLease;
             std::uint64_t retainedBytes{};
             std::uint64_t gameplayPauseRevision{};
+            SequenceTime clockPosition{};
+            std::uint64_t clockEpoch{};
+            std::uint64_t scaleRemainder{};
+            SequencePlaybackRate appliedScale{};
             bool gameplayPaused{};
+            bool clockBaselineValid{};
+            bool hostWasSuspended{};
             bool resumeBaselinePending{};
             bool suppressNextPlayBoundary{};
             bool restoreApplied{};
 
             Instance(SequencePlayer playerValue, const SequenceFrameCursor &cursorValue, SequencePlaybackActivation activationValue,
-                     std::optional<SequenceCoordinationLease> gameplayPauseLeaseValue,
+                     std::vector<float> baselineValues, std::optional<SequenceCoordinationLease> gameplayPauseLeaseValue,
                      std::optional<SequenceCoordinationLease> hudSuppressionLeaseValue) noexcept;
         };
 
@@ -579,6 +623,11 @@ namespace Horo::Cinematic {
 
         [[nodiscard]] Result<std::size_t> ResolveSlot(const SequencePlayerHandle &handle) const;
         [[nodiscard]] Result<void> SynchronizeCursor(Instance &instance, SequenceCursorResetPolicy resetPolicy) const;
+        /** @brief Evaluates a validated clock interval and commits its baseline only after success. */
+        [[nodiscard]] Result<SequenceFrameEvaluationResult> EvaluateClockDelta(const SequencePlayerHandle &handle,
+                                                                               const SequenceClockSample &sample,
+                                                                               const SequenceFrameScratch &scratch,
+                                                                               const SequenceFrameHooks &hooks, const Instance &instance);
         [[nodiscard]] Result<void> RebindCursorFence(Instance &instance) const;
         [[nodiscard]] Result<void> ValidateActivation(const SequencePlaybackActivation &activation) const;
         [[nodiscard]] Result<void> AdmitActivation(const SequencePlaybackActivation &activation, SequenceEvaluationUsage &additional,

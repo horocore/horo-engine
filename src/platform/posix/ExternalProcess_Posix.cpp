@@ -16,6 +16,7 @@
 #include <span>
 #include <spawn.h>
 #include <string_view>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -25,11 +26,17 @@ namespace Horo {
     namespace {
         class LineDecoder final {
         public:
-            LineDecoder(const ProcessOutputStream stream, const std::size_t maximum, const std::function<void(ProcessOutputLine)> &callback)
-                : stream_(stream), maximum_(std::max<std::size_t>(maximum, 1U)), callback_(&callback) {}
+            LineDecoder(const ProcessOutputStream stream, const std::size_t maximum, const std::size_t outputBudget,
+                        const std::function<void(ProcessOutputLine)> &callback)
+                : stream_(stream), maximum_(std::max<std::size_t>(maximum, 1U)), outputBudget_(outputBudget), callback_(&callback) {}
 
             void Append(const std::span<const char> bytes) {
                 for (const char value : bytes) {
+                    if (received_ >= outputBudget_) {
+                        truncated_ = true;
+                        continue;
+                    }
+                    ++received_;
                     if (value == '\n')
                         Emit();
                     else if (value != '\r') {
@@ -56,6 +63,8 @@ namespace Horo {
 
             ProcessOutputStream stream_;
             std::size_t maximum_;
+            std::size_t outputBudget_;
+            std::size_t received_{};
             const std::function<void(ProcessOutputLine)> *callback_;
             std::string pending_;
             bool truncated_{false};
@@ -82,10 +91,16 @@ namespace Horo {
             return result;
         }
 
+        /** @brief Reads exactly one explicitly sized destination span from a pipe. */
+        [[nodiscard]] ssize_t ReadPipeChunk(const int descriptor, const std::span<char> destination) {
+            iovec buffer{destination.data(), destination.size()};
+            return readv(descriptor, &buffer, 1);
+        }
+
         void Drain(const int descriptor, bool &open, LineDecoder &decoder) {
             std::array<char, 4096> buffer{};
-            for (;;) {
-                const ssize_t count = read(descriptor, buffer.data(), buffer.size());
+            for (std::size_t reads = 0; reads < 16; ++reads) {
+                const ssize_t count = ReadPipeChunk(descriptor, buffer);
                 if (count > 0) {
                     decoder.Append(std::span<const char>{buffer.data(), static_cast<std::size_t>(count)});
                     continue;
@@ -149,37 +164,82 @@ namespace Horo {
             return Result<pid_t>::Success(process);
         }
 
+        [[nodiscard]] Result<pid_t> SpawnCapturedProcess(const ExternalProcessRequest &request, std::array<int, 2> &stdoutPipe,
+                                                         std::array<int, 2> &stderrPipe) {
+            if (pipe(stdoutPipe.data()) != 0 || pipe(stderrPipe.data()) != 0) {
+                const int failure = errno;
+                for (const int descriptor : {stdoutPipe[0], stdoutPipe[1], stderrPipe[0], stderrPipe[1]})
+                    if (descriptor >= 0)
+                        close(descriptor);
+                return Result<pid_t>::Failure(MakeError(PlatformErrors::ProcessIoFailed, std::strerror(failure)));
+            }
+
+            auto spawned = SpawnProcess(request, stdoutPipe, stderrPipe);
+            close(stdoutPipe[1]);
+            close(stderrPipe[1]);
+            if (spawned.HasError()) {
+                close(stdoutPipe[0]);
+                close(stderrPipe[0]);
+                return spawned;
+            }
+
+            static_cast<void>(fcntl(stdoutPipe[0], F_SETFL, fcntl(stdoutPipe[0], F_GETFL) | O_NONBLOCK));
+            static_cast<void>(fcntl(stderrPipe[0], F_SETFL, fcntl(stderrPipe[0], F_GETFL) | O_NONBLOCK));
+            return spawned;
+        }
+
         struct ProcessMonitorState {
             std::chrono::steady_clock::time_point started;
             std::chrono::steady_clock::time_point terminationStarted;
             bool terminationRequested = false;
-            bool timedOut = false;
+            ProcessStopCause cause{ProcessStopCause::None};
+            bool forced = false;
+            std::chrono::steady_clock::time_point forcedAt;
         };
 
         void UpdateProcessTermination(const pid_t process, const ExternalProcessRequest &request, const CancellationToken &cancellation,
                                       ProcessMonitorState &monitor, const bool childExited) {
+            using enum ProcessStopCause;
             const auto now = std::chrono::steady_clock::now();
-            if (const bool cancelled = cancellation.IsCancellationRequested();
-                !monitor.terminationRequested && (cancelled || now - monitor.started >= request.timeout)) {
+            if (request.forceCancellation.IsCancellationRequested() && !monitor.forced) {
+                monitor.cause = monitor.cause == None ? Cancellation : monitor.cause;
                 monitor.terminationRequested = true;
-                monitor.timedOut = !cancelled;
+                static_cast<void>(kill(-process, SIGKILL));
+                monitor.forced = true;
+                monitor.forcedAt = now;
+                return;
+            }
+            if (const bool cancelled = cancellation.IsCancellationRequested();
+                !monitor.terminationRequested && (cancelled || now - monitor.started >= request.timeout || childExited)) {
+                monitor.terminationRequested = true;
+                if (cancelled)
+                    monitor.cause = Cancellation;
+                else if (childExited)
+                    monitor.cause = DescendantCleanup;
+                else
+                    monitor.cause = Timeout;
                 monitor.terminationStarted = now;
                 static_cast<void>(kill(-process, SIGTERM));
-            } else if (monitor.terminationRequested && !childExited && now - monitor.terminationStarted >= request.gracefulTermination) {
+            } else if (monitor.terminationRequested && !monitor.forced && now - monitor.terminationStarted >= request.gracefulTermination) {
                 static_cast<void>(kill(-process, SIGKILL));
+                monitor.forced = true;
+                monitor.forcedAt = now;
             }
         }
 
-        [[nodiscard]] ExternalProcessResult BuildExternalProcessResult(const int status, const bool timedOut,
-                                                                       const bool terminationRequested) {
+        [[nodiscard]] ExternalProcessResult BuildExternalProcessResult(const int status, const ProcessMonitorState &monitor) {
             using enum ProcessTerminationReason;
             ExternalProcessResult result;
-            if (timedOut)
+            if (monitor.forced)
+                result.reason = Forced;
+            else if (monitor.cause == ProcessStopCause::Timeout)
                 result.reason = TimedOut;
-            else if (terminationRequested)
+            else if (monitor.cause == ProcessStopCause::Cancellation)
                 result.reason = Cancelled;
             else if (WIFSIGNALED(status))
                 result.reason = Signalled;
+
+            result.stopCause = monitor.cause;
 
             if (WIFEXITED(status))
                 result.exitCode = WEXITSTATUS(status);
@@ -199,28 +259,16 @@ namespace Horo {
 
         std::array<int, 2> stdoutPipe{-1, -1};
         std::array<int, 2> stderrPipe{-1, -1};
-        if (pipe(stdoutPipe.data()) != 0 || pipe(stderrPipe.data()) != 0) {
-            for (const int descriptor : {stdoutPipe[0], stdoutPipe[1], stderrPipe[0], stderrPipe[1]})
-                if (descriptor >= 0)
-                    close(descriptor);
-            return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed, std::strerror(errno)));
-        }
-
-        auto spawnedResult = SpawnProcess(request, stdoutPipe, stderrPipe);
-        close(stdoutPipe[1]);
-        close(stderrPipe[1]);
+        auto spawnedResult = SpawnCapturedProcess(request, stdoutPipe, stderrPipe);
         if (spawnedResult.HasError()) {
-            close(stdoutPipe[0]);
-            close(stderrPipe[0]);
             return Result<ExternalProcessResult>::Failure(spawnedResult.ErrorValue());
         }
         const pid_t process = spawnedResult.Value();
 
-        static_cast<void>(fcntl(stdoutPipe[0], F_SETFL, fcntl(stdoutPipe[0], F_GETFL) | O_NONBLOCK));
-        static_cast<void>(fcntl(stderrPipe[0], F_SETFL, fcntl(stderrPipe[0], F_GETFL) | O_NONBLOCK));
-
-        LineDecoder standardOutput{ProcessOutputStream::StandardOutput, request.maximumLineBytes, request.onOutput};
-        LineDecoder standardError{ProcessOutputStream::StandardError, request.maximumLineBytes, request.onOutput};
+        LineDecoder standardOutput{ProcessOutputStream::StandardOutput, request.maximumLineBytes, request.maximumOutputBytes,
+                                   request.onOutput};
+        LineDecoder standardError{ProcessOutputStream::StandardError, request.maximumLineBytes, request.maximumOutputBytes,
+                                  request.onOutput};
         bool stdoutOpen = true;
         bool stderrOpen = true;
         bool childExited = false;
@@ -241,13 +289,23 @@ namespace Horo {
                 Drain(stdoutPipe[0], stdoutOpen, standardOutput);
             if (stderrOpen && (descriptors[1].revents & (POLLIN | POLLHUP | POLLERR)) != 0)
                 Drain(stderrPipe[0], stderrOpen, standardError);
-            if (!childExited)
-                childExited = waitpid(process, &status, WNOHANG) == process;
+            if (!childExited) {
+                siginfo_t information{};
+                childExited = waitid(P_PID, static_cast<id_t>(process), &information, WEXITED | WNOHANG | WNOWAIT) == 0 &&
+                              information.si_pid == process;
+            }
+            if (monitor.forced && std::chrono::steady_clock::now() - monitor.forcedAt >= request.maximumDrainDuration)
+                break;
         }
+        // Keep the unreaped leader PID reserved until the whole group has received its final kill.
+        static_cast<void>(kill(-process, SIGKILL));
         close(stdoutPipe[0]);
         close(stderrPipe[0]);
+        standardOutput.Finish();
+        standardError.Finish();
+        static_cast<void>(waitpid(process, &status, 0));
 
-        return Result<ExternalProcessResult>::Success(BuildExternalProcessResult(status, monitor.timedOut, monitor.terminationRequested));
+        return Result<ExternalProcessResult>::Success(BuildExternalProcessResult(status, monitor));
     }
 
 }  // namespace Horo

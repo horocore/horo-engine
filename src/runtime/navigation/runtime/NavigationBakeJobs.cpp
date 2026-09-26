@@ -173,6 +173,34 @@ namespace Horo::Navigation {
             ++state->snapshot.revision;
         }
 
+        /** @brief Counts a claimed child when its callback leaves, including exceptional exits. */
+        struct TerminalCounter final {
+            std::shared_ptr<NavigationBakeJobDetail::SharedState> state;
+
+            explicit TerminalCounter(std::shared_ptr<NavigationBakeJobDetail::SharedState> sharedState) : state(std::move(sharedState)) {}
+
+            TerminalCounter(const TerminalCounter &) = delete;
+            TerminalCounter &operator=(const TerminalCounter &) = delete;
+
+            ~TerminalCounter() {
+                CountTerminal(state);
+            }
+        };
+
+        /** @brief Executes one bake item and translates its typed cancellation into a job acknowledgement. */
+        template <typename Work>  // NOSONAR(cpp:S5213,cpp:S995) Work is already a const-reference template parameter.
+        [[nodiscard]] Result<void> ExecuteBakeWork(const std::shared_ptr<NavigationBakeJobDetail::SharedState> &state, const Work &work,
+                                                   const CancellationToken &cancellation) {  // NOSONAR(cpp:S995) Work is already const-ref.
+            TerminalCounter terminal{state};
+            if (cancellation.IsCancellationRequested())
+                return JobCancelled(MakeError(NavigationErrors::BakeInputCancelled));
+            Result<void> outcome = work(cancellation);
+            if (outcome.HasError() && ErrorChainContains(outcome.ErrorValue(), NavigationErrors::BakeInputCancelled.domain,
+                                                         NavigationErrors::BakeInputCancelled.code))
+                return JobCancelled(outcome.ErrorValue());
+            return outcome;
+        }
+
         void Finish(const std::shared_ptr<NavigationBakeJobDetail::SharedState> &state, const NavigationBakeJobState terminal,
                     const std::optional<Error> &error = {}, const std::optional<NavigationBakeBudgetResource> limitingResource = {}) {
             OperationUpdate update;
@@ -237,25 +265,8 @@ namespace Horo::Navigation {
                 auto &item = descriptor.work[cursor];
                 auto work = std::move(item.execute);
                 if (auto child = group.Spawn({},
-                                             [state, work = std::move(work)](const CancellationToken &cancellation) mutable {
-                    struct TerminalCounter final {
-                        std::shared_ptr<NavigationBakeJobDetail::SharedState> state;
-
-                        explicit TerminalCounter(std::shared_ptr<NavigationBakeJobDetail::SharedState> sharedState)
-                            : state(std::move(sharedState)) {}
-                        TerminalCounter(const TerminalCounter &) = delete;
-                        TerminalCounter &operator=(const TerminalCounter &) = delete;
-                        TerminalCounter(TerminalCounter &&) = delete;
-                        TerminalCounter &operator=(TerminalCounter &&) = delete;
-
-                        ~TerminalCounter() {
-                            CountTerminal(state);
-                        }
-                    };
-                    TerminalCounter terminal{state};
-                    if (cancellation.IsCancellationRequested())
-                        return BakeFailure<void>(NavigationErrors::BakeInputCancelled);
-                    return work(cancellation);
+                                             [state, work = std::move(work)](const CancellationToken &cancellation) {
+                    return ExecuteBakeWork(state, work, cancellation);
                 });
                     child.HasError()) {
                     group.RequestCancel();
@@ -279,9 +290,10 @@ namespace Horo::Navigation {
 
         [[nodiscard]] Result<void> FinishBatchFailure(const std::shared_ptr<NavigationBakeJobDetail::SharedState> &state,
                                                       const Error &error) {
-            if (state->cancellation->Token().IsCancellationRequested()) {
+            if (IsJobCancelled(error) ||
+                ErrorChainContains(error, NavigationErrors::BakeInputCancelled.domain, NavigationErrors::BakeInputCancelled.code)) {
                 Finish(state, NavigationBakeJobState::Cancelled);
-                return BakeFailure<void>(NavigationErrors::BakeInputCancelled);
+                return IsJobCancelled(error) ? Result<void>::Failure(error) : JobCancelled(error);
             }
             Finish(state, NavigationBakeJobState::Failed, error);
             return Result<void>::Failure(error);
@@ -304,7 +316,7 @@ namespace Horo::Navigation {
                 while (cursor != last) {
                     if (state->cancellation->Token().IsCancellationRequested()) {
                         Finish(state, NavigationBakeJobState::Cancelled);
-                        return BakeFailure<void>(NavigationErrors::BakeInputCancelled);
+                        return JobCancelled(MakeError(NavigationErrors::BakeInputCancelled));
                     }
                     auto batch = ExecuteBatch(state, jobs, descriptor, cursor, last);
                     if (batch.HasError())

@@ -90,7 +90,7 @@ namespace Horo {
         std::optional<std::chrono::steady_clock::time_point> finishedAt;
     };
 
-    /** @brief Immutable typed result installed by the job's first terminal transition. */
+    /** @brief Immutable typed result installed by the job's first terminal transition; only success has no error. */
     struct JobTerminalResult final {
         JobState state{JobState::Failed};
         std::optional<Error> error;
@@ -119,6 +119,16 @@ namespace Horo {
 
     /** @brief Result-returning unit of scheduled work. */
     using JobFunction = std::function<Result<void>(const CancellationToken &)>;
+
+    /**
+     * @brief Explicitly acknowledges cooperative cancellation from a job callback.
+     * @param cause Optional typed reason retained beneath the job cancellation identity.
+     * @return The cancellation result to return from a job callback.
+     */
+    [[nodiscard]] Result<void> JobCancelled(std::optional<Error> cause = std::nullopt);
+
+    /** @brief Checks the exact Foundation cancellation identity, including its owning domain. @return True only for job.cancelled. */
+    [[nodiscard]] bool IsJobCancelled(const Error &error) noexcept;
 
     /** @brief Submission metadata retained by the job system. */
     struct JobDescriptor {
@@ -201,7 +211,7 @@ namespace Horo {
         JobHandle(JobHandle &&) noexcept = default;
         JobHandle &operator=(JobHandle &&) noexcept = default;
 
-        /** @brief Waits until the job reaches its single terminal state. */
+        /** @brief Waits until the job reaches its single terminal state. @return Success, the retained failure, or job.cancelled. */
         [[nodiscard]] Result<void> Wait() const;
         /**
          * @brief Waits under a finite affinity policy, optionally helping only this exact queued record.
@@ -215,7 +225,7 @@ namespace Horo {
         [[nodiscard]] JobId Id() const noexcept;
         /** @brief Returns an owned consistent snapshot even after bounded store eviction. */
         [[nodiscard]] std::optional<JobSnapshot> Snapshot() const;
-        /** @brief Requests cooperative cancellation through this durable record lease. */
+        /** @brief Requests cooperative cancellation through this durable record lease; terminal work is unchanged. */
         [[nodiscard]] Result<void> RequestCancel() const;
 
     private:
@@ -253,7 +263,7 @@ namespace Horo {
          * @return Move-only accepted-job handle or a typed admission failure. Rejection creates no record.
          */
         [[nodiscard]] Result<JobHandle> SubmitContext(JobDescriptor descriptor, ContextJobFunction work) const;
-        /** @brief Requests cooperative cancellation; queued work becomes terminal immediately. */
+        /** @brief Requests cooperative cancellation; a still-queued job becomes terminal immediately. */
         [[nodiscard]] Result<void> RequestCancel(JobId id) const;
         /** @brief Returns the latest state for an accepted job. */
         [[nodiscard]] JobSnapshot Query(JobId id) const;
@@ -276,6 +286,13 @@ namespace Horo {
     enum class TaskGroupFailurePolicy : std::uint8_t {
         FailFast,
         CollectAll,
+    };
+
+    /** @brief Final aggregate outcome after all accepted children have been joined. */
+    enum class TaskGroupOutcome : std::uint8_t {
+        Completed,
+        Failed,
+        Cancelled,
     };
 
     /** @brief Operation-owned structured concurrency scope over an injected JobSystem. */
@@ -312,18 +329,21 @@ namespace Horo {
         [[nodiscard]] Result<JobId> SpawnContext(JobDescriptor descriptor, ContextJobFunction work) const;
         /** @brief Returns the stable process-local identity correlated to every accepted child. */
         [[nodiscard]] TaskGroupId Id() const noexcept;
+        /** @brief Returns the immutable aggregate outcome after a completed join. @return Outcome, or no value while open/draining. */
+        [[nodiscard]] std::optional<TaskGroupOutcome> Outcome() const;
         /** @brief Closes admission and requests cooperative cancellation for all accepted children. */
         void RequestCancel() const;
         /**
          * @brief Closes admission and joins every accepted child.
-         * @return Success or the first child error in deterministic spawn order. Repeated calls return the same result.
+         * @return Success, the first child failure in spawn order, or the first cancellation if none failed.
+         * Repeated calls return the same result.
          */
         [[nodiscard]] Result<void> Join() const;
         /**
          * @brief Closes admission and joins every accepted child under one finite deadline.
          * @param options Caller-affinity rule and maximum duration shared by the complete join.
-         * @return Success, the first child error in spawn order, or a typed wait-control error. A wait-control error
-         * leaves the closed group retryable so its owner can cancel and drain it safely.
+         * @return Success, the first child failure, the first cancellation if none failed, or a typed wait-control error. A wait-control
+         * error leaves the closed group retryable so its owner can cancel and drain it safely.
          */
         [[nodiscard]] Result<void> Join(const JoinOptions &options) const;
 
@@ -331,7 +351,8 @@ namespace Horo {
         struct State;
 
         struct ChildJoinOutcome {
-            std::optional<Error> firstError;
+            std::optional<Error> firstFailure;
+            std::optional<Error> firstCancellation;
             std::optional<Error> interruption;
         };
 

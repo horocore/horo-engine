@@ -102,6 +102,20 @@ namespace Horo::PlatformServices {
         extern const ErrorCodeDescriptor ShutdownFailed;
     }  // namespace PlatformProviderLifecycleErrors
 
+    class PlatformProviderAdmission;
+
+    /** @brief Complete exact selection and consumer authority used to start a provider lifecycle. */
+    struct PlatformProviderLifecycleStartContext final {
+        const PlatformProjectConfiguration &configuration;                 /**< Immutable selected provider and required service set. */
+        const PlatformProviderAdmission &admission;                        /**< Host-owned admission registry. */
+        const Extensions::ApplicationCapabilityProviderIdentity &identity; /**< Exact selected module generation. */
+        const Extensions::ExtensionCapabilityHandle &authority;            /**< Capability authorizing this consumer. */
+        const Extensions::ApplicationCapabilityVersionRange &versions;     /**< Accepted provider contract range. */
+        std::string_view consumerExtensionId;                              /**< Stable consuming extension identity. */
+        std::string_view consumerModuleId;                                 /**< Stable consuming module identity. */
+        std::uint64_t consumerGeneration{};                                /**< Current consumer generation. */
+    };
+
     /**
      * @brief Narrow owner-lane composition of one exact version-2 provider operation profile.
      * @details Start publishes only after service initialization, session observation and completion ingress all succeed.
@@ -112,12 +126,11 @@ namespace Horo::PlatformServices {
     public:
         using RequestHandle = PlatformRequestHandle<void>;
 
-        /** @brief Resolves the exact immutable selection and starts each operation stage in declared order. */
+        /** @brief Resolves the exact immutable selection and starts each operation stage in declared order.
+         * @param context Complete selection and consumer authority captured by the host.
+         */
         [[nodiscard]] static Result<std::unique_ptr<PlatformProviderLifecycleHost>> Start(
-            const PlatformProjectConfiguration &configuration, PlatformProviderAdmission &admission,
-            const Extensions::ApplicationCapabilityProviderIdentity &identity, const Extensions::ExtensionCapabilityHandle &authority,
-            const Extensions::ApplicationCapabilityVersionRange &versions, std::string_view consumerExtensionId,
-            std::string_view consumerModuleId, std::uint64_t consumerGeneration);
+            const PlatformProviderLifecycleStartContext &context);
 
         ~PlatformProviderLifecycleHost();
         PlatformProviderLifecycleHost(const PlatformProviderLifecycleHost &) = delete;

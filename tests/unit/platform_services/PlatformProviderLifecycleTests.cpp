@@ -125,8 +125,9 @@ namespace Horo::PlatformServices::Tests {
                 auto authority = consumer.Grant({"platform.services.provider"});
                 REQUIRE(authority.HasValue());
                 const Extensions::ApplicationCapabilityVersionRange version{{1, 0, 0}, {1, 0, 0}};
-                return PlatformProviderLifecycleHost::Start(Configuration(), admission, identity, authority.Value(), version,
-                                                            "example.consumer", "consumer.module", 1);
+                const auto configuration = Configuration();
+                return PlatformProviderLifecycleHost::Start(
+                    {configuration, admission, identity, authority.Value(), version, "example.consumer", "consumer.module", 1});
             }
         };
     }  // namespace

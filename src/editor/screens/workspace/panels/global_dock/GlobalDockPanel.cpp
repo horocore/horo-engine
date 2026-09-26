@@ -131,7 +131,7 @@ namespace Horo::Editor {
             using BuiltInPaneAdapter::BuiltInPaneAdapter;
 
             void Attach(PanelContext &context) override {
-                pane_.Attach(context.buildOutputQuery);
+                pane_.Attach(context.buildOutputQuery, context.gameplayBuilds, context.projectRoot);
             }
 
             void Detach() override {

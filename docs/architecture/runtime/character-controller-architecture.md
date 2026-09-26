@@ -406,24 +406,14 @@ render or Physics transforms.
 
 ## Surface Materials
 
-Surface materials describe the physical and gameplay properties of a collider.
-
-```cpp
-struct SurfaceMaterial {
-    SurfaceMaterialId id;
-    float staticFriction;
-    float dynamicFriction;
-    float restitution;
-    SurfaceType surfaceType;       // e.g., Metal, Wood, Concrete, Grass
-    AssetId footstepSoundSet;      // variation container reference
-    AssetId impactSoundSet;
-    AssetId bulletImpactEffect;    // VFX asset reference
-    AssetId footstepEffect;
-};
-```
-
-Surface materials are assigned to colliders, not to meshes. A single mesh may
-use multiple surface materials through material IDs or collision sub-shapes.
+[ADR-181](../../adr/181-physics-material-surface-and-cross-system-identity.md)
+separates physical coefficients from optional gameplay surface identity. A
+collider/shape material slot binds a physical material asset and may separately
+bind a project `SurfaceMaterialId`. Mesh and compound subshapes preserve their
+authored slot mapping. The surface catalog carries no friction, sound or VFX
+asset; application/Gameplay binding assets select optional consumer cues from
+the committed semantic surface. A physical asset can serve several surfaces,
+and several physical assets can share a surface.
 
 ## Locomotion Facts And Footstep Correlation
 
@@ -511,16 +501,14 @@ capsule.
 
 ## Physics Material Query
 
-During sweeps, the controller reads the physics material from hit colliders.
-
-```cpp
-std::optional<SurfaceMaterialId> QuerySurfaceMaterial(const PhysicsHit& hit);
-```
-
-If a collider has no surface material, the controller uses its default material.
-`MovementResult.groundSurface` and `SurfaceContact.material` always contain a
-valid material ID; the fallback from `QuerySurfaceMaterial` to the descriptor's
-`defaultMaterial` is applied inside the controller before the result is returned.
+During sweeps, the controller reads copied physical material evidence and the
+optional semantic surface binding of the supporting collider. For grounded
+support with no semantic binding, Character uses its explicit project-valid
+default `SurfaceMaterialId`. This is independent of the implemented descriptor's
+physical `PhysicsQueryMaterial` fallback. No valid support means no ground surface;
+no live catalog lookup occurs during a sweep. A grounded committed result has a
+valid semantic surface only after the ADR-181 typed projection and default are
+implemented; current C++ query/results expose physical material evidence only.
 
 ## Collider Filtering
 

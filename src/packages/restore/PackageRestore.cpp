@@ -436,6 +436,8 @@ namespace Horo::Packages {
                 std::lock_guard lock(completion->Mutex());
                 completion->error = result.ErrorValue();
                 ++completion->revision;
+                if (ErrorChainContains(result.ErrorValue(), PackageRestoreErrors::Cancelled.domain, PackageRestoreErrors::Cancelled.code))
+                    return JobCancelled(std::move(result).ErrorValue());
                 return Result<void>::Failure(std::move(result).ErrorValue());
             }
             {

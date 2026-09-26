@@ -91,10 +91,10 @@ int main(const int argc, char **argv) {
 
     HORO_LOG_INFO("foundation.host", "Headless host initialized");
     if (options.emitSmoke) {
-        const auto gameCounter =
-            Horo::Telemetry::Runtime::RegisterCounter({.name = "game.smoke.completed", .subsystem = "Game.Smoke", .unit = "operations"});
-        const auto pluginGauge =
-            Horo::Telemetry::Runtime::RegisterGauge({.name = "plugin.example.active", .subsystem = "Plugin.example", .unit = "instances"});
+        const auto gameCounter = Horo::Telemetry::Runtime::RegisterCounter(
+            {.name = "game.smoke.completed", .subsystem = "Game.Smoke", .unit = Horo::Telemetry::MetricUnit::Count});
+        const auto pluginGauge = Horo::Telemetry::Runtime::RegisterGauge(
+            {.name = "plugin.example.active", .subsystem = "Plugin.example", .unit = Horo::Telemetry::MetricUnit::Count});
         gameCounter.Add();
         pluginGauge.Set(1.0);
         static_cast<void>(Horo::Telemetry::Runtime::EmitEvent("Game.Smoke", "game.smoke.completed", Horo::Log::Level::Info,

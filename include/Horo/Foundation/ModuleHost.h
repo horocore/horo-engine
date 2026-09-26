@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Foundation/Configuration.h"
 #include "Horo/Foundation/ErrorCodeRegistry.h"
 #include "Horo/Foundation/ModuleDescriptor.h"
 #include "Horo/Foundation/Result.h"
@@ -18,6 +19,14 @@
 namespace Horo {
     class ModuleActivationContext;
     class ModuleCallbackGate;
+
+    /** @brief Owned, inert settings registered explicitly by the composition root for one module. */
+    struct ModuleConfigurationContribution {
+        ModuleId module;
+        std::string ownerPrefix;
+        std::vector<SettingDescriptor> settings;
+        std::vector<EnvironmentVariableBinding> environmentBindings;
+    };
 
     /** @brief Host-approved dependency bindings owned by the composition root. */
     class IDependencyBindings {
@@ -196,6 +205,15 @@ namespace Horo {
          */
         [[nodiscard]] Result<void> Register(const ModuleDescriptor &descriptor);
 
+        /** @brief Atomically registers a module and its owned settings; rejects conflicts before activation. */
+        [[nodiscard]] Result<void> Register(const ModuleDescriptor &descriptor, const ModuleConfigurationContribution &contribution);
+
+        /** @brief Builds a mutable schema from active modules in stable module/key order. */
+        [[nodiscard]] Result<ConfigurationSchema> BuildConfigurationSchema() const;
+
+        /** @brief Returns active environment bindings in stable module/variable order. */
+        [[nodiscard]] std::vector<EnvironmentVariableBinding> ConfigurationEnvironmentBindings() const;
+
         /**
          * @brief Validates the full registration graph and activates modules in validated order.
          * @param bindings Host-approved dependency bindings handed to every activation callback.
@@ -245,6 +263,7 @@ namespace Horo {
                                 std::size_t base) noexcept;
 
         std::vector<ModuleDescriptor> m_registered;
+        std::vector<ModuleConfigurationContribution> m_configurationContributions;
         std::vector<ActiveModule> m_active;
         std::vector<ModuleStateRecord> m_states;
         std::shared_ptr<const ErrorCodeRegistry> m_errorCodes;

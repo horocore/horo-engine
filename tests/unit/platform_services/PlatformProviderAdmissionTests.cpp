@@ -30,6 +30,38 @@ namespace Horo::PlatformServices::Tests {
             return 1U << static_cast<std::uint8_t>(HostPlatform());
         }
 
+        /** @brief Stages a native provider fixture and its matching manifest in a temporary package. */
+        [[nodiscard]] bool WriteProviderPackage(const std::filesystem::path &root, const std::filesystem::path &fixture) {
+            const std::filesystem::path modulePath = root / fixture.filename();
+            if (!std::filesystem::copy_file(fixture, modulePath))
+                return false;
+            std::ofstream manifest{root / "extension.json"};
+            manifest
+                << R"({"id":"example.extension","version":"1.0.0","modules":[{"id":"example.module","version":"1.0.0","kind":"native","roles":["backend-capability"],"entry":")"
+                << modulePath.filename().generic_string()
+                << R"(","requiredCapabilities":["platform.services.provider"]}],"contributions":[{"type":"platform.services.provider","id":"example.provider","module":"example.module"}]})";
+            return manifest.good();
+        }
+
+        /** @brief Builds the exact-provider configuration used by the operations ABI integration case. */
+        [[nodiscard]] Result<PlatformProjectConfiguration> OptionalAchievementConfiguration() {
+            PlatformProjectConfigurationCandidate draft{.projectId = "example.project",
+                                                        .profile = PlatformServicesHostProfile::HeadlessServer,
+                                                        .provider = {.mode = PlatformProviderSelectionMode::ExactProvider,
+                                                                     .providerKey = "example.provider"}};
+            draft.services[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = PlatformServiceRequirement::Optional;
+            PlatformProviderModuleContribution contribution{.module = {"example.module"},
+                                                            .providerKey = "example.provider",
+                                                            .provider = {42},
+                                                            .interfaceVersion = {PlatformServicesBackendInterfaceMajor,
+                                                                                 PlatformServicesBackendInterfaceMinor},
+                                                            .allowedProfiles = PlatformServicesHostProfileMask::HeadlessServer};
+            contribution.supportedServices[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = true;
+            const std::vector contributions{contribution};
+            const std::vector trusted{ModuleId{"example.module"}};
+            return BuildPlatformProjectConfiguration(draft, contributions, trusted);
+        }
+
         struct Audit final {
             std::atomic_bool allowRetire{true};
             std::atomic_int created{};
@@ -308,16 +340,7 @@ namespace Horo::PlatformServices::Tests {
             }
         } cleanup{root};
 
-        const fs::path modulePath = root / fs::path{HORO_PLATFORM_PROVIDER_FIXTURE}.filename();
-        REQUIRE(fs::copy_file(HORO_PLATFORM_PROVIDER_FIXTURE, modulePath));
-        {
-            std::ofstream manifest{root / "extension.json"};
-            manifest
-                << R"({"id":"example.extension","version":"1.0.0","modules":[{"id":"example.module","version":"1.0.0","kind":"native","roles":["backend-capability"],"entry":")"
-                << modulePath.filename().generic_string()
-                << R"(","requiredCapabilities":["platform.services.provider"]}],"contributions":[{"type":"platform.services.provider","id":"example.provider","module":"example.module"}]})";
-            REQUIRE(manifest.good());
-        }
+        REQUIRE(WriteProviderPackage(root, HORO_PLATFORM_PROVIDER_FIXTURE));
         Extensions::ApplicationCapabilityRegistry capabilities;
         Extensions::BackendServiceRegistry services;
         const auto policy = Policy();
@@ -368,16 +391,7 @@ namespace Horo::PlatformServices::Tests {
             }
         } cleanup{root};
 
-        const fs::path modulePath = root / fs::path{HORO_PLATFORM_PROVIDER_OPERATIONS_FIXTURE}.filename();
-        REQUIRE(fs::copy_file(HORO_PLATFORM_PROVIDER_OPERATIONS_FIXTURE, modulePath));
-        {
-            std::ofstream manifest{root / "extension.json"};
-            manifest
-                << R"({"id":"example.extension","version":"1.0.0","modules":[{"id":"example.module","version":"1.0.0","kind":"native","roles":["backend-capability"],"entry":")"
-                << modulePath.filename().generic_string()
-                << R"(","requiredCapabilities":["platform.services.provider"]}],"contributions":[{"type":"platform.services.provider","id":"example.provider","module":"example.module"}]})";
-            REQUIRE(manifest.good());
-        }
+        REQUIRE(WriteProviderPackage(root, HORO_PLATFORM_PROVIDER_OPERATIONS_FIXTURE));
         Extensions::ApplicationCapabilityRegistry capabilities;
         Extensions::BackendServiceRegistry services;
         const auto policy = Policy();
@@ -395,24 +409,16 @@ namespace Horo::PlatformServices::Tests {
         auto consumer = Consumer(policy);
         auto authority = consumer.Grant({"platform.services.provider"});
         REQUIRE(authority.HasValue());
-        PlatformProjectConfigurationCandidate draft{.projectId = "example.project",
-                                                    .profile = PlatformServicesHostProfile::HeadlessServer,
-                                                    .provider = {.mode = PlatformProviderSelectionMode::ExactProvider,
-                                                                 .providerKey = "example.provider"}};
-        draft.services[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = PlatformServiceRequirement::Optional;
-        PlatformProviderModuleContribution contribution{.module = {"example.module"},
-                                                        .providerKey = "example.provider",
-                                                        .provider = {42},
-                                                        .interfaceVersion = {PlatformServicesBackendInterfaceMajor,
-                                                                             PlatformServicesBackendInterfaceMinor},
-                                                        .allowedProfiles = PlatformServicesHostProfileMask::HeadlessServer};
-        contribution.supportedServices[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = true;
-        const std::vector contributions{contribution};
-        const std::vector trusted{ModuleId{"example.module"}};
-        auto configuration = BuildPlatformProjectConfiguration(draft, contributions, trusted);
+        auto configuration = OptionalAchievementConfiguration();
         REQUIRE(configuration.HasValue());
-        auto started = PlatformProviderLifecycleHost::Start(configuration.Value(), admission, {"example.module", "example.provider", 1},
-                                                            authority.Value(), Version(1), "example.consumer", "consumer.module", 1);
+        auto started = PlatformProviderLifecycleHost::Start({configuration.Value(),
+                                                             admission,
+                                                             {"example.module", "example.provider", 1},
+                                                             authority.Value(),
+                                                             Version(1),
+                                                             "example.consumer",
+                                                             "consumer.module",
+                                                             1});
         REQUIRE(started.HasValue());
         auto host = std::move(started).Value();
         auto request = host->UnlockAchievement({1});

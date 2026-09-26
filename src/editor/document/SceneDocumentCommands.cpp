@@ -143,6 +143,9 @@ namespace Horo::Editor {
 
     /** @copydoc SceneDocumentCommandExecutor::CommitObject */
     Result<SceneCommandResult> SceneDocumentCommandExecutor::CommitObject(ObjectCommitContext context) {
+        if (const Result<void> validHistory = ValidateHistoryDelta(context.delta, 1); validHistory.HasError())
+            return Result<SceneCommandResult>::Failure(validHistory.ErrorValue());
+
         const std::size_t memoryBytes = EstimateMemoryBytes(context.delta, 1);
         const DocumentStateId beforeState = m_document.m_state;
         ApplyDelta(m_document.m_objects, context.delta);

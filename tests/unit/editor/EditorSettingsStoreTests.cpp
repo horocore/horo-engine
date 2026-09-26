@@ -15,6 +15,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
     void SetHomeForTest(const std::filesystem::path &home) {
@@ -23,6 +24,25 @@ namespace {
 #else
         setenv("HOME", home.string().c_str(), 1);
 #endif
+    }
+
+    TEST_CASE("Editor appearance settings use the composed module schema", "[unit][editor][configuration]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+
+        EditorSettings settings = DefaultEditorSettings();
+        settings.themePreset = EditorThemePreset::Light;
+        ModuleHost host;
+        const ModuleDescriptor module{.id = ModuleId{"horo.editor.services"}, .version = {1, 0, 0}};
+        REQUIRE(host.Register(module, MakeEditorSettingsContribution(settings)).HasValue());
+        REQUIRE(host.ActivateRegistered(nullptr).HasValue());
+        auto schema = host.BuildConfigurationSchema();
+        REQUIRE(schema.HasValue());
+        ConfigurationService configuration = CreateEditorConfigurationService(settings, nullptr, std::move(schema).Value());
+        CHECK(std::get<std::string>(configuration.Snapshot().Get(SettingKey{"editor.theme.active"})) == "light");
+        CHECK(configuration.Snapshot().Revision() == 0);
+        host.DeactivateAll();
+        CHECK(std::get<std::string>(configuration.Snapshot().Get(SettingKey{"editor.theme.active"})) == "light");
     }
 
     template <typename T> void RequireSettingValue(const Horo::ConfigurationSnapshot &snapshot, const char *key, const T &expected) {

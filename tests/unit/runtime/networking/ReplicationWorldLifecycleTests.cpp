@@ -1,4 +1,5 @@
 #include "Horo/Network/NetworkErrors.h"
+#include "Horo/Network/NetworkMetrics.h"
 #include "Horo/Network/ReplicationWorldLifecycle.h"
 #include "NetworkTestUtils.h"
 
@@ -187,5 +188,24 @@ namespace Horo::Network {
                      NetworkErrors::ReplicationAuthorityDenied);
         REQUIRE(lifecycle.Unload(replacement.scene, replacement.session).HasValue());
         REQUIRE(lifecycle.State() == ReplicationWorldLifecycleState::Empty);
+    }
+
+    TEST_CASE("Replication mapping metrics count only committed exact-generation changes", "[unit][network][replication][metrics]") {
+        NetworkMetrics metrics{88, true};
+        auto lifecycle = std::move(ReplicationWorldLifecycle::Create({.maximumObjects = 2, .maximumRetiredWorlds = 2}, &metrics)).Value();
+        const auto world = World();
+        REQUIRE(lifecycle.Stage(world).HasValue());
+        REQUIRE(lifecycle.CommitAtSafePoint(world.scene, world.session).HasValue());
+        const auto object = Object();
+        REQUIRE(lifecycle.RegisterObject(world.scene, world.session, object).HasValue());
+        RequireError(lifecycle.RegisterObject(world.scene, world.session, object), NetworkErrors::NetworkObjectMappingConflict);
+        REQUIRE(lifecycle.RetireObject(world.scene, world.session, object.object).HasValue());
+        RequireError(lifecycle.RetireObject(world.scene, world.session, object.object), NetworkErrors::NetworkObjectMappingUnknown);
+        REQUIRE(metrics.Publish());
+        const auto snapshot = metrics.Snapshot();
+        REQUIRE(snapshot.replication[static_cast<std::size_t>(NetworkMetricReplication::ObjectRegistered)] == 1);
+        REQUIRE(snapshot.replication[static_cast<std::size_t>(NetworkMetricReplication::ObjectRetired)] == 1);
+        lifecycle.BeginShutdown();
+        REQUIRE(metrics.Close());
     }
 }  // namespace Horo::Network

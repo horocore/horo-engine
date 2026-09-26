@@ -69,7 +69,7 @@ namespace Horo::Editor {
     void DrawGlobalDockTableHeaderSurface(ImVec2 origin, float width, float height);
 
     /** @brief Draws the canonical bottom-dock row hover and divider treatment. */
-    void DrawGlobalDockTableRowSurface(ImVec2 origin, float width, float height, bool hovered);
+    void DrawGlobalDockTableRowSurface(ImVec2 origin, float width, float height, bool hovered, bool selected = false);
 
     /** @brief Draws one canonical bottom-dock metric card, including an optional sparkline. */
     void DrawGlobalDockMetricCard(ImVec2 origin, ImVec2 size, const GlobalDockMetricCardProps &props, const Theme::Fonts &fonts);
@@ -107,4 +107,8 @@ namespace Horo::Editor {
     /** @brief Draws clipped, single-line text without leaking feature-local typography. */
     void DrawGlobalDockClippedText(ImDrawList &drawList, ImFont *font, float fontSize, ImVec2 minimum, ImVec2 maximum, ImVec4 color,
                                    std::string_view text);
+
+    /** @brief Draws a single line with an ellipsis when the available width is too small. */
+    void DrawGlobalDockEllipsizedText(ImDrawList &drawList, ImFont *font, float fontSize, ImVec2 minimum, ImVec2 maximum, ImVec4 color,
+                                      std::string_view text);
 }  // namespace Horo::Editor

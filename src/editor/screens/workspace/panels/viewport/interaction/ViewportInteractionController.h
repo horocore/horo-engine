@@ -33,6 +33,8 @@ namespace Horo::Editor {
         void Detach() noexcept;
 
         [[nodiscard]] bool IsActive() const noexcept;
+        /** @brief Emits an already-queued cancellation while routed input is blocked. */
+        [[nodiscard]] bool ConsumePendingCancellation(EditorWorkspaceViewCommandData &command) noexcept;
 
         void Draw(const ViewportInteractionDrawContext &context);
 
