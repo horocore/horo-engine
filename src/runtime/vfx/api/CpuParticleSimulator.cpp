@@ -42,6 +42,30 @@ namespace Horo::Vfx {
         using CpuParticleSimulatorDetail::RunSpawnStage;
         using CpuParticleSimulatorDetail::ValidateOperationalState;
 
+        /** @brief Restores the pre-step input-admission boundary on every exit path. */
+        struct AdvanceScope final {
+            bool &active;
+
+            explicit AdvanceScope(bool &activeState) noexcept : active(activeState) {}
+
+            AdvanceScope(const AdvanceScope &) = delete;
+            AdvanceScope &operator=(const AdvanceScope &) = delete;
+
+            ~AdvanceScope() {
+                active = false;
+            }
+        };
+
+        /** @brief Reports a reentrant gameplay write without changing the frozen step input. */
+        [[nodiscard]] Result<void> GameplayStageFailure() {
+            Error error = MakeError(VfxErrors::ParticleStageContractViolation);
+            error.diagnostics.push_back({.code = DiagnosticCode{"vfx.payload.active_step_write"},
+                                         .severity = DiagnosticSeverity::Error,
+                                         .message = "GameplayInput cannot be changed during an active particle step.",
+                                         .path = "payloadChannels"});
+            return Result<void>::Failure(std::move(error));
+        }
+
         [[nodiscard]] Result<CpuParticleSimulationStepResult> CommitCandidate(Detail::CpuParticleSimulatorState &state,
                                                                               const Detail::CpuParticleSpawnStageResult &spawn,
                                                                               const std::uint32_t killed, const std::uint32_t collisions) {
@@ -93,6 +117,8 @@ namespace Horo::Vfx {
     Result<CpuParticleSimulationStepResult> CpuParticleSimulator::Advance(const CpuParticleSimulationStep &step) {
         if (const auto state = ValidateOperationalState(state_.get()); state.HasError())
             return Result<CpuParticleSimulationStepResult>::Failure(state.ErrorValue());
+        if (state_->advancing)
+            return Failure<CpuParticleSimulationStepResult>(VfxErrors::ParticleStageContractViolation);
         if (step.cancelled)
             return Failure<CpuParticleSimulationStepResult>(VfxErrors::ParticleSimulationStepCancelled);
         if (!CpuParticleSimulatorDetail::Finite(step.deltaSeconds) || step.deltaSeconds < 0.0F ||
@@ -102,6 +128,8 @@ namespace Horo::Vfx {
         if (state_->committedGeneration == std::numeric_limits<std::uint64_t>::max() ||
             state_->nextTick == std::numeric_limits<std::uint64_t>::max())
             return Failure<CpuParticleSimulationStepResult>(VfxErrors::ParticleGenerationStale);
+        state_->advancing = true;
+        const AdvanceScope scope{state_->advancing};
         if (auto prepared = PrepareCandidate(*state_); prepared.HasError())
             return Result<CpuParticleSimulationStepResult>::Failure(prepared.ErrorValue());
 
@@ -177,8 +205,11 @@ namespace Horo::Vfx {
                                       .maximumAge = floats(view.maximumAge),
                                       .customFlags = unsigneds(view.customFlags),
                                       .customFloatStreamCount = state_->customFloatStreams};
-        for (std::uint32_t index = 0; index < state_->customFloatStreams; ++index)
-            result.customFloats[index] = floats(view.customFloats[index]);
+        for (std::uint32_t index = 0; index < state_->payloadChannelCount; ++index) {
+            const auto &channel = state_->payloadChannels[index];
+            if (channel.classification == CpuParticlePayloadClass::RenderOnly)
+                result.customFloats[channel.customFloatStream] = floats(view.customFloats[channel.customFloatStream]);
+        }
         return Result<CpuParticleExtractView>::Success(result);
     }
 
@@ -186,6 +217,8 @@ namespace Horo::Vfx {
     Result<void> CpuParticleSimulator::SubmitGameplayInput(const std::uint16_t channel, const float value) {
         if (auto state = ValidateOperationalState(state_.get()); state.HasError())
             return state;
+        if (state_->advancing)
+            return GameplayStageFailure();
         if (!CpuParticleSimulatorDetail::Finite(value))
             return Failure<void>(VfxErrors::ParticlePayloadSchemaMismatch);
         for (std::uint32_t index = 0; index < state_->payloadChannelCount; ++index) {
