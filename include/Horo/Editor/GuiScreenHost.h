@@ -198,6 +198,7 @@ namespace Horo::Editor {
 
         const EditorGuiContext *context_;
         EditorModalHost *modalHost_;
+        Input::InputRouter *inputRouter_;
         EditorSettingsService *settingsService_;
         LocalizationService *localization_;
         EngineDataBus *engineEvents_;

@@ -574,6 +574,27 @@ string-based shortcut authority.
 
 ## Testing
 
+### INP-001.3 Context, Focus, Capture, and Modal Evidence
+
+The editor router admits exactly one highest-priority, most-recent context for
+keyboard focus and pointer acquisition at a time. The Runtime UI focus graph
+retains one target per exact player/presentation scope, so a modal in one
+split-screen scope does not overwrite another player's focus. There is no
+process-global focus pointer. A modal's router token and the editor screen
+host's disabled presentation/menu gate block workspace handlers before
+dispatch; gameplay action reads are neutral while their context is ineligible.
+
+| Acceptance criterion | Executable evidence |
+|---|---|
+| Modal/native-dialog transitions never reach lower contexts, including open/close frames | `InputContextTests`, `EditorModalHostTests`, `GuiScreenHostLifecycleTests` |
+| One eligible focus/capture owner and owner/context destruction safety | `InputContextTests`, `UiFocusGraphTests` |
+| Release, Escape, focus/device loss, modal open, preemption, owner removal, context removal, and explicit cancellation | `InputTests`, `InputContextTests`, `ViewportPanelRenderTests` |
+| Workspace gesture cancelled before modal `OnOpen` | `EditorModalHostTests`, `ViewportPanelRenderTests` |
+
+The PR's current-head [GitHub checks](https://github.com/horocore/horo-engine/pulls?q=is%3Apr+HORO-1792)
+provide Linux/macOS/Windows and hosted quality-gate evidence; this document
+does not assert a platform result before those checks complete.
+
 Required tests cover:
 
 - pressed/released frame semantics

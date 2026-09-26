@@ -429,22 +429,33 @@ namespace Horo::Input {
     /** @brief Deterministic reason delivered when exclusive capture is cancelled. */
     enum class CaptureCancellationReason : std::uint8_t {
         Explicit,
+        Released,
         Escape,
         FocusLost,
         ModalOpened,
+        ContextPreempted,
         OwnerDestroyed,
         DeviceDisconnected,
         ContextRemoved,
     };
 
+    class InputRouter;
+
     /** @brief Narrow callback implemented by an interaction that owns capture. */
     class IInputCaptureOwner {
     public:
-        virtual ~IInputCaptureOwner() = default;
+        IInputCaptureOwner() = default;
+        virtual ~IInputCaptureOwner();
+        IInputCaptureOwner(const IInputCaptureOwner &) = delete;
+        IInputCaptureOwner &operator=(const IInputCaptureOwner &) = delete;
+        IInputCaptureOwner(IInputCaptureOwner &&) = delete;
+        IInputCaptureOwner &operator=(IInputCaptureOwner &&) = delete;
         virtual void OnInputCaptureCancelled(CaptureCancellationReason reason) noexcept = 0;
-    };
 
-    class InputRouter;
+    private:
+        friend class InputRouter;
+        InputRouter *capturingRouter_{nullptr};
+    };
 
     /** @brief Move-only RAII registration for one live routing context. */
     class InputContextToken {
@@ -498,6 +509,8 @@ namespace Horo::Input {
 
         /** @brief Installs the committed snapshot and clears per-frame consumption. */
         void BeginFrame(const RawInputSnapshot &snapshot);
+        /** @brief Cancels any capture still held after its initiating button release was delivered to handlers. */
+        void EndFrame() noexcept;
         /** @brief Registers a context until the returned move-only token is destroyed. */
         [[nodiscard]] InputContextToken PushContext(InputContextId id, InputContextKind kind);
         /** @brief Acquires exclusive pointer capture for the currently eligible context. */
@@ -536,10 +549,12 @@ namespace Horo::Input {
         [[nodiscard]] std::optional<PlayerId> PlayerForGamepad(GamepadDeviceId gamepad) const noexcept;
 
     private:
+        friend class IInputCaptureOwner;
         friend class InputContextToken;
         friend class PointerCaptureToken;
         void RemoveContext(std::uint64_t token) noexcept;
         void ReleaseCapture(std::uint64_t token) noexcept;
+        void OnCaptureOwnerDestroyed(const IInputCaptureOwner *owner) noexcept;
         [[nodiscard]] bool TokenActive(std::uint64_t token) const noexcept;
         [[nodiscard]] bool CaptureActive(std::uint64_t token) const noexcept;
         struct Impl;

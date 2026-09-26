@@ -27,6 +27,7 @@ namespace {
         int enters = 0;
         int leaves = 0;
         int destructions = 0;
+        int menuInvocations = 0;
     };
 
     class RecordingScreen final : public GuiScreen {
@@ -50,6 +51,11 @@ namespace {
 
         void Draw(const GuiContentRegion &) override {}
 
+        bool HandleMenuInvocation(const EditorMenuInvocation &) override {
+            ++stats_.menuInvocations;
+            return true;
+        }
+
         [[nodiscard]] LeaveDecision CanLeave(const LeaveTarget &) const override {
             return {.disposition = LeaveDisposition::Allow, .requirement = std::nullopt};
         }
@@ -65,6 +71,21 @@ namespace {
     private:
         ScreenStats &stats_;
     };
+
+    void VerifyMenuInputBarrier(GuiScreenHost &host, Input::InputRouter &input, const ScreenStats &stats) {
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
+        REQUIRE(stats.menuInvocations == 1);
+        auto modalContext = input.PushContext(Input::InputContextId{"test.modal"}, Input::InputContextKind::ModalRoot);
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
+        REQUIRE(stats.menuInvocations == 1);
+        modalContext.Reset();
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
+        REQUIRE(stats.menuInvocations == 1);
+        const Input::RawInputSnapshot nextFrame;
+        input.BeginFrame(nextFrame);
+        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
+        REQUIRE(stats.menuInvocations == 2);
+    }
 
     TEST_CASE("Shutdown Leaves Once Destroys Screen And Revokes Services", "[unit][editor]") {
         EngineDataBus engineEvents;
@@ -98,6 +119,8 @@ namespace {
         REQUIRE((host.Start(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}).HasValue()));
         REQUIRE((stats.enters == 1));
         REQUIRE((!host.Services().Empty()));
+
+        VerifyMenuInputBarrier(host, input, stats);
 
         const Result<void> invalidRoute = host.Navigate(GuiRoute{GuiRouteKind::Welcome, ProjectCreationRouteParameters{}});
         REQUIRE((invalidRoute.HasError()));

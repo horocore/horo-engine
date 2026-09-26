@@ -324,6 +324,8 @@ namespace Horo::Input {
 
     void RawInputCollector::SetWindowState(const WindowInputState state) noexcept {
         impl_->snapshots[impl_->write].window = state;
+        if (!state.focused || !state.pointerDeviceAvailable)
+            Neutralize();
     }
 
     void RawInputCollector::Neutralize() noexcept {
@@ -341,6 +343,8 @@ namespace Horo::Input {
             gamepad.axes.fill(0.0F);
             std::ranges::fill(gamepad.rawAxes, 0.0F);
         }
+        snapshot.text.clear();
+        snapshot.composition = {};
     }
 
     GamepadDeviceId RawInputCollector::ConnectGamepad(std::string name, const bool canonicalMapping, const std::size_t rawButtonCount,
@@ -811,6 +815,8 @@ namespace Horo::Input {
         bool consumedWheelY{false};
         InputDeviceAssignments assignments;
         std::uint64_t nextToken{1};
+        bool modalBarrier{false};
+        bool blockNextFrame{false};
     };
 
     namespace {
@@ -825,9 +831,21 @@ namespace Horo::Input {
 
     InputRouter::InputRouter() : impl_(std::make_unique<Impl>()) {}
 
-    InputRouter::~InputRouter() = default;
+    InputRouter::~InputRouter() {
+        if (impl_->capture)
+            impl_->capture->owner->capturingRouter_ = nullptr;
+    }
+
+    IInputCaptureOwner::~IInputCaptureOwner() {
+        if (capturingRouter_)
+            capturingRouter_->OnCaptureOwnerDestroyed(this);
+    }
 
     void InputRouter::BeginFrame(const RawInputSnapshot &snapshot) {
+        impl_->modalBarrier =
+            std::exchange(impl_->blockNextFrame, false) || std::ranges::any_of(impl_->contexts, [](const Impl::Context &context) {
+            return Priority(context.kind) >= Priority(InputContextKind::ModalRoot);
+        });
         impl_->previousSnapshot = impl_->snapshot;
         impl_->snapshot = &snapshot;
         impl_->consumedKeys.clear();
@@ -844,11 +862,24 @@ namespace Horo::Input {
             CancelCapture(CaptureCancellationReason::Escape);
     }
 
+    void InputRouter::EndFrame() noexcept {
+        if (impl_->capture && impl_->snapshot && impl_->snapshot->State(impl_->capture->button).released)
+            CancelCapture(CaptureCancellationReason::Released);
+    }
+
     InputContextToken InputRouter::PushContext(InputContextId id, const InputContextKind kind) {
         using enum InputContextKind;
         const std::uint64_t token = impl_->nextToken++;
-        if (kind == ModalRoot || kind == ModalChild || kind == NativeDialog)
+        if (kind == ModalRoot || kind == ModalChild || kind == NativeDialog) {
             CancelCapture(CaptureCancellationReason::ModalOpened);
+            impl_->modalBarrier = true;
+            if (kind == NativeDialog)
+                impl_->blockNextFrame = true;
+        } else if (impl_->capture) {
+            const auto capturedContext = std::ranges::find(impl_->contexts, impl_->capture->context, &Impl::Context::token);
+            if (capturedContext != impl_->contexts.end() && Priority(kind) >= Priority(capturedContext->kind))
+                CancelCapture(CaptureCancellationReason::ContextPreempted);
+        }
         impl_->contexts.emplace_back(token, std::move(id), kind);
         return InputContextToken(this, token);
     }
@@ -857,10 +888,13 @@ namespace Horo::Input {
                                                             IInputCaptureOwner &owner) {
         if (!IsContextActive(context))
             return Result<PointerCaptureToken>::Failure(MakeError(Errors::CaptureInactiveContext, "Input context is not active."));
-        if (impl_->capture)
+        if (impl_->capture || owner.capturingRouter_)
             return Result<PointerCaptureToken>::Failure(MakeError(Errors::CaptureBusy, "Pointer is already captured."));
+        if (impl_->snapshot && (!impl_->snapshot->window.focused || !impl_->snapshot->window.pointerDeviceAvailable))
+            return Result<PointerCaptureToken>::Failure(MakeError(Errors::CaptureInactiveContext, "Pointer device is unavailable."));
         const std::uint64_t token = impl_->nextToken++;
         impl_->capture = Impl::Capture{token, context.token_, button, &owner};
+        owner.capturingRouter_ = this;
         return Result<PointerCaptureToken>::Success(PointerCaptureToken(this, token));
     }
 
@@ -869,8 +903,8 @@ namespace Horo::Input {
             return;
         IInputCaptureOwner *owner = impl_->capture->owner;
         impl_->capture.reset();
-        if (owner)
-            owner->OnInputCaptureCancelled(reason);
+        owner->capturingRouter_ = nullptr;
+        owner->OnInputCaptureCancelled(reason);
     }
 
     bool InputRouter::HasCapture() const noexcept {
@@ -878,7 +912,8 @@ namespace Horo::Input {
     }
 
     bool InputRouter::HasHigherPriorityContext(const InputContextKind kind) const noexcept {
-        return std::ranges::any_of(impl_->contexts, [kind](const Impl::Context &context) {
+        return (impl_->modalBarrier && Priority(kind) < Priority(InputContextKind::ModalRoot)) ||
+               std::ranges::any_of(impl_->contexts, [kind](const Impl::Context &context) {
             return Priority(context.kind) > Priority(kind);
         });
     }
@@ -887,6 +922,9 @@ namespace Horo::Input {
         if (context.router_ != this || !TokenActive(context.token_))
             return false;
         const auto found = std::ranges::find(impl_->contexts, context.token_, &Impl::Context::token);
+        if ((impl_->snapshot && !impl_->snapshot->window.focused) ||
+            (found != impl_->contexts.end() && impl_->modalBarrier && Priority(found->kind) < Priority(InputContextKind::ModalRoot)))
+            return false;
         return found != impl_->contexts.end() && std::ranges::none_of(impl_->contexts, [&](const Impl::Context &candidate) {
             return Priority(candidate.kind) > Priority(found->kind) || (candidate.kind == found->kind && candidate.token > found->token);
         });
@@ -1072,7 +1110,14 @@ namespace Horo::Input {
     }
 
     void InputRouter::ReleaseCapture(const std::uint64_t token) noexcept {
-        if (impl_->capture && impl_->capture->token == token)
+        if (impl_->capture && impl_->capture->token == token) {
+            impl_->capture->owner->capturingRouter_ = nullptr;
+            impl_->capture.reset();
+        }
+    }
+
+    void InputRouter::OnCaptureOwnerDestroyed(const IInputCaptureOwner *owner) noexcept {
+        if (impl_->capture && impl_->capture->owner == owner)
             impl_->capture.reset();
     }
 

@@ -294,6 +294,13 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     auto modalContext = inputRouter.PushContext(Input::InputContextId{"test.modal"}, Input::InputContextKind::ModalRoot);
     drawFrame();
     REQUIRE((command.command == EditorWorkspaceViewCommand::CancelObjectTransformPreview));
+    command = {};
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    drawFrame();
+    command = {};
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    drawFrame();
+    REQUIRE((command.command == EditorWorkspaceViewCommand::None));
     modalContext.Reset();
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
     command = {};

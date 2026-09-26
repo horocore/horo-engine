@@ -188,6 +188,7 @@ endif ()
 add_executable(HoroInputTests
         unit/runtime/input/GameplayInputFrameTests.cpp
         unit/runtime/input/InputTests.cpp
+        unit/runtime/input/InputContextTests.cpp
 )
 target_compile_features(HoroInputTests PRIVATE cxx_std_20)
 target_link_libraries(HoroInputTests PRIVATE HoroEngine::Input)
