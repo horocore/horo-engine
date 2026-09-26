@@ -195,6 +195,29 @@ namespace Horo::Editor {
         return PresentedBuildStatuses[static_cast<std::size_t>(PresentedStatus(record))];
     }
 
+    /** @copydoc GlobalDockBuildOutputPane::ResolveColumns */
+    GlobalDockBuildOutputPane::ColumnLayout GlobalDockBuildOutputPane::ResolveColumns(const GlobalDockPaneRegions &regions,
+                                                                                      const GlobalDockPaneMetrics &metrics,
+                                                                                      const float scale) noexcept {
+        const float left = regions.contentOrigin.x + metrics.contentPadding;
+        const float right = regions.contentOrigin.x + regions.contentWidth - metrics.contentPadding - 32.0F * scale;
+        const float available = std::max(0.0F, right - left);
+        const bool showLine = available >= 520.0F * scale;
+        const bool showFile = available >= 360.0F * scale;
+        const float levelWidth = std::min(84.0F * scale, available * 0.38F);
+        const float line = left + levelWidth + metrics.columnGap;
+        const float file = line + (showLine ? 70.0F * scale + metrics.columnGap : 0.0F);
+        const float message = file + (showFile ? std::min(132.0F * scale, available * 0.22F) + metrics.columnGap : 0.0F);
+        return {.level = left,
+                .line = line,
+                .file = file,
+                .message = message,
+                .right = right,
+                .action = right + 5.0F * scale,
+                .showLine = showLine,
+                .showFile = showFile};
+    }
+
     /** @copydoc GlobalDockBuildOutputPane::Attach */
     void GlobalDockBuildOutputPane::Attach(const IBuildOutputQuery *buildOutputQuery,
                                            const Application::GameplayBuildService *gameplayBuilds, const std::string_view projectRoot) {
@@ -204,8 +227,14 @@ namespace Horo::Editor {
         m_snapshot = {};
         m_revision = 0;
         m_filteredIndices.clear();
+        m_search.fill('\0');
+        m_statusFilter = StatusFilter::All;
+        m_severityFilter.reset();
+        m_sessionFilter.reset();
+        m_stageFilter.clear();
+        m_clearBeforeSequence = 0;
+        m_selectedSequence.reset();
         m_filterDirty = true;
-        m_initialFollowTail = true;
     }
 
     /** @copydoc GlobalDockBuildOutputPane::Detach */
@@ -216,6 +245,11 @@ namespace Horo::Editor {
         m_snapshot = {};
         m_revision = 0;
         m_filteredIndices.clear();
+        m_severityFilter.reset();
+        m_sessionFilter.reset();
+        m_stageFilter.clear();
+        m_clearBeforeSequence = 0;
+        m_selectedSequence.reset();
     }
 
     /** @copydoc GlobalDockBuildOutputPane::Draw */
@@ -247,7 +281,13 @@ namespace Horo::Editor {
             }
         }
         DrawTable(regions, metrics, context, command, snapshotChanged);
-        DrawFooter(regions, metrics, context, errorCount, warningCount);
+        std::size_t visibleErrors = 0U;
+        std::size_t visibleWarnings = 0U;
+        for (const std::size_t index : m_filteredIndices) {
+            visibleErrors += IsErrorRecord(m_snapshot.records[index]) ? 1U : 0U;
+            visibleWarnings += IsWarningRecord(m_snapshot.records[index]) ? 1U : 0U;
+        }
+        DrawFooter(regions, metrics, context, visibleErrors, visibleWarnings);
     }
 
     void GlobalDockBuildOutputPane::DrawActiveBuild(const Application::GameplayBuildSnapshot &snapshot,
@@ -288,26 +328,35 @@ namespace Horo::Editor {
                                                 const std::size_t warningCount) {
         const float controlY = regions.toolbarOrigin.y + (metrics.toolbarHeight - metrics.controlHeight) * 0.5F;
         DrawGlobalDockToolbarSurface(regions.toolbarOrigin, regions.toolbarWidth, metrics.toolbarHeight);
-        const float x = DrawToolbarStatus(regions, metrics, context, errorCount, warningCount, controlY);
-        DrawToolbarTargets(metrics, context, x, controlY);
-    }
-
-    float GlobalDockBuildOutputPane::DrawToolbarStatus(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
-                                                       const EditorGuiContext &context, const std::size_t errorCount,
-                                                       const std::size_t warningCount, const float controlY) {
         const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
+        const GlobalDockToolbarChipProps filterProps{
+            .id = "BuildFilters",
+            .label = context.localization.Get("editor", "workspace.global_dock.build_output.filters"),
+            .active = m_statusFilter != StatusFilter::All || m_severityFilter.has_value() || m_sessionFilter.has_value() ||
+                      !m_stageFilter.empty(),
+        };
+        const float filterWidth = MeasureGlobalDockToolbarChip(filterProps, context.theme.fonts);
         ToolbarStatusChipLayout layout = ResolveToolbarStatusChipLayout(context, errorCount, warningCount, scale, metrics.toolbarGap);
-        const Theme::Fonts &fonts = context.theme.fonts;
-        const float searchWidth = std::max(180.0F * scale, regions.toolbarWidth - metrics.toolbarPaddingX * 2.0F - layout.fixedWidth);
-        float x = regions.toolbarOrigin.x + metrics.toolbarPaddingX;
+        const bool showExtended =
+            regions.toolbarWidth >= metrics.toolbarPaddingX * 2.0F + 140.0F * scale + layout.fixedWidth + filterWidth + metrics.toolbarGap;
+        const float searchWidth = ResolveGlobalDockSearchWidth(regions.toolbarWidth, filterWidth + metrics.toolbarGap +
+                                                                                         (showExtended ? layout.fixedWidth : 0.0F));
         const std::string previousSearch{m_search.data()};
-        x = DrawGlobalDockSearchControl({x, controlY}, searchWidth, "##BuildOutputSearch", m_search,
-                                        context.localization.Get("editor", "workspace.global_dock.build_output.search"), fonts);
+        float x =
+            DrawGlobalDockSearchControl({regions.toolbarOrigin.x + metrics.toolbarPaddingX, controlY}, searchWidth, "##BuildOutputSearch",
+                                        m_search, context.localization.Get("editor", "workspace.global_dock.build_output.search"),
+                                        context.theme.fonts);
         if (previousSearch != std::string_view{m_search.data()})
             m_filterDirty = true;
-        layout.x = x;
-        layout.controlY = controlY;
-        return DrawToolbarStatusChips(layout);
+        if (showExtended) {
+            layout.x = x;
+            layout.controlY = controlY;
+            x = DrawToolbarStatusChips(layout);
+            x = DrawToolbarTargets(metrics, context, x, controlY);
+        }
+        if (DrawGlobalDockToolbarChip({x, controlY}, filterWidth, filterProps, context.theme.fonts))
+            ImGui::OpenPopup("##BuildFiltersPopup");
+        DrawFilterPopup(context);
     }
 
     GlobalDockBuildOutputPane::ToolbarStatusChipLayout GlobalDockBuildOutputPane::ResolveToolbarStatusChipLayout(
@@ -382,8 +431,8 @@ namespace Horo::Editor {
         return cursorX + layout.gap + layout.scale;
     }
 
-    void GlobalDockBuildOutputPane::DrawToolbarTargets(const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context, float x,
-                                                       const float controlY) {
+    float GlobalDockBuildOutputPane::DrawToolbarTargets(const GlobalDockPaneMetrics &metrics, const EditorGuiContext &context, float x,
+                                                        const float controlY) {
         const Theme::Fonts &fonts = context.theme.fonts;
         const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
         const float targetWidth = 108.0F * scale;
@@ -427,6 +476,140 @@ namespace Horo::Editor {
         };
         const float rebuildWidth = MeasureGlobalDockToolbarChip(rebuildProps, fonts);
         static_cast<void>(DrawGlobalDockToolbarChip({x, controlY}, rebuildWidth, rebuildProps, fonts));
+        return x + rebuildWidth + metrics.toolbarGap;
+    }
+
+    void GlobalDockBuildOutputPane::DrawFilterPopup(const EditorGuiContext &context) {
+        const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
+        ImGui::SetNextWindowSize({280.0F * scale, 0.0F}, ImGuiCond_Appearing);
+        if (!ImGui::BeginPopup("##BuildFiltersPopup"))
+            return;
+
+        const Theme::Fonts &fonts = context.theme.fonts;
+        const auto label = [&](const char *key) {
+            Ui::FieldLabel(context.localization.Get("editor", key).c_str(), fonts);
+        };
+        const auto combo = [&](const char *id, int &selection, const std::vector<std::string> &items) {
+            std::vector<const char *> labels;
+            labels.reserve(items.size());
+            for (const std::string &item : items)
+                labels.push_back(item.c_str());
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            return Ui::ComboControl(id, &selection, labels.data(), static_cast<int>(labels.size()), fonts);
+        };
+
+        label("workspace.global_dock.build_output.filter.status");
+        const std::vector<std::string> statuses{
+            context.localization.Get("editor", "workspace.global_dock.build_output.status.all"),
+            context.localization.Get("editor", "workspace.global_dock.build_output.status.ok"),
+            context.localization.Get("editor", "workspace.global_dock.build_output.status.failed"),
+            context.localization.Get("editor", "workspace.global_dock.build_output.status.cached"),
+            context.localization.Get("editor", "workspace.global_dock.build_output.status.warning"),
+        };
+        int statusIndex = 0;
+        switch (m_statusFilter) {
+            case StatusFilter::All:
+                break;
+            case StatusFilter::Ok:
+                statusIndex = 1;
+                break;
+            case StatusFilter::Failed:
+            case StatusFilter::Errors:
+                statusIndex = 2;
+                break;
+            case StatusFilter::Cached:
+                statusIndex = 3;
+                break;
+            case StatusFilter::Warning:
+                statusIndex = 4;
+                break;
+        }
+        if (combo("##BuildStatusFilter", statusIndex, statuses)) {
+            constexpr std::array filters{StatusFilter::All, StatusFilter::Ok, StatusFilter::Errors, StatusFilter::Cached,
+                                         StatusFilter::Warning};
+            m_statusFilter = filters[static_cast<std::size_t>(statusIndex)];
+            m_filterDirty = true;
+        }
+
+        label("workspace.global_dock.build_output.filter.severity");
+        constexpr std::array severities{DiagnosticSeverity::Note, DiagnosticSeverity::Warning, DiagnosticSeverity::Error,
+                                        DiagnosticSeverity::Fatal};
+        const std::vector<std::string> severityLabels{
+            context.localization.Get("editor", "workspace.global_dock.build_output.filter.any"),
+            context.localization.Get("editor", "workspace.global_dock.build_output.row_status.info"),
+            context.localization.Get("editor", "workspace.global_dock.build_output.row_status.warning"),
+            context.localization.Get("editor", "workspace.global_dock.build_output.row_status.failed"),
+            context.localization.Get("editor", "workspace.global_dock.build_output.row_status.fatal"),
+        };
+        const auto selectedSeverity = std::ranges::find(severities, m_severityFilter.value_or(DiagnosticSeverity::Note));
+        int severityIndex = m_severityFilter.has_value() ? static_cast<int>(selectedSeverity - severities.begin()) + 1 : 0;
+        if (combo("##BuildSeverityFilter", severityIndex, severityLabels)) {
+            m_severityFilter = severityIndex == 0 ? std::nullopt : std::optional{severities[static_cast<std::size_t>(severityIndex - 1)]};
+            m_filterDirty = true;
+        }
+
+        label("workspace.global_dock.build_output.filter.stage");
+        std::vector<std::string> stages;
+        for (const BuildOutputRecord &record : m_snapshot.records) {
+            if (!record.stage.empty())
+                stages.push_back(record.stage);
+        }
+        if (!m_stageFilter.empty())
+            stages.push_back(m_stageFilter);
+        std::ranges::sort(stages);
+        stages.erase(std::unique(stages.begin(), stages.end()), stages.end());
+        int stageIndex = 0;
+        if (!m_stageFilter.empty()) {
+            const auto selected = std::ranges::find(stages, m_stageFilter);
+            if (selected != stages.end())
+                stageIndex = static_cast<int>(selected - stages.begin()) + 1;
+        }
+        stages.insert(stages.begin(), context.localization.Get("editor", "workspace.global_dock.build_output.filter.any"));
+        if (combo("##BuildStageFilter", stageIndex, stages)) {
+            m_stageFilter = stageIndex == 0 ? std::string{} : stages[static_cast<std::size_t>(stageIndex)];
+            m_filterDirty = true;
+        }
+
+        label("workspace.global_dock.build_output.filter.session");
+        std::vector<BuildOutputSessionId> sessions;
+        for (const BuildOutputRecord &record : m_snapshot.records) {
+            if (record.sessionId.has_value())
+                sessions.push_back(*record.sessionId);
+        }
+        if (m_sessionFilter.has_value())
+            sessions.push_back(*m_sessionFilter);
+        std::ranges::sort(sessions);
+        sessions.erase(std::unique(sessions.begin(), sessions.end()), sessions.end());
+        std::vector<std::string> sessionLabels{context.localization.Get("editor", "workspace.global_dock.build_output.filter.any")};
+        int sessionIndex = 0;
+        for (std::size_t index = 0; index < sessions.size(); ++index) {
+            sessionLabels.push_back(std::format("#{}", sessions[index].Value()));
+            if (m_sessionFilter == sessions[index])
+                sessionIndex = static_cast<int>(index) + 1;
+        }
+        if (combo("##BuildSessionFilter", sessionIndex, sessionLabels)) {
+            m_sessionFilter = sessionIndex == 0 ? std::nullopt : std::optional{sessions[static_cast<std::size_t>(sessionIndex - 1)]};
+            m_filterDirty = true;
+        }
+
+        ImGui::Separator();
+        if (m_snapshot.droppedRecordCount != 0U) {
+            const std::string dropped =
+                std::format("{} {}", m_snapshot.droppedRecordCount,
+                            context.localization.Get("editor", "workspace.global_dock.build_output.footer.dropped"));
+            ImGui::TextUnformatted(dropped.c_str());
+        }
+        if (Ui::Button({.label = context.localization.Get("editor", "workspace.global_dock.build_output.clear").c_str(),
+                        .size = {ImGui::GetContentRegionAvail().x, 30.0F * scale},
+                        .variant = Ui::ButtonVariant::Secondary,
+                        .enabled = !m_snapshot.records.empty(),
+                        .font = fonts.sans})) {
+            m_clearBeforeSequence = m_snapshot.records.back().sequence;
+            m_selectedSequence.reset();
+            m_filterDirty = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
     void GlobalDockBuildOutputPane::DrawTable(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
@@ -443,21 +626,18 @@ namespace Horo::Editor {
         const ImVec2 headerMin = regions.contentOrigin;
         DrawGlobalDockTableHeaderSurface(headerMin, regions.contentWidth, metrics.tableHeaderHeight);
         const float headerY = headerMin.y + (metrics.tableHeaderHeight - Theme::TextPx::Caption()) * 0.5F;
-        const std::array positions{
-            headerMin.x + metrics.contentPadding,
-            headerMin.x + metrics.contentPadding + 68.0F * scale + metrics.columnGap,
-            headerMin.x + metrics.contentPadding + (68.0F + 74.0F) * scale + metrics.columnGap * 2.0F,
-            headerMin.x + metrics.contentPadding + (68.0F + 74.0F + 96.0F) * scale + metrics.columnGap * 3.0F,
+        const ColumnLayout columns = ResolveColumns(regions, metrics, scale);
+        const auto draw = [&](const float x, const float maximum, const char *key) {
+            DrawGlobalDockClippedText(*drawList, context.theme.fonts.sansCompact, Theme::TextPx::Caption(), {x, headerY},
+                                      {maximum, headerMin.y + metrics.tableHeaderHeight}, Theme::Muted(),
+                                      context.localization.Get("editor", key));
         };
-        const std::array<const char *, 4> keys{
-            "workspace.global_dock.build_output.column.level",
-            "workspace.global_dock.build_output.column.line",
-            "workspace.global_dock.build_output.column.file",
-            "workspace.global_dock.build_output.column.message",
-        };
-        for (std::size_t index = 0; index < positions.size(); ++index)
-            drawList->AddText(context.theme.fonts.sansCompact, Theme::TextPx::Caption(), {positions[index], headerY},
-                              Theme::U32(Theme::Muted()), context.localization.Get("editor", keys[index]).c_str());
+        draw(columns.level, columns.line - metrics.columnGap, "workspace.global_dock.build_output.column.level");
+        if (columns.showLine)
+            draw(columns.line, columns.file - metrics.columnGap, "workspace.global_dock.build_output.column.line");
+        if (columns.showFile)
+            draw(columns.file, columns.message - metrics.columnGap, "workspace.global_dock.build_output.column.file");
+        draw(columns.message, columns.right, "workspace.global_dock.build_output.column.message");
     }
 
     void GlobalDockBuildOutputPane::DrawTableRows(const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
@@ -474,9 +654,8 @@ namespace Horo::Editor {
         const bool wasAtBottom = ImGui::GetScrollY() >= std::max(0.0F, ImGui::GetScrollMaxY() - 2.0F);
         for (std::size_t visibleIndex = 0; visibleIndex < m_filteredIndices.size(); ++visibleIndex)
             DrawTableRow(m_snapshot.records[m_filteredIndices[visibleIndex]], visibleIndex, regions, metrics, context, command, *drawList);
-        if (snapshotChanged && (wasAtBottom || m_initialFollowTail))
+        if (snapshotChanged && wasAtBottom)
             ImGui::SetScrollHereY(1.0F);
-        m_initialFollowTail = false;
         ImGui::EndChild();
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
@@ -485,12 +664,9 @@ namespace Horo::Editor {
     void GlobalDockBuildOutputPane::DrawTableRow(const BuildOutputRecord &record, const std::size_t visibleIndex,
                                                  const GlobalDockPaneRegions &regions, const GlobalDockPaneMetrics &metrics,
                                                  const EditorGuiContext &context, EditorWorkspaceViewCommandData &command,
-                                                 ImDrawList &drawList) const {
+                                                 ImDrawList &drawList) {
         const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
-        const float levelX = regions.contentOrigin.x + metrics.contentPadding;
-        const float lineX = levelX + 68.0F * scale + metrics.columnGap;
-        const float fileX = lineX + 74.0F * scale + metrics.columnGap;
-        const float messageX = fileX + 96.0F * scale + metrics.columnGap;
+        const ColumnLayout columns = ResolveColumns(regions, metrics, scale);
         const ImVec2 rowMin{regions.contentOrigin.x, regions.contentOrigin.y + metrics.tableHeaderHeight +
                                                          static_cast<float>(visibleIndex) * metrics.tableRowHeight - ImGui::GetScrollY()};
         ImGui::SetCursorScreenPos(rowMin);
@@ -498,20 +674,38 @@ namespace Horo::Editor {
         const bool activated = ImGui::InvisibleButton("##diagnostic", {regions.contentWidth, metrics.tableRowHeight});
         const bool hovered = ImGui::IsItemHovered();
         ImGui::PopID();
-        DrawGlobalDockTableRowSurface(rowMin, regions.contentWidth, metrics.tableRowHeight, hovered);
+        if (activated)
+            m_selectedSequence = record.sequence;
+        DrawGlobalDockTableRowSurface(rowMin, regions.contentWidth, metrics.tableRowHeight, hovered, m_selectedSequence == record.sequence);
         const float textY = rowMin.y + (metrics.tableRowHeight - Theme::TextPx::Label()) * 0.5F;
         const std::string level = context.localization.Get("editor", StatusLocalizationKey(record));
         const std::string line = LineLabel(record);
         const std::string file = FileLabel(record);
-        DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {levelX, textY},
-                                  {lineX - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, StatusColor(record), level);
-        DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {lineX, textY},
-                                  {fileX - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, Theme::Text(), line);
-        DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {fileX, textY},
-                                  {messageX - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, Theme::Accent(), file);
-        DrawGlobalDockClippedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {messageX, textY},
-                                  {rowMin.x + regions.contentWidth - metrics.contentPadding, rowMin.y + metrics.tableRowHeight},
-                                  Theme::Text(), record.message);
+        DrawGlobalDockEllipsizedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {columns.level, textY},
+                                     {columns.line - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, StatusColor(record), level);
+        if (columns.showLine)
+            DrawGlobalDockEllipsizedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {columns.line, textY},
+                                         {columns.file - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, Theme::Text(), line);
+        if (columns.showFile)
+            DrawGlobalDockEllipsizedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {columns.file, textY},
+                                         {columns.message - metrics.columnGap, rowMin.y + metrics.tableRowHeight}, Theme::Accent(), file);
+        DrawGlobalDockEllipsizedText(drawList, context.theme.fonts.sansCompact, Theme::TextPx::Label(), {columns.message, textY},
+                                     {columns.right, rowMin.y + metrics.tableRowHeight}, Theme::Text(), record.message);
+        if (record.source.has_value()) {
+            const float iconSize = 14.0F * scale;
+            Ui::DrawEditorIcon(&drawList, Ui::UiIcon::ArrowForward, {columns.action, rowMin.y + (metrics.tableRowHeight - iconSize) * 0.5F},
+                               {iconSize, iconSize}, Theme::U32(Theme::Accent()), context.theme.fonts.icon);
+        }
+        if (hovered && (record.source.has_value() || !record.message.empty())) {
+            ImGui::BeginTooltip();
+            if (!record.message.empty())
+                ImGui::TextUnformatted(record.message.c_str());
+            if (record.source.has_value()) {
+                const std::string fullSource = FormatSource(record.source);
+                ImGui::TextUnformatted(fullSource.c_str());
+            }
+            ImGui::EndTooltip();
+        }
         if (activated && record.source.has_value()) {
             command.command = EditorWorkspaceViewCommand::OpenDiagnosticSource;
             command.diagnosticSource = DiagnosticSourceRequest{
@@ -527,15 +721,24 @@ namespace Horo::Editor {
                                                const std::size_t warningCount) {
         const Theme::Fonts &fonts = context.theme.fonts;
         const std::string summary =
-            std::format("{} {}   {} {}   {} {}", m_snapshot.records.size(),
+            std::format("{} {}   {} {}   {} {}", m_filteredIndices.size(),
                         context.localization.Get("editor", "workspace.global_dock.build_output.footer.diagnostics"), errorCount,
                         context.localization.Get("editor", "workspace.global_dock.build_output.footer.errors"), warningCount,
                         context.localization.Get("editor", "workspace.global_dock.build_output.footer.warnings"));
+        const std::string dropped =
+            m_snapshot.droppedRecordCount == 0U
+                ? std::string{}
+                : std::format("   {} {}", m_snapshot.droppedRecordCount,
+                              context.localization.Get("editor", "workspace.global_dock.build_output.footer.dropped"));
+        const std::string leftText = summary + dropped;
         DrawGlobalDockFooterSurface(regions.footerOrigin, regions.footerWidth, metrics.footerHeight);
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         const float footerY = regions.footerOrigin.y + (metrics.footerHeight - Theme::TextPx::Caption()) * 0.5F;
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {regions.footerOrigin.x + metrics.contentPadding, footerY},
-                          Theme::U32(Theme::Muted()), summary.c_str());
+        DrawGlobalDockEllipsizedText(*drawList, fonts.sansCompact, Theme::TextPx::Caption(),
+                                     {regions.footerOrigin.x + metrics.contentPadding, footerY},
+                                     {regions.footerOrigin.x + regions.footerWidth - metrics.contentPadding,
+                                      regions.footerOrigin.y + metrics.footerHeight},
+                                     Theme::Muted(), leftText);
         if (m_snapshot.records.empty())
             return;
         const BuildOutputRecord &last = m_snapshot.records.back();
@@ -545,6 +748,16 @@ namespace Horo::Editor {
         const float textWidth = (fonts.sansCompact != nullptr ? fonts.sansCompact : ImGui::GetFont())
                                     ->CalcTextSizeA(Theme::TextPx::Caption(), FLT_MAX, 0.0F, lastBuild.c_str())
                                     .x;
+        const float summaryWidth = MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Caption(), leftText);
+        if (summaryWidth > regions.footerWidth - metrics.contentPadding * 2.0F &&
+            ImGui::IsMouseHoveringRect(regions.footerOrigin,
+                                       {regions.footerOrigin.x + regions.footerWidth, regions.footerOrigin.y + metrics.footerHeight})) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted(leftText.c_str());
+            ImGui::EndTooltip();
+        }
+        if (summaryWidth + textWidth + metrics.contentPadding * 3.0F > regions.footerWidth)
+            return;
         drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(),
                           {regions.footerOrigin.x + regions.footerWidth - metrics.contentPadding - textWidth, footerY},
                           Theme::U32(Theme::Muted()), lastBuild.c_str());
@@ -557,6 +770,10 @@ namespace Horo::Editor {
         if (!changed.has_value())
             return false;
         m_snapshot = std::move(*changed);
+        if (m_selectedSequence.has_value() && std::ranges::none_of(m_snapshot.records, [&](const BuildOutputRecord &record) {
+            return record.sequence == *m_selectedSequence;
+        }))
+            m_selectedSequence.reset();
         m_revision = m_snapshot.revision;
         m_filterDirty = true;
         return true;
@@ -582,17 +799,31 @@ namespace Horo::Editor {
 
     std::vector<std::size_t> GlobalDockBuildOutputPane::ProjectRecords(const std::span<const BuildOutputRecord> records,
                                                                        const StatusFilter statusFilter, const std::string_view search) {
+        return ProjectRecords(records, RecordFilter{.status = statusFilter, .search = search});
+    }
+
+    /** @copydoc GlobalDockBuildOutputPane::ProjectRecords */
+    std::vector<std::size_t> GlobalDockBuildOutputPane::ProjectRecords(const std::span<const BuildOutputRecord> records,
+                                                                       const RecordFilter &filter) {
         std::vector<std::size_t> projected;
         projected.reserve(records.size());
         for (std::size_t index = 0; index < records.size(); ++index) {
             const BuildOutputRecord &record = records[index];
-            const std::string source = FormatSource(record.source);
-            if (!PassesStatusFilter(record, statusFilter))
+            if (record.sequence != 0U && record.sequence <= filter.afterSequence)
                 continue;
-            if (!search.empty() && !GlobalDockContainsCaseInsensitive(record.stage, search) &&
-                !GlobalDockContainsCaseInsensitive(record.code.Value(), search) &&
-                !GlobalDockContainsCaseInsensitive(record.message, search) && !GlobalDockContainsCaseInsensitive(source, search) &&
-                !GlobalDockContainsCaseInsensitive(TechnicalStatusText(record), search))
+            if (!PassesStatusFilter(record, filter.status))
+                continue;
+            if (filter.severity.has_value() && record.severity != *filter.severity)
+                continue;
+            if (filter.session.has_value() && record.sessionId != filter.session)
+                continue;
+            if (!filter.stage.empty() && record.stage != filter.stage)
+                continue;
+            if (!filter.search.empty() && !GlobalDockContainsCaseInsensitive(record.stage, filter.search) &&
+                !GlobalDockContainsCaseInsensitive(record.code.Value(), filter.search) &&
+                !GlobalDockContainsCaseInsensitive(record.message, filter.search) &&
+                !GlobalDockContainsCaseInsensitive(FormatSource(record.source), filter.search) &&
+                !GlobalDockContainsCaseInsensitive(TechnicalStatusText(record), filter.search))
                 continue;
             projected.push_back(index);
         }
@@ -600,7 +831,12 @@ namespace Horo::Editor {
     }
 
     void GlobalDockBuildOutputPane::RebuildFilter() {
-        m_filteredIndices = ProjectRecords(m_snapshot.records, m_statusFilter, std::string_view{m_search.data()});
+        m_filteredIndices = ProjectRecords(m_snapshot.records, RecordFilter{.status = m_statusFilter,
+                                                                            .severity = m_severityFilter,
+                                                                            .session = m_sessionFilter,
+                                                                            .stage = m_stageFilter,
+                                                                            .search = std::string_view{m_search.data()},
+                                                                            .afterSequence = m_clearBeforeSequence});
         m_filterDirty = false;
     }
 }  // namespace Horo::Editor

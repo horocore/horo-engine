@@ -116,6 +116,14 @@ start time so elapsed time is derived by the reader; cancellation always routes
 through the service using the session ID. Terminal results remain in Build Output
 and Operations rather than in the active-session projection.
 
+The Build Output panel filters its retained snapshot by status, severity,
+stage, session, and case-insensitive text without changing either producer
+store. Clear Output records the newest visible sequence as a view cutoff;
+future records remain visible and historical operation results remain intact.
+The panel shows the store's dropped-record count separately from this view
+cutoff. New records follow the tail only while the reader is already at the
+tail, so a manually inspected earlier row keeps its scroll position.
+
 Freshness is a SHA-256 identity over project CMake files, native sources and
 headers, declared extra inputs, SDK fingerprint, selected configuration,
 generator/toolset/platform, and compiler identity. Compiler binary SHA-256 is
