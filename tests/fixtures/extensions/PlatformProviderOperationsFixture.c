@@ -73,9 +73,8 @@ HoroExtensionStatus horo_test_provider_session_changed(FixtureAudit *audit, uint
     return audit->sink->sessionChanged(audit->sink->context, revision, phase);
 }
 
-static HoroExtensionStatus Complete(const HoroPlatformProviderSink *sink, uint64_t requestId, uint64_t generation,
-                                    uint32_t service, uint32_t operation, uint32_t resultCode, const uint8_t *payload,
-                                    uint32_t payloadSize) {
+static HoroExtensionStatus Complete(const HoroPlatformProviderSink *sink, uint64_t requestId, uint64_t generation, uint32_t service,
+                                    uint32_t operation, uint32_t resultCode, const uint8_t *payload, uint32_t payloadSize) {
     const HoroPlatformProviderCompletion completion = {.structSize = sizeof(HoroPlatformProviderCompletion),
                                                        .requestId = requestId,
                                                        .requestGeneration = generation,
