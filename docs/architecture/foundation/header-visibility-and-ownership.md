@@ -35,6 +35,17 @@ public-header consumers cover both headers without exposing HTTP or SDK types.
 The host opts into tool capability only after confirming support for its selected
 model; default configuration advertises streaming and optional provider usage.
 
+## TRF-002.2 Import Boundary
+
+`HoroTerrainImport` owns `Horo/Terrain/TerrainSourceImport.h` and depends on
+`HoroTerrainApi`; runtime Terrain consumers continue to link `HoroTerrainApi` alone.
+The new header is additive: there are no callers to migrate. Hosts that import
+Terrain sources link `HoroTerrainImport`, pin any optional decoder contribution for
+the synchronous invocation, then publish a detached candidate against the exact
+current source revision. Format and codec types do not enter TerrainApi or runtime
+headers. The generated public-header consumer compiles the header through the new
+target's staged include view.
+
 ## DFR-002.2 Import Boundary
 
 `HoroEngine::Assets` owns the additive `Horo/Assets/PreFracturedSource.h` FBX

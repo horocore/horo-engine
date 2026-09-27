@@ -569,6 +569,9 @@ horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/TerrainFoliageRegistry.h
     Horo/Terrain/TerrainIdentity.h
 )
+horo_configure_target_header_boundary(HoroTerrainImport PUBLIC_HEADERS
+    Horo/Terrain/TerrainSourceImport.h
+)
 horo_configure_target_header_boundary(HoroTerrainRuntime PUBLIC_HEADERS
     Horo/Terrain/TerrainAsyncJobs.h
 )
