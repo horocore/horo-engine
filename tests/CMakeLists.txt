@@ -1120,6 +1120,12 @@ target_compile_features(HoroReleaseChecksumsTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReleaseChecksumsTests PRIVATE HoroEngine::Application)
 horo_register_catch_test(HoroReleaseChecksumsTests LABELS "release;checksums;headless")
 
+add_executable(HoroReleaseSigningBoundaryTests
+        unit/application/ReleaseSigningBoundaryTests.cpp)
+target_compile_features(HoroReleaseSigningBoundaryTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReleaseSigningBoundaryTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroReleaseSigningBoundaryTests LABELS "release;signing;headless")
+
 add_executable(HoroReleaseBuildProvenanceTests
         unit/application/ReleaseBuildProvenanceTests.cpp)
 target_compile_features(HoroReleaseBuildProvenanceTests PRIVATE cxx_std_20)

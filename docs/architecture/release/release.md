@@ -396,6 +396,13 @@ signing. Pre-sign verification rejects missing, changed, undeclared, or linked
 files. This inventory is a separate schema and cannot be parsed or published as
 the final candidate manifest; signing may change its recorded bytes.
 
+The signing handoff verifies this complete unsigned tree immediately before it
+invokes a host-owned signer. It admits only a nonzero opaque credential handle
+already selected in the frozen release plan; credential values remain inside
+the signer. A successful handoff is not final candidate verification: signing
+may change files, so final metadata and exact post-sign verification still run.
+This boundary is additive and does not migrate existing host signing workers.
+
 Every release contains a versioned machine-readable manifest describing:
 
 - engine and project versions

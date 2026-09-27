@@ -222,6 +222,7 @@ add_library(HoroApplication STATIC
         application/release/ReleaseJobTracker.cpp
         application/release/ReleasePipelineExecutor.cpp
         application/release/ReleasePackageProducer.cpp
+        application/release/ReleaseSigningBoundary.cpp
         application/release/ReleaseProfile.cpp
         application/release/ReleasePreflight.cpp
         application/release/ReleaseTargetMatrix.cpp
