@@ -190,6 +190,26 @@ Secrets are referenced through credential handles. Passwords, private keys, and
 tokens are not stored directly in release request objects or persistent job
 history.
 
+### Preflight and frozen inputs
+
+`ReleasePreflight` accepts typed intent plus read-only observations captured by
+the host for that exact intent. It aggregates independent failures for project
+readability, version/source consistency, profile identity, toolchain and target
+support, output collision, permission, free space, and credential-handle
+availability. The observations echo the requested project and output roots so
+facts captured for another request cannot produce a plan. A failed preflight
+has no plan and performs no output mutation.
+
+A successful `ReleaseExecutionPlan` owns copies of the request, canonical
+project/output paths, and source-tree, dependency-lock, profile, toolchain, and
+policy digests. Its machine snapshot is an internal plan artifact: it includes
+opaque credential-handle identities but never credential values. Human-facing
+summaries omit even the handle identities. Before each stage consumes source or
+toolchain inputs, the executor must compare fresh read-only observations with
+the plan through `ValidateReleaseInputFreeze` and stop on drift. The plan is
+not a substitute for a file lock or immutable source checkout; those belong to
+the host execution boundary.
+
 ## Job And Pipeline State
 
 Each target is an independent job under ADR-060. Job ownership and stage attempts
@@ -297,6 +317,33 @@ membership for a matrix of independent release jobs and aggregates their verifie
 outputs by that identity. Adapters never infer a matrix from labels, timestamps,
 paths or request order. A failed required target cannot be represented as a
 successful multi-platform release.
+
+`PlanReleaseTargetMatrix` admits each group member separately. Every cell has a
+distinct service-assigned job identity, stable target identity, requirement,
+single-target preflight plan and validated
+target evidence, or field-specific validation failures. The host supplies an
+exact toolchain descriptor bound to the preflight toolchain digest; a broad
+"cross compiler available" observation alone never admits cross-compilation.
+The descriptor names the host and target OS/architecture, an enabled and
+compile/link-validated toolchain, an installed target SDK, supported minimum
+platform range and package formats. Native builds require an exact host/target
+tuple. Cross builds require an explicit compatible profile, including when only
+the CPU architecture differs. Non-macOS hosts cannot target macOS. The currently
+qualified desktop architectures are Windows and Linux x86_64, and macOS x86_64
+and arm64. The product/profile package-format policy and the selected toolchain
+must both admit the format. The validated SDK, platform floor, format capabilities
+and toolchain digest travel with the frozen single-target plan. Duplicate target
+identities, equivalent project/profile/OS/architecture/configuration/toolchain
+tuples and colliding canonical output roots are rejected within the group.
+
+The service schedules one job per admitted cell and preserves validation
+rejections as terminal cell evidence. `SummarizeReleaseTargetMatrix` derives a
+group decision from complete immutable membership and terminal outcomes. It
+remains incomplete while any admitted cell lacks a terminal outcome. Results
+must match group, job and target identity; duplicate or foreign terminal results
+fail closed. Success requires every required member
+to succeed with a final-verified candidate; optional failures remain visible.
+The summary never replaces a job's terminal result or candidate verification.
 
 ## Output Layout
 

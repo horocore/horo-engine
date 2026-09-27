@@ -489,6 +489,26 @@ Every other terminal path publishes once, clears gameplay admission and rejects 
 messages/callbacks or replacement generations. Transport close remains externally
 owned and cannot rewrite the session snapshot.
 
+`NetworkTickAlignment` is a NetworkRuntime owner-thread projection for one admitted
+connection/session generation. The host supplies committed local fixed ticks and
+owner-stamped round-trip samples expressed in negotiated fixed-tick units; wall
+time never assigns simulation ticks. A sample estimates receive-time server tick
+from send tick plus ceiling of half the bounded measured round trip; that
+symmetry assumption is quality evidence, not gameplay authority. Its fixed
+eight-sample ceiling produces a
+median server-tick estimate and immutable quality/drift evidence. Each local
+fixed-tick advance maps to at most two projected server ticks (or holds one
+server tick), bounding correction to one tick without invoking additional
+fixed updates. The mapper does not own an input journal, canonical state,
+checkpoint, restore, or rollback path: those remain under ADR-100's declared
+prediction/provider contracts. Pause and host suspension freeze projection,
+increment a local sample epoch, and discard old samples. Reconnect accepts an
+explicit newly admitted handle (same-slot reuse requires its exact next
+generation) and a different session generation; a new admitted session on the
+same connection is also fenced. Loss ages
+quality to stale while projection advances ordinarily; it never silently
+expands history or simulation catch-up limits.
+
 The canonical hello exchange includes:
 
 - Product/protocol family identity and minimum/maximum wire versions.
@@ -658,6 +678,36 @@ declare network roles and required transport capability evidence before packagin
 or activation. `PreflightNetworkProjectSettings` validates the selected role and
 exact transport evidence before an operation publishes state.
 
+`NetworkTargetCapabilities` is the product-target admission boundary. The
+packager/release plan supplies an immutable version-one manifest for a specific
+build and platform; final package verification supplies a separate inventory of
+the roles, runtime, provider artifacts/capabilities and protocol actually present. The host composition root supplies a fresh,
+provider-mapped snapshot of registered transports, host support, configuration,
+runtime presence and protocol support. The project/release supplies required
+roles and an optional exact provider; the invocation selects one role, provider
+and protocol version. The pure assessment exposes package, installed,
+host-supported, project-required and selected facts separately and rejects the
+first missing capability with a typed remediation. A declaration alone cannot
+prove that a runtime or provider was packaged. The host must not synthesize
+`NetworkTargetHostFacts` from the product manifest or a renderer/device tier.
+Native provider names, factories and credentials remain in host-private mappings.
+`CaptureNetworkTargetHostFacts` reads sealed `TransportBackendComposition`
+registrations through an explicit typed provider-to-backend mapping; it never
+calls a factory and preserves absent/unsupported/unconfigured distinctions.
+Only an admitted, build-identity/revision-fenced assessment may precede activation; it does not
+activate anything itself. Standalone requires no provider or protocol selection.
+
+The manifest codec accepts only bounded, closed version-one JSON with non-zero
+build/revision/profile IDs, a typed platform and role set, exact protocol/schema
+range, and at most eight provider capability descriptors. It rejects duplicate
+keys, unknown fields and future versions. Migrated version-one project settings
+still pass through the same package/host assessment after their documented
+version-two normalization; migration never manufactures packaged capabilities.
+Automation must use this same assessment and final inventory evidence rather
+than inferring server support from a build variant or headless mode. Producers
+must bump product, host or project revisions on replacement and re-assess before
+publication; cancellation and shutdown deny admission.
+
 ## Optional Composition and Product Configurations
 
 Horo Engine products declare only the modes and network targets they can realize:
@@ -693,10 +743,71 @@ Networking integrates with Horo's diagnostic and metric infrastructure:
   cancellation, shutdown, and success use the same publication gate. Replacement
   requires the exact next non-wrapping handle generation, so late callbacks cannot
   terminate a new connection.
+- Hosts compose one `NetworkLogStream` per admitted connection/session generation
+  with a borrowed, host-owned `INetworkLogSink` (normally a
+  `NetworkTelemetryLogSink`). The stream consumes
+  canonical `NetworkTerminalRecord` failures and owner-published
+  `PeerSessionTerminalSnapshot` lifecycle outcomes; its closed categories and fields
+  carry host-operation, connection slot/generation, session, optional runtime-scene
+  instance, host-issued ephemeral player pseudonym, and owner-clock tick. The
+  pseudonym issuer never accepts an account/player identifier. Ordinary payloads,
+  private backend text, credentials, addresses, and authenticated principals are
+  absent from the log record type and telemetry projection. The adapter submits an
+  empty diagnostic context instead of inheriting potentially sensitive ambient
+  thread-local context. Network feature code does
+  not initialize the process logger or choose a persistence backend.
+- Peer-controlled failures have a fixed per-kind, per-window first-occurrence
+  allowance (1..8) and one aggregate suppression record at window retirement or
+  terminalization. The aggregate retains only a saturating count and latest tick.
+  Stream state is fixed-size; disabled instrumentation needs no sink and cannot
+  call one even when provided.
+  Exact connection/session generations and monotonic ticks fence late callbacks;
+  replacement requires the next connection generation after terminal publication.
+  Hosts must bound admitted streams with their connection capacity. A saturating
+  generation-scoped sink-failure count preserves evidence when an export throws,
+  resets on connection replacement, and never changes the network result. This
+  additive `NetworkRuntime` public
+  header has no migration requirement for existing callers; hosts opt in by
+  composing the stream at their connection owner boundary.
 
 - **Counters**: `net.bytes_sent`, `net.bytes_received`, `net.packets_lost`, `net.packets_dropped`.
 - **Gauges**: `net.active_connections`, `net.inbound_queue_depth`, `net.outbound_queue_depth`, `net.rtt_ms`.
+- `net.rtt_ms` uses the appended `MetricUnit::Milliseconds` descriptor, exported as
+  OTLP unit `ms`. Existing metric-unit numeric identities are unchanged; hosts
+  using typed descriptors need no migration.
 - **Tracing**: Transport connection events and session handshakes log to the `LogCategory::Network` category. Payloads are scrubbed of sensitive data by default.
+
+The host may compose `NetworkMetrics` with the selected transport, I/O service,
+peer-session lifecycle, and replication-world lifecycle. A metrics owner outlives
+those services and shuts them down before closing or destroying the collector.
+Only the owning network thread records measurements. I/O producers retain a
+separate shared admission flag, not the collector, so a late completion cannot
+access a retired metric owner. Closing the collector disables producer-side
+capacity-drop accounting immediately. The host calls `Publish` at a network
+safe point; `Snapshot` returns the last coherent fixed-size value to editor,
+headless, or other readers without touching in-flight network state. Process
+composition alone registers telemetry descriptors and passes pre-bound handles
+to `NetworkMetricPublisher`; no network component chooses an exporter.
+
+Transport-category outbound counts are admitted send requests; inbound counts
+are delivered normalized transport events. The deterministic transport counts
+each emitted fragment as a received event and its actual emitted bytes; seeded
+loss does not fabricate receive traffic.
+Additional closed control/replication/RPC categories are semantic observations,
+not partitions of those wire totals. Replication mapping counters count only
+successful register/retire operations, not unimplemented wire spawns or updates.
+`net.packets_lost` is qualified by `lossAvailable`: a backend without an actual
+loss counter does not turn absence of evidence into zero loss. RTT is the mean
+of owner-observed finite connection samples in one publication window and is
+unavailable when that window contains none. Queue and connection gauges are
+owner-safe-point values. Every series name and category is compiled from a
+closed vocabulary; peer handles, addresses, protocol IDs, message IDs, payloads,
+and native diagnostics never become metric dimensions. Saturation clamps
+counters and marks the snapshot; instrumentation failure never affects network
+admission, send, terminal state, or replication authority.
+The new observer parameters on existing network factories default to null;
+existing callers keep their behavior and need no migration. Hosts opting in
+must enforce the documented owner and shutdown order.
 
 ## Testing and Verification Strategy
 

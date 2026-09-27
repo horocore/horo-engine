@@ -828,6 +828,11 @@ namespace Horo::Editor {
                         return PollPlatformEvents();
                     case Runtime::RuntimePhase::BuildInputSnapshot:
                         p_->inputRouter.BeginFrame(p_->inputBackend.Commit());
+                        // ImGui owns editor field focus and the native IME lifecycle. Feed its
+                        // committed characters from the same immutable snapshot as Input,
+                        // rather than forwarding SDL text events on a second path.
+                        if (p_->inputRouter.Snapshot().window.focused && !p_->inputRouter.Snapshot().text.empty())
+                            p_->presentation.io.AddInputCharactersUTF8(p_->inputRouter.Snapshot().text.c_str());
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::ApplyQueuedOwnerThreadCommands:
                         screenHost_->OnInputSnapshot();
@@ -847,6 +852,7 @@ namespace Horo::Editor {
                     case Runtime::RuntimePhase::CommitDeferredLifecycleChanges:
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::EndFrame:
+                        p_->inputRouter.EndFrame();
                         if (context.frameNumber % 60U == 1U) {
                             p_->telemetry.frameNumber.Set(static_cast<double>(context.frameNumber));
                             p_->telemetry.frameDuration.Set(static_cast<double>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0);
@@ -893,7 +899,7 @@ namespace Horo::Editor {
                         smoothWheel) {
                         scrollSource_ = event.wheel.which == SDL_TOUCH_MOUSEID ? ImGuiMouseSource_TouchScreen : ImGuiMouseSource_Mouse;
                         scrollSmoother_.Queue(-event.wheel.x, event.wheel.y);
-                    } else {
+                    } else if (event.type != SDL_EVENT_TEXT_INPUT) {
                         ImGui_ImplSDL3_ProcessEvent(&event);
                     }
                     p_->inputBackend.ProcessEvent(event);
@@ -1440,6 +1446,7 @@ namespace Horo::Editor {
         const Subscription settingsSub = SubscribeToEditorSettings(editorEvents, settings, localization);
 
         Input::SdlInputBackend inputBackend;
+        inputBackend.BindWindow(SDL_GetWindowID(w));
         Input::InputRouter inputRouter;
         ConfigureEditorInput(inputRouter);
         EditorModalHost modalHost{editorEvents, inputRouter};

@@ -60,7 +60,7 @@ jobs:
         include:
           - name: Linux / GCC
             runner: ubuntu-24.04
-            timeout_minutes: 25
+            timeout_minutes: 35
             cc: gcc
             cxx: g++
             build_dir: build/ci
@@ -191,6 +191,58 @@ jobs:
           path: ${{ github.workspace }}/${{ matrix.build_dir }}/test-results/
           retention-days: 14
 
+  cli-process-windows:
+    name: CLI and Process · Windows / MSVC
+    runs-on: windows-2022
+    needs: [format]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+
+      - uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67
+
+      - name: Build and test CLI cancellation and process termination
+        shell: bash
+        run: |
+          cmake -S . -B build/cli-process-windows -G Ninja \
+            -DBUILD_TESTING=ON \
+            -DHORO_BUILD_EDITOR_GUI=OFF \
+            -DHORO_BUILD_RENDER_OPENGL=OFF \
+            -DHORO_ENABLE_OPENTELEMETRY=OFF
+          cmake --build build/cli-process-windows --target HoroCliCommandRegistryTests HoroPlatformTests --parallel 2
+          ctest --test-dir build/cli-process-windows -R '^Horo(CliCommandRegistry|Platform)Tests::' --output-on-failure
+
+  input-sdl-windows:
+    name: Input SDL and Runtime UI · Windows / MSVC
+    runs-on: windows-2022
+    needs: [format]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+
+      - uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67
+
+      - name: Build and test headless SDL text input
+        shell: bash
+        run: |
+          cmake -S . -B build/input-sdl-windows -G Ninja \
+            -DBUILD_TESTING=ON \
+            -DHORO_BUILD_EDITOR_GUI=OFF \
+            -DHORO_BUILD_INPUT_SDL3=ON \
+            -DHORO_BUILD_AUDIO_SDL3=OFF \
+            -DHORO_BUILD_RENDER_OPENGL=OFF \
+            -DHORO_ENABLE_OPENTELEMETRY=OFF
+          cmake --build build/input-sdl-windows \
+            --target HoroInputTests HoroInputSdlTests HoroRuntimeUiInputTests HoroInputPublicHeaderConsumer \
+            --parallel 2
+          ctest --test-dir build/input-sdl-windows \
+            -R '^Horo(InputTests|InputSdlTests|RuntimeUiInputTests)::' \
+            --output-on-failure --timeout 30 -j 2
+
   vfx-foundation-windows:
     name: VFX Foundation · Windows / MSVC
     runs-on: windows-2022
@@ -225,7 +277,7 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
           cmake --build build/vfx-windows --target HoroVfxApiTests --parallel
-          ctest --test-dir build/vfx-windows -R '^HoroVfxApiTests::' --output-on-failure
+          ctest --test-dir build/vfx-windows -R '^HoroVfxApiTests::' --output-on-failure --timeout 90
         env:
           CC: cl
           CXX: cl

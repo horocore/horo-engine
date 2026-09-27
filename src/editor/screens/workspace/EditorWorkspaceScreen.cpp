@@ -48,6 +48,7 @@ namespace Horo::Editor {
             IEditorViewportRenderer *viewportRenderer{nullptr};
             const Log::IStructuredLogQuery *logQuery{nullptr};
             const IBuildOutputQuery *buildOutputQuery{nullptr};
+            const Application::GameplayBuildService *gameplayBuilds{nullptr};
             const IOperationQuery *operationQuery{nullptr};
             IOperationControl *operationControl{nullptr};
         };
@@ -138,6 +139,7 @@ namespace Horo::Editor {
                       .viewportRenderer = services.TryGet<IEditorViewportRenderer>(),
                       .logQuery = services.TryGetConst<Log::IStructuredLogQuery>(),
                       .buildOutputQuery = services.TryGetConst<IBuildOutputQuery>(),
+                      .gameplayBuilds = services.TryGetConst<Application::GameplayBuildService>(),
                       .operationQuery = services.TryGetConst<IOperationQuery>(),
                       .operationControl = services.TryGet<IOperationControl>(),
                   },
@@ -207,6 +209,8 @@ namespace Horo::Editor {
                     .workspaceInputContext = &workspaceInputContext_,
                     .logQuery = panelServices_.logQuery,
                     .buildOutputQuery = panelServices_.buildOutputQuery,
+                    .gameplayBuilds = panelServices_.gameplayBuilds,
+                    .projectRoot = controller_->ViewModel().projectRoot,
                     .operationQuery = panelServices_.operationQuery,
                     .operationControl = panelServices_.operationControl,
                     // Built-in panels have no extension activation identity; extension hosts inject

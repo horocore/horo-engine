@@ -288,7 +288,7 @@ namespace Horo::Editor {
             }
         }
 
-        // Populate What's New from build-time generated data (CHANGELOG.md).
+        // Populate What's New from the compiled projection of the reviewed notes snapshot.
         for (int i = 0; i < Generated::kWhatsNewCount; ++i) {
             const auto &src = Generated::kWhatsNewEntries[i];
             model.whatsNew[static_cast<std::size_t>(i)] = WhatsNewEntry{src.tag, src.title, src.body};

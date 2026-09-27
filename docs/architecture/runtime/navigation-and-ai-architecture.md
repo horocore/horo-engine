@@ -274,6 +274,29 @@ publishes paths/desired velocities before character locomotion. Stale results re
 `StaleSnapshot` or `InvalidHandle` and may be resubmitted within budget; they are never applied
 to replacement agents or tiles. A held path/corridor must be revalidated before later use too.
 
+`NavigationPathPolicy` is the owner-thread held-corridor boundary while a full coordinator
+is not yet present. The owner assigns a generation-safe `PathId` to each accepted
+path and retains its query provenance, complete or partial region evidence, link
+revision and goal revision. Before handing out a movement corridor, the owner
+compares one fresh combined-world observation with the retained world, topology,
+filter, profile, origin, obstacle, link, region and target revisions. A changed
+region is reported by Horo-owned region ID and generation; a whole-topology
+fallback is mandatory even when exact region generations appear unchanged,
+because canonical corridor polygon indices are topology-scoped. Stale corridors
+remain retained only for diagnostics, never returned as current movement input.
+The policy keeps one coalesced repath intent for the newest goal/source, applies
+fixed-tick debounce and cooldown after ordinary changes, and allows an explicit
+forced request to bypass those delays. Only owner admission consumes that intent;
+the owner must observe the current combined world at that same tick before
+admission. This policy neither runs a provider query nor publishes a result itself.
+World replacement reports a typed invalidation but cannot enqueue a repath
+under the old world identity; the owner clears the policy and creates new-world
+path identity before admitting work. Same-world revision rollback is rejected.
+The new runtime-owned public header is additive; existing query/result callers
+require no source migration, and providers retain the unchanged `NavigationApi`
+boundary. Future coordinator integration must use this owner-phase check rather
+than create a second path-currentness authority.
+
 ADR-018 `OwnerThreadNextFrame` console handlers submit typed navigation commands for this
 phase; they do not introduce a second mutation phase in `PreUpdate` / `DebugPhase`. Heavy
 bake/export commands use asynchronous `OperationId` progress per ADR-010. The application
@@ -1023,6 +1046,23 @@ struct AIPerceptionMemory {
      stale handles and discard the record immediately, preventing use-after-free
      and stale target locking.
 
+The implemented per-agent `AIPerceptionMemory` contract in `HoroEngine::AI` stores
+at most the host-profile cap in fixed storage, with an additional cap for each
+listener identity (both at most 32). `Observe`, `MarkLost`, and `AdvanceTo`
+receive the committed simulation tick and exact fixed quantum from the fixed-step
+owner; no wall-clock or variable frame delta enters aging. Repeating the same tick
+during pause leaves age and confidence unchanged. Replay rewind explicitly resets
+memory to the restored tick before deterministic re-ingestion; backward ticks
+without reset are rejected. A record retains its
+first sensed time until forgetting, refreshes its last sensed time and last-known
+facts on reacquisition, and expires at the configured age even if a sense omitted
+an explicit loss notification. A lost record decays from its last sensed time and
+is removed at the configured confidence threshold. Memory queries require the
+`HoroAISceneIntegration` live-source adapter, which reacquires the current scene
+view and rejects destroyed or recycled generations; destruction may also eagerly
+call `ForgetSource`. This memory component does not publish to a blackboard or
+choose sense scheduling policy; those remain separate phase owners.
+
 ## Environment Query System (EQS)
 
 ### EQS Ownership And Provider Execution
@@ -1050,6 +1090,15 @@ snapshot and implement its own pathfinder, step physics or mutate sensory memory
 | Behavior trees / decision graphs | Tactical intent consumption | Generation-checked query handles and immutable results; never blocking waits |
 
 ### EQS Asset, Context And Extension Contracts
+
+`Horo/AI/EnvironmentQuerySchema.h` implements the Foundation-only authoring schema
+slice: stable typed identities, explicit stage order, bounded typed properties,
+versioned inert provider descriptors, and a read-only admitted plan. Authoring capture
+preserves unavailable/unknown contributions for editor round-trip. Compilation of an
+executable plan fails with typed errors if any required contribution, version, or
+stage kind is unavailable; it never skips a stage. This is schema admission, not the
+AssetRegistry mapping, cooker artifact, provider implementation, or runtime executor
+described below. Host composition supplies descriptor contributions explicitly.
 
 EnvironmentQueryTemplate is an authoring asset with stable AssetId metadata in
 AssetRegistry. Its immutable cooked EnvironmentQueryPlan contains stable StageIds,
@@ -1787,6 +1836,25 @@ When that backend is composed, group coordination may request:
 - Safe-velocity evaluation for Gameplay-authored formation/lane preferred velocities
 - Bounded density facts used only by the local solver
 
+`NavigationCrowdSnapshot` is the NAV-006.2 owner-safe-point fact boundary below
+the coordinator. It combines an exact immutable logical-agent publication,
+the same Scene/world dynamic-registry publication, committed per-agent motion
+samples, and authored profile fact caps. It owns contiguous agent, neighbor,
+boundary, and cell arrays; workers retain the snapshot, not Scene/registry
+pointers. Ground-plane XZ cells, distance ties, and source identity order are
+stable for both best-effort and deterministic-qualified capture modes. Searches
+scan occupied cells rather than walking empty coordinates, so a neighborhood
+radius may exceed the cell size. Enabled
+obstacles and exclusion modifiers contribute finite planar segments; cylinders
+use a conservative enclosing square, not provider-native geometry. Segment
+selection also respects the source's vertical extent. Missing or
+malformed samples, mismatched generations, and work/storage ceiling failures
+reject the whole capture. Per-agent and per-profile omitted-fact counts expose
+quality-cap truncation; capture never silently truncates global storage. Result
+publication still rechecks the captured Scene/world binding, dynamic revision,
+agent generation, and tick. This additive runtime contract does not change
+existing agent-registry callers; hosts opt in at their fixed-tick capture point.
+
 ```cpp
 struct CrowdAgentConfig {
     float    neighborRadius;
@@ -1803,6 +1871,26 @@ initial deterministic tier. Horo ships no separate ORCA/RVO kernel for 1.0.
 Deterministic simulations either compose a separately qualified provider, use the
 declared collision-safe no-avoidance policy or fail admission when avoidance is
 required.
+
+`NavigationCrowdAvoidance.h` is the additive provider-neutral solver contract.
+Hosts compose `CreateRecastDetourCrowdBackend` before activation; NavigationRuntime
+does not link the concrete provider. One request identifies a snapshot agent and
+finite preferred velocity, speed, acceleration, step and horizon limits. The
+provider privately samples the pinned Detour obstacle-avoidance kernel with
+snapshot-owned agent circles and conservative static segments, then checks the
+sampled desired velocity against the finite envelopes and conservative swept
+facts. A sample it cannot validate is an explicit zero-desired-velocity
+`CollisionSafeStop`, not a successful sample or a guarantee that moving Physics
+can brake instantly. Truncated facts, unsupported execution mode, native
+capacity contention and numerical failure also yield typed stop reasons. Invalid
+request values fail admission. The returned binding, dynamic revision and capture
+tick are publication evidence, not a currentness assertion; the NAV-006.4
+coordinator must check them again at `NavIntentCommit`. Native `dt*` types remain
+private to the optional provider. Existing snapshot and query callers need no
+migration; host composition opts in explicitly. The separate
+`HoroNavigationCrowdDetour` library depends on `NavigationRuntime`'s narrow
+public crowd contract, never the reverse. Path-only consumers of
+`HoroNavigationRecastDetour` do not link DetourCrowd.
 
 Scale (`CrowdSmall`, `CrowdMedium`, `CrowdLarge`, `CrowdDedicated`) and quality
 (`AvoidanceOff`, `AvoidanceConservative`, `AvoidanceBalanced`, `AvoidanceDense`)

@@ -69,6 +69,8 @@ enum class MetricUnit {
     Bytes,
     Seconds,
     Ratio,
+    Milliseconds,
+    Hertz,
 };
 
 struct MetricDimensionDescriptor {
@@ -159,9 +161,11 @@ Allowed dimensions and `maxSeries` prevent high-cardinality time series from
 growing without bound.
 
 The host validates descriptors through the process-owned Foundation Telemetry
-registry. Units are the typed `Count`, `Bytes`, `Seconds`, or `Ratio` values.
+registry. Units are the typed `Count`, `Bytes`, `Seconds`, `Ratio`, `Milliseconds`,
+or `Hertz` values.
 This replaces free-form unit strings: count-like instruments map to `Count`,
-byte totals to `Bytes`, and elapsed durations to `Seconds`; callers update the
+byte totals to `Bytes`, elapsed durations to `Seconds`, and device sample rates
+to `Hertz`; callers update the
 descriptor initializer, while the OpenTelemetry adapter emits the corresponding
 unit symbol.
 Admission is capped at 256 registered instruments, 96 bytes per metric name,

@@ -73,6 +73,12 @@ namespace {
 
 TEST_CASE("Metric descriptors accept each typed unit", "[foundation][observability][telemetry][contract]") {
     using namespace Horo::Telemetry;
+    static_assert(static_cast<std::uint8_t>(MetricUnit::Count) == 0);
+    static_assert(static_cast<std::uint8_t>(MetricUnit::Bytes) == 1);
+    static_assert(static_cast<std::uint8_t>(MetricUnit::Seconds) == 2);
+    static_assert(static_cast<std::uint8_t>(MetricUnit::Ratio) == 3);
+    static_assert(static_cast<std::uint8_t>(MetricUnit::Milliseconds) == 4);
+    static_assert(static_cast<std::uint8_t>(MetricUnit::Hertz) == 5);
     Runtime::Shutdown();
     REQUIRE(Runtime::Initialize({.queueCapacity = 64, .enabled = true}, std::make_shared<NullSink>()));
 
@@ -81,13 +87,15 @@ TEST_CASE("Metric descriptors accept each typed unit", "[foundation][observabili
              std::pair{"valid.bytes", MetricUnit::Bytes},
              std::pair{"valid.seconds", MetricUnit::Seconds},
              std::pair{"valid.ratio", MetricUnit::Ratio},
+             std::pair{"valid.milliseconds", MetricUnit::Milliseconds},
+             std::pair{"valid.hertz", MetricUnit::Hertz},
          }) {
         auto descriptor = MakeDescriptor(name);
         descriptor.unit = unit;
         REQUIRE(Register(std::move(descriptor)));
     }
 
-    CHECK(Runtime::GetDiagnosticSnapshot().availabilityCount == 4);
+    CHECK(Runtime::GetDiagnosticSnapshot().availabilityCount == 6);
     CHECK(Runtime::Shutdown());
 }
 

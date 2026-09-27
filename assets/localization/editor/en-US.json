@@ -1058,6 +1058,12 @@
     "workspace.global_dock.build_output.clear": {
       "text": "Clear"
     },
+    "workspace.global_dock.build_output.filters": {"text": "Filters"},
+    "workspace.global_dock.build_output.filter.status": {"text": "Status"},
+    "workspace.global_dock.build_output.filter.severity": {"text": "Severity"},
+    "workspace.global_dock.build_output.filter.stage": {"text": "Stage"},
+    "workspace.global_dock.build_output.filter.session": {"text": "Session"},
+    "workspace.global_dock.build_output.filter.any": {"text": "All"},
     "workspace.global_dock.build_output.columns": {
       "text": "Columns"
     },
@@ -1075,6 +1081,15 @@
     },
     "workspace.global_dock.build_output.status.warning": {"text": "Warnings"},
     "workspace.global_dock.build_output.rebuild": {"text": "Rebuild"},
+    "workspace.global_dock.build_output.active": {"text": "Active build"},
+    "workspace.global_dock.build_output.cancel": {"text": "Cancel"},
+    "workspace.global_dock.build_output.cancelling": {"text": "Cancelling"},
+    "workspace.global_dock.build_output.active_state.queued": {"text": "Queued"},
+    "workspace.global_dock.build_output.active_state.acquiring_lock": {"text": "Acquiring lock"},
+    "workspace.global_dock.build_output.active_state.waiting": {"text": "Waiting for build"},
+    "workspace.global_dock.build_output.active_state.configuring": {"text": "Configuring"},
+    "workspace.global_dock.build_output.active_state.building": {"text": "Building"},
+    "workspace.global_dock.build_output.active_state.validating": {"text": "Validating"},
     "workspace.global_dock.build_output.target.editor": {"text": "Editor"},
     "workspace.global_dock.build_output.target.runtime": {"text": "Runtime"},
     "workspace.global_dock.build_output.target.tests": {"text": "Tests"},
@@ -1084,6 +1099,7 @@
     "workspace.global_dock.build_output.footer.diagnostics": {"text": "diagnostics"},
     "workspace.global_dock.build_output.footer.errors": {"text": "errors"},
     "workspace.global_dock.build_output.footer.warnings": {"text": "warnings"},
+    "workspace.global_dock.build_output.footer.dropped": {"text": "older entries dropped"},
     "workspace.global_dock.build_output.footer.last_build": {"text": "Last build"},
     "workspace.global_dock.build_output.row_status.info": {"text": "Info"},
     "workspace.global_dock.build_output.row_status.warning": {"text": "Warning"},

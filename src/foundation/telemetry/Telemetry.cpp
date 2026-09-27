@@ -102,7 +102,7 @@ namespace Horo::Telemetry {
         }
 
         [[nodiscard]] bool IsValidMetricUnit(const MetricUnit unit) noexcept {
-            return unit >= MetricUnit::Count && unit <= MetricUnit::Ratio;
+            return unit >= MetricUnit::Count && unit <= MetricUnit::Hertz;
         }
 
         [[nodiscard]] bool IsValidAvailabilityState(const MetricAvailabilityState state) noexcept {
