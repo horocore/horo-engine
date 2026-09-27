@@ -140,8 +140,9 @@ namespace Horo::Destruction {
          * @return Success or typed failure leaving the old snapshot intact.
          */
         [[nodiscard]] Result<void> Accept(std::shared_ptr<const StructuralGraphArtifact> candidate,
-                                          StructuralGraphOwnerRevision expectedRevision, FractureArtifactContentIdentity currentContent,
-                                          Sha256Digest currentMeshDigest, StructuralPolicyRevision currentPolicyRevision);
+                                          StructuralGraphOwnerRevision expectedRevision,
+                                          const FractureArtifactContentIdentity &currentContent, const Sha256Digest &currentMeshDigest,
+                                          StructuralPolicyRevision currentPolicyRevision);
         /** @brief Cancels pending work and advances the revision. @return Success or typed exhaustion/shutdown failure. */
         [[nodiscard]] Result<void> Invalidate();
         /** @brief Closes admission and cancels work, retaining the last snapshot. */

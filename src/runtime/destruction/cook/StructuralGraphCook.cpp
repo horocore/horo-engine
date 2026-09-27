@@ -4,6 +4,7 @@
 #include <bit>
 #include <cmath>
 #include <cstddef>
+#include <format>
 #include <limits>
 #include <span>
 #include <string>
@@ -111,7 +112,7 @@ namespace Horo::Destruction {
         }
 
         [[nodiscard]] Error Context(const ErrorCodeDescriptor &code, std::string_view field, std::size_t index) {
-            return MakeError(code, std::string(field) + "[" + std::to_string(index) + "]");
+            return MakeError(code, std::format("{}[{}]", field, index));
         }
 
         [[nodiscard]] bool ValidLimits(const DestructionLimits &limits, const DestructionLimits &tier) {
@@ -159,9 +160,9 @@ namespace Horo::Destruction {
 
         [[nodiscard]] Result<void> BuildChunks(StructuralGraphArtifact &graph, const ChunkMeshArtifact &mesh,
                                                const StructuralGraphCookRequest &request, const CancellationToken &cancellation) {
-            auto charged = Charge(graph.validation, request.limits, mesh.chunks.size() * 2 - 1,
-                                  sizeof(StructuralGraphArtifact) + mesh.chunks.size() * sizeof(StructuralGraphChunk));
-            if (charged.HasError())
+            if (auto charged = Charge(graph.validation, request.limits, mesh.chunks.size() * 2 - 1,
+                                      sizeof(StructuralGraphArtifact) + mesh.chunks.size() * sizeof(StructuralGraphChunk));
+                charged.HasError())
                 return charged;
             graph.chunks.reserve(mesh.chunks.size());
             for (std::size_t index = 0; index < mesh.chunks.size(); ++index) {
@@ -170,15 +171,17 @@ namespace Horo::Destruction {
                 const auto &input = request.chunks[index];
                 if (!input.id.IsValid() || input.id != mesh.chunks[index].id || input.parent == input.id)
                     return Result<void>::Failure(Context(StructuralGraphErrors::InvalidInput, "chunk", index));
-                const auto parent = std::ranges::lower_bound(mesh.chunks, input.parent, {}, &ChunkMesh::id);
-                if (input.parent.IsValid() && (parent == mesh.chunks.end() || parent->id != input.parent))
+                if (const auto parent = std::ranges::lower_bound(mesh.chunks, input.parent, {}, &ChunkMesh::id);
+                    input.parent.IsValid() && (parent == mesh.chunks.end() || parent->id != input.parent))
                     return Result<void>::Failure(Context(StructuralGraphErrors::InvalidInput, "parent", index));
                 StructuralGraphChunk chunk;
                 chunk.id = input.id;
                 chunk.parent = input.parent;
                 chunk.flags = {input.anchor, input.required, input.anchor, input.parent.IsValid()};
-                graph.validation.anchorCount += input.anchor;
-                graph.validation.requiredCount += input.required;
+                if (input.anchor)
+                    ++graph.validation.anchorCount;
+                if (input.required)
+                    ++graph.validation.requiredCount;
                 graph.chunks.push_back(std::move(chunk));
             }
             return Result<void>::Success();
@@ -201,9 +204,9 @@ namespace Horo::Destruction {
                 auto &high = graph.chunks[contact.high];
                 if (!std::isfinite(low.supportWeight + contact.weight) || !std::isfinite(high.supportWeight + contact.weight))
                     return Result<void>::Failure(Context(StructuralGraphErrors::InvalidInput, "weight", index));
-                const auto charged =
-                    Charge(graph.validation, request.limits, 2, sizeof(StructuralContactInput) + 2 * sizeof(std::uint32_t));
-                if (charged.HasError())
+                if (const auto charged =
+                        Charge(graph.validation, request.limits, 2, sizeof(StructuralContactInput) + 2 * sizeof(std::uint32_t));
+                    charged.HasError())
                     return charged;
                 low.supportWeight += contact.weight;
                 high.supportWeight += contact.weight;
@@ -224,8 +227,7 @@ namespace Horo::Destruction {
                 while (parent.IsValid()) {
                     if (cancellation.IsCancellationRequested())
                         return Result<void>::Failure(MakeError(StructuralGraphErrors::Cancelled));
-                    const auto charged = Charge(graph.validation, request.limits, 1);
-                    if (charged.HasError())
+                    if (const auto charged = Charge(graph.validation, request.limits, 1); charged.HasError())
                         return charged;
                     if (++depth > graph.chunks.size())
                         return Result<void>::Failure(Context(StructuralGraphErrors::HierarchyCycle, "chunk", index));
@@ -257,12 +259,12 @@ namespace Horo::Destruction {
                     queue.push_back(index);
                 }
             }
-            for (std::size_t head = 0; head < queue.size(); ++head) {
+            std::size_t head = 0;
+            while (head < queue.size()) {
                 if (cancellation.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(StructuralGraphErrors::Cancelled));
-                for (const auto neighbor : graph.chunks[queue[head]].adjacency) {
-                    const auto charged = Charge(graph.validation, limits, 1);
-                    if (charged.HasError())
+                for (const auto neighbor : graph.chunks[queue[head++]].adjacency) {
+                    if (const auto charged = Charge(graph.validation, limits, 1); charged.HasError())
                         return charged;
                     if (!supported[neighbor]) {
                         supported[neighbor] = true;
@@ -278,6 +280,28 @@ namespace Horo::Destruction {
             return Result<void>::Success();
         }
 
+        /** @brief Expands one island from its seed, charging each visited contact and honoring cancellation. */
+        [[nodiscard]] Result<void> TraverseIsland(StructuralGraphArtifact &graph, const DestructionLimits &limits,
+                                                  const CancellationToken &cancellation, std::vector<bool> &visited,
+                                                  std::vector<std::uint32_t> &queue) {
+            std::size_t head = 0;
+            while (head < queue.size()) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(StructuralGraphErrors::Cancelled));
+                auto &chunk = graph.chunks[queue[head++]];
+                chunk.island = graph.validation.islandCount;
+                for (const auto neighbor : chunk.adjacency) {
+                    if (const auto charged = Charge(graph.validation, limits, 1); charged.HasError())
+                        return charged;
+                    if (visited[neighbor])
+                        continue;
+                    visited[neighbor] = true;
+                    queue.push_back(neighbor);
+                }
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> AssignIslands(StructuralGraphArtifact &graph, const DestructionLimits &limits,
                                                  const CancellationToken &cancellation) {
             std::vector<bool> visited(graph.chunks.size());
@@ -289,21 +313,8 @@ namespace Horo::Destruction {
                 queue.clear();
                 queue.push_back(index);
                 visited[index] = true;
-                for (std::size_t head = 0; head < queue.size(); ++head) {
-                    if (cancellation.IsCancellationRequested())
-                        return Result<void>::Failure(MakeError(StructuralGraphErrors::Cancelled));
-                    auto &chunk = graph.chunks[queue[head]];
-                    chunk.island = graph.validation.islandCount;
-                    for (const auto neighbor : chunk.adjacency) {
-                        const auto charged = Charge(graph.validation, limits, 1);
-                        if (charged.HasError())
-                            return charged;
-                        if (!visited[neighbor]) {
-                            visited[neighbor] = true;
-                            queue.push_back(neighbor);
-                        }
-                    }
-                }
+                if (const auto traversed = TraverseIsland(graph, limits, cancellation, visited, queue); traversed.HasError())
+                    return traversed;
                 ++graph.validation.islandCount;
             }
             return Result<void>::Success();
@@ -314,8 +325,7 @@ namespace Horo::Destruction {
     Result<std::shared_ptr<const StructuralGraphArtifact>> CookStructuralGraph(const ChunkMeshArtifact &mesh,
                                                                                const StructuralGraphCookRequest &request,
                                                                                const CancellationToken &cancellation) {
-        const auto valid = ValidateRequest(mesh, request, cancellation);
-        if (valid.HasError())
+        if (const auto valid = ValidateRequest(mesh, request, cancellation); valid.HasError())
             return Output::Failure(valid.ErrorValue());
         auto graph = std::make_shared<StructuralGraphArtifact>();
         graph->content = request.content;
@@ -364,8 +374,8 @@ namespace Horo::Destruction {
     /** @copydoc StructuralGraphCookOwner::Accept */
     Result<void> StructuralGraphCookOwner::Accept(std::shared_ptr<const StructuralGraphArtifact> candidate,
                                                   StructuralGraphOwnerRevision expectedRevision,
-                                                  FractureArtifactContentIdentity currentContent, Sha256Digest currentMeshDigest,
-                                                  StructuralPolicyRevision currentPolicyRevision) {
+                                                  const FractureArtifactContentIdentity &currentContent,
+                                                  const Sha256Digest &currentMeshDigest, StructuralPolicyRevision currentPolicyRevision) {
         if (shutdown_)
             return Result<void>::Failure(MakeError(StructuralGraphErrors::Shutdown));
         if (revision_ != expectedRevision || cancellation_.Token().IsCancellationRequested() || !candidate ||
