@@ -21,9 +21,7 @@ namespace Horo::Release {
 
         /** @brief Tests path containment by components after platform path normalization. */
         [[nodiscard]] bool Contains(const std::filesystem::path &parent, const std::filesystem::path &child) {
-            const auto [parentEnd, ignored] = std::mismatch(parent.begin(), parent.end(), child.begin(), child.end());
-            static_cast<void>(ignored);
-            return parentEnd == parent.end();
+            return std::ranges::mismatch(parent, child).in1 == parent.end();
         }
 
         /** @brief Keeps producer output away from immutable candidate inputs. */
@@ -62,8 +60,8 @@ namespace Horo::Release {
     /** @copydoc ProduceReleasePackage */
     Result<ReleasePackageResult> ProduceReleasePackage(const ReleasePackageRequest &request,
                                                        const std::span<IReleasePackageProducer *const> producers) {
-        const auto admitted = ValidateDistributionPackageSelection(request.selection.artifact, request.selection.format);
-        if (!admitted.HasValue() || admitted.Value() != request.selection || !MatchesCandidate(request) || !DistinctRoots(request))
+        if (const auto admitted = ValidateDistributionPackageSelection(request.selection.artifact, request.selection.format);
+            !admitted.HasValue() || admitted.Value() != request.selection || !MatchesCandidate(request) || !DistinctRoots(request))
             return InvalidRequest();
 
         IReleasePackageProducer *selected = nullptr;
