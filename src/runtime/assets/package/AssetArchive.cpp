@@ -110,7 +110,7 @@ namespace Horo::Assets {
                 std::span<const std::uint8_t> bytes;
                 if (!Bytes(2U, bytes))
                     return false;
-                out = static_cast<std::uint16_t>(bytes[0]) | static_cast<std::uint16_t>(bytes[1]) << 8U;
+                out = static_cast<std::uint16_t>(static_cast<std::uint16_t>(bytes[0]) | (static_cast<std::uint16_t>(bytes[1]) << 8U));
                 return true;
             }
 
@@ -270,8 +270,8 @@ namespace Horo::Assets {
             if (!reader.Bytes(static_cast<std::size_t>(byteCount), cookedBytes) ||
                 !std::ranges::equal(Digest(cookedBytes).bytes, expectedDigest))
                 return Result<ParsedArchiveAsset>::Failure(MakeError(InvalidArchive));
-            auto decoded = DecodeCookedArtifact(cookedBytes, {.maximumArtifactBytes = limits.maximumAssetBytes});
-            if (decoded.HasError() || decoded.Value().id != id || decoded.Value().type != type.Value() ||
+            if (auto decoded = DecodeCookedArtifact(cookedBytes, {.maximumArtifactBytes = limits.maximumAssetBytes});
+                decoded.HasError() || decoded.Value().id != id || decoded.Value().type != type.Value() ||
                 decoded.Value().target != expectedTarget)
                 return Result<ParsedArchiveAsset>::Failure(MakeError(InvalidArchive));
             return Result<ParsedArchiveAsset>::Success({id, offset, static_cast<std::size_t>(byteCount)});
@@ -285,10 +285,11 @@ namespace Horo::Assets {
         auto contents = ReadCookGenerationContents(generation, limits.maximumArchiveBytes, cookLimits);
         if (contents.HasError())
             return Result<std::vector<std::uint8_t>>::Failure(contents.ErrorValue());
+        auto generationContents = std::move(contents).Value();
         std::vector<AssetArchiveInput> inputs;
-        inputs.reserve(contents.Value().entries.size());
-        for (std::size_t i = 0; i < contents.Value().entries.size(); ++i)
-            inputs.push_back({contents.Value().entries[i].assetId, std::move(contents.Value().artifacts[i])});
+        inputs.reserve(generationContents.entries.size());
+        for (std::size_t i = 0; i < generationContents.entries.size(); ++i)
+            inputs.emplace_back(generationContents.entries[i].assetId, std::move(generationContents.artifacts[i]));
         return BuildAssetArchive(plan, generation.target, inputs, limits);
     }
 
@@ -377,7 +378,7 @@ namespace Horo::Assets {
                 chunk.assets.push_back(parsed.Value().id);
                 entries.push_back({parsed.Value().id, parsed.Value().offset, parsed.Value().size});
             }
-            chunks.push_back(std::move(chunk));
+            chunks.emplace_back(std::move(chunk));
         }
         if (!reader.Done() ||
             AssetChunkPlan::Create(chunks, {.maximumChunks = limits.maximumChunks, .maximumAssets = limits.maximumAssets}).HasError())

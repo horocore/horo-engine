@@ -59,6 +59,19 @@ TEST_CASE("Release chunk plan rejects cycles and self dependencies", "[assets][r
     CHECK(AssetChunkPlan::Create(std::array{first, second}).HasError());
 }
 
+TEST_CASE("Release chunk plan resolves shared dependencies before dependents", "[assets][release]") {
+    auto core = Definition("core", "00000000-0000-0000-0000-000000000001");
+    auto audio = Definition("audio", "00000000-0000-0000-0000-000000000002");
+    auto world = Definition("world", "00000000-0000-0000-0000-000000000003");
+    auto dlc = Definition("dlc", "00000000-0000-0000-0000-000000000004", AssetChunkKind::Optional);
+    world.dependencies = {Chunk("core"), Chunk("audio")};
+    dlc.dependencies = {Chunk("world")};
+    CHECK(AssetChunkPlan::Create(std::array{dlc, world, audio, core}).HasValue());
+
+    audio.dependencies = {Chunk("dlc")};
+    CHECK(AssetChunkPlan::Create(std::array{dlc, world, audio, core}).HasError());
+}
+
 TEST_CASE("DLC chunks require exact base compatibility evidence", "[assets][release]") {
     auto dlc = Definition("dlc", "00000000-0000-0000-0000-000000000001", AssetChunkKind::Dlc);
     CHECK(AssetChunkPlan::Create(std::array{dlc}).HasError());

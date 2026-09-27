@@ -239,12 +239,12 @@ namespace Horo::Assets {
             std::error_code error;
             if (!IsSafePathWithin(targetRoot, generationRoot))
                 return false;
-            const auto generationStatus = std::filesystem::symlink_status(generationRoot, error);
-            if (error || !std::filesystem::is_directory(generationStatus) || std::filesystem::is_symlink(generationStatus))
+            if (const auto generationStatus = std::filesystem::symlink_status(generationRoot, error);
+                error || !std::filesystem::is_directory(generationStatus) || std::filesystem::is_symlink(generationStatus))
                 return false;
             const auto manifestPath = generationRoot / "manifest.json";
-            const auto manifestStatus = std::filesystem::symlink_status(manifestPath, error);
-            if (error || !std::filesystem::is_regular_file(manifestStatus) || std::filesystem::is_symlink(manifestStatus))
+            if (const auto manifestStatus = std::filesystem::symlink_status(manifestPath, error);
+                error || !std::filesystem::is_regular_file(manifestStatus) || std::filesystem::is_symlink(manifestStatus))
                 return false;
             auto manifest = ReadFile(manifestPath, limits.maximumArtifactBytes);
             return manifest.HasValue() && ComputeSha256(std::as_bytes(std::span{manifest.Value()})) == digest;
@@ -295,7 +295,7 @@ namespace Horo::Assets {
                 if (id.HasError() || type.HasError() || hash.HasError() || !IsSafeArtifactFile(file) ||
                     (!entries.empty() && id.Value() <= entries.back().assetId))
                     return invalid();
-                entries.push_back(AssetCookManifestEntry{std::move(id).Value(), std::move(type).Value(), file, std::move(hash).Value()});
+                entries.emplace_back(std::move(id).Value(), std::move(type).Value(), file, std::move(hash).Value());
             }
             if (BuildManifestJson(generation.target.Value(), entries) != text)
                 return invalid();
@@ -310,8 +310,8 @@ namespace Horo::Assets {
     Result<AssetCookGeneration> ResolveCurrentCookGeneration(const std::filesystem::path &targetRoot, const AssetCookLimits &limits) {
         const auto currentPath = targetRoot / "current.json";
         std::error_code statusError;
-        const auto currentStatus = std::filesystem::symlink_status(currentPath, statusError);
-        if (statusError || !std::filesystem::is_regular_file(currentStatus) || std::filesystem::is_symlink(currentStatus)) {
+        if (const auto currentStatus = std::filesystem::symlink_status(currentPath, statusError);
+            statusError || !std::filesystem::is_regular_file(currentStatus) || std::filesystem::is_symlink(currentStatus)) {
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
         }
 
@@ -345,10 +345,10 @@ namespace Horo::Assets {
             std::to_string(count) != countStr)
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
 
-        const auto expectedCurrent =
-            std::format(R"({{"schemaVersion":1,"target":"{}","manifestDigest":"{}","generationPath":"{}","artifactCount":"{}"}})",
-                        target.Value().Value(), manifestHex, relPath.generic_string(), count);
-        if (json != expectedCurrent)
+        if (const auto expectedCurrent =
+                std::format(R"({{"schemaVersion":1,"target":"{}","manifestDigest":"{}","generationPath":"{}","artifactCount":"{}"}})",
+                            target.Value().Value(), manifestHex, relPath.generic_string(), count);
+            json != expectedCurrent)
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
 
         const std::filesystem::path generationRoot = targetRoot / relPath;
@@ -375,8 +375,8 @@ namespace Horo::Assets {
 
         const auto manifestPath = generation.generationRoot / "manifest.json";
         std::error_code statusError;
-        const auto manifestStatus = std::filesystem::symlink_status(manifestPath, statusError);
-        if (statusError || !std::filesystem::is_regular_file(manifestStatus) || std::filesystem::is_symlink(manifestStatus) ||
+        if (const auto manifestStatus = std::filesystem::symlink_status(manifestPath, statusError);
+            statusError || !std::filesystem::is_regular_file(manifestStatus) || std::filesystem::is_symlink(manifestStatus) ||
             !IsSafePathWithin(generation.generationRoot, manifestPath))
             return invalid();
         auto manifestBytes = ReadFile(manifestPath, limits.maximumArtifactBytes);
@@ -393,17 +393,17 @@ namespace Horo::Assets {
         std::size_t totalBytes = 0;
         for (const auto &entry : contents.entries) {
             const auto artifactPath = generation.generationRoot / entry.artifactFile;
-            const auto artifactStatus = std::filesystem::symlink_status(artifactPath, statusError);
-            if (statusError || !std::filesystem::is_regular_file(artifactStatus) || std::filesystem::is_symlink(artifactStatus) ||
+            if (const auto artifactStatus = std::filesystem::symlink_status(artifactPath, statusError);
+                statusError || !std::filesystem::is_regular_file(artifactStatus) || std::filesystem::is_symlink(artifactStatus) ||
                 !IsSafePathWithin(generation.generationRoot, artifactPath))
                 return invalid();
             auto bytes = ReadFile(artifactPath, limits.maximumArtifactBytes);
             if (bytes.HasError() || bytes.Value().size() > maximumTotalBytes - totalBytes ||
                 ComputeSha256(std::as_bytes(std::span{bytes.Value()})) != entry.artifactHash)
                 return invalid();
-            auto decoded = DecodeCookedArtifact(bytes.Value(), limits);
-            if (decoded.HasError() || decoded.Value().id != entry.assetId || decoded.Value().type != entry.assetType ||
-                decoded.Value().target != generation.target)
+            if (auto decoded = DecodeCookedArtifact(bytes.Value(), limits); decoded.HasError() || decoded.Value().id != entry.assetId ||
+                                                                            decoded.Value().type != entry.assetType ||
+                                                                            decoded.Value().target != generation.target)
                 return invalid();
             totalBytes += bytes.Value().size();
             contents.artifacts.push_back(std::move(bytes).Value());
