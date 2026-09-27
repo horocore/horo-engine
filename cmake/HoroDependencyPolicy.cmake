@@ -120,6 +120,8 @@ horo_allow_target_dependencies(TARGET horo-extension-validate DEPENDENCIES HoroE
 horo_allow_target_dependencies(TARGET HoroExtensionSdkValidatorStage DEPENDENCIES horo-extension-validate)
 horo_allow_target_dependencies(TARGET horo-extension-conformance DEPENDENCIES HoroExtensions)
 horo_allow_target_dependencies(TARGET HoroExtensionSdkConformanceStage DEPENDENCIES horo-extension-conformance)
+horo_allow_target_dependencies(TARGET horo-package DEPENDENCIES HoroPackageSecurity HoroPackages HoroSecurity)
+horo_allow_target_dependencies(TARGET HoroExtensionSdkPackageStage DEPENDENCIES horo-package)
 horo_allow_target_dependencies(TARGET HoroEditor
     DEPENDENCIES
         HoroGui
