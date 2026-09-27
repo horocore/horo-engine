@@ -684,6 +684,14 @@ Promotion never rebuilds artifacts. It moves or references an already verified
 release candidate. If a promotion fails, the candidate remains valid but the
 channel state is unchanged.
 
+The GitHub Releases destination lives in `HoroReleaseGitHub`, outside the shared
+release application target. Its host-owned client resolves an existing tagged
+release, uploads only final-manifest files and canonical `manifest.json`, reads
+each remote asset back for size and SHA-256 verification, and binds the channel
+commit to the same remote release ID. A missing release or changed ID fails
+without creating a tag or release. The concrete authenticated HTTP client and
+`Release Binaries` workflow composition remain separate host work.
+
 ## Security
 
 Release credentials, encryption, signing, CI trust, transport, logging, and

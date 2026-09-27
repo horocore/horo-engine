@@ -243,6 +243,11 @@ add_library(HoroEngine::ReleaseService ALIAS HoroReleaseService)
 target_compile_features(HoroReleaseService PUBLIC cxx_std_20)
 target_link_libraries(HoroReleaseService PUBLIC HoroEngine::Application HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
 
+add_library(HoroReleaseGitHub STATIC application/release/GitHubReleasePublication.cpp)
+add_library(HoroEngine::ReleaseGitHub ALIAS HoroReleaseGitHub)
+target_compile_features(HoroReleaseGitHub PUBLIC cxx_std_20)
+target_link_libraries(HoroReleaseGitHub PUBLIC HoroEngine::Application)
+
 add_library(HoroProjectMigrations STATIC
         ${HORO_PROJECT_MIGRATION_CATALOG_CPP}
         ${HORO_PROJECT_MIGRATION_SOURCES}
