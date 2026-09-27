@@ -10,9 +10,9 @@
 
 namespace Horo::Destruction::Detail {
     inline constexpr std::uint64_t ReplicationSchemaValue = 0x4446520000000001ULL;
-    inline constexpr std::array<std::uint32_t, 9> FieldValues{1, 2, 3, 4, 5, 6, 7, 8, 9};
-    inline constexpr std::array<std::uint32_t, 9> MaximumFieldBytes{24, 56, 8, 8, 8, 5, 20, 516, 8200};
-    inline constexpr std::size_t FixedFieldBytes = 24 + 56 + 8 + 8 + 8 + 5 + 20 + 4 + 4;
+    inline constexpr std::array<std::uint32_t, 10> FieldValues{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    inline constexpr std::array<std::uint32_t, 10> MaximumFieldBytes{24, 56, 8, 8, 8, 5, 20, 516, 8200, 4};
+    inline constexpr std::size_t FixedFieldBytes = 24 + 56 + 8 + 8 + 8 + 5 + 20 + 4 + 4 + 4;
     inline constexpr std::size_t MaximumPayloadBytes = 16 * 1024;
 
     [[nodiscard]] inline Network::ReplicationSchemaId SchemaId() {

@@ -140,8 +140,10 @@ namespace Horo::Destruction {
                                                  const DestructionReplicationLimits &limits) {
             if (!ValidLimits(limits))
                 return Fail<void>(DestructionErrors::ReplicationLimitExceeded);
-            if (!state.target.IsValid() || !state.content.IsValid() || !state.configuration.IsValid() || !state.authority.IsValid() ||
-                !state.revision.IsValid() || state.seed.version == 0 || state.phase > DestructionStatePhase::Destroyed)
+            if (!state.target.IsValid() || !state.content.IsValid() || !state.configuration.IsValid() ||
+                !state.effectiveFeatures.IsValid() || !state.effectiveFeatures.Contains(DestructionFeature::AuthoritativeReplication) ||
+                !state.authority.IsValid() || !state.revision.IsValid() || state.seed.version == 0 ||
+                state.phase > DestructionStatePhase::Destroyed)
                 return Fail<void>(DestructionErrors::ReplicationInvalid);
             if (state.masks.chunkCount == 0 || state.masks.chunkCount > limits.maximumChunks ||
                 state.supportAnchors.size() > limits.maximumAnchors)
@@ -229,6 +231,9 @@ namespace Horo::Destruction {
                 support.U64(anchor.Value());
             support.U32(state.supportCursor);
             add(8, std::move(support));
+            Writer features;
+            features.U32(state.effectiveFeatures.bits);
+            add(9, std::move(features));
             return payload;
         }
 
@@ -309,6 +314,9 @@ namespace Horo::Destruction {
             Reader seed{payload.fields[6].canonical};
             if (!seed.U32(state.seed.version) || !seed.U64(state.seed.value) || !seed.U64(state.seed.cursor) || !seed.Complete())
                 return Fail<void>(DestructionErrors::ReplicationInvalid);
+            Reader features{payload.fields[9].canonical};
+            if (!features.U32(state.effectiveFeatures.bits) || !features.Complete())
+                return Fail<void>(DestructionErrors::ReplicationInvalid);
             return Result<void>::Success();
         }
 
@@ -352,8 +360,9 @@ namespace Horo::Destruction {
         [[nodiscard]] Result<void> ValidateReceiver(const Network::ReplicationRoleBinding &receiver,
                                                     const DestructionReplicationFence &fence) {
             if (!receiver.IsValid() || !fence.session.IsValid() || !fence.object.IsValid() || !fence.target.IsValid() ||
-                !fence.content.IsValid() || !fence.authority.IsValid() || receiver.session != fence.session ||
-                receiver.object != fence.object || receiver.schema != Detail::SchemaId() ||
+                !fence.content.IsValid() || !fence.configuration.IsValid() || !fence.effectiveFeatures.IsValid() ||
+                !fence.effectiveFeatures.Contains(DestructionFeature::AuthoritativeReplication) || !fence.authority.IsValid() ||
+                receiver.session != fence.session || receiver.object != fence.object || receiver.schema != Detail::SchemaId() ||
                 receiver.schemaVersion != DestructionReplicationVersion)
                 return Fail<void>(DestructionErrors::ReplicationIncompatible);
             if (receiver.role != Network::ReplicationExecutionRole::AutonomousClient &&
@@ -408,6 +417,10 @@ namespace Horo::Destruction {
             if (state.target != fence.target)
                 return Fail<DestructionReplicationState>(DestructionErrors::StaleGeneration);
             if (state.content != fence.content)
+                return Fail<DestructionReplicationState>(DestructionErrors::ReplicationIncompatible);
+            if (state.configuration != fence.configuration)
+                return Fail<DestructionReplicationState>(DestructionErrors::StaleConfiguration);
+            if (state.effectiveFeatures != fence.effectiveFeatures)
                 return Fail<DestructionReplicationState>(DestructionErrors::ReplicationIncompatible);
             if (fence.currentRevision.IsValid() && state.revision <= fence.currentRevision)
                 return Fail<DestructionReplicationState>(DestructionErrors::StaleRevision);

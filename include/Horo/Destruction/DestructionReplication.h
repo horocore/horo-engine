@@ -51,6 +51,7 @@ namespace Horo::Destruction {
         DestructionHandle target;                                   /**< Exact world/destructible/runtime generation. */
         FractureArtifactContentIdentity content;                    /**< Exact chunk-table/content fingerprint. */
         DestructionConfigurationRevision configuration;             /**< Exact admitted policy generation. */
+        DestructionFeatureSet effectiveFeatures;                    /**< Resolved capabilities, including authority replication. */
         Network::ReplicationAuthorityEpoch authority;               /**< Server authority generation. */
         DestructionStateRevision revision;                          /**< Monotonic semantic revision. */
         DestructionStatePhase phase{DestructionStatePhase::Intact}; /**< Canonical phase. */
@@ -80,12 +81,14 @@ namespace Horo::Destruction {
 
     /** @brief Immutable admission fence supplied by the Network/DFR owner, not inferred from a client packet. */
     struct DestructionReplicationFence final {
-        Network::NetworkSessionGeneration session;    /**< Active Network session generation. */
-        Network::NetworkObjectId object;              /**< Exact replicated-object occurrence. */
-        DestructionHandle target;                     /**< Exact DFR runtime generation. */
-        FractureArtifactContentIdentity content;      /**< Exact published artifact generation. */
-        Network::ReplicationAuthorityEpoch authority; /**< Current server authority epoch. */
-        DestructionStateRevision currentRevision;     /**< Last committed semantic revision. */
+        Network::NetworkSessionGeneration session;      /**< Active Network session generation. */
+        Network::NetworkObjectId object;                /**< Exact replicated-object occurrence. */
+        DestructionHandle target;                       /**< Exact DFR runtime generation. */
+        FractureArtifactContentIdentity content;        /**< Exact published artifact generation. */
+        DestructionConfigurationRevision configuration; /**< Exact current policy publication. */
+        DestructionFeatureSet effectiveFeatures;        /**< Exact current admitted capabilities. */
+        Network::ReplicationAuthorityEpoch authority;   /**< Current server authority epoch. */
+        DestructionStateRevision currentRevision;       /**< Last committed semantic revision. */
     };
 
     /** @brief Borrowed immutable exact cooked chunk-table evidence; neither encoder nor decoder retains it. */
@@ -122,7 +125,7 @@ namespace Horo::Destruction {
     /**
      * @brief Validates and decodes one detached server payload before any owner mutation or large allocation.
      * @param payload Complete NetworkRuntime-delivered required-field set.
-     * @param fence Exact current session/object/DFR/content/authority/revision evidence.
+     * @param fence Exact current session/object/DFR/content/configuration/capability/authority/revision evidence.
      * @param artifact Trusted exact-content chunk table borrowed only during decode.
      * @param receiver Exact client role binding; a client cannot originate authoritative state.
      * @param limits Explicit finite product bounds.

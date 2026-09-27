@@ -54,6 +54,7 @@ namespace Horo::Destruction {
             return {.target = {Id<DestructionWorldId>(3), Id<DestructibleId>(4), Id<DestructionGeneration>(5)},
                     .content = Content(),
                     .configuration = Id<DestructionConfigurationRevision>(6),
+                    .effectiveFeatures = {.bits = DestructionFeatureBit<DestructionFeature::AuthoritativeReplication>},
                     .authority = Network::ReplicationAuthorityEpoch::Create(7).Value(),
                     .revision = Id<DestructionStateRevision>(8),
                     .phase = DestructionStatePhase::Damaged,
@@ -73,6 +74,8 @@ namespace Horo::Destruction {
                     .object = Object(),
                     .target = state.target,
                     .content = state.content,
+                    .configuration = state.configuration,
+                    .effectiveFeatures = state.effectiveFeatures,
                     .authority = state.authority};
         }
 
@@ -109,7 +112,7 @@ namespace Horo::Destruction {
                   "[unit][destruction][replication][descriptor]") {
             const auto declared = MakeDestructionReplicationDescriptor();
             REQUIRE(declared.HasValue());
-            CHECK(declared.Value().fields.size() == 9);
+            CHECK(declared.Value().fields.size() == 10);
             for (const auto &field : declared.Value().fields) {
                 CHECK(field.condition == Network::ReplicationCondition::Always);
                 CHECK(field.requirement == Network::ReplicationFieldRequirement::Required);
@@ -117,14 +120,14 @@ namespace Horo::Destruction {
             }
             const auto snapshots =
                 Network::BuildReplicationDescriptorSnapshot(std::array{declared.Value()}, {.maximumSchemas = 1,
-                                                                                           .maximumFieldsPerSchema = 9,
+                                                                                           .maximumFieldsPerSchema = 10,
                                                                                            .maximumOwnerIdentityBytes = 64,
                                                                                            .maximumDefaultBytesPerField = 1,
                                                                                            .maximumTotalDefaultBytes = 1});
             REQUIRE(snapshots.HasValue());
             const auto serializers = MakeDestructionReplicationSerializers();
             REQUIRE(serializers.HasValue());
-            REQUIRE(serializers.Value().size() == 9);
+            REQUIRE(serializers.Value().size() == 10);
             const auto registry = Network::ReplicationSerializerRegistry::Create(snapshots.Value(), serializers.Value());
             REQUIRE(registry.HasValue());
             CHECK(registry.Value().Schemas()->Fingerprint() == snapshots.Value()->Fingerprint());
@@ -139,7 +142,7 @@ namespace Horo::Destruction {
             const auto second = EncodeDestructionReplication(state, writer, {});
             REQUIRE(first.HasValue());
             REQUIRE(second.HasValue());
-            REQUIRE(first.Value().fields.size() == 9);
+            REQUIRE(first.Value().fields.size() == 10);
             CHECK(first.Value().fields == second.Value().fields);
             const auto decoded = DecodeDestructionReplication(first.Value(), Fence(state), receiver, {});
             REQUIRE(decoded.HasValue());
@@ -179,6 +182,12 @@ namespace Horo::Destruction {
             state.supportAnchors = {Id<DestructionChunkId>(200), Id<DestructionChunkId>(100)};
             ExpectError(EncodeDestructionReplication(state, server, {}), DestructionErrors::ReplicationInvalid);
             state = State();
+            state.effectiveFeatures = {};
+            ExpectError(EncodeDestructionReplication(state, server, {}), DestructionErrors::ReplicationInvalid);
+            state = State();
+            state.effectiveFeatures.bits |= 0x80000000U;
+            ExpectError(EncodeDestructionReplication(state, server, {}), DestructionErrors::ReplicationInvalid);
+            state = State();
             ExpectError(EncodeDestructionReplication(state, server, {.maximumChunks = 8}), DestructionErrors::ReplicationLimitExceeded);
             auto payload = EncodeDestructionReplication(state, server, {});
             REQUIRE(payload.HasValue());
@@ -196,6 +205,9 @@ namespace Horo::Destruction {
             ExpectError(DecodeDestructionReplication(malformed, Fence(state), client, {}), DestructionErrors::ReplicationLimitExceeded);
             malformed = payload.Value();
             malformed.fields[6].canonical[3] = std::byte{};
+            ExpectError(DecodeDestructionReplication(malformed, Fence(state), client, {}), DestructionErrors::ReplicationInvalid);
+            malformed = payload.Value();
+            malformed.fields[9].canonical.pop_back();
             ExpectError(DecodeDestructionReplication(malformed, Fence(state), client, {}), DestructionErrors::ReplicationInvalid);
         }
 
@@ -236,6 +248,12 @@ namespace Horo::Destruction {
             fence = Fence(state);
             fence.target.generation = Id<DestructionGeneration>(6);
             ExpectError(DecodeDestructionReplication(payload.Value(), fence, client, {}), DestructionErrors::StaleGeneration);
+            fence = Fence(state);
+            fence.configuration = Id<DestructionConfigurationRevision>(7);
+            ExpectError(DecodeDestructionReplication(payload.Value(), fence, client, {}), DestructionErrors::StaleConfiguration);
+            fence = Fence(state);
+            fence.effectiveFeatures.bits |= DestructionFeatureBit<DestructionFeature::CookedSupport>;
+            ExpectError(DecodeDestructionReplication(payload.Value(), fence, client, {}), DestructionErrors::ReplicationIncompatible);
             fence = Fence(state);
             fence.currentRevision = state.revision;
             ExpectError(DecodeDestructionReplication(payload.Value(), fence, client, {}), DestructionErrors::StaleRevision);
