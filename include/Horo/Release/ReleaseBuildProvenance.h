@@ -78,7 +78,7 @@ namespace Horo::Release {
         [[nodiscard]] std::vector<ReleaseBuildVariance> Compare(const ReleaseBuildProvenance &other) const;
 
     private:
-        ReleaseBuildProvenance(ReleaseBuildProvenanceData data, std::string json, Sha256Digest digest);
+        ReleaseBuildProvenance(ReleaseBuildProvenanceData data, std::string json, const Sha256Digest &digest);
 
         ReleaseBuildProvenanceData data_;
         std::string json_;
