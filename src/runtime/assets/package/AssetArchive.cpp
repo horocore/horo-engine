@@ -30,6 +30,13 @@ namespace Horo::Assets {
             return ComputeSha256({reinterpret_cast<const std::byte *>(bytes.data()), bytes.size()});
         }
 
+        /** @brief Confirms the whole archive's detached trailer before parsing any entry. */
+        [[nodiscard]] bool HasValidTrailer(const std::span<const std::uint8_t> bytes) noexcept {
+            if (bytes.size() < 32U)
+                return false;
+            return std::ranges::equal(Digest(bytes.first(bytes.size() - 32U)).bytes, bytes.last(32U));
+        }
+
         class Writer final {
         public:
             explicit Writer(const std::size_t maximum) : maximum_(maximum) {}
@@ -333,12 +340,9 @@ namespace Horo::Assets {
         if (!ValidLimits(limits) || !expectedTarget.IsValid() || bytes.size() > limits.maximumArchiveBytes ||
             bytes.size() < Magic.size() + 4U + 32U)
             return Result<AssetArchiveProvider>::Failure(MakeError(InvalidArchive));
-        const auto payload = bytes.first(bytes.size() - 32U);
-        const auto digest = Digest(payload);
-        if (!std::ranges::equal(digest.bytes, bytes.last(32U)))
+        if (!HasValidTrailer(bytes))
             return Result<AssetArchiveProvider>::Failure(MakeError(InvalidArchive));
-
-        Reader reader(payload);
+        Reader reader(bytes.first(bytes.size() - 32U));
         std::span<const std::uint8_t> magic;
         std::uint32_t version{};
         std::uint32_t featureFlags{};

@@ -268,6 +268,39 @@ namespace Horo::Assets {
             const std::vector<std::uint8_t> manifest(manifestBytes.begin(), manifestBytes.end());
             return WriteAtomic(root / "manifest.json", manifest);
         }
+
+        /** @brief Parses only the exact canonical manifest bound to a pinned generation. */
+        [[nodiscard]] Result<std::vector<AssetCookManifestEntry>> ParseGenerationManifest(const std::string &text,
+                                                                                          const AssetCookGeneration &generation) {
+            const auto invalid = [] {
+                return Result<std::vector<AssetCookManifestEntry>>::Failure(Error{CookErrors::MalformedArtifact.code});
+            };
+            const auto manifest = nlohmann::json::parse(text, nullptr, false);
+            if (!manifest.is_object() || !manifest.contains("schemaVersion") || !manifest["schemaVersion"].is_number_unsigned() ||
+                manifest["schemaVersion"] != 1U || !manifest.contains("target") || !manifest["target"].is_string() ||
+                manifest["target"].get<std::string>() != generation.target.Value() || !manifest.contains("artifacts") ||
+                !manifest["artifacts"].is_array() || manifest["artifacts"].size() != generation.artifactCount)
+                return invalid();
+            std::vector<AssetCookManifestEntry> entries;
+            entries.reserve(generation.artifactCount);
+            for (const auto &item : manifest["artifacts"]) {
+                if (!item.is_object() || !item.contains("assetId") || !item["assetId"].is_string() || !item.contains("assetType") ||
+                    !item["assetType"].is_string() || !item.contains("artifact") || !item["artifact"].is_string() ||
+                    !item.contains("artifactHash") || !item["artifactHash"].is_string())
+                    return invalid();
+                auto id = AssetId::Parse(item["assetId"].get<std::string>());
+                auto type = AssetTypeId::Parse(item["assetType"].get<std::string>());
+                auto hash = ParseSha256(item["artifactHash"].get<std::string>());
+                const auto file = item["artifact"].get<std::string>();
+                if (id.HasError() || type.HasError() || hash.HasError() || !IsSafeArtifactFile(file) ||
+                    (!entries.empty() && id.Value() <= entries.back().assetId))
+                    return invalid();
+                entries.push_back(AssetCookManifestEntry{std::move(id).Value(), std::move(type).Value(), file, std::move(hash).Value()});
+            }
+            if (BuildManifestJson(generation.target.Value(), entries) != text)
+                return invalid();
+            return Result<std::vector<AssetCookManifestEntry>>::Success(std::move(entries));
+        }
     }  // namespace
 
     // ---------------------------------------------------------------------------
@@ -351,35 +384,13 @@ namespace Horo::Assets {
             return invalid();
 
         const std::string manifestText(manifestBytes.Value().begin(), manifestBytes.Value().end());
-        const auto manifest = nlohmann::json::parse(manifestText, nullptr, false);
-        if (!manifest.is_object() || !manifest.contains("schemaVersion") || !manifest["schemaVersion"].is_number_unsigned() ||
-            manifest["schemaVersion"] != 1U || !manifest.contains("target") || !manifest["target"].is_string() ||
-            manifest["target"].get<std::string>() != generation.target.Value() || !manifest.contains("artifacts") ||
-            !manifest["artifacts"].is_array() || manifest["artifacts"].size() != generation.artifactCount)
+        auto entries = ParseGenerationManifest(manifestText, generation);
+        if (entries.HasError())
             return invalid();
-
         AssetCookGenerationContents contents;
-        contents.entries.reserve(generation.artifactCount);
+        contents.entries = std::move(entries).Value();
         contents.artifacts.reserve(generation.artifactCount);
         std::size_t totalBytes = 0;
-        for (const auto &item : manifest["artifacts"]) {
-            if (!item.is_object() || !item.contains("assetId") || !item["assetId"].is_string() || !item.contains("assetType") ||
-                !item["assetType"].is_string() || !item.contains("artifact") || !item["artifact"].is_string() ||
-                !item.contains("artifactHash") || !item["artifactHash"].is_string())
-                return invalid();
-            auto id = AssetId::Parse(item["assetId"].get<std::string>());
-            auto type = AssetTypeId::Parse(item["assetType"].get<std::string>());
-            auto hash = ParseSha256(item["artifactHash"].get<std::string>());
-            const auto file = item["artifact"].get<std::string>();
-            if (id.HasError() || type.HasError() || hash.HasError() || !IsSafeArtifactFile(file) ||
-                (!contents.entries.empty() && id.Value() <= contents.entries.back().assetId))
-                return invalid();
-            contents.entries.push_back(
-                AssetCookManifestEntry{std::move(id).Value(), std::move(type).Value(), file, std::move(hash).Value()});
-        }
-        if (BuildManifestJson(generation.target.Value(), contents.entries) != manifestText)
-            return invalid();
-
         for (const auto &entry : contents.entries) {
             const auto artifactPath = generation.generationRoot / entry.artifactFile;
             const auto artifactStatus = std::filesystem::symlink_status(artifactPath, statusError);
