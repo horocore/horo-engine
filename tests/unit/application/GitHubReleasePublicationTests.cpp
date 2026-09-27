@@ -154,17 +154,20 @@ TEST_CASE("GitHub adapter rejects missing, changed, or corrupted remote release 
     auto verified = VerifyReleaseCandidate(directory.root, manifest, required, nullptr, probes);
     REQUIRE(verified.HasValue());
     ReleasePublicationRequest request{plan, verified.Value(), manifest, {ReleaseChannelKind::Stable, {}}};
+    FakeGitHubClient missingClient;
+    missingClient.missing = true;
+    GitHubReleasePublicationAdapter missingAdapter{"horocore/horo-engine", missingClient};
+    CHECK(PublishVerifiedReleaseCandidate(request, missingAdapter).HasError());
+    CHECK(missingClient.uploads == 0);
+
+    FakeGitHubClient wrongTagClient;
+    wrongTagClient.wrongTag = true;
+    GitHubReleasePublicationAdapter wrongTagAdapter{"horocore/horo-engine", wrongTagClient};
+    CHECK(PublishVerifiedReleaseCandidate(request, wrongTagAdapter).HasError());
+    CHECK(wrongTagClient.uploads == 0);
+
     FakeGitHubClient client;
     GitHubReleasePublicationAdapter adapter{"horocore/horo-engine", client};
-
-    client.missing = true;
-    CHECK(PublishVerifiedReleaseCandidate(request, adapter).HasError());
-    CHECK(client.uploads == 0);
-    client.missing = false;
-    client.wrongTag = true;
-    CHECK(PublishVerifiedReleaseCandidate(request, adapter).HasError());
-    CHECK(client.uploads == 0);
-    client.wrongTag = false;
     auto receipt = adapter.Upload(request);
     REQUIRE(receipt.HasValue());
     client.assets.at("bin%2Feditor").digest = Digest("tampered");
