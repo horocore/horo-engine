@@ -80,8 +80,8 @@ namespace Horo::WorldStreaming {
         return entries > 0 && entries <= MaximumEntries && leases > 0 && leases <= MaximumLeases && !capacity.IsZero();
     }
 
-    SharedAssetResidencyLedger::SharedAssetResidencyLedger(const StreamingRuntimeOwnerToken owner,
-                                                           const SharedAssetResidencyLimits limits) noexcept
+    SharedAssetResidencyLedger::SharedAssetResidencyLedger(const StreamingRuntimeOwnerToken &owner,
+                                                           const SharedAssetResidencyLimits &limits) noexcept
         : owner_(owner), limits_(limits) {}
 
     /** @copydoc SharedAssetResidencyLedger::SharedAssetResidencyLedger */
@@ -95,8 +95,8 @@ namespace Horo::WorldStreaming {
     }
 
     /** @copydoc SharedAssetResidencyLedger::Create */
-    Result<SharedAssetResidencyLedger> SharedAssetResidencyLedger::Create(const StreamingRuntimeOwnerToken owner,
-                                                                          const SharedAssetResidencyLimits limits) {
+    Result<SharedAssetResidencyLedger> SharedAssetResidencyLedger::Create(const StreamingRuntimeOwnerToken &owner,
+                                                                          const SharedAssetResidencyLimits &limits) {
         if (!owner.IsValid() || !limits.IsValid())
             return Failure<SharedAssetResidencyLedger>(WorldStreamingErrors::SharedAssetInvalid);
         SharedAssetResidencyLedger ledger{owner, limits};
@@ -115,10 +115,11 @@ namespace Horo::WorldStreaming {
     /** @brief Resolves one existing charge or preflights a new charge without mutating either ledger. */
     Result<SharedAssetResidencyLedger::ChargeCandidate> SharedAssetResidencyLedger::PrepareCharge(
         const SharedAssetKey &key, const StreamingBudgetAmounts &residentCost) const {
-        const auto found = std::ranges::find_if(entries_, [&](const Entry &entry) {
+        if (const auto found = std::ranges::find_if(entries_,
+                                                    [&](const Entry &entry) {
             return entry.key == key;
         });
-        if (found != entries_.end()) {
+            found != entries_.end()) {
             if (found->cost != residentCost)
                 return Failure<ChargeCandidate>(WorldStreamingErrors::SharedAssetConflict);
             if (found->retiring)
@@ -134,8 +135,8 @@ namespace Horo::WorldStreaming {
     Result<SharedAssetLease> SharedAssetResidencyLedger::Acquire(const SharedAssetKey &key, const StreamingBudgetAmounts &residentCost,
                                                                  const SharedAssetConsumer &consumer,
                                                                  const StreamingFence &currentAttempt) {
-        const auto request = ValidateAcquireRequest(state_, owner_, cancelledAttempts_, key, residentCost, consumer, currentAttempt);
-        if (request.HasError())
+        if (const auto request = ValidateAcquireRequest(state_, owner_, cancelledAttempts_, key, residentCost, consumer, currentAttempt);
+            request.HasError())
             return Result<SharedAssetLease>::Failure(request.ErrorValue());
         if (std::ranges::any_of(leases_, [&](const SharedAssetLease &lease) {
             return lease.key == key && lease.consumer == consumer;
@@ -227,8 +228,9 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc SharedAssetResidencyLedger::BeginShutdown */
     void SharedAssetResidencyLedger::BeginShutdown() noexcept {
-        if (state_ == SharedAssetResidencyState::Accepting)
-            state_ = entries_.empty() ? SharedAssetResidencyState::Closed : SharedAssetResidencyState::Draining;
+        using enum SharedAssetResidencyState;
+        if (state_ == Accepting)
+            state_ = entries_.empty() ? Closed : Draining;
     }
 
     /** @copydoc SharedAssetResidencyLedger::Owner */

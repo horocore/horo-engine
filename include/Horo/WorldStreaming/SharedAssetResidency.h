@@ -103,7 +103,8 @@ namespace Horo::WorldStreaming {
          * @param limits Mandatory entry, lease, and resource-axis ceilings.
          * @return Empty accepting ledger or typed invalid/capacity failure.
          */
-        [[nodiscard]] static Result<SharedAssetResidencyLedger> Create(StreamingRuntimeOwnerToken owner, SharedAssetResidencyLimits limits);
+        [[nodiscard]] static Result<SharedAssetResidencyLedger> Create(const StreamingRuntimeOwnerToken &owner,
+                                                                       const SharedAssetResidencyLimits &limits);
 
         /**
          * @brief Atomically obtains one lease, charging a new asset revision exactly once.
@@ -174,7 +175,7 @@ namespace Horo::WorldStreaming {
             bool isNew{};
         };
 
-        SharedAssetResidencyLedger(StreamingRuntimeOwnerToken owner, SharedAssetResidencyLimits limits) noexcept;
+        SharedAssetResidencyLedger(const StreamingRuntimeOwnerToken &owner, const SharedAssetResidencyLimits &limits) noexcept;
         [[nodiscard]] Result<ChargeCandidate> PrepareCharge(const SharedAssetKey &key, const StreamingBudgetAmounts &residentCost) const;
         StreamingRuntimeOwnerToken owner_;
         SharedAssetResidencyLimits limits_;
