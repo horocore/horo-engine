@@ -490,7 +490,8 @@ namespace Horo::Physics {
             return SnapshotResult::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
         if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping || impl_->runtime->state != PhysicsRuntimeState::Ready)
             return SnapshotResult::Failure(MakeError(PhysicsErrors::InvalidState));
-        if (impl_->published.completedTick == 0)
+        const PhysicsPublishedTick published = impl_->publication.Snapshot();
+        if (published.completedTick == 0)
             return SnapshotResult::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
         try {
             const Detail::CanonicalDebugProjection projected = Detail::ProjectCanonicalDebug(impl_->native, budget);
@@ -504,10 +505,10 @@ namespace Horo::Physics {
             for (std::size_t index = 0; index < contactCapacity; ++index)
                 contacts.emplace_back(PhysicsDebugContact{events[index]});
             const std::array<PhysicsDebugRecord, 1> pipeline{
-                PhysicsDebugPipeline{impl_->published.appliedCommands, impl_->published.eventCount, impl_->published.droppedEventCount}};
+                PhysicsDebugPipeline{published.appliedCommands, published.eventCount, published.droppedEventCount}};
             const PhysicsDebugSource source =
-                DebugSource(impl_->identity, impl_->published, projected, contacts, pipeline, events.size() - contacts.size());
-            return CapturePhysicsDebugSnapshot(source, impl_->published, budget);
+                DebugSource(impl_->identity, published, projected, contacts, pipeline, events.size() - contacts.size());
+            return CapturePhysicsDebugSnapshot(source, published, budget);
         } catch (const std::bad_alloc &) {
             return SnapshotResult::Failure(MakeError(PhysicsErrors::CapacityExceeded, "Unable to project bounded Physics debug evidence."));
         }
