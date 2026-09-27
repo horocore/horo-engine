@@ -1381,9 +1381,8 @@ namespace Horo::Editor {
         opts.rendererBackend = moduleInfo->id.Value();
         const RendererAvailabilitySnapshot rendererAvailability = BuildRendererAvailabilitySnapshot(opts.rendererBackend);
 
-        auto selectedRenderer = Application::Internal::HostRendererFromBackendId(opts.rendererBackend);
-        if (selectedRenderer.HasError()) {
-            LOG_CRITICAL("editor.renderer", "%s", selectedRenderer.ErrorValue().message.c_str());
+        std::unique_ptr<ModuleHost> moduleHost = ComposeEditorModules(opts.rendererBackend);
+        if (!moduleHost) {
             Log::Logger::Shutdown();
             return 1;
         }
