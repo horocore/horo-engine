@@ -156,6 +156,9 @@ TEST_CASE("Release service recovers durable job identities and terminal stage st
         const auto records = service.ListHistory();
         REQUIRE(records.size() == 1U);
         CHECK(records.front().state == ReleaseJobState::Succeeded);
+        CHECK(records.front().createdUtcMilliseconds > 0);
+        REQUIRE(records.front().finishedUtcMilliseconds.has_value());
+        CHECK(*records.front().finishedUtcMilliseconds >= records.front().createdUtcMilliseconds);
         CHECK(records.front().stages[static_cast<std::size_t>(ReleaseStage::FinalVerifying)] == ReleaseStageState::Succeeded);
     }
     history.reset();

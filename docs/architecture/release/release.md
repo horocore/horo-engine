@@ -515,7 +515,8 @@ The service accepts an optional host-owned `ReleaseRunHistory` and UTC clock.
 When supplied, admission, stage boundaries, and terminal transitions replace a
 bounded typed snapshot under an exclusive writer lock. The durable snapshot
 contains IDs, revision, stage states and attempts, candidate identity, and UTC
-update time; it excludes worker messages, arbitrary paths, and credentials.
+creation, update, and terminal times; it excludes worker messages, arbitrary
+paths, and credentials.
 Publication uses a durable prepared file and atomic replacement. Recovery rejects
 malformed or oversized history and retains the highest candidate ID even after
 its job record ages out. Hosts that do not supply the optional store retain the

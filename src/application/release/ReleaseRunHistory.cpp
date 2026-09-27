@@ -25,7 +25,10 @@ namespace Horo::Release {
 
         /** @brief Checks the closed enum ranges before accepting durable records. */
         [[nodiscard]] bool ValidEntry(const ReleaseRunHistoryEntry &entry) {
-            if (entry.job.value == 0U || entry.target.value == 0U || entry.operation == 0U || entry.updatedUtcMilliseconds <= 0 ||
+            if (entry.job.value == 0U || entry.target.value == 0U || entry.operation == 0U || entry.createdUtcMilliseconds <= 0 ||
+                entry.updatedUtcMilliseconds < entry.createdUtcMilliseconds ||
+                (entry.finishedUtcMilliseconds && (*entry.finishedUtcMilliseconds < entry.createdUtcMilliseconds ||
+                                                   *entry.finishedUtcMilliseconds != entry.updatedUtcMilliseconds)) ||
                 entry.state > ReleaseJobState::Cancelled || (entry.candidate && entry.candidate->value == 0U))
                 return false;
             return std::ranges::all_of(entry.stages, [](const ReleaseStageState state) {
@@ -51,12 +54,14 @@ namespace Horo::Release {
                     {"stages", std::move(stages)},
                     {"attempts", std::move(attempts)},
                     {"candidate", entry.candidate ? Json(entry.candidate->value) : Json(nullptr)},
+                    {"createdUtcMilliseconds", entry.createdUtcMilliseconds},
+                    {"finishedUtcMilliseconds", entry.finishedUtcMilliseconds ? Json(*entry.finishedUtcMilliseconds) : Json(nullptr)},
                     {"updatedUtcMilliseconds", entry.updatedUtcMilliseconds}};
         }
 
         /** @brief Reads one exact schema-v1 record without accepting unknown or missing fields. */
         [[nodiscard]] ReleaseRunHistoryEntry ReadEntry(const Json &json) {
-            if (!json.is_object() || json.size() != 9U || !json.at("stages").is_array() || json.at("stages").size() != ReleaseStageCount ||
+            if (!json.is_object() || json.size() != 11U || !json.at("stages").is_array() || json.at("stages").size() != ReleaseStageCount ||
                 !json.at("attempts").is_array() || json.at("attempts").size() != ReleaseStageCount)
                 throw std::invalid_argument("Invalid release history entry");
             ReleaseRunHistoryEntry entry;
@@ -72,7 +77,10 @@ namespace Horo::Release {
             }
             if (!json.at("candidate").is_null())
                 entry.candidate = ReleaseCandidateId{json.at("candidate").get<std::uint64_t>()};
+            entry.createdUtcMilliseconds = json.at("createdUtcMilliseconds").get<std::int64_t>();
             entry.updatedUtcMilliseconds = json.at("updatedUtcMilliseconds").get<std::int64_t>();
+            if (!json.at("finishedUtcMilliseconds").is_null())
+                entry.finishedUtcMilliseconds = json.at("finishedUtcMilliseconds").get<std::int64_t>();
             if (!ValidEntry(entry))
                 throw std::invalid_argument("Invalid release history identity");
             return entry;
@@ -160,7 +168,12 @@ namespace Horo::Release {
         }
         if (snapshot.candidate)
             entry.candidate = snapshot.candidate->id;
+        entry.createdUtcMilliseconds = updatedUtcMilliseconds;
         entry.updatedUtcMilliseconds = updatedUtcMilliseconds;
+        const bool terminal = entry.state == ReleaseJobState::Succeeded || entry.state == ReleaseJobState::Failed ||
+                              entry.state == ReleaseJobState::Cancelled;
+        if (terminal)
+            entry.finishedUtcMilliseconds = updatedUtcMilliseconds;
         if (!ValidEntry(entry))
             return Result<void>::Failure(InvalidHistory());
         std::lock_guard lock(mutex_);
@@ -169,8 +182,13 @@ namespace Horo::Release {
             return value.job.value;
         });
         if (found != updated.end() && found->job == entry.job) {
-            if (entry.revision < found->revision || entry.target != found->target || entry.operation != found->operation)
+            if (entry.revision < found->revision || entry.target != found->target || entry.operation != found->operation ||
+                (found->finishedUtcMilliseconds && !terminal))
                 return Result<void>::Failure(InvalidHistory());
+            entry.createdUtcMilliseconds = found->createdUtcMilliseconds;
+            entry.updatedUtcMilliseconds = std::max(entry.updatedUtcMilliseconds, entry.createdUtcMilliseconds);
+            if (terminal)
+                entry.finishedUtcMilliseconds = entry.updatedUtcMilliseconds;
             *found = entry;
         } else
             updated.insert(found, entry);

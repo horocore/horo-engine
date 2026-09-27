@@ -28,7 +28,9 @@ namespace Horo::Release {
         std::array<ReleaseStageState, ReleaseStageCount> stages{};
         std::array<std::optional<ReleaseStageAttemptId>, ReleaseStageCount> attempts{};
         std::optional<ReleaseCandidateId> candidate;
+        std::int64_t createdUtcMilliseconds{};
         std::int64_t updatedUtcMilliseconds{};
+        std::optional<std::int64_t> finishedUtcMilliseconds;
     };
 
     /** @brief Host-owned durable history with one writer lock and bounded replacement snapshots. */
