@@ -30,6 +30,19 @@ HOSTS = {
 }
 
 
+def canonical_platform(value: str) -> str:
+    # Return a literal from the supported matrix, never the caller's raw argv.
+    if value == "linux-x64":
+        return "linux-x64"
+    if value == "macos-arm64":
+        return "macos-arm64"
+    if value == "macos-x64":
+        return "macos-x64"
+    if value == "windows-x64":
+        return "windows-x64"
+    raise ValueError("unsupported extension CI platform")
+
+
 def read_lock(project: Path, platform: str) -> tuple[str, str, str]:
     document = json.loads((project / ".horo/extension-ci.lock.json").read_text(encoding="utf-8"))
     if document.get("schemaVersion") != 1 or not isinstance(document.get("sdkVersion"), str):
@@ -128,11 +141,12 @@ def main() -> int:
     parser.add_argument("--commit", required=True)
     args = parser.parse_args()
     try:
-        operating_system, machines = HOSTS[args.platform]
+        platform = canonical_platform(args.platform)
+        operating_system, machines = HOSTS[platform]
         if host_platform.system() != operating_system or host_platform.machine() not in machines:
             raise ValueError("CI runner architecture does not match the locked platform")
         project, output = author_paths(args)
-        version, url, digest = read_lock(project, args.platform)
+        version, url, digest = read_lock(project, platform)
         with tempfile.TemporaryDirectory(prefix="horo-extension-sdk-") as temporary:
             root = Path(temporary)
             extract_sdk(fetch_archive(url, digest), root)
@@ -143,7 +157,7 @@ def main() -> int:
             if not runner.is_file() or runner.is_symlink():
                 raise ValueError("downloaded SDK does not contain the author CI tool")
             command = [sys.executable, str(runner), "--sdk", str(root), "--project", str(project),
-                       "--output", str(output), "--platform", args.platform,
+                       "--output", str(output), "--platform", platform,
                        "--repository", args.repository, "--commit", args.commit,
                        "--sdk-sha256", digest]
             # The runner came from the SHA-256-pinned archive, arguments are separate

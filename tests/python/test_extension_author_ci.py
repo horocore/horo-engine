@@ -54,6 +54,13 @@ def test_template_pins_actions_tools_platforms_and_no_secrets():
         assert all(character in "0123456789abcdef" for character in revision)
 
 
+def test_bootstrap_passes_only_canonical_platform_literals():
+    for platform in BOOTSTRAP.PLATFORMS:
+        assert BOOTSTRAP.canonical_platform(platform) == platform
+    with pytest.raises(ValueError, match="unsupported extension CI platform"):
+        BOOTSTRAP.canonical_platform("linux-x64 --output /outside")
+
+
 def test_scaffold_carries_versioned_ci_contract_without_source_path(tmp_path):
     output = tmp_path / "author"
     SCAFFOLDER.write_project(output, "com.example.author", "Author", "1.0.0", "backend")
@@ -253,6 +260,7 @@ def test_bootstrap_checks_downloaded_sdk_version_before_runner(monkeypatch, tmp_
     assert BOOTSTRAP.main() == 0
     assert len(launched) == 1
     assert launched[0][2] is False
+    assert launched[0][0][launched[0][0].index("--platform") + 1] == "linux-x64"
     assert "--sdk-sha256" in launched[0][0]
     assert digest in launched[0][0]
 
