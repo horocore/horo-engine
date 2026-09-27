@@ -537,6 +537,7 @@ horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRViewRenderPlan.h
 )
 horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
+    Horo/XR/XRFeatureNegotiation.h
     Horo/XR/XRFrameLifecycle.h
     Horo/XR/XRSessionErrors.h
     Horo/XR/XRSessionLifecycle.h

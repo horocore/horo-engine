@@ -676,6 +676,7 @@ horo_register_catch_test(HoroXRApiTests LABELS "unit;xr;headless")
 
 add_executable(HoroXRRuntimeTests
         support/AllocationProbe.cpp
+        unit/runtime/xr/XRFeatureNegotiationTests.cpp
         unit/runtime/xr/XRFrameLifecycleTests.cpp
         unit/runtime/xr/XRSessionLifecycleTests.cpp
 )
