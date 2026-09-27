@@ -106,6 +106,16 @@ namespace Horo::Runtime {
                    IsValidSupport(policy.productVersions) && HasValidParticipantPolicy(policy);
         }
 
+        /** @brief Finds the first required dependency missing from a manifest's sorted participant list. */
+        [[nodiscard]] std::optional<SaveParticipantId> MissingRequiredDependency(const SaveGameManifest &manifest,
+                                                                                 const SaveParticipantCompatibility &support) {
+            for (const SaveParticipantId &dependency : support.requiredDependencies) {
+                if (!std::ranges::binary_search(manifest.participants, dependency, {}, &SaveManifestParticipant::participant))
+                    return dependency;
+            }
+            return std::nullopt;
+        }
+
         /** @brief Evaluates declared participant support and required current composition. */
         [[nodiscard]] std::optional<SaveCompatibilityDecision> EvaluateDeclaredParticipants(const SaveGameManifest &manifest,
                                                                                             const SaveCompatibilityPolicy &policy,
@@ -118,12 +128,9 @@ namespace Horo::Runtime {
                         return Reject(SaveCompatibilityReason::MissingRequiredParticipant, support.participant);
                     continue;
                 }
-                if (support.required) {
-                    for (const SaveParticipantId &dependency : support.requiredDependencies) {
-                        if (!std::ranges::binary_search(manifest.participants, dependency, {}, &SaveManifestParticipant::participant))
-                            return Reject(SaveCompatibilityReason::MissingRequiredParticipant, dependency);
-                    }
-                }
+                if (support.required)
+                    if (const auto missing = MissingRequiredDependency(manifest, support))
+                        return Reject(SaveCompatibilityReason::MissingRequiredParticipant, *missing);
                 const VersionAdmission admission = ClassifyVersion(found->schemaVersion, support.versions);
                 if (admission == VersionAdmission::Rejected && (support.required || found->required))
                     return Reject(SaveCompatibilityReason::UnsupportedParticipantSchema, support.participant);

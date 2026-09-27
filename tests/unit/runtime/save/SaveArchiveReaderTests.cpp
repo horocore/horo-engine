@@ -248,7 +248,8 @@ namespace {
         REQUIRE(archive.HasValue());
         const auto report = archive.Value().InspectUnknownData(UnknownPolicy(), 1024);
         REQUIRE(report.HasError());
-        CHECK(report.ErrorValue().message.find("project.future.dlc.v1") != std::string::npos);
+        CHECK(report.ErrorValue().message ==
+              "Save cannot be restored: required module or content participant 'project.future.dlc.v1' is unavailable.");
     }
 
     TEST_CASE("Unknown optional bytes and integrity metadata survive a changed archive envelope", "[runtime][save][archive-reader]") {

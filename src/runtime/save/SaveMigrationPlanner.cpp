@@ -318,13 +318,13 @@ namespace Horo::Runtime::SaveMigrationDetail {
                     return Result<void>::Failure(
                         MigrationError(SaveErrors::MigrationSourceUnsupported,
                                        "Target composition requires a participant absent from the source: " + policy.participant.Value()));
-                if (policy.required) {
-                    for (const SaveParticipantId &dependency : policy.requiredDependencies) {
-                        if (FindStateParticipant(source, dependency) == nullptr)
-                            return Result<void>::Failure(
-                                MigrationError(SaveErrors::MigrationSourceUnsupported,
-                                               "Required participant dependency is absent from the source: " + dependency.Value()));
-                    }
+                if (!policy.required)
+                    continue;
+                for (const SaveParticipantId &dependency : policy.requiredDependencies) {
+                    if (FindStateParticipant(source, dependency) == nullptr)
+                        return Result<void>::Failure(
+                            MigrationError(SaveErrors::MigrationSourceUnsupported,
+                                           "Required participant dependency is absent from the source: " + dependency.Value()));
                 }
             }
             return Result<void>::Success();

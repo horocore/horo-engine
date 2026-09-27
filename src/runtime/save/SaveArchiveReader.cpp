@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <format>
 #include <limits>
 #include <new>
 #include <string>
@@ -428,21 +429,21 @@ namespace Horo::Runtime {
     /** @copydoc ValidatedSaveArchive::InspectUnknownData */
     Result<SaveUnknownDataReport> ValidatedSaveArchive::InspectUnknownData(const SaveCompatibilityPolicy &policy,
                                                                            const std::uint64_t maximumPreservedBytes) const {
-        const SaveCompatibilityDecision decision = EvaluateSaveCompatibility(preamble_.archiveFormatVersion, header_, manifest_, policy);
-        if (decision.disposition == SaveCompatibilityDisposition::Rejected) {
+        if (const SaveCompatibilityDecision decision =
+                EvaluateSaveCompatibility(preamble_.archiveFormatVersion, header_, manifest_, policy);
+            decision.disposition == SaveCompatibilityDisposition::Rejected) {
+            using enum SaveCompatibilityReason;
             std::string reason = "Save cannot be restored: ";
-            if (decision.reason == SaveCompatibilityReason::UnknownRequiredParticipant && decision.participant)
-                reason += "required module or content participant '" + decision.participant->Value() + "' is unavailable.";
-            else if (decision.reason == SaveCompatibilityReason::UnsupportedParticipantSchema && decision.participant)
-                reason += "participant '" + decision.participant->Value() + "' needs a supported module version or a migration.";
-            else if (decision.reason == SaveCompatibilityReason::MissingRequiredParticipant && decision.participant)
-                reason += "required participant '" + decision.participant->Value() + "' is absent from the archive.";
-            else if (decision.reason == SaveCompatibilityReason::UnsupportedFeature)
-                reason +=
-                    "unsupported required feature flags " + std::to_string(header_.featureFlags & ~policy.supportedFeatureFlagsMask) + ".";
+            if (decision.reason == UnknownRequiredParticipant && decision.participant)
+                reason += std::format("required module or content participant '{}' is unavailable.", decision.participant->Value());
+            else if (decision.reason == UnsupportedParticipantSchema && decision.participant)
+                reason += std::format("participant '{}' needs a supported module version or a migration.", decision.participant->Value());
+            else if (decision.reason == MissingRequiredParticipant && decision.participant)
+                reason += std::format("required participant '{}' is absent from the archive.", decision.participant->Value());
+            else if (decision.reason == UnsupportedFeature)
+                reason += std::format("unsupported required feature flags {}.", header_.featureFlags & ~policy.supportedFeatureFlagsMask);
             else
-                reason +=
-                    "compatibility preflight rejected the archive (reason " + std::to_string(static_cast<unsigned>(decision.reason)) + ").";
+                reason += std::format("compatibility preflight rejected the archive (reason {}).", static_cast<unsigned>(decision.reason));
             return Result<SaveUnknownDataReport>::Failure(MakeError(SaveErrors::MigrationSourceUnsupported, std::move(reason)));
         }
 
@@ -452,11 +453,11 @@ namespace Horo::Runtime {
             for (const SaveManifestParticipant &participant : manifest_.participants) {
                 const auto installed =
                     std::ranges::lower_bound(policy.participants, participant.participant, {}, &SaveParticipantCompatibility::participant);
-                const bool supported =
-                    installed != policy.participants.end() && installed->participant == participant.participant &&
-                    (installed->versions.direct.Contains(participant.schemaVersion) ||
-                     (installed->versions.migrationSource && installed->versions.migrationSource->Contains(participant.schemaVersion)));
-                if (supported)
+                if (const bool supported =
+                        installed != policy.participants.end() && installed->participant == participant.participant &&
+                        (installed->versions.direct.Contains(participant.schemaVersion) ||
+                         (installed->versions.migrationSource && installed->versions.migrationSource->Contains(participant.schemaVersion)));
+                    supported)
                     continue;
                 if (participant.required)
                     return Result<SaveUnknownDataReport>::Failure(
