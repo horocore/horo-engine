@@ -630,6 +630,32 @@ Delivery policies:
 - **ReliableOrdered**: Guaranteed delivery in order (e.g., game events, inventory actions, chat).
 - **ReliableUnordered**: Guaranteed delivery without strict ordering constraints.
 
+The session owner admits each decoded message through a generation-fenced,
+single-owner message delivery gate immediately before calling an application
+handler. Each explicitly configured channel is an independent sequence/replay
+scope; unrelated command, snapshot, and control work needs separate negotiated
+channels to avoid head-of-line coupling. Sequence keys start at one and never
+wrap within a session. Ordered channels require the next key, sequenced and
+replaceable snapshot channels discard older keys, and unordered channels keep
+a fixed 64-key replay window and reject older arrivals. Absolute owner-clock
+expiry is checked before replay state or gameplay mutation; equal to the expiry
+tick is expired. Disconnect/shutdown permanently closes the gate, and a new
+session generation receives new state. The gate is backend-neutral and uses
+the already admitted transport capability snapshot; it never silently changes
+delivery policy. The owner supplies metadata derived from the validated
+transport event and decoded envelope, not untrusted application payload fields.
+Admission consumes a replay key before handler invocation. Typed handler failure
+is propagated and an exception escapes to the owner boundary; neither permits
+ambiguous replay of a handler that may already have mutated state. The gate
+allocates only when configured, not on its admitted-message path; handler work
+has its own budget and error contract.
+This adds a NetworkApi-owned optional policy seam; existing envelope, transport,
+and session callers retain their contracts. A host adding gameplay dispatch
+must construct the gate after session admission, derive its inputs from the
+validated event/envelope, call `Apply` at the owner safe point, and shut it down
+before retiring that session. It does not replace the owner-thread routing and
+handler registry work tracked separately by NET-002.7.
+
 ### Backpressure and Overload Policies
 
 All transport queues have bounded capacities:

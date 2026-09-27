@@ -223,6 +223,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/MessageCodecRegistry.h
+    Horo/Network/MessageDeliveryGate.h
     Horo/Network/MessageEnvelope.h
     Horo/Network/NetworkAddress.h
     Horo/Network/NetworkErrors.h
