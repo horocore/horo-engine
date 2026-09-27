@@ -15,6 +15,13 @@ add_test(NAME HoroAudioDependencyPolicyTest
 set_tests_properties(HoroAudioDependencyPolicyTest PROPERTIES
     LABELS "architecture;cmake;audio")
 
+add_test(NAME HoroAudioCallbackLockPolicyTest
+    COMMAND "${CMAKE_COMMAND}"
+        "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/VerifyAudioCallbackLockPolicy.cmake")
+set_tests_properties(HoroAudioCallbackLockPolicyTest PROPERTIES
+    LABELS "architecture;cmake;audio;realtime-safety")
+
 add_test(NAME HoroMcpBoundaryNegativeConfigureTest
     COMMAND "${CMAKE_COMMAND}"
         "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
@@ -348,6 +355,15 @@ add_executable(HoroAudioWatchdogTests
 target_compile_features(HoroAudioWatchdogTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioWatchdogTests PRIVATE HoroAudioWatchdog)
 horo_register_catch_test(HoroAudioWatchdogTests LABELS "unit;audio;headless")
+add_executable(HoroAudioRealtimeSafetyHarnessTests
+        support/AllocationProbe.cpp
+        unit/runtime/audio/AudioRealtimeSafetyHarnessTests.cpp
+)
+target_include_directories(HoroAudioRealtimeSafetyHarnessTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_compile_features(HoroAudioRealtimeSafetyHarnessTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAudioRealtimeSafetyHarnessTests PRIVATE
+        HoroAudioWatchdog HoroEngine::AudioCommands HoroEngine::AudioDsp)
+horo_register_catch_test(HoroAudioRealtimeSafetyHarnessTests LABELS "unit;audio;headless;realtime-safety")
 add_executable(HoroAudioNullTests
         unit/runtime/audio/NullAudioBackendTests.cpp
 )
