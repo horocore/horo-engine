@@ -75,3 +75,15 @@ capability resolver, provider admission, and the narrow Platform Services
 lifecycle host. Native C fixture modes 10 and 11 exercise old-prefix loading
 and the appended operation profile respectively; service-host tests cover
 startup rollback, BUSY drain, off-thread callback ingress and repeat teardown.
+# Platform Services completion error migration
+
+Provider operation callbacks must set `HoroPlatformProviderCompletion::resultCode`
+to a `HoroPlatformProviderResultCode` value. Translate SDK results inside the
+private provider package. Zero remains success; values 1 through 10 represent
+stable provider failure categories; 11, 12 and 13 represent cancellation,
+timeout and capability absence. Unknown native results use
+`HORO_PLATFORM_PROVIDER_UNKNOWN_FAILURE`. The host also treats unrecognized wire
+values as Unknown. Never place native error text, credentials, account IDs or
+response bodies in a failure payload. Host processing discards failure payloads.
+The completion struct layout is unchanged, so ABI 1.3 providers only need to
+update the semantic mapping of `resultCode`.

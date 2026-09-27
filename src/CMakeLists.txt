@@ -150,6 +150,7 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformProviderManifestCook.cpp
         platform_services/PlatformRequest.cpp
         platform_services/PlatformRequestErrors.cpp
+        platform_services/PlatformServiceErrors.cpp
         platform_services/PlatformServicesBackend.cpp
         platform_services/PlatformServicesFrontend.cpp
         platform_services/PlatformSessionObserver.cpp

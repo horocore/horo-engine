@@ -7,6 +7,7 @@ typedef struct FixtureAudit {
     char events[128];
     unsigned eventCount;
     unsigned failStage;
+    unsigned submitStatus;
     unsigned busy;
     unsigned destroyed;
     unsigned postDestroyCallbacks;
@@ -35,6 +36,10 @@ void horo_test_provider_audit_free(FixtureAudit *audit) {
 
 void horo_test_provider_fail_at(FixtureAudit *audit, unsigned stage) {
     audit->failStage = stage;
+}
+
+void horo_test_provider_submit_status(FixtureAudit *audit, unsigned status) {
+    audit->submitStatus = status;
 }
 
 void horo_test_provider_set_busy(FixtureAudit *audit, unsigned busy) {
@@ -80,6 +85,22 @@ HoroExtensionStatus horo_test_provider_emit(FixtureAudit *audit, uint64_t reques
                                                        .resultCode = 0,
                                                        .payload = payload,
                                                        .payloadSize = sizeof(payload)};
+    return audit->sink->complete(audit->sink->context, &completion);
+}
+
+HoroExtensionStatus horo_test_provider_emit_failure(FixtureAudit *audit, uint64_t requestId, uint64_t generation, uint32_t resultCode) {
+    if (audit->sink == NULL)
+        return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+    static const uint8_t privatePayload[] = "token=private-account@example.com";
+    const HoroPlatformProviderCompletion completion = {.structSize = sizeof(HoroPlatformProviderCompletion),
+                                                       .requestId = requestId,
+                                                       .requestGeneration = generation,
+                                                       .sessionRevision = 1,
+                                                       .service = 0,
+                                                       .operation = HORO_PLATFORM_OPERATION_ACHIEVEMENT_UNLOCK,
+                                                       .resultCode = resultCode,
+                                                       .payload = privatePayload,
+                                                       .payloadSize = sizeof(privatePayload)};
     return audit->sink->complete(audit->sink->context, &completion);
 }
 
@@ -158,7 +179,7 @@ static HoroExtensionStatus OpenIngress(void *candidate, const HoroPlatformProvid
 static HoroExtensionStatus Submit(void *candidate, const HoroPlatformProviderOperation *operation) {
     FixtureAudit *audit = (FixtureAudit *)candidate;
     Record(audit, 'O');
-    return operation->structSize == sizeof(HoroPlatformProviderOperation) ? HORO_EXTENSION_SUCCESS : HORO_EXTENSION_ERROR_INVALID_ARGS;
+    return operation->structSize == sizeof(HoroPlatformProviderOperation) ? audit->submitStatus : HORO_EXTENSION_ERROR_INVALID_ARGS;
 }
 
 static HoroExtensionStatus Cancel(void *candidate, uint64_t requestId, uint64_t generation) {
