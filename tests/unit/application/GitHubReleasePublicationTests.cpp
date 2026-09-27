@@ -76,6 +76,8 @@ namespace {
 
     class FakeGitHubClient final : public IGitHubReleaseClient {
     public:
+        explicit FakeGitHubClient(const bool mismatchedBody = false) : wrongBody(mismatchedBody) {}
+
         [[nodiscard]] Result<GitHubReleaseIdentity> FindExisting(const std::string_view repository, const std::string_view tag) override {
             ++lookups;
             if (missing)
@@ -180,8 +182,7 @@ TEST_CASE("GitHub adapter rejects missing, changed, or corrupted remote release 
     CHECK(PublishVerifiedReleaseCandidate(request, wrongSourceAdapter).HasError());
     CHECK(wrongSourceClient.uploads == 0);
 
-    FakeGitHubClient wrongBodyClient;
-    wrongBodyClient.wrongBody = true;
+    FakeGitHubClient wrongBodyClient{true};
     GitHubReleasePublicationAdapter wrongBodyAdapter{"horocore/horo-engine", wrongBodyClient};
     CHECK(PublishVerifiedReleaseCandidate(request, wrongBodyAdapter).HasError());
     CHECK(wrongBodyClient.uploads == 0);
@@ -194,10 +195,11 @@ TEST_CASE("GitHub adapter rejects missing, changed, or corrupted remote release 
     CHECK(adapter.VerifyRemote(request, receipt.Value()).HasError());
     CHECK(client.commits == 0);
     client.assets.at("bin%2Feditor").digest = Digest("editor");
-    client.wrongBody = true;
-    CHECK(adapter.VerifyRemote(request, receipt.Value()).HasError());
-    CHECK(adapter.CommitChannel(request, receipt.Value()).HasError());
-    client.wrongBody = false;
+    FakeGitHubClient changedBodyClient{true};
+    changedBodyClient.assets = client.assets;
+    GitHubReleasePublicationAdapter changedBodyAdapter{"horocore/horo-engine", changedBodyClient};
+    CHECK(changedBodyAdapter.VerifyRemote(request, receipt.Value()).HasError());
+    CHECK(changedBodyAdapter.CommitChannel(request, receipt.Value()).HasError());
     ++client.releaseId;
     CHECK(adapter.VerifyRemote(request, receipt.Value()).HasError());
     CHECK(adapter.CommitChannel(request, receipt.Value()).HasError());
