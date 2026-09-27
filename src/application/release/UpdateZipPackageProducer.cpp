@@ -105,7 +105,7 @@ namespace Horo::Release {
         }
 
         /** @brief Writes the reserved inventory entry using the same stable ZIP metadata. */
-        [[nodiscard]] bool AddInventory(mz_zip_archive &archive, const std::string &inventory) {
+        [[nodiscard]] bool AddInventory(mz_zip_archive &archive, const std::string_view inventory) {
             auto modified = StableZipTime;
             return mz_zip_writer_add_mem_ex_v2(&archive, UpdateFileInventoryPath.data(), inventory.data(), inventory.size(), nullptr, 0U,
                                                MZ_NO_COMPRESSION, 0U, 0U, &modified, nullptr, 0U, nullptr, 0U) != 0;
@@ -128,14 +128,14 @@ namespace Horo::Release {
         if (!std::filesystem::is_directory(std::filesystem::symlink_status(request.privateOutputRoot, error)) || error)
             return InvalidPackage();
         const auto output = request.privateOutputRoot / PackageName;
-        const auto outputStatus = std::filesystem::symlink_status(output, error);
-        if (outputStatus.type() != std::filesystem::file_type::not_found || (error && error != std::errc::no_such_file_or_directory))
+        if (const auto outputStatus = std::filesystem::symlink_status(output, error);
+            outputStatus.type() != std::filesystem::file_type::not_found || (error && error != std::errc::no_such_file_or_directory))
             return InvalidPackage();
 
         std::vector<UpdateStagedFile> files;
         files.reserve(request.sourceInventory.Artifacts().size());
         for (const auto &file : request.sourceInventory.Artifacts())
-            files.push_back({file.path, file.size, file.digest});
+            files.emplace_back(file.path, file.size, file.digest);
         auto inventory = BuildCanonicalUpdateFileInventory(files, limits_);
         if (inventory.HasError())
             return Result<ReleasePackageResult>::Failure(inventory.ErrorValue());

@@ -41,8 +41,8 @@ namespace Horo::Release {
         std::error_code error;
         if (!std::filesystem::is_directory(std::filesystem::symlink_status(stageRoot.parent_path(), error)) || error)
             return invalid();
-        const auto stageStatus = std::filesystem::symlink_status(stageRoot, error);
-        if (stageStatus.type() != std::filesystem::file_type::not_found || (error && error != std::errc::no_such_file_or_directory))
+        if (const auto stageStatus = std::filesystem::symlink_status(stageRoot, error);
+            stageStatus.type() != std::filesystem::file_type::not_found || (error && error != std::errc::no_such_file_or_directory))
             return invalid();
 
         auto checkpoint = DownloadUpdatePackageHttps(package, paths, downloadLimits, files, verifier, cancellation, policy, progress);
