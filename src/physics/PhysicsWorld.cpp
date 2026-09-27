@@ -9,6 +9,34 @@ namespace Horo::Physics {
             return context != nullptr && context->TryCapture(observation);
         }
 
+        /** @brief Builds borrowed category views for the synchronous bounded copy. */
+        [[nodiscard]] PhysicsDebugSource DebugSource(const PhysicsWorldId world, const PhysicsPublishedTick &published,
+                                                     const Detail::CanonicalDebugProjection &projected,
+                                                     const std::span<const PhysicsDebugRecord> contacts,
+                                                     const std::span<const PhysicsDebugRecord> pipeline,
+                                                     const std::size_t truncatedContacts) {
+            using enum PhysicsDebugCategory;
+            using enum PhysicsDebugAvailability;
+            PhysicsDebugSource source{.world = world,
+                                      .simulationTick = published.completedTick,
+                                      .publicationRevision = published.publicationRevision};
+            source.categories[static_cast<std::size_t>(Body)] = {.availability = Available,
+                                                                 .records = projected.bodies,
+                                                                 .truncatedBeforeCapture = projected.truncatedBodies};
+            source.categories[static_cast<std::size_t>(Shape)] = {.availability = Available,
+                                                                  .records = projected.shapes,
+                                                                  .truncatedBeforeCapture = projected.truncatedShapes};
+            source.categories[static_cast<std::size_t>(Contact)] = {.availability = Available,
+                                                                    .records = contacts,
+                                                                    .truncatedBeforeCapture = truncatedContacts,
+                                                                    .droppedBeforeCapture = published.droppedEventCount};
+            source.categories[static_cast<std::size_t>(Constraint)] = {.availability = Available,
+                                                                       .records = projected.constraints,
+                                                                       .truncatedBeforeCapture = projected.truncatedConstraints};
+            source.categories[static_cast<std::size_t>(Pipeline)] = {.availability = Available, .records = pipeline};
+            return source;
+        }
+
     }  // namespace
 
     namespace {
@@ -454,6 +482,36 @@ namespace Horo::Physics {
     PhysicsPublishedTick PhysicsWorld::PublishedTick() const noexcept {
         Detail::PublicationGuard publicationGuard{impl_->publicationLock};
         return impl_->published;
+    }
+
+    /** @copydoc PhysicsWorld::CaptureDebugSnapshot */
+    Result<std::shared_ptr<const PhysicsDebugSnapshot>> PhysicsWorld::CaptureDebugSnapshot(const PhysicsDebugBudget &budget) const {
+        using SnapshotResult = Result<std::shared_ptr<const PhysicsDebugSnapshot>>;
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return SnapshotResult::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping || impl_->runtime->state != PhysicsRuntimeState::Ready)
+            return SnapshotResult::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (impl_->published.completedTick == 0)
+            return SnapshotResult::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
+        try {
+            const Detail::CanonicalDebugProjection projected = Detail::ProjectCanonicalDebug(impl_->native, budget);
+            const auto events = impl_->queryEvents.events.PublishedEvents();
+            const auto &contactLimit = budget.categories[static_cast<std::size_t>(PhysicsDebugCategory::Contact)];
+            const std::size_t contactCapacity = std::min<std::size_t>(
+                {events.size(), contactLimit.maximumRecords, contactLimit.maximumPayloadBytes / sizeof(PhysicsDebugRecord),
+                 budget.maximumPayloadBytes / sizeof(PhysicsDebugRecord), MaximumPhysicsDebugRecords});
+            std::vector<PhysicsDebugRecord> contacts;
+            contacts.reserve(contactCapacity);
+            for (std::size_t index = 0; index < contactCapacity; ++index)
+                contacts.emplace_back(PhysicsDebugContact{events[index]});
+            const std::array<PhysicsDebugRecord, 1> pipeline{
+                PhysicsDebugPipeline{impl_->published.appliedCommands, impl_->published.eventCount, impl_->published.droppedEventCount}};
+            const PhysicsDebugSource source =
+                DebugSource(impl_->identity, impl_->published, projected, contacts, pipeline, events.size() - contacts.size());
+            return CapturePhysicsDebugSnapshot(source, impl_->published, budget);
+        } catch (const std::bad_alloc &) {
+            return SnapshotResult::Failure(MakeError(PhysicsErrors::CapacityExceeded, "Unable to project bounded Physics debug evidence."));
+        }
     }
 
     /** @copydoc PhysicsWorld::TickStatistics */

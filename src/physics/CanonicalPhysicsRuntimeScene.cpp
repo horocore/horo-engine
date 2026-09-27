@@ -475,19 +475,6 @@ namespace Horo::Physics::Detail {
         return Result<void>::Success();
     }
 
-    /** @copydoc ReadCanonicalSceneBodyPolicy */
-    Result<PhysicsBodyDescriptor> ReadCanonicalSceneBodyPolicy(const CanonicalWorldHandle world, const PhysicsWorldId owner,
-                                                               const BodyHandle body) {
-        if (world.value == nullptr || !owner.IsValid())
-            return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        if (const auto handle = ValidatePhysicsHandleOwner(body, owner); handle.HasError())
-            return Result<PhysicsBodyDescriptor>::Failure(handle.ErrorValue());
-        const auto *record = FindSceneBody(*static_cast<CanonicalWorld *>(world.value), body);
-        if (record == nullptr)
-            return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::HandleStale));
-        return Result<PhysicsBodyDescriptor>::Success(record->policy);
-    }
-
     /** @copydoc CreateCanonicalSceneConstraint */
     Result<ConstraintHandle> CreateCanonicalSceneConstraint(const CanonicalWorldHandle world, const PhysicsWorldId owner,
                                                             const PhysicsConstraintDescriptor &descriptor) {
@@ -569,28 +556,4 @@ namespace Horo::Physics::Detail {
         return Result<void>::Success();
     }
 
-    /** @copydoc ReadCanonicalSceneJointState */
-    Result<PhysicsJointState> ReadCanonicalSceneJointState(const CanonicalWorldHandle world, const ConstraintHandle constraint) {
-        if (world.value == nullptr)
-            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        const auto &canonical = *static_cast<const CanonicalWorld *>(world.value);
-        const auto found = std::ranges::find_if(canonical.scene.constraints, [constraint](const auto &record) {
-            return record.handle == constraint;
-        });
-        if (found == canonical.scene.constraints.end())
-            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::HandleStale));
-        switch (found->constraint->GetSubType()) {
-            case JPH::EConstraintSubType::Hinge:
-                return Result<PhysicsJointState>::Success(
-                    {PhysicsJointCoordinateKind::AngleRadians,
-                     static_cast<const JPH::HingeConstraint *>(found->constraint.GetPtr())->GetCurrentAngle()});
-            case JPH::EConstraintSubType::Slider:
-                return Result<PhysicsJointState>::Success(
-                    {PhysicsJointCoordinateKind::PositionMeters,
-                     static_cast<const JPH::SliderConstraint *>(found->constraint.GetPtr())->GetCurrentPosition()});
-            default:
-                return Result<PhysicsJointState>::Failure(
-                    MakeError(PhysicsErrors::OperationUnsupported, "Only hinge and slider joints expose a single-axis coordinate."));
-        }
-    }
 }  // namespace Horo::Physics::Detail

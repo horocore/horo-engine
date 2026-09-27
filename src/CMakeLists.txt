@@ -796,6 +796,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsCookedShapeCache.cpp
         physics/PhysicsCookedShapeDescriptor.cpp
         physics/PhysicsDiagnostics.cpp
+        physics/PhysicsDebugSnapshot.cpp
         physics/PhysicsDeterminismPolicy.cpp
         physics/PhysicsEventProjection.cpp
         physics/PhysicsEventProjection.h
@@ -825,6 +826,7 @@ target_link_libraries(HoroPhysics PUBLIC HoroEngine::Foundation HoroEngine::Asse
 if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp
+        physics/CanonicalPhysicsRuntimeDebug.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
@@ -836,6 +838,7 @@ if(HORO_BUILD_PHYSICS_NATIVE)
     target_link_libraries(HoroPhysics PRIVATE Jolt)
     set_source_files_properties(
         physics/CanonicalPhysicsRuntime.cpp
+        physics/CanonicalPhysicsRuntimeDebug.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
