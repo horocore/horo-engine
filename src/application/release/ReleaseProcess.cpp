@@ -46,7 +46,7 @@ namespace Horo::Release {
             try {
                 observer(
                     ReleaseProcessOutput{context.job, context.target, context.operation, context.stage, context.attempt, std::move(line)});
-            } catch (...) {
+            } catch (...) {  // NOSONAR: External output observers may throw non-standard exceptions; keep draining safely.
                 observerFailed = true;
             }
         };

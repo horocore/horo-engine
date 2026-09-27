@@ -1,9 +1,11 @@
 #include "Horo/Release/ReleaseService.h"
 
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Release/ReleaseErrors.h"
 
 #include <algorithm>
 #include <atomic>
+#include <exception>
 #include <utility>
 
 namespace Horo::Release {
@@ -89,7 +91,7 @@ namespace Horo::Release {
 
     /** @copydoc ReleaseService::ReleaseService */
     ReleaseService::ReleaseService(OperationStore &operations, IReleasePreflightFactsProvider &facts, IReleaseWorkerFactory &workers,
-                                   const ReleaseServiceConfig config)
+                                   const ReleaseServiceConfig &config)
         : operations_(operations), facts_(facts), workers_(workers), config_(config), jobs_(config.workers),
           cancellationGate_(std::make_shared<CancellationGate>()) {
         cancellationGate_->owner = this;
@@ -97,7 +99,13 @@ namespace Horo::Release {
 
     /** @copydoc ReleaseService::~ReleaseService */
     ReleaseService::~ReleaseService() {
-        Shutdown();
+        try {
+            Shutdown();
+        } catch (...) {  // NOSONAR: Teardown cannot leave asynchronous callbacks bound to this service.
+            // A failed join would leave callbacks with a dangling service owner.
+            Log::Logger::WriteEmergency("release.service", Log::Level::Error, "Release service shutdown failed.");
+            std::terminate();
+        }
     }
 
     /** @copydoc ReleaseService::RecordTerminal */
@@ -107,8 +115,8 @@ namespace Horo::Release {
             return;
         try {
             (void)operations_.Update(snapshot.operation, TerminalOperation(snapshot));
-        } catch (...) {
-            // The operation history sink is a projection; it cannot revoke the release terminal.
+        } catch (...) {  // NOSONAR: A projection failure must not revoke the authoritative release terminal.
+            Log::Logger::WriteEmergency("release.service", Log::Level::Error, "Release operation projection failed.");
         }
         std::lock_guard lock(mutex_);
         if (activeCount_ > 0)
@@ -118,6 +126,82 @@ namespace Horo::Release {
             records_.erase(recent_.front());
             recent_.pop_front();
         }
+    }
+
+    /** @copydoc ReleaseService::CancelOperation */
+    void ReleaseService::CancelOperation(const std::shared_ptr<CancellationSource> &cancellation,
+                                         const std::shared_ptr<CancellationSlot> &slot, const std::shared_ptr<CancellationGate> &gate) {
+        cancellation->RequestCancellation();
+        ReleaseService *owner = nullptr;
+        {
+            std::lock_guard lock(gate->mutex);
+            owner = gate->owner;
+            if (owner)
+                ++gate->inFlight;
+        }
+        if (!owner)
+            return;
+
+        struct FlightGuard final {
+            CancellationGate &gate;
+
+            ~FlightGuard() {
+                {
+                    std::lock_guard lock(gate.mutex);
+                    --gate.inFlight;
+                }
+                gate.idle.notify_all();
+            }
+        } flight{*gate};
+
+        std::shared_ptr<Record> record;
+        {
+            std::lock_guard lock(slot->mutex);
+            record = slot->record.lock();
+        }
+        if (record) {
+            try {
+                (void)record->tracker.RequestCancel();
+                if (record->tracker.Snapshot().terminal)
+                    owner->RecordTerminal(record);
+            } catch (...) {  // NOSONAR: Cancellation callbacks may throw non-standard exceptions.
+                FailUnexpected(record->tracker);
+                owner->RecordTerminal(record);
+            }
+        }
+    }
+
+    /** @copydoc ReleaseService::RunRecord */
+    Result<void> ReleaseService::RunRecord(const std::shared_ptr<Record> &record, const CancellationToken &token) {
+        if (!record->tracker.Snapshot().terminal) {
+            try {
+                auto worker = workers_.Create(record->plan);
+                if (worker.HasError())
+                    (void)record->tracker.FailAdmission(worker.ErrorValue());
+                else if (!worker.Value())
+                    (void)record->tracker.FailAdmission(MakeError(ReleaseErrors::PipelineOutputInvalid));
+                else if (!record->tracker.Snapshot().terminal) {
+                    (void)operations_.Update(record->tracker.Snapshot().operation, OperationUpdate{.state = OperationState::Running,
+                                                                                                   .phase = "release",
+                                                                                                   .message = "Release pipeline running."});
+                    (void)ReleasePipelineExecutor{}.Execute(record->tracker, record->candidate, record->plan, facts_, *worker.Value(),
+                                                            token, config_.pipeline);
+                }
+            } catch (...) {  // NOSONAR: Worker implementations may throw non-standard exceptions.
+                FailUnexpected(record->tracker);
+            }
+        }
+        if (!record->tracker.Snapshot().terminal)
+            FailUnexpected(record->tracker);
+        RecordTerminal(record);
+        const ReleaseJobSnapshot result = record->tracker.Snapshot();
+        if (result.state == ReleaseJobState::Succeeded)
+            return Result<void>::Success();
+        if (result.state == ReleaseJobState::Cancelled)
+            return JobCancelled();
+        if (result.terminal && std::holds_alternative<ReleaseFailed>(*result.terminal))
+            return Result<void>::Failure(std::get<ReleaseFailed>(*result.terminal).cause);
+        return Result<void>::Failure(MakeError(ReleaseErrors::PipelineTransitionInvalid));
     }
 
     /** @copydoc ReleaseService::Submit */
@@ -144,37 +228,9 @@ namespace Horo::Release {
                                                                      .message = "Release job queued.",
                                                                      .cancellable = true,
                                                                      .requestCancel = [cancellation, cancellationSlot, cancellationGate] {
-            cancellation->RequestCancellation();
-            std::shared_ptr<Record> record;
-            ReleaseService *owner = nullptr;
-            {
-                std::lock_guard lock(cancellationGate->mutex);
-                owner = cancellationGate->owner;
-                if (owner)
-                    ++cancellationGate->inFlight;
-            }
-            if (!owner)
-                return;
-            {
-                std::lock_guard lock(cancellationSlot->mutex);
-                record = cancellationSlot->record.lock();
-            }
-            if (record) {
-                try {
-                    (void)record->tracker.RequestCancel();
-                    if (record->tracker.Snapshot().terminal)
-                        owner->RecordTerminal(record);
-                } catch (...) {
-                    // The owned worker or shutdown path still records the terminal.
-                }
-            }
-            {
-                std::lock_guard lock(cancellationGate->mutex);
-                --cancellationGate->inFlight;
-            }
-            cancellationGate->idle.notify_all();
+            CancelOperation(cancellation, cancellationSlot, cancellationGate);
         }});
-        if (!operation) {
+        if (!operation.has_value()) {
             std::lock_guard lock(mutex_);
             --activeCount_;
             return Result<ReleaseSubmission>::Failure(AdmissionRejected());
@@ -183,7 +239,7 @@ namespace Horo::Release {
         auto record = std::make_shared<Record>(job, target, candidate, *operation, std::move(plan), cancellation, cancellationSlot);
         {
             std::lock_guard lock(mutex_);
-            records_.emplace(job.value, record);
+            records_.try_emplace(job.value, record);
         }
         {
             std::lock_guard lock(cancellationSlot->mutex);
@@ -200,36 +256,7 @@ namespace Horo::Release {
         descriptor.parentCancellation = cancellation->Token();
         descriptor.operationId = *operation;
         auto submitted = jobs_.SubmitResult(descriptor, [this, record](const CancellationToken &token) {
-            if (!record->tracker.Snapshot().terminal) {
-                try {
-                    auto worker = workers_.Create(record->plan);
-                    if (worker.HasError())
-                        (void)record->tracker.FailAdmission(worker.ErrorValue());
-                    else if (!worker.Value())
-                        (void)record->tracker.FailAdmission(MakeError(ReleaseErrors::PipelineOutputInvalid));
-                    else if (!record->tracker.Snapshot().terminal) {
-                        (void)operations_.Update(record->tracker.Snapshot().operation,
-                                                 OperationUpdate{.state = OperationState::Running,
-                                                                 .phase = "release",
-                                                                 .message = "Release pipeline running."});
-                        (void)ReleasePipelineExecutor{}.Execute(record->tracker, record->candidate, record->plan, facts_, *worker.Value(),
-                                                                token, config_.pipeline);
-                    }
-                } catch (...) {
-                    FailUnexpected(record->tracker);
-                }
-            }
-            if (!record->tracker.Snapshot().terminal)
-                FailUnexpected(record->tracker);
-            RecordTerminal(record);
-            const ReleaseJobSnapshot result = record->tracker.Snapshot();
-            if (result.state == ReleaseJobState::Succeeded)
-                return Result<void>::Success();
-            if (result.state == ReleaseJobState::Cancelled)
-                return JobCancelled();
-            if (result.terminal && std::holds_alternative<ReleaseFailed>(*result.terminal))
-                return Result<void>::Failure(std::get<ReleaseFailed>(*result.terminal).cause);
-            return Result<void>::Failure(MakeError(ReleaseErrors::PipelineTransitionInvalid));
+            return RunRecord(record, token);
         });
         if (submitted.HasError()) {
             if (!record->tracker.Snapshot().terminal)

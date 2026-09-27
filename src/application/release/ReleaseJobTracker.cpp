@@ -129,13 +129,13 @@ namespace Horo::Release {
 
     /** @copydoc ReleaseJobTracker::FailStage */
     Result<void> ReleaseJobTracker::FailStage(const ReleaseStage stage, const ReleaseStageAttemptId attempt, Error cause) {
+        using enum ReleaseJobState;
         std::lock_guard lock(mutex_);
-        if ((snapshot_.state != ReleaseJobState::Running && snapshot_.state != ReleaseJobState::Cancelling) ||
-            !IsActiveAttempt(stage, attempt))
+        if ((snapshot_.state != Running && snapshot_.state != Cancelling) || !IsActiveAttempt(stage, attempt))
             return Result<void>::Failure(IllegalTransition());
         snapshot_.stages[StageIndex(stage)].state = ReleaseStageState::Failed;
         snapshot_.activeStage.reset();
-        snapshot_.state = ReleaseJobState::Failed;
+        snapshot_.state = Failed;
         snapshot_.terminal = ReleaseFailed{snapshot_.target, stage, attempt, std::move(cause)};
         ++snapshot_.revision;
         return Result<void>::Success();
@@ -143,14 +143,15 @@ namespace Horo::Release {
 
     /** @copydoc ReleaseJobTracker::RequestCancel */
     Result<void> ReleaseJobTracker::RequestCancel() {
+        using enum ReleaseJobState;
         std::lock_guard lock(mutex_);
-        if (snapshot_.state == ReleaseJobState::Cancelling || snapshot_.state == ReleaseJobState::Cancelled)
+        if (snapshot_.state == Cancelling || snapshot_.state == Cancelled)
             return Result<void>::Success();
-        if (snapshot_.state == ReleaseJobState::Queued) {
-            snapshot_.state = ReleaseJobState::Cancelled;
+        if (snapshot_.state == Queued) {
+            snapshot_.state = Cancelled;
             snapshot_.terminal = ReleaseCancelled{snapshot_.target, std::nullopt, std::nullopt};
-        } else if (snapshot_.state == ReleaseJobState::Running) {
-            snapshot_.state = ReleaseJobState::Cancelling;
+        } else if (snapshot_.state == Running) {
+            snapshot_.state = Cancelling;
         } else {
             return Result<void>::Failure(IllegalTransition());
         }
@@ -189,10 +190,11 @@ namespace Horo::Release {
 
     /** @copydoc ReleaseJobTracker::FailJob */
     Result<void> ReleaseJobTracker::FailJob(Error cause) {
+        using enum ReleaseJobState;
         std::lock_guard lock(mutex_);
-        if ((snapshot_.state != ReleaseJobState::Running && snapshot_.state != ReleaseJobState::Cancelling) || snapshot_.activeStage)
+        if ((snapshot_.state != Running && snapshot_.state != Cancelling) || snapshot_.activeStage)
             return Result<void>::Failure(IllegalTransition());
-        snapshot_.state = ReleaseJobState::Failed;
+        snapshot_.state = Failed;
         snapshot_.terminal = ReleaseFailed{snapshot_.target, std::nullopt, std::nullopt, std::move(cause)};
         ++snapshot_.revision;
         return Result<void>::Success();
@@ -214,14 +216,14 @@ namespace Horo::Release {
     /** @copydoc ReleaseJobTracker::AppendDiagnostic */
     Result<ReleaseDiagnosticId> ReleaseJobTracker::AppendDiagnostic(const ReleaseStage stage, const ReleaseStageAttemptId attempt,
                                                                     ErrorCode code, const ErrorSeverity severity, std::string message) {
+        using enum ReleaseJobState;
         std::lock_guard lock(mutex_);
-        if ((snapshot_.state != ReleaseJobState::Running && snapshot_.state != ReleaseJobState::Cancelling) ||
-            !IsActiveAttempt(stage, attempt) || code.Value().empty() || message.empty() ||
-            message.size() > MaximumReleaseDiagnosticMessageBytes || nextDiagnostic_ == 0)
+        if ((snapshot_.state != Running && snapshot_.state != Cancelling) || !IsActiveAttempt(stage, attempt) || code.Value().empty() ||
+            message.empty() || message.size() > MaximumReleaseDiagnosticMessageBytes || nextDiagnostic_ == 0)
             return Result<ReleaseDiagnosticId>::Failure(IllegalTransition());
         const ReleaseDiagnosticId id{nextDiagnostic_++};
-        diagnostics_.push_back(
-            {id, snapshot_.id, snapshot_.target, snapshot_.operation, stage, attempt, std::move(code), severity, std::move(message)});
+        diagnostics_.emplace_back(id, snapshot_.id, snapshot_.target, snapshot_.operation, stage, attempt, std::move(code), severity,
+                                  std::move(message));
         snapshot_.recentDiagnostics.push_back(id);
         if (diagnostics_.size() > MaximumReleaseDiagnostics) {
             diagnostics_.pop_front();
