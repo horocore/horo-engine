@@ -36,6 +36,22 @@ The authoring owner must call `Invalidate()` on source changes to cancel older
 preparations before accepting any later candidate; acceptance itself also rotates
 the revision and cancellation token. Shutdown closes acceptance but retains the
 last immutable snapshot for existing readers.
+
+## REL-001.6 Release Pipeline Boundary
+
+`HoroEngine::Application` owns the additive `ReleaseJobTracker.h` and
+`ReleasePipelineExecutor.h` contracts. `HoroEngine::ReleaseService` owns
+`ReleaseService.h` and depends only on Application and Foundation. Hosts that
+submit release jobs create one process-lifetime service, inject a thread-safe
+facts provider and worker factory, and query the service's typed snapshots;
+presentation sessions do not own a job. `HoroEngine::ReleaseProcess` owns
+`ReleaseProcess.h` and adapts stage-scoped child invocations to the existing
+Platform process runner. Existing preflight, profile and target-matrix callers
+have no signature migration. New stage workers implement the typed handoffs and
+keep their temporary resources until the attempt completes or cancellation is
+acknowledged. The three generated standalone public-header consumers verify
+ownership and transitive dependencies.
+
 ## MCP-001.2 Session Boundary
 
 `HoroEngine::McpSession` owns the additive `Horo/Mcp/McpErrors.h`,

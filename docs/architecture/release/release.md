@@ -146,6 +146,15 @@ GUI       CLI       MCP       CI
 `ReleaseService` owns use-case validation, job lifecycle, cancellation,
 progress, and structured results.
 
+The shared service schedules one frozen target per job and retains bounded active
+and recent snapshots after a submitting GUI, CLI, MCP or CI observer exits. Its
+stage executor checks the frozen input identities before each worker invocation,
+passes only typed outputs to the next stage, and reserves candidate identities
+before final metadata is computed. Stage workers use the injected bounded
+`ReleaseProcessRunner` for shell-free child invocations when a tool is needed.
+The service projects a coarse status to `OperationStore`; release snapshots and
+bounded diagnostic IDs remain the authoritative detailed observation path.
+
 [ADR-060](../../adr/060-release-domain-model-and-state-machine.md) defines the
 authoritative typed identities, single-target job state, stage attempts,
 candidate state, revisioned snapshots, terminal results and ownership rules.
