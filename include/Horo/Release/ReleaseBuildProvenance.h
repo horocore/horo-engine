@@ -10,6 +10,7 @@
 #include "Horo/Release/ReleasePreflight.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -83,4 +84,13 @@ namespace Horo::Release {
         std::string json_;
         Sha256Digest digest_;
     };
+
+    /**
+     * @brief Captures exact unsigned file bytes from a quiescent private build tree.
+     * @param root Private output directory; never serialized into provenance.
+     * @param inputs Frozen identities, environment digests, and normalization policy; files must be empty.
+     * @return Canonical provenance or a typed invalid-output failure for missing, unsafe, or unreadable content.
+     */
+    [[nodiscard]] Result<ReleaseBuildProvenance> CaptureReleaseBuildProvenance(const std::filesystem::path &root,
+                                                                               ReleaseBuildProvenanceData inputs);
 }  // namespace Horo::Release

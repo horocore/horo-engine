@@ -199,6 +199,7 @@ add_library(HoroApplication STATIC
         application/release/ReleaseArtifactManifest.cpp
         application/release/ReleaseArtifactVerification.cpp
         application/release/ReleaseBuildProvenance.cpp
+        application/release/ReleaseBuildProvenanceCapture.cpp
         application/release/ReleaseErrors.cpp
         application/release/ReleaseJobTracker.cpp
         application/release/ReleasePipelineExecutor.cpp

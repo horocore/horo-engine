@@ -2,13 +2,39 @@
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <ranges>
+#include <string_view>
 #include <vector>
 
 using namespace Horo;
 using namespace Horo::Release;
 
 namespace {
+    class TemporaryDirectory final {
+    public:
+        TemporaryDirectory()
+            : path(std::filesystem::temp_directory_path() /
+                   ("horo-release-provenance-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+            std::filesystem::create_directories(path);
+        }
+
+        ~TemporaryDirectory() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+
+        std::filesystem::path path;
+    };
+
+    void WriteFile(const std::filesystem::path &path, const std::string_view bytes) {
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream output(path, std::ios::binary);
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    }
+
     ReleaseBuildProvenanceData Fixture() {
         ReleaseBuildProvenanceData data;
         data.sourceEpochSeconds = 1'700'000'000U;
@@ -17,7 +43,44 @@ namespace {
         data.files = {{"bin/game", 4U, {}}, {"assets/archive.bin", 6U, {}}};
         return data;
     }
+
+    ReleaseBuildProvenanceData Inputs() {
+        auto data = Fixture();
+        data.files.clear();
+        return data;
+    }
 }  // namespace
+
+TEST_CASE("Unsigned provenance capture hashes real files and explains changed bytes", "[release][provenance]") {
+    TemporaryDirectory directory;
+    WriteFile(directory.path / "a/bin/game", "game");
+    WriteFile(directory.path / "a/assets/data", "assets");
+    WriteFile(directory.path / "b/assets/data", "assets");
+    WriteFile(directory.path / "b/bin/game", "game");
+
+    auto first = CaptureReleaseBuildProvenance(directory.path / "a", Inputs());
+    auto second = CaptureReleaseBuildProvenance(directory.path / "b", Inputs());
+    REQUIRE(first.HasValue());
+    REQUIRE(second.HasValue());
+    CHECK(first.Value().Digest() == second.Value().Digest());
+    CHECK(first.Value().CanonicalJson().find(directory.path.string()) == std::string::npos);
+
+    WriteFile(directory.path / "b/bin/game", "new!");
+    auto changed = CaptureReleaseBuildProvenance(directory.path / "b", Inputs());
+    REQUIRE(changed.HasValue());
+    CHECK(first.Value().Compare(changed.Value()) == std::vector<ReleaseBuildVariance>{{"files.bin/game"}});
+}
+
+TEST_CASE("Unsigned provenance capture rejects unsafe tree entries", "[release][provenance]") {
+    TemporaryDirectory directory;
+    WriteFile(directory.path / "payload", "ok");
+    CHECK(CaptureReleaseBuildProvenance(directory.path, Fixture()).HasError());
+
+    std::error_code error;
+    std::filesystem::create_symlink(directory.path / "payload", directory.path / "link", error);
+    if (!error)
+        CHECK(CaptureReleaseBuildProvenance(directory.path, Inputs()).HasError());
+}
 
 TEST_CASE("Unsigned provenance canonicalizes independent of inventory order", "[release][provenance]") {
     auto first = ReleaseBuildProvenance::Create(Fixture());

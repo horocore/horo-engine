@@ -506,6 +506,9 @@ epoch used by deterministic generators; and sorted relative file sizes and
 hashes. Its locale and timezone contract is `C` and `UTC`. Signed bytes and
 signing credentials belong only to the final candidate manifest. A comparison
 of two provenance values names each changed input field and unsigned file.
+The capture boundary streams exact files from a quiescent private unsigned tree
+without serializing the host path, and rejects symbolic links, special files,
+unreadable content, and portable-path collisions.
 Build and cook workers must capture this evidence from actual inputs and bytes
 and apply the declared normalization before claiming reproducibility.
 
