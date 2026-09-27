@@ -963,6 +963,7 @@ target_compile_features(HoroDestructionApi PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
 add_library(HoroDestructionCook STATIC
+        runtime/destruction/cook/ChunkMeshCook.cpp
         runtime/destruction/cook/OfflineVoronoi.cpp
         runtime/destruction/cook/OfflineVoronoiChunks.cpp
         runtime/destruction/cook/OfflineVoronoiClipping.cpp
