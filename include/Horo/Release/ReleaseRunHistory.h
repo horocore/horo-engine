@@ -31,6 +31,7 @@ namespace Horo::Release {
         std::int64_t createdUtcMilliseconds{};
         std::int64_t updatedUtcMilliseconds{};
         std::optional<std::int64_t> finishedUtcMilliseconds;
+        bool interruptedByRestart{}; /**< A prior process ended without a durable terminal transition. */
     };
 
     /** @brief Host-owned durable history with one writer lock and bounded replacement snapshots. */

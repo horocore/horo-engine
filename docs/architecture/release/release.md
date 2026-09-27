@@ -521,6 +521,10 @@ Publication uses a durable prepared file and atomic replacement. Recovery reject
 malformed or oversized history and retains the highest candidate ID even after
 its job record ages out. Retention evicts the oldest terminal job; active jobs
 remain queryable, and admission fails when the store is full of active jobs.
+On process restart, a previously nonterminal record is projected as failed with
+`interruptedByRestart`; its last stage state remains visible, and no finish time
+is fabricated. Schema-v1 records remain readable and are rewritten as schema v2
+when the next snapshot is stored.
 Hosts that do not supply the optional store retain the existing in-memory
 behavior; no existing constructor call needs migration.
 

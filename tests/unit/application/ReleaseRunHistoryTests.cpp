@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <nlohmann/json.hpp>
 #include <string>
 
 using namespace Horo;
@@ -103,6 +104,77 @@ TEST_CASE("Release history preserves active jobs and rejects admission when only
     CHECK(recent[0].job.value == 3U);
     CHECK(recent[1].job.value == 4U);
     CHECK(history->Dropped() == 2U);
+}
+
+TEST_CASE("Release history identifies interrupted jobs after restart and releases their retention slot", "[release][history]") {
+    TemporaryHistoryDirectory directory;
+    NativeDurableFileSystem files;
+    const auto path = directory.path / "history.json";
+    auto opened = ReleaseRunHistory::Open(files, path, 2U);
+    REQUIRE(opened.HasValue());
+    auto history = std::move(opened).Value();
+    auto running = Snapshot(1U);
+    running.state = ReleaseJobState::Running;
+    running.revision = 1U;
+    running.stages[0].state = ReleaseStageState::Running;
+    running.stages[0].attempt = ReleaseStageAttemptId{1U};
+    REQUIRE(history->Record(running, 1000).HasValue());
+    history.reset();
+
+    auto restarted = ReleaseRunHistory::Open(files, path, 2U);
+    REQUIRE(restarted.HasValue());
+    history = std::move(restarted).Value();
+    const auto interrupted = history->List();
+    REQUIRE(interrupted.size() == 1U);
+    CHECK(interrupted.front().state == ReleaseJobState::Failed);
+    CHECK(interrupted.front().interruptedByRestart);
+    CHECK_FALSE(interrupted.front().finishedUtcMilliseconds.has_value());
+    CHECK(interrupted.front().stages[0] == ReleaseStageState::Running);
+    CHECK(history->Record(running, 1100).HasError());
+    REQUIRE(history->Record(Snapshot(2U), 1200).HasValue());
+    history.reset();
+
+    auto reopened = ReleaseRunHistory::Open(files, path, 2U);
+    REQUIRE(reopened.HasValue());
+    const auto records = reopened.Value()->List();
+    REQUIRE(records.size() == 2U);
+    CHECK(records.front().interruptedByRestart);
+    CHECK(records.front().state == ReleaseJobState::Failed);
+}
+
+TEST_CASE("Release history migrates schema one snapshots when a later job is recorded", "[release][history]") {
+    TemporaryHistoryDirectory directory;
+    NativeDurableFileSystem files;
+    const auto path = directory.path / "history.json";
+    auto opened = ReleaseRunHistory::Open(files, path, 2U);
+    REQUIRE(opened.HasValue());
+    auto history = std::move(opened).Value();
+    auto first = Snapshot(1U);
+    first.state = ReleaseJobState::Failed;
+    REQUIRE(history->Record(first, 1000).HasValue());
+    history.reset();
+
+    nlohmann::ordered_json old;
+    {
+        std::ifstream input(path, std::ios::binary);
+        input >> old;
+    }
+    old["schemaVersion"] = 1;
+    old["entries"][0].erase("interruptedByRestart");
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << old.dump();
+    }
+    auto restarted = ReleaseRunHistory::Open(files, path, 2U);
+    REQUIRE(restarted.HasValue());
+    history = std::move(restarted).Value();
+    REQUIRE(history->Record(Snapshot(2U), 1100).HasValue());
+    history.reset();
+
+    std::ifstream input(path, std::ios::binary);
+    const auto migrated = nlohmann::ordered_json::parse(input);
+    CHECK(migrated.at("schemaVersion") == 2);
+    CHECK_FALSE(migrated.at("entries").at(0).at("interruptedByRestart").get<bool>());
 }
 
 TEST_CASE("Release history rejects stale updates and corrupt or unsafe storage", "[release][history]") {

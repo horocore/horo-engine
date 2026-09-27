@@ -34,7 +34,8 @@ namespace Horo::Release {
                 entry.updatedUtcMilliseconds < entry.createdUtcMilliseconds ||
                 (entry.finishedUtcMilliseconds && (*entry.finishedUtcMilliseconds < entry.createdUtcMilliseconds ||
                                                    *entry.finishedUtcMilliseconds != entry.updatedUtcMilliseconds)) ||
-                entry.state > ReleaseJobState::Cancelled || (entry.candidate && entry.candidate->value == 0U))
+                entry.state > ReleaseJobState::Cancelled || (entry.candidate && entry.candidate->value == 0U) ||
+                (entry.interruptedByRestart && (entry.state != ReleaseJobState::Failed || entry.finishedUtcMilliseconds)))
                 return false;
             return std::ranges::all_of(entry.stages, [](const ReleaseStageState state) {
                 return state <= ReleaseStageState::NotApplicable;
@@ -61,13 +62,15 @@ namespace Horo::Release {
                     {"candidate", entry.candidate ? Json(entry.candidate->value) : Json(nullptr)},
                     {"createdUtcMilliseconds", entry.createdUtcMilliseconds},
                     {"finishedUtcMilliseconds", entry.finishedUtcMilliseconds ? Json(*entry.finishedUtcMilliseconds) : Json(nullptr)},
-                    {"updatedUtcMilliseconds", entry.updatedUtcMilliseconds}};
+                    {"updatedUtcMilliseconds", entry.updatedUtcMilliseconds},
+                    {"interruptedByRestart", entry.interruptedByRestart}};
         }
 
-        /** @brief Reads one exact schema-v1 record without accepting unknown or missing fields. */
-        [[nodiscard]] ReleaseRunHistoryEntry ReadEntry(const Json &json) {
-            if (!json.is_object() || json.size() != 11U || !json.at("stages").is_array() || json.at("stages").size() != ReleaseStageCount ||
-                !json.at("attempts").is_array() || json.at("attempts").size() != ReleaseStageCount)
+        /** @brief Reads one exact supported record schema without accepting unknown or missing fields. */
+        [[nodiscard]] ReleaseRunHistoryEntry ReadEntry(const Json &json, const std::uint8_t schemaVersion) {
+            if (!json.is_object() || json.size() != (schemaVersion == 1U ? 11U : 12U) || !json.at("stages").is_array() ||
+                json.at("stages").size() != ReleaseStageCount || !json.at("attempts").is_array() ||
+                json.at("attempts").size() != ReleaseStageCount)
                 throw std::invalid_argument("Invalid release history entry");
             ReleaseRunHistoryEntry entry;
             entry.job = {json.at("job").get<std::uint64_t>()};
@@ -86,6 +89,8 @@ namespace Horo::Release {
             entry.updatedUtcMilliseconds = json.at("updatedUtcMilliseconds").get<std::int64_t>();
             if (!json.at("finishedUtcMilliseconds").is_null())
                 entry.finishedUtcMilliseconds = json.at("finishedUtcMilliseconds").get<std::int64_t>();
+            if (schemaVersion == 2U)
+                entry.interruptedByRestart = json.at("interruptedByRestart").get<bool>();
             if (!ValidEntry(entry))
                 throw std::invalid_argument("Invalid release history identity");
             return entry;
@@ -139,16 +144,23 @@ namespace Horo::Release {
         if (!old.Value().empty()) {
             try {
                 const Json document = Json::parse(old.Value());
-                if (!document.is_object() || document.size() != 4U || document.at("schemaVersion") != 1 ||
-                    !document.at("entries").is_array() || document.at("entries").size() > capacity)
+                if (!document.is_object() || document.size() != 4U ||
+                    (document.at("schemaVersion") != 1 && document.at("schemaVersion") != 2) || !document.at("entries").is_array() ||
+                    document.at("entries").size() > capacity)
                     return Result<std::unique_ptr<ReleaseRunHistory>>::Failure(InvalidHistory());
+                const auto schemaVersion = document.at("schemaVersion").get<std::uint8_t>();
                 dropped = document.at("dropped").get<std::uint64_t>();
                 highestCandidate = document.at("highestCandidate").get<std::uint64_t>();
                 for (const auto &value : document.at("entries")) {
-                    auto entry = ReadEntry(value);
+                    auto entry = ReadEntry(value, schemaVersion);
                     if ((!entries.empty() && entries.back().job.value >= entry.job.value) ||
                         (entry.candidate && entry.candidate->value > highestCandidate))
                         return Result<std::unique_ptr<ReleaseRunHistory>>::Failure(InvalidHistory());
+                    if (!IsTerminal(entry.state)) {
+                        entry.state = ReleaseJobState::Failed;
+                        entry.finishedUtcMilliseconds.reset();
+                        entry.interruptedByRestart = true;
+                    }
                     entries.push_back(std::move(entry));
                 }
             } catch (const std::exception &) {
@@ -187,7 +199,7 @@ namespace Horo::Release {
         });
         if (found != updated.end() && found->job == entry.job) {
             if (entry.revision < found->revision || entry.target != found->target || entry.operation != found->operation ||
-                (found->finishedUtcMilliseconds && !terminal))
+                found->interruptedByRestart || (IsTerminal(found->state) && !terminal))
                 return Result<void>::Failure(InvalidHistory());
             entry.createdUtcMilliseconds = found->createdUtcMilliseconds;
             entry.updatedUtcMilliseconds = std::max(entry.updatedUtcMilliseconds, entry.createdUtcMilliseconds);
@@ -210,7 +222,7 @@ namespace Horo::Release {
         }
         const std::uint64_t nextHighestCandidate =
             entry.candidate ? std::max(highestCandidate_, entry.candidate->value) : highestCandidate_;
-        Json document = {{"schemaVersion", 1},
+        Json document = {{"schemaVersion", 2},
                          {"dropped", nextDropped},
                          {"highestCandidate", nextHighestCandidate},
                          {"entries", Json::array()}};
