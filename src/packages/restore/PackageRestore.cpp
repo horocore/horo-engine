@@ -298,8 +298,8 @@ namespace Horo::Packages {
                     QuarantineOrOriginal(PackageRestoreErrors::PublisherRejected, package, context.cache, artifact.bytes,
                                          PackageQuarantineReason::VerificationFailure, std::move(failure)));
             }
-            const auto &publisher = decision.Value().decision;
-            if (publisher.installPermitted &&
+            if (const auto &publisher = decision.Value().decision;
+                publisher.installPermitted &&
                 (!request.requirePublisherVerification || publisher.outcome == PackagePublisherVerificationOutcome::Accepted))
                 return Result<std::optional<PackagePublisherVerificationDecision>>::Success(publisher);
 
