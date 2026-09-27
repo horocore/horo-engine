@@ -31,6 +31,12 @@ namespace Horo::Cinematic::SequencePlaybackRuntimeErrors {
                                                 .summary = "The cinematic playback activation transaction is malformed.",
                                                 .remediationHint =
                                                     "Rebuild the plan, authority claims, and handoff snapshot at the owner boundary."};
+    const ErrorCodeDescriptor ClockInvalid{.domain = PlaybackDomain,
+                                           .code = ErrorCode{"cinematic.playback_runtime.clock_invalid"},
+                                           .defaultSeverity = ErrorSeverity::Error,
+                                           .summary = "The host cinematic clock sample is invalid for this player.",
+                                           .remediationHint =
+                                               "Supply the selected monotonic source and a valid scale at the owner boundary."};
     const ErrorCodeDescriptor CapacityExceeded{.domain = PlaybackDomain,
                                                .code = ErrorCode{"cinematic.playback_runtime.capacity_exceeded"},
                                                .defaultSeverity = ErrorSeverity::Warning,

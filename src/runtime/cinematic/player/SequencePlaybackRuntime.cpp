@@ -45,6 +45,33 @@ namespace Horo::Cinematic {
             return nullptr;
         }
 
+        /** @brief Classifies every captured target before any owner write is allowed. */
+        [[nodiscard]] SequenceRestoreResult PreflightRestoreTargets(const std::span<const SequenceRestoreEntry> entries,
+                                                                    const std::span<const SequenceRestoreTargetSnapshot> targets,
+                                                                    const std::span<SequenceRestoreDiagnostic> diagnostics) noexcept {
+            SequenceRestoreResult result{};
+            for (std::size_t index = 0; index < entries.size(); ++index) {
+                const SequenceRestoreEntry &entry = entries[index];
+                SequenceRestoreDiagnostic &diagnostic = diagnostics[index];
+                diagnostic = {entry.track, entry.target, SequenceRestoreOutcome::TargetMissing};
+                const SequenceRestoreTargetSnapshot *target = FindRestoreTarget(targets, entry.target);
+                if (target == nullptr || !target->target.IsValid() || target->context == nullptr || target->apply == nullptr) {
+                    ++result.missing;
+                    continue;
+                }
+                if (target->target.generation != entry.target.generation || target->targetRevision != entry.targetRevision ||
+                    std::ranges::count_if(targets, [&](const SequenceRestoreTargetSnapshot &candidate) {
+                    return SameStableTarget(candidate.target, entry.target);
+                }) != 1) {
+                    diagnostic.outcome = SequenceRestoreOutcome::StaleGeneration;
+                    ++result.stale;
+                    continue;
+                }
+                diagnostic.outcome = SequenceRestoreOutcome::Restored;
+            }
+            return result;
+        }
+
         [[nodiscard]] bool AuthorityClaimLess(const SequenceAuthorityClaim &left, const SequenceAuthorityClaim &right) noexcept {
             if (left.target.stableValue != right.target.stableValue)
                 return left.target.stableValue < right.target.stableValue;
@@ -79,6 +106,14 @@ namespace Horo::Cinematic {
             return state == SequencePlaybackState::Stopped || state == SequencePlaybackState::Failed;
         }
 
+        /** @brief Binds activation-owned baselines and edge durations to one evaluation call. */
+        void ConfigureBlendScratch(SequenceFrameScratch &scratch, const SequencePlaybackBlendSettings &settings,
+                                   const std::span<const float> baselines) noexcept {
+            scratch.blendBaselines = baselines;
+            scratch.blendInDuration = settings.blendIn.mode == SequenceBlendMode::Blend ? settings.blendIn.duration : 0;
+            scratch.blendOutDuration = settings.blendOut.mode == SequenceBlendMode::Blend ? settings.blendOut.duration : 0;
+        }
+
         [[nodiscard]] std::uint32_t SaturatingAdd(const std::uint32_t left, const std::uint32_t right) noexcept {
             if (right > std::numeric_limits<std::uint32_t>::max() - left)
                 return std::numeric_limits<std::uint32_t>::max();
@@ -89,6 +124,36 @@ namespace Horo::Cinematic {
             if (right > std::numeric_limits<std::uint64_t>::max() - left)
                 return std::numeric_limits<std::uint64_t>::max();
             return left + right;
+        }
+
+        /** @brief Scaled source interval and fractional carry for the next clock sample. */
+        struct ScaledClockDelta final {
+            SequenceTime value{};
+            std::uint64_t remainder{};
+        };
+
+        /** @brief Scales a non-negative source interval without overflowing an intermediate product. */
+        [[nodiscard]] Result<ScaledClockDelta> ScaleClockDelta(const SequenceTime rawDelta, const SequencePlaybackRate scale,
+                                                               const std::uint64_t remainder) {
+            const auto numerator = static_cast<std::uint64_t>(scale.numerator);
+            const auto denominator = static_cast<std::uint64_t>(scale.denominator);
+            const auto whole = static_cast<std::uint64_t>(rawDelta) / denominator;
+            const auto fraction = static_cast<std::uint64_t>(rawDelta) % denominator;
+            // The bounded 32-bit ratio fields keep this product and carry within uint64_t.
+            const std::uint64_t fractionalProduct = fraction * numerator + remainder;
+            if (const auto wholeLimit = static_cast<std::uint64_t>(std::numeric_limits<SequenceTime>::max());
+                numerator != 0 && whole > (wholeLimit - fractionalProduct / denominator) / numerator)
+                return Failed<ScaledClockDelta>(SequencePlaybackRuntimeErrors::ClockInvalid);
+            return Result<ScaledClockDelta>::Success(
+                {static_cast<SequenceTime>(whole * numerator + fractionalProduct / denominator), fractionalProduct % denominator});
+        }
+
+        /** @brief Checks source identity, scale shape, and monotonic ordering within an epoch. */
+        [[nodiscard]] bool IsValidClockSample(const SequenceClockSample &sample, const SequenceClockSource source, const bool baselineValid,
+                                              const std::uint64_t epoch, const SequenceTime position) noexcept {
+            return sample.source == source && sample.position >= 0 && sample.epoch != 0 && sample.gameplayScale.numerator >= 0 &&
+                   sample.gameplayScale.denominator != 0 &&
+                   (!baselineValid || (sample.epoch >= epoch && (sample.epoch != epoch || sample.position >= position)));
         }
 
         [[nodiscard]] SequenceEvaluationUsage AddUsage(const SequenceEvaluationUsage &left, const SequenceEvaluationUsage &right) noexcept {
@@ -213,6 +278,11 @@ namespace Horo::Cinematic {
         return Result<float>::Success(value);
     }
 
+    /** @copydoc MakeSequencePlaybackCoordinationSettings */
+    SequencePlaybackCoordinationSettings MakeSequencePlaybackCoordinationSettings(const SequencePlaybackSettings &settings) noexcept {
+        return {settings.clockSource, settings.pausePolicy, settings.dilationPolicy, settings.pauseGameplay, settings.hideHud};
+    }
+
     /** @copydoc ValidateSequencePlaybackCoordinationSettings */
     Result<void> ValidateSequencePlaybackCoordinationSettings(const SequencePlaybackCoordinationSettings &settings) {
         if (settings.clockSource >= SequenceClockSource::Count || settings.pausePolicy >= SequencePausePolicy::Count ||
@@ -269,22 +339,23 @@ namespace Horo::Cinematic {
         if (diagnostics.size() < snapshot.Size())
             return Failed<SequenceRestoreResult>(SequencePlaybackRuntimeErrors::RestoreInvalid);
         using enum SequenceRestoreOutcome;
-        SequenceRestoreResult result{};
         const auto entries = snapshot.Entries();
+        // Resolve every generation before invoking any owner write; a destroyed target
+        // selects keep-final for the entire activation rather than a partial restore.
+        SequenceRestoreResult result = PreflightRestoreTargets(entries, targets, diagnostics);
+        if (result.missing != 0 || result.stale != 0) {
+            for (std::size_t index = 0; index < entries.size(); ++index) {
+                if (diagnostics[index].outcome == Restored) {
+                    diagnostics[index].outcome = KeptFinalDueToMissingTarget;
+                    ++result.keptFinal;
+                }
+            }
+            return Result<SequenceRestoreResult>::Success(result);
+        }
         for (std::size_t index = 0; index < entries.size(); ++index) {
             const SequenceRestoreEntry &entry = entries[index];
             SequenceRestoreDiagnostic &diagnostic = diagnostics[index];
-            diagnostic = {entry.track, entry.target, TargetMissing};
             const SequenceRestoreTargetSnapshot *target = FindRestoreTarget(targets, entry.target);
-            if (target == nullptr || !target->target.IsValid() || target->context == nullptr || target->apply == nullptr) {
-                ++result.missing;
-                continue;
-            }
-            if (target->target.generation != entry.target.generation || target->targetRevision != entry.targetRevision) {
-                diagnostic.outcome = StaleGeneration;
-                ++result.stale;
-                continue;
-            }
             if (!target->apply(target->context, entry.value)) {
                 diagnostic.outcome = WriteRejected;
                 ++result.rejected;
@@ -392,6 +463,7 @@ namespace Horo::Cinematic {
                 {snapshot.position, snapshot.position, instance.cursor.traversal, instance.cursor.evaluationRevision, 0, 0, 0, false});
         }
         SequenceFrameScratch boundedScratch = scratch;
+        ConfigureBlendScratch(boundedScratch, instance.blend, instance.blendBaselines);
         if (boundedScratch.maximumBoundaryOccurrences == 0 ||
             boundedScratch.maximumBoundaryOccurrences > budget_.maximumBoundaryOccurrences)
             boundedScratch.maximumBoundaryOccurrences = budget_.maximumBoundaryOccurrences;
@@ -408,8 +480,94 @@ namespace Horo::Cinematic {
             if (auto stopped = instance.player.FinishStop(handle); stopped.HasError())
                 return Result<SequenceFrameEvaluationResult>::Failure(stopped.ErrorValue());
             ReleaseCoordination(instance);
+            if (hooks.finishedHook != nullptr)
+                hooks.finishedHook(hooks.finishedContext, handle);
         }
         return Result<SequenceFrameEvaluationResult>::Success(result);
+    }
+
+    /** @copydoc CinematicRuntimeService::EvaluateClock */
+    Result<SequenceFrameEvaluationResult> CinematicRuntimeService::EvaluateClock(const SequencePlayerHandle &handle,
+                                                                                 const SequenceClockSample &sample,
+                                                                                 const SequenceFrameScratch &scratch,
+                                                                                 const SequenceFrameHooks &hooks) {
+        auto slot = ResolveSlot(handle);
+        if (slot.HasError())
+            return Result<SequenceFrameEvaluationResult>::Failure(slot.ErrorValue());
+        Instance &instance = *slots_[slot.Value()].instance;
+        if (const SequencePlaybackState state = instance.player.Snapshot().state;
+            state == SequencePlaybackState::Closing || state == SequencePlaybackState::Stopped || state == SequencePlaybackState::Failed)
+            return Failed<SequenceFrameEvaluationResult>(SequencePlaybackRuntimeErrors::ActivationInvalid);
+        if (!IsValidClockSample(sample, instance.coordination.clockSource, instance.clockBaselineValid, instance.clockEpoch,
+                                instance.clockPosition))
+            return Failed<SequenceFrameEvaluationResult>(SequencePlaybackRuntimeErrors::ClockInvalid);
+
+        const SequencePlayerSnapshot player = instance.player.Snapshot();
+        const auto unchanged = [&]() {
+            return Result<SequenceFrameEvaluationResult>::Success(
+                {player.position, player.position, instance.cursor.traversal, instance.cursor.evaluationRevision, 0, 0, 0, false});
+        };
+        const bool epochChanged = instance.clockBaselineValid && sample.epoch != instance.clockEpoch;
+        const bool rebase = !instance.clockBaselineValid || epochChanged || sample.hostSuspended || instance.hostWasSuspended ||
+                            instance.resumeBaselinePending;
+        if (sample.hostSuspended || player.state == SequencePlaybackState::Paused ||
+            (instance.gameplayPaused && instance.coordination.pausePolicy == SequencePausePolicy::FollowGameplay)) {
+            instance.clockPosition = sample.position;
+            instance.clockEpoch = sample.epoch;
+            instance.clockBaselineValid = true;
+            instance.hostWasSuspended = sample.hostSuspended;
+            return unchanged();
+        }
+        if (rebase) {
+            if (epochChanged) {
+                if (auto synchronized = SynchronizeCursor(instance, SequenceCursorResetPolicy::SuppressCurrentBoundary);
+                    synchronized.HasError())
+                    return Result<SequenceFrameEvaluationResult>::Failure(synchronized.ErrorValue());
+            }
+            instance.clockPosition = sample.position;
+            instance.clockEpoch = sample.epoch;
+            instance.clockBaselineValid = true;
+            instance.hostWasSuspended = false;
+            instance.resumeBaselinePending = false;
+            if (instance.appliedScale != sample.gameplayScale)
+                instance.scaleRemainder = 0;
+            instance.appliedScale = sample.gameplayScale;
+            return unchanged();
+        }
+
+        return EvaluateClockDelta(handle, sample, scratch, hooks, instance);
+    }
+
+    /** @copydoc CinematicRuntimeService::EvaluateClockDelta */
+    Result<SequenceFrameEvaluationResult> CinematicRuntimeService::EvaluateClockDelta(const SequencePlayerHandle &handle,
+                                                                                      const SequenceClockSample &sample,
+                                                                                      const SequenceFrameScratch &scratch,
+                                                                                      const SequenceFrameHooks &hooks,
+                                                                                      const Instance &instance) {
+        const SequenceTime rawDelta = sample.position - instance.clockPosition;
+        SequenceTime sourceDelta = rawDelta;
+        std::uint64_t nextRemainder = instance.scaleRemainder;
+        if (instance.coordination.dilationPolicy == SequenceDilationPolicy::ApplyGameplayScale) {
+            if (sample.gameplayScale != instance.appliedScale)
+                nextRemainder = 0;
+            auto scaled = ScaleClockDelta(rawDelta, sample.gameplayScale, nextRemainder);
+            if (scaled.HasError())
+                return Result<SequenceFrameEvaluationResult>::Failure(scaled.ErrorValue());
+            sourceDelta = scaled.Value().value;
+            nextRemainder = scaled.Value().remainder;
+        }
+        auto evaluated = Evaluate(handle, sourceDelta, scratch, hooks);
+        if (evaluated.HasError())
+            return evaluated;
+        // A completion hook may retire this player at the terminal boundary.
+        if (auto current = ResolveSlot(handle); current.HasValue()) {
+            Instance &live = *slots_[current.Value()].instance;
+            live.clockPosition = sample.position;
+            live.clockEpoch = sample.epoch;
+            live.scaleRemainder = nextRemainder;
+            live.appliedScale = sample.gameplayScale;
+        }
+        return evaluated;
     }
 
     /** @copydoc CinematicRuntimeService::ResolveGameplayPause */
@@ -422,6 +580,9 @@ namespace Horo::Cinematic {
         if (request.authorityRevision == 0)
             return Failed<SequenceGameplayPauseResult>(SequencePlaybackRuntimeErrors::ActivationInvalid);
         Instance &instance = *slots_[slot.Value()].instance;
+        if (const SequencePlaybackState state = instance.player.Snapshot().state;
+            state == SequencePlaybackState::Closing || state == SequencePlaybackState::Stopped || state == SequencePlaybackState::Failed)
+            return Failed<SequenceGameplayPauseResult>(SequencePlaybackRuntimeErrors::ActivationInvalid);
         if (request.authorityRevision < instance.gameplayPauseRevision ||
             (request.authorityRevision == instance.gameplayPauseRevision && request.paused != instance.gameplayPaused))
             return Result<SequenceGameplayPauseResult>::Success({StaleAuthority, instance.gameplayPauseRevision});
@@ -431,9 +592,14 @@ namespace Horo::Cinematic {
         const bool wasPaused = instance.gameplayPaused;
         instance.gameplayPauseRevision = request.authorityRevision;
         instance.gameplayPaused = request.paused;
-        instance.resumeBaselinePending = wasPaused && !request.paused;
-        if (!request.paused)
-            return Result<SequenceGameplayPauseResult>::Success({Resumed, instance.gameplayPauseRevision});
+        if (wasPaused && !request.paused && instance.coordination.pausePolicy == SequencePausePolicy::FollowGameplay &&
+            instance.coordination.clockSource != SequenceClockSource::CommittedSimulation)
+            instance.resumeBaselinePending = true;
+        if (!request.paused) {
+            const SequenceGameplayPauseOutcome outcome =
+                wasPaused && instance.coordination.pausePolicy == SequencePausePolicy::FollowGameplay ? Resumed : Unchanged;
+            return Result<SequenceGameplayPauseResult>::Success({outcome, instance.gameplayPauseRevision});
+        }
         const SequenceGameplayPauseOutcome outcome =
             instance.coordination.pausePolicy == SequencePausePolicy::FollowGameplay ? HeldByGameplayPause : ContinuedDuringGameplayPause;
         return Result<SequenceGameplayPauseResult>::Success({outcome, instance.gameplayPauseRevision});

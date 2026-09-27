@@ -189,12 +189,24 @@ namespace Horo::Physics::Detail {
         SECTION("drop newest retains a coherent bounded lifecycle") {
             PhysicsEventProjection projection(1, 4, PhysicsEventOverflowPolicy::DropNewest);
             REQUIRE(CapturePair(projection, 1, 1, 2));
+            REQUIRE(projection.TryCapture(Observation(1, 5, 6)));
             const auto completed = projection.CompleteTick(1);
             REQUIRE(completed.HasValue());
             REQUIRE(completed.Value().overflowed);
-            REQUIRE(completed.Value().droppedRecordCount == 1);
+            REQUIRE(completed.Value().droppedRecordCount == 2);
             REQUIRE(completed.Value().publishedRecordCount == 1);
-            REQUIRE(projection.DroppedRecordCount() == 1);
+            REQUIRE(projection.DroppedRecordCount() == 2);
+            std::array<PhysicsEventRecord, 1> copied{};
+            const auto omitted = projection.CopyPublishedEvents(copied, 0);
+            REQUIRE(omitted.recordCount == 0);
+            REQUIRE(omitted.truncated);
+            REQUIRE(omitted.omittedRecordCount == 1);
+            REQUIRE(omitted.droppedRecordCount == 2);
+            const auto retained = projection.CopyPublishedEvents(copied, 1);
+            REQUIRE(retained.recordCount == 1);
+            REQUIRE_FALSE(retained.truncated);
+            REQUIRE(retained.omittedRecordCount == 0);
+            REQUIRE(retained.droppedRecordCount == 2);
 
             REQUIRE(CapturePair(projection, 2, 1, 2));
             REQUIRE(projection.CompleteTick(2).Value().publishedRecordCount == 1);

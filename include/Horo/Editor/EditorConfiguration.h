@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Foundation/Configuration.h"
+#include "Horo/Foundation/ModuleHost.h"
 
 #include <string_view>
 
@@ -26,13 +27,21 @@ namespace Horo::Editor {
      */
     EditorThemePreset ThemePresetFromConfigurationValue(std::string_view value) noexcept;
 
+    /** @brief Returns the editor settings metadata supplied at module composition.
+     * @param settings Persisted settings used as initial configuration defaults.
+     * @return Owned inert settings contribution for `horo.editor.services`.
+     */
+    [[nodiscard]] ModuleConfigurationContribution MakeEditorSettingsContribution(const EditorSettings &settings);
+
     /**
      * @brief Builds the editor appearance configuration authority from persisted defaults.
      * @param settings Persisted editor settings whose appearance values initialize the schema.
      * @param events Optional process-owned engine event bus notified on successful commits.
+     * @param schema Active module settings schema; standalone callers may pass an empty schema.
      * @return Composition-root-owned configuration service.
      */
-    ConfigurationService CreateEditorConfigurationService(const EditorSettings &settings, EngineDataBus *events = nullptr);
+    ConfigurationService CreateEditorConfigurationService(const EditorSettings &settings, EngineDataBus *events = nullptr,
+                                                          ConfigurationSchema schema = {});
 
     /**
      * @brief Maps an editor appearance snapshot to one Foundation configuration draft.

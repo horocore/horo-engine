@@ -18,6 +18,8 @@ namespace Horo::Cinematic::SequencePlaybackRuntimeErrors {
     extern const ErrorCodeDescriptor DuplicateHandle;
     /** @brief The prepared plan, blend policy, or authority transaction is malformed. */
     extern const ErrorCodeDescriptor ActivationInvalid;
+    /** @brief A host clock sample has the wrong domain, epoch, scale, or time ordering. */
+    extern const ErrorCodeDescriptor ClockInvalid;
     /** @brief The aggregate profile cannot admit the requested player resources. */
     extern const ErrorCodeDescriptor CapacityExceeded;
     /** @brief The authority claim set contains incompatible required owners. */

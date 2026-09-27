@@ -25,7 +25,7 @@ namespace Horo::Extensions::Tests {
     };
 
     TEST_CASE_METHOD(AbiIntegrationFixture, "Native C ABI negotiation gates actual dynamic module activation", "[Extensions][ABI]") {
-        const std::array paths{HORO_ABI_FIXTURE_0, HORO_ABI_FIXTURE_1, HORO_ABI_FIXTURE_2, HORO_ABI_FIXTURE_3};
+        const std::array paths{HORO_ABI_FIXTURE_0, HORO_ABI_FIXTURE_1, HORO_ABI_FIXTURE_2, HORO_ABI_FIXTURE_3, HORO_ABI_FIXTURE_9};
         for (std::size_t mode = 0; mode < paths.size(); ++mode) {
             const auto packageRoot = root / std::to_string(mode);
             REQUIRE(std::filesystem::create_directory(packageRoot));
@@ -46,8 +46,8 @@ namespace Horo::Extensions::Tests {
             REQUIRE(count() == 0);
             ExtensionManager manager{nullptr, ExtensionHostProfile::Interactive, {}, Horo::Tests::CreateAcceptingArtifactGate()};
             const auto result = manager.LoadExtension(packageRoot.string());
-            CHECK(result.HasValue() == (mode < 2));
-            CHECK(manager.GetLoadedExtensionIds().size() == (mode < 2 ? 1 : 0));
+            CHECK(result.HasValue() == (mode < 2 || mode == 4));
+            CHECK(manager.GetLoadedExtensionIds().size() == ((mode < 2 || mode == 4) ? 1 : 0));
             CHECK(count() == (mode == 2 ? 0 : 1));
         }
     }

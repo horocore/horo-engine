@@ -12,6 +12,10 @@ namespace Horo::Extensions::Tests {
             return HORO_EXTENSION_SUCCESS;
         }
 
+        HoroExtensionStatus RegisterProviderUnused(void *, const HoroPlatformServicesProviderDescriptor *) {
+            return HORO_EXTENSION_SUCCESS;
+        }
+
         HoroExtensionStatus QueryLegacy(HoroExtensionRequirements *requirements) {
             *requirements = {.structSize = sizeof(HoroExtensionRequirements),
                              .abiMajorVersion = HORO_EXTENSION_ABI_VERSION,
@@ -27,6 +31,19 @@ namespace Horo::Extensions::Tests {
             requirements->requiredHostApiSize = sizeof(HoroExtensionHostApi);
             return HORO_EXTENSION_SUCCESS;
         }
+
+        HoroExtensionStatus QueryV11(HoroExtensionRequirements *requirements) {
+            QueryLegacy(requirements);
+            requirements->minimumHostMinor = 1;
+            requirements->requiredHostApiSize = offsetof(HoroExtensionHostApi, registerPlatformServicesProvider);
+            return HORO_EXTENSION_SUCCESS;
+        }
+
+        HoroExtensionStatus QueryProvider(HoroExtensionRequirements *requirements) {
+            QueryCurrent(requirements);
+            requirements->requiredFunctions = HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER;
+            return HORO_EXTENSION_SUCCESS;
+        }
     }  // namespace
 
     TEST_CASE("ABI negotiation accepts compatible minors and requires requested functions", "[Extensions][ABI]") {
@@ -36,7 +53,12 @@ namespace Horo::Extensions::Tests {
                                   .abiMinorVersion = HORO_EXTENSION_ABI_MINOR_VERSION};
         CHECK(NegotiateModuleAbi(nullptr, host) == HORO_EXTENSION_SUCCESS);
         CHECK(NegotiateModuleAbi(QueryLegacy, host) == HORO_EXTENSION_SUCCESS);
+        CHECK(NegotiateModuleAbi(QueryV11, host) == HORO_EXTENSION_SUCCESS);
         CHECK(NegotiateModuleAbi(QueryCurrent, host) == HORO_EXTENSION_SUCCESS);
+        CHECK(NegotiateModuleAbi(QueryProvider, host) == HORO_EXTENSION_ERROR_INVALID_ARGS);
+        host.registerPlatformServicesProvider = RegisterProviderUnused;
+        CHECK(NegotiateModuleAbi(QueryProvider, host) == HORO_EXTENSION_SUCCESS);
+        host.registerPlatformServicesProvider = nullptr;
         host.registerAssetImporter = nullptr;
         CHECK(NegotiateModuleAbi(QueryCurrent, host) == HORO_EXTENSION_ERROR_INVALID_ARGS);
     }
@@ -68,7 +90,7 @@ namespace Horo::Extensions::Tests {
             return HORO_EXTENSION_SUCCESS;
         }, [](HoroExtensionRequirements *r) -> HoroExtensionStatus {
             QueryLegacy(r);
-            r->requiredFunctions = 2;
+            r->requiredFunctions = 4;
             return HORO_EXTENSION_SUCCESS;
         }};
         for (const auto query : invalid)

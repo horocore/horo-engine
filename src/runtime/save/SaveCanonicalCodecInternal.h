@@ -16,6 +16,9 @@ namespace Horo::Runtime::CanonicalCodecDetail {
     [[nodiscard]] inline bool ValidLimits(const CanonicalCodecLimits &value) noexcept {
         return value.maximumBytes && value.maximumDecodedBytes && value.maximumStringBytes && value.maximumCollectionElements &&
                value.maximumFields && value.maximumNestingDepth && value.maximumStringBytes <= value.maximumBytes &&
+               value.maximumReadWorkBytes && value.maximumReadWorkBytes <= 256ULL * 1024 * 1024 &&
+               value.maximumBytes <= 64ULL * 1024 * 1024 && value.maximumDecodedBytes <= 128ULL * 1024 * 1024 &&
+               value.maximumNestingDepth <= 64 && value.maximumCollectionElements <= 1'048'576 && value.maximumFields <= 65'536 &&
                value.maximumCollectionElements <= std::numeric_limits<std::uint32_t>::max() &&
                value.maximumFields <= std::numeric_limits<std::uint32_t>::max();
     }

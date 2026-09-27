@@ -19,6 +19,40 @@ namespace Horo::Extensions::ExtensionErrors {
     extern const ErrorCodeDescriptor EditorSurfaceContextCapacityExceeded;
     /** @brief Surface context attachment and access admission are closed. */
     extern const ErrorCodeDescriptor EditorSurfaceContextShutdown;
+    /** @brief An external panel/tab registry descriptor, provider key, or bound is malformed. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryInvalid;
+    /** @brief An external panel/tab contribution identity is already published. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryDuplicate;
+    /** @brief The bounded external panel/tab registry is full. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryCapacityExceeded;
+    /** @brief External panel/tab registration and lifecycle admission are closed. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryShutdown;
+    /** @brief The requested external panel/tab is not registered or no longer available. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryUnknown;
+    /** @brief The external panel/tab provider is present but disabled by host policy. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryProviderDisabled;
+    /** @brief The external panel/tab provider is missing, revoked, or unloaded. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryProviderMissing;
+    /** @brief A focus request targeted a registered surface that is currently closed. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistrySurfaceClosed;
+    /** @brief Persisted external panel/tab state is malformed or exceeds host bounds. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryStateInvalid;
+    /** @brief A command contribution is malformed or violates its surface contract. */
+    extern const ErrorCodeDescriptor EditorCommandInvalid;
+    /** @brief A command identity is already published by another contribution. */
+    extern const ErrorCodeDescriptor EditorCommandDuplicate;
+    /** @brief A shortcut is already claimed by another command contribution. */
+    extern const ErrorCodeDescriptor EditorCommandShortcutConflict;
+    /** @brief The bounded editor-command registry capacity was exhausted. */
+    extern const ErrorCodeDescriptor EditorCommandCapacityExceeded;
+    /** @brief The requested editor command is not published. */
+    extern const ErrorCodeDescriptor EditorCommandUnknown;
+    /** @brief The requested editor command is currently disabled by its predicates. */
+    extern const ErrorCodeDescriptor EditorCommandNotEnabled;
+    /** @brief The command's activation-scoped provider context is no longer usable. */
+    extern const ErrorCodeDescriptor EditorCommandProviderRevoked;
+    /** @brief Editor-command publication and invocation are closed. */
+    extern const ErrorCodeDescriptor EditorCommandShutdown;
     /** @brief A declarative editor form or standard-component node is malformed. */
     extern const ErrorCodeDescriptor EditorUiFormInvalid;
     /** @brief A declarative editor form exceeded one of its explicit finite bounds. */

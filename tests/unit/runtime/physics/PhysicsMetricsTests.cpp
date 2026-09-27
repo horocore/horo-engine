@@ -201,12 +201,12 @@ namespace Horo::Physics {
             REQUIRE(descriptor.subsystem == "physics");
             if (descriptor.name.ends_with("duration")) {
                 REQUIRE(descriptor.kind == Telemetry::InstrumentKind::Histogram);
-                REQUIRE(descriptor.unit == "seconds");
+                REQUIRE(descriptor.unit == Telemetry::MetricUnit::Seconds);
             } else if (descriptor.kind == Telemetry::InstrumentKind::Gauge) {
-                REQUIRE(descriptor.unit == "items");
+                REQUIRE(descriptor.unit == Telemetry::MetricUnit::Count);
             } else {
                 REQUIRE(descriptor.kind == Telemetry::InstrumentKind::Counter);
-                REQUIRE(descriptor.unit == "events");
+                REQUIRE(descriptor.unit == Telemetry::MetricUnit::Count);
             }
             const auto &metric = std::get<Telemetry::MetricRecord>(records[index].payload);
             observedSeries.emplace(descriptor.name, metric.dimensionCount == 0 ? 0 : metric.dimensionValueIds[0]);

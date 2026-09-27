@@ -191,6 +191,31 @@ namespace Horo::Extensions {
             ApplicationCapabilityProviderLease{std::move(selected), std::move(admitted).Value()});
     }
 
+    /** @copydoc ApplicationCapabilityRegistry::ResolveExact */
+    Result<ApplicationCapabilityProviderLease> ApplicationCapabilityRegistry::ResolveExact(
+        const ExtensionCapabilityHandle &authority, const ApplicationCapabilityVersionRange &versions,
+        const ApplicationCapabilityProviderIdentity &identity, const std::string_view extensionId, const std::string_view moduleId,
+        const std::uint64_t activationGeneration) const {
+        if (!IsValid(versions) || identity.moduleId.empty() || identity.providerId.empty() || identity.generation == 0)
+            return Result<ApplicationCapabilityProviderLease>::Failure(MakeError(ExtensionErrors::CapabilityRegistryInvalid));
+        if (state_ == nullptr)
+            return Result<ApplicationCapabilityProviderLease>::Failure(MakeError(ExtensionErrors::CapabilityRegistryShutdown));
+        std::scoped_lock lock{state_->mutex};
+        if (state_->shutdown)
+            return Result<ApplicationCapabilityProviderLease>::Failure(MakeError(ExtensionErrors::CapabilityRegistryShutdown));
+        const auto found = std::ranges::find_if(state_->providers, [&](const auto &provider) {
+            const auto &descriptor = provider->descriptor;
+            return descriptor.capability == authority.Capability() && descriptor.provider == identity &&
+                   descriptor.version >= versions.minimum && descriptor.version <= versions.maximum;
+        });
+        if (found == state_->providers.end())
+            return Result<ApplicationCapabilityProviderLease>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable));
+        auto admitted = authority.AcquireUse(extensionId, moduleId, activationGeneration);
+        if (admitted.HasError())
+            return Result<ApplicationCapabilityProviderLease>::Failure(admitted.ErrorValue());
+        return Result<ApplicationCapabilityProviderLease>::Success(ApplicationCapabilityProviderLease{*found, std::move(admitted).Value()});
+    }
+
     /** @copydoc ApplicationCapabilityRegistry::BeginShutdown */
     void ApplicationCapabilityRegistry::BeginShutdown() noexcept {
         if (state_ == nullptr)

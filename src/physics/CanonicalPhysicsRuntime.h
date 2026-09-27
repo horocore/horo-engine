@@ -120,9 +120,25 @@ namespace Horo::Physics::Detail {
     /** @brief Admits one scene body after its shape has been staged. */
     [[nodiscard]] Result<BodyHandle> CreateCanonicalSceneBody(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                               const PhysicsSceneBodyDescriptor &descriptor);
+    /** @brief Validates one resident body replacement before queue admission or any tick mutation. */
+    [[nodiscard]] Result<PhysicsBodyDescriptor> ResolveCanonicalBodyMutation(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                                             const PhysicsBodyMutation &mutation);
+    /** @brief Applies one prevalidated owner-thread replacement and reconciles retained policy. */
+    [[nodiscard]] Result<void> ApplyCanonicalBodyMutation(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                          const PhysicsBodyMutation &mutation);
+    /** @brief Copies the last applied policy for one exact resident scene body. */
+    [[nodiscard]] Result<PhysicsBodyDescriptor> ReadCanonicalSceneBodyPolicy(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                                             BodyHandle body);
+    /** @brief Reads translated native state alongside retained body policy on the owner thread. */
+    [[nodiscard]] Result<PhysicsBodyReconciliation> ReadCanonicalSceneBodyReconciliation(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                                                         BodyHandle body);
     /** @brief Admits one scene constraint after both body endpoints have been staged. */
     [[nodiscard]] Result<ConstraintHandle> CreateCanonicalSceneConstraint(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                                           const PhysicsConstraintDescriptor &descriptor);
+    /** @brief Removes one exact resident native joint at the owner-thread structural safe point. */
+    [[nodiscard]] Result<void> DestroyCanonicalSceneConstraint(CanonicalWorldHandle world, ConstraintHandle constraint);
+    /** @brief Reads a hinge/slider coordinate from an exact resident native joint on the owner thread. */
+    [[nodiscard]] Result<PhysicsJointState> ReadCanonicalSceneJointState(CanonicalWorldHandle world, ConstraintHandle constraint);
     /** @brief Exercises the same bounded callback inbox from native-boundary tests. */
     void SubmitCanonicalDiagnosticForTesting(CanonicalWorldHandle world, CanonicalDiagnosticKind kind, std::string_view message) noexcept;
     /** @brief Invokes the installed native callback hook under a bounded test route. */

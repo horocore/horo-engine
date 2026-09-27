@@ -224,6 +224,22 @@ namespace Horo {
     }  // namespace HashingErrors
 
     namespace ModuleDescriptorErrors {
+        const ErrorCodeDescriptor InvalidSettingsContribution{.domain = ModuleDescriptorDomain,
+                                                              .code = ErrorCode{"foundation.module.invalid_settings_contribution"},
+                                                              .defaultSeverity = ErrorSeverity::Error,
+                                                              .summary = "Module settings contribution is invalid."};
+        const ErrorCodeDescriptor DuplicateSetting{.domain = ModuleDescriptorDomain,
+                                                   .code = ErrorCode{"foundation.module.duplicate_setting"},
+                                                   .defaultSeverity = ErrorSeverity::Error,
+                                                   .summary = "Configuration setting key is duplicated."};
+        const ErrorCodeDescriptor SettingOwnerConflict{.domain = ModuleDescriptorDomain,
+                                                       .code = ErrorCode{"foundation.module.setting_owner_conflict"},
+                                                       .defaultSeverity = ErrorSeverity::Error,
+                                                       .summary = "Configuration setting owners overlap."};
+        const ErrorCodeDescriptor DuplicateEnvironmentBinding{.domain = ModuleDescriptorDomain,
+                                                              .code = ErrorCode{"foundation.module.duplicate_environment_binding"},
+                                                              .defaultSeverity = ErrorSeverity::Error,
+                                                              .summary = "Configuration environment binding is duplicated."};
         const ErrorCodeDescriptor InvalidDescriptor{.domain = ModuleDescriptorDomain,
                                                     .code = ErrorCode{"foundation.module.invalid_descriptor"},
                                                     .defaultSeverity = ErrorSeverity::Error,
