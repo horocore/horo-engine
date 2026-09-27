@@ -203,6 +203,8 @@ add_library(HoroApplication STATIC
         application/project_migration/ProjectMigrationExecution.cpp
         application/release/DistributionModel.cpp
         application/release/ReleaseErrors.cpp
+        application/release/ReleaseJobTracker.cpp
+        application/release/ReleasePipelineExecutor.cpp
         application/release/ReleaseProfile.cpp
         application/release/ReleasePreflight.cpp
         application/release/ReleaseTargetMatrix.cpp
@@ -219,6 +221,16 @@ target_link_libraries(HoroApplication
         PRIVATE nlohmann_json::nlohmann_json
 )
 add_dependencies(HoroApplication HoroProjectCompatibilityCatalog)
+
+add_library(HoroReleaseProcess STATIC application/release/ReleaseProcess.cpp)
+add_library(HoroEngine::ReleaseProcess ALIAS HoroReleaseProcess)
+target_compile_features(HoroReleaseProcess PUBLIC cxx_std_20)
+target_link_libraries(HoroReleaseProcess PUBLIC HoroEngine::Application HoroEngine::Platform)
+
+add_library(HoroReleaseService STATIC application/release/ReleaseService.cpp)
+add_library(HoroEngine::ReleaseService ALIAS HoroReleaseService)
+target_compile_features(HoroReleaseService PUBLIC cxx_std_20)
+target_link_libraries(HoroReleaseService PUBLIC HoroEngine::Application HoroEngine::Foundation)
 
 add_library(HoroProjectMigrations STATIC
         ${HORO_PROJECT_MIGRATION_CATALOG_CPP}

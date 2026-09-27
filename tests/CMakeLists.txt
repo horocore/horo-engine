@@ -1039,11 +1039,31 @@ add_executable(HoroReleasePreflightTests
 )
 target_compile_features(HoroReleasePreflightTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReleasePreflightTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
+add_executable(HoroReleasePipelineExecutorTests
+        unit/application/ReleasePipelineExecutorTests.cpp
+)
+target_compile_features(HoroReleasePipelineExecutorTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReleasePipelineExecutorTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
+add_executable(HoroReleaseServiceTests
+        unit/application/ReleaseServiceTests.cpp
+)
+target_compile_features(HoroReleaseServiceTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReleaseServiceTests PRIVATE HoroEngine::ReleaseService nlohmann_json::nlohmann_json)
 add_executable(HoroReleaseTargetMatrixTests
         unit/application/ReleaseTargetMatrixTests.cpp
 )
 target_compile_features(HoroReleaseTargetMatrixTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReleaseTargetMatrixTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
+add_executable(HoroReleaseJobTrackerTests
+        unit/application/ReleaseJobTrackerTests.cpp
+)
+target_compile_features(HoroReleaseJobTrackerTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReleaseJobTrackerTests PRIVATE HoroEngine::Application)
+add_executable(HoroReleaseProcessTests
+        unit/application/ReleaseProcessTests.cpp
+)
+target_compile_features(HoroReleaseProcessTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReleaseProcessTests PRIVATE HoroEngine::ReleaseProcess)
 add_executable(HoroProjectMigrationTests
         unit/application/ProjectMigrationTests.cpp
         unit/application/ProjectMigrationCatalogTests.cpp
@@ -2566,7 +2586,11 @@ set(HORO_CATCH_TEST_TARGETS
         HoroDistributionModelTests
         HoroReleaseProfileTests
         HoroReleasePreflightTests
+        HoroReleasePipelineExecutorTests
+        HoroReleaseServiceTests
         HoroReleaseTargetMatrixTests
+        HoroReleaseJobTrackerTests
+        HoroReleaseProcessTests
         HoroProjectMigrationTests
         HoroProjectMigrationTransactionTests
         HoroProjectOpenServiceTests
