@@ -66,6 +66,15 @@ installation or from a decoded/partially validated manifest. Parse, validation o
 verification failure quarantines staging and leaves the previous install record
 unchanged.
 
+The first install-record boundary accepts an immutable complete restore graph,
+rechecks each archive against its lock evidence, and writes a project-local
+pending record under an exclusive install lock. A durable atomic replacement is
+the commit point; cancellation and failures before it leave the prior record and
+in-process graph unchanged. A durability error after rename may require journal
+recovery before restart can safely select a graph. This record grants availability only. The service
+does not infer trust, enablement, or activation from a successful install. Host
+activation and restart reconstruction are subsequent lifecycle work.
+
 ## Trust And Activation
 
 Data-only assets may be mounted after verification. The following require trust

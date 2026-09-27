@@ -138,6 +138,7 @@ add_test(NAME HoroModelProviderContractTests
 set_tests_properties(HoroModelProviderContractTests PROPERTIES LABELS "unit;agent;headless" TIMEOUT 30)
 
 add_executable(HoroPackageValidationTests
+    unit/packages/PackageInstallTests.cpp
     unit/packages/PackageDependencyResolverTests.cpp
     unit/packages/PackageLockfileTests.cpp
     unit/packages/PackagePathTests.cpp
