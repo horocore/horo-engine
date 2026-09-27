@@ -1014,6 +1014,12 @@ target_link_libraries(HoroReleasePreflightTests PRIVATE HoroEngine::Application 
 add_executable(HoroReleasePipelineExecutorTests
         unit/application/ReleasePipelineExecutorTests.cpp
 )
+add_executable(HoroReleaseArtifactManifestTests
+        unit/application/ReleaseArtifactManifestTests.cpp
+)
+target_compile_features(HoroReleaseArtifactManifestTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReleaseArtifactManifestTests PRIVATE HoroEngine::Application)
+horo_register_catch_test(HoroReleaseArtifactManifestTests LABELS "release;manifest;headless")
 target_compile_features(HoroReleasePipelineExecutorTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReleasePipelineExecutorTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
 add_executable(HoroReleaseServiceTests
