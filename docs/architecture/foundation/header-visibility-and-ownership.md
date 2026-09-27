@@ -20,6 +20,15 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## REL-002.3 Update Discovery Boundary
+
+`HoroEngine::UpdateDiscovery` owns the additive
+`Horo/Release/UpdateDiscovery.h` and `UpdateDiscoveryErrors.h` contracts. There
+are no existing discovery callers to migrate. Product hosts link this target,
+persist channel/check policy, and queue source access away from startup. The
+target depends only on `HoroEngine::UpdateManifest`; transports and application
+composition remain outside its public interface. Generated standalone public
+header consumers verify both headers and their declared dependencies.
 ## AIA-001.3 Model Provider Boundary
 
 `HoroEngine::ModelProvider` owns the additive `Horo/Agent/ModelProvider.h`
@@ -838,6 +847,15 @@ character controller, Scene Runtime, network, renderer, platform clock or native
 backend type. Hosts retain source registration and clock ownership; the public
 function only projects immutable caller-supplied evidence. The generated public
 header consumer continues to verify the Foundation/Assets-only staged boundary.
+
+`[WST-003.5]` adds `Horo/WorldStreaming/SharedAssetResidency.h` to the existing
+`HoroWorldStreaming` owner. The public boundary uses the already declared Assets
+dependency for stable `AssetId` and World Streaming's own revision, fence, service
+and owner identities. It does not expose an asset-cache implementation, raw cached
+object, allocator, filesystem, renderer or native provider type. Hosts and cache
+adapters migrate by presenting exact cache allocation revision/byte facts and by
+routing actual retirement acknowledgements back to the authority; consumers do not
+become cache owners. Existing public consumers retain the same target dependency.
 
 ANI-001.6 adds `Horo/Animation/AnimationClip.h` to the same owner. Asset and runtime
 composition replace ad hoc floating-point cursors and untyped wrap flags with exact
