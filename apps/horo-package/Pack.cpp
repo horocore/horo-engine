@@ -29,19 +29,22 @@ namespace Horo::PackageCommand {
             if (bytes.empty())
                 return false;
             const std::string_view content{reinterpret_cast<const char *>(bytes.data()), bytes.size()};
-            constexpr std::array<std::string_view, 5> markers{"-----BEGIN PRIVATE KEY-----", "-----BEGIN EC PRIVATE KEY-----",
-                                                              "-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN ENCRYPTED PRIVATE KEY-----",
-                                                              "-----BEGIN OPENSSH PRIVATE KEY-----"};
-            return std::ranges::any_of(markers, [content](const std::string_view marker) {
-                return content.find(marker) != content.npos;
-            });
+            constexpr std::string_view prefix = "-----BEGIN ";
+            constexpr std::string_view suffix = "-----";
+            constexpr std::array<std::string_view, 5> keyTypes{"PRIVATE KEY", "EC PRIVATE KEY", "RSA PRIVATE KEY", "ENCRYPTED PRIVATE KEY",
+                                                               "OPENSSH PRIVATE KEY"};
+            for (std::size_t offset = content.find(prefix); offset != content.npos; offset = content.find(prefix, offset + prefix.size())) {
+                const auto following = content.substr(offset + prefix.size());
+                if (std::ranges::any_of(keyTypes, [following, suffix](const std::string_view type) {
+                    return following.starts_with(type) && following.substr(type.size()).starts_with(suffix);
+                }))
+                    return true;
+            }
+            return false;
         }
 
-        [[nodiscard]] Outcome Gather(const std::filesystem::path &root, const std::filesystem::path &output, std::vector<File> &files) {
+        [[nodiscard]] Outcome ValidateOutputLocation(const std::filesystem::path &root, const std::filesystem::path &output) {
             std::error_code error;
-            const auto rootStatus = std::filesystem::symlink_status(root, error);
-            if (error || !std::filesystem::is_directory(rootStatus) || std::filesystem::is_symlink(rootStatus))
-                return Failure("package.root_invalid", "Package root must be a real directory.");
             const auto canonicalRoot = std::filesystem::canonical(root, error);
             if (error)
                 return Failure("package.root_invalid", "Package root could not be resolved.");
@@ -51,6 +54,16 @@ namespace Horo::PackageCommand {
             const auto outputParent = std::filesystem::weakly_canonical(absoluteOutput.parent_path(), error);
             if (error || IsWithin(canonicalRoot, outputParent / absoluteOutput.filename()))
                 return Failure("package.output_inside_root", "Output must be outside the package root.");
+            return Success();
+        }
+
+        [[nodiscard]] Outcome Gather(const std::filesystem::path &root, const std::filesystem::path &output, std::vector<File> &files) {
+            std::error_code error;
+            const auto rootStatus = std::filesystem::symlink_status(root, error);
+            if (error || !std::filesystem::is_directory(rootStatus) || std::filesystem::is_symlink(rootStatus))
+                return Failure("package.root_invalid", "Package root must be a real directory.");
+            if (const auto checked = ValidateOutputLocation(root, output); !checked.success)
+                return checked;
             std::uint64_t total{};
             bool hasManifest{};
             for (std::filesystem::recursive_directory_iterator iterator{root, error}, end; !error && iterator != end;

@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
+import subprocess  # nosec B404 - this black-box test must execute the staged CLI.
 import sys
 import tempfile
 import time
@@ -23,7 +23,10 @@ class PackageCommands(unittest.TestCase):
         (self.source / "assets" / "café.txt").write_bytes(b"unicode path")
 
     def run_tool(self, *arguments, tool=None, expected=0):
-        result = subprocess.run([str(tool or self.tool), *map(str, arguments)], capture_output=True, text=True, check=False)
+        # CTest supplies the staged binary; arguments are test-owned and no shell is involved.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+        result = subprocess.run([str(tool or self.tool), *map(str, arguments)],  # nosec B603
+                                capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, expected, (arguments, result.stdout, result.stderr))
         return result
 
@@ -51,11 +54,16 @@ class PackageCommands(unittest.TestCase):
 
     def signing_key(self):
         private = self.root / "private.pem"
-        subprocess.run(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(private)], check=True,
-                       capture_output=True)
+        openssl = shutil.which("openssl")
+        if openssl is None:
+            raise RuntimeError("OpenSSL is required for the package CLI contract test")
+        openssl = str(Path(openssl).resolve(strict=True))
+        # Fixed OpenSSL command and test-owned output path; no shell.
+        subprocess.run([openssl, "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(private)],  # nosec B603
+                       check=True, capture_output=True)
         private.chmod(0o600)
-        public_der = subprocess.run(["openssl", "pkey", "-in", str(private), "-pubout", "-outform", "DER"], check=True,
-                                    capture_output=True).stdout
+        public_der = subprocess.run([openssl, "pkey", "-in", str(private), "-pubout", "-outform", "DER"],  # nosec B603
+                                    check=True, capture_output=True).stdout
         public = public_der[-65:]
         self.assertEqual(public[0], 4)
         return private, public
@@ -164,7 +172,10 @@ class PackageCommands(unittest.TestCase):
         self.assertNotIn("PRIVATE KEY", result.stderr)
 
 
-if __name__ == "__main__":
+if __name__ != "__main__":
+    # Repository pytest has no staged SDK arguments; CTest is this suite's integration runner.
+    PackageCommands = unittest.skip("requires staged SDK tool; covered by HoroPackageAuthorCommands CTest")(PackageCommands)
+else:
     if len(sys.argv) != 3:
         raise RuntimeError("expected staged SDK root and tool path")
     PackageCommands.sdk_root = Path(sys.argv[1])
