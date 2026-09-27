@@ -1075,6 +1075,11 @@ add_executable(HoroUpdateDownloadTests unit/application/UpdateDownloadTests.cpp)
 target_compile_features(HoroUpdateDownloadTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateDownloadTests PRIVATE HoroEngine::UpdateDownload miniz)
 horo_register_catch_test(HoroUpdateDownloadTests LABELS "release;update;headless")
+
+add_executable(HoroUpdateZipPackageProducerTests unit/application/UpdateZipPackageProducerTests.cpp)
+target_compile_features(HoroUpdateZipPackageProducerTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUpdateZipPackageProducerTests PRIVATE HoroEngine::UpdateDownload miniz)
+horo_register_catch_test(HoroUpdateZipPackageProducerTests LABELS "release;update;package;headless")
 add_executable(HoroUpdateHttpResponseTests unit/application/UpdateHttpResponseTests.cpp
         ${PROJECT_SOURCE_DIR}/src/application/release/UpdateHttpResponse.cpp)
 target_compile_features(HoroUpdateHttpResponseTests PRIVATE cxx_std_20)
