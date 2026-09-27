@@ -31,4 +31,24 @@ namespace Horo::Mcp::McpErrors {
     const ErrorCodeDescriptor DrainTimedOut{ErrorDomainId{"horo.mcp"}, ErrorCode{"drain_timed_out"}, ErrorSeverity::Error,
                                             "MCP callbacks did not drain before shutdown's deadline.",
                                             "Keep application leases alive until the callbacks finish."};
+    const ErrorCodeDescriptor ToolDescriptorInvalid{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_descriptor_invalid"}, ErrorSeverity::Error,
+                                                    "An MCP tool descriptor or schema is invalid.",
+                                                    "Declare a bounded tool contract using supported schema keywords."};
+    const ErrorCodeDescriptor ToolDuplicate{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_duplicate"}, ErrorSeverity::Error,
+                                            "An MCP tool identity is registered more than once.",
+                                            "Use one registration per stable tool ID."};
+    const ErrorCodeDescriptor ToolIncompatible{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_incompatible"}, ErrorSeverity::Error,
+                                               "An MCP tool replacement is not contract-compatible.",
+                                               "Retain the major version and do not regress the published version."};
+    const ErrorCodeDescriptor ToolUnavailable{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_unavailable"}, ErrorSeverity::Warning,
+                                              "The MCP tool is not registered.", "Use an advertised tool identity."};
+    const ErrorCodeDescriptor ToolCapabilityUnavailable{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_capability_unavailable"},
+                                                        ErrorSeverity::Warning, "The MCP tool is unavailable to this session.",
+                                                        "Request an authorized capability from the host."};
+    const ErrorCodeDescriptor ToolInputInvalid{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_input_invalid"}, ErrorSeverity::Error,
+                                               "MCP tool arguments do not satisfy the declared schema.",
+                                               "Supply bounded arguments matching the advertised contract."};
+    const ErrorCodeDescriptor ToolOutputInvalid{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_output_invalid"}, ErrorSeverity::Error,
+                                                "An MCP tool returned data outside its declared schema.",
+                                                "Repair the application adapter contract."};
 }  // namespace Horo::Mcp::McpErrors
