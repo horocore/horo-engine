@@ -155,6 +155,7 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformProviderManifestCook.cpp
         platform_services/PlatformRequest.cpp
         platform_services/PlatformRequestErrors.cpp
+        platform_services/PlatformServiceErrors.cpp
         platform_services/PlatformServicesBackend.cpp
         platform_services/PlatformServicesFrontend.cpp
         platform_services/PlatformSessionObserver.cpp
@@ -203,6 +204,7 @@ add_library(HoroApplication STATIC
         application/release/ReleaseErrors.cpp
         application/release/ReleaseProfile.cpp
         application/release/ReleasePreflight.cpp
+        application/release/ReleaseTargetMatrix.cpp
         application/release/ReleaseVersion.cpp
 )
 add_library(HoroEngine::Application ALIAS HoroApplication)
@@ -639,6 +641,20 @@ target_include_directories(HoroAudioBackendContract INTERFACE
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/include>")
 target_link_libraries(HoroAudioBackendContract INTERFACE HoroEngine::AudioApi)
 
+# Build-tree-only hook boundary shared by backend callback scopes and Horo-owned audio operations.
+add_library(HoroAudioSafetyHooks STATIC
+        audio/safety/AudioCallbackSafetyHooks.cpp
+)
+target_compile_features(HoroAudioSafetyHooks PUBLIC cxx_std_20)
+target_include_directories(HoroAudioSafetyHooks PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/safety/include>")
+
+add_library(HoroAudioWatchdog STATIC
+        audio/backend/AudioCallbackWatchdog.cpp
+)
+target_compile_features(HoroAudioWatchdog PUBLIC cxx_std_20)
+target_link_libraries(HoroAudioWatchdog PUBLIC HoroAudioBackendContract HoroAudioSafetyHooks)
+
 add_library(HoroAudioNull STATIC
         audio/backend/null/NullAudioBackend.cpp
 )
@@ -646,7 +662,7 @@ add_library(HoroEngine::AudioNull ALIAS HoroAudioNull)
 target_compile_features(HoroAudioNull PUBLIC cxx_std_20)
 target_include_directories(HoroAudioNull PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/null/include>")
-target_link_libraries(HoroAudioNull PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands)
+target_link_libraries(HoroAudioNull PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands PRIVATE HoroAudioWatchdog)
 
 if(HORO_BUILD_AUDIO_SDL3)
     add_library(HoroAudioSdl3 STATIC
@@ -658,7 +674,7 @@ if(HORO_BUILD_AUDIO_SDL3)
             "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/audio/backend/sdl3/include>")
     target_link_libraries(HoroAudioSdl3
             PUBLIC HoroAudioBackendContract HoroEngine::AudioCommands
-            PRIVATE ${HORO_SDL3_TARGET})
+            PRIVATE HoroAudioWatchdog ${HORO_SDL3_TARGET})
 endif()
 
 add_library(HoroAudioDsp STATIC
@@ -680,7 +696,7 @@ add_library(HoroAudioMemory STATIC
 )
 add_library(HoroEngine::AudioMemory ALIAS HoroAudioMemory)
 target_compile_features(HoroAudioMemory PUBLIC cxx_std_20)
-target_link_libraries(HoroAudioMemory PUBLIC HoroEngine::AudioApi)
+target_link_libraries(HoroAudioMemory PUBLIC HoroEngine::AudioApi PRIVATE HoroAudioSafetyHooks)
 
 add_library(HoroAudioCommands STATIC
         audio/commands/AudioClock.cpp
@@ -693,7 +709,15 @@ add_library(HoroAudioCommands STATIC
 )
 add_library(HoroEngine::AudioCommands ALIAS HoroAudioCommands)
 target_compile_features(HoroAudioCommands PUBLIC cxx_std_20)
-target_link_libraries(HoroAudioCommands PUBLIC HoroEngine::AudioMemory)
+target_link_libraries(HoroAudioCommands PUBLIC HoroEngine::AudioMemory PRIVATE HoroAudioSafetyHooks)
+
+add_library(HoroAudioMetrics STATIC
+        audio/metrics/AudioMetrics.cpp
+        audio/metrics/AudioMetricTelemetry.cpp
+)
+add_library(HoroEngine::AudioMetrics ALIAS HoroAudioMetrics)
+target_compile_features(HoroAudioMetrics PUBLIC cxx_std_20)
+target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngine::Foundation)
 
 add_library(HoroPhysics STATIC
         physics/CharacterControllerContracts.cpp
@@ -850,6 +874,13 @@ add_library(HoroEngine::PCG ALIAS HoroPCG)
 target_compile_features(HoroPCG PUBLIC cxx_std_20)
 target_link_libraries(HoroPCG PUBLIC HoroEngine::Foundation)
 
+add_library(HoroPCGTerrainAdapter STATIC
+        runtime/pcg/terrain/TerrainInputSnapshot.cpp
+)
+add_library(HoroEngine::PCGTerrainAdapter ALIAS HoroPCGTerrainAdapter)
+target_compile_features(HoroPCGTerrainAdapter PUBLIC cxx_std_20)
+target_link_libraries(HoroPCGTerrainAdapter PUBLIC HoroEngine::PCG HoroEngine::TerrainApi)
+
 add_library(HoroVfxApi STATIC
         runtime/vfx/api/CpuParticleBuffer.cpp
         runtime/vfx/api/CpuParticleSimulator.cpp
@@ -979,6 +1010,14 @@ add_library(HoroXRApi STATIC
 add_library(HoroEngine::XRApi ALIAS HoroXRApi)
 target_compile_features(HoroXRApi PUBLIC cxx_std_20)
 target_link_libraries(HoroXRApi PUBLIC HoroEngine::Foundation HoroEngine::RenderApi)
+
+add_library(HoroXRRuntime STATIC
+        runtime/xr/runtime/XRSessionErrors.cpp
+        runtime/xr/runtime/XRSessionLifecycle.cpp
+)
+add_library(HoroEngine::XRRuntime ALIAS HoroXRRuntime)
+target_compile_features(HoroXRRuntime PUBLIC cxx_std_20)
+target_link_libraries(HoroXRRuntime PUBLIC HoroEngine::XRApi)
 
 add_library(HoroTerrainApi STATIC
         runtime/terrain/api/FoliageDefinition.cpp

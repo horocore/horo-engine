@@ -1,5 +1,6 @@
 #include "Horo/Audio/AudioCommandBuffer.h"
 
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <memory>
@@ -148,5 +149,14 @@ namespace Horo::Audio {
         return !state_ || (state_->closed.load(std::memory_order_acquire) &&    // NOSONAR - observes producer closure.
                            state_->read.load(std::memory_order_relaxed) ==      // NOSONAR - read is consumer-owned.
                                state_->write.load(std::memory_order_acquire));  // NOSONAR - observes the last published record.
+    }
+
+    /** @copydoc AudioCommandBuffer::Depth */
+    std::uint32_t AudioCommandBuffer::Depth() const noexcept {
+        if (!state_)
+            return 0;
+        const auto consumed = state_->read.load(std::memory_order_acquire);
+        const auto published = state_->write.load(std::memory_order_acquire);
+        return std::min(published - consumed, state_->descriptor.slots);
     }
 }  // namespace Horo::Audio
