@@ -214,6 +214,7 @@ add_library(HoroApplication STATIC
         application/project_migration/ProjectMigrationExecution.cpp
         application/release/DistributionModel.cpp
         application/release/ReleaseArtifactManifest.cpp
+        application/release/ReleaseCandidateVerification.cpp
         application/release/ReleaseArtifactVerification.cpp
         application/release/ReleaseChecksums.cpp
         application/release/ReleaseBuildProvenance.cpp
@@ -222,6 +223,7 @@ add_library(HoroApplication STATIC
         application/release/ReleaseJobTracker.cpp
         application/release/ReleasePipelineExecutor.cpp
         application/release/ReleasePackageProducer.cpp
+        application/release/ReleaseSigningBoundary.cpp
         application/release/ReleaseProfile.cpp
         application/release/ReleasePreflight.cpp
         application/release/ReleaseTargetMatrix.cpp
@@ -250,6 +252,17 @@ add_library(HoroReleaseService STATIC application/release/ReleaseService.cpp app
 add_library(HoroEngine::ReleaseService ALIAS HoroReleaseService)
 target_compile_features(HoroReleaseService PUBLIC cxx_std_20)
 target_link_libraries(HoroReleaseService PUBLIC HoroEngine::Application HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
+
+add_library(HoroUpdateManifest STATIC application/release/UpdateManifest.cpp application/release/UpdateManifestErrors.cpp
+        application/release/UpdateSignatureCodec.cpp application/release/UpdateTrustRoot.cpp)
+add_library(HoroEngine::UpdateManifest ALIAS HoroUpdateManifest)
+target_compile_features(HoroUpdateManifest PUBLIC cxx_std_20)
+target_link_libraries(HoroUpdateManifest PUBLIC HoroEngine::Application HoroEngine::Security PRIVATE nlohmann_json::nlohmann_json)
+
+add_library(HoroUpdateDiscovery STATIC application/release/UpdateDiscovery.cpp application/release/UpdateDiscoveryErrors.cpp)
+add_library(HoroEngine::UpdateDiscovery ALIAS HoroUpdateDiscovery)
+target_compile_features(HoroUpdateDiscovery PUBLIC cxx_std_20)
+target_link_libraries(HoroUpdateDiscovery PUBLIC HoroEngine::UpdateManifest)
 
 add_library(HoroProjectMigrations STATIC
         ${HORO_PROJECT_MIGRATION_CATALOG_CPP}
@@ -422,6 +435,8 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiPointerCapture.cpp
         runtime/ui/UiPointerCaptureErrors.cpp
         runtime/ui/UiActions.cpp
+        runtime/ui/UiFeedback.cpp
+        runtime/ui/UiFeedbackErrors.cpp
         runtime/ui/UiScreenStack.cpp
         runtime/ui/UiFocusGraph.cpp
         runtime/ui/UiFocusGraphOperations.cpp
@@ -794,6 +809,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsCookedShapeCache.cpp
         physics/PhysicsCookedShapeDescriptor.cpp
         physics/PhysicsDiagnostics.cpp
+        physics/PhysicsDebugSnapshot.cpp
         physics/PhysicsDeterminismPolicy.cpp
         physics/PhysicsEventProjection.cpp
         physics/PhysicsEventProjection.h
@@ -823,6 +839,7 @@ target_link_libraries(HoroPhysics PUBLIC HoroEngine::Foundation HoroEngine::Asse
 if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp
+        physics/CanonicalPhysicsRuntimeDebug.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
@@ -834,6 +851,7 @@ if(HORO_BUILD_PHYSICS_NATIVE)
     target_link_libraries(HoroPhysics PRIVATE Jolt)
     set_source_files_properties(
         physics/CanonicalPhysicsRuntime.cpp
+        physics/CanonicalPhysicsRuntimeDebug.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
@@ -1201,6 +1219,8 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/CookedWorldIndexManifest.cpp
         runtime/world_streaming/FallbackStreamingProvider.cpp
         runtime/world_streaming/StreamingBudgetModel.cpp
+        runtime/world_streaming/SharedAssetResidency.cpp
+        runtime/world_streaming/SharedAssetResidencyErrors.cpp
         runtime/world_streaming/StreamingCellOperation.cpp
         runtime/world_streaming/StreamingCellCandidate.cpp
         runtime/world_streaming/StreamingCellAssetRequest.cpp

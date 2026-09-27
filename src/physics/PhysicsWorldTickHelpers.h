@@ -67,16 +67,7 @@ namespace Horo::Physics::Detail {
     /** @brief Replaces every externally visible publication domain under one synchronization boundary. */
     void CommitPublishedTick(auto &impl, const std::uint64_t tick, const std::uint32_t appliedCommands,
                              const PhysicsEventProjectionResult &eventResult) noexcept {
-        PublicationGuard publicationGuard{impl.publicationLock};
-        const std::uint64_t revision = impl.published.publicationRevision + 1;
-        impl.published = {.completedTick = tick,
-                          .publicationRevision = revision,
-                          .transformTick = tick,
-                          .queryTick = tick,
-                          .eventTick = tick,
-                          .appliedCommands = appliedCommands,
-                          .eventCount = eventResult.publishedRecordCount,
-                          .droppedEventCount = eventResult.droppedRecordCount};
+        impl.publication.Commit(tick, appliedCommands, eventResult);
     }
 
     /** @brief Normalizes and canonicalizes retained commands without frame-hot allocation. */
@@ -214,7 +205,8 @@ namespace Horo::Physics::Detail {
     [[nodiscard]] Result<void> ValidateTickInput(const auto &impl, const PhysicsFixedTickInput &input) {
         if (const auto configuredNanoseconds =
                 static_cast<std::int64_t>(std::llround(impl.settings.Values().world.fixedDeltaSeconds * 1'000'000'000.0));
-            input.simulationTick == 0 || input.sceneGeneration == 0 || input.simulationTick != impl.published.completedTick + 1 ||
+            input.simulationTick == 0 || input.sceneGeneration == 0 ||
+            input.simulationTick != impl.publication.Snapshot().completedTick + 1 ||
             input.fixedDelta.ToNanoseconds() != configuredNanoseconds)
             return Result<void>::Failure(
                 MakeError(PhysicsErrors::DescriptorInvalid, "Physics requires the next one-based tick and the world's exact fixed delta."));

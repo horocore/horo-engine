@@ -2,6 +2,11 @@
 #include "Horo/Physics/PhysicsErrors.h"
 
 namespace Horo::Physics::Detail {
+    /** @copydoc ProjectCanonicalDebug */
+    CanonicalDebugProjection ProjectCanonicalDebug(const CanonicalWorldHandle, const PhysicsDebugBudget &) {
+        return {};
+    }
+
     /** @copydoc CreateCanonicalRuntime */
     Result<CanonicalRuntimeHandle> CreateCanonicalRuntime(const CanonicalFailurePoint) {
         return Result<CanonicalRuntimeHandle>::Failure(

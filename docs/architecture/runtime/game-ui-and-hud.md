@@ -511,6 +511,35 @@ ray/direct modes, tracking or session loss, assignment change, modal/route exclu
 presentation-revision loss and source destruction release capture and neutralize the
 source. A Physics/Renderer hit is evidence only; it cannot set focus or invoke a widget.
 
+### Semantic audio and haptic feedback
+
+The Runtime UI owner may observe completed action/navigation results, focus
+changes, applied control defaults, and genuine control cancellation through the
+typed `UiFeedbackQueue` contract. These produce `Navigate`, `Focus`, `Confirm`,
+`Cancel`, `Error`, or `Boundary` intents. A press that only stages a default, a
+suppressed default, an ignored input, stale/retiring action rejection, and
+reload/retirement focus recovery do not produce a cue. The owner observes a
+semantic outcome once; observing both a navigation completion and its derived
+focus change would intentionally create two distinct cues. That is a composition
+decision, not hidden deduplication.
+
+Intent values carry the exact presented Runtime UI owner/revision and originating
+element; focus-originated intents also carry the per-player/presentation-layer
+scope. The owner preallocates a bounded FIFO before frame work. Admission returns
+explicit malformed, stale, capacity, or lifecycle failures; it never performs
+audio/haptic work, allocation, or I/O. On reload the old queue retires and
+discards its stale cues; the new presented owner gets a new queue. Shutdown
+likewise discards undelivered optional cues.
+
+At a non-frame-hot host safe point, a borrowed `UiFeedbackRealizer` may map an
+intent to optional audio and/or haptic effects. Its per-modality result explicitly
+distinguishes skipped, realized, unavailable, and failed. Provider failure does
+not roll back or change the UI action, and the queue never owns a provider or
+retains a native handle. A host with no audio/haptic capability may simply drain
+and discard intents. This is an additive contract: no existing control API or
+authored document needs migration. Live host audio/haptic composition is separate
+from this Runtime UI contract and must respect its own backend lifetime.
+
 ## Runtime Accessibility Semantics
 
 [ADR-082](../../adr/082-runtime-ui-accessibility-capability-and-ownership.md) makes
