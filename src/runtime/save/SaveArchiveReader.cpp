@@ -8,6 +8,7 @@
 #include <bit>
 #include <limits>
 #include <new>
+#include <string>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -382,6 +383,107 @@ namespace Horo::Runtime {
             }
         }
         return SelectSaveChunkPayload(payload_, directory_, record);
+    }
+
+    /** @copydoc ValidatedSaveArchive::InspectUnknownData */
+    Result<SaveUnknownDataReport> ValidatedSaveArchive::InspectUnknownData(const SaveCompatibilityPolicy &policy,
+                                                                           const std::uint64_t maximumPreservedBytes) const {
+        const SaveCompatibilityDecision decision = EvaluateSaveCompatibility(preamble_.archiveFormatVersion, header_, manifest_, policy);
+        if (decision.disposition == SaveCompatibilityDisposition::Rejected) {
+            std::string reason = "Save cannot be restored: ";
+            if (decision.reason == SaveCompatibilityReason::UnknownRequiredParticipant && decision.participant)
+                reason += "required module or content participant '" + decision.participant->Value() + "' is unavailable.";
+            else if (decision.reason == SaveCompatibilityReason::UnsupportedParticipantSchema && decision.participant)
+                reason += "participant '" + decision.participant->Value() + "' needs a supported module version or a migration.";
+            else if (decision.reason == SaveCompatibilityReason::MissingRequiredParticipant && decision.participant)
+                reason += "required participant '" + decision.participant->Value() + "' is absent from the archive.";
+            else if (decision.reason == SaveCompatibilityReason::UnsupportedFeature)
+                reason +=
+                    "unsupported required feature flags " + std::to_string(header_.featureFlags & ~policy.supportedFeatureFlagsMask) + ".";
+            else
+                reason +=
+                    "compatibility preflight rejected the archive (reason " + std::to_string(static_cast<unsigned>(decision.reason)) + ").";
+            return Result<SaveUnknownDataReport>::Failure(MakeError(SaveErrors::MigrationSourceUnsupported, std::move(reason)));
+        }
+
+        SaveUnknownDataReport report;
+        std::uint64_t retainedBytes = 0;
+        try {
+            for (const SaveManifestParticipant &participant : manifest_.participants) {
+                const auto installed =
+                    std::ranges::lower_bound(policy.participants, participant.participant, {}, &SaveParticipantCompatibility::participant);
+                const bool supported =
+                    installed != policy.participants.end() && installed->participant == participant.participant &&
+                    (installed->versions.direct.Contains(participant.schemaVersion) ||
+                     (installed->versions.migrationSource && installed->versions.migrationSource->Contains(participant.schemaVersion)));
+                if (supported)
+                    continue;
+                if (participant.required)
+                    return Result<SaveUnknownDataReport>::Failure(
+                        MakeError(SaveErrors::MigrationSourceUnsupported,
+                                  "Required module or content participant '" + participant.participant.Value() + "' is unavailable."));
+                if (std::ranges::binary_search(policy.droppableUnknownParticipants, participant.participant)) {
+                    for (const SaveRecordId &record : participant.chunks) {
+                        auto verified = SelectChunk(record);
+                        if (verified.HasError())
+                            return Result<SaveUnknownDataReport>::Failure(verified.ErrorValue());
+                        if (!verified.Value())
+                            return Result<SaveUnknownDataReport>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
+                    }
+                    report.dropped.push_back(participant.participant);
+                    continue;
+                }
+                for (const SaveRecordId &record : participant.chunks) {
+                    const auto entries = directory_.Entries();
+                    const auto found = std::ranges::lower_bound(entries, record, {}, &SaveChunkDirectoryEntry::record);
+                    if (found == entries.end() || found->record != record || found->owner != participant.participant)
+                        return Result<SaveUnknownDataReport>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
+                    if (found->storedByteLength > maximumPreservedBytes - retainedBytes)
+                        return Result<SaveUnknownDataReport>::Failure(
+                            MakeError(SaveErrors::ArchiveMetadataLimitExceeded, "Unknown optional data exceeds the preservation budget."));
+                    auto verified = SelectChunk(record);
+                    if (verified.HasError())
+                        return Result<SaveUnknownDataReport>::Failure(verified.ErrorValue());
+                    if (!verified.Value())
+                        return Result<SaveUnknownDataReport>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
+                    const auto stored =
+                        payload_.subspan(static_cast<std::size_t>(found->offset), static_cast<std::size_t>(found->storedByteLength));
+                    report.preserved.push_back({.entry = *found, .storedBytes = {stored.begin(), stored.end()}});
+                    retainedBytes += found->storedByteLength;
+                }
+            }
+            std::ranges::sort(report.preserved, {}, [](const PreservedSaveChunk &chunk) {
+                return chunk.entry.record;
+            });
+            return Result<SaveUnknownDataReport>::Success(std::move(report));
+        } catch (const std::bad_alloc &) {
+            return Result<SaveUnknownDataReport>::Failure(MakeError(SaveErrors::ArchiveAllocationFailed));
+        }
+    }
+
+    /** @copydoc VerifyUnknownDataRoundTrip */
+    Result<void> VerifyUnknownDataRoundTrip(const ValidatedSaveArchive &source, const ValidatedSaveArchive &destination,
+                                            const SaveCompatibilityPolicy &policy, const std::uint64_t maximumPreservedBytes) {
+        auto expected = source.InspectUnknownData(policy, maximumPreservedBytes);
+        if (expected.HasError())
+            return Result<void>::Failure(expected.ErrorValue());
+        auto actual = destination.InspectUnknownData(policy, maximumPreservedBytes);
+        if (actual.HasError())
+            return Result<void>::Failure(actual.ErrorValue());
+        const auto &actualChunks = actual.Value().preserved;
+        for (const PreservedSaveChunk &chunk : expected.Value().preserved) {
+            const auto found = std::ranges::lower_bound(actualChunks, chunk.entry.record, {}, [](const PreservedSaveChunk &value) {
+                return value.entry.record;
+            });
+            if (found == actualChunks.end() || found->entry.record != chunk.entry.record || found->entry.owner != chunk.entry.owner ||
+                found->entry.codec != chunk.entry.codec || found->entry.storedByteLength != chunk.entry.storedByteLength ||
+                found->entry.decodedByteLength != chunk.entry.decodedByteLength || found->entry.alignment != chunk.entry.alignment ||
+                found->entry.decodedHash != chunk.entry.decodedHash || found->storedBytes != chunk.storedBytes)
+                return Result<void>::Failure(MakeError(SaveErrors::MigrationCandidateInvalid,
+                                                       "Save copy or migration lost preservable optional data: participant '" +
+                                                           chunk.entry.owner.Value() + "', record " + chunk.entry.record.ToString() + "."));
+        }
+        return Result<void>::Success();
     }
 
     SaveArchiveReader::SaveArchiveReader(SaveArchiveReaderLimits limits) : limits_(std::move(limits)) {}

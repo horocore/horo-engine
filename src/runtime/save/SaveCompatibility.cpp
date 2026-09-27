@@ -77,7 +77,22 @@ namespace Horo::Runtime {
             for (std::size_t index = 0; index < policy.participants.size(); ++index) {
                 const auto &support = policy.participants[index];
                 if (!support.participant.IsValid() || !IsValidSupport(support.versions) ||
-                    (index != 0 && policy.participants[index - 1].participant == support.participant))
+                    (index != 0 && policy.participants[index - 1].participant == support.participant) ||
+                    !std::ranges::is_sorted(support.requiredDependencies) ||
+                    std::ranges::adjacent_find(support.requiredDependencies) != support.requiredDependencies.end() ||
+                    std::ranges::any_of(support.requiredDependencies, [&support](const SaveParticipantId &id) {
+                    return !id.IsValid() || id == support.participant;
+                }))
+                    return false;
+            }
+            if (!std::ranges::is_sorted(policy.droppableUnknownParticipants) ||
+                std::ranges::adjacent_find(policy.droppableUnknownParticipants) != policy.droppableUnknownParticipants.end())
+                return false;
+            for (const SaveParticipantId &id : policy.droppableUnknownParticipants) {
+                if (!id.IsValid() || std::ranges::binary_search(policy.participants, id, {}, &SaveParticipantCompatibility::participant) ||
+                    std::ranges::any_of(policy.participants, [&id](const SaveParticipantCompatibility &support) {
+                    return support.required && std::ranges::binary_search(support.requiredDependencies, id);
+                }))
                     return false;
             }
             return true;
@@ -103,9 +118,17 @@ namespace Horo::Runtime {
                         return Reject(SaveCompatibilityReason::MissingRequiredParticipant, support.participant);
                     continue;
                 }
+                if (support.required) {
+                    for (const SaveParticipantId &dependency : support.requiredDependencies) {
+                        if (!std::ranges::binary_search(manifest.participants, dependency, {}, &SaveManifestParticipant::participant))
+                            return Reject(SaveCompatibilityReason::MissingRequiredParticipant, dependency);
+                    }
+                }
                 const VersionAdmission admission = ClassifyVersion(found->schemaVersion, support.versions);
-                if (admission == VersionAdmission::Rejected)
+                if (admission == VersionAdmission::Rejected && (support.required || found->required))
                     return Reject(SaveCompatibilityReason::UnsupportedParticipantSchema, support.participant);
+                if (admission == VersionAdmission::Rejected)
+                    continue;
                 migrationRequired |= admission == VersionAdmission::Migration;
             }
             return std::nullopt;
@@ -119,6 +142,13 @@ namespace Horo::Runtime {
                     std::ranges::lower_bound(policy.participants, entry.participant, {}, &SaveParticipantCompatibility::participant);
                 if (entry.required && (found == policy.participants.end() || found->participant != entry.participant))
                     return Reject(SaveCompatibilityReason::UnknownRequiredParticipant, entry.participant);
+                for (const SaveParticipantCompatibility &support : policy.participants) {
+                    if (!support.required || !std::ranges::binary_search(support.requiredDependencies, entry.participant))
+                        continue;
+                    if (found == policy.participants.end() || found->participant != entry.participant ||
+                        ClassifyVersion(entry.schemaVersion, found->versions) == VersionAdmission::Rejected)
+                        return Reject(SaveCompatibilityReason::UnknownRequiredParticipant, entry.participant);
+                }
             }
             return std::nullopt;
         }

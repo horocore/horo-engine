@@ -982,6 +982,34 @@ the sealed registry has one complete path to current directly readable writer
 versions. Unknown optional participants may be skipped only when no required
 participant depends on them. Missing/unknown required participants reject.
 
+An unknown participant marked required in the manifest blocks restore before any
+participant callback; the diagnostic names its stable owner so the host can direct
+the user to missing content, DLC, or a module. Unknown required feature bits also
+block restore with the unsupported bit mask. An unknown optional participant is
+preservable by default. A sealed release policy may list stable optional owner IDs
+that are explicitly droppable; the list is sorted, unique, and disjoint from installed
+participants. An absent entry is never permission to discard it. Before migration or
+save-copy publication, the reader verifies every retained chunk and copies its exact
+stored bytes plus codec, lengths, alignment, and decoded digest into bounded detached
+staging. A changed archive may relocate an entry, but must retain those bytes and
+integrity fields. A known optional owner with an unsupported newer participant schema
+is treated as opaque under the same preservation rule. If a required participant
+declares a dependency on either unknown owner or unsupported schema, preflight blocks
+load and names the dependency. The migration executor rejects candidate output that changes a
+preservable unknown participant, and a repack/copy must compare source and candidate
+opaque records before commit. The source remains available on any failure. This
+policy does not grant permission to interpret unknown payload schemas or bypass the
+archive's integrity/signature and size checks.
+
+For callers migrating from the earlier API, empty droppable and dependency lists
+retain the conservative behavior. Code that constructs `SaveMigrationSource` from a
+validated archive must call `RetainUnknownSaveData` before planning; planning now
+rejects an unknown preservable owner without verified chunk evidence. Repack/copy
+callers must carry those records into the destination and use
+`VerifyUnknownDataRoundTrip` before the commit gate. The new policy fields are host
+declarations, not archive-provided permissions, so existing v1/v2 files need no wire
+rewrite.
+
 Any newer archive format, save schema, required participant schema or product
 compatibility version outside the declared range fails with a typed unsupported-newer
 result before live mutation. Readers do not best-effort interpret forward input.
