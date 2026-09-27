@@ -1653,6 +1653,7 @@ add_library(HoroEditorServices STATIC
         editor/screens/workspace/ContentBrowserModel.cpp
         editor/screens/workspace/GameplayBehaviorRequestValidation.cpp
         editor/modals/gameplay_behavior/GameplayBehaviorFilenameModalState.cpp
+        editor/modals/build_release/BuildReleaseModalSession.cpp
         editor/project_model/ProjectCreationService.cpp
         editor/project_model/ProjectMutation.cpp
         editor/project_model/ProjectMigrationTransaction.cpp
