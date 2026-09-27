@@ -572,10 +572,16 @@ target_compile_definitions(HoroPreFracturedImportTests PRIVATE HORO_UFBX_TEST_DA
 horo_register_catch_test(HoroPreFracturedImportTests LABELS "unit;destruction;headless")
 add_executable(HoroDestructionRuntimeTests
         unit/runtime/destruction/DestructionDamageRuntimeTests.cpp
+        unit/runtime/destruction/DestructionEventStreamTests.cpp
 )
 target_compile_features(HoroDestructionRuntimeTests PRIVATE cxx_std_20)
 target_link_libraries(HoroDestructionRuntimeTests PRIVATE HoroEngine::DestructionRuntime)
 horo_register_catch_test(HoroDestructionRuntimeTests LABELS "unit;destruction;headless")
+
+add_executable(HoroDestructionApplicationTests unit/application/destruction/DestructionEventDispatcherTests.cpp)
+target_compile_features(HoroDestructionApplicationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroDestructionApplicationTests PRIVATE HoroEngine::DestructionApplication)
+horo_register_catch_test(HoroDestructionApplicationTests LABELS "unit;destruction;headless")
 
 add_executable(HoroOfflineVoronoiTests unit/runtime/destruction/OfflineVoronoiTests.cpp)
 target_compile_features(HoroOfflineVoronoiTests PRIVATE cxx_std_20)

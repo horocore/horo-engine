@@ -486,6 +486,10 @@ horo_configure_target_header_boundary(HoroDestructionCook PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroDestructionRuntime PUBLIC_HEADERS
     Horo/Destruction/DestructionDamageRuntime.h
+    Horo/Destruction/DestructionEventStream.h
+)
+horo_configure_target_header_boundary(HoroDestructionApplication PUBLIC_HEADERS
+    Horo/Destruction/DestructionEventDispatcher.h
 )
 horo_configure_target_header_boundary(HoroDestructionReplication PUBLIC_HEADERS
     Horo/Destruction/DestructionReplication.h
