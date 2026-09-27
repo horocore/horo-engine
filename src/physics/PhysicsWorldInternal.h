@@ -167,7 +167,7 @@ namespace Horo::Physics {
 
     private:
         // The owner thread writes; foreign readers snapshot through this same bounded guard.
-        mutable std::atomic_flag lock_ = ATOMIC_FLAG_INIT;
+        mutable std::atomic_flag lock_ = ATOMIC_FLAG_INIT;  // NOSONAR(cpp:S8379) This guards value_.
         PhysicsPublishedTick value_{};
     };
 
