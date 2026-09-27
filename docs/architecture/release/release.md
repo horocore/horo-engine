@@ -412,6 +412,13 @@ The manifest uses a canonical serialization format before hashing or signing.
 Unknown required manifest fields cause validation failure. Optional extensions
 are namespaced and versioned.
 
+Checksum metadata is a deterministic projection of post-sign artifact records.
+It lists each final artifact's SHA-256 digest in portable path order, before
+`checksums.txt` and `manifest.json` are written. Neither metadata file may list
+itself; the final manifest can then account for the checksum file without an
+identity cycle. The projection is additive to the existing manifest contract;
+release hosts still own final-byte hashing and verification before publication.
+
 ## Runtime Compatibility Contract
 
 A game release declares runtime compatibility separately from editor project

@@ -336,6 +336,11 @@ namespace Horo::Release {
     ReleaseArtifactManifest::ReleaseArtifactManifest(ReleaseArtifactManifestData data, std::string json, const Sha256Digest &digest)
         : data_(std::move(data)), json_(std::move(json)), digest_(digest) {}
 
+    /** @copydoc IsValidReleaseArtifactPath */
+    bool IsValidReleaseArtifactPath(const std::string_view path) {
+        return SafeRelativePath(path);
+    }
+
     /** @copydoc ReleaseArtifactManifest::Create */
     Result<ReleaseArtifactManifest> ReleaseArtifactManifest::Create(ReleaseArtifactManifestData data) {
         if (!ValidData(data))
