@@ -98,12 +98,19 @@ namespace {
     [[nodiscard]] std::string ZipArchive(const std::string_view name, const std::string_view content,
                                          const std::optional<std::string_view> declaredContent = std::nullopt,
                                          const std::optional<std::pair<std::string_view, std::string_view>> extraFile = std::nullopt,
-                                         const bool includeInventory = true) {
+                                         const bool includeInventory = true, const bool uppercaseDigest = false) {
         mz_zip_archive writer{};
         REQUIRE(mz_zip_writer_init_heap(&writer, 0U, 0U));
         const auto digest = Horo::ComputeSha256(std::as_bytes(std::span{declaredContent.value_or(content)}));
+        std::string digestText = Horo::FormatSha256(digest);
+        if (uppercaseDigest) {
+            for (char &character : digestText) {
+                if (character >= 'a' && character <= 'f')
+                    character = static_cast<char>(character - 'a' + 'A');
+            }
+        }
         const std::string inventory =
-            "horo-update-files-v1\n" + std::string{name} + '\t' + std::to_string(content.size()) + '\t' + Horo::FormatSha256(digest) + '\n';
+            "horo-update-files-v1\n" + std::string{name} + '\t' + std::to_string(content.size()) + '\t' + digestText + '\n';
         if (includeInventory)
             REQUIRE(mz_zip_writer_add_mem(&writer, "horo-update-files-v1.txt", inventory.data(), inventory.size(), MZ_DEFAULT_COMPRESSION));
         REQUIRE(mz_zip_writer_add_mem(&writer, std::string{name}.c_str(), content.data(), content.size(), MZ_DEFAULT_COMPRESSION));
@@ -417,7 +424,8 @@ TEST_CASE("ZIP staging rejects undeclared files and declared digest mismatches",
     const std::array archives{ZipArchive("bin/editor", "verified editor", "altered editor"),
                               ZipArchive("bin/editor", "verified editor", std::nullopt,
                                          std::pair<std::string_view, std::string_view>{"extra.txt", "undeclared"}),
-                              ZipArchive("bin/editor", "verified editor", std::nullopt, std::nullopt, false)};
+                              ZipArchive("bin/editor", "verified editor", std::nullopt, std::nullopt, false),
+                              ZipArchive("bin/editor", "verified editor", std::nullopt, std::nullopt, true, true)};
     for (const auto &archive : archives) {
         const auto package = Package(archive);
         const auto paths = Paths(stage);

@@ -147,7 +147,7 @@ namespace Horo::Release {
             if (error != std::errc{} || end != sizeText.data() + sizeText.size() || std::to_string(size) != sizeText)
                 return Result<UpdateStagedFile>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
             auto digest = ParseSha256(row.substr(second + 1U));
-            if (digest.HasError())
+            if (digest.HasError() || FormatSha256(digest.Value()) != row.substr(second + 1U))
                 return Result<UpdateStagedFile>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
             return Result<UpdateStagedFile>::Success({std::string{row.substr(0U, first)}, size, std::move(digest).Value()});
         }
