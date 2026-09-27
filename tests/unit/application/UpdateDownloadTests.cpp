@@ -1,10 +1,13 @@
 #include "Horo/Release/UpdateDownloadSession.h"
 #include "Horo/Release/UpdateHttpDownload.h"
+#include "Horo/Release/UpdateStageReady.h"
 #include "Horo/Release/UpdateTransferCheckpointStore.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <span>
@@ -215,4 +218,68 @@ TEST_CASE("HTTPS adapter rejects invalid policy and cancellation before opening 
     cancellation.RequestCancellation();
     CHECK(DownloadUpdatePackageHttps(package, Paths(stage), Limits, files, Verifier(), cancellation.Token()).HasError());
     CHECK_FALSE(std::filesystem::exists(Paths(stage).partialFile));
+}
+
+TEST_CASE("Verified stage publishes a durable marker only for the exact private tree", "[release][update]") {
+    TemporaryStage stage;
+    const std::string payload(100U, 'p');
+    const auto package = Package(payload);
+    Horo::NativeDurableFileSystem files;
+    auto started = UpdateDownloadSession::Begin(package, Fresh(package), Paths(stage), Limits, files, {});
+    REQUIRE(started.HasValue());
+    auto session = std::move(started).Value();
+    REQUIRE(session.Append(std::as_bytes(std::span{payload})).HasValue());
+    auto checkpoint = session.Finish(Verifier());
+    REQUIRE(checkpoint.HasValue());
+
+    const auto root = stage.path / "candidate";
+    std::filesystem::create_directories(root / "bin");
+    const std::string executable = "verified editor";
+    {
+        std::ofstream output(root / "bin/editor", std::ios::binary);
+        output << executable;
+    }
+    const std::array inventory{
+        UpdateStagedFile{"bin/editor", executable.size(), Horo::ComputeSha256(std::as_bytes(std::span{executable}))}};
+    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
+    auto published = PublishVerifiedUpdateStage(package, checkpoint.Value(), Paths(stage).partialFile, root, inventory, archiveLimits,
+                                                files, Verifier(), {});
+    REQUIRE(published.HasValue());
+    CHECK(std::filesystem::is_regular_file(published.Value()));
+
+    {
+        std::ofstream output(root / "bin/editor", std::ios::binary | std::ios::trunc);
+        output << "changed";
+    }
+    CHECK(PublishVerifiedUpdateStage(package, checkpoint.Value(), Paths(stage).partialFile, root, inventory, archiveLimits, files,
+                                     Verifier(), {})
+              .HasError());
+    CHECK_FALSE(std::filesystem::exists(published.Value()));
+}
+
+TEST_CASE("Cancelled or invalid stage never publishes ready", "[release][update]") {
+    TemporaryStage stage;
+    const std::string payload(100U, 'p');
+    const auto package = Package(payload);
+    Horo::NativeDurableFileSystem files;
+    const auto root = stage.path / "candidate";
+    std::filesystem::create_directory(root);
+    const std::array inventory{UpdateStagedFile{"bin/editor", 1U, Horo::ComputeSha256(std::as_bytes(std::span{payload}))}};
+    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
+    Horo::CancellationSource cancellation;
+    cancellation.RequestCancellation();
+    CHECK(PublishVerifiedUpdateStage(package, {}, Paths(stage).partialFile, root, inventory, archiveLimits, files, Verifier(),
+                                     cancellation.Token())
+              .HasError());
+    CHECK_FALSE(std::filesystem::exists(root.string() + ".ready"));
+    CHECK(PublishVerifiedUpdateStage(package, {}, Paths(stage).partialFile, "relative/candidate", inventory, archiveLimits, files,
+                                     Verifier(), {})
+              .HasError());
+    const auto marker = std::filesystem::path{root.string() + ".ready"};
+    {
+        std::ofstream output(marker, std::ios::binary);
+        output << "preserve unrelated package path";
+    }
+    CHECK(PublishVerifiedUpdateStage(package, {}, marker, root, inventory, archiveLimits, files, Verifier(), {}).HasError());
+    CHECK(std::filesystem::is_regular_file(marker));
 }

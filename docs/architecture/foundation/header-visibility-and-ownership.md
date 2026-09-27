@@ -39,7 +39,8 @@ persists checkpoints only after private-file durability. This target depends on
 `HoroEngine::UpdateManifest` and contains no concrete network or filesystem
 backend. Generated standalone public-header consumers verify both headers.
 `HoroEngine::UpdateDownload` separately owns the additive
-`Horo/Release/UpdateDownloadSession.h` and `UpdateHttpDownload.h` host adapters.
+`Horo/Release/UpdateDownloadSession.h`, `UpdateHttpDownload.h`, and
+`UpdateStageReady.h` host adapters.
 It depends on UpdateTransfer and Platform, keeps native durable file writes and
 the private cURL HTTPS implementation out of the transfer policy target, and has
 no prior callers to migrate. Generated standalone header consumers check both

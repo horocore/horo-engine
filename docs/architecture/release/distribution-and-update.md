@@ -294,6 +294,11 @@ framing or content encoding. A resumed request sends the durable byte range and
 its strong ETag with `If-Range`; a fresh full response cannot silently replace
 partial bytes. The host calls this blocking adapter on its update job and owns
 progress dispatch to the user interface.
+Once the authenticated archive reader has extracted and supplied its complete
+per-file inventory, `PublishVerifiedUpdateStage` rechecks the complete private
+package and staged tree, clears any stale marker, and atomically publishes a
+durable marker bound to package and inventory digests. The host keeps both
+private inputs quiescent through this publication.
 
 ## Staging
 

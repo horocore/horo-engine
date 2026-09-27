@@ -260,7 +260,8 @@ target_compile_features(HoroUpdateTransfer PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateTransfer PUBLIC HoroEngine::UpdateManifest)
 
 add_library(HoroUpdateDownload STATIC application/release/UpdateDownloadSession.cpp
-        application/release/UpdateHttpResponse.cpp application/release/UpdateHttpDownload.cpp)
+        application/release/UpdateHttpResponse.cpp application/release/UpdateHttpDownload.cpp
+        application/release/UpdateStageReady.cpp)
 add_library(HoroEngine::UpdateDownload ALIAS HoroUpdateDownload)
 target_compile_features(HoroUpdateDownload PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateDownload PUBLIC HoroEngine::UpdateTransfer HoroEngine::Platform PRIVATE CURL::libcurl)
