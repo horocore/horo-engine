@@ -1,14 +1,10 @@
 #include "Horo/Audio/Internal/AudioCallbackWatchdog.h"
 
+#include "Horo/Audio/Internal/AudioCallbackSafetyHooks.h"
+
 #include <algorithm>
 
 namespace Horo::Audio::Backend {
-    namespace {
-        // Mutable thread-local scope is required to route static hooks to the active callback;
-        // Invoke restores the previous value before returning, including nested invocations.
-        constinit thread_local AudioCallbackWatchdog *activeWatchdog{};
-    }  // namespace
-
     /** @copydoc AudioCallbackWatchdog::Configure */
     void AudioCallbackWatchdog::Configure(const std::uint64_t deadlineNanoseconds,
                                           const std::uint64_t minimumFramesBetweenRecords) noexcept {
@@ -40,6 +36,13 @@ namespace Horo::Audio::Backend {
         write_.store(write + 1, std::memory_order_release);
     }
 
+    void AudioCallbackWatchdog::RecordAttempt(void *const context, const Safety::AudioCallbackAttempt attempt) noexcept {
+        auto &watchdog = *static_cast<AudioCallbackWatchdog *>(context);
+        const auto kind = attempt == Safety::AudioCallbackAttempt::Allocation ? AudioCallbackViolationKind::AllocationAttempt
+                                                                              : AudioCallbackViolationKind::LockAttempt;
+        watchdog.Record(kind, 0);
+    }
+
     /** @copydoc AudioCallbackWatchdog::ObserveDuration */
     void AudioCallbackWatchdog::ObserveDuration(const AudioDeviceEpoch &epoch, const std::uint64_t sampleFrame,
                                                 const std::uint64_t elapsedNanoseconds) noexcept {
@@ -64,12 +67,10 @@ namespace Horo::Audio::Backend {
 #else
         activeEpoch_ = invocation.epoch;
         activeFrame_ = invocation.sampleFrame;
-        auto *const previous = activeWatchdog;
-        activeWatchdog = this;
+        const Safety::AudioCallbackSafetyScope scope(this, &AudioCallbackWatchdog::RecordAttempt);
         const auto start = std::chrono::steady_clock::now();
         const RenderResult result = port.process(port.context, invocation);
         const auto end = std::chrono::steady_clock::now();
-        activeWatchdog = previous;
         if (const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count(); elapsed > 0)
             ObserveDuration(invocation.epoch, invocation.sampleFrame, static_cast<std::uint64_t>(elapsed));
         return result;
@@ -83,28 +84,20 @@ namespace Horo::Audio::Backend {
 #else
         activeEpoch_ = invocation.epoch;
         activeFrame_ = invocation.sampleFrame;
-        auto *const previous = activeWatchdog;
-        activeWatchdog = this;
+        const Safety::AudioCallbackSafetyScope scope(this, &AudioCallbackWatchdog::RecordAttempt);
         const RenderResult result = port.process(port.context, invocation);
-        activeWatchdog = previous;
         return result;
 #endif
     }
 
     /** @copydoc AudioCallbackWatchdog::OnAllocationAttempt */
     void AudioCallbackWatchdog::OnAllocationAttempt() noexcept {
-#if !defined(NDEBUG)
-        if (activeWatchdog)
-            activeWatchdog->Record(AudioCallbackViolationKind::AllocationAttempt, 0);
-#endif
+        Safety::OnAudioAllocationAttempt();
     }
 
     /** @copydoc AudioCallbackWatchdog::OnLockAttempt */
     void AudioCallbackWatchdog::OnLockAttempt() noexcept {
-#if !defined(NDEBUG)
-        if (activeWatchdog)
-            activeWatchdog->Record(AudioCallbackViolationKind::LockAttempt, 0);
-#endif
+        Safety::OnAudioLockAttempt();
     }
 
     /** @copydoc AudioCallbackWatchdog::Drain */

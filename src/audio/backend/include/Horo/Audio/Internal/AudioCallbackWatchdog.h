@@ -13,6 +13,10 @@
 #include <cstdint>
 #include <span>
 
+namespace Horo::Audio::Safety {
+    enum class AudioCallbackAttempt : std::uint8_t;
+}
+
 namespace Horo::Audio::Backend {
     /** @brief Fixed callback safety facts; no strings or diagnostic formatting enter the render thread. */
     enum class AudioCallbackViolationKind : std::uint8_t {
@@ -73,7 +77,7 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] AudioCallbackViolationDrain Drain(std::span<AudioCallbackViolation> output) noexcept;
 
     private:
-        friend class AudioCallbackWatchdogScope;
+        static void RecordAttempt(void *context, Safety::AudioCallbackAttempt attempt) noexcept;
         void Record(AudioCallbackViolationKind kind, std::uint64_t observedNanoseconds) noexcept;
 
         static constexpr std::size_t KindCount = 3;

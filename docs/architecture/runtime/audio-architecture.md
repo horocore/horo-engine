@@ -1865,12 +1865,15 @@ detachment must precede watchdog destruction. NullAudio retains deterministic
 simulated time: it participates in explicit forbidden-operation hooks but has
 no physical deadline samples.
 
-Explicit `OnAllocationAttempt` and `OnLockAttempt` hooks are for participating
-Horo render-core call sites. They do not globally interpose C++/C allocation or
-third-party/native locks; such operations require separate platform or sanitizer
-qualification. Hooks are inert outside the instrumented callback scope and in
-`NDEBUG` builds. No callback log, exception, heap fallback, blocking wait, or
-unbounded scan is added by this instrumentation.
+Explicit callback-safety hooks run immediately before heap construction in the
+Horo audio memory pool and scratch arena, and before each ingress staging mutex
+attempt. These are control-only operations under the normal ownership contract;
+if a supplied render port invokes one from a callback, the active backend scope
+records the forbidden attempt. The hooks do not globally interpose C++/C
+allocation or third-party/native locks; such operations require separate platform
+or sanitizer qualification. They are inert outside the instrumented callback
+scope and in `NDEBUG` builds. No callback log, exception, heap fallback, blocking
+wait, or unbounded scan is added by the instrumentation itself.
 
 ## Testing
 
