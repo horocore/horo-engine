@@ -97,6 +97,7 @@ horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/PlatformProviderManifestCook.h
     Horo/PlatformServices/PlatformRequest.h
     Horo/PlatformServices/PlatformRequestErrors.h
+    Horo/PlatformServices/PlatformServiceErrors.h
     Horo/PlatformServices/PlatformServiceInterfaces.h
     Horo/PlatformServices/PlatformServicesBackend.h
     Horo/PlatformServices/PlatformServicesFrontend.h
@@ -120,6 +121,7 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/ReleaseErrors.h
     Horo/Release/ReleaseProfile.h
     Horo/Release/ReleasePreflight.h
+    Horo/Release/ReleaseTargetMatrix.h
     Horo/Release/ReleaseVersion.h
 )
 horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
@@ -436,6 +438,9 @@ horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
     Horo/PCG/PCGSpatialSnapshot.h
     Horo/PCG/PCGRegistry.h
     Horo/PCG/PCGAsyncOperation.h
+)
+horo_configure_target_header_boundary(HoroPCGTerrainAdapter PUBLIC_HEADERS
+    Horo/PCGTerrain/TerrainInputSnapshot.h
 )
 horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
     Horo/Vfx/CpuParticleBuffer.h
