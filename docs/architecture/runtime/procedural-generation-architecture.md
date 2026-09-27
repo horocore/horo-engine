@@ -400,6 +400,19 @@ These integrations use immutable spatial snapshots and typed target-owner candid
 They do not expose live provider storage to PCG or grant nodes authority to mutate the
 integrated subsystem.
 
+The headless `HoroPCGTerrainAdapter` is a separate target depending on the PCG and
+Terrain public APIs; `HoroPCG` itself does not acquire a Terrain dependency. A Terrain
+owner supplies a complete, bounded row-major projection of committed height, upward
+normal, slope, material-layer and exclusion-mask values at its safe point. The adapter
+checks the exact registry dataset/capability/bounds/content publication, copies those
+values into an immutable PCG-facing root, and retains neither the registry nor mutable
+Terrain storage. Current-at-commit/reuse must compare the registry publication,
+Terrain content/residency/mutation/capability revisions and provider/origin revision;
+retained old roots remain readable but logically stale. The registry itself contains
+metadata, not height samples: the runtime Terrain producer must supply the committed
+sample projection, and absence of that projection is unavailable coverage, never a
+fabricated flat surface.
+
 [ADR-154](../../adr/154-pcg-cross-system-authority-readiness-and-commit-boundary.md)
 defines the integration adapter and readiness contract. Adapters depend on both the PCG
 and target public APIs and are composed by the host; PCG Core does not depend on target
