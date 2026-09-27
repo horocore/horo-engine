@@ -3,8 +3,10 @@
 #include "Horo/Release/UpdateTransferErrors.h"
 
 #include <algorithm>
+#include <fstream>
 #include <span>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace Horo::Release {
@@ -100,5 +102,37 @@ namespace Horo::Release {
         if (auto published = files.AtomicReplace(prepared, ready); published.HasError())
             return Result<std::filesystem::path>::Failure(published.ErrorValue());
         return Result<std::filesystem::path>::Success(std::move(ready));
+    }
+
+    /** @copydoc VerifyReadyUpdateStage */
+    Result<void> VerifyReadyUpdateStage(const UpdatePackageRecord &package, const UpdateTransferCheckpoint &checkpoint,
+                                        const std::filesystem::path &packageFile, const std::filesystem::path &stageRoot,
+                                        const std::span<const UpdateStagedFile> inventory, const UpdateArchiveLimits &limits,
+                                        const Security::ArtifactVerifier &verifier) {
+        const auto invalid = [] {
+            return Result<void>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
+        };
+        if (!ValidStagePath(stageRoot, packageFile))
+            return invalid();
+        auto marker = stageRoot;
+        marker += ".ready";
+        if (packageFile == marker)
+            return invalid();
+        auto expected = ReadyRecord(package, inventory);
+        if (expected.HasError())
+            return Result<void>::Failure(expected.ErrorValue());
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(marker, error)) || error ||
+            std::filesystem::hard_link_count(marker, error) != 1U || error ||
+            std::filesystem::file_size(marker, error) != expected.Value().size() || error)
+            return invalid();
+        std::ifstream input(marker, std::ios::binary);
+        std::string actual(expected.Value().size(), '\0');
+        input.read(actual.data(), static_cast<std::streamsize>(actual.size()));
+        if (!input || actual != expected.Value())
+            return invalid();
+        if (auto verified = VerifyCompletedUpdateTransfer(package, checkpoint, packageFile, verifier); verified.HasError())
+            return verified;
+        return VerifyUpdateStagedTree(stageRoot, inventory, limits);
     }
 }  // namespace Horo::Release

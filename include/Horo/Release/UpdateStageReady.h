@@ -34,6 +34,23 @@ namespace Horo::Release {
         NativeDurableFileSystem &files, const Security::ArtifactVerifier &verifier, CancellationToken cancellation);
 
     /**
+     * @brief Reauthenticates a ready stage and its exact marker immediately before activation.
+     * @param package Signed package selected by update discovery.
+     * @param checkpoint Complete durable checkpoint for the quiescent package file.
+     * @param packageFile Complete private package file beside stageRoot.
+     * @param stageRoot Quiescent staged tree whose sibling marker has already been published.
+     * @param inventory Complete file inventory authenticated from the package.
+     * @param limits Host archive limits used when the stage was created.
+     * @param verifier Trusted publisher signature verifier.
+     * @return Success only when marker, package, and staged file bytes agree.
+     * @note The activation host holds the private parent quiescent throughout verification and switching.
+     */
+    [[nodiscard]] Result<void> VerifyReadyUpdateStage(const UpdatePackageRecord &package, const UpdateTransferCheckpoint &checkpoint,
+                                                      const std::filesystem::path &packageFile, const std::filesystem::path &stageRoot,
+                                                      std::span<const UpdateStagedFile> inventory, const UpdateArchiveLimits &limits,
+                                                      const Security::ArtifactVerifier &verifier);
+
+    /**
      * @brief Authenticates a ZIP and its internal file inventory, extracts it into a new private stage, then publishes ready.
      * @param package Signed ZIP package identity selected by update discovery.
      * @param checkpoint Durable checkpoint for the complete quiescent package file.

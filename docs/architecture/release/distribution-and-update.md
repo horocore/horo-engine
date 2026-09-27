@@ -344,6 +344,10 @@ version.
 ## Activation
 
 Activation occurs after editor and CLI processes using the installation exit.
+`VerifyReadyUpdateStage` must reauthenticate the exact durable ready marker,
+signed private package, and staged file tree while the installation is locked
+and quiescent, immediately before any active-version transition. A marker alone
+is not activation authority.
 The updater:
 
 1. acquires the installation lock
