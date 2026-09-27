@@ -8,6 +8,13 @@ add_test(NAME HoroDependencyDirectionNegativeConfigureTest
 set_tests_properties(HoroDependencyDirectionNegativeConfigureTest PROPERTIES
     LABELS "architecture;cmake")
 
+add_test(NAME HoroAudioDependencyPolicyTest
+    COMMAND "${CMAKE_COMMAND}"
+        "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/VerifyAudioDependencyPolicy.cmake")
+set_tests_properties(HoroAudioDependencyPolicyTest PROPERTIES
+    LABELS "architecture;cmake;audio")
+
 add_test(NAME HoroMcpBoundaryNegativeConfigureTest
     COMMAND "${CMAKE_COMMAND}"
         "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
@@ -991,7 +998,7 @@ add_executable(HoroReleaseTargetMatrixTests
         unit/application/ReleaseTargetMatrixTests.cpp
 )
 target_compile_features(HoroReleaseTargetMatrixTests PRIVATE cxx_std_20)
-target_link_libraries(HoroReleaseTargetMatrixTests PRIVATE HoroEngine::Application)
+target_link_libraries(HoroReleaseTargetMatrixTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
 add_executable(HoroProjectMigrationTests
         unit/application/ProjectMigrationTests.cpp
         unit/application/ProjectMigrationCatalogTests.cpp

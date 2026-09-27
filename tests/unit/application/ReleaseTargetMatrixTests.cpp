@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <format>
+#include <nlohmann/json.hpp>
 #include <string_view>
 
 namespace {
@@ -11,6 +13,20 @@ namespace {
 
     [[nodiscard]] Sha256Digest Digest(const std::string_view text) {
         return ComputeSha256(std::as_bytes(std::span{text.data(), text.size()}));
+    }
+
+    [[nodiscard]] std::string Notes(const std::string_view version = "1.2.3") {
+        const std::string markdown = std::format("## [{}] — 2026-09-26\n\n### Added\n- Reviewed matrix behavior.\n", version);
+        return nlohmann::json{{"schemaVersion", 1},
+                              {"product", "horo-editor"},
+                              {"version", version},
+                              {"locale", "en-US"},
+                              {"date", "2026-09-26"},
+                              {"sections", nlohmann::json::array(
+                                               {{{"category", "Added"}, {"items", nlohmann::json::array({"Reviewed matrix behavior."})}}})},
+                              {"markdown", markdown}}
+                   .dump() +
+               '\n';
     }
 
     [[nodiscard]] EffectiveReleaseProfile Profile(const DistributionPlatform platform, const DistributionPackageFormat format) {
@@ -74,7 +90,8 @@ namespace {
                                     .profileDigest = Digest(request.profile.SerializeCanonical()),
                                     .toolchainDigest = Digest("toolchain"),
                                     .policyDigest = Digest("policy"),
-                                    .availableCredentials = {{42}}};
+                                    .availableCredentials = {{42}},
+                                    .releaseNotesSnapshot = Notes()};
         return {"job-" + std::string{id}, std::string{id}, requirement, std::move(request), std::move(facts), {14, 0, 0}, "sdk-1"};
     }
 
@@ -99,6 +116,26 @@ namespace {
         });
     }
 }  // namespace
+
+TEST_CASE("Matrix fixture freezes exact release notes and rejects a mismatched version", "[unit][application][release][matrix]") {
+    const ReleaseMachine host{DistributionPlatform::Linux, DistributionArchitecture::X64};
+    ReleaseMatrixCellRequest cell = Cell("notes", host.platform, host.architecture, DistributionPackageFormat::TarGzip);
+    const ReleaseToolchainDescriptor toolchain = Toolchain(host, host, DistributionPackageFormat::TarGzip);
+    auto matrix = PlanReleaseTargetMatrix("release-notes", host, std::span{&cell, 1U}, std::span{&toolchain, 1U});
+    REQUIRE(matrix.cells.size() == 1);
+    REQUIRE(matrix.cells[0].issues.empty());
+    REQUIRE(matrix.cells[0].plan.has_value());
+    CHECK(matrix.cells[0].plan->ReleaseNotesSnapshot() == cell.facts.releaseNotesSnapshot);
+    CHECK(matrix.cells[0].plan->Identities().notes == Digest(cell.facts.releaseNotesSnapshot));
+
+    cell.facts.releaseNotesSnapshot = Notes("1.2.4");
+    matrix = PlanReleaseTargetMatrix("release-notes", host, std::span{&cell, 1U}, std::span{&toolchain, 1U});
+    REQUIRE(matrix.cells.size() == 1);
+    CHECK_FALSE(matrix.cells[0].plan.has_value());
+    CHECK(std::ranges::any_of(matrix.cells[0].issues, [](const ReleaseTargetIssue &issue) {
+        return issue.code == ReleaseTargetIssueCode::PreflightFailed && issue.field == "notes.version";
+    }));
+}
 
 TEST_CASE("Native Windows, Linux and macOS targets produce independent frozen release plans", "[unit][application][release][matrix]") {
     for (const ReleaseMachine machine : {ReleaseMachine{DistributionPlatform::Windows, DistributionArchitecture::X64},
