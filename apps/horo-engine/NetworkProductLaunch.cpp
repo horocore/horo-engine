@@ -267,8 +267,7 @@ namespace Horo::Application::Internal {
             Result<void> RunPhase(const Runtime::RuntimePhase phase) override {
                 if (phase != Runtime::RuntimePhase::NetworkPoll)
                     return Result<void>::Success();
-                auto polled = router_->RunNetworkPoll(++pollTick_);
-                if (polled.HasError())
+                if (auto polled = router_->RunNetworkPoll(++pollTick_); polled.HasError())
                     return Result<void>::Failure(polled.ErrorValue());
                 return Result<void>::Success();
             }

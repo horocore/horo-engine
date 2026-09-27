@@ -3,7 +3,6 @@
 #include "Horo/Network/NetworkErrors.h"
 
 #include <algorithm>
-#include <exception>
 #include <new>
 #include <utility>
 
@@ -29,6 +28,10 @@ namespace Horo::Network {
             std::uint32_t count{};
         };
 
+        Handler(const InboundHandlerBinding &handlerBinding, const std::shared_ptr<IInboundMessageHandler> &handlerOwner,
+                const std::size_t maximumSessions)
+            : binding(handlerBinding), owner(handlerOwner), rates(maximumSessions) {}
+
         InboundHandlerBinding binding;
         std::weak_ptr<IInboundMessageHandler> owner;
         std::vector<RateState> rates;
@@ -36,7 +39,7 @@ namespace Horo::Network {
 
     /** @copydoc InboundMessageDispatcher::InboundMessageDispatcher */
     InboundMessageDispatcher::InboundMessageDispatcher(INetworkTransport &transport, const MessageCodecRegistry &codecs,
-                                                       InboundDispatchLimits limits)
+                                                       const InboundDispatchLimits &limits)
         : transport_(transport), codecs_(codecs), limits_(limits), owner_(std::this_thread::get_id()), queue_(limits.maximumQueuedPackets) {
         sessions_.reserve(limits.maximumSessions);
         handlers_.reserve(limits.maximumHandlers);
@@ -56,8 +59,9 @@ namespace Horo::Network {
             limits.maximumPacketsPerPoll > limits.maximumQueuedPackets || limits.envelope.maximumFrameBytes == 0)
             return Result<std::unique_ptr<InboundMessageDispatcher>>::Failure(MakeError(NetworkErrors::NetworkIoServiceInvalid));
         try {
-            return Result<std::unique_ptr<InboundMessageDispatcher>>::Success(
-                std::unique_ptr<InboundMessageDispatcher>(new InboundMessageDispatcher(transport, codecs, limits)));
+            auto created = std::unique_ptr<InboundMessageDispatcher>(
+                new InboundMessageDispatcher(transport, codecs, limits));  // NOSONAR: private constructor enforces this validated factory.
+            return Result<std::unique_ptr<InboundMessageDispatcher>>::Success(std::move(created));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<InboundMessageDispatcher>>::Failure(MakeError(NetworkErrors::NetworkIoServiceCapacityExceeded));
         }
@@ -104,10 +108,10 @@ namespace Horo::Network {
     void InboundMessageDispatcher::RevokeSession(const ConnectionHandle connection) noexcept {
         if (std::this_thread::get_id() != owner_)
             return;
-        for (auto &entry : sessions_)
+        for (const auto &entry : sessions_)
             if (entry->connection == connection)
                 entry->cancellation.RequestCancellation();
-        for (auto &entry : sessions_)
+        for (const auto &entry : sessions_)
             if (entry->connection == connection)
                 entry->gate.Shutdown();
         std::erase_if(sessions_, [connection](const auto &entry) {
@@ -138,7 +142,7 @@ namespace Horo::Network {
         if (handlers_.size() == limits_.maximumHandlers)
             return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
         try {
-            handlers_.push_back({binding, handler, std::vector<Handler::RateState>(limits_.maximumSessions)});
+            handlers_.emplace_back(binding, handler, limits_.maximumSessions);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
         }
@@ -155,7 +159,7 @@ namespace Horo::Network {
     void InboundMessageDispatcher::RevokeHandler(const ProtocolId protocol, const MessageTypeId message) noexcept {
         if (std::this_thread::get_id() != owner_)
             return;
-        std::erase_if(handlers_, [=](const Handler &entry) {
+        std::erase_if(handlers_, [protocol, message](const Handler &entry) {
             return entry.binding.protocol == protocol && entry.binding.message == message;
         });
     }
@@ -173,15 +177,16 @@ namespace Horo::Network {
 
     /** @copydoc InboundMessageDispatcher::Dispatch */
     Result<void> InboundMessageDispatcher::Dispatch(NetworkTransportEvent &event, const std::uint64_t nowTick) {
-        if (event.kind > NetworkTransportEventKind::Failed)
+        using enum NetworkTransportEventKind;
+        if (event.kind > Failed)
             return RejectAndClose(event.connection, MakeError(NetworkErrors::TransportMalformedPacket));
-        if (event.kind == NetworkTransportEventKind::PacketReceived)
+        if (event.kind == PacketReceived)
             return DispatchPacket(event, nowTick);
-        if (event.kind == NetworkTransportEventKind::Closed || event.kind == NetworkTransportEventKind::Failed)
+        if (event.kind == Closed || event.kind == Failed)
             RevokeSession(event.connection);
         if (auto host = sessionHost_.lock())
             host->OnTransportEvent(std::move(event));
-        else if (event.kind == NetworkTransportEventKind::Accepted || event.kind == NetworkTransportEventKind::Connected)
+        else if (event.kind == Accepted || event.kind == Connected)
             return transport_.Close(event.connection);  // No host trust authority; fail closed.
         return Result<void>::Success();
     }
@@ -227,8 +232,8 @@ namespace Horo::Network {
         if (decoded.HasError())
             return RejectAndClose(event.connection, std::move(decoded).ErrorValue());
         const auto &message = decoded.Value();
-        const auto *negotiation = session.Value()->lifecycle->Negotiation();
-        if (negotiation == nullptr || message.protocol != negotiation->protocol)
+        if (const auto *negotiation = session.Value()->lifecycle->Negotiation();
+            negotiation == nullptr || message.protocol != negotiation->protocol)
             return RejectAndClose(event.connection, MakeError(NetworkErrors::GameplayDispatchRejected));
         const auto handler = std::ranges::find_if(handlers_, [&](const Handler &entry) {
             return entry.binding.protocol == message.protocol && entry.binding.message == message.message;
@@ -266,15 +271,16 @@ namespace Horo::Network {
             input{event.connection,    session->generation, event.channel, event.delivery, handler.binding.traffic, message.sequence, 0,
                   event.payload.size()};
         try {
-            return session->gate.Apply(input, nowTick, [&]() -> Result<void> {
+            // Apply invokes synchronously; pin both owners while the decoded message and rate slot are borrowed.
+            return session->gate.Apply(input, nowTick,
+                                       [rate, &message, bound, session, connection = event.connection, generation = session->generation,
+                                        nowTick] {
                 ++rate->count;
-                if (auto activity = session->lifecycle->RecordActivity(event.connection, session->generation, nowTick); activity.HasError())
+                if (auto activity = session->lifecycle->RecordActivity(connection, generation, nowTick); activity.HasError())
                     return activity;
                 return bound->Handle(message);
             });
-        } catch (const std::exception &) {
-            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
-        } catch (...) {
+        } catch (...) {  // NOSONAR: non-std handler throws require typed rejection; replay-consumption regression covers this boundary.
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         }
     }
@@ -289,8 +295,7 @@ namespace Horo::Network {
         if (nowTick == 0 || nowTick < lastTick_)
             return Result<InboundDispatchReport>::Failure(MakeError(NetworkErrors::MessageDeliveryInvalid));
         lastTick_ = nowTick;
-        const auto polled = transport_.PollEvents(*this);
-        if (polled.HasError()) {
+        if (const auto polled = transport_.PollEvents(*this); polled.HasError()) {
             Shutdown();  // A partial native poll cannot leave staged events or authority live.
             transport_.Shutdown();
             return Result<InboundDispatchReport>::Failure(polled.ErrorValue());
@@ -337,9 +342,9 @@ namespace Horo::Network {
         if (shuttingDown_)
             return;
         shuttingDown_ = true;
-        for (auto &session : sessions_)
+        for (const auto &session : sessions_)
             session->cancellation.RequestCancellation();
-        for (auto &session : sessions_)
+        for (const auto &session : sessions_)
             session->gate.Shutdown();
         sessions_.clear();
         handlers_.clear();

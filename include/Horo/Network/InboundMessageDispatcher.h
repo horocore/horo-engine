@@ -100,7 +100,7 @@ namespace Horo::Network {
     private:
         struct Session;
         struct Handler;
-        InboundMessageDispatcher(INetworkTransport &transport, const MessageCodecRegistry &codecs, InboundDispatchLimits limits);
+        InboundMessageDispatcher(INetworkTransport &transport, const MessageCodecRegistry &codecs, const InboundDispatchLimits &limits);
         void Consume(NetworkTransportEvent event) noexcept override;
         [[nodiscard]] Result<void> Dispatch(NetworkTransportEvent &event, std::uint64_t nowTick);
         [[nodiscard]] Result<void> DispatchPacket(NetworkTransportEvent &event, std::uint64_t nowTick);

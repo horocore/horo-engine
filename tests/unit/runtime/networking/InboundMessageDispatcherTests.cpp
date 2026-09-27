@@ -98,6 +98,16 @@ namespace Horo::Network {
             }
         };
 
+        class NonStandardThrowingHandler final : public IInboundMessageHandler {
+        public:
+            std::size_t called{};
+
+            Result<void> Handle(const MessageEnvelope &) override {
+                ++called;
+                throw 42;
+            }
+        };
+
         struct Fixture final {
             std::array<ProtocolIdentityDescriptor, 1> protocols{
                 ProtocolIdentityDescriptor{WireIdentity<ProtocolId>(1), {{1, 0}, {1, 3}}},
@@ -230,6 +240,23 @@ namespace Horo::Network {
         REQUIRE(mixed.Value().processedEvents == 2);
         REQUIRE(mixed.Value().rejectedPackets == 1);
         REQUIRE(fixture.handler->called == 3);
+    }
+
+    TEST_CASE("Inbound dispatch converts nonstandard handler throws without retrying consumed replay state", "[unit][network][dispatch]") {
+        Fixture fixture;
+        auto throwing = std::make_shared<NonStandardThrowingHandler>();
+        REQUIRE(fixture.router
+                    ->RegisterHandler({fixture.protocols[0].id, fixture.messages[0].id, MessageTrafficClass::Command,
+                                       Runtime::RuntimePhase::NetworkPoll, 4},
+                                      throwing)
+                    .HasValue());
+        REQUIRE(fixture.router->RegisterSession(fixture.ActiveSession(), Connection(), Session(), fixture.Gate(), 22).HasValue());
+        fixture.Enqueue(1);
+        RequirePacketRejection(fixture.router->RunNetworkPoll(23), NetworkErrors::GameplayDispatchRejected);
+        REQUIRE(throwing->called == 1);
+        fixture.Enqueue(1);
+        RequirePacketRejection(fixture.router->RunNetworkPoll(24), NetworkErrors::MessageDeliveryDuplicate);
+        REQUIRE(throwing->called == 1);
     }
 
     TEST_CASE("Inbound dispatch rejects absent revoked malformed and expired sessions before handlers", "[unit][network][dispatch]") {
