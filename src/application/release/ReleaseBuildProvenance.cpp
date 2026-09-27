@@ -31,12 +31,13 @@ namespace Horo::Release {
         }
 
         [[nodiscard]] bool SafePath(const std::string_view path) {
-            if (path.empty() || path.size() > 512U || path.front() == '/' || path.back() == '/' || path.find('\\') != path.npos)
+            if (path.empty() || path.size() > 512U || path.front() == '/' || path.back() == '/' ||
+                path.find('\\') != std::string_view::npos)
                 return false;
             std::size_t start = 0;
             while (start < path.size()) {
                 const auto end = path.find('/', start);
-                const auto part = path.substr(start, end == path.npos ? path.npos : end - start);
+                const auto part = path.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
                 if (!SafeName(part) || part.back() == '.' || part == "." || part == "..")
                     return false;
                 std::string stem{part.substr(0, part.find('.'))};
@@ -44,7 +45,7 @@ namespace Horo::Release {
                 if (stem == "con" || stem == "prn" || stem == "aux" || stem == "nul" ||
                     (stem.size() == 4U && (stem.starts_with("com") || stem.starts_with("lpt")) && stem[3] >= '1' && stem[3] <= '9'))
                     return false;
-                if (end == path.npos)
+                if (end == std::string_view::npos)
                     break;
                 start = end + 1U;
             }
@@ -55,16 +56,12 @@ namespace Horo::Release {
             if (data.files.empty() || data.files.size() > MaximumFiles || data.features.size() > MaximumNames ||
                 data.environment.size() > MaximumNames)
                 return false;
-            for (const auto &feature : data.features)
-                if (!SafeName(feature))
-                    return false;
-            for (const auto &entry : data.environment)
-                if (!SafeName(entry.name))
-                    return false;
-            for (const auto &file : data.files)
-                if (!SafePath(file.path))
-                    return false;
-            return true;
+            return std::ranges::all_of(data.features, SafeName) &&
+                   std::ranges::all_of(data.environment, [](const ReleaseEnvironmentIdentity &entry) {
+                return SafeName(entry.name);
+            }) && std::ranges::all_of(data.files, [](const ReleaseUnsignedFile &file) {
+                return SafePath(file.path);
+            });
         }
 
         [[nodiscard]] bool UniquePaths(const std::vector<ReleaseUnsignedFile> &files) {
@@ -120,8 +117,8 @@ namespace Horo::Release {
                 !document["features"].is_array() || !document.contains("environment") || !document["environment"].is_array() ||
                 !document.contains("files") || !document["files"].is_array())
                 return false;
-            const Json &frozen = document["frozen"];
-            if (!ReadDigest(frozen, "sourceTree", data.frozen.sourceTree) ||
+            if (const Json &frozen = document["frozen"];
+                !ReadDigest(frozen, "sourceTree", data.frozen.sourceTree) ||
                 !ReadDigest(frozen, "dependencyLock", data.frozen.dependencyLock) || !ReadDigest(frozen, "profile", data.frozen.profile) ||
                 !ReadDigest(frozen, "toolchain", data.frozen.toolchain) || !ReadDigest(frozen, "policy", data.frozen.policy) ||
                 !ReadDigest(frozen, "notes", data.frozen.notes) || !ReadDigest(document, "buildScript", data.buildScript))
@@ -153,9 +150,47 @@ namespace Horo::Release {
             }
             return true;
         }
+
+        /** @brief Appends changed environment identities from two sorted snapshots. */
+        void CompareEnvironment(const std::vector<ReleaseEnvironmentIdentity> &left, const std::vector<ReleaseEnvironmentIdentity> &right,
+                                std::vector<ReleaseBuildVariance> &differences) {
+            std::size_t leftIndex = 0;
+            std::size_t rightIndex = 0;
+            while (leftIndex < left.size() || rightIndex < right.size()) {
+                if (rightIndex == right.size() || (leftIndex < left.size() && left[leftIndex].name < right[rightIndex].name)) {
+                    differences.emplace_back("environment." + left[leftIndex++].name);
+                } else if (leftIndex == left.size() || right[rightIndex].name < left[leftIndex].name) {
+                    differences.emplace_back("environment." + right[rightIndex++].name);
+                } else {
+                    if (left[leftIndex] != right[rightIndex])
+                        differences.emplace_back("environment." + left[leftIndex].name);
+                    ++leftIndex;
+                    ++rightIndex;
+                }
+            }
+        }
+
+        /** @brief Appends changed file identities from two sorted snapshots. */
+        void CompareFiles(const std::vector<ReleaseUnsignedFile> &left, const std::vector<ReleaseUnsignedFile> &right,
+                          std::vector<ReleaseBuildVariance> &differences) {
+            std::size_t leftIndex = 0;
+            std::size_t rightIndex = 0;
+            while (leftIndex < left.size() || rightIndex < right.size()) {
+                if (rightIndex == right.size() || (leftIndex < left.size() && left[leftIndex].path < right[rightIndex].path)) {
+                    differences.emplace_back("files." + left[leftIndex++].path);
+                } else if (leftIndex == left.size() || right[rightIndex].path < left[leftIndex].path) {
+                    differences.emplace_back("files." + right[rightIndex++].path);
+                } else {
+                    if (left[leftIndex] != right[rightIndex])
+                        differences.emplace_back("files." + left[leftIndex].path);
+                    ++leftIndex;
+                    ++rightIndex;
+                }
+            }
+        }
     }  // namespace
 
-    ReleaseBuildProvenance::ReleaseBuildProvenance(ReleaseBuildProvenanceData data, std::string json, const Sha256Digest digest)
+    ReleaseBuildProvenance::ReleaseBuildProvenance(ReleaseBuildProvenanceData data, std::string json, const Sha256Digest &digest)
         : data_(std::move(data)), json_(std::move(json)), digest_(digest) {}
 
     /** @copydoc ReleaseBuildProvenance::Create */
@@ -216,7 +251,7 @@ namespace Horo::Release {
         std::vector<ReleaseBuildVariance> differences;
         const auto check = [&differences](const bool changed, const char *name) {
             if (changed)
-                differences.push_back({name});
+                differences.emplace_back(name);
         };
         check(data_.frozen.sourceTree != other.data_.frozen.sourceTree, "frozen.sourceTree");
         check(data_.frozen.dependencyLock != other.data_.frozen.dependencyLock, "frozen.dependencyLock");
@@ -227,38 +262,8 @@ namespace Horo::Release {
         check(data_.buildScript != other.data_.buildScript, "buildScript");
         check(data_.sourceEpochSeconds != other.data_.sourceEpochSeconds, "normalization.sourceEpochSeconds");
         check(data_.features != other.data_.features, "features");
-        std::size_t environmentLeft = 0;
-        std::size_t environmentRight = 0;
-        while (environmentLeft < data_.environment.size() || environmentRight < other.data_.environment.size()) {
-            if (environmentRight == other.data_.environment.size() ||
-                (environmentLeft < data_.environment.size() &&
-                 data_.environment[environmentLeft].name < other.data_.environment[environmentRight].name)) {
-                differences.push_back({"environment." + data_.environment[environmentLeft++].name});
-            } else if (environmentLeft == data_.environment.size() ||
-                       other.data_.environment[environmentRight].name < data_.environment[environmentLeft].name) {
-                differences.push_back({"environment." + other.data_.environment[environmentRight++].name});
-            } else {
-                if (data_.environment[environmentLeft] != other.data_.environment[environmentRight])
-                    differences.push_back({"environment." + data_.environment[environmentLeft].name});
-                ++environmentLeft;
-                ++environmentRight;
-            }
-        }
-        std::size_t left = 0;
-        std::size_t right = 0;
-        while (left < data_.files.size() || right < other.data_.files.size()) {
-            if (right == other.data_.files.size() ||
-                (left < data_.files.size() && data_.files[left].path < other.data_.files[right].path)) {
-                differences.push_back({"files." + data_.files[left++].path});
-            } else if (left == data_.files.size() || other.data_.files[right].path < data_.files[left].path) {
-                differences.push_back({"files." + other.data_.files[right++].path});
-            } else {
-                if (data_.files[left] != other.data_.files[right])
-                    differences.push_back({"files." + data_.files[left].path});
-                ++left;
-                ++right;
-            }
-        }
+        CompareEnvironment(data_.environment, other.data_.environment, differences);
+        CompareFiles(data_.files, other.data_.files, differences);
         return differences;
     }
 }  // namespace Horo::Release
