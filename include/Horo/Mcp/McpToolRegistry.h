@@ -77,7 +77,18 @@ namespace Horo::Mcp {
 
     /** @brief Immutable published registry generation retained by active readers. */
     class McpToolSnapshot final {
+        struct ConstructionKey final {
+        private:
+            friend class McpToolRegistry;
+            ConstructionKey() = default;
+
+        public:
+            ConstructionKey(const ConstructionKey &) = default;
+        };
+
     public:
+        /** @brief Internal construction seam used only by the registry's atomic publication. */
+        explicit McpToolSnapshot(ConstructionKey, std::uint64_t generation, std::vector<McpToolRegistration> entries);
         /** @brief Returns the monotonically increasing publication generation. */
         [[nodiscard]] std::uint64_t Generation() const noexcept;
         /** @brief Lists descriptors in stable ID order, filtered by the host-approved grant set.
@@ -91,7 +102,6 @@ namespace Horo::Mcp {
 
     private:
         friend class McpToolRegistry;
-        explicit McpToolSnapshot(std::uint64_t generation, std::vector<McpToolRegistration> entries);
         std::uint64_t generation_{};
         std::vector<McpToolRegistration> entries_;
     };

@@ -36,6 +36,13 @@ namespace {
         }
     };
 
+    class ThrowingNonStandardAdapter final : public IMcpToolAdapter {
+    public:
+        Result<nlohmann::json> Invoke(const nlohmann::json &, const McpRequestContext &) override {
+            throw 42;
+        }
+    };
+
     [[nodiscard]] McpToolRegistration Tool(std::string id, const std::shared_ptr<IMcpToolAdapter> &adapter,
                                            std::vector<std::string> capabilities = {}) {
         return {.descriptor = {.id = {std::move(id)},
@@ -286,6 +293,37 @@ TEST_CASE("MCP nested schema validates arrays enums string limits and finite num
     CHECK(adapter->calls == 1);
 }
 
+TEST_CASE("MCP schema matching preserves primitive types bounds and open object members", "[unit][mcp][registry]") {
+    McpToolRegistry registry;
+    const auto adapter = std::make_shared<CountingAdapter>();
+    auto entry = Tool("primitive.query", adapter);
+    entry.descriptor.inputSchema = {{"type", "object"},
+                                    {"properties",
+                                     {{"flag", {{"type", "boolean"}}},
+                                      {"ratio", {{"type", "number"}, {"minimum", 0}, {"maximum", 1}}},
+                                      {"nothing", {{"type", "null"}}},
+                                      {"items", {{"type", "array"}, {"minItems", 1}, {"maxItems", 2}, {"items", {{"type", "integer"}}}}}}},
+                                    {"required", {"flag", "ratio", "nothing", "items"}},
+                                    {"additionalProperties", true}};
+    REQUIRE(registry.Publish({std::move(entry)}).HasValue());
+    const auto snapshot = registry.Read();
+    const nlohmann::json valid{{"flag", true}, {"ratio", 0.5}, {"nothing", nullptr}, {"items", {1, 2}}, {"extra", "allowed"}};
+    REQUIRE(snapshot->Invoke({"primitive.query"}, valid, Context()).HasValue());
+    CHECK(adapter->calls == 1);
+
+    for (const auto &[name, replacement] : std::vector<std::pair<std::string, nlohmann::json>>{{"flag", 1},
+                                                                                               {"ratio", 2},
+                                                                                               {"nothing", false},
+                                                                                               {"items", nlohmann::json::array()}}) {
+        auto invalid = valid;
+        invalid[name] = replacement;
+        const auto result = snapshot->Invoke({"primitive.query"}, invalid, Context());
+        REQUIRE(result.HasError());
+        CHECK(Code(result.ErrorValue()) == McpErrors::ToolInputInvalid.code.Value());
+        CHECK(adapter->calls == 1);
+    }
+}
+
 TEST_CASE("MCP registry rejects malformed UTF-8 arguments before application invocation", "[unit][mcp][registry]") {
     McpToolRegistry registry;
     const auto adapter = std::make_shared<CountingAdapter>();
@@ -314,6 +352,11 @@ TEST_CASE("MCP snapshots retain adapters after registry teardown and translate a
     const auto result = registry.Read()->Invoke({"throws.query"}, {{"count", 1}}, Context());
     REQUIRE(result.HasError());
     CHECK(Code(result.ErrorValue()) == McpErrors::ControllerFailed.code.Value());
+
+    REQUIRE(registry.Publish({Tool("throws.nonstandard", std::make_shared<ThrowingNonStandardAdapter>())}).HasValue());
+    const auto nonStandard = registry.Read()->Invoke({"throws.nonstandard"}, {{"count", 1}}, Context());
+    REQUIRE(nonStandard.HasError());
+    CHECK(Code(nonStandard.ErrorValue()) == McpErrors::ControllerFailed.code.Value());
 }
 
 TEST_CASE("MCP candidate publication is all-or-nothing across concurrent snapshot readers", "[unit][mcp][registry]") {

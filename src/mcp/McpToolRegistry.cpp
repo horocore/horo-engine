@@ -4,6 +4,7 @@
 #include "Horo/Mcp/McpErrors.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <ranges>
@@ -35,7 +36,8 @@ namespace Horo::Mcp {
         /** @brief Applies a finite structural budget before serialization or recursive schema checks. */
         [[nodiscard]] bool WithinBudget(const nlohmann::json &value, const std::size_t maximumBytes, const std::size_t maximumDepth,
                                         const std::size_t maximumNodes, const std::size_t depth, std::size_t &nodes, std::size_t &bytes) {
-            if (depth > maximumDepth || ++nodes > maximumNodes)
+            ++nodes;
+            if (depth > maximumDepth || nodes > maximumNodes)
                 return false;
             if (value.is_string()) {
                 const auto &text = value.get_ref<const std::string &>();
@@ -63,14 +65,14 @@ namespace Horo::Mcp {
 
         [[nodiscard]] bool MatchesSchema(const nlohmann::json &schema, const nlohmann::json &value);
 
-        /** @brief Checks supported scalar bounds and ensures enum members can satisfy the declared schema. */
-        [[nodiscard]] bool ValidSchemaConstraints(const nlohmann::json &schema, const std::string &kind) {
-            if (const auto choices = schema.find("enum"); choices != schema.end() && (!choices->is_array() || choices->empty()))
-                return false;
+        /** @brief Checks the supported bound keywords against their schema type. */
+        [[nodiscard]] bool ValidSchemaBounds(const nlohmann::json &schema, const std::string_view kind) {
             for (const std::string_view key : {"minItems", "maxItems", "minLength", "maxLength"}) {
                 const auto bound = schema.find(std::string{key});
-                if (bound != schema.end() &&
-                    (!ValidSizeBound(*bound) || ((key == "minItems" || key == "maxItems") ? kind != "array" : kind != "string")))
+                if (bound == schema.end())
+                    continue;
+                const bool applicable = (key == "minItems" || key == "maxItems") ? kind == "array" : kind == "string";
+                if (!applicable || !ValidSizeBound(*bound))
                     return false;
             }
             for (const std::string_view key : {"minimum", "maximum"}) {
@@ -83,6 +85,15 @@ namespace Horo::Mcp {
                 if (schema.contains(lower) && schema.contains(upper) && schema[lower] > schema[upper])
                     return false;
             }
+            return true;
+        }
+
+        /** @brief Checks supported scalar bounds and ensures enum members can satisfy the declared schema. */
+        [[nodiscard]] bool ValidSchemaConstraints(const nlohmann::json &schema, const std::string_view kind) {
+            if (const auto choices = schema.find("enum"); choices != schema.end() && (!choices->is_array() || choices->empty()))
+                return false;
+            if (!ValidSchemaBounds(schema, kind))
+                return false;
             if (const auto choices = schema.find("enum"); choices != schema.end()) {
                 nlohmann::json withoutEnum = schema;
                 withoutEnum.erase("enum");
@@ -94,44 +105,58 @@ namespace Horo::Mcp {
             return true;
         }
 
+        [[nodiscard]] bool ValidSchemaShape(const nlohmann::json &schema, std::size_t depth, std::size_t &nodes);
+
+        /** @brief Checks recursively declared object properties. */
+        [[nodiscard]] bool ValidProperties(const nlohmann::json &properties, const std::size_t depth, std::size_t &nodes) {
+            if (!properties.is_object())
+                return false;
+            for (auto it = properties.begin(); it != properties.end(); ++it) {
+                if (it.key().empty() || it.key().size() > 128 || !IsValidUtf8ScalarSequence(it.key()) ||
+                    !ValidSchemaShape(it.value(), depth + 1, nodes))
+                    return false;
+            }
+            return true;
+        }
+
+        /** @brief Checks unique required object-property names. */
+        [[nodiscard]] bool ValidRequired(const nlohmann::json &required) {
+            if (!required.is_array())
+                return false;
+            std::vector<std::string> seen;
+            for (const auto &name : required) {
+                if (!name.is_string() || name.get_ref<const std::string &>().empty() ||
+                    std::ranges::find(seen, name.get_ref<const std::string &>()) != seen.end())
+                    return false;
+                seen.push_back(name.get<std::string>());
+            }
+            return true;
+        }
+
         /** @brief Rejects schemas outside the deliberately supported closed JSON Schema subset. */
         [[nodiscard]] bool ValidSchemaShape(const nlohmann::json &schema, const std::size_t depth, std::size_t &nodes) {
-            if (!schema.is_object() || depth > MaximumSchemaDepth || ++nodes > MaximumSchemaNodes)
+            ++nodes;
+            if (!schema.is_object() || depth > MaximumSchemaDepth || nodes > MaximumSchemaNodes)
                 return false;
-            static constexpr std::string_view keywords[]{"type",      "properties", "required", "additionalProperties",
-                                                         "items",     "enum",       "minItems", "maxItems",
-                                                         "minLength", "maxLength",  "minimum",  "maximum"};
+            static constexpr std::array<std::string_view, 12> keywords{"type",      "properties", "required", "additionalProperties",
+                                                                       "items",     "enum",       "minItems", "maxItems",
+                                                                       "minLength", "maxLength",  "minimum",  "maximum"};
             for (auto it = schema.begin(); it != schema.end(); ++it) {
-                if (std::ranges::find(keywords, it.key()) == std::end(keywords))
+                if (std::ranges::find(keywords, it.key()) == keywords.end())
                     return false;
             }
             const auto type = schema.find("type");
             if (type == schema.end() || !type->is_string())
                 return false;
-            const std::string &kind = type->get_ref<const std::string &>();
-            if (kind != "object" && kind != "array" && kind != "string" && kind != "integer" && kind != "number" && kind != "boolean" &&
-                kind != "null")
+            const std::string_view kind = type->get_ref<const std::string &>();
+            static constexpr std::array<std::string_view, 7> kinds{"object", "array", "string", "integer", "number", "boolean", "null"};
+            if (std::ranges::find(kinds, kind) == kinds.end())
                 return false;
-            if (const auto properties = schema.find("properties"); properties != schema.end()) {
-                if (kind != "object" || !properties->is_object())
-                    return false;
-                for (auto it = properties->begin(); it != properties->end(); ++it) {
-                    if (it.key().empty() || it.key().size() > 128 || !IsValidUtf8ScalarSequence(it.key()) ||
-                        !ValidSchemaShape(it.value(), depth + 1, nodes))
-                        return false;
-                }
-            }
-            if (const auto required = schema.find("required"); required != schema.end()) {
-                if (kind != "object" || !required->is_array())
-                    return false;
-                std::vector<std::string> seen;
-                for (const auto &name : *required) {
-                    if (!name.is_string() || name.get_ref<const std::string &>().empty() ||
-                        std::ranges::find(seen, name.get_ref<const std::string &>()) != seen.end())
-                        return false;
-                    seen.push_back(name.get<std::string>());
-                }
-            }
+            if (const auto properties = schema.find("properties");
+                properties != schema.end() && (kind != "object" || !ValidProperties(*properties, depth, nodes)))
+                return false;
+            if (const auto required = schema.find("required"); required != schema.end() && (kind != "object" || !ValidRequired(*required)))
+                return false;
             if (const auto additional = schema.find("additionalProperties");
                 additional != schema.end() && (kind != "object" || !additional->is_boolean()))
                 return false;
@@ -141,62 +166,89 @@ namespace Horo::Mcp {
             return ValidSchemaConstraints(schema, kind);
         }
 
-        /** @brief Validates one value against the accepted non-referencing schema subset. */
-        [[nodiscard]] bool MatchesSchema(const nlohmann::json &schema, const nlohmann::json &value) {
-            const std::string &kind = schema["type"].get_ref<const std::string &>();
-            const bool typeMatches = kind == "object"    ? value.is_object()
-                                     : kind == "array"   ? value.is_array()
-                                     : kind == "string"  ? value.is_string()
-                                     : kind == "integer" ? value.is_number_integer()
-                                     : kind == "number"  ? value.is_number()
-                                     : kind == "boolean" ? value.is_boolean()
-                                                         : value.is_null();
-            if (!typeMatches || (schema.contains("enum") && std::ranges::find(schema["enum"], value) == schema["enum"].end()))
-                return false;
-            if (kind == "object") {
-                if (schema.contains("required")) {
-                    for (const auto &name : schema["required"]) {
-                        if (!value.contains(name.get_ref<const std::string &>()))
-                            return false;
-                    }
-                }
-                const auto properties = schema.find("properties");
-                for (auto it = value.begin(); it != value.end(); ++it) {
-                    const auto property = properties == schema.end() ? nlohmann::json::const_iterator{} : properties->find(it.key());
-                    if (properties != schema.end() && property != properties->end()) {
-                        if (!MatchesSchema(*property, it.value()))
-                            return false;
-                    } else if (schema.value("additionalProperties", true) == false) {
+        /** @brief Matches one value against the single declared JSON type. */
+        [[nodiscard]] bool MatchesType(const std::string_view kind, const nlohmann::json &value) {
+            if (kind == "object")
+                return value.is_object();
+            if (kind == "array")
+                return value.is_array();
+            if (kind == "string")
+                return value.is_string();
+            if (kind == "integer")
+                return value.is_number_integer();
+            if (kind == "number")
+                return value.is_number();
+            if (kind == "boolean")
+                return value.is_boolean();
+            return value.is_null();
+        }
+
+        /** @brief Checks one object member against a declared property or the additional-property rule. */
+        [[nodiscard]] bool MatchesObjectMember(const nlohmann::json &schema, const nlohmann::json::const_iterator properties,
+                                               const std::string &name, const nlohmann::json &value) {
+            if (properties != schema.end()) {
+                const auto property = properties->find(name);
+                if (property != properties->end())
+                    return MatchesSchema(*property, value);
+            }
+            return schema.value("additionalProperties", true);
+        }
+
+        /** @brief Checks required and permitted object members recursively. */
+        [[nodiscard]] bool MatchesObject(const nlohmann::json &schema, const nlohmann::json &value) {
+            if (const auto required = schema.find("required"); required != schema.end()) {
+                for (const auto &name : *required) {
+                    if (!value.contains(name.get_ref<const std::string &>()))
                         return false;
-                    }
                 }
-            } else if (kind == "array") {
-                if (value.size() < schema.value("minItems", std::size_t{0}) ||
-                    value.size() > schema.value("maxItems", std::numeric_limits<std::size_t>::max()))
-                    return false;
-                if (const auto items = schema.find("items"); items != schema.end()) {
-                    for (const auto &member : value) {
-                        if (!MatchesSchema(*items, member))
-                            return false;
-                    }
-                }
-            } else if (kind == "string") {
-                const auto size = value.get_ref<const std::string &>().size();
-                if (size < schema.value("minLength", std::size_t{0}) ||
-                    size > schema.value("maxLength", std::numeric_limits<std::size_t>::max()))
-                    return false;
-            } else if (kind == "integer" || kind == "number") {
-                if ((schema.contains("minimum") && value < schema["minimum"]) || (schema.contains("maximum") && value > schema["maximum"]))
+            }
+            const auto properties = schema.find("properties");
+            for (auto it = value.begin(); it != value.end(); ++it) {
+                if (!MatchesObjectMember(schema, properties, it.key(), it.value()))
                     return false;
             }
             return true;
         }
 
+        /** @brief Checks array cardinality and declared item schemas. */
+        [[nodiscard]] bool MatchesArray(const nlohmann::json &schema, const nlohmann::json &value) {
+            if (value.size() < schema.value("minItems", std::size_t{0}) ||
+                value.size() > schema.value("maxItems", std::numeric_limits<std::size_t>::max()))
+                return false;
+            if (const auto items = schema.find("items"); items != schema.end()) {
+                for (const auto &member : value) {
+                    if (!MatchesSchema(*items, member))
+                        return false;
+                }
+            }
+            return true;
+        }
+
+        /** @brief Validates one value against the accepted non-referencing schema subset. */
+        [[nodiscard]] bool MatchesSchema(const nlohmann::json &schema, const nlohmann::json &value) {
+            const std::string_view kind = schema["type"].get_ref<const std::string &>();
+            if (!MatchesType(kind, value))
+                return false;
+            if (const auto choices = schema.find("enum"); choices != schema.end() && std::ranges::find(*choices, value) == choices->end())
+                return false;
+            if (kind == "object")
+                return MatchesObject(schema, value);
+            if (kind == "array")
+                return MatchesArray(schema, value);
+            if (kind == "string") {
+                const auto size = value.get_ref<const std::string &>().size();
+                return size >= schema.value("minLength", std::size_t{0}) &&
+                       size <= schema.value("maxLength", std::numeric_limits<std::size_t>::max());
+            }
+            if (kind == "integer" || kind == "number")
+                return (!schema.contains("minimum") || value >= schema["minimum"]) &&
+                       (!schema.contains("maximum") || value <= schema["maximum"]);
+            return true;
+        }
+
         /** @brief Validates both structural and serialized byte budgets. */
         [[nodiscard]] bool BoundedValue(const nlohmann::json &value, const std::size_t maximumBytes, const McpToolBounds &bounds) {
-            std::size_t nodes{};
-            std::size_t bytes{};
-            if (!WithinBudget(value, maximumBytes, bounds.maximumDepth, bounds.maximumNodes, 0, nodes, bytes))
+            if (std::size_t nodes{}, bytes{}; !WithinBudget(value, maximumBytes, bounds.maximumDepth, bounds.maximumNodes, 0, nodes, bytes))
                 return false;
             try {
                 return value.dump().size() <= maximumBytes;
@@ -240,7 +292,8 @@ namespace Horo::Mcp {
         }
     }  // namespace
 
-    McpToolSnapshot::McpToolSnapshot(const std::uint64_t generation, std::vector<McpToolRegistration> entries)
+    /** @copydoc McpToolSnapshot::McpToolSnapshot */
+    McpToolSnapshot::McpToolSnapshot(ConstructionKey, const std::uint64_t generation, std::vector<McpToolRegistration> entries)
         : generation_(generation), entries_(std::move(entries)) {}
 
     /** @copydoc McpToolSnapshot::Generation */
@@ -278,12 +331,13 @@ namespace Horo::Mcp {
                  !MatchesSchema(found->descriptor.outputSchema, outcome.Value())))
                 return Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolOutputInvalid));
             return outcome;
-        } catch (...) {
+        } catch (...) {  // NOSONAR: injected adapters may throw non-standard exceptions; preserve the typed failure boundary.
             return Result<nlohmann::json>::Failure(MakeError(McpErrors::ControllerFailed));
         }
     }
 
-    McpToolRegistry::McpToolRegistry() : current_(std::shared_ptr<const McpToolSnapshot>(new McpToolSnapshot(0, {}))) {}
+    McpToolRegistry::McpToolRegistry()
+        : current_(std::make_shared<const McpToolSnapshot>(McpToolSnapshot::ConstructionKey{}, 0, std::vector<McpToolRegistration>{})) {}
 
     /** @copydoc McpToolRegistry::Publish */
     Result<std::uint64_t> McpToolRegistry::Publish(std::vector<McpToolRegistration> entries,
@@ -329,7 +383,7 @@ namespace Horo::Mcp {
                 return Result<std::uint64_t>::Failure(MakeError(McpErrors::ToolIncompatible));
         }
         const auto generation = current_->Generation() + 1;
-        current_ = std::shared_ptr<const McpToolSnapshot>(new McpToolSnapshot(generation, std::move(entries)));
+        current_ = std::make_shared<const McpToolSnapshot>(McpToolSnapshot::ConstructionKey{}, generation, std::move(entries));
         return Result<std::uint64_t>::Success(generation);
     }
 
