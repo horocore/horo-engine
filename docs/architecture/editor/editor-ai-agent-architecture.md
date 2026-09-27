@@ -799,6 +799,21 @@ These are surfaced in the chat UI as context chips above the input area.
   assets, raw voice, continuous gaze/pose history, camera frames, and environment
   geometry are excluded by default.
 
+The host-owned `Horo::Security::AgentPolicy` is the shared local/cloud admission
+boundary for future agent-provider composition. The UI must show the exact
+classified, redacted preview and provider residence before recording one-request
+consent; the policy binds consent to each item's content digest, classification,
+project/trust revision, and provider. Context is copied into an ephemeral bounded
+envelope only after this check. It does not retain raw context in consent or audit
+state. The host calls the one-use dispatch authorization immediately before the
+provider send; it rechecks the exact envelope and current project/trust revision.
+Hybrid providers resolve to the actual local or cloud residence for each request;
+there is no less restrictive third admission path.
+Credentials and raw sensor data are never ordinary context; project files,
+tool results, proposed changes, transcripts, and sensitive project data require host redaction before
+admission. The host owns accurate classification/redaction and must not pass the
+policy's mutable consent/approval methods to a model or provider adapter.
+
 ### Permission Model
 
 ```cpp
@@ -815,6 +830,16 @@ enum class AgentPermission {
 
 Permissions are configured per-project in the AI settings panel. The agent's
 effective permission set is displayed as a badge in the chat header.
+
+Every non-read-only operation, in local and cloud mode alike, requires an exact
+provider/operation/proposal-revision approval consumed immediately before dispatch.
+An untrusted project cannot acquire mutation, execution, credential, or network
+authority through an approval. Host project/trust revision changes revoke pending
+consent and approval; an already returned decision cannot be cached across that
+boundary. `AgentPolicy` supplies this runtime contract and bounded, payload-free
+decision history; provider adapters and the agent loop must integrate it at their
+later composition boundaries rather than treating this contract as automatic
+provider or MCP dispatch wiring.
 
 ### Audit Trail
 

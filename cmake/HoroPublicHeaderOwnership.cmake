@@ -50,6 +50,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroSecurity PUBLIC_HEADERS
+    Horo/Security/AgentPolicy.h
     Horo/Security/ArtifactSignature.h
     Horo/Security/CredentialStore.h
     Horo/Security/SecureMemory.h
