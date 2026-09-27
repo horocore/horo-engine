@@ -40,6 +40,7 @@ namespace Horo::Release {
         ReleaseCandidateId candidate;
         Sha256Digest manifestDigest;
         std::uint64_t artifactCount{};
+        std::string remoteIdentity; /**< Opaque provider ID bound to all later verification and commit calls. */
     };
 
     /** @brief Host-installed provider adapter with an explicit remote verification boundary. */

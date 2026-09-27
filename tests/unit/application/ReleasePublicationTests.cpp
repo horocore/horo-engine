@@ -79,7 +79,8 @@ namespace {
         [[nodiscard]] Result<ReleasePublicationReceipt> Upload(const ReleasePublicationRequest &request) override {
             ++uploads;
             return Result<ReleasePublicationReceipt>::Success(
-                {Destination(), request.verified.Candidate(), request.verified.ManifestDigest(), request.manifest.Artifacts().size()});
+                {Destination(), request.verified.Candidate(), request.verified.ManifestDigest(), request.manifest.Artifacts().size(),
+                 omitRemoteIdentity ? "" : "release-42"});
         }
 
         [[nodiscard]] Result<void> VerifyRemote(const ReleasePublicationRequest &request, const ReleasePublicationReceipt &) override {
@@ -101,6 +102,7 @@ namespace {
         int commits{};
         bool mutateLocal{};
         bool rejectRemote{};
+        bool omitRemoteIdentity{};
     };
 }  // namespace
 
@@ -129,6 +131,12 @@ TEST_CASE("Publication commits a channel only after exact local and remote candi
     CHECK(adapter.commits == 1);
 
     adapter.rejectRemote = false;
+    adapter.omitRemoteIdentity = true;
+    CHECK(PublishVerifiedReleaseCandidate(request, adapter).HasError());
+    CHECK(adapter.verifications == 2);
+    CHECK(adapter.commits == 1);
+    adapter.omitRemoteIdentity = false;
+
     adapter.mutateLocal = true;
     CHECK(PublishVerifiedReleaseCandidate(request, adapter).HasError());
     CHECK(adapter.commits == 1);
