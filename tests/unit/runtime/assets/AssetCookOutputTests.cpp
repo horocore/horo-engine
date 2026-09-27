@@ -232,7 +232,44 @@ TEST_CASE("ResolveCurrentCookGeneration reads published generation", "[native]")
 
     REQUIRE((gen.target == nullTarget));
     REQUIRE((gen.artifactCount == 1));
+    REQUIRE((gen.manifestDigest == pubResult.Value().manifestDigest));
     REQUIRE((std::filesystem::exists(gen.generationRoot)));
+}
+
+TEST_CASE("ResolveCurrentCookGeneration rejects changed manifest and malformed count", "[native]") {
+    TempDir tmp;
+    const auto target = Target("headless-null");
+    const auto id = Id("00000000-0000-0000-0000-000000000007");
+    const auto payload = MakePayload(16, 0x22);
+    const std::vector<AssetCookManifestEntry> entries = {
+        {.assetId = id, .assetType = Type("core.mesh"), .artifactFile = id.ToString() + ".cooked", .artifactHash = DigestOf(payload)}};
+    const std::vector<std::vector<std::uint8_t>> payloads = {payload};
+    auto published = PublishCookGeneration(tmp.path, target, entries, payloads);
+    REQUIRE(published.HasValue());
+
+    const auto currentPath = tmp.path / "current.json";
+    std::ifstream currentInput(currentPath, std::ios::binary);
+    const std::string current{std::istreambuf_iterator<char>{currentInput}, std::istreambuf_iterator<char>{}};
+    auto malformedCount = current;
+    const auto countPosition = malformedCount.find(R"("artifactCount":"1")");
+    REQUIRE(countPosition != std::string::npos);
+    malformedCount.replace(countPosition, std::string_view{R"("artifactCount":"1")"}.size(), R"("artifactCount":"not-a-number")");
+    {
+        std::ofstream output(currentPath, std::ios::binary | std::ios::trunc);
+        output << malformedCount;
+    }
+    CHECK(ResolveCurrentCookGeneration(tmp.path).HasError());
+    {
+        std::ofstream output(currentPath, std::ios::binary | std::ios::trunc);
+        output << current;
+    }
+
+    const auto manifestPath = published.Value().generationRoot / "manifest.json";
+    {
+        std::ofstream output(manifestPath, std::ios::binary | std::ios::app);
+        output << 'x';
+    }
+    CHECK(ResolveCurrentCookGeneration(tmp.path).HasError());
 }
 
 TEST_CASE("ResolveCurrentCookGeneration rejects a generation path outside the target root", "[native]") {
