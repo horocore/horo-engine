@@ -11,8 +11,8 @@
 namespace Horo::Release {
     namespace {
         [[nodiscard]] bool ValidRepository(const std::string_view repository) {
-            const auto slash = repository.find('/');
-            if (slash == std::string_view::npos || slash == 0U || slash + 1U == repository.size() ||
+            if (const auto slash = repository.find('/');
+                slash == std::string_view::npos || slash == 0U || slash + 1U == repository.size() ||
                 repository.find('/', slash + 1U) != std::string_view::npos || repository.size() > 200U)
                 return false;
             return std::ranges::all_of(repository, [](const char character) {
@@ -56,9 +56,8 @@ namespace Horo::Release {
             auto found = client.FindExisting(repository, tag);
             if (found.HasError())
                 return found;
-            const auto &release = found.Value();
-            if (release.repository != repository || release.tag != tag || release.releaseId == 0U ||
-                (!receiptId.empty() && std::to_string(release.releaseId) != receiptId))
+            if (const auto &release = found.Value(); release.repository != repository || release.tag != tag || release.releaseId == 0U ||
+                                                     (!receiptId.empty() && std::to_string(release.releaseId) != receiptId))
                 return Result<GitHubReleaseIdentity>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
             return found;
         }
@@ -89,8 +88,8 @@ namespace Horo::Release {
                 return Result<ReleasePublicationReceipt>::Failure(uploaded.ErrorValue());
         }
         const auto metadata = ManifestRecord(request.manifest);
-        auto uploaded = client_.UploadExact(release, metadata.path, request.verified.Root() / metadata.path, metadata);
-        if (uploaded.HasError())
+        if (auto uploaded = client_.UploadExact(release, metadata.path, request.verified.Root() / metadata.path, metadata);
+            uploaded.HasError())
             return Result<ReleasePublicationReceipt>::Failure(uploaded.ErrorValue());
         return Result<ReleasePublicationReceipt>::Success({Destination(), request.verified.Candidate(), request.verified.ManifestDigest(),
                                                            request.manifest.Artifacts().size(), std::to_string(release.releaseId)});
