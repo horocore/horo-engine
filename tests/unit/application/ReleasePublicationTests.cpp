@@ -78,9 +78,9 @@ namespace {
 
         [[nodiscard]] Result<ReleasePublicationReceipt> Upload(const ReleasePublicationRequest &request) override {
             ++uploads;
-            return Result<ReleasePublicationReceipt>::Success(
-                {Destination(), request.verified.Candidate(), request.verified.ManifestDigest(), request.manifest.Artifacts().size(),
-                 omitRemoteIdentity ? "" : "release-42"});
+            return Result<ReleasePublicationReceipt>::Success({Destination(), request.verified.Candidate(),
+                                                               request.verified.ManifestDigest(), request.manifest.Artifacts().size(),
+                                                               omitRemoteIdentity ? "" : "release-42"});
         }
 
         [[nodiscard]] Result<void> VerifyRemote(const ReleasePublicationRequest &request, const ReleasePublicationReceipt &) override {

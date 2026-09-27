@@ -266,6 +266,16 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor ActionLifecycleUnavailable;
     /** @brief A default navigation command or result has invalid focus evidence. */
     extern const ErrorCodeDescriptor NavigationInvalid;
+    /** @brief A semantic Runtime UI feedback intent or producer outcome is malformed. */
+    extern const ErrorCodeDescriptor FeedbackInvalid;
+    /** @brief Feedback source or audience belongs to another presented owner generation. */
+    extern const ErrorCodeDescriptor FeedbackSourceStale;
+    /** @brief The preallocated semantic feedback queue is full. */
+    extern const ErrorCodeDescriptor FeedbackCapacityExceeded;
+    /** @brief The semantic feedback queue is retiring or stopped. */
+    extern const ErrorCodeDescriptor FeedbackLifecycleUnavailable;
+    /** @brief An optional host feedback realizer failed or threw. */
+    extern const ErrorCodeDescriptor FeedbackConsumerFailed;
     /** @brief A route-stack descriptor or operation request is malformed. */
     extern const ErrorCodeDescriptor RouteStackInvalid;
     /** @brief A route operation has invalid fields or targets an unsupported route. */

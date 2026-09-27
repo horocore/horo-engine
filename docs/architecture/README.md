@@ -318,6 +318,8 @@ dependency direction in [System Design](./foundation/system-design.md).
 - [Terrain And Foliage Architecture](./runtime/terrain-and-foliage-architecture.md):
   heightfields, terrain layers, instanced foliage, wind, LOD, collision,
   streaming, and editor tools.
+- [Terrain Source Import Contract](./runtime/terrain-source-import.md): exact built-in
+  height, weight and hole formats, optional decoder seam, bounds and source publication.
 - [Terrain and Foliage Ownership, Data, Tier and Lifecycle](../adr/137-terrain-foliage-ownership-data-tier-and-lifecycle.md):
   public/runtime module boundaries, authored/cooked/live data strata, typed identity
   and revisions, provider-neutral tier resolution, aggregate lifecycle and retirement.

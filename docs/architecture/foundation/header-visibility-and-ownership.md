@@ -20,6 +20,32 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## AIA-001.3 Model Provider Boundary
+
+`HoroEngine::ModelProvider` owns the additive `Horo/Agent/ModelProvider.h`
+streaming, discovery, feature admission, cancellation and configuration contract.
+`HoroEngine::ModelProviderAdapters` owns the additive
+`Horo/Agent/ReferenceModelProviders.h` host factories and privately links curl and
+JSON for real Ollama and OpenAI-compatible HTTP adapters. No existing caller
+migrates. Future editor-agent hosts register these factories explicitly at the
+composition root, resolve cloud credentials only at dispatch, and keep tool
+execution and approval outside the model adapter. Runtime gameplay AI and
+packaged game/server targets do not link either target. Generated standalone
+public-header consumers cover both headers without exposing HTTP or SDK types.
+The host opts into tool capability only after confirming support for its selected
+model; default configuration advertises streaming and optional provider usage.
+
+## TRF-002.2 Import Boundary
+
+`HoroTerrainImport` owns `Horo/Terrain/TerrainSourceImport.h` and depends on
+`HoroTerrainApi`; runtime Terrain consumers continue to link `HoroTerrainApi` alone.
+The new header is additive: there are no callers to migrate. Hosts that import
+Terrain sources link `HoroTerrainImport`, pin any optional decoder contribution for
+the synchronous invocation, then publish a detached candidate against the exact
+current source revision. Format and codec types do not enter TerrainApi or runtime
+headers. The generated public-header consumer compiles the header through the new
+target's staged include view.
+
 ## DFR-002.2 Import Boundary
 
 `HoroEngine::Assets` owns the additive `Horo/Assets/PreFracturedSource.h` FBX
@@ -159,6 +185,17 @@ Existing Physics structural-command callers migrate from one admission-ordered
 sequence to the complete tick/world/scene/target/source key; no second legacy
 ordering authority remains. Consumers continue linking `HoroEngine::Physics`, and
 native solver identities or random providers are not exposed.
+
+## Physics Debug Snapshot Boundary
+
+`Horo/Physics/PhysicsDebugSnapshot.h` is owned by `HoroPhysics`. It adds an
+opt-in completed-tick value model and `PhysicsWorld::CaptureDebugSnapshot` without
+changing existing tick or query callers. The world projects current private
+Horo identities and its published event/tick evidence into the new source
+contract; future backend-neutral producers can fill the remaining unavailable
+categories. No compatibility adapter or native solver type is exposed.
+Standalone public-header consumer coverage is generated for the new header by
+the ownership registry.
 
 ## PHY-004.9 Query And Event Capability Boundary
 
@@ -1068,3 +1105,15 @@ in must supply owner-stamped fixed-tick samples, advance only after committed
 local fixed ticks, and treat stale quality as evidence rather than permission to
 run extra simulation steps. The generated standalone NetworkRuntime public-header
 consumer and `HoroNetworkRuntimeTests` cover the new boundary.
+
+## NET-007.2 Host Mode Composition Boundary
+
+`HoroEngine::NetworkRuntime` solely owns the additive public
+`Horo/Network/NetworkModeComposition.h` contract. It consumes the existing
+NetworkApi target assessment, PeerSessionLifecycle admission, and RuntimeScene
+identities and Runtime fixed-phase contexts through explicit public dependencies;
+it publishes no native transport, GUI, renderer or Physics
+type. Existing callers require no signature migration. Application roots supply
+exact concrete participant factories and retain their code and resources through
+composition shutdown. `HoroNetworkModePublicHeaderConsumer`, the runtime mode
+tests, and the concrete headless host integration consumer cover this boundary.

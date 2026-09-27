@@ -32,7 +32,7 @@ namespace Horo::Release {
                                                                        IReleaseCandidateSignatureVerifier *,
                                                                        std::span<IReleaseCandidateSmokeProbe *const>);
         /** @brief Issued only by the complete final verifier. */
-        VerifiedReleaseCandidate(ReleaseCandidateId candidate, Sha256Digest manifestDigest, std::filesystem::path root);
+        VerifiedReleaseCandidate(ReleaseCandidateId candidate, const Sha256Digest &manifestDigest, std::filesystem::path root);
 
         ReleaseCandidateId candidate_;
         Sha256Digest manifestDigest_;
