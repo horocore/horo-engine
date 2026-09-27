@@ -597,6 +597,7 @@ target_link_libraries(HoroPhysicsModel PUBLIC HoroEngine::Foundation HoroEngine:
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::PhysicsModel)
 
 add_library(HoroAudioApi STATIC
+        audio/api/AudioAcousticQuery.cpp
         audio/api/AudioAssetSchema.cpp
         audio/api/AudioBackendCapabilities.cpp
         audio/api/AudioCallbackEvents.cpp

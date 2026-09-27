@@ -299,6 +299,7 @@ add_dependencies(HoroNetworkTransportCompositionTests HoroNetworkDisabledLinkPro
 horo_register_catch_test(HoroNetworkTransportCompositionTests LABELS "unit;network;headless")
 add_executable(HoroAudioApiTests
         support/AllocationProbe.cpp
+        unit/runtime/audio/AudioAcousticQueryTests.cpp
         unit/runtime/audio/AudioAssetSchemaTests.cpp
         unit/runtime/audio/MixerAssetSchemaTests.cpp
         unit/runtime/audio/AudioSoundReferenceTests.cpp
