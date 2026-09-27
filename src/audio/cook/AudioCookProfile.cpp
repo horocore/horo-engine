@@ -13,6 +13,17 @@ namespace Horo::Audio {
         constexpr std::size_t MaximumTargetOverrides = 64;
         constexpr std::size_t MaximumToolchainIdentityBytes = 128;
 
+        [[nodiscard]] bool ValidResidency(const AudioCookResidency residency) noexcept {
+            using enum AudioCookResidency;
+            switch (residency) {
+                case Auto:
+                case Resident:
+                case Streamed:
+                    return true;
+            }
+            return false;
+        }
+
         void Append32(std::vector<std::uint8_t> &bytes, const std::uint32_t value) {
             for (unsigned shift = 0; shift < 32; shift += 8)
                 bytes.push_back(static_cast<std::uint8_t>(value >> shift));
@@ -29,19 +40,19 @@ namespace Horo::Audio {
         }
 
         void AppendLayout(std::vector<std::uint8_t> &bytes, const std::optional<AudioChannelLayout> &layout) {
-            bytes.push_back(layout ? 1 : 0);
-            if (!layout)
+            bytes.push_back(layout.has_value() ? 1 : 0);
+            if (!layout.has_value())
                 return;
             bytes.push_back(static_cast<std::uint8_t>(layout->kind));
             bytes.push_back(static_cast<std::uint8_t>(layout->orderedChannels.size()));
-            bytes.push_back(layout->ambisonic ? 1 : 0);
-            bytes.push_back(layout->ambisonic ? layout->ambisonic->order : 0);
+            bytes.push_back(layout->ambisonic.has_value() ? 1 : 0);
+            bytes.push_back(layout->ambisonic.has_value() ? layout->ambisonic->order : 0);
             for (const auto &channel : layout->orderedChannels) {
                 bytes.push_back(static_cast<std::uint8_t>(channel.index()));
-                std::visit([&bytes](const auto role) {
-                    if constexpr (std::is_same_v<std::remove_cvref_t<decltype(role)>, AudioSpeakerRole>)
+                std::visit([&bytes]<typename Role>(const Role role) {
+                    if constexpr (std::is_same_v<Role, AudioSpeakerRole>)
                         bytes.push_back(static_cast<std::uint8_t>(role));
-                    else if constexpr (std::is_same_v<std::remove_cvref_t<decltype(role)>, AudioDiscreteChannel>)
+                    else if constexpr (std::is_same_v<Role, AudioDiscreteChannel>)
                         bytes.push_back(role.index);
                     else
                         bytes.push_back(role.acn);
@@ -52,10 +63,10 @@ namespace Horo::Audio {
         Result<void> ValidateSettings(const AudioCookSettings &settings) {
             if (!settings.container.IsValid() || !settings.codec.IsValid() || settings.streamThresholdFrames == 0 ||
                 settings.streamChunkFrames == 0 || settings.streamChunkFrames > MaximumAudioStreamChunkFrames ||
-                (settings.sampleRate && (*settings.sampleRate < MinimumAudioSampleRate || *settings.sampleRate > MaximumAudioSampleRate)) ||
-                (settings.layout && !ValidateAudioChannelLayout(ViewAudioChannelLayout(*settings.layout))) ||
-                (settings.residency != AudioCookResidency::Auto && settings.residency != AudioCookResidency::Resident &&
-                 settings.residency != AudioCookResidency::Streamed))
+                (settings.sampleRate.has_value() &&
+                 (*settings.sampleRate < MinimumAudioSampleRate || *settings.sampleRate > MaximumAudioSampleRate)) ||
+                (settings.layout.has_value() && !ValidateAudioChannelLayout(ViewAudioChannelLayout(*settings.layout))) ||
+                !ValidResidency(settings.residency))
                 return Result<void>::Failure(MakeError(AudioErrors::CookProfileInvalid));
             if (settings.container != AudioContainerIds::HoroCooked || settings.codec != AudioCodecIds::Pcm ||
                 settings.compression != AudioCookCompression::None || settings.quality != AudioCookQuality::Float32Exact ||
@@ -94,7 +105,7 @@ namespace Horo::Audio {
     Result<Sha256Digest> FingerprintAudioCookConfiguration(const AudioCookProfile &profile, const AssetCookTargetId &target,
                                                            const AudioCookToolchain &toolchain) {
         if (toolchain.identity.empty() || toolchain.identity.size() > MaximumToolchainIdentityBytes ||
-            std::any_of(toolchain.identity.begin(), toolchain.identity.end(), [](const unsigned char c) {
+            std::ranges::any_of(toolchain.identity, [](const unsigned char c) {
             return c < 0x21 || c > 0x7E;
         }))
             return Result<Sha256Digest>::Failure(MakeError(AudioErrors::CookProfileInvalid));
@@ -114,7 +125,7 @@ namespace Horo::Audio {
         bytes.push_back(static_cast<std::uint8_t>(settings.compression));
         bytes.push_back(static_cast<std::uint8_t>(settings.quality));
         bytes.push_back(static_cast<std::uint8_t>(settings.residency));
-        bytes.push_back(settings.sampleRate ? 1 : 0);
+        bytes.push_back(settings.sampleRate.has_value() ? 1 : 0);
         Append32(bytes, settings.sampleRate.value_or(0));
         AppendLayout(bytes, settings.layout);
         Append64(bytes, settings.streamThresholdFrames);
@@ -138,13 +149,12 @@ namespace Horo::Audio {
             source.decoderIdentity.size() > MaximumToolchainIdentityBytes || !ValidateAudioProcessingFormat(source.decodedFormat))
             return Result<AudioCookPlan>::Failure(MakeError(AudioErrors::SourceInvalid));
         const auto &settings = *selected.Value();
-        if ((settings.sampleRate && *settings.sampleRate != source.decodedFormat.sampleRate) ||
-            (settings.layout && *settings.layout != source.decodedFormat.layout))
+        if ((settings.sampleRate.has_value() && *settings.sampleRate != source.decodedFormat.sampleRate) ||
+            (settings.layout.has_value() && *settings.layout != source.decodedFormat.layout))
             return Result<AudioCookPlan>::Failure(MakeError(AudioErrors::CookCombinationUnsupported));
-        const auto residency =
-            settings.residency == AudioCookResidency::Auto
-                ? (source.frameCount >= settings.streamThresholdFrames ? AudioCookResidency::Streamed : AudioCookResidency::Resident)
-                : settings.residency;
+        AudioCookResidency residency = settings.residency;
+        if (residency == AudioCookResidency::Auto)
+            residency = source.frameCount >= settings.streamThresholdFrames ? AudioCookResidency::Streamed : AudioCookResidency::Resident;
         return Result<AudioCookPlan>::Success(AudioCookPlan{
             .target = target,
             .settings = settings,

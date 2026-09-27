@@ -69,7 +69,9 @@ namespace Horo::Audio {
         };
 
         [[nodiscard]] bool ReadLayout(Reader &reader, AudioChannelLayout &layout) {
-            std::uint8_t kind{}, channels{}, ambisonicOrder{};
+            std::uint8_t kind{};
+            std::uint8_t channels{};
+            std::uint8_t ambisonicOrder{};
             if (!reader.U8(kind) || !reader.U8(channels) || !reader.U8(ambisonicOrder) ||
                 kind > static_cast<std::uint8_t>(AudioLayoutKind::Discrete) || channels == 0 || channels > MaximumAudioChannels)
                 return false;
@@ -80,7 +82,8 @@ namespace Horo::Audio {
                 return false;
             layout.orderedChannels.reserve(channels);
             for (std::uint8_t index = 0; index < channels; ++index) {
-                std::uint8_t family{}, value{};
+                std::uint8_t family{};
+                std::uint8_t value{};
                 if (!reader.U8(family) || !reader.U8(value))
                     return false;
                 switch (family) {
@@ -103,8 +106,16 @@ namespace Horo::Audio {
         }
 
         [[nodiscard]] bool ReadManifestFields(Reader &reader, AudioCookManifest &manifest) {
-            std::uint32_t version{}, sourceContainer{}, sourceCodec{}, container{}, codec{}, targetBytes{};
-            std::uint8_t residency{}, compression{}, quality{}, targetOverride{};
+            std::uint32_t version{};
+            std::uint32_t sourceContainer{};
+            std::uint32_t sourceCodec{};
+            std::uint32_t container{};
+            std::uint32_t codec{};
+            std::uint32_t targetBytes{};
+            std::uint8_t residency{};
+            std::uint8_t compression{};
+            std::uint8_t quality{};
+            std::uint8_t targetOverride{};
             if (!reader.U32(version) || version != AudioCookSchemaVersion || !reader.U8(residency) ||
                 residency < static_cast<std::uint8_t>(AudioCookResidency::Resident) ||
                 residency > static_cast<std::uint8_t>(AudioCookResidency::Streamed) || !reader.U32(sourceContainer) ||
@@ -182,15 +193,15 @@ namespace Horo::Audio {
         if (bytes.size() > MaximumCookedAudioPayloadBytes || bytes.size() < 4)
             return Result<AudioCookManifest>::Failure(MakeError(AudioErrors::CookPayloadInvalid));
         Reader reader{bytes};
-        std::span<const std::uint8_t> magic;
-        if (!reader.Take(4, magic) || !std::ranges::equal(magic, std::array<std::uint8_t, 4>{'H', 'A', 'C', '1'}))
+        if (std::span<const std::uint8_t> magic;
+            !reader.Take(4, magic) || !std::ranges::equal(magic, std::array<std::uint8_t, 4>{'H', 'A', 'C', '1'}))
             return Result<AudioCookManifest>::Failure(MakeError(AudioErrors::CookPayloadInvalid));
         AudioCookManifest manifest;
         if (!ReadManifestFields(reader, manifest) || !ValidateChunks(reader, manifest) || reader.Remaining() != manifest.payloadByteCount)
             return Result<AudioCookManifest>::Failure(MakeError(AudioErrors::CookPayloadInvalid));
-        std::span<const std::uint8_t> payload;
-        if (!reader.Take(static_cast<std::size_t>(manifest.payloadByteCount), payload) ||
-            ComputeSha256(std::as_bytes(payload)) != manifest.payloadDigest || !ValidatePcmSamples(payload))
+        if (std::span<const std::uint8_t> payload; !reader.Take(static_cast<std::size_t>(manifest.payloadByteCount), payload) ||
+                                                   ComputeSha256(std::as_bytes(payload)) != manifest.payloadDigest ||
+                                                   !ValidatePcmSamples(payload))
             return Result<AudioCookManifest>::Failure(MakeError(AudioErrors::CookPayloadInvalid));
         return Result<AudioCookManifest>::Success(std::move(manifest));
     }

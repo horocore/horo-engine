@@ -33,13 +33,13 @@ namespace Horo::Audio {
         void AppendLayout(std::vector<std::uint8_t> &bytes, const AudioChannelLayout &layout) {
             bytes.push_back(static_cast<std::uint8_t>(layout.kind));
             bytes.push_back(static_cast<std::uint8_t>(layout.orderedChannels.size()));
-            bytes.push_back(layout.ambisonic ? layout.ambisonic->order : 0);
+            bytes.push_back(layout.ambisonic.has_value() ? layout.ambisonic->order : 0);
             for (const auto &channel : layout.orderedChannels) {
                 bytes.push_back(static_cast<std::uint8_t>(channel.index()));
-                std::visit([&bytes](const auto role) {
-                    if constexpr (std::is_same_v<std::remove_cvref_t<decltype(role)>, AudioSpeakerRole>)
+                std::visit([&bytes]<typename Role>(const Role role) {
+                    if constexpr (std::is_same_v<Role, AudioSpeakerRole>)
                         bytes.push_back(static_cast<std::uint8_t>(role));
-                    else if constexpr (std::is_same_v<std::remove_cvref_t<decltype(role)>, AudioDiscreteChannel>)
+                    else if constexpr (std::is_same_v<Role, AudioDiscreteChannel>)
                         bytes.push_back(role.index);
                     else
                         bytes.push_back(role.acn);
@@ -50,6 +50,7 @@ namespace Horo::Audio {
         struct MemoryReader final {
             std::span<const std::byte> bytes;
 
+            // AudioSourceReader's C-style callback borrows this exact stack object only during synchronous import.
             static Result<std::size_t> Read(void *context, const std::uint64_t offset, const std::span<std::byte> destination) {
                 const auto &self = *static_cast<MemoryReader *>(context);
                 if (offset > self.bytes.size())
@@ -66,6 +67,7 @@ namespace Horo::Audio {
             std::optional<AudioProcessingFormat> format;
             std::uint64_t frames{};
 
+            // AudioDecodedFrameSink borrows this exact stack object; decoded blocks are copied before returning.
             static Result<void> Write(void *context, const std::uint64_t firstFrame, const AudioProcessingFormat &format,
                                       const std::span<const AudioSample> samples) {
                 auto &self = *static_cast<PcmSink *>(context);
@@ -159,7 +161,7 @@ namespace Horo::Audio {
         class AudioCookerStrategy final : public Assets::ICookerStrategy {
         public:
             AudioCookerStrategy(AudioCookProfile profile, AssetCookTargetId target, AudioCookToolchain toolchain,
-                                const Sha256Digest configurationDigest)
+                                const Sha256Digest &configurationDigest)
                 : profile_(std::move(profile)), target_(std::move(target)), toolchain_(std::move(toolchain)),
                   configurationDigest_(configurationDigest) {}
 
@@ -172,8 +174,8 @@ namespace Horo::Audio {
                 auto inspected = InspectCookedAudio(payload);
                 if (inspected.HasError())
                     return Result<void>::Failure(inspected.ErrorValue());
-                const auto &manifest = inspected.Value();
-                if (manifest.target != target_ || manifest.target != source.target || manifest.sourceDigest != source.sourceDigest ||
+                if (const auto &manifest = inspected.Value();
+                    manifest.target != target_ || manifest.target != source.target || manifest.sourceDigest != source.sourceDigest ||
                     manifest.configurationDigest != configurationDigest_ ||
                     manifest.toolchainDigest != ComputeSha256(std::as_bytes(std::span{toolchain_.identity})))
                     return Result<void>::Failure(MakeError(AudioErrors::CookPayloadInvalid));
@@ -204,13 +206,13 @@ namespace Horo::Audio {
     Result<AudioCookedOutput> CookAudioSource(const std::span<const std::uint8_t> source, const AudioCookProfile &profile,
                                               const AssetCookTargetId &target, const AudioCookToolchain &toolchain,
                                               const CancellationToken &cancellation) {
-        auto configuration = FingerprintAudioCookConfiguration(profile, target, toolchain);
-        if (configuration.HasError())
+        if (auto configuration = FingerprintAudioCookConfiguration(profile, target, toolchain); configuration.HasError())
             return Result<AudioCookedOutput>::Failure(configuration.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return Result<AudioCookedOutput>::Failure(MakeError(AudioErrors::OperationCancelled));
         MemoryReader reader{std::as_bytes(source)};
         PcmSink sink{cancellation};
+        // ImportCoreAudioSource invokes both callbacks synchronously and retains neither borrowed context.
         auto imported = ImportCoreAudioSource({&reader, source.size(), &MemoryReader::Read}, {&sink, &PcmSink::Write});
         if (imported.HasError())
             return Result<AudioCookedOutput>::Failure(imported.ErrorValue());
