@@ -36,6 +36,43 @@ namespace {
         UpdateAdmissionContext context;
     };
 
+    [[nodiscard]] SignedUpdateManifest MakeManifest(const DistributionArtifactIdentity &artifact,
+                                                    const DistributionPackageSelection &selected) {
+        constexpr std::string_view ArtifactBytes = "package";
+        const auto digest = ComputeSha256(std::as_bytes(std::span{ArtifactBytes.data(), ArtifactBytes.size()}));
+        UpdateManifestData data;
+        data.product = artifact.product;
+        data.version = artifact.version;
+        data.build = artifact.build;
+        data.channel = "stable";
+        data.sequence = 7U;
+        data.publishedAt = 1000U;
+        data.expiresAt = 2000U;
+        data.minimumUpdaterVersion = 1U;
+        data.minimumRootRevision = 1U;
+        data.packages.push_back({selected, "https://example.test/editor.tar.gz", ArtifactBytes.size(), digest, Signature(digest)});
+        auto payload = BuildCanonicalUpdatePayload(data);
+        REQUIRE(payload.HasValue());
+        auto metadataDigest = ComputeSha256(std::as_bytes(std::span{payload.Value()}));
+        auto manifest = SignedUpdateManifest::Create(std::move(data), Signature(metadataDigest));
+        REQUIRE(manifest.HasValue());
+        return std::move(manifest).Value();
+    }
+
+    [[nodiscard]] UpdateTrustRootSnapshot MakeRoots(const DistributionProductIdentity &product) {
+        UpdateTrustRootData root;
+        root.product = product;
+        root.revision = 1U;
+        root.minimumManifestSequence = 7U;
+        root.expiresAt = 3000U;
+        std::vector<std::byte> publicKey(65U, std::byte{1});
+        publicKey.front() = std::byte{0x04};
+        root.keys.push_back({.publisherId = "com.horo.updates", .keyId = "key-1", .publicKey = std::move(publicKey)});
+        auto roots = UpdateTrustRootSnapshot::Bootstrap(std::move(root));
+        REQUIRE(roots.HasValue());
+        return std::move(roots).Value();
+    }
+
     [[nodiscard]] Fixture MakeFixture() {
         const auto version = ParseReleaseVersion("0.4.2");
         const auto installed = ParseReleaseVersion("0.4.1");
@@ -51,34 +88,6 @@ namespace {
         artifact.installation = DistributionInstallationId{"horo-editor"};
         auto selected = ValidateDistributionPackageSelection(artifact, DistributionPackageFormat::TarGzip);
         REQUIRE(selected.HasValue());
-        constexpr std::string_view ArtifactBytes = "package";
-        const auto digest = ComputeSha256(std::as_bytes(std::span{ArtifactBytes.data(), ArtifactBytes.size()}));
-        UpdateManifestData data;
-        data.product = artifact.product;
-        data.version = artifact.version;
-        data.build = artifact.build;
-        data.channel = "stable";
-        data.sequence = 7U;
-        data.publishedAt = 1000U;
-        data.expiresAt = 2000U;
-        data.minimumUpdaterVersion = 1U;
-        data.minimumRootRevision = 1U;
-        data.packages.push_back({selected.Value(), "https://example.test/editor.tar.gz", ArtifactBytes.size(), digest, Signature(digest)});
-        auto payload = BuildCanonicalUpdatePayload(data);
-        REQUIRE(payload.HasValue());
-        auto metadataDigest = ComputeSha256(std::as_bytes(std::span{payload.Value()}));
-        auto manifest = SignedUpdateManifest::Create(std::move(data), Signature(metadataDigest));
-        REQUIRE(manifest.HasValue());
-        UpdateTrustRootData root;
-        root.product = artifact.product;
-        root.revision = 1U;
-        root.minimumManifestSequence = 7U;
-        root.expiresAt = 3000U;
-        std::vector<std::byte> publicKey(65U, std::byte{1});
-        publicKey.front() = std::byte{0x04};
-        root.keys.push_back({.publisherId = "com.horo.updates", .keyId = "key-1", .publicKey = std::move(publicKey)});
-        auto roots = UpdateTrustRootSnapshot::Bootstrap(std::move(root));
-        REQUIRE(roots.HasValue());
         UpdateAdmissionContext context{.installedProduct = artifact.product,
                                        .installedVersion = EngineProductVersion{installed.Value()},
                                        .channel = "stable",
@@ -87,7 +96,7 @@ namespace {
                                        .updaterVersion = 1U,
                                        .minimumAcceptedSequence = 7U,
                                        .now = 1500U};
-        return {std::move(manifest).Value(), std::move(roots).Value(), std::move(context)};
+        return {MakeManifest(artifact, selected.Value()), MakeRoots(artifact.product), std::move(context)};
     }
 }  // namespace
 
