@@ -2,10 +2,11 @@
 
 import json
 import os
-import subprocess
+import subprocess  # nosec B404 - this fixture executes only the validated CMake test target.
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -54,7 +55,10 @@ class Handler(BaseHTTPRequestHandler):
             if messages[2].get("role") != "tool" or (cloud and messages[2].get("tool_call_id") != "call-1"):
                 self.send_records(["{}"], status=400)
                 return
-        if payload["model"] == "tools":
+        self.send_model_stream(payload["model"], cloud)
+
+    def send_model_stream(self, model, cloud):
+        if model == "tools":
             if cloud:
                 frames = [
                     {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-1", "function": {"name": "scene_query", "arguments": "{\"target\":"}}]}}]},
@@ -79,20 +83,29 @@ class Handler(BaseHTTPRequestHandler):
                 {"done": True, "prompt_eval_count": 7, "eval_count": 2},
             ]
         if cloud:
-            records = [f"data: {json.dumps(frame)}\n\n" for frame in frames] + ["data: [DONE]\n\n"]
+            separator = "" if model == "nospace" else " "
+            records = [f"data:{separator}{json.dumps(frame)}\r\n\r\n" for frame in frames] + [f"data:{separator}[DONE]\r\n\r\n"]
             self.send_records(records, content_type="text/event-stream")
         else:
             self.send_records([json.dumps(frame) + "\n" for frame in frames])
 
 
 def main():
+    binary = Path(sys.argv[1]).resolve(strict=True)
+    source_root = Path(__file__).resolve().parents[2]
+    if (not binary.is_relative_to(source_root / "build") or binary.parent.name != "tests"
+            or binary.name not in {"HoroModelProviderTests", "HoroModelProviderTests.exe"}
+            or not binary.is_file() or not os.access(binary, os.X_OK)):
+        raise ValueError("CTest must supply the built HoroModelProviderTests executable")
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     environment = os.environ.copy()
     environment["HORO_MODEL_TEST_ENDPOINT"] = f"http://127.0.0.1:{server.server_port}"
     try:
-        return subprocess.call([sys.argv[1]], env=environment)
+        # The executable is resolved inside this checkout's build/tests tree; no shell is used.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+        return subprocess.run([str(binary)], env=environment, check=False).returncode  # nosec B603
     finally:
         server.shutdown()
         server.server_close()

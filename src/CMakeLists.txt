@@ -87,7 +87,7 @@ add_library(HoroModelProvider STATIC editor/agent/ModelProvider.cpp)
 add_library(HoroEngine::ModelProvider ALIAS HoroModelProvider)
 target_compile_features(HoroModelProvider PUBLIC cxx_std_20)
 
-add_library(HoroModelProviderAdapters STATIC editor/agent/ReferenceModelProviders.cpp)
+add_library(HoroModelProviderAdapters STATIC editor/agent/ReferenceModelProviders.cpp editor/agent/ReferenceModelStream.cpp)
 add_library(HoroEngine::ModelProviderAdapters ALIAS HoroModelProviderAdapters)
 target_compile_features(HoroModelProviderAdapters PUBLIC cxx_std_20)
 target_link_libraries(HoroModelProviderAdapters

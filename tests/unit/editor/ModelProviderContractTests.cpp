@@ -87,6 +87,21 @@ TEST_CASE("Real local and cloud HTTP adapters satisfy one streaming contract", "
     }
 }
 
+TEST_CASE("OpenAI adapter accepts SSE data fields without optional spaces and with CRLF", "[agent][model][http]") {
+    auto provider = Create(true);
+    std::vector<ModelEvent> events;
+    const auto outcome = provider->Stream(Request("nospace"), [&](const ModelEvent &event) {
+        events.push_back(event);
+        return true;
+    }, {});
+    REQUIRE(outcome.Succeeded());
+    REQUIRE(events.size() == 4);
+    REQUIRE(events[0].text == "hello");
+    REQUIRE(events[1].text == " world");
+    REQUIRE(events[2].kind == ModelEventKind::Usage);
+    REQUIRE(events[3].kind == ModelEventKind::Completed);
+}
+
 TEST_CASE("Real adapters assemble tool intents without executing them", "[agent][model][http]") {
     for (const bool cloud : {false, true}) {
         DYNAMIC_SECTION((cloud ? "cloud" : "local")) {
