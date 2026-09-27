@@ -46,8 +46,8 @@ namespace Horo::Network {
                 gate.channels_[channel.channel.Value()].configured)
                 return Result<MessageDeliveryGate>::Failure(MakeError(NetworkErrors::MessageDeliveryInvalid));
             const TransportSendRequirement requirement{channel.delivery, channel.channel, 0, 0};
-            const auto admitted = AdmitTransportSend(selection, expectedRevision, requirement, TransportAdmissionState::Accepting);
-            if (admitted.HasError())
+            if (const auto admitted = AdmitTransportSend(selection, expectedRevision, requirement, TransportAdmissionState::Accepting);
+                admitted.HasError())
                 return Result<MessageDeliveryGate>::Failure(admitted.ErrorValue());
             auto &state = gate.channels_[channel.channel.Value()];
             state.policy = channel;
@@ -74,13 +74,20 @@ namespace Horo::Network {
         if (!state.configured || input.delivery != state.policy.delivery || input.traffic != state.policy.traffic)
             return Reject(NetworkErrors::MessageDeliveryInvalid);
         const TransportSendRequirement requirement{input.delivery, input.channel, input.payloadBytes, 0};
-        const auto transport = AdmitTransportSend(selection_, revision_, requirement, TransportAdmissionState::Accepting);
-        if (transport.HasError())
+        if (const auto transport = AdmitTransportSend(selection_, revision_, requirement, TransportAdmissionState::Accepting);
+            transport.HasError())
             return transport;
         if (input.expiresAtTick != 0 && nowTick >= input.expiresAtTick)
             return Reject(NetworkErrors::MessageDeliveryExpired);
 
-        const std::uint32_t sequence = input.sequence.Value();
+        if (const auto replay = AdmitSequence(state, input.sequence.Value()); replay.HasError())
+            return replay;
+        lastTick_ = nowTick;
+        return Result<void>::Success();
+    }
+
+    /** @brief Advances one channel replay window only after all metadata and expiry checks succeed. */
+    Result<void> MessageDeliveryGate::AdmitSequence(ChannelState &state, const std::uint32_t sequence) {
         if (state.policy.delivery == DeliveryPolicy::ReliableOrdered) {
             if (state.highestSequence == std::numeric_limits<std::uint32_t>::max())
                 return Reject(NetworkErrors::MessageCounterExhausted);
@@ -104,7 +111,6 @@ namespace Horo::Network {
                 return Reject(NetworkErrors::MessageDeliveryOutOfOrder);
             state.seenWindow |= 1ULL << age;
         }
-        lastTick_ = nowTick;
         return Result<void>::Success();
     }
 }  // namespace Horo::Network

@@ -114,6 +114,7 @@ namespace Horo::Network {
         };
 
         [[nodiscard]] Result<void> Admit(const MessageDeliveryInput &input, std::uint64_t nowTick);
+        [[nodiscard]] static Result<void> AdmitSequence(ChannelState &state, std::uint32_t sequence);
 
         TransportSelectionEvidence selection_{};
         std::uint64_t revision_{};
