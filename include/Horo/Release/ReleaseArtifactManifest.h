@@ -38,6 +38,13 @@ namespace Horo::Release {
         bool operator==(const ReleaseArtifactRecord &) const noexcept = default;
     };
 
+    /**
+     * @brief Validates the canonical portable path grammar shared by release metadata files.
+     * @param path Candidate relative artifact path.
+     * @return True only for a bounded, portable path that cannot name manifest.json.
+     */
+    [[nodiscard]] bool IsValidReleaseArtifactPath(std::string_view path);
+
     /** @brief Final, non-secret signing evidence for the already signed artifact set. */
     struct ReleaseManifestSigning final {
         std::string algorithm;

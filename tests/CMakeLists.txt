@@ -1021,6 +1021,12 @@ target_compile_features(HoroReleaseArtifactManifestTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReleaseArtifactManifestTests PRIVATE HoroEngine::Application)
 horo_register_catch_test(HoroReleaseArtifactManifestTests LABELS "release;manifest;headless")
 
+add_executable(HoroReleaseChecksumsTests
+        unit/application/ReleaseChecksumsTests.cpp)
+target_compile_features(HoroReleaseChecksumsTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReleaseChecksumsTests PRIVATE HoroEngine::Application)
+horo_register_catch_test(HoroReleaseChecksumsTests LABELS "release;checksums;headless")
+
 add_executable(HoroReleaseBuildProvenanceTests
         unit/application/ReleaseBuildProvenanceTests.cpp)
 target_compile_features(HoroReleaseBuildProvenanceTests PRIVATE cxx_std_20)
