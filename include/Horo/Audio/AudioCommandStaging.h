@@ -6,6 +6,7 @@
 #include "Horo/Audio/AudioCommandBuffer.h"
 
 #include <memory>
+#include <optional>
 
 namespace Horo::Audio {
     /** @brief Fixed-size ingress/control outcomes; failed admission retains work with its caller. */
@@ -36,6 +37,12 @@ namespace Horo::Audio {
     struct AudioCommandPumpResult {
         AudioCommandStagingStatus status{AudioCommandStagingStatus::Inactive};
         std::uint32_t published{};
+    };
+
+    /** @brief Control-safe-point occupancy facts, excluding rejected caller-owned commands. */
+    struct AudioCommandStagingStats final {
+        std::uint32_t ingressDepth{};  /**< Accepted records awaiting control publication. */
+        std::uint32_t callbackDepth{}; /**< Published records awaiting callback consumption. */
     };
 
     /** @brief Independent bounded reservations, prepared before starting any producer or callback. */
@@ -114,6 +121,10 @@ namespace Horo::Audio {
         [[nodiscard]] bool TryConsume(AudioCommandRecord &record) noexcept;
         /** @brief Callback-only closed-and-empty check. @return Drain state, not proof of execution or device detachment. */
         [[nodiscard]] bool IsDrained() const noexcept;
+        /** @brief Tries to sample actual ingress and callback occupancies without blocking producers.
+         * @return Bounded facts, or no sample when ingress is contended or inert.
+         */
+        [[nodiscard]] std::optional<AudioCommandStagingStats> Stats() const noexcept;
 
     private:
         struct State;

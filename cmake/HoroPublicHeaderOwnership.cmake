@@ -347,6 +347,9 @@ horo_configure_target_header_boundary(HoroAudioCommands PUBLIC_HEADERS
     Horo/Audio/AudioLifecycleReconciler.h
     Horo/Audio/ScheduledAudioCommandBatch.h
 )
+horo_configure_target_header_boundary(HoroAudioMetrics PUBLIC_HEADERS
+    Horo/Audio/AudioMetrics.h
+)
 horo_configure_target_header_boundary(HoroInput PUBLIC_HEADERS
     Horo/Runtime/Input.h
 )

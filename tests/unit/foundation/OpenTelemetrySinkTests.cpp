@@ -372,7 +372,7 @@ TEST_CASE("OpenTelemetry preserves counter gauge histogram and timing signal sha
     REQUIRE(metrics.at(3).at("histogram").at("dataPoints").at(0).at("sum") == 0.012);
 }
 
-TEST_CASE("OpenTelemetry exports millisecond gauges with the OTLP ms unit", "[foundation][observability][opentelemetry][metrics]") {
+static void RequireExportedGaugeUnit(const char *name, const Horo::Telemetry::MetricUnit unit, const char *symbol, const double value) {
     RuntimeGuard runtimeGuard;
     auto transport = std::make_shared<CapturingTransport>();
     Horo::Telemetry::OpenTelemetryConfiguration configuration;
@@ -384,12 +384,11 @@ TEST_CASE("OpenTelemetry exports millisecond gauges with the OTLP ms unit", "[fo
     REQUIRE(sink != nullptr);
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 8, .enabled = true}, sink));
 
-    const auto gauge = Horo::Telemetry::Runtime::RegisterGauge(
-        {.name = "test.rtt_ms", .subsystem = "Foundation.Tests", .unit = Horo::Telemetry::MetricUnit::Milliseconds});
+    const auto gauge = Horo::Telemetry::Runtime::RegisterGauge({.name = name, .subsystem = "Foundation.Tests", .unit = unit});
     REQUIRE(gauge);
     const auto acceptedBefore = Horo::Telemetry::Runtime::GetStatistics().acceptedRecords;
     for (int attempt = 0; attempt < 10'000 && Horo::Telemetry::Runtime::GetStatistics().acceptedRecords == acceptedBefore; ++attempt) {
-        gauge.Set(37.0);
+        gauge.Set(value);
         std::this_thread::yield();
     }
     REQUIRE(Horo::Telemetry::Runtime::GetStatistics().acceptedRecords > acceptedBefore);
@@ -399,9 +398,17 @@ TEST_CASE("OpenTelemetry exports millisecond gauges with the OTLP ms unit", "[fo
     REQUIRE(calls.size() == 1);
     const nlohmann::json payload = nlohmann::json::parse(calls.front().payload);
     const auto &metric = payload.at("resourceMetrics").at(0).at("scopeMetrics").at(0).at("metrics").at(0);
-    REQUIRE(metric.at("name") == "test.rtt_ms");
-    REQUIRE(metric.at("unit") == "ms");
-    REQUIRE(metric.at("gauge").at("dataPoints").at(0).at("asDouble") == 37.0);
+    REQUIRE(metric.at("name") == name);
+    REQUIRE(metric.at("unit") == symbol);
+    REQUIRE(metric.at("gauge").at("dataPoints").at(0).at("asDouble") == value);
+}
+
+TEST_CASE("OpenTelemetry exports millisecond gauges with the OTLP ms unit", "[foundation][observability][opentelemetry][metrics]") {
+    RequireExportedGaugeUnit("test.rtt_ms", Horo::Telemetry::MetricUnit::Milliseconds, "ms", 37.0);
+}
+
+TEST_CASE("OpenTelemetry exports audio sample rate with the OTLP Hz unit", "[foundation][observability][opentelemetry][metrics]") {
+    RequireExportedGaugeUnit("audio.device.sample_rate", Horo::Telemetry::MetricUnit::Hertz, "Hz", 48'000.0);
 }
 
 TEST_CASE("OpenTelemetry retries are bounded and exporter failure remains isolated from producers",

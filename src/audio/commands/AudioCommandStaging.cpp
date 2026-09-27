@@ -383,4 +383,13 @@ namespace Horo::Audio {
             return state.output.IsDrained();
         });
     }
+
+    /** @copydoc AudioCommandStaging::Stats */
+    std::optional<AudioCommandStagingStats> AudioCommandStaging::Stats() const noexcept {
+        if (!state_)
+            return std::nullopt;
+        if (const std::unique_lock lock(state_->mutex, std::try_to_lock); lock.owns_lock())
+            return AudioCommandStagingStats{.ingressDepth = state_->count, .callbackDepth = state_->output.Depth()};
+        return std::nullopt;
+    }
 }  // namespace Horo::Audio
