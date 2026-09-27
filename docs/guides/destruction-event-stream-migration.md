@@ -12,7 +12,11 @@ planned fact batch before commit. A cancelled or failed transition discards the
 move-only reservation, calls `CancelRequired` on the preflighted adapters, and
 publishes no fact. **Only after** the
 complete Scene/Physics/Render aggregate root has become queryable does it call
-`Publish` with the exact current source generation and canonical fact batch. This
+`Publish` with the exact current source generation and committed revision. `Reserve`
+must receive the canonical pre-commit revision for that source and generation;
+the planned facts must carry its exact successor. The finite journal does not
+keep a second per-source revision table: retained facts can wrap or interleave,
+so they cannot establish source monotonicity. This
 is an explicit owner precondition, not something an event journal can infer from a
 standalone `DestructionDamageRuntime` value. The DFR-003.4 aggregate owner is not yet
 present in this checkout and must wire this seam when it lands; this change does

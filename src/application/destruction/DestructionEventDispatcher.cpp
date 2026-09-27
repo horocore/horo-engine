@@ -3,6 +3,8 @@
 #include <algorithm>
 
 namespace Horo::Destruction {
+    using enum DestructionEventStatus;
+
     /** @copydoc DestructionEventDispatcher::ValidBindings */
     bool DestructionEventDispatcher::ValidBindings(const std::span<const DestructionEventBinding> bindings, const bool headless) noexcept {
         if (bindings.empty() || bindings.size() > MaximumBindings)
@@ -28,16 +30,16 @@ namespace Horo::Destruction {
         const DestructionWorldId world, const std::uint64_t generation, const std::span<const DestructionEventBinding> bindings,
         const bool headless) noexcept {
         if (!world.IsValid() || generation == 0 || !ValidBindings(bindings, headless))
-            return {DestructionEventStatus::Invalid, {}};
+            return {Invalid, {}};
         DestructionEventDispatcher dispatcher;
         dispatcher.world_ = world;
         dispatcher.generation_ = generation;
         dispatcher.owner_ = std::this_thread::get_id();
         dispatcher.cursor_ = {.world = world, .sequence = 0};
-        std::copy(bindings.begin(), bindings.end(), dispatcher.bindings_.begin());
+        std::ranges::copy(bindings, dispatcher.bindings_.begin());
         dispatcher.bindingCount_ = bindings.size();
         dispatcher.headless_ = headless;
-        return {DestructionEventStatus::Ok, dispatcher};
+        return {Ok, dispatcher};
     }
 
     /** @copydoc DestructionEventDispatcher::Cursor */
@@ -64,23 +66,23 @@ namespace Horo::Destruction {
     DestructionEventStatus DestructionEventDispatcher::ValidatePreflightInputs(
         const std::span<const DestructionFact> facts, const std::span<const DestructionAdapterSlot> adapters) const noexcept {
         if (facts.empty() || facts.size() > DestructionHardLimits::EventsPerTransition || adapters.size() > MaximumBindings)
-            return DestructionEventStatus::Invalid;
+            return Invalid;
         for (std::size_t index = 0; index < adapters.size(); ++index) {
             const DestructionAdapterSlot &slot = adapters[index];
             if (slot.adapter == nullptr || slot.destination > DestructionDestinationKind::Accessibility || slot.destinationId == 0)
-                return DestructionEventStatus::Invalid;
+                return Invalid;
             for (std::size_t previous = 0; previous < index; ++previous) {
                 if (adapters[previous].destination == slot.destination && adapters[previous].destinationId == slot.destinationId)
-                    return DestructionEventStatus::Invalid;
+                    return Invalid;
             }
         }
         for (const DestructionFact &fact : facts) {
             if (!fact.occurrence.IsValid() || fact.occurrence.source.world != world_ || fact.payloadSchema != DestructionFactSchema ||
                 fact.transitionTicket == 0 || fact.transitionTicket != facts.front().transitionTicket ||
                 fact.occurrence.source != facts.front().occurrence.source)
-                return DestructionEventStatus::Invalid;
+                return Invalid;
         }
-        return DestructionEventStatus::Ok;
+        return Ok;
     }
 
     /** @copydoc DestructionEventDispatcher::RequiredRequestCount */
@@ -106,11 +108,11 @@ namespace Horo::Destruction {
             const DestructionEventBinding &binding = bindings_[index];
             if (!binding.required || !Active(binding))
                 continue;
-            IDestructionDestinationAdapter *adapter = FindAdapter(binding, adapters);
+            const IDestructionDestinationAdapter *adapter = FindAdapter(binding, adapters);
             if (adapter == nullptr || !adapter->Supports(binding.requestSchema))
-                return DestructionEventStatus::ConsumerUnavailable;
+                return ConsumerUnavailable;
         }
-        return DestructionEventStatus::Ok;
+        return Ok;
     }
 
     /** @copydoc DestructionEventDispatcher::ReserveRequiredDestinations */
@@ -132,36 +134,35 @@ namespace Horo::Destruction {
             const std::uint32_t count = RequiredRequestCount(binding, facts);
             if (count != 0) {
                 const DestructionEventStatus result = adapter->ReserveRequired(facts.front().transitionTicket, count);
-                if (result != DestructionEventStatus::Ok) {
+                if (result != Ok) {
                     (void)CancelRequired(facts.front().transitionTicket, adapters);
                     return result;
                 }
             }
         }
-        return DestructionEventStatus::Ok;
+        return Ok;
     }
 
     /** @copydoc DestructionEventDispatcher::Preflight */
     DestructionEventStatus DestructionEventDispatcher::Preflight(const std::span<const DestructionFact> facts,
                                                                  const std::span<const DestructionAdapterSlot> adapters) const noexcept {
         if (owner_ != std::this_thread::get_id())
-            return DestructionEventStatus::WrongThread;
+            return WrongThread;
         if (closing_)
-            return DestructionEventStatus::ShutdownInProgress;
-        const DestructionEventStatus valid = ValidatePreflightInputs(facts, adapters);
-        if (valid != DestructionEventStatus::Ok)
+            return ShutdownInProgress;
+        if (const DestructionEventStatus valid = ValidatePreflightInputs(facts, adapters); valid != Ok)
             return valid;
         const DestructionEventStatus available = ValidateRequiredAdapters(adapters);
-        return available == DestructionEventStatus::Ok ? ReserveRequiredDestinations(facts, adapters) : available;
+        return available == Ok ? ReserveRequiredDestinations(facts, adapters) : available;
     }
 
     /** @copydoc DestructionEventDispatcher::CancelRequired */
     DestructionEventStatus DestructionEventDispatcher::CancelRequired(
         const std::uint64_t transitionTicket, const std::span<const DestructionAdapterSlot> adapters) const noexcept {
         if (owner_ != std::this_thread::get_id())
-            return DestructionEventStatus::WrongThread;
+            return WrongThread;
         if (transitionTicket == 0 || adapters.size() > MaximumBindings)
-            return DestructionEventStatus::Invalid;
+            return Invalid;
         for (std::size_t index = 0; index < bindingCount_; ++index) {
             const DestructionEventBinding &binding = bindings_[index];
             if (!binding.required || !Active(binding))
@@ -170,19 +171,19 @@ namespace Horo::Destruction {
             if (adapter != nullptr)
                 adapter->CancelRequired(transitionTicket);
         }
-        return DestructionEventStatus::Ok;
+        return Ok;
     }
 
     /** @copydoc DestructionEventDispatcher::CheckPumpSource */
     DestructionEventStatus DestructionEventDispatcher::CheckPumpSource(const DestructionEventStream &stream,
                                                                        const DestructionHandle currentSource) const noexcept {
         if (owner_ != std::this_thread::get_id() || !stream.OnOwnerThread())
-            return DestructionEventStatus::WrongThread;
+            return WrongThread;
         if (closing_)
-            return DestructionEventStatus::ShutdownInProgress;
+            return ShutdownInProgress;
         if (stream.Tail().world != world_ || !currentSource.IsValid() || currentSource.world != world_)
-            return DestructionEventStatus::StaleGeneration;
-        return DestructionEventStatus::Ok;
+            return StaleGeneration;
+        return Ok;
     }
 
     /** @copydoc DestructionEventDispatcher::DeliverLayer */
@@ -190,17 +191,17 @@ namespace Horo::Destruction {
                                                                     const std::span<const DestructionAdapterSlot> adapters,
                                                                     DestructionDispatchResult &result) const noexcept {
         if (binding.factKind != fact.occurrence.kind)
-            return DestructionEventStatus::Ok;
+            return Ok;
         if (!Active(binding)) {
             ++result.suppressed;
-            return DestructionEventStatus::Ok;
+            return Ok;
         }
         IDestructionDestinationAdapter *adapter = FindAdapter(binding, adapters);
         if (adapter == nullptr || !adapter->Supports(binding.requestSchema)) {
             if (binding.required)
-                return DestructionEventStatus::ConsumerUnavailable;
+                return ConsumerUnavailable;
             ++result.suppressed;
-            return DestructionEventStatus::Ok;
+            return Ok;
         }
         const DestructionDestinationRequest request{.id = {.occurrence = fact.occurrence,
                                                            .bindingGeneration = generation_,
@@ -212,44 +213,44 @@ namespace Horo::Destruction {
                                                     .committedTick = fact.committedTick,
                                                     .payload = fact.payload};
         const DestructionEventStatus outcome = adapter->Submit(request);
-        if (outcome == DestructionEventStatus::Ok || outcome == DestructionEventStatus::AlreadyDispatched) {
+        if (outcome == Ok || outcome == AlreadyDispatched) {
             ++result.submitted;
-            return DestructionEventStatus::Ok;
+            return Ok;
         }
         if (binding.required)
             return outcome;
         ++result.suppressed;
-        return DestructionEventStatus::Ok;
+        return Ok;
     }
 
     /** @copydoc DestructionEventDispatcher::PumpOne */
     DestructionDispatchResult DestructionEventDispatcher::PumpOne(const DestructionEventStream &stream,
                                                                   const DestructionHandle currentSource,
                                                                   const std::span<const DestructionAdapterSlot> adapters) noexcept {
-        DestructionDispatchResult result{.status = DestructionEventStatus::Invalid, .next = cursor_};
+        DestructionDispatchResult result{.status = Invalid, .next = cursor_};
         result.status = CheckPumpSource(stream, currentSource);
-        if (result.status != DestructionEventStatus::Ok)
+        if (result.status != Ok)
             return result;
         const DestructionEventRead read = stream.Read(cursor_);
-        if (read.status != DestructionEventStatus::Ok) {
+        if (read.status != Ok) {
             result.status = read.status;
             result.next = read.next;
             return result;
         }
         if (read.fact.occurrence.source != currentSource) {
-            result.status = DestructionEventStatus::StaleGeneration;
+            result.status = StaleGeneration;
             return result;
         }
         pending_ = true;
         for (; pendingBinding_ < bindingCount_; ++pendingBinding_) {
             result.status = DeliverLayer(bindings_[pendingBinding_], read.fact, adapters, result);
-            if (result.status != DestructionEventStatus::Ok)
+            if (result.status != Ok)
                 return result;
         }
         pendingBinding_ = 0;
         pending_ = false;
         cursor_ = read.next;
-        result.status = DestructionEventStatus::Ok;
+        result.status = Ok;
         result.next = cursor_;
         return result;
     }
@@ -258,37 +259,37 @@ namespace Horo::Destruction {
     DestructionEventStatus DestructionEventDispatcher::Reconcile(const DestructionEventStream &stream,
                                                                  const DestructionEventCursor cursor) noexcept {
         if (owner_ != std::this_thread::get_id())
-            return DestructionEventStatus::WrongThread;
+            return WrongThread;
         if (!stream.OnOwnerThread())
-            return DestructionEventStatus::WrongThread;
+            return WrongThread;
         if (closing_)
-            return DestructionEventStatus::ShutdownInProgress;
+            return ShutdownInProgress;
         if (cursor.world != world_ || stream.Tail().world != world_)
-            return DestructionEventStatus::StaleGeneration;
+            return StaleGeneration;
         if (pending_ || cursor.sequence < cursor_.sequence || cursor.sequence < stream.Oldest().sequence ||
             cursor.sequence > stream.Tail().sequence)
-            return DestructionEventStatus::Invalid;
+            return Invalid;
         cursor_ = cursor;
-        return DestructionEventStatus::Ok;
+        return Ok;
     }
 
     /** @copydoc DestructionEventDispatcher::ReplaceBindings */
     DestructionEventStatus DestructionEventDispatcher::ReplaceBindings(const std::uint64_t generation,
                                                                        const std::span<const DestructionEventBinding> bindings) noexcept {
         if (owner_ != std::this_thread::get_id())
-            return DestructionEventStatus::WrongThread;
+            return WrongThread;
         if (closing_)
-            return DestructionEventStatus::ShutdownInProgress;
+            return ShutdownInProgress;
         if (pending_)
-            return DestructionEventStatus::ReservationStale;
+            return ReservationStale;
         if (generation <= generation_)
-            return DestructionEventStatus::StaleRevision;
+            return StaleRevision;
         if (!ValidBindings(bindings, headless_))
-            return DestructionEventStatus::Invalid;
-        std::copy(bindings.begin(), bindings.end(), bindings_.begin());
+            return Invalid;
+        std::ranges::copy(bindings, bindings_.begin());
         bindingCount_ = bindings.size();
         generation_ = generation;
-        return DestructionEventStatus::Ok;
+        return Ok;
     }
 
     /** @copydoc DestructionEventDispatcher::BeginShutdown */

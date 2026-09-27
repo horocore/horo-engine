@@ -14,7 +14,7 @@ namespace Horo::Destruction {
             return {Id<DestructionWorldId>(7), Id<DestructibleId>(11), Id<DestructionGeneration>(generation)};
         }
 
-        DestructionFact Fact(const std::uint64_t revision = 1) {
+        DestructionFact Fact(const std::uint64_t revision = 2) {
             return {.occurrence = {.source = Handle(),
                                    .stateRevision = Id<DestructionStateRevision>(revision),
                                    .kind = DestructionFactKind::Damaged},
@@ -30,9 +30,11 @@ namespace Horo::Destruction {
         }
 
         void Publish(DestructionEventStream &stream, const DestructionFact &fact) {
-            auto [status, reservation] = stream.Reserve(Handle(), fact.transitionTicket, std::span(&fact, 1), stream.Tail());
+            const auto sourceRevision = Id<DestructionStateRevision>(fact.occurrence.stateRevision.Value() - 1);
+            auto [status, reservation] =
+                stream.Reserve(Handle(), sourceRevision, fact.transitionTicket, std::span(&fact, 1), stream.Tail());
             REQUIRE(status == DestructionEventStatus::Ok);
-            REQUIRE(stream.Publish(std::move(reservation), Handle()) == DestructionEventStatus::Ok);
+            REQUIRE(stream.Publish(std::move(reservation), Handle(), fact.occurrence.stateRevision) == DestructionEventStatus::Ok);
         }
 
         constexpr DestructionEventBinding Gameplay{.factKind = DestructionFactKind::Damaged,

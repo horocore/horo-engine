@@ -14,6 +14,7 @@
 #include <span>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace Horo::Destruction {
     /** @brief Fixed schema version for the baseline semantic fact payload. */
@@ -79,7 +80,7 @@ namespace Horo::Destruction {
         DestructionHandle source_{};
         std::uint64_t nextSequence_{};
         std::uint32_t count_{};
-        std::unique_ptr<DestructionFact[]> facts_{};
+        std::vector<DestructionFact> facts_{};
     };
 
     /** @brief Result of one bounded cursor read, including a recovery cursor on Gap. */
@@ -118,23 +119,26 @@ namespace Horo::Destruction {
         /**
          * @brief Validates and owns the exact bounded batch before an aggregate transition is committed.
          * @param source Exact current canonical source handle, supplied by the aggregate owner.
+         * @param sourceRevision Canonical pre-commit revision for that source and generation, supplied by the aggregate owner.
          * @param transitionTicket Non-zero unique owner-issued ticket.
          * @param facts Complete canonically ordered planned batch, copied before commit.
          * @param requiredCursor Minimum of all required consumer acknowledgements; optional consumers do not hold retention.
          * @return Reservation or typed failure. No journal mutation occurs.
          */
         [[nodiscard]] std::pair<DestructionEventStatus, DestructionEventReservation> Reserve(
-            DestructionHandle source, std::uint64_t transitionTicket, std::span<const DestructionFact> facts,
-            DestructionEventCursor requiredCursor) const noexcept;
+            DestructionHandle source, DestructionStateRevision sourceRevision, std::uint64_t transitionTicket,
+            std::span<const DestructionFact> facts, DestructionEventCursor requiredCursor) const noexcept;
 
         /**
          * @brief Atomically appends the exact planned batch after the complete aggregate root is visible.
          * @param reservation Move-only prevalidated batch; consumed on success.
          * @param currentSource Exact canonical source handle after aggregate commit; rejects replacement.
+         * @param committedRevision Canonical post-commit revision; must equal the reserved fact revision.
          * @return Typed result; failure leaves the journal unchanged.
          * @pre Caller owns the scene safe point and has committed the corresponding Scene/Physics/Render aggregate.
          */
-        [[nodiscard]] DestructionEventStatus Publish(DestructionEventReservation &&reservation, DestructionHandle currentSource) noexcept;
+        [[nodiscard]] DestructionEventStatus Publish(DestructionEventReservation &&reservation, DestructionHandle currentSource,
+                                                     DestructionStateRevision committedRevision) noexcept;
 
         /**
          * @brief Copies one committed fact or reports a gap requiring full canonical snapshot reconciliation.
@@ -148,14 +152,15 @@ namespace Horo::Destruction {
 
     private:
         DestructionEventStream(DestructionWorldId world, std::uint32_t capacity, std::uint32_t maximumBatch,
-                               std::unique_ptr<DestructionFact[]> storage) noexcept;
-        [[nodiscard]] DestructionEventStatus ValidateBatch(DestructionHandle source, std::uint64_t transitionTicket,
+                               std::vector<DestructionFact> storage) noexcept;
+        [[nodiscard]] DestructionEventStatus ValidateBatch(DestructionHandle source, DestructionStateRevision sourceRevision,
+                                                           std::uint64_t transitionTicket,
                                                            std::span<const DestructionFact> facts) const noexcept;
 
         DestructionWorldId world_{};
         std::uint32_t capacity_{};
         std::uint32_t maximumBatch_{};
-        std::unique_ptr<DestructionFact[]> storage_;
+        std::vector<DestructionFact> storage_;
         std::thread::id owner_;
         std::uint64_t tail_{};
         std::uint64_t oldest_{};
