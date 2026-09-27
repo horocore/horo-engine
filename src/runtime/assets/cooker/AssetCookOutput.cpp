@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -238,7 +239,9 @@ namespace Horo::Assets {
 
     Result<AssetCookGeneration> ResolveCurrentCookGeneration(const std::filesystem::path &targetRoot, const AssetCookLimits &limits) {
         const auto currentPath = targetRoot / "current.json";
-        if (!std::filesystem::exists(currentPath)) {
+        std::error_code statusError;
+        const auto currentStatus = std::filesystem::symlink_status(currentPath, statusError);
+        if (statusError || !std::filesystem::is_regular_file(currentStatus) || std::filesystem::is_symlink(currentStatus)) {
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
         }
 
@@ -254,7 +257,7 @@ namespace Horo::Assets {
         std::filesystem::path relPath = JsonStringValue(json, "generationPath");
         auto countStr = JsonStringValue(json, "artifactCount");
 
-        if (targetStr.empty() || manifestHex.empty() || relPath.empty()) {
+        if (targetStr.empty() || manifestHex.empty() || relPath.empty() || countStr.empty()) {
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
         }
 
@@ -262,17 +265,40 @@ namespace Horo::Assets {
         if (target.HasError())
             return Result<AssetCookGeneration>::Failure(target.ErrorValue());
 
-        std::size_t count = 0;
-        if (!countStr.empty())
-            count = static_cast<std::size_t>(std::stoull(countStr));
+        auto digest = ParseSha256("sha256:" + manifestHex);
+        if (digest.HasError() || relPath.generic_string() != "generations/" + manifestHex)
+            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
+
+        std::size_t count{};
+        const auto [end, parseError] = std::from_chars(countStr.data(), countStr.data() + countStr.size(), count);
+        if (parseError != std::errc{} || end != countStr.data() + countStr.size() || count == 0U || count > limits.maximumAssets ||
+            std::to_string(count) != countStr)
+            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
+
+        const auto expectedCurrent =
+            std::format(R"({{"schemaVersion":1,"target":"{}","manifestDigest":"{}","generationPath":"{}","artifactCount":"{}"}})",
+                        target.Value().Value(), manifestHex, relPath.generic_string(), count);
+        if (json != expectedCurrent)
+            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
 
         const std::filesystem::path generationRoot = targetRoot / relPath;
         if (relPath.is_absolute() || !IsSafePathWithin(targetRoot, generationRoot))
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
 
+        const auto generationStatus = std::filesystem::symlink_status(generationRoot, statusError);
+        if (statusError || !std::filesystem::is_directory(generationStatus) || std::filesystem::is_symlink(generationStatus))
+            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
+        const auto manifestPath = generationRoot / "manifest.json";
+        const auto manifestStatus = std::filesystem::symlink_status(manifestPath, statusError);
+        if (statusError || !std::filesystem::is_regular_file(manifestStatus) || std::filesystem::is_symlink(manifestStatus))
+            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
+        auto manifest = ReadFile(manifestPath, limits.maximumArtifactBytes);
+        if (manifest.HasError() || ComputeSha256(std::as_bytes(std::span{manifest.Value()})) != digest.Value())
+            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
+
         return Result<AssetCookGeneration>::Success(AssetCookGeneration{
             .target = target.Value(),
-            .manifestDigest = Sha256Digest{},
+            .manifestDigest = digest.Value(),
             .generationRoot = generationRoot,
             .artifactCount = count,
         });
