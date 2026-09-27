@@ -81,6 +81,44 @@ namespace Horo::Release {
         std::vector<ReleaseManifestExtension> extensions;
     };
 
+    /** @brief Canonical unsigned file inventory captured before byte-changing signing work. */
+    class ReleasePreSignInventory final {
+    public:
+        /**
+         * @brief Validates and freezes exact unsigned artifact records separately from final metadata.
+         * @param candidate Nonzero candidate identity that owns the private stage.
+         * @param artifacts Complete unsigned file inventory.
+         * @return Canonical pre-sign inventory or a typed invalid-output failure.
+         */
+        [[nodiscard]] static Result<ReleasePreSignInventory> Create(ReleaseCandidateId candidate,
+                                                                    std::vector<ReleaseArtifactRecord> artifacts);
+
+        /**
+         * @brief Parses only exact canonical pre-sign inventory bytes.
+         * @param json Complete inventory bytes.
+         * @return Validated inventory or a typed invalid-output failure.
+         */
+        [[nodiscard]] static Result<ReleasePreSignInventory> ParseCanonical(std::string_view json);
+
+        /** @brief Returns the owning candidate. @return Candidate identity. */
+        [[nodiscard]] ReleaseCandidateId Candidate() const noexcept;
+        /** @brief Returns exact canonical pre-sign bytes. @return Immutable JSON bytes. */
+        [[nodiscard]] const std::string &CanonicalJson() const noexcept;
+        /** @brief Returns SHA-256 of the canonical inventory. @return Pre-sign inventory digest. */
+        [[nodiscard]] const Sha256Digest &Digest() const noexcept;
+        /** @brief Returns validated unsigned file records. @return Borrowed immutable inventory. */
+        [[nodiscard]] std::span<const ReleaseArtifactRecord> Artifacts() const noexcept;
+
+    private:
+        ReleasePreSignInventory(ReleaseCandidateId candidate, std::vector<ReleaseArtifactRecord> artifacts, std::string json,
+                                const Sha256Digest &digest);
+
+        ReleaseCandidateId candidate_;
+        std::vector<ReleaseArtifactRecord> artifacts_;
+        std::string json_;
+        Sha256Digest digest_;
+    };
+
     /** @brief Validated canonical schema-v1 final manifest, frozen after byte-changing operations. */
     class ReleaseArtifactManifest final {
     public:
@@ -122,4 +160,12 @@ namespace Horo::Release {
      * @return Success only when all recorded sizes, hashes, and canonical manifest bytes match the tree.
      */
     [[nodiscard]] Result<void> VerifyReleaseArtifactTree(const std::filesystem::path &root, const ReleaseArtifactManifest &manifest);
+
+    /**
+     * @brief Verifies every unsigned staged file and rejects undeclared files and symbolic links.
+     * @param root Quiescent private stage before signing, without final manifest.json.
+     * @param inventory Expected canonical unsigned inventory.
+     * @return Success only when the complete tree matches exact recorded sizes and hashes.
+     */
+    [[nodiscard]] Result<void> VerifyReleaseStagedTree(const std::filesystem::path &root, const ReleasePreSignInventory &inventory);
 }  // namespace Horo::Release

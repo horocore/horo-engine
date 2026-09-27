@@ -95,12 +95,20 @@ namespace Horo::Release {
             return path != "manifest.json";
         }
 
+        /** @brief Applies one bounded portable file contract to unsigned and final inventories. */
+        [[nodiscard]] bool ValidArtifactRecords(const std::span<const ReleaseArtifactRecord> artifacts) {
+            return !artifacts.empty() && artifacts.size() <= MaximumArtifacts &&
+                   std::ranges::all_of(artifacts, [](const ReleaseArtifactRecord &artifact) {
+                return SafeRelativePath(artifact.path) && !NameOf(artifact.role, Roles).empty();
+            });
+        }
+
         [[nodiscard]] bool ValidData(const ReleaseArtifactManifestData &data) {
             if (data.candidate.value == 0U || NameOf(data.product.kind, ProductKinds).empty() || NameOf(data.platform, Platforms).empty() ||
                 NameOf(data.architecture, Architectures).empty() || NameOf(data.configuration, Configurations).empty() ||
                 !SafeToken(data.build.value) || !SafeToken(data.toolchainId) || data.sourceRevision.value.empty() ||
                 data.sourceRevision.value.size() > MaximumReleaseSourceRevisionBytes || data.assetArchiveFormatVersion == 0U ||
-                data.artifacts.empty() || data.artifacts.size() > MaximumArtifacts || data.runtimeFeatures.size() > MaximumFeatures ||
+                !ValidArtifactRecords(data.artifacts) || data.runtimeFeatures.size() > MaximumFeatures ||
                 data.extensions.size() > MaximumExtensions)
                 return false;
             if (!data.product.componentId.empty() && !SafeToken(data.product.componentId))
@@ -108,9 +116,6 @@ namespace Horo::Release {
             if (data.signing &&
                 (!SafeToken(data.signing->algorithm) || !SafeToken(data.signing->publisher) || !SafeToken(data.signing->keyId)))
                 return false;
-            for (const auto &artifact : data.artifacts)
-                if (!SafeRelativePath(artifact.path) || NameOf(artifact.role, Roles).empty())
-                    return false;
             for (const auto &feature : data.runtimeFeatures)
                 if (!SafeToken(feature))
                     return false;
@@ -118,6 +123,17 @@ namespace Horo::Release {
                 return extension.name.find('.') != std::string::npos && SafeToken(extension.name) && extension.version != 0U &&
                        extension.canonicalJson.size() <= 16'384U;
             });
+        }
+
+        /** @brief Emits one ordered inventory in both pre-sign and final schemas. */
+        [[nodiscard]] Json WriteArtifactRecords(const std::span<const ReleaseArtifactRecord> artifacts) {
+            Json result = Json::array();
+            for (const auto &artifact : artifacts)
+                result.push_back({{"path", artifact.path},
+                                  {"role", NameOf(artifact.role, Roles)},
+                                  {"size", artifact.size},
+                                  {"sha256", FormatSha256(artifact.digest)}});
+            return result;
         }
 
         [[nodiscard]] Json WriteManifest(const ReleaseArtifactManifestData &data) {
@@ -151,12 +167,7 @@ namespace Horo::Release {
                                        {"publisher", data.signing->publisher},
                                        {"keyId", data.signing->keyId},
                                        {"signedPayloadDigest", FormatSha256(data.signing->signedPayloadDigest)}};
-            document["artifacts"] = Json::array();
-            for (const auto &artifact : data.artifacts)
-                document["artifacts"].push_back({{"path", artifact.path},
-                                                 {"role", NameOf(artifact.role, Roles)},
-                                                 {"size", artifact.size},
-                                                 {"sha256", FormatSha256(artifact.digest)}});
+            document["artifacts"] = WriteArtifactRecords(data.artifacts);
             document["extensions"] = Json::array();
             for (const auto &extension : data.extensions)
                 document["extensions"].push_back(
@@ -211,24 +222,32 @@ namespace Horo::Release {
             return true;
         }
 
+        /** @brief Reads the shared bounded file-record schema. */
+        [[nodiscard]] bool ParseArtifactRecords(const Json &artifacts, std::vector<ReleaseArtifactRecord> &records) {
+            if (!artifacts.is_array() || artifacts.empty() || artifacts.size() > MaximumArtifacts)
+                return false;
+            for (const auto &item : artifacts) {
+                if (!item.is_object() || item.size() != 4U)
+                    return false;
+                const auto role = ParseName<ReleaseArtifactRole>(item.at("role").get<std::string>(), Roles);
+                auto digest = ParseSha256(item.at("sha256").get<std::string>());
+                if (!role || digest.HasError())
+                    return false;
+                records.emplace_back(item.at("path").get<std::string>(), *role, item.at("size").get<std::uint64_t>(), digest.Value());
+            }
+            return true;
+        }
+
         /** @brief Parses bounded file inventory and inert namespaced extensions. */
         [[nodiscard]] bool ParseInventory(const Json &document, ReleaseArtifactManifestData &data) {
             const auto &features = document.at("runtimeFeatures");
             const auto &artifacts = document.at("artifacts");
             const auto &extensions = document.at("extensions");
-            if (!features.is_array() || !artifacts.is_array() || !extensions.is_array() || features.size() > MaximumFeatures ||
-                artifacts.size() > MaximumArtifacts || extensions.size() > MaximumExtensions)
+            if (!features.is_array() || !extensions.is_array() || features.size() > MaximumFeatures ||
+                extensions.size() > MaximumExtensions || !ParseArtifactRecords(artifacts, data.artifacts))
                 return false;
             for (const auto &feature : features)
                 data.runtimeFeatures.push_back(feature.get<std::string>());
-            for (const auto &item : artifacts) {
-                const auto role = ParseName<ReleaseArtifactRole>(item.at("role").get<std::string>(), Roles);
-                auto digest = ParseSha256(item.at("sha256").get<std::string>());
-                if (!role || digest.HasError())
-                    return false;
-                data.artifacts.emplace_back(item.at("path").get<std::string>(), *role, item.at("size").get<std::uint64_t>(),
-                                            digest.Value());
-            }
             for (const auto &item : extensions)
                 data.extensions.emplace_back(item.at("name").get<std::string>(), item.at("version").get<std::uint32_t>(),
                                              item.at("value").dump());
@@ -248,6 +267,71 @@ namespace Horo::Release {
             return true;
         }
     }  // namespace
+
+    ReleasePreSignInventory::ReleasePreSignInventory(const ReleaseCandidateId candidate, std::vector<ReleaseArtifactRecord> artifacts,
+                                                     std::string json, const Sha256Digest &digest)
+        : candidate_(candidate), artifacts_(std::move(artifacts)), json_(std::move(json)), digest_(digest) {}
+
+    /** @copydoc ReleasePreSignInventory::Create */
+    Result<ReleasePreSignInventory> ReleasePreSignInventory::Create(const ReleaseCandidateId candidate,
+                                                                    std::vector<ReleaseArtifactRecord> artifacts) {
+        if (candidate.value == 0U || !ValidArtifactRecords(artifacts))
+            return Result<ReleasePreSignInventory>::Failure(InvalidManifest());
+        std::ranges::sort(artifacts, {}, &ReleaseArtifactRecord::path);
+        if (!UniquePortablePaths(artifacts))
+            return Result<ReleasePreSignInventory>::Failure(InvalidManifest());
+        std::string json = Json{{"schemaVersion", 1},
+                                {"kind", "pre-sign-inventory"},
+                                {"candidate", candidate.value},
+                                {"artifacts", WriteArtifactRecords(artifacts)}}
+                               .dump();
+        if (json.size() > MaximumManifestBytes)
+            return Result<ReleasePreSignInventory>::Failure(InvalidManifest());
+        const Sha256Digest digest = ComputeSha256(std::as_bytes(std::span{json}));
+        return Result<ReleasePreSignInventory>::Success(ReleasePreSignInventory{candidate, std::move(artifacts), std::move(json), digest});
+    }
+
+    /** @copydoc ReleasePreSignInventory::ParseCanonical */
+    Result<ReleasePreSignInventory> ReleasePreSignInventory::ParseCanonical(const std::string_view json) {
+        if (json.empty() || json.size() > MaximumManifestBytes)
+            return Result<ReleasePreSignInventory>::Failure(InvalidManifest());
+        const Json document = Json::parse(json, nullptr, false);
+        if (!document.is_object() || document.size() != 4U)
+            return Result<ReleasePreSignInventory>::Failure(InvalidManifest());
+        try {
+            if (document.at("schemaVersion") != 1 || document.at("kind") != "pre-sign-inventory")
+                return Result<ReleasePreSignInventory>::Failure(InvalidManifest());
+            std::vector<ReleaseArtifactRecord> artifacts;
+            if (!ParseArtifactRecords(document.at("artifacts"), artifacts))
+                return Result<ReleasePreSignInventory>::Failure(InvalidManifest());
+            auto inventory = Create(ReleaseCandidateId{document.at("candidate").get<std::uint64_t>()}, std::move(artifacts));
+            return inventory.HasValue() && inventory.Value().CanonicalJson() == json
+                       ? std::move(inventory)
+                       : Result<ReleasePreSignInventory>::Failure(InvalidManifest());
+        } catch (const Json::exception &) {
+            return Result<ReleasePreSignInventory>::Failure(InvalidManifest());
+        }
+    }
+
+    /** @copydoc ReleasePreSignInventory::Candidate */
+    ReleaseCandidateId ReleasePreSignInventory::Candidate() const noexcept {
+        return candidate_;
+    }
+
+    /** @copydoc ReleasePreSignInventory::CanonicalJson */
+    const std::string &ReleasePreSignInventory::CanonicalJson() const noexcept {
+        return json_;
+    }
+
+    /** @copydoc ReleasePreSignInventory::Digest */
+    const Sha256Digest &ReleasePreSignInventory::Digest() const noexcept {
+        return digest_;
+    }
+
+    /** @copydoc ReleasePreSignInventory::Artifacts */
+    std::span<const ReleaseArtifactRecord> ReleasePreSignInventory::Artifacts() const noexcept {
+        return artifacts_;
+    }
 
     ReleaseArtifactManifest::ReleaseArtifactManifest(ReleaseArtifactManifestData data, std::string json, const Sha256Digest &digest)
         : data_(std::move(data)), json_(std::move(json)), digest_(digest) {}
