@@ -104,8 +104,8 @@ namespace Horo::Destruction {
                                                                  const std::span<const DestructionFact> facts) const noexcept {
         if (facts.empty() || facts.size() > maximumBatch_ || transitionTicket == 0)
             return Invalid;
-        const auto successor = AdvanceDestructionStateRevision(sourceRevision);
-        if (successor.HasError() || facts.front().occurrence.stateRevision != successor.Value())
+        if (const auto successor = AdvanceDestructionStateRevision(sourceRevision);
+            successor.HasError() || facts.front().occurrence.stateRevision != successor.Value())
             return StaleRevision;
         std::uint64_t priorTick = lastTick_;
         DestructionStateRevision priorRevision{};
