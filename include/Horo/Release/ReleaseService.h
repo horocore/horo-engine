@@ -53,7 +53,7 @@ namespace Horo::Release {
          * @param config Finite admission, retention and execution limits.
          */
         ReleaseService(OperationStore &operations, IReleasePreflightFactsProvider &facts, IReleaseWorkerFactory &workers,
-                       ReleaseServiceConfig config = {});
+                       const ReleaseServiceConfig &config = {});
         /** @brief Cancels and joins all owned work before releasing records. */
         ~ReleaseService();
         ReleaseService(const ReleaseService &) = delete;
@@ -82,6 +82,11 @@ namespace Horo::Release {
         struct CancellationGate;
         /** @brief Projects one terminal and applies bounded recent retention exactly once. */
         void RecordTerminal(const std::shared_ptr<Record> &record);
+        /** @brief Applies an operation cancellation request while coordinating service teardown. */
+        static void CancelOperation(const std::shared_ptr<CancellationSource> &cancellation, const std::shared_ptr<CancellationSlot> &slot,
+                                    const std::shared_ptr<CancellationGate> &gate);
+        /** @brief Runs one accepted record and translates its authoritative terminal to a job result. */
+        [[nodiscard]] Result<void> RunRecord(const std::shared_ptr<Record> &record, const CancellationToken &token);
 
         OperationStore &operations_;
         IReleasePreflightFactsProvider &facts_;
