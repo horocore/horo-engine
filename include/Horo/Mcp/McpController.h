@@ -1,0 +1,67 @@
+#pragma once
+
+/**
+ * @file McpController.h
+ * @brief Bounded owner-context dispatch and transport-neutral MCP operation lifecycle.
+ */
+
+#include "Horo/Mcp/McpToolRegistry.h"
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <thread>
+
+namespace Horo::Mcp {
+    /** @brief Finite admission and retention budgets for one host-owned controller. */
+    struct McpControllerLimits final {
+        std::size_t maximumPending{64};
+        std::size_t maximumActive{128};
+        std::size_t maximumRecent{128};
+        std::size_t maximumPumpBatch{8};
+        std::chrono::milliseconds shutdownDrainTimeout{5'000};
+    };
+
+    /**
+     * @brief One registry-backed controller shared by local and in-process sessions.
+     * @details Host composition binds each owner context to its scheduler by calling Pump on
+     * that context's owning thread. Editor/runtime adapters must start slow application
+     * operations and return promptly; background/build pumps may run on host workers.
+     * The controller never creates a worker or invokes an adapter on a transport thread.
+     */
+    class McpController final : public IMcpRequestController {
+    public:
+        /** @brief Constructs a controller over one host registry. @param registry Registry lease. @param limits Finite budgets.
+         * @return Controller or typed configuration failure. */
+        [[nodiscard]] static Result<std::shared_ptr<McpController>> Create(std::shared_ptr<McpToolRegistry> registry,
+                                                                           McpControllerLimits limits = {});
+
+        /** @copydoc IMcpRequestController::Dispatch */
+        [[nodiscard]] Result<nlohmann::json> Dispatch(const McpRequest &request, const McpRequestContext &context) override;
+        /** @copydoc IMcpRequestController::CancelAccepted */
+        [[nodiscard]] Result<void> CancelAccepted(McpSessionHandle session, const nlohmann::json &requestId) override;
+
+        /** @brief Binds an execution context to the current thread once, before accepting its work.
+         * @param owner Context whose application state this thread owns. @return Success or typed owner conflict. */
+        [[nodiscard]] Result<void> BindOwner(McpOwnerContext owner);
+
+        /** @brief Executes up to maximumPumpBatch queued calls on the bound owner thread.
+         * @param owner Context to pump. @return Number executed or typed wrong-thread failure. */
+        [[nodiscard]] Result<std::size_t> Pump(McpOwnerContext owner);
+
+        /** @brief Closes admission, finalizes queued work, cancels running work and drains bounded callbacks.
+         * @return Success when callbacks drained, or typed timeout while their state leases stay alive. */
+        [[nodiscard]] Result<void> Shutdown();
+
+        ~McpController() override;
+        McpController(const McpController &) = delete;
+        McpController &operator=(const McpController &) = delete;
+
+    private:
+        struct State;
+        explicit McpController(std::shared_ptr<State> state) noexcept;
+        std::shared_ptr<State> state_;
+    };
+}  // namespace Horo::Mcp
