@@ -1081,6 +1081,15 @@ target_compile_features(HoroUpdateHttpResponseTests PRIVATE cxx_std_20)
 target_include_directories(HoroUpdateHttpResponseTests PRIVATE ${PROJECT_SOURCE_DIR}/src/application/release)
 target_link_libraries(HoroUpdateHttpResponseTests PRIVATE HoroEngine::UpdateTransfer)
 horo_register_catch_test(HoroUpdateHttpResponseTests LABELS "release;update;headless")
+find_program(HORO_TEST_OPENSSL_EXECUTABLE openssl)
+if(Python3_Interpreter_FOUND AND HORO_TEST_OPENSSL_EXECUTABLE)
+    add_executable(HoroUpdateHttpsClient integration/UpdateHttpsClient.cpp)
+    target_compile_features(HoroUpdateHttpsClient PRIVATE cxx_std_20)
+    target_link_libraries(HoroUpdateHttpsClient PRIVATE HoroEngine::UpdateDownload)
+    add_test(NAME HoroUpdateHttpsIntegration COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/integration/update_https_server.py" "$<TARGET_FILE:HoroUpdateHttpsClient>")
+    set_tests_properties(HoroUpdateHttpsIntegration PROPERTIES LABELS "release;update;integration" TIMEOUT 60)
+endif()
 
 add_executable(HoroReleaseChecksumsTests
         unit/application/ReleaseChecksumsTests.cpp)
