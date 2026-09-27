@@ -2,6 +2,7 @@
 
 namespace Horo::Audio::Safety {
     namespace {
+#if !defined(NDEBUG)
         /** @brief The active callback receiver belongs to this thread; a nested scope saves and restores it. */
         struct CallbackBinding final {
             void *context{};
@@ -9,6 +10,7 @@ namespace Horo::Audio::Safety {
         };
 
         constinit thread_local CallbackBinding activeBinding{};
+#endif
 
         /** @brief Invoke only the already-installed fixed receiver, with no fallback work. */
         void Report(const AudioCallbackAttempt attempt) noexcept {
