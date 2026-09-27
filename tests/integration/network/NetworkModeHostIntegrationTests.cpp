@@ -158,6 +158,87 @@ namespace Horo::Network {
             return session;
         }
 
+        struct ProductCapabilities final {
+            NetworkProductCapabilityManifest product;
+            NetworkTargetPackageInventory inventory;
+            NetworkTargetHostFacts host;
+            NetworkTargetRequirements requirements;
+            NetworkTargetSelection selection;
+        };
+
+#if defined(_WIN32)
+        constexpr auto testPlatform = NetworkTargetPlatform::Windows;
+#elif defined(__APPLE__)
+        constexpr auto testPlatform = NetworkTargetPlatform::MacOS;
+#else
+        constexpr auto testPlatform = NetworkTargetPlatform::Linux;
+#endif
+
+        [[nodiscard]] NetworkProductCapabilityManifest ProductManifest(const NetworkProjectSettings &project,
+                                                                       const TransportCapabilities &capabilities,
+                                                                       const NetworkTransportProviderId provider) {
+            NetworkProductCapabilityManifest product;
+            product.build = Id<NetworkProductBuildId>(1);
+            product.revision = Id<NetworkProductCapabilityRevision>(2);
+            product.platform = testPlatform;
+            product.supportedRoles = project.SupportedRoles();
+            product.includesNetworkRuntime = true;
+            product.profile = project.Profile().id;
+            product.profileRevision = project.Profile().revision;
+            product.protocol = project.Protocol();
+            product.providerCount = 1;
+            product.providers[0] = {provider, std::uint32_t{1} << static_cast<std::uint8_t>(testPlatform), capabilities};
+            return product;
+        }
+
+        [[nodiscard]] ProductCapabilities ProductFacts(const NetworkProjectSettings &project, const NetworkProjectRole mode,
+                                                       const bool omitRoleFromPackage) {
+            TransportCapabilities capabilities;
+            capabilities.revision = 1;
+            capabilities.delivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = TransportSupport::Available;
+            capabilities.maximumChannels = 4;
+            capabilities.maximumMessageBytes = 4096;
+            const auto provider = Id<NetworkTransportProviderId>(5);
+            ProductCapabilities facts;
+            facts.product = ProductManifest(project, capabilities, provider);
+            const auto &product = facts.product;
+            auto &inventory = facts.inventory;
+            inventory.build = product.build;
+            inventory.platform = testPlatform;
+            inventory.supportedRoles = product.supportedRoles;
+            inventory.includesNetworkRuntime = true;
+            inventory.protocol = product.protocol;
+            if (omitRoleFromPackage)
+                inventory.supportedRoles = NetworkProjectRoleSet::Standalone;
+            inventory.providerCount = 1;
+            inventory.providers[0] = product.providers[0];
+            auto &host = facts.host;
+            host.revision = Id<NetworkHostCapabilityRevision>(3);
+            host.platform = testPlatform;
+            host.supportedRoles = product.supportedRoles;
+            host.networkRuntimeInstalled = true;
+            host.protocol = product.protocol;
+            host.providerCount = 1;
+            host.providers[0] = {provider, true, true, true, capabilities};
+            auto &requirements = facts.requirements;
+            requirements.requiredRoles = mode == NetworkProjectRole::Standalone     ? NetworkProjectRoleSet::Standalone
+                                         : mode == NetworkProjectRole::Client       ? NetworkProjectRoleSet::Client
+                                         : mode == NetworkProjectRole::ListenServer ? NetworkProjectRoleSet::ListenServer
+                                                                                    : NetworkProjectRoleSet::DedicatedServer;
+            requirements.requiredProvider = mode == NetworkProjectRole::Standalone ? NetworkTransportProviderId{} : provider;
+            auto &selection = facts.selection;
+            selection.role = mode;
+            selection.expectedBuild = product.build;
+            selection.expectedProductRevision = product.revision;
+            selection.expectedHostRevision = host.revision;
+            selection.expectedProjectRevision = project.Revision();
+            if (mode != NetworkProjectRole::Standalone) {
+                selection.provider = provider;
+                selection.protocolVersion = {1, 0};
+            }
+            return facts;
+        }
+
         [[nodiscard]] Result<std::unique_ptr<Application::Internal::NetworkProductHost>> Product(
             Clock &clock, const NetworkProjectRole mode, const std::span<const NetworkModeWorld> worlds,
             const NetworkModePresentation presentation, const std::shared_ptr<ProductOwners> &owners,
@@ -171,64 +252,7 @@ namespace Horo::Network {
             input.transport.capabilities.requiredMaximumMessageBytes = 1024;
             const auto project = NetworkProjectSettings::Create(input);
             REQUIRE(project.HasValue());
-#if defined(_WIN32)
-            constexpr auto platform = NetworkTargetPlatform::Windows;
-#elif defined(__APPLE__)
-            constexpr auto platform = NetworkTargetPlatform::MacOS;
-#else
-            constexpr auto platform = NetworkTargetPlatform::Linux;
-#endif
-            TransportCapabilities capabilities;
-            capabilities.revision = 1;
-            capabilities.delivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = TransportSupport::Available;
-            capabilities.maximumChannels = 4;
-            capabilities.maximumMessageBytes = 4096;
-            const auto provider = Id<NetworkTransportProviderId>(5);
-            NetworkProductCapabilityManifest product;
-            product.build = Id<NetworkProductBuildId>(1);
-            product.revision = Id<NetworkProductCapabilityRevision>(2);
-            product.platform = platform;
-            product.supportedRoles = project.Value().SupportedRoles();
-            product.includesNetworkRuntime = true;
-            product.profile = project.Value().Profile().id;
-            product.profileRevision = project.Value().Profile().revision;
-            product.protocol = project.Value().Protocol();
-            product.providerCount = 1;
-            product.providers[0] = {provider, std::uint32_t{1} << static_cast<std::uint8_t>(platform), capabilities};
-            NetworkTargetPackageInventory inventory;
-            inventory.build = product.build;
-            inventory.platform = platform;
-            inventory.supportedRoles = product.supportedRoles;
-            inventory.includesNetworkRuntime = true;
-            inventory.protocol = product.protocol;
-            if (omitRoleFromPackage)
-                inventory.supportedRoles = NetworkProjectRoleSet::Standalone;
-            inventory.providerCount = 1;
-            inventory.providers[0] = product.providers[0];
-            NetworkTargetHostFacts host;
-            host.revision = Id<NetworkHostCapabilityRevision>(3);
-            host.platform = platform;
-            host.supportedRoles = product.supportedRoles;
-            host.networkRuntimeInstalled = true;
-            host.protocol = product.protocol;
-            host.providerCount = 1;
-            host.providers[0] = {provider, true, true, true, capabilities};
-            NetworkTargetRequirements requirements;
-            requirements.requiredRoles = mode == NetworkProjectRole::Standalone     ? NetworkProjectRoleSet::Standalone
-                                         : mode == NetworkProjectRole::Client       ? NetworkProjectRoleSet::Client
-                                         : mode == NetworkProjectRole::ListenServer ? NetworkProjectRoleSet::ListenServer
-                                                                                    : NetworkProjectRoleSet::DedicatedServer;
-            requirements.requiredProvider = mode == NetworkProjectRole::Standalone ? NetworkTransportProviderId{} : provider;
-            NetworkTargetSelection selection;
-            selection.role = mode;
-            selection.expectedBuild = product.build;
-            selection.expectedProductRevision = product.revision;
-            selection.expectedHostRevision = host.revision;
-            selection.expectedProjectRevision = project.Value().Revision();
-            if (mode != NetworkProjectRole::Standalone) {
-                selection.provider = provider;
-                selection.protocolVersion = {1, 0};
-            }
+            const auto facts = ProductFacts(project.Value(), mode, omitRoleFromPackage);
             Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{19}, Runtime::SceneDefinitionRevision{1}};
             Runtime::RuntimeEntityDefinition entity;
             entity.object = Runtime::SceneObjectId{1};
@@ -239,9 +263,53 @@ namespace Horo::Network {
                                                                                        std::move(definition).Value()),
                                                                                    ProductFactories(owners));
             return Application::Internal::NetworkProductHost::Create(clock,
-                                                                     {project.Value(), product, inventory, host, requirements, selection, 6,
-                                                                      worlds, presentation},
+                                                                     {project.Value(), facts.product, facts.inventory, facts.host,
+                                                                      facts.requirements, facts.selection, 6, worlds, presentation},
                                                                      std::move(factories));
+        }
+
+        void VerifyClientLifecycle(Application::Internal::NetworkProductHost &host, const NetworkProjectRole mode,
+                                   const std::span<const NetworkModeWorld> worlds) {
+            const auto clientIndex = worlds.size() - 1;
+            auto pending = PeerSessionLifecycle::Create(Connection(), Session(), {10, 20, 30, 100, 10});
+            REQUIRE(pending.HasValue());
+            CHECK_FALSE(host.AdmitClientSession(NetworkModeWorldKind::Client, pending.Value(), Connection(), Session(), 1).HasValue());
+            CHECK_FALSE(host.Role(NetworkModeWorldKind::Client, worlds[clientIndex].scene).Value().session.has_value());
+            auto active = AdmittedSession();
+            REQUIRE(host.AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session(), 22).HasValue());
+            CHECK(host.Role(NetworkModeWorldKind::Client, worlds[clientIndex].scene).Value().session == Session());
+            std::array<NetworkModeWorld, 2> replacement{};
+            if (mode == NetworkProjectRole::Client) {
+                replacement[0] = World(NetworkModeWorldKind::Client, 102);
+            } else {
+                replacement[0] = World(NetworkModeWorldKind::AuthorityServer, 103, 110);
+                replacement[1] = World(NetworkModeWorldKind::Client, 104);
+            }
+            REQUIRE(host.RequestTravel({replacement.data(), worlds.size()}, Session()).HasValue());
+            REQUIRE(host.RunFrame().HasValue());
+            CHECK_FALSE(host.TakeTravelFailure().has_value());
+            for (std::size_t index = 0; index < worlds.size(); ++index) {
+                CHECK_FALSE(host.Role(worlds[index].kind, worlds[index].scene).HasValue());
+                CHECK(host.Role(replacement[index].kind, replacement[index].scene).HasValue());
+            }
+            REQUIRE(host.DisconnectClient(NetworkModeWorldKind::Client, Session()).HasValue());
+            CHECK_FALSE(host.Role(NetworkModeWorldKind::Client, replacement[clientIndex].scene).Value().session.has_value());
+            CHECK_FALSE(host.AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session(), 23).HasValue());
+        }
+
+        void VerifyNonClientTravel(Application::Internal::NetworkProductHost &host, const NetworkProjectRole mode,
+                                   const std::span<const NetworkModeWorld> worlds) {
+            const std::array replacement{mode == NetworkProjectRole::Standalone ? World(NetworkModeWorldKind::Standalone, 101)
+                                                                                : World(NetworkModeWorldKind::AuthorityServer, 105, 111)};
+            REQUIRE(host.RequestTravel(worlds).HasValue());
+            REQUIRE(host.RunFrame().HasValue());
+            CHECK(host.TakeTravelFailure().has_value());
+            CHECK(host.Role(worlds[0].kind, worlds[0].scene).HasValue());
+            REQUIRE(host.RequestTravel(replacement).HasValue());
+            REQUIRE(host.RunFrame().HasValue());
+            CHECK_FALSE(host.TakeTravelFailure().has_value());
+            CHECK_FALSE(host.Role(worlds[0].kind, worlds[0].scene).HasValue());
+            CHECK(host.Role(replacement[0].kind, replacement[0].scene).HasValue());
         }
     }  // namespace
 
@@ -283,47 +351,10 @@ namespace Horo::Network {
             CHECK(owners->localPlayers == (mode == NetworkProjectRole::Client || mode == NetworkProjectRole::ListenServer ? 1 : 0));
             for (std::size_t index = 0; index < count; ++index)
                 CHECK(host->Role(worlds[index].kind, worlds[index].scene).HasValue());
-            if (mode == NetworkProjectRole::Client || mode == NetworkProjectRole::ListenServer) {
-                const auto clientIndex = count - 1;
-                auto pending = PeerSessionLifecycle::Create(Connection(), Session(), {10, 20, 30, 100, 10});
-                REQUIRE(pending.HasValue());
-                CHECK_FALSE(host->AdmitClientSession(NetworkModeWorldKind::Client, pending.Value(), Connection(), Session(), 1).HasValue());
-                CHECK_FALSE(host->Role(NetworkModeWorldKind::Client, worlds[clientIndex].scene).Value().session.has_value());
-                auto active = AdmittedSession();
-                REQUIRE(host->AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session(), 22).HasValue());
-                CHECK(host->Role(NetworkModeWorldKind::Client, worlds[clientIndex].scene).Value().session == Session());
-                std::array<NetworkModeWorld, 2> replacement{};
-                if (mode == NetworkProjectRole::Client) {
-                    replacement[0] = World(NetworkModeWorldKind::Client, 102);
-                } else {
-                    replacement[0] = World(NetworkModeWorldKind::AuthorityServer, 103, 110);
-                    replacement[1] = World(NetworkModeWorldKind::Client, 104);
-                }
-                REQUIRE(host->RequestTravel({replacement.data(), count}, Session()).HasValue());
-                REQUIRE(host->RunFrame().HasValue());
-                CHECK_FALSE(host->TakeTravelFailure().has_value());
-                for (std::size_t index = 0; index < count; ++index) {
-                    CHECK_FALSE(host->Role(worlds[index].kind, worlds[index].scene).HasValue());
-                    CHECK(host->Role(replacement[index].kind, replacement[index].scene).HasValue());
-                }
-                REQUIRE(host->DisconnectClient(NetworkModeWorldKind::Client, Session()).HasValue());
-                CHECK_FALSE(host->Role(NetworkModeWorldKind::Client, replacement[clientIndex].scene).Value().session.has_value());
-                CHECK_FALSE(host->AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session(), 23).HasValue());
-            }
-            if (mode == NetworkProjectRole::Standalone || mode == NetworkProjectRole::DedicatedServer) {
-                const std::array replacement{mode == NetworkProjectRole::Standalone
-                                                 ? World(NetworkModeWorldKind::Standalone, 101)
-                                                 : World(NetworkModeWorldKind::AuthorityServer, 105, 111)};
-                REQUIRE(host->RequestTravel(worlds).HasValue());
-                REQUIRE(host->RunFrame().HasValue());
-                CHECK(host->TakeTravelFailure().has_value());
-                CHECK(host->Role(worlds[0].kind, worlds[0].scene).HasValue());
-                REQUIRE(host->RequestTravel(replacement).HasValue());
-                REQUIRE(host->RunFrame().HasValue());
-                CHECK_FALSE(host->TakeTravelFailure().has_value());
-                CHECK_FALSE(host->Role(worlds[0].kind, worlds[0].scene).HasValue());
-                CHECK(host->Role(replacement[0].kind, replacement[0].scene).HasValue());
-            }
+            if (mode == NetworkProjectRole::Client || mode == NetworkProjectRole::ListenServer)
+                VerifyClientLifecycle(*host, mode, {worlds.data(), count});
+            else
+                VerifyNonClientTravel(*host, mode, {worlds.data(), count});
             host->Shutdown();
             CHECK_FALSE(host->Role(worlds[0].kind, worlds[0].scene).HasValue());
         }
