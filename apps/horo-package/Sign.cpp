@@ -3,6 +3,7 @@
 #include "PackageCommand.h"
 #include "SignatureDocument.h"
 
+#include <algorithm>
 #include <array>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/ecdsa.h>
@@ -39,34 +40,48 @@ namespace Horo::PackageCommand {
             }
         };
 
+        struct PrivateKeyBuffer final {
+            std::vector<unsigned char> bytes;
+
+            ~PrivateKeyBuffer() {
+                Security::SecureZero(std::as_writable_bytes(std::span{bytes}));
+            }
+        };
+
+        struct PublicPoint final {
+            std::array<unsigned char, 65> bytes{};
+            std::size_t size{};
+        };
+
         [[nodiscard]] Outcome SignPayload(const std::filesystem::path &keyPath, Security::DetachedSignatureEnvelope &envelope) {
             std::error_code error;
             const auto permissions = std::filesystem::status(keyPath, error).permissions();
             if (error)
                 return Failure("package.key_invalid", "Private key file is unavailable.");
 #ifndef _WIN32
-            const auto shared = std::filesystem::perms::group_all | std::filesystem::perms::others_all;
-            if ((permissions & shared) != std::filesystem::perms::none)
+            if (const auto shared = std::filesystem::perms::group_all | std::filesystem::perms::others_all;
+                (permissions & shared) != std::filesystem::perms::none)
                 return Failure("package.key_permissions", "Private key file must not be accessible to group or others.");
 #endif
             std::vector<std::byte> privateBytes;
-            privateBytes.reserve(16U * 1024U + 1U);  // Appending PEM terminator must not reallocate and strand secret bytes.
             if (const auto read = ReadBounded(keyPath, 16U * 1024U, privateBytes); !read.success)
                 return read;
-            const auto erase = [&privateBytes] {
-                Security::SecureZero(std::span{privateBytes});
-            };
-            if (privateBytes.empty() || privateBytes.back() != std::byte{0})
-                privateBytes.push_back(std::byte{0});
+            PrivateKeyBuffer privateKey;
+            privateKey.bytes.reserve(16U * 1024U + 1U);
+            privateKey.bytes.resize(privateBytes.size());
+            std::ranges::transform(privateBytes, privateKey.bytes.begin(), [](const std::byte value) {
+                return std::to_integer<unsigned char>(value);
+            });
+            Security::SecureZero(std::span{privateBytes});
+            if (privateKey.bytes.empty() || privateKey.bytes.back() != 0)
+                privateKey.bytes.push_back(0);
             SigningState state;
-            constexpr std::string_view Personalization = "horo-package-sign-v1";
+            constexpr unsigned char Personalization[] = "horo-package-sign-v1";
             const int seeded =
-                mbedtls_ctr_drbg_seed(&state.random, mbedtls_entropy_func, &state.entropy,
-                                      reinterpret_cast<const unsigned char *>(Personalization.data()), Personalization.size());
-            const int parsed = seeded == 0 ? mbedtls_pk_parse_key(&state.key, reinterpret_cast<const unsigned char *>(privateBytes.data()),
-                                                                  privateBytes.size(), nullptr, 0, mbedtls_ctr_drbg_random, &state.random)
+                mbedtls_ctr_drbg_seed(&state.random, mbedtls_entropy_func, &state.entropy, Personalization, sizeof(Personalization) - 1U);
+            const int parsed = seeded == 0 ? mbedtls_pk_parse_key(&state.key, privateKey.bytes.data(), privateKey.bytes.size(), nullptr, 0,
+                                                                  mbedtls_ctr_drbg_random, &state.random)
                                            : -1;
-            erase();
             if (parsed != 0)
                 return Failure("package.key_invalid", "Private key could not be parsed as unencrypted P-256 PEM.");
             auto *ec = mbedtls_pk_ec(state.key);
@@ -76,18 +91,23 @@ namespace Horo::PackageCommand {
             if (mbedtls_ecdsa_sign(&ec->MBEDTLS_PRIVATE(grp), &state.r, &state.s, &ec->MBEDTLS_PRIVATE(d), digest.bytes.data(),
                                    digest.bytes.size(), mbedtls_ctr_drbg_random, &state.random) != 0)
                 return Failure("package.sign_failed", "Private-key signing failed.");
-            envelope.signature.resize(64U);
-            auto *out = reinterpret_cast<unsigned char *>(envelope.signature.data());
-            if (mbedtls_mpi_write_binary(&state.r, out, 32U) != 0 || mbedtls_mpi_write_binary(&state.s, out + 32U, 32U) != 0)
+            std::array<unsigned char, 64> encoded{};
+            if (mbedtls_mpi_write_binary(&state.r, encoded.data(), 32U) != 0 ||
+                mbedtls_mpi_write_binary(&state.s, encoded.data() + 32U, 32U) != 0)
                 return Failure("package.sign_failed", "Signature encoding failed.");
-            std::array<std::byte, 65> publicKey{};
-            std::size_t keyBytes{};
-            if (mbedtls_ecp_point_write_binary(&ec->MBEDTLS_PRIVATE(grp), &ec->MBEDTLS_PRIVATE(Q), MBEDTLS_ECP_PF_UNCOMPRESSED, &keyBytes,
-                                               reinterpret_cast<unsigned char *>(publicKey.data()), publicKey.size()) != 0 ||
-                keyBytes != publicKey.size())
+            envelope.signature.resize(encoded.size());
+            std::ranges::transform(encoded, envelope.signature.begin(), [](const unsigned char value) {
+                return static_cast<std::byte>(value);
+            });
+            PublicPoint publicKey;
+            if (mbedtls_ecp_point_write_binary(&ec->MBEDTLS_PRIVATE(grp), &ec->MBEDTLS_PRIVATE(Q), MBEDTLS_ECP_PF_UNCOMPRESSED,
+                                               &publicKey.size, publicKey.bytes.data(), publicKey.bytes.size()) != 0 ||
+                publicKey.size != publicKey.bytes.size())
                 return Failure("package.sign_failed", "Signing key public point is invalid.");
             const auto provider = Security::CreateMbedTlsSignatureProvider();
-            if (const auto checked = provider->Verify(envelope.algorithm, publicKey, digest, envelope.signature); checked.HasError())
+            if (const auto checked =
+                    provider->Verify(envelope.algorithm, std::as_bytes(std::span{publicKey.bytes}), digest, envelope.signature);
+                checked.HasError())
                 return Failure("package.sign_failed", "Produced signature did not self-verify.");
             return Success();
         }

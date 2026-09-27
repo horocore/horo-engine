@@ -105,6 +105,9 @@ class PackageCommands(unittest.TestCase):
         self.run_tool("pack", self.source, self.root / "reserved.horopkg", expected=1)
         self.run_tool("sign", expected=2)
         self.run_tool("inspect", "--unknown", expected=1)
+        self.run_tool("verify", self.root / "absent.horopkg", "--trust", self.root / "absent.json", expected=2)
+        self.run_tool("verify", self.root / "absent.horopkg", "--package-id", "com.example.package",
+                      "--package-id", "com.example.package", "--trust", self.root / "absent.json", expected=2)
 
     def test_pack_rejects_private_signing_key_content(self):
         private, _ = self.signing_key()
@@ -163,6 +166,42 @@ class PackageCommands(unittest.TestCase):
         self.run_tool("verify", archive, "--package-id", "com.example.package", "--trust", trust, "--signature", signature,
                       expected=1)
         self.run_tool("verify", archive, "--package-id", "not an id", "--trust", trust, expected=1)
+
+    def test_signed_artifact_binds_exact_bytes_and_rejects_bad_key(self):
+        archive = self.pack()
+        private, public = self.signing_key()
+        trust = self.trust(public)
+        signature = self.root / "signature.json"
+        self.run_tool("sign", archive, "--publisher", "com.example.author", "--key-id", "release-1", "--key", private,
+                      "--output", signature)
+        self.run_tool("sign", archive, "--publisher", "com.example.author", "--key-id", "release-1", "--key", private,
+                      "--output", signature, expected=1)
+        self.run_tool("verify", archive, "--package-id", "com.example.package", "--trust", trust, "--signature", signature)
+        with archive.open("ab") as output:
+            output.write(b"extra")
+        self.run_tool("verify", archive, "--package-id", "com.example.package", "--trust", trust, "--signature", signature,
+                      expected=1)
+        invalid = self.root / "invalid.pem"
+        invalid.write_text("not an EC private key", encoding="utf-8")
+        if os.name != "nt":
+            invalid.chmod(0o600)
+        clean = self.pack("clean.horopkg")
+        self.run_tool("sign", clean, "--publisher", "com.example.author", "--key-id", "release-1", "--key", invalid,
+                      "--output", self.root / "bad-signature.json", expected=1)
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission contract")
+    def test_outputs_are_private_and_existing_output_is_untouched(self):
+        archive = self.pack()
+        self.assertEqual(archive.stat().st_mode & 0o777, 0o600)
+        signature = self.root / "signature.json"
+        private, _ = self.signing_key()
+        self.run_tool("sign", archive, "--publisher", "com.example.author", "--key-id", "release-1", "--key", private,
+                      "--output", signature)
+        self.assertEqual(signature.stat().st_mode & 0o777, 0o600)
+        initial = signature.read_bytes()
+        self.run_tool("sign", archive, "--publisher", "com.example.author", "--key-id", "release-1", "--key", private,
+                      "--output", signature, expected=1)
+        self.assertEqual(signature.read_bytes(), initial)
 
     @unittest.skipIf(os.name == "nt", "POSIX permission contract")
     def test_sign_rejects_shared_private_key_permissions(self):

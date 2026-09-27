@@ -2,6 +2,7 @@
 
 #include "Horo/Foundation/Sha256.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -20,8 +21,10 @@ namespace Horo::PackageCommand {
             bool valid{true};
 
             bool operator()(const int depth, const Json::parse_event_t event, const Json &value) {
-                if (depth < 0 || depth >= 4)
-                    return valid = false;
+                if (depth < 0 || depth >= 4) {
+                    valid = false;
+                    return false;
+                }
                 const auto index = static_cast<std::size_t>(depth);
                 if (event == Json::parse_event_t::object_start)
                     keys[index + 1].clear();
@@ -34,10 +37,9 @@ namespace Horo::PackageCommand {
         [[nodiscard]] bool ExactKeys(const Json &value, const std::initializer_list<std::string_view> keys) {
             if (!value.is_object() || value.size() != keys.size())
                 return false;
-            for (const auto key : keys)
-                if (!value.contains(std::string{key}))
-                    return false;
-            return true;
+            return std::ranges::all_of(keys, [&value](const std::string_view key) {
+                return value.contains(std::string{key});
+            });
         }
 
         [[nodiscard]] Outcome LoadJson(const std::filesystem::path &path, Json &document) {
@@ -48,7 +50,10 @@ namespace Horo::PackageCommand {
                 return Failure("package.document_invalid", "JSON document is empty.");
             try {
                 UniqueKeys keys;
-                const std::string text(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+                std::string text(bytes.size(), '\0');
+                std::ranges::transform(bytes, text.begin(), [](const std::byte value) {
+                    return static_cast<char>(std::to_integer<unsigned char>(value));
+                });
                 document = Json::parse(text, std::ref(keys));
                 if (!keys.valid)
                     return Failure("package.document_invalid", "JSON has duplicate fields or excessive nesting.");
@@ -61,7 +66,7 @@ namespace Horo::PackageCommand {
         [[nodiscard]] std::optional<std::vector<std::byte>> DecodeHex(const std::string_view text, const std::size_t expectedBytes) {
             if (text.size() != expectedBytes * 2)
                 return std::nullopt;
-            const auto digit = [](const char character) -> int {
+            const auto digit = [](const char character) {
                 if (character >= '0' && character <= '9')
                     return character - '0';
                 if (character >= 'a' && character <= 'f')
@@ -135,12 +140,13 @@ namespace Horo::PackageCommand {
             const auto keyId = entry["keyId"].get<std::string>();
             if (publisher.HasError() || !key || key->front() != std::byte{0x04} || keyId.empty() || keyId.size() > 256U)
                 return Failure("package.trust_invalid", "Trust publisher identity or key is invalid.");
-            policy.publishers.push_back({.publisher = std::move(publisher).Value(),
-                                         .keyId = keyId,
-                                         .algorithm = Security::SignatureAlgorithm::EcdsaP256Sha256,
-                                         .publicKey = std::move(*key),
-                                         .expiresAtUnixMilliseconds = entry["expiresAtUnixMilliseconds"].get<std::uint64_t>(),
-                                         .publisherRevoked = entry["revoked"].get<bool>()});
+            policy.publishers.emplace_back(
+                Packages::PackagePublisherTrustRecord{.publisher = std::move(publisher).Value(),
+                                                      .keyId = keyId,
+                                                      .algorithm = Security::SignatureAlgorithm::EcdsaP256Sha256,
+                                                      .publicKey = std::move(*key),
+                                                      .expiresAtUnixMilliseconds = entry["expiresAtUnixMilliseconds"].get<std::uint64_t>(),
+                                                      .publisherRevoked = entry["revoked"].get<bool>()});
         }
         return Success();
     }

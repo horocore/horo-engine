@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <format>
 #include <memory>
 #include <miniz.h>
 #include <nlohmann/json.hpp>
@@ -28,15 +29,20 @@ namespace Horo::PackageCommand {
         [[nodiscard]] bool ContainsPrivateKeyPem(const std::vector<std::byte> &bytes) {
             if (bytes.empty())
                 return false;
-            const std::string_view content{reinterpret_cast<const char *>(bytes.data()), bytes.size()};
             constexpr std::string_view prefix = "-----BEGIN ";
             constexpr std::string_view suffix = "-----";
             constexpr std::array<std::string_view, 5> keyTypes{"PRIVATE KEY", "EC PRIVATE KEY", "RSA PRIVATE KEY", "ENCRYPTED PRIVATE KEY",
                                                                "OPENSSH PRIVATE KEY"};
-            for (std::size_t offset = content.find(prefix); offset != content.npos; offset = content.find(prefix, offset + prefix.size())) {
-                const auto following = content.substr(offset + prefix.size());
-                if (std::ranges::any_of(keyTypes, [following, suffix](const std::string_view type) {
-                    return following.starts_with(type) && following.substr(type.size()).starts_with(suffix);
+            const auto content = std::span{bytes};
+            const auto startsWith = [](const std::span<const std::byte> input, const std::string_view text) {
+                return input.size() >= text.size() && std::ranges::equal(input.first(text.size()), std::as_bytes(std::span{text}));
+            };
+            for (std::size_t offset = 0; offset + prefix.size() <= content.size(); ++offset) {
+                if (!startsWith(content.subspan(offset), prefix))
+                    continue;
+                const auto following = content.subspan(offset + prefix.size());
+                if (std::ranges::any_of(keyTypes, [&](const std::string_view type) {
+                    return startsWith(following, type) && startsWith(following.subspan(type.size()), suffix);
                 }))
                     return true;
             }
@@ -51,16 +57,16 @@ namespace Horo::PackageCommand {
             const auto absoluteOutput = std::filesystem::absolute(output, error);
             if (error)
                 return Failure("package.output_unwritable", "Output location could not be resolved.");
-            const auto outputParent = std::filesystem::weakly_canonical(absoluteOutput.parent_path(), error);
-            if (error || IsWithin(canonicalRoot, outputParent / absoluteOutput.filename()))
+            if (const auto outputParent = std::filesystem::weakly_canonical(absoluteOutput.parent_path(), error);
+                error || IsWithin(canonicalRoot, outputParent / absoluteOutput.filename()))
                 return Failure("package.output_inside_root", "Output must be outside the package root.");
             return Success();
         }
 
         [[nodiscard]] Outcome Gather(const std::filesystem::path &root, const std::filesystem::path &output, std::vector<File> &files) {
             std::error_code error;
-            const auto rootStatus = std::filesystem::symlink_status(root, error);
-            if (error || !std::filesystem::is_directory(rootStatus) || std::filesystem::is_symlink(rootStatus))
+            if (const auto rootStatus = std::filesystem::symlink_status(root, error);
+                error || !std::filesystem::is_directory(rootStatus) || std::filesystem::is_symlink(rootStatus))
                 return Failure("package.root_invalid", "Package root must be a real directory.");
             if (const auto checked = ValidateOutputLocation(root, output); !checked.success)
                 return checked;
@@ -77,9 +83,11 @@ namespace Horo::PackageCommand {
                 if (files.size() >= 4095U)
                     return Failure("package.input_limit", "Package has too many files.");
                 const auto utf8Name = iterator->path().lexically_relative(root).generic_u8string();
-                const std::string name{reinterpret_cast<const char *>(utf8Name.data()), utf8Name.size()};
-                const auto parsed = Packages::PackagePath::Parse(name);
-                if (parsed.HasError() || name == "files.manifest.json")
+                std::string name(utf8Name.size(), '\0');
+                std::ranges::transform(utf8Name, name.begin(), [](const char8_t character) {
+                    return static_cast<char>(character);
+                });
+                if (const auto parsed = Packages::PackagePath::Parse(name); parsed.HasError() || name == "files.manifest.json")
                     return Failure("package.path_invalid", "Package contains a noncanonical or reserved path.");
                 const auto size = iterator->file_size(error);
                 if (error || size > MaximumArtifactBytes || size > 256U * 1024U * 1024U - total)
@@ -92,7 +100,7 @@ namespace Horo::PackageCommand {
                 const auto permissions = status.permissions();
                 const auto execute =
                     std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec | std::filesystem::perms::others_exec;
-                files.push_back({name, std::move(bytes), (permissions & execute) != std::filesystem::perms::none});
+                files.emplace_back(File{name, std::move(bytes), (permissions & execute) != std::filesystem::perms::none});
                 total += size;
                 hasManifest |= name == "horo-package.toml";
             }
@@ -125,12 +133,14 @@ namespace Horo::PackageCommand {
             if (!mz_zip_reader_init_mem(&reader, bytes.data(), bytes.size(), 0))
                 return Failure("package.archive_invalid", "Packed archive could not be inspected.");
             bool valid = mz_zip_reader_get_num_files(&reader) == files.size() + 1;
-            for (mz_uint index = 0; valid && index < files.size(); ++index) {
+            for (mz_uint index = 0; index < files.size(); ++index) {
+                if (!valid)
+                    break;
                 mz_zip_archive_file_stat stat{};
                 valid = mz_zip_reader_file_stat(&reader, index, &stat);
                 if (!valid)
                     break;
-                const std::size_t offset = static_cast<std::size_t>(reader.m_central_directory_file_ofs + stat.m_central_dir_ofs + 38U);
+                const auto offset = static_cast<std::size_t>(reader.m_central_directory_file_ofs + stat.m_central_dir_ofs + 38U);
                 valid = offset <= bytes.size() && bytes.size() - offset >= 4U;
                 if (valid)
                     Write32(bytes, offset, (files[index].executable ? 0100755U : 0100644U) << 16U);
@@ -151,7 +161,9 @@ namespace Horo::PackageCommand {
             void *buffer{};
             std::size_t size{};
             valid &= mz_zip_writer_finalize_heap_archive(&writer, &buffer, &size) != 0;
-            const std::unique_ptr<void, decltype(&std::free)> owned{buffer, &std::free};
+            const std::unique_ptr<void, void (*)(void *)> owned{buffer, [](void *memory) {
+                std::free(memory);
+            }};
             if (valid && size <= MaximumArtifactBytes) {
                 const auto *first = static_cast<const std::byte *>(buffer);
                 bytes.assign(first, first + size);
@@ -177,6 +189,6 @@ namespace Horo::PackageCommand {
             return checked;
         if (const auto written = WriteNew(output, bytes); !written.success)
             return written;
-        return Success("packed " + std::to_string(files.size()) + " files; sha256=" + FormatSha256(verified->Digest()));
+        return Success(std::format("packed {} files; sha256={}", files.size(), FormatSha256(verified->Digest())));
     }
 }  // namespace Horo::PackageCommand

@@ -3,6 +3,7 @@
 #include "SignatureDocument.h"
 
 #include <chrono>
+#include <format>
 #include <utility>
 
 namespace Horo::PackageCommand {
@@ -13,9 +14,9 @@ namespace Horo::PackageCommand {
         std::optional<Packages::ValidatedPackageArchive> archive;
         if (const auto checked = VerifyArchive(bytes, archive); !checked.success)
             return checked;
-        return Success("files=" + std::to_string(archive->Manifest().Entries().size()) + " archive=" + FormatSha256(archive->Digest()) +
-                       " manifest=" + FormatSha256(archive->PackageManifestDigest()) +
-                       " inventory=" + FormatSha256(archive->Manifest().Digest()));
+        return Success(std::format("files={} archive={} manifest={} inventory={}", archive->Manifest().Entries().size(),
+                                   FormatSha256(archive->Digest()), FormatSha256(archive->PackageManifestDigest()),
+                                   FormatSha256(archive->Manifest().Digest())));
     }
 
     Outcome Verify(const std::filesystem::path &archivePath, const std::filesystem::path &signaturePath,
@@ -44,11 +45,11 @@ namespace Horo::PackageCommand {
             signature.emplace(std::move(parsed));
         }
         const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
-        auto verified = service.Value().Verify({.package = std::move(package).Value(),
-                                                .artifact = std::move(bytes),
-                                                .signature = std::move(signature),
-                                                .nowUnixMilliseconds = static_cast<std::uint64_t>(now.count())});
-        if (verified.HasError() || !verified.Value().decision.installPermitted)
+        if (auto verified = service.Value().Verify({.package = std::move(package).Value(),
+                                                    .artifact = std::move(bytes),
+                                                    .signature = std::move(signature),
+                                                    .nowUnixMilliseconds = static_cast<std::uint64_t>(now.count())});
+            verified.HasError() || !verified.Value().decision.installPermitted)
             return Failure("package.publisher_rejected", "Installer publisher policy rejected the artifact.");
         return Success("verified archive and publisher policy; sha256=" + FormatSha256(archive->Digest()));
     }
