@@ -123,6 +123,7 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Application/ProjectMigrationCatalog.h
     Horo/Application/ProjectVersion.h
     Horo/Release/DistributionModel.h
+    Horo/Release/ReleaseArtifactManifest.h
     Horo/Release/ReleaseErrors.h
     Horo/Release/ReleaseJobTracker.h
     Horo/Release/ReleasePipelineExecutor.h
@@ -132,6 +133,7 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/ReleaseVersion.h
 )
 horo_configure_target_header_boundary(HoroReleaseProcess PUBLIC_HEADERS
+    Horo/Release/ReleaseCandidatePublisher.h
     Horo/Release/ReleaseProcess.h
 )
 horo_configure_target_header_boundary(HoroReleaseService PUBLIC_HEADERS
