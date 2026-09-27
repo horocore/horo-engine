@@ -50,5 +50,35 @@ bin/horo-extension-conformance --json path/to/native-module
 
 The harness reports stable stage-specific codes and exits nonzero for an
 incompatible module. It loads native code in the harness process, so run it only
-against trusted build output. Project scaffolding and distribution tools are
-separate SDK deliverables.
+against trusted build output.
+
+The SDK also includes the versioned `bin/horo-package` author tool. It needs no
+engine source checkout. `--version` reports the command contract version.
+
+```text
+bin/horo-package pack <package-root> <output.horopkg>
+bin/horo-package inspect <output.horopkg>
+bin/horo-package sign <output.horopkg> --publisher com.example.studio --key-id release-1 --key <unencrypted-p256.pem> --output <signature.json>
+bin/horo-package verify <output.horopkg> --package-id com.example.package --trust <trust.json> --signature <signature.json>
+```
+
+`pack` requires `horo-package.toml` in a real directory and creates a canonical
+`files.manifest.json`; it rejects symlinks, noncanonical paths and existing output.
+File order and ZIP metadata are deterministic for identical inputs and this tool
+version. The output must be outside the package root. Keep credentials outside
+the package root: the packer rejects recognized private-key PEM content but
+cannot recognize arbitrary secret content. `sign`
+accepts an unencrypted P-256 PEM private key readable only by its owner on POSIX,
+never writes or prints its contents, and creates a detached v1 JSON envelope.
+Do not pass a private key as a command-line argument. Store it in an approved
+credential system and materialize a short-lived owner-only file when necessary.
+
+`verify` applies the same bounded archive and publisher-signature policy used by
+the current package restore path. The caller supplies the package ID and an
+explicit trust-policy JSON document; no author-declared key becomes trusted by
+itself. Trust JSON v1 has `schemaVersion`, `allowUnsigned`, and `publishers`;
+each publisher has `publisherId`, `keyId`, `algorithm` (`ecdsa-p256-sha256`),
+`publicKeyHex` (uncompressed P-256 point), `expiresAtUnixMilliseconds` (0 means
+no expiry), and `revoked`. Omit `--signature` only when the trust policy explicitly
+allows unsigned packages. The command verifies archive structure and content,
+not yet-unimplemented typed TOML package semantics or extension activation.
