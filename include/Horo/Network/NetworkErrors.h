@@ -8,6 +8,14 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::Network::NetworkErrors {
+    /** @brief A host mode plan or participant graph violates the closed composition matrix. */
+    extern const ErrorCodeDescriptor NetworkModeInvalid;
+    /** @brief A required host participant is not installed or failed before publication. */
+    extern const ErrorCodeDescriptor NetworkModeUnavailable;
+    /** @brief A role, Scene, session or authority generation was replaced. */
+    extern const ErrorCodeDescriptor NetworkModeStale;
+    /** @brief A mode composition has stopped accepting startup, travel or gameplay work. */
+    extern const ErrorCodeDescriptor NetworkModeShuttingDown;
     /** @brief Endpoint text is malformed or has an ambiguous non-canonical representation. */
     extern const ErrorCodeDescriptor NetworkAddressInvalid;
     /** @brief Endpoint text uses a deliberately unsupported scheme, zone, or IDNA representation. */

@@ -22,7 +22,7 @@ horo_allow_target_dependencies(TARGET HoroRuntimeUi DEPENDENCIES HoroFoundation 
 horo_allow_target_dependencies(TARGET HoroRuntimeUiInput DEPENDENCIES HoroInput HoroRuntimeUi)
 horo_allow_target_dependencies(TARGET HoroAssets DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroNetworkApi DEPENDENCIES HoroFoundation)
-horo_allow_target_dependencies(TARGET HoroNetworkRuntime DEPENDENCIES HoroNetworkApi HoroRuntimeScene)
+horo_allow_target_dependencies(TARGET HoroNetworkRuntime DEPENDENCIES HoroNetworkApi HoroRuntimeScene HoroRuntime)
 horo_allow_target_dependencies(TARGET HoroNetworkTransportNull DEPENDENCIES HoroNetworkApi)
 if(HORO_BUILD_NETWORK_GNS)
     horo_allow_target_dependencies(TARGET HoroNetworkTransportGNSFactoryInternal DEPENDENCIES HoroNetworkApi)
@@ -126,7 +126,10 @@ horo_allow_target_dependencies(TARGET HoroExtensions
 
 # Executables are composition roots and may select any production module.
 horo_allow_target_dependencies(TARGET HoroHostModuleComposition DEPENDENCIES HoroFoundation HoroPlatformServices)
-horo_allow_target_dependencies(TARGET horo-engine DEPENDENCIES HoroApplication HoroExtensions HoroHostModuleComposition)
+horo_allow_target_dependencies(TARGET HoroNetworkProductHost
+    DEPENDENCIES HoroNetworkRuntime HoroRuntimeScene HoroPhysics HoroRuntime)
+horo_allow_target_dependencies(TARGET horo-engine
+    DEPENDENCIES HoroApplication HoroExtensions HoroHostModuleComposition HoroNetworkProductHost HoroNetworkTransportGNS)
 horo_allow_target_dependencies(TARGET horo-extension-validate DEPENDENCIES HoroExtensions)
 horo_allow_target_dependencies(TARGET HoroExtensionSdkValidatorStage DEPENDENCIES horo-extension-validate)
 horo_allow_target_dependencies(TARGET horo-extension-conformance DEPENDENCIES HoroExtensions)
