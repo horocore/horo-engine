@@ -513,6 +513,7 @@ horo_configure_target_header_boundary(HoroDestructionApi PUBLIC_HEADERS
     Horo/Destruction/DestructionStateMachine.h
 )
 horo_configure_target_header_boundary(HoroDestructionCook PUBLIC_HEADERS
+    Horo/Destruction/ChunkMeshCook.h
     Horo/Destruction/OfflineVoronoi.h
     Horo/Destruction/PreFracturedImport.h
 )

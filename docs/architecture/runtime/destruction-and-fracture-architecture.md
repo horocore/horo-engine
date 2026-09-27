@@ -235,6 +235,28 @@ cannot hold the complete result, generation fails before publication. The detach
 candidate is for later Assets publication and separate Physics/Render derived cooking;
 runtime composition has no call into this cook entry point.
 
+`Horo/Destruction/ChunkMeshCook.h` defines the DFR-002.4 portable surface product.
+The cook consumes a sealed offline Voronoi candidate or a validated pre-fractured
+import candidate and exact fracture-content identity. The content digest binds
+the prior semantic fingerprint or normalized imported geometry, source identity
+and revision, logical material IDs and revision digests, explicit interior
+classification, the two finite planar UV scales and this mesh schema. Every
+referenced exterior and interior slot must have a binding. Imported cut faces
+must have an exact opposite-wound triangle in another chunk; differing cut
+triangulations require explicit source normalization before cook. Missing
+material, altered candidate geometry, invalid cut-plane pairing, non-finite
+face basis/UV or over-limit output fails without publication. Each face retains its
+interior flag and material slot; face-local vertices carry Horo-space normals,
+handed tangents and UVs. Each chunk records stable ID, finite bounds, volume and
+first moment for later density-aware Physics mass realization. The artifact
+records the exact admitted feature tier and produced pre-cooked capability,
+with no tier substitution. The output owns no
+native handles or mutable runtime state. A single-thread owner accepts only an
+immutable, integrity-checked candidate from the captured revision; invalidation
+cancels prior work, and replacement or shutdown leaves the last published snapshot
+available to existing readers. Mesh/Render may lower this product but cannot change
+its DFR face classification or material attribution.
+
 ## Runtime Pre-Cooked Fracture
 
 Runtime fracture can be triggered by:

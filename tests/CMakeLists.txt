@@ -641,6 +641,11 @@ target_compile_features(HoroOfflineVoronoiTests PRIVATE cxx_std_20)
 target_link_libraries(HoroOfflineVoronoiTests PRIVATE HoroEngine::DestructionCook)
 horo_register_catch_test(HoroOfflineVoronoiTests LABELS "unit;destruction;headless")
 
+add_executable(HoroChunkMeshCookTests unit/runtime/destruction/ChunkMeshCookTests.cpp)
+target_compile_features(HoroChunkMeshCookTests PRIVATE cxx_std_20)
+target_link_libraries(HoroChunkMeshCookTests PRIVATE HoroEngine::DestructionCook)
+horo_register_catch_test(HoroChunkMeshCookTests LABELS "unit;destruction;headless")
+
 add_executable(HoroDestructionReplicationTests
         unit/runtime/destruction/DestructionReplicationTests.cpp
 )
