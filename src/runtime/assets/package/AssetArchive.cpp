@@ -376,7 +376,7 @@ namespace Horo::Assets {
                 if (parsed.HasError())
                     return Result<AssetArchiveProvider>::Failure(std::move(parsed).ErrorValue());
                 chunk.assets.push_back(parsed.Value().id);
-                entries.push_back({parsed.Value().id, parsed.Value().offset, parsed.Value().size});
+                entries.emplace_back(parsed.Value().id, parsed.Value().offset, parsed.Value().size);
             }
             chunks.emplace_back(std::move(chunk));
         }
