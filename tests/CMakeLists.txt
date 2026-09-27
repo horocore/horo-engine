@@ -129,6 +129,14 @@ function(horo_register_catch_test target)
     )
 endfunction()
 
+add_executable(HoroModelProviderTests unit/editor/ModelProviderContractTests.cpp)
+target_compile_features(HoroModelProviderTests PRIVATE cxx_std_20)
+target_link_libraries(HoroModelProviderTests PRIVATE HoroEngine::ModelProviderAdapters Catch2::Catch2WithMain)
+add_test(NAME HoroModelProviderContractTests
+    COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/python/model_provider_http_fixture.py"
+            "$<TARGET_FILE:HoroModelProviderTests>")
+set_tests_properties(HoroModelProviderContractTests PROPERTIES LABELS "unit;agent;headless" TIMEOUT 30)
+
 add_executable(HoroPackageValidationTests
     unit/packages/PackageDependencyResolverTests.cpp
     unit/packages/PackageLockfileTests.cpp

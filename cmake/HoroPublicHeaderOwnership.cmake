@@ -715,6 +715,12 @@ horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroEditorViewportScene)
 horo_configure_target_header_boundary(HoroEditorRenderExtraction)
+horo_configure_target_header_boundary(HoroModelProvider PUBLIC_HEADERS
+    Horo/Agent/ModelProvider.h
+)
+horo_configure_target_header_boundary(HoroModelProviderAdapters PUBLIC_HEADERS
+    Horo/Agent/ReferenceModelProviders.h
+)
 
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/ActivityBarLayout.h

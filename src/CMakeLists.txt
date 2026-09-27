@@ -84,6 +84,17 @@ add_library(HoroEngine::McpRegistry ALIAS HoroMcpRegistry)
 target_compile_features(HoroMcpRegistry PUBLIC cxx_std_20)
 target_link_libraries(HoroMcpRegistry PUBLIC HoroEngine::McpSession)
 
+add_library(HoroModelProvider STATIC editor/agent/ModelProvider.cpp)
+add_library(HoroEngine::ModelProvider ALIAS HoroModelProvider)
+target_compile_features(HoroModelProvider PUBLIC cxx_std_20)
+
+add_library(HoroModelProviderAdapters STATIC editor/agent/ReferenceModelProviders.cpp editor/agent/ReferenceModelStream.cpp)
+add_library(HoroEngine::ModelProviderAdapters ALIAS HoroModelProviderAdapters)
+target_compile_features(HoroModelProviderAdapters PUBLIC cxx_std_20)
+target_link_libraries(HoroModelProviderAdapters
+        PUBLIC HoroEngine::ModelProvider
+        PRIVATE nlohmann_json::nlohmann_json CURL::libcurl)
+
 if (HORO_ENABLE_OPENTELEMETRY)
     add_library(HoroOpenTelemetry STATIC
             foundation/telemetry/OpenTelemetrySink.cpp

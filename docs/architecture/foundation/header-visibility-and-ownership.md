@@ -20,6 +20,21 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## AIA-001.3 Model Provider Boundary
+
+`HoroEngine::ModelProvider` owns the additive `Horo/Agent/ModelProvider.h`
+streaming, discovery, feature admission, cancellation and configuration contract.
+`HoroEngine::ModelProviderAdapters` owns the additive
+`Horo/Agent/ReferenceModelProviders.h` host factories and privately links curl and
+JSON for real Ollama and OpenAI-compatible HTTP adapters. No existing caller
+migrates. Future editor-agent hosts register these factories explicitly at the
+composition root, resolve cloud credentials only at dispatch, and keep tool
+execution and approval outside the model adapter. Runtime gameplay AI and
+packaged game/server targets do not link either target. Generated standalone
+public-header consumers cover both headers without exposing HTTP or SDK types.
+The host opts into tool capability only after confirming support for its selected
+model; default configuration advertises streaming and optional provider usage.
+
 ## DFR-002.2 Import Boundary
 
 `HoroEngine::Assets` owns the additive `Horo/Assets/PreFracturedSource.h` FBX
