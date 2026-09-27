@@ -62,6 +62,14 @@ namespace Horo::Mcp {
     private:
         struct State;
         explicit McpController(std::shared_ptr<State> state) noexcept;
+        /** @brief Lists capability-visible tools from the session's registry generation. */
+        [[nodiscard]] Result<nlohmann::json> DispatchList(const McpRequestContext &context);
+        /** @brief Queries or cancels one operation owned by the session generation. */
+        [[nodiscard]] Result<nlohmann::json> DispatchOperation(const McpRequest &request, const McpRequestContext &context);
+        /** @brief Validates a call and queues it for the declared owner. */
+        [[nodiscard]] Result<nlohmann::json> DispatchCall(const McpRequest &request, const McpRequestContext &context);
+        /** @brief Processes one queue entry; empty means the owner queue is drained. */
+        [[nodiscard]] std::optional<bool> PumpOne(McpOwnerContext owner);
         std::shared_ptr<State> state_;
     };
 }  // namespace Horo::Mcp

@@ -97,7 +97,7 @@ namespace Horo::Mcp {
         }
     }  // namespace
 
-    struct McpController::State final {
+    struct McpController::State final : std::enable_shared_from_this<State> {
         explicit State(std::shared_ptr<McpToolRegistry> registryValue, McpControllerLimits limitsValue)
             : registry(std::move(registryValue)), limits(limitsValue) {}
 
@@ -156,6 +156,67 @@ namespace Horo::Mcp {
             }
             return false;
         }
+
+        /** @brief Applies bounded progress only while the operation is running. */
+        void ReportProgress(const std::uint64_t id, const double fraction, std::string phase) {
+            if (!std::isfinite(fraction) || fraction < 0.0 || fraction > 1.0 || phase.size() > 256 || !IsValidUtf8ScalarSequence(phase))
+                return;
+            std::lock_guard lock{mutex};
+            const auto found = operations.find(id);
+            if (found != operations.end() && found->second->state == OperationState::Running) {
+                found->second->progress = fraction;
+                found->second->phase = std::move(phase);
+            }
+        }
+
+        /** @brief Admits one request and retains its snapshot under the bounded queue lock. */
+        [[nodiscard]] Result<nlohmann::json> QueueCall(const McpRequest &request, const McpRequestContext &context, McpToolId tool,
+                                                       const McpOwnerContext owner, std::shared_ptr<const McpToolSnapshot> snapshot) {
+            std::lock_guard lock{mutex};
+            if (stopping)
+                return Result<nlohmann::json>::Failure(MakeError(McpErrors::ShuttingDown));
+            if (pending >= limits.maximumPending || active >= limits.maximumActive || nextId == std::numeric_limits<std::uint64_t>::max())
+                return Result<nlohmann::json>::Failure(MakeError(McpErrors::OperationCapacityExceeded));
+            for (const auto &[id, existing] : operations) {
+                static_cast<void>(id);
+                if (existing->session == context.session && existing->requestId == request.id && !Terminal(existing->state))
+                    return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
+            }
+            auto operation = std::make_shared<Operation>();
+            operation->id = nextId++;
+            operation->requestId = request.id;
+            operation->session = context.session;
+            operation->tool = std::move(tool);
+            operation->arguments = request.params["arguments"];
+            operation->context = context;
+            operation->cancellation = CancellationSource{context.cancellation};
+            operation->context.cancellation = operation->cancellation.Token();
+            operation->context.reportProgress = [weak = weak_from_this(), id = operation->id](const double fraction, std::string phase) {
+                if (const auto state = weak.lock())
+                    state->ReportProgress(id, fraction, std::move(phase));
+            };
+            operation->owner = owner;
+            operation->snapshot = std::move(snapshot);
+            operations.emplace(operation->id, operation);
+            queues[Index(owner)].push_back(operation);
+            ++pending;
+            ++active;
+            StopIfRequested(operation);
+            return Result<nlohmann::json>::Success(View(*operation));
+        }
+
+        /** @brief Finalizes a deferred callback and releases one shutdown drain lease. */
+        void Complete(const std::shared_ptr<Operation> &operation, Result<nlohmann::json> outcome) {
+            std::lock_guard lock{mutex};
+            if (operation && !StopIfRequested(operation)) {
+                if (outcome.HasValue())
+                    Finish(operation, OperationState::Succeeded, {}, std::move(outcome).Value());
+                else
+                    Finish(operation, OperationState::Failed, outcome.ErrorValue());
+            }
+            --callbacks;
+            drained.notify_all();
+        }
     };
 
     /** @copydoc McpController::Create */
@@ -174,40 +235,51 @@ namespace Horo::Mcp {
 
     /** @copydoc McpController::Dispatch */
     Result<nlohmann::json> McpController::Dispatch(const McpRequest &request, const McpRequestContext &context) {
-        if (request.method == "tools/list") {
-            std::lock_guard lock{state_->mutex};
-            if (state_->stopping)
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::ShuttingDown));
-            const auto snapshot = state_->registry->Read();
-            if (context.registryRevision != 0 && context.registryRevision != snapshot->Generation())
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::RegistryRevisionStale));
-            nlohmann::json tools = nlohmann::json::array();
-            for (const auto &descriptor : snapshot->Discover(context.capabilities))
-                tools.push_back({{"name", descriptor.id.value},
-                                 {"description", descriptor.description},
-                                 {"inputSchema", descriptor.inputSchema},
-                                 {"outputSchema", descriptor.outputSchema}});
-            return Result<nlohmann::json>::Success({{"tools", std::move(tools)}, {"registryRevision", snapshot->Generation()}});
-        }
+        if (request.method == "tools/list")
+            return DispatchList(context);
+        if (request.method == "operations/get" || request.method == "operations/cancel")
+            return DispatchOperation(request, context);
+        return DispatchCall(request, context);
+    }
 
-        if (request.method == "operations/get" || request.method == "operations/cancel") {
-            const auto id = OperationId(request.params);
-            if (!id)
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
-            std::lock_guard lock{state_->mutex};
-            const auto found = state_->operations.find(*id);
-            if (found == state_->operations.end() || found->second->session != context.session)
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::OperationUnavailable));
-            const auto &operation = found->second;
-            if (request.method == "operations/cancel" && !Terminal(operation->state)) {
-                operation->cancellation.RequestCancellation();
-                state_->Finish(operation, OperationState::Cancelled, MakeError(McpErrors::RequestCancelled));
-            } else {
-                state_->StopIfRequested(operation);
-            }
-            return Result<nlohmann::json>::Success(View(*operation));
-        }
+    /** @copydoc McpController::DispatchList */
+    Result<nlohmann::json> McpController::DispatchList(const McpRequestContext &context) {
+        std::lock_guard lock{state_->mutex};
+        if (state_->stopping)
+            return Result<nlohmann::json>::Failure(MakeError(McpErrors::ShuttingDown));
+        const auto snapshot = state_->registry->Read();
+        if (context.registryRevision != 0 && context.registryRevision != snapshot->Generation())
+            return Result<nlohmann::json>::Failure(MakeError(McpErrors::RegistryRevisionStale));
+        nlohmann::json tools = nlohmann::json::array();
+        for (const auto &descriptor : snapshot->Discover(context.capabilities))
+            tools.push_back({{"name", descriptor.id.value},
+                             {"description", descriptor.description},
+                             {"inputSchema", descriptor.inputSchema},
+                             {"outputSchema", descriptor.outputSchema}});
+        return Result<nlohmann::json>::Success({{"tools", std::move(tools)}, {"registryRevision", snapshot->Generation()}});
+    }
 
+    /** @copydoc McpController::DispatchOperation */
+    Result<nlohmann::json> McpController::DispatchOperation(const McpRequest &request, const McpRequestContext &context) {
+        const auto id = OperationId(request.params);
+        if (!id)
+            return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
+        std::lock_guard lock{state_->mutex};
+        const auto found = state_->operations.find(*id);
+        if (found == state_->operations.end() || found->second->session != context.session)
+            return Result<nlohmann::json>::Failure(MakeError(McpErrors::OperationUnavailable));
+        const auto &operation = found->second;
+        if (request.method == "operations/cancel" && !Terminal(operation->state)) {
+            operation->cancellation.RequestCancellation();
+            state_->Finish(operation, OperationState::Cancelled, MakeError(McpErrors::RequestCancelled));
+        } else {
+            state_->StopIfRequested(operation);
+        }
+        return Result<nlohmann::json>::Success(View(*operation));
+    }
+
+    /** @copydoc McpController::DispatchCall */
+    Result<nlohmann::json> McpController::DispatchCall(const McpRequest &request, const McpRequestContext &context) {
         if (request.method != "tools/call" || !request.params.is_object() || !request.params.contains("name") ||
             !request.params["name"].is_string() || !request.params.contains("arguments") || !request.params["arguments"].is_object())
             return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
@@ -221,48 +293,7 @@ namespace Horo::Mcp {
         const auto owner = snapshot->Owner(tool, context.capabilities);
         if (owner.HasError())
             return Result<nlohmann::json>::Failure(owner.ErrorValue());
-
-        std::lock_guard lock{state_->mutex};
-        if (state_->stopping)
-            return Result<nlohmann::json>::Failure(MakeError(McpErrors::ShuttingDown));
-        if (state_->pending >= state_->limits.maximumPending || state_->active >= state_->limits.maximumActive ||
-            state_->nextId == std::numeric_limits<std::uint64_t>::max())
-            return Result<nlohmann::json>::Failure(MakeError(McpErrors::OperationCapacityExceeded));
-        for (const auto &[id, existing] : state_->operations) {
-            static_cast<void>(id);
-            if (existing->session == context.session && existing->requestId == request.id && !Terminal(existing->state))
-                return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
-        }
-        auto operation = std::make_shared<Operation>();
-        operation->id = state_->nextId++;
-        operation->requestId = request.id;
-        operation->session = context.session;
-        operation->tool = tool;
-        operation->arguments = request.params["arguments"];
-        operation->context = context;
-        operation->cancellation = CancellationSource{context.cancellation};
-        operation->context.cancellation = operation->cancellation.Token();
-        operation->context.reportProgress = [weak = std::weak_ptr<State>{state_}, id = operation->id](const double fraction,
-                                                                                                      std::string phase) {
-            if (!std::isfinite(fraction) || fraction < 0.0 || fraction > 1.0 || phase.size() > 256 || !IsValidUtf8ScalarSequence(phase))
-                return;
-            if (const auto state = weak.lock()) {
-                std::lock_guard lock{state->mutex};
-                const auto found = state->operations.find(id);
-                if (found != state->operations.end() && found->second->state == OperationState::Running) {
-                    found->second->progress = fraction;
-                    found->second->phase = std::move(phase);
-                }
-            }
-        };
-        operation->owner = owner.Value();
-        operation->snapshot = snapshot;
-        state_->operations.emplace(operation->id, operation);
-        state_->queues[Index(operation->owner)].push_back(operation);
-        ++state_->pending;
-        ++state_->active;
-        state_->StopIfRequested(operation);
-        return Result<nlohmann::json>::Success(View(*operation));
+        return state_->QueueCall(request, context, tool, owner.Value(), snapshot);
     }
 
     /** @copydoc McpController::CancelAccepted */
@@ -317,47 +348,48 @@ namespace Horo::Mcp {
 
         std::size_t executed{};
         for (std::size_t count = 0; count < state->limits.maximumPumpBatch; ++count) {
-            std::shared_ptr<Operation> operation;
-            {
-                std::lock_guard lock{state->mutex};
-                auto &queue = state->queues[Index(owner)];
-                if (queue.empty() || state->stopping)
-                    break;
-                operation = queue.front();
-                if (state->StopIfRequested(operation))
-                    continue;
-                queue.pop_front();
-                --state->pending;
-                operation->state = OperationState::Running;
-                ++state->callbacks;
-            }
-            const auto completed = std::make_shared<std::atomic_bool>(false);
-            auto complete = [weakState = std::weak_ptr<State>{state}, weakOperation = std::weak_ptr<Operation>{operation},
-                             completed](Result<nlohmann::json> outcome) {
-                if (completed->exchange(true))
-                    return;
-                const auto state = weakState.lock();
-                if (!state)
-                    return;
-                std::lock_guard lock{state->mutex};
-                if (const auto operation = weakOperation.lock(); operation && !state->StopIfRequested(operation)) {
-                    if (outcome.HasValue())
-                        state->Finish(operation, OperationState::Succeeded, {}, std::move(outcome).Value());
-                    else
-                        state->Finish(operation, OperationState::Failed, outcome.ErrorValue());
-                }
-                --state->callbacks;
-                state->drained.notify_all();
-            };
-            try {
-                operation->snapshot->InvokeAsync(operation->tool, operation->arguments, operation->context, complete);
-            } catch (...) {  // NOSONAR: completion must drain even when an adapter throws before retaining its callback.
-                complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::ControllerFailed)));
-            }
-            operation->snapshot.reset();
-            ++executed;
+            const auto step = PumpOne(owner);
+            if (!step)
+                break;
+            executed += *step ? 1 : 0;
         }
         return Result<std::size_t>::Success(executed);
+    }
+
+    /** @copydoc McpController::PumpOne */
+    std::optional<bool> McpController::PumpOne(const McpOwnerContext owner) {
+        const auto state = state_;
+        std::shared_ptr<Operation> operation;
+        {
+            std::lock_guard lock{state->mutex};
+            auto &queue = state->queues[Index(owner)];
+            if (queue.empty() || state->stopping)
+                return std::nullopt;
+            operation = queue.front();
+            if (state->StopIfRequested(operation))
+                return false;
+            queue.pop_front();
+            --state->pending;
+            operation->state = OperationState::Running;
+            ++state->callbacks;
+        }
+        const auto completed = std::make_shared<std::atomic_bool>(false);
+        auto complete = [weakState = std::weak_ptr<State>{state}, weakOperation = std::weak_ptr<Operation>{operation},
+                         completed](Result<nlohmann::json> outcome) {
+            if (completed->exchange(true))
+                return;
+            const auto state = weakState.lock();
+            if (!state)
+                return;
+            state->Complete(weakOperation.lock(), std::move(outcome));
+        };
+        try {
+            operation->snapshot->InvokeAsync(operation->tool, operation->arguments, operation->context, complete);
+        } catch (...) {  // NOSONAR: completion must drain even when an adapter throws before retaining its callback.
+            complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::ControllerFailed)));
+        }
+        operation->snapshot.reset();
+        return true;
     }
 
     /** @copydoc McpController::Shutdown */
