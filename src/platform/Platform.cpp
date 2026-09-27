@@ -1,8 +1,10 @@
 #include "Horo/Foundation/Platform.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <unordered_set>
 #include <vector>
@@ -240,6 +242,67 @@ namespace Horo {
             return Result<void>::Failure(FsError(IoFailed, path));
 #endif
         return SyncDirectory(path.parent_path());
+    }
+
+    /** @copydoc NativeDurableFileSystem::AppendPrivateDurable */
+    Result<void> NativeDurableFileSystem::AppendPrivateDurable(const std::filesystem::path &path, const std::uint64_t expectedOffset,
+                                                               const std::span<const std::byte> bytes) {
+        if (path.empty() || path.parent_path().empty() || bytes.empty() ||
+            bytes.size() > std::numeric_limits<std::uint64_t>::max() - expectedOffset)
+            return Result<void>::Failure(FsError(IoFailed, path));
+#if defined(_WIN32)
+        const DWORD disposition = expectedOffset == 0U ? CREATE_NEW : OPEN_EXISTING;
+        HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, disposition,
+                                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (handle == INVALID_HANDLE_VALUE)
+            return Result<void>::Failure(FsError(IoFailed, path));
+        BY_HANDLE_FILE_INFORMATION info{};
+        LARGE_INTEGER size{};
+        bool ok = GetFileType(handle) == FILE_TYPE_DISK && GetFileInformationByHandle(handle, &info) &&
+                  (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) == 0U && info.nNumberOfLinks == 1U &&
+                  GetFileSizeEx(handle, &size) && size.QuadPart >= 0 && static_cast<std::uint64_t>(size.QuadPart) == expectedOffset;
+        LARGE_INTEGER zero{};
+        if (ok)
+            ok = SetFilePointerEx(handle, zero, nullptr, FILE_END) != 0;
+        std::size_t offset = 0U;
+        while (ok && offset < bytes.size()) {
+            const auto count = static_cast<DWORD>((std::min)(bytes.size() - offset, static_cast<std::size_t>(MAXDWORD)));
+            DWORD written{};
+            ok = WriteFile(handle, bytes.data() + offset, count, &written, nullptr) && written == count;
+            offset += written;
+        }
+        if (ok)
+            ok = FlushFileBuffers(handle) != 0;
+        if (!CloseHandle(handle))
+            ok = false;
+#else
+        if (expectedOffset > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()))
+            return Result<void>::Failure(FsError(IoFailed, path));
+        const int flags = O_WRONLY | O_NOFOLLOW | O_CLOEXEC | (expectedOffset == 0U ? O_CREAT | O_EXCL : 0);
+        const int descriptor = open(path.c_str(), flags, 0600);
+        if (descriptor < 0)
+            return Result<void>::Failure(FsError(IoFailed, path));
+        struct stat status{};
+        bool ok = fstat(descriptor, &status) == 0 && S_ISREG(status.st_mode) && status.st_nlink == 1U && status.st_size >= 0 &&
+                  static_cast<std::uint64_t>(status.st_size) == expectedOffset;
+        if (ok)
+            ok = lseek(descriptor, static_cast<off_t>(expectedOffset), SEEK_SET) == static_cast<off_t>(expectedOffset);
+        std::size_t offset = 0U;
+        while (ok && offset < bytes.size()) {
+            const auto count = (std::min)(bytes.size() - offset, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+            const ssize_t written = write(descriptor, bytes.data() + offset, count);
+            if (written <= 0) {
+                ok = false;
+                break;
+            }
+            offset += static_cast<std::size_t>(written);
+        }
+        if (ok)
+            ok = FlushFileDescriptor(descriptor);
+        if (close(descriptor) != 0)
+            ok = false;
+#endif
+        return ok ? SyncDirectory(path.parent_path()) : Result<void>::Failure(FsError(IoFailed, path));
     }
 
     /** @copydoc DurableFileSystem::CopyDurable */

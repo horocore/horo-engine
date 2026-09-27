@@ -326,6 +326,44 @@ TEST_CASE("Private transfer checkpoint recovery requires exact durable partial b
     CHECK(LoadUpdateTransferCheckpoint(partialPath, checkpointPath).HasError());
 }
 
+TEST_CASE("Durable private chunks resume from the exact recovered checkpoint", "[release][update]") {
+    TemporaryStage stage;
+    const auto partialPath = stage.path / "package partial";
+    const auto checkpointPath = stage.path / "package checkpoint";
+    const std::string payload(100U, 'p');
+    auto package = Package();
+    package.digest = Horo::ComputeSha256(std::as_bytes(std::span{payload}));
+    package.signature = {.publisherId = "com.horo.updates",
+                         .keyId = "key-1",
+                         .artifactDigest = package.digest,
+                         .signature = std::vector<std::byte>(64U, std::byte{1})};
+    Horo::NativeDurableFileSystem files;
+    auto fresh = PlanUpdateTransfer(package, FreshResponse(package), std::nullopt);
+    REQUIRE(fresh.HasValue());
+    REQUIRE(files.AppendPrivateDurable(partialPath, 0U, std::as_bytes(std::span{payload.data(), 40U})).HasValue());
+    auto firstCheckpoint = AdvanceUpdateTransfer(fresh.Value(), 40U);
+    REQUIRE(firstCheckpoint.HasValue());
+    REQUIRE(SaveUpdateTransferCheckpoint(files, partialPath, checkpointPath, firstCheckpoint.Value()).HasValue());
+
+    auto recovered = LoadUpdateTransferCheckpoint(partialPath, checkpointPath);
+    REQUIRE(recovered.HasValue());
+    REQUIRE(recovered.Value().has_value());
+    auto resume = PlanUpdateTransfer(package, RemainingResponse(package), recovered.Value());
+    REQUIRE(resume.HasValue());
+    CHECK(files.AppendPrivateDurable(partialPath, 39U, std::as_bytes(std::span{payload.data() + 40U, 60U})).HasError());
+    REQUIRE(files.AppendPrivateDurable(partialPath, resume.Value().writeOffset, std::as_bytes(std::span{payload.data() + 40U, 60U}))
+                .HasValue());
+    auto complete = AdvanceUpdateTransfer(resume.Value(), 60U);
+    REQUIRE(complete.HasValue());
+    REQUIRE(SaveUpdateTransferCheckpoint(files, partialPath, checkpointPath, complete.Value()).HasValue());
+    auto roots = std::make_shared<Horo::Security::TrustedRootStore>();
+    std::vector<std::byte> key(65U, std::byte{1});
+    key.front() = std::byte{0x04};
+    REQUIRE(roots->Add({.publisherId = "com.horo.updates", .keyId = "key-1", .publicKey = std::move(key)}).HasValue());
+    const Horo::Security::ArtifactVerifier verifier{std::make_shared<AcceptingProvider>(), roots};
+    CHECK(VerifyCompletedUpdateTransfer(package, complete.Value(), partialPath, verifier).HasValue());
+}
+
 TEST_CASE("Private checkpoint publication rejects aliases of package bytes", "[release][update]") {
     TemporaryStage stage;
     const auto partialPath = stage.path / "package.partial";

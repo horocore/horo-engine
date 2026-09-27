@@ -93,6 +93,15 @@ namespace Horo {
                                                                     std::string_view ownerMetadata) override;
         [[nodiscard]] Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override;
         [[nodiscard]] Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override;
+        /**
+         * @brief Creates a new private file at offset zero or appends to one regular, single-link file at an exact offset.
+         * @param path Host-owned private file path; parent directory already exists and is protected from concurrent mutation.
+         * @param expectedOffset Required current file length; zero requires the file to be absent.
+         * @param bytes Nonempty bytes to append and flush durably.
+         * @return Success after file and directory durability, or typed I/O failure without publishing a checkpoint.
+         */
+        [[nodiscard]] Result<void> AppendPrivateDurable(const std::filesystem::path &path, std::uint64_t expectedOffset,
+                                                        std::span<const std::byte> bytes);
         [[nodiscard]] Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override;
         [[nodiscard]] Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override;
         [[nodiscard]] Result<void> RemoveDurable(const std::filesystem::path &path) override;

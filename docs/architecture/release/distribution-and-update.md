@@ -277,6 +277,10 @@ and the new transport response before appending any downloaded bytes. The
 private checkpoint store publishes canonical evidence with a durable prepared
 file and atomic replacement, then recovery requires both the partial file and
 checkpoint to exist as regular files with exactly matching durable byte counts.
+Native private-file writes require an absent file at offset zero or a regular,
+single-link file at the exact checkpoint offset. Each append is flushed before
+its checkpoint advances; an interrupted write without matching checkpoint
+evidence is rejected during recovery.
 
 ## Staging
 
