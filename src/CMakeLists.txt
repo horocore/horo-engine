@@ -786,6 +786,8 @@ add_library(HoroPhysics STATIC
         physics/PhysicsConvexHullArtifact.cpp
         physics/PhysicsTriangleMeshCook.cpp
         physics/PhysicsTriangleMeshArtifact.cpp
+        physics/PhysicsHeightFieldCook.cpp
+        physics/PhysicsHeightFieldArtifact.cpp
         physics/PhysicsCookedShapeCache.cpp
         physics/PhysicsCookedShapeDescriptor.cpp
         physics/PhysicsDiagnostics.cpp
