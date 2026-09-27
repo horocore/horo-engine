@@ -966,10 +966,16 @@ target_compile_features(HoroDestructionCook PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionCook PUBLIC HoroEngine::DestructionApi HoroEngine::Assets)
 add_library(HoroDestructionRuntime STATIC
         runtime/destruction/runtime/DestructionDamageRuntime.cpp
+        runtime/destruction/runtime/DestructionEventStream.cpp
 )
 add_library(HoroEngine::DestructionRuntime ALIAS HoroDestructionRuntime)
 target_compile_features(HoroDestructionRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionRuntime PUBLIC HoroEngine::DestructionApi)
+
+add_library(HoroDestructionApplication STATIC application/destruction/DestructionEventDispatcher.cpp)
+add_library(HoroEngine::DestructionApplication ALIAS HoroDestructionApplication)
+target_compile_features(HoroDestructionApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroDestructionApplication PUBLIC HoroEngine::DestructionRuntime)
 
 add_library(HoroDestructionReplication STATIC
         runtime/destruction/network/DestructionReplicationDescriptor.cpp
