@@ -394,6 +394,82 @@ namespace Horo::Physics {
             return Result<void>::Success();
         }
 
+        [[nodiscard]] Result<void> ReadGridMetadata(Reader &reader, LoadedPhysicsHeightField &loaded, std::uint32_t &materialCount) {
+            if (!reader.U32(loaded.width) || !reader.U32(loaded.height) || !reader.Float(loaded.origin.x) ||
+                !reader.Float(loaded.origin.y) || !reader.Float(loaded.origin.z) || !reader.Float(loaded.spacingX) ||
+                !reader.Float(loaded.spacingZ) || !reader.Float(loaded.sampleScaleY) || !reader.U32(materialCount))
+                return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield tile geometry header is truncated.");
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateGridExtent(const LoadedPhysicsHeightField &loaded,
+                                                      const PhysicsHeightFieldCookLimits &cookLimits,
+                                                      const PhysicsHeightFieldCookLimits &runtimeLimits, const std::uint32_t materialCount,
+                                                      const std::size_t payloadBytes) {
+            if (loaded.width < 2 || loaded.height < 2 || loaded.width > runtimeLimits.maxDimension ||
+                loaded.height > runtimeLimits.maxDimension || loaded.width > cookLimits.maxDimension ||
+                loaded.height > cookLimits.maxDimension || SampleCount(loaded.width, loaded.height) > runtimeLimits.maxSamples ||
+                SampleCount(loaded.width, loaded.height) > cookLimits.maxSamples || materialCount == 0 ||
+                materialCount > runtimeLimits.maxMaterialSlots || materialCount > cookLimits.maxMaterialSlots ||
+                !ValidScale(loaded.origin, loaded.spacingX, loaded.spacingZ, loaded.sampleScaleY))
+                return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield tile dimensions or scale are invalid.");
+            const auto samples = SampleCount(loaded.width, loaded.height);
+            const auto cells = CellCount(loaded.width, loaded.height);
+            const auto expectedBytes = HeaderBytes + 36ULL + samples * sizeof(float) +
+                                       cells * (sizeof(std::uint8_t) + sizeof(std::uint64_t)) +
+                                       static_cast<std::uint64_t>(materialCount) * sizeof(std::uint64_t);
+            if (expectedBytes != payloadBytes)
+                return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield artifact table extent is inconsistent.");
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ReadGridSamplesAndHoles(Reader &reader, LoadedPhysicsHeightField &loaded) {
+            const auto samples = SampleCount(loaded.width, loaded.height);
+            const auto cells = CellCount(loaded.width, loaded.height);
+            loaded.samples.resize(static_cast<std::size_t>(samples));
+            loaded.cellHoles.resize(static_cast<std::size_t>(cells));
+            for (auto &sample : loaded.samples) {
+                if (!reader.Float(sample))
+                    return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield sample is invalid.");
+            }
+            for (auto &hole : loaded.cellHoles) {
+                if (!reader.U8(hole))
+                    return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield hole table is truncated.");
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ReadGridMaterials(Reader &reader, LoadedPhysicsHeightField &loaded, const std::uint32_t materialCount) {
+            loaded.cellMaterials.resize(static_cast<std::size_t>(CellCount(loaded.width, loaded.height)));
+            loaded.materialSlots.resize(materialCount);
+            for (auto &material : loaded.cellMaterials) {
+                std::uint64_t value{};
+                if (!reader.U64(value))
+                    return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield cell material table is truncated.");
+                material = PhysicsMaterialSlotId::FromValue(value);
+            }
+            for (auto &material : loaded.materialSlots) {
+                std::uint64_t value{};
+                if (!reader.U64(value))
+                    return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield material table is truncated.");
+                material = PhysicsMaterialSlotId::FromValue(value);
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateDecodedGrid(const LoadedPhysicsHeightField &loaded, const Math::Aabb &bounds,
+                                                       const Reader &reader) {
+            if (!reader.Remaining().empty())
+                return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield artifact has trailing bytes.");
+            if (const auto mapping = ValidateMappings(loaded.cellHoles, loaded.cellMaterials, loaded.materialSlots); mapping.HasError())
+                return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, mapping.ErrorValue().message);
+            const auto measured = ComputeBounds(loaded.width, loaded.height, loaded.origin, loaded.spacingX, loaded.spacingZ,
+                                                loaded.sampleScaleY, loaded.samples);
+            if (measured.HasError() || measured.Value().minimum != bounds.minimum || measured.Value().maximum != bounds.maximum)
+                return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield artifact bounds do not match its sample grid.");
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<LoadedPhysicsHeightField> Decode(const PhysicsCookedShapeDescriptor &descriptor,
                                                               const PhysicsShapeCookTargetDigest &target,
                                                               const std::span<const std::uint8_t> payload,
@@ -409,62 +485,17 @@ namespace Horo::Physics {
                                                          "Heightfield artifact source table digest is inconsistent.");
             LoadedPhysicsHeightField loaded{.descriptor = descriptor, .sourceDigest = header.source, .bounds = header.bounds};
             std::uint32_t materialCount{};
-            if (!reader.U32(loaded.width) || !reader.U32(loaded.height) || !reader.Float(loaded.origin.x) ||
-                !reader.Float(loaded.origin.y) || !reader.Float(loaded.origin.z) || !reader.Float(loaded.spacingX) ||
-                !reader.Float(loaded.spacingZ) || !reader.Float(loaded.sampleScaleY) || !reader.U32(materialCount))
-                return Failure<LoadedPhysicsHeightField>(PhysicsErrors::ShapeArtifactInvalid,
-                                                         "Heightfield tile geometry header is truncated.");
-            if (loaded.width < 2 || loaded.height < 2 || loaded.width > limits.maxDimension || loaded.height > limits.maxDimension ||
-                loaded.width > header.settings.limits.maxDimension || loaded.height > header.settings.limits.maxDimension ||
-                SampleCount(loaded.width, loaded.height) > limits.maxSamples ||
-                SampleCount(loaded.width, loaded.height) > header.settings.limits.maxSamples || materialCount == 0 ||
-                materialCount > limits.maxMaterialSlots || materialCount > header.settings.limits.maxMaterialSlots ||
-                !ValidScale(loaded.origin, loaded.spacingX, loaded.spacingZ, loaded.sampleScaleY))
-                return Failure<LoadedPhysicsHeightField>(PhysicsErrors::ShapeArtifactInvalid,
-                                                         "Heightfield tile dimensions or scale are invalid.");
-            const auto samples = SampleCount(loaded.width, loaded.height);
-            const auto cells = CellCount(loaded.width, loaded.height);
-            const auto expectedBytes = HeaderBytes + 36ULL + samples * sizeof(float) +
-                                       cells * (sizeof(std::uint8_t) + sizeof(std::uint64_t)) +
-                                       static_cast<std::uint64_t>(materialCount) * sizeof(std::uint64_t);
-            if (expectedBytes != payload.size())
-                return Failure<LoadedPhysicsHeightField>(PhysicsErrors::ShapeArtifactInvalid,
-                                                         "Heightfield artifact table extent is inconsistent.");
-            loaded.samples.resize(static_cast<std::size_t>(samples));
-            loaded.cellHoles.resize(static_cast<std::size_t>(cells));
-            loaded.cellMaterials.resize(static_cast<std::size_t>(cells));
-            loaded.materialSlots.resize(materialCount);
-            for (auto &sample : loaded.samples) {
-                if (!reader.Float(sample))
-                    return Failure<LoadedPhysicsHeightField>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield sample is invalid.");
-            }
-            for (auto &hole : loaded.cellHoles) {
-                if (!reader.U8(hole))
-                    return Failure<LoadedPhysicsHeightField>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield hole table is truncated.");
-            }
-            for (auto &material : loaded.cellMaterials) {
-                std::uint64_t value{};
-                if (!reader.U64(value))
-                    return Failure<LoadedPhysicsHeightField>(PhysicsErrors::ShapeArtifactInvalid,
-                                                             "Heightfield cell material table is truncated.");
-                material = PhysicsMaterialSlotId::FromValue(value);
-            }
-            for (auto &material : loaded.materialSlots) {
-                std::uint64_t value{};
-                if (!reader.U64(value))
-                    return Failure<LoadedPhysicsHeightField>(PhysicsErrors::ShapeArtifactInvalid,
-                                                             "Heightfield material table is truncated.");
-                material = PhysicsMaterialSlotId::FromValue(value);
-            }
-            if (!reader.Remaining().empty())
-                return Failure<LoadedPhysicsHeightField>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield artifact has trailing bytes.");
-            if (const auto mapping = ValidateMappings(loaded.cellHoles, loaded.cellMaterials, loaded.materialSlots); mapping.HasError())
-                return Failure<LoadedPhysicsHeightField>(PhysicsErrors::ShapeArtifactInvalid, mapping.ErrorValue().message);
-            const auto bounds = ComputeBounds(loaded.width, loaded.height, loaded.origin, loaded.spacingX, loaded.spacingZ,
-                                              loaded.sampleScaleY, loaded.samples);
-            if (bounds.HasError() || bounds.Value().minimum != header.bounds.minimum || bounds.Value().maximum != header.bounds.maximum)
-                return Failure<LoadedPhysicsHeightField>(PhysicsErrors::ShapeArtifactInvalid,
-                                                         "Heightfield artifact bounds do not match its sample grid.");
+            if (const auto metadata = ReadGridMetadata(reader, loaded, materialCount); metadata.HasError())
+                return Result<LoadedPhysicsHeightField>::Failure(metadata.ErrorValue());
+            if (const auto extent = ValidateGridExtent(loaded, header.settings.limits, limits, materialCount, payload.size());
+                extent.HasError())
+                return Result<LoadedPhysicsHeightField>::Failure(extent.ErrorValue());
+            if (const auto geometry = ReadGridSamplesAndHoles(reader, loaded); geometry.HasError())
+                return Result<LoadedPhysicsHeightField>::Failure(geometry.ErrorValue());
+            if (const auto materials = ReadGridMaterials(reader, loaded, materialCount); materials.HasError())
+                return Result<LoadedPhysicsHeightField>::Failure(materials.ErrorValue());
+            if (const auto valid = ValidateDecodedGrid(loaded, header.bounds, reader); valid.HasError())
+                return Result<LoadedPhysicsHeightField>::Failure(valid.ErrorValue());
             return Result<LoadedPhysicsHeightField>::Success(std::move(loaded));
         }
     }  // namespace

@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
 #include <span>
+#include <string>
 #include <thread>
 
 namespace Horo::Physics {
@@ -149,6 +150,22 @@ namespace Horo::Physics {
         cooked.payload[192] = 0xff;
         RefreshDigest(cooked);
         RequireError(LoadCookedPhysicsHeightField(cooked.descriptor, Target(), cooked.payload), PhysicsErrors::ShapeArtifactInvalid);
+
+        cooked = CookPhysicsHeightField(tile.Request()).Value();
+        // The payload-length word is in the envelope, outside the source digest.
+        cooked.payload[184] ^= 1U;
+        RefreshDigest(cooked);
+        const auto malformedLength = LoadCookedPhysicsHeightField(cooked.descriptor, Target(), cooked.payload);
+        RequireError(malformedLength, PhysicsErrors::ShapeArtifactInvalid);
+        REQUIRE(malformedLength.ErrorValue().message.find("envelope") != std::string::npos);
+
+        cooked = CookPhysicsHeightField(tile.Request()).Value();
+        // A forged but finite envelope bound must be checked against decoded samples.
+        cooked.payload[164] ^= 1U;
+        RefreshDigest(cooked);
+        const auto forgedBounds = LoadCookedPhysicsHeightField(cooked.descriptor, Target(), cooked.payload);
+        RequireError(forgedBounds, PhysicsErrors::ShapeArtifactInvalid);
+        REQUIRE(forgedBounds.ErrorValue().message.find("bounds do not match") != std::string::npos);
     }
 
     TEST_CASE("Heightfield cache pins exact tile generations through eviction and shutdown",
