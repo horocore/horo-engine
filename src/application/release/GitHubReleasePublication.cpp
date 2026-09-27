@@ -22,6 +22,12 @@ namespace Horo::Release {
             });
         }
 
+        [[nodiscard]] bool ValidGitCommit(const std::string_view commit) {
+            return commit.size() == 40U && std::ranges::all_of(commit, [](const char character) {
+                return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f');
+            });
+        }
+
         [[nodiscard]] std::string ExpectedTag(const ReleasePublicationRequest &request) {
             return "v" + std::visit([](const auto &version) {
                 return FormatReleaseVersion(version.value);
@@ -50,13 +56,16 @@ namespace Horo::Release {
         [[nodiscard]] Result<GitHubReleaseIdentity> ExistingRelease(IGitHubReleaseClient &client, const std::string_view repository,
                                                                     const ReleasePublicationRequest &request,
                                                                     const std::string_view receiptId = {}) {
-            if (!ValidRepository(repository) || (request.manifest.Data().version != request.plan.Request().version.productVersion))
+            const auto &source = request.manifest.Data().sourceRevision.value;
+            if (!ValidRepository(repository) || !ValidGitCommit(source) ||
+                (request.manifest.Data().version != request.plan.Request().version.productVersion))
                 return Result<GitHubReleaseIdentity>::Failure(MakeError(ReleaseErrors::PipelineInputChanged));
             const std::string tag = ExpectedTag(request);
             auto found = client.FindExisting(repository, tag);
             if (found.HasError())
                 return found;
             if (const auto &release = found.Value(); release.repository != repository || release.tag != tag || release.releaseId == 0U ||
+                                                     release.sourceCommit != source ||
                                                      (!receiptId.empty() && std::to_string(release.releaseId) != receiptId))
                 return Result<GitHubReleaseIdentity>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
             return found;

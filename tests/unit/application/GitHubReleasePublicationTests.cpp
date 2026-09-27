@@ -12,6 +12,8 @@ using namespace Horo::Release;
 using namespace ReleaseTestFixtures;
 
 namespace {
+    constexpr std::string_view SourceCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
     class TemporaryCandidate final {
     public:
         TemporaryCandidate()
@@ -35,6 +37,7 @@ namespace {
 
     ReleaseExecutionPlan PublicationPlan() {
         auto request = Request();
+        request.version.sourceRevision.value = SourceCommit;
         request.profile = Profile(ReleaseSigningPolicy::Disabled, true);
         request.publicationDestination = ReleaseDestinationId{"github-releases"};
         auto outcome = PreflightRelease(request, Facts(request));
@@ -77,7 +80,9 @@ namespace {
             ++lookups;
             if (missing)
                 return Result<GitHubReleaseIdentity>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
-            return Result<GitHubReleaseIdentity>::Success({std::string{repository}, wrongTag ? "v0.4.3" : std::string{tag}, releaseId});
+            return Result<GitHubReleaseIdentity>::Success(
+                {std::string{repository}, wrongTag ? "v0.4.3" : std::string{tag}, releaseId,
+                 wrongSource ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" : std::string{SourceCommit}});
         }
 
         [[nodiscard]] Result<void> UploadExact(const GitHubReleaseIdentity &release, const std::string_view name,
@@ -113,6 +118,7 @@ namespace {
         int commits{};
         bool missing{};
         bool wrongTag{};
+        bool wrongSource{};
     };
 }  // namespace
 
@@ -165,6 +171,12 @@ TEST_CASE("GitHub adapter rejects missing, changed, or corrupted remote release 
     GitHubReleasePublicationAdapter wrongTagAdapter{"horocore/horo-engine", wrongTagClient};
     CHECK(PublishVerifiedReleaseCandidate(request, wrongTagAdapter).HasError());
     CHECK(wrongTagClient.uploads == 0);
+
+    FakeGitHubClient wrongSourceClient;
+    wrongSourceClient.wrongSource = true;
+    GitHubReleasePublicationAdapter wrongSourceAdapter{"horocore/horo-engine", wrongSourceClient};
+    CHECK(PublishVerifiedReleaseCandidate(request, wrongSourceAdapter).HasError());
+    CHECK(wrongSourceClient.uploads == 0);
 
     FakeGitHubClient client;
     GitHubReleasePublicationAdapter adapter{"horocore/horo-engine", client};

@@ -18,6 +18,7 @@ namespace Horo::Release {
         std::string repository;
         std::string tag;
         std::uint64_t releaseId{};
+        std::string sourceCommit; /**< Peeled commit SHA of the existing Git tag. */
     };
 
     /** @brief Remote asset evidence measured by reading the uploaded bytes. */
@@ -36,7 +37,7 @@ namespace Horo::Release {
          * @brief Finds an existing authorized release without creating a tag, version, or release.
          * @param repository Canonical owner/repository identity.
          * @param tag Exact source tag for the candidate version.
-         * @return Existing remote identity or a typed failure.
+         * @return Existing remote identity with the tag's peeled source commit, or a typed failure.
          */
         [[nodiscard]] virtual Result<GitHubReleaseIdentity> FindExisting(std::string_view repository, std::string_view tag) = 0;
 

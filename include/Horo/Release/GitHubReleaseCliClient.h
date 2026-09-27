@@ -39,6 +39,7 @@ namespace Horo::Release {
         CancellationToken cancellation_;
 
         [[nodiscard]] Result<std::string> Run(std::vector<std::string> arguments) const;
+        [[nodiscard]] Result<std::string> ResolveSourceCommit(std::string_view repository, std::string_view tag) const;
         [[nodiscard]] Result<std::uint64_t> AssetId(const GitHubReleaseIdentity &release, std::string_view name) const;
         [[nodiscard]] Result<void> ConfirmIdentity(const GitHubReleaseIdentity &release);
     };

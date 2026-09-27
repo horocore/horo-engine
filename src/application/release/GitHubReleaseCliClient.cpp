@@ -50,6 +50,15 @@ namespace Horo::Release {
             return true;
         }
 
+        [[nodiscard]] bool SafeGitObjectId(const std::string_view objectId) {
+            if (objectId.size() != 40U)
+                return false;
+            for (const char character : objectId)
+                if (!((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')))
+                    return false;
+            return true;
+        }
+
         [[nodiscard]] Result<Json> ParseResponse(const std::string &response) {
             try {
                 return Result<Json>::Success(Json::parse(response));
@@ -179,10 +188,42 @@ namespace Horo::Release {
             const auto remoteTag = document.at("tag_name").get<std::string>();
             if (id == 0U || remoteTag != tag || document.at("draft").get<bool>())
                 return Result<GitHubReleaseIdentity>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
-            return Result<GitHubReleaseIdentity>::Success({std::string{repository}, remoteTag, id});
+            auto commit = ResolveSourceCommit(repository, tag);
+            if (commit.HasError())
+                return Result<GitHubReleaseIdentity>::Failure(commit.ErrorValue());
+            return Result<GitHubReleaseIdentity>::Success({std::string{repository}, remoteTag, id, std::move(commit).Value()});
         } catch (const Json::exception &) {
             return Result<GitHubReleaseIdentity>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
         }
+    }
+
+    /** @brief Peels a bounded annotated tag chain to the exact source commit. */
+    Result<std::string> GitHubReleaseCliClient::ResolveSourceCommit(const std::string_view repository, const std::string_view tag) const {
+        auto response = Run({"api", "repos/" + std::string{repository} + "/git/ref/tags/" + std::string{tag}});
+        if (response.HasError())
+            return response;
+        for (std::uint32_t depth = 0U; depth < 4U; ++depth) {
+            auto parsed = ParseResponse(response.Value());
+            if (parsed.HasError())
+                return Result<std::string>::Failure(parsed.ErrorValue());
+            try {
+                const auto &object = parsed.Value().at("object");
+                const auto type = object.at("type").get<std::string>();
+                const auto sha = object.at("sha").get<std::string>();
+                if (!SafeGitObjectId(sha))
+                    return Result<std::string>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+                if (type == "commit")
+                    return Result<std::string>::Success(sha);
+                if (type != "tag")
+                    return Result<std::string>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+                response = Run({"api", "repos/" + std::string{repository} + "/git/tags/" + sha});
+                if (response.HasError())
+                    return response;
+            } catch (const Json::exception &) {
+                return Result<std::string>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+            }
+        }
+        return Result<std::string>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
     }
 
     /** @brief Rejects changed or removed tag-to-release bindings between operations. */
@@ -190,7 +231,7 @@ namespace Horo::Release {
         auto current = FindExisting(release.repository, release.tag);
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
-        if (current.Value().releaseId != release.releaseId)
+        if (current.Value().releaseId != release.releaseId || current.Value().sourceCommit != release.sourceCommit)
             return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
         return Result<void>::Success();
     }

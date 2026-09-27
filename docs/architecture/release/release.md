@@ -688,7 +688,9 @@ The GitHub Releases destination lives in `HoroReleaseGitHub`, outside the shared
 release application target. Its host-owned client resolves an existing tagged
 release, uploads only final-manifest files and canonical `manifest.json`, reads
 each remote asset back for size and SHA-256 verification, and binds the channel
-commit to the same remote release ID. A missing release or changed ID fails
+commit to the same remote release ID. The destination requires a canonical Git
+commit SHA in the candidate and peels the existing Git tag to that exact commit.
+A missing release, retargeted tag, or changed release ID fails
 without creating a tag or release. The `GitHubReleaseCliClient` uses the host's
 authenticated `gh` installation through the bounded, shell-free process runner;
 it never passes credentials in arguments or emits GitHub CLI diagnostic text.
