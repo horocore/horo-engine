@@ -16,6 +16,8 @@ namespace Horo::Release::UpdateTransferErrors {
     extern const ErrorCodeDescriptor ResumeMismatch;
     /** @brief The host cancelled a private update download before it was verified. */
     extern const ErrorCodeDescriptor Cancelled;
+    /** @brief HTTPS connection, timeout, or body transfer failed before a complete verified package. */
+    extern const ErrorCodeDescriptor TransportFailed;
     /** @brief Persisted checkpoint bytes are malformed, oversized, or from an unsupported schema. */
     extern const ErrorCodeDescriptor InvalidCheckpoint;
     /** @brief Archive metadata contains unsafe names, links, collisions, or invalid entry types. */

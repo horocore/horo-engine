@@ -154,6 +154,7 @@ horo_configure_target_header_boundary(HoroUpdateTransfer PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroUpdateDownload PUBLIC_HEADERS
     Horo/Release/UpdateDownloadSession.h
+    Horo/Release/UpdateHttpDownload.h
 )
 horo_configure_target_header_boundary(HoroReleaseProcess PUBLIC_HEADERS
     Horo/Release/ReleaseCandidatePublisher.h

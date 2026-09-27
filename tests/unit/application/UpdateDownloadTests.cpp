@@ -1,4 +1,5 @@
 #include "Horo/Release/UpdateDownloadSession.h"
+#include "Horo/Release/UpdateHttpDownload.h"
 #include "Horo/Release/UpdateTransferCheckpointStore.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -181,4 +182,37 @@ TEST_CASE("Private download never authenticates a changed package body", "[relea
     REQUIRE(recovered.HasValue());
     REQUIRE(recovered.Value().has_value());
     CHECK(recovered.Value()->durableBytes == package.size);
+}
+
+TEST_CASE("HTTPS adapter authenticates a complete durable checkpoint without another request", "[release][update]") {
+    TemporaryStage stage;
+    const std::string payload(100U, 'p');
+    const auto package = Package(payload);
+    Horo::NativeDurableFileSystem files;
+    auto started = UpdateDownloadSession::Begin(package, Fresh(package), Paths(stage), Limits, files, {});
+    REQUIRE(started.HasValue());
+    auto session = std::move(started).Value();
+    REQUIRE(session.Append(std::as_bytes(std::span{payload})).HasValue());
+    REQUIRE(session.Finish(Verifier()).HasValue());
+
+    const auto recovered = DownloadUpdatePackageHttps(package, Paths(stage), Limits, files, Verifier(), {});
+    REQUIRE(recovered.HasValue());
+    CHECK(recovered.Value().durableBytes == package.size);
+}
+
+TEST_CASE("HTTPS adapter rejects invalid policy and cancellation before opening transport", "[release][update]") {
+    TemporaryStage stage;
+    const std::string payload(100U, 'p');
+    auto package = Package(payload);
+    Horo::NativeDurableFileSystem files;
+    package.url = "http://updates.example.test/editor.zip";
+    CHECK(DownloadUpdatePackageHttps(package, Paths(stage), Limits, files, Verifier(), {}).HasError());
+    package.url = "https://updates.example.test/editor.zip";
+    CHECK(DownloadUpdatePackageHttps(package, Paths(stage), Limits, files, Verifier(), {},
+                                     {.connectTimeoutSeconds = 15U, .requestTimeoutSeconds = 14U})
+              .HasError());
+    Horo::CancellationSource cancellation;
+    cancellation.RequestCancellation();
+    CHECK(DownloadUpdatePackageHttps(package, Paths(stage), Limits, files, Verifier(), cancellation.Token()).HasError());
+    CHECK_FALSE(std::filesystem::exists(Paths(stage).partialFile));
 }

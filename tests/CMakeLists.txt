@@ -1075,6 +1075,12 @@ add_executable(HoroUpdateDownloadTests unit/application/UpdateDownloadTests.cpp)
 target_compile_features(HoroUpdateDownloadTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateDownloadTests PRIVATE HoroEngine::UpdateDownload)
 horo_register_catch_test(HoroUpdateDownloadTests LABELS "release;update;headless")
+add_executable(HoroUpdateHttpResponseTests unit/application/UpdateHttpResponseTests.cpp
+        ${PROJECT_SOURCE_DIR}/src/application/release/UpdateHttpResponse.cpp)
+target_compile_features(HoroUpdateHttpResponseTests PRIVATE cxx_std_20)
+target_include_directories(HoroUpdateHttpResponseTests PRIVATE ${PROJECT_SOURCE_DIR}/src/application/release)
+target_link_libraries(HoroUpdateHttpResponseTests PRIVATE HoroEngine::UpdateTransfer)
+horo_register_catch_test(HoroUpdateHttpResponseTests LABELS "release;update;headless")
 
 add_executable(HoroReleaseChecksumsTests
         unit/application/ReleaseChecksumsTests.cpp)

@@ -254,7 +254,8 @@ A changed validator, unexpected redirect, or server response that ignores the
 range fails closed; the caller must explicitly discard the old partial file
 before a new transfer. `CheckUpdateTransferSpace` reserves host-requested free
 capacity, and checkpoints advance only after bytes are durably stored. The host
-still owns transport, private-file I/O, cancellation, and progress dispatch.
+selects the transport and owns private storage, cancellation, and progress
+dispatch.
 `VerifyCompletedUpdateTransfer` then checks the complete private-file size,
 hash, and publisher signature before any extractor or staging marker consumes
 it. The file-backed path streams the private package through SHA-256 in bounded
@@ -286,6 +287,13 @@ body byte, loads the previous checkpoint, checks remaining private storage,
 and publishes progress as durable byte counts. Cancellation, excess body data,
 and short responses cannot finish or mark a package ready. A complete response
 is authenticated against the signed package before it can be used for staging.
+`DownloadUpdatePackageHttps` binds a concrete TLS-verified cURL GET to this
+session. It disables redirects, admits only the signed effective URL, parses
+bounded final headers before the first body callback, and rejects ambiguous
+framing or content encoding. A resumed request sends the durable byte range and
+its strong ETag with `If-Range`; a fresh full response cannot silently replace
+partial bytes. The host calls this blocking adapter on its update job and owns
+progress dispatch to the user interface.
 
 ## Staging
 

@@ -28,6 +28,12 @@ namespace Horo::Release::UpdateTransferErrors {
                                         .defaultSeverity = ErrorSeverity::Info,
                                         .summary = "Update download was cancelled before verification.",
                                         .retryable = true};
+    const ErrorCodeDescriptor TransportFailed{.domain = Domain,
+                                              .code = ErrorCode{"release.update_transfer.transport_failed"},
+                                              .defaultSeverity = ErrorSeverity::Error,
+                                              .summary = "HTTPS update transfer failed before verification.",
+                                              .remediationHint = "Retry from the trusted update source.",
+                                              .retryable = true};
     const ErrorCodeDescriptor InvalidCheckpoint{.domain = Domain,
                                                 .code = ErrorCode{"release.update_transfer.invalid_checkpoint"},
                                                 .defaultSeverity = ErrorSeverity::Warning,
