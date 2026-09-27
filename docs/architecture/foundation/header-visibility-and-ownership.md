@@ -38,6 +38,11 @@ migrate. The product host supplies transport-observed response evidence and
 persists checkpoints only after private-file durability. This target depends on
 `HoroEngine::UpdateManifest` and contains no concrete network or filesystem
 backend. Generated standalone public-header consumers verify both headers.
+`HoroEngine::UpdateDownload` separately owns the additive
+`Horo/Release/UpdateDownloadSession.h` host adapter. It depends on UpdateTransfer
+and Platform, keeps native durable file writes out of the transfer policy target,
+and has no prior callers to migrate. Its generated standalone header consumer
+checks the new ownership and declared dependencies.
 
 ## DFR-002.2 Import Boundary
 

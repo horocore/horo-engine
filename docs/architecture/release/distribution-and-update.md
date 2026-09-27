@@ -281,6 +281,11 @@ Native private-file writes require an absent file at offset zero or a regular,
 single-link file at the exact checkpoint offset. Each append is flushed before
 its checkpoint advances; an interrupted write without matching checkpoint
 evidence is rejected during recovery.
+The host-composed `UpdateDownloadSession` admits final HTTP headers before any
+body byte, loads the previous checkpoint, checks remaining private storage,
+and publishes progress as durable byte counts. Cancellation, excess body data,
+and short responses cannot finish or mark a package ready. A complete response
+is authenticated against the signed package before it can be used for staging.
 
 ## Staging
 

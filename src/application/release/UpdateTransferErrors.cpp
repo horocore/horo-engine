@@ -23,6 +23,11 @@ namespace Horo::Release::UpdateTransferErrors {
                                              .summary = "Partial update bytes no longer match the source validator.",
                                              .remediationHint = "Discard the partial download and restart from byte zero.",
                                              .userActionable = true};
+    const ErrorCodeDescriptor Cancelled{.domain = Domain,
+                                        .code = ErrorCode{"release.update_transfer.cancelled"},
+                                        .defaultSeverity = ErrorSeverity::Info,
+                                        .summary = "Update download was cancelled before verification.",
+                                        .retryable = true};
     const ErrorCodeDescriptor InvalidCheckpoint{.domain = Domain,
                                                 .code = ErrorCode{"release.update_transfer.invalid_checkpoint"},
                                                 .defaultSeverity = ErrorSeverity::Warning,
