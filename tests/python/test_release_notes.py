@@ -2,6 +2,7 @@
 
 import json
 import io
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -67,6 +68,8 @@ class ReleaseNotesTests(unittest.TestCase):
         with self.assertRaises(NotesError):
             verify(encoded, "v0.2.0", 'set(HORO_ENGINE_VERSION "0.2.0")', "Different GitHub Release body")
         with self.assertRaises(NotesError):
+            verify(encoded, "v0.2.0", 'set(HORO_ENGINE_VERSION "0.2.0")', snapshot["markdown"] + "\n")
+        with self.assertRaises(NotesError):
             verify(encoded, "v0.2.1", 'set(HORO_ENGINE_VERSION "0.2.0")', snapshot["markdown"])
 
     def test_rejects_missing_malformed_oversized_and_unsafe_content(self):
@@ -79,15 +82,41 @@ class ReleaseNotesTests(unittest.TestCase):
             SOURCE.replace("- Reviewed feature.", "- [bad](javascript:evil)"),
             SOURCE.replace("- Reviewed feature.", "- " + "x" * 2049),
             SOURCE + "\n## [0.2.0] — 2026-09-27\n### Fixed\n- Duplicate.\n",
+            "## [0.3.0] — not-a-date\n### Added\n- Invalid.\n" + SOURCE,
+            "## Not a version\n" + SOURCE,
             "x" * 262145,
         ):
             with self.subTest(source=source[:40]), self.assertRaises(NotesError):
                 parse_changelog(source)
+        entries = parse_changelog(SOURCE)
         with self.assertRaises(NotesError):
-            select_version(parse_changelog(SOURCE), "0.3.0")
+            select_version(entries, "0.3.0")
         for invalid in ("1." + "9" * 100000 + ".0", "1.0.0-01", "1.0.0+", "1.0.0-rc..1"):
-            with self.subTest(version=invalid[:30]), self.assertRaises(NotesError):
-                version_parts(invalid)
+            with self.subTest(version=invalid[:30]):
+                with self.assertRaises(NotesError):
+                    version_parts(invalid)
+
+    def test_generated_files_stay_in_build_directory(self):
+        script = Path(__file__).resolve().parents[2] / "scripts" / "parse_changelog.py"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "CHANGELOG.md"
+            source.write_text(SOURCE, encoding="utf-8")
+            command = [sys.executable, str(script), "--source", str(source),
+                       "--version", "0.2.0", "--product", "horo-editor"]
+            result = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "generated" / "ReleaseNotesSnapshot.json").read_bytes(),
+                             snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor")))
+            self.assertTrue((root / "generated" / "GeneratedBuildInfo.h").is_file())
+            outside = root / "outside"
+            outside.mkdir()
+            (root / "generated" / "ReleaseNotesSnapshot.json").unlink()
+            (root / "generated" / "ReleaseNotesSnapshot.json").symlink_to(outside / "stolen.json")
+            result = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must not be a symlink", result.stderr)
+            self.assertFalse((outside / "stolen.json").exists())
 
     def test_archive_contains_exact_snapshot(self):
         snapshot = snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor"))
@@ -96,6 +125,9 @@ class ReleaseNotesTests(unittest.TestCase):
             tar_path = root / "release.tar.gz"
             zip_path = root / "release.zip"
             with tarfile.open(tar_path, "w:gz") as package:
+                directory = tarfile.TarInfo("HoroEngine/")
+                directory.type = tarfile.DIRTYPE
+                package.addfile(directory)
                 member = tarfile.TarInfo("HoroEngine/release-notes.json")
                 member.size = len(snapshot)
                 package.addfile(member, io.BytesIO(snapshot))
@@ -118,6 +150,76 @@ class ReleaseNotesTests(unittest.TestCase):
             with self.assertRaisesRegex(NotesError, "exactly one"):
                 verify_archive(snapshot, duplicate)
 
+            for unsafe in ("../release-notes.json", "/release-notes.json",
+                           "package/../release-notes.json", "package\\release-notes.json"):
+                with self.subTest(unsafe=unsafe):
+                    with tarfile.open(tar_path, "w:gz") as package:
+                        member = tarfile.TarInfo(unsafe)
+                        member.size = len(snapshot)
+                        package.addfile(member, io.BytesIO(snapshot))
+                    with zipfile.ZipFile(zip_path, "w") as package:
+                        package.writestr(unsafe, snapshot)
+                    for archive in (tar_path, zip_path):
+                        with self.assertRaisesRegex(NotesError, "unsafe package member path"):
+                            verify_archive(snapshot, archive)
+
+            with self.assertRaisesRegex(NotesError, "unsupported release archive format"):
+                verify_archive(snapshot, root / "release.7z")
+            with self.assertRaisesRegex(NotesError, "missing or oversized"):
+                verify_archive(b"", zip_path)
+            with self.assertRaisesRegex(NotesError, "missing or oversized"):
+                verify_archive(b"x" * 32769, zip_path)
+
+    def test_archive_rejects_unrelated_traversal_and_non_file_notes(self):
+        snapshot = snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor"))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tar_path = root / "release.tar.gz"
+            zip_path = root / "release.zip"
+            with tarfile.open(tar_path, "w:gz") as package:
+                member = tarfile.TarInfo("HoroEngine/release-notes.json")
+                member.size = len(snapshot)
+                package.addfile(member, io.BytesIO(snapshot))
+                member = tarfile.TarInfo("../outside.txt")
+                member.size = 1
+                package.addfile(member, io.BytesIO(b"x"))
+            with zipfile.ZipFile(zip_path, "w") as package:
+                package.writestr("release-notes.json", snapshot)
+                package.writestr("../outside.txt", b"x")
+            for archive in (tar_path, zip_path):
+                with self.subTest(archive=archive.name):
+                    with self.assertRaisesRegex(NotesError, "unsafe package member path"):
+                        verify_archive(snapshot, archive)
+            with tarfile.open(tar_path, "w:gz") as package:
+                member = tarfile.TarInfo("release-notes.json")
+                member.type = tarfile.SYMTYPE
+                member.linkname = "../outside.txt"
+                package.addfile(member)
+            with self.assertRaisesRegex(NotesError, "exactly one"):
+                verify_archive(snapshot, tar_path)
+            with zipfile.ZipFile(zip_path, "w") as package:
+                package.writestr("release-notes.json/", b"")
+            with self.assertRaisesRegex(NotesError, "exactly one"):
+                verify_archive(snapshot, zip_path)
+
+    def test_release_verifier_rejects_invalid_identity_and_snapshot(self):
+        snapshot = snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor"))
+        cmake = 'set(HORO_ENGINE_VERSION "0.2.0")'
+        markdown = json.loads(snapshot)["markdown"]
+        for data, tag, configured, body in (
+            (snapshot, "0.2.0", cmake, markdown),
+            (snapshot, "v0.2.0-01", cmake, markdown),
+            (snapshot, "v0.2.0", cmake + "\n" + cmake, markdown),
+            (b"", "v0.2.0", cmake, markdown),
+            (b"{bad", "v0.2.0", cmake, markdown),
+            (b"[]", "v0.2.0", cmake, markdown),
+            (snapshot.replace(b'horo-editor', b'another-product'), "v0.2.0", cmake, markdown),
+        ):
+            with self.subTest(tag=tag, data=data[:20]):
+                with self.assertRaises(NotesError):
+                    verify(data, tag, configured, body)
+        verify(snapshot, "v0.2.0", cmake, markdown.replace("\n", "\r\n"))
+
     def test_release_body_fetch_uses_bounded_authenticated_api_request(self):
         with patch.dict("os.environ", {"GITHUB_REPOSITORY": "horocore/horo-engine", "GH_TOKEN": str(id(self))}):
             with patch("verify_release_notes.http.client.HTTPSConnection") as constructor:
@@ -131,6 +233,23 @@ class ReleaseNotesTests(unittest.TestCase):
                 self.assertEqual(connection.request.call_args.kwargs["headers"]["Accept"],
                                  "application/vnd.github+json")
                 connection.close.assert_called_once()
+
+    def test_release_body_fetch_rejects_untrusted_responses(self):
+        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "../escape", "GH_TOKEN": "token"}):
+            with self.assertRaisesRegex(NotesError, "GITHUB_REPOSITORY"):
+                release_body("v0.2.0")
+        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "horocore/horo-engine", "GH_TOKEN": "token"}):
+            with patch("verify_release_notes.http.client.HTTPSConnection") as constructor:
+                connection = constructor.return_value
+                connection.getresponse.return_value.status = 404
+                with self.assertRaisesRegex(NotesError, "HTTP 404"):
+                    release_body("v0.2.0")
+                connection.getresponse.return_value.status = 200
+                for response in (b"x" * 131073, b"{bad", b'{"body":null}'):
+                    connection.getresponse.return_value.read.return_value = response
+                    with self.subTest(response=response[:20]):
+                        with self.assertRaises(NotesError):
+                            release_body("v0.2.0")
 
 
 if __name__ == "__main__":

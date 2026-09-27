@@ -5,7 +5,6 @@ import argparse
 import http.client
 import json
 import os
-import re
 import sys
 from urllib.parse import quote
 from pathlib import Path
@@ -18,21 +17,23 @@ def verify(snapshot_bytes: bytes, tag: str, cmake_text: str, release_body: str) 
         raise NotesError("release tag must use v<exact-semver>")
     version = tag[1:]
     version_parts(version)
-    match = re.search(r'^set\(HORO_ENGINE_VERSION "([^"]+)"\)$', cmake_text, re.MULTILINE)
-    if not match or match.group(1) != version:
+    declared = [line.removeprefix('set(HORO_ENGINE_VERSION "').removesuffix('")')
+                for line in cmake_text.splitlines()
+                if line.startswith('set(HORO_ENGINE_VERSION "') and line.endswith('")')]
+    if declared != [version]:
         raise NotesError(f"release tag {tag} does not match HORO_ENGINE_VERSION")
     if not snapshot_bytes or len(snapshot_bytes) > MAX_SNAPSHOT_BYTES:
         raise NotesError("reviewed notes snapshot is missing or oversized")
     try:
         snapshot = json.loads(snapshot_bytes)
-    except (UnicodeError, ValueError) as error:
+    except ValueError as error:
         raise NotesError("reviewed notes snapshot is malformed") from error
     if not isinstance(snapshot, dict):
         raise NotesError("reviewed notes snapshot must be an object")
     if (snapshot.get("schemaVersion") != 1 or snapshot.get("product") != "horo-editor"
         or snapshot.get("version") != version or snapshot.get("locale") != "en-US"):
         raise NotesError("reviewed notes snapshot product or exact version differs from release tag")
-    if release_body.replace("\r\n", "\n").strip() != snapshot.get("markdown", "").strip():
+    if release_body.replace("\r\n", "\n") != snapshot.get("markdown", ""):
         raise NotesError("GitHub Release body must equal the reviewed snapshot Markdown")
 
 
@@ -43,7 +44,7 @@ def release_body(tag: str) -> str:
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     token = os.environ.get("GH_TOKEN", "")
     parts = repository.split("/")
-    if (len(parts) != 2 or not all(part and all(char.isascii() and
+    if (len(parts) != 2 or not all(part not in (".", "..") and all(char.isascii() and
         (char.isalnum() or char in "._-") for char in part) for part in parts) or not token):
         raise NotesError("GITHUB_REPOSITORY and GH_TOKEN are required for release verification")
     path = f"/repos/{repository}/releases/tags/{quote(tag, safe='')}"

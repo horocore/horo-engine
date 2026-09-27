@@ -122,6 +122,9 @@ def parse_changelog(text: str) -> list[dict]:
     """Parse bounded released entries; Unreleased is never candidate content."""
     if len(text.encode("utf-8")) > MAX_SOURCE_BYTES:
         raise NotesError(f"CHANGELOG.md exceeds {MAX_SOURCE_BYTES} bytes")
+    for line in text.splitlines():
+        if line.startswith("## ") and HEADER.fullmatch(line) is None:
+            raise NotesError(f"malformed release heading: {line[:80]}")
     headings = list(HEADER.finditer(text))
     if not headings:
         raise NotesError("CHANGELOG.md has no version headings")
@@ -205,14 +208,19 @@ def render_header(snapshot: dict) -> str:
     ))
 
 
-def safe_output(raw: Path) -> Path:
-    """Reject traversal and symlink redirection before creating generated files."""
-    if ".." in raw.parts:
-        raise NotesError(f"unsafe output path: {raw}")
-    path = raw if raw.is_absolute() else Path.cwd() / raw
-    if any(part.is_symlink() for part in (path, *path.parents)):
-        raise NotesError(f"output path traverses a symlink: {raw}")
-    return path
+def generated_outputs() -> tuple[Path, Path]:
+    """Keep generated output names fixed beneath the invocation's build directory."""
+    directory = Path.cwd() / "generated"
+    if directory.is_symlink():
+        raise NotesError("generated output directory must not be a symlink")
+    directory.mkdir(exist_ok=True)
+    if not directory.is_dir():
+        raise NotesError("generated output directory is not a directory")
+    snapshot = directory / "ReleaseNotesSnapshot.json"
+    header = directory / "GeneratedBuildInfo.h"
+    if snapshot.is_symlink() or header.is_symlink():
+        raise NotesError("generated output must not be a symlink")
+    return snapshot, header
 
 
 def main() -> int:
@@ -220,20 +228,15 @@ def main() -> int:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--product", required=True)
-    parser.add_argument("--snapshot", type=Path, required=True)
-    parser.add_argument("--header", type=Path, required=True)
     args = parser.parse_args()
     try:
         if not args.source.is_file() or args.source.stat().st_size > MAX_SOURCE_BYTES:
             raise NotesError("CHANGELOG.md is missing or oversized")
         entry = select_version(parse_changelog(args.source.read_text(encoding="utf-8")), args.version)
         snapshot = make_snapshot(entry, args.product)
-        args.snapshot = safe_output(args.snapshot)
-        args.header = safe_output(args.header)
-        for output in (args.snapshot, args.header):
-            output.parent.mkdir(parents=True, exist_ok=True)
-        args.snapshot.write_bytes(snapshot_bytes(snapshot))
-        args.header.write_text(render_header(snapshot), encoding="utf-8")
+        snapshot_path, header_path = generated_outputs()
+        snapshot_path.write_bytes(snapshot_bytes(snapshot))
+        header_path.write_text(render_header(snapshot), encoding="utf-8")
     except (OSError, UnicodeError, NotesError) as error:
         print(f"[release-notes] {error}", file=sys.stderr)
         return 1

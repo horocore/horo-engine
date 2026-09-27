@@ -348,3 +348,37 @@ TEST_CASE("Release candidate retains reviewed notes and rejects later source cha
         return issue.code == ReleasePreflightIssueCode::NotesChanged && issue.field == "notes";
     }));
 }
+
+TEST_CASE("Release notes reject forged structure and excessive item counts", "[unit][application][release][preflight]") {
+    const ReleasePreflightRequest request = Request();
+    ReleasePreflightFacts facts = Facts(request);
+    const nlohmann::json valid = nlohmann::json::parse(Notes());
+
+    auto checkMalformed = [&](const nlohmann::json &notes) {
+        facts.releaseNotesSnapshot = notes.dump();
+        const ReleasePreflightOutcome outcome = PreflightRelease(request, facts);
+        CHECK_FALSE(outcome.plan.has_value());
+        CHECK(HasIssue(outcome, ReleasePreflightIssueCode::NotesMalformed));
+    };
+
+    auto malformed = valid;
+    malformed["locale"] = "bad-locale";
+    checkMalformed(malformed);
+    malformed = valid;
+    malformed["date"] = "2026-02-30";
+    checkMalformed(malformed);
+    malformed = valid;
+    malformed["sections"][0]["category"] = "Unknown";
+    checkMalformed(malformed);
+    malformed = valid;
+    malformed["sections"].push_back(malformed["sections"][0]);
+    checkMalformed(malformed);
+    malformed = valid;
+    malformed["sections"][0]["items"] = nlohmann::json::array();
+    checkMalformed(malformed);
+    malformed = valid;
+    malformed["sections"][0]["items"] = nlohmann::json::array();
+    for (int index = 0; index < 65; ++index)
+        malformed["sections"][0]["items"].push_back("Reviewed item.");
+    checkMalformed(malformed);
+}

@@ -95,16 +95,19 @@ namespace Horo::Release {
                     !section.contains("items") || !section["items"].is_array() || section["items"].empty())
                     return false;
                 const std::string category = section["category"].get<std::string>();
-                const auto found = std::ranges::find(categories, category);
+                const auto found = std::ranges::find(categories, std::string_view{category});
                 if (found == categories.end())
                     return false;
-                const std::size_t index = static_cast<std::size_t>(found - categories.begin());
+                const auto index = static_cast<std::size_t>(found - categories.begin());
                 if (seen[index])
                     return false;
                 seen[index] = true;
                 markdown += std::format("\n### {}\n", category);
                 for (const auto &item : section["items"]) {
-                    if (!ValidNotesItem(item) || ++itemCount > 64)
+                    if (!ValidNotesItem(item))
+                        return false;
+                    ++itemCount;
+                    if (itemCount > 64)
                         return false;
                     markdown += std::format("- {}\n", item.get<std::string>());
                 }
@@ -131,7 +134,15 @@ namespace Horo::Release {
         [[nodiscard]] bool ContainsPath(const std::filesystem::path &ancestor, const std::filesystem::path &path) {
             const auto normalizedAncestor = ancestor.lexically_normal();
             const auto normalizedPath = path.lexically_normal();
-            return std::ranges::mismatch(normalizedAncestor, normalizedPath).in1 == normalizedAncestor.end();
+            auto ancestorPart = normalizedAncestor.begin();
+            auto pathPart = normalizedPath.begin();
+            while (ancestorPart != normalizedAncestor.end() && pathPart != normalizedPath.end()) {
+                if (*ancestorPart != *pathPart)
+                    return false;
+                ++ancestorPart;
+                ++pathPart;
+            }
+            return ancestorPart == normalizedAncestor.end();
         }
 
         /** @brief Appends one independently actionable validation failure. */
@@ -160,8 +171,7 @@ namespace Horo::Release {
                 AddIssue(issues, NotesMalformed, "notes", "Reviewed release notes snapshot is malformed or inconsistent.");
                 return;
             }
-            const std::string version = notes["version"].get<std::string>();
-            if (version != VersionText(request.version.productVersion))
+            if (const std::string version = notes["version"].get<std::string>(); version != VersionText(request.version.productVersion))
                 AddIssue(issues, NotesVersionMismatch, "notes.version", "Release notes must match the exact candidate SemVer.");
             if (notes["product"] != request.projectId)
                 AddIssue(issues, NotesProductMismatch, "notes.product", "Release notes product differs from the candidate.");
