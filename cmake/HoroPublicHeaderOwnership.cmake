@@ -137,6 +137,11 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/ReleaseTargetMatrix.h
     Horo/Release/ReleaseVersion.h
 )
+horo_configure_target_header_boundary(HoroUpdateManifest PUBLIC_HEADERS
+    Horo/Release/UpdateManifest.h
+    Horo/Release/UpdateManifestErrors.h
+    Horo/Release/UpdateTrustRoot.h
+)
 horo_configure_target_header_boundary(HoroReleaseProcess PUBLIC_HEADERS
     Horo/Release/ReleaseCandidatePublisher.h
     Horo/Release/ReleaseProcess.h
