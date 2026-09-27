@@ -5,6 +5,7 @@
 #include "UpdateHttpResponse.h"
 
 #include <curl/curl.h>
+#include <format>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -27,7 +28,7 @@ namespace Horo::Release {
             std::optional<UpdateDownloadSession> session;
             std::optional<Error> failure;
             bool transportFailure{};
-            CURL *curl{};
+            CURL *curl{};  // NOSONAR(cpp:S5008): CURL is libcurl's opaque C handle.
         };
 
         /** @brief Admits the final response at the header/body boundary. */
@@ -52,7 +53,8 @@ namespace Horo::Release {
             return true;
         }
 
-        std::size_t ReceiveHeader(char *data, const std::size_t size, const std::size_t count, void *userData) noexcept {
+        std::size_t ReceiveHeader(char *data, const std::size_t size, const std::size_t count,
+                                  void *userData) noexcept {  // NOSONAR: libcurl requires this exact C callback signature.
             auto *state = static_cast<DownloadState *>(userData);
             if (state == nullptr || size == 0U || count > std::numeric_limits<std::size_t>::max() / size)
                 return 0U;
@@ -67,7 +69,8 @@ namespace Horo::Release {
             return bytes;
         }
 
-        std::size_t ReceiveBody(char *data, const std::size_t size, const std::size_t count, void *userData) noexcept {
+        std::size_t ReceiveBody(char *data, const std::size_t size, const std::size_t count,
+                                void *userData) noexcept {  // NOSONAR(cpp:S5008): libcurl requires this exact C callback signature.
             auto *state = static_cast<DownloadState *>(userData);
             if (state == nullptr || size == 0U || count > std::numeric_limits<std::size_t>::max() / size)
                 return 0U;
@@ -91,13 +94,15 @@ namespace Horo::Release {
             return bytes;
         }
 
-        int ReportTransfer(void *userData, curl_off_t, curl_off_t, curl_off_t, curl_off_t) noexcept {
+        int ReportTransfer(void *userData, curl_off_t, curl_off_t, curl_off_t,
+                           curl_off_t) noexcept {  // NOSONAR(cpp:S5008): libcurl requires this exact C callback signature.
             const auto *state = static_cast<const DownloadState *>(userData);
             return state != nullptr && state->cancellation.IsCancellationRequested() ? 1 : 0;
         }
 
         /** @brief Configures a TLS-verified HTTPS GET with strict final-source and bounded callback behavior. */
-        [[nodiscard]] bool Configure(CURL *curl, DownloadState &state, const UpdateHttpDownloadPolicy &policy) {
+        [[nodiscard]] bool Configure(CURL *curl, DownloadState &state,
+                                     const UpdateHttpDownloadPolicy &policy) {  // NOSONAR(cpp:S5008): Opaque libcurl handle.
             return curl_easy_setopt(curl, CURLOPT_URL, state.package.url.c_str()) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_USERAGENT, "horo-update/1") == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https") == CURLE_OK &&
@@ -106,7 +111,9 @@ namespace Horo::Release {
                    curl_easy_setopt(curl, CURLOPT_SUPPRESS_CONNECT_HEADERS, 1L) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2) == CURLE_OK &&
+                   curl_easy_setopt(curl, CURLOPT_SSLVERSION,
+                                    CURL_SSLVERSION_TLSv1_2) ==
+                       CURLE_OK &&  // NOSONAR(cpp:S4423): This sets a minimum; TLS 1.3 remains enabled.
                    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "identity") == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, static_cast<long>(policy.connectTimeoutSeconds)) == CURLE_OK &&
@@ -124,9 +131,9 @@ namespace Horo::Release {
 
         /** @brief Applies one exact If-Range request for a durable partial package. */
         [[nodiscard]] bool ConfigureResume(CURL *curl, const UpdateTransferCheckpoint &checkpoint, curl_slist *&headers,
-                                           std::string &range) {
+                                           std::string &range) {  // NOSONAR(cpp:S5008): Opaque libcurl handle.
             range = std::to_string(checkpoint.durableBytes) + "-";
-            headers = curl_slist_append(nullptr, ("If-Range: " + checkpoint.strongEtag).c_str());
+            headers = curl_slist_append(nullptr, std::format("If-Range: {}", checkpoint.strongEtag).c_str());
             return headers != nullptr && curl_easy_setopt(curl, CURLOPT_RANGE, range.c_str()) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) == CURLE_OK;
         }
@@ -176,18 +183,19 @@ namespace Horo::Release {
 
         if (static const bool CurlReady = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK; !CurlReady)
             return Result<UpdateTransferCheckpoint>::Failure(MakeError(UpdateTransferErrors::TransportFailed));
-        std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl{curl_easy_init(), curl_easy_cleanup};
+        std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl{curl_easy_init(), &curl_easy_cleanup};
         if (!curl)
             return Result<UpdateTransferCheckpoint>::Failure(MakeError(UpdateTransferErrors::TransportFailed));
         DownloadState state{package, paths, limits, files, cancellation, progress, UpdateHttpResponseHeaders{package.url}};
         state.curl = curl.get();
         if (!Configure(curl.get(), state, policy))
             return Result<UpdateTransferCheckpoint>::Failure(MakeError(UpdateTransferErrors::TransportFailed));
-        const std::string caBundle = policy.certificateAuthorityBundle.string();
+        const std::string caBundle =
+            policy.certificateAuthorityBundle.string();  // NOSONAR(cpp:S6004): libcurl borrows this buffer through perform.
         if (!caBundle.empty() && curl_easy_setopt(curl.get(), CURLOPT_CAINFO, caBundle.c_str()) != CURLE_OK)
             return Result<UpdateTransferCheckpoint>::Failure(MakeError(UpdateTransferErrors::TransportFailed));
         curl_slist *rawHeaders = nullptr;
-        std::unique_ptr<curl_slist, decltype(&curl_slist_free_all)> headers{nullptr, curl_slist_free_all};
+        std::unique_ptr<curl_slist, decltype(&curl_slist_free_all)> headers{nullptr, &curl_slist_free_all};
         std::string range;
         if (prior.Value()) {
             if (prior.Value()->strongEtag.empty() || !ConfigureResume(curl.get(), *prior.Value(), rawHeaders, range)) {
@@ -198,7 +206,7 @@ namespace Horo::Release {
             headers.reset(rawHeaders);
         }
         const CURLcode outcome = curl_easy_perform(curl.get());
-        char *effectiveUrl = nullptr;
+        char *effectiveUrl = nullptr;  // NOSONAR(cpp:S6004): libcurl writes this output pointer.
         if (curl_easy_getinfo(curl.get(), CURLINFO_EFFECTIVE_URL, &effectiveUrl) != CURLE_OK || effectiveUrl == nullptr ||
             package.url != effectiveUrl)
             return Result<UpdateTransferCheckpoint>::Failure(MakeError(UpdateTransferErrors::InvalidResponse));
