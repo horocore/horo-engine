@@ -135,7 +135,7 @@ target_link_libraries(HoroModelProviderTests PRIVATE HoroEngine::ModelProviderAd
 add_test(NAME HoroModelProviderContractTests
     COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/python/model_provider_http_fixture.py"
             "$<TARGET_FILE:HoroModelProviderTests>")
-set_tests_properties(HoroModelProviderContractTests PROPERTIES LABELS "unit;agent;headless" TIMEOUT 30)
+set_tests_properties(HoroModelProviderContractTests PROPERTIES LABELS "unit;agent;headless" TIMEOUT 60)
 
 add_executable(HoroPackageValidationTests
     unit/packages/PackageDependencyResolverTests.cpp
