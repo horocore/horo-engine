@@ -53,6 +53,7 @@ namespace Horo::XR {
 
         TEST_CASE("XR contract versions reject malformed and incompatible producers", "[unit][xr][contract]") {
             REQUIRE(RequireXRContractVersion(CurrentXRContractVersion, CurrentXRContractVersion).HasValue());
+            RequireFailureIdentity(RequireXRContractVersion(CurrentXRContractVersion, {1, 0, 0}), XRErrors::ContractVersionIncompatible);
             REQUIRE(RequireXRContractVersion({1, 2, 9}, {1, 3, 0}).HasValue());
             REQUIRE(RequireXRContractVersion({1, 2, 9}, {1, 2, 0}).HasValue());
             RequireFailureIdentity(RequireXRContractVersion({}, CurrentXRContractVersion), XRErrors::ContractVersionInvalid);
