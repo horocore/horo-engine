@@ -13,13 +13,14 @@ namespace Horo::Release {
         constexpr std::uint64_t MaximumCheckInterval = 30U * 24U * 60U * 60U;
 
         [[nodiscard]] bool ValidChannel(const UpdateChannel &channel) {
+            using enum UpdateChannelKind;
             switch (channel.kind) {
-                case UpdateChannelKind::Stable:
-                case UpdateChannelKind::Preview:
-                case UpdateChannelKind::Nightly:
+                case Stable:
+                case Preview:
+                case Nightly:
                     return channel.sourceId.empty();
-                case UpdateChannelKind::Enterprise:
-                case UpdateChannelKind::Offline:
+                case Enterprise:
+                case Offline:
                     return IsValidDistributionIdentity(channel.sourceId);
             }
             return false;
@@ -46,11 +47,11 @@ namespace Horo::Release {
         if (policy.selectedChannel != context.installedChannel && !context.explicitChannelChange)
             return Result<UpdateCheckPlan>::Failure(MakeError(UpdateDiscoveryErrors::ChannelChangeRequiresAction));
         const bool manual = context.trigger == UpdateCheckTrigger::Manual;
-        if (!manual && context.lastSuccessfulCheck && *context.lastSuccessfulCheck > context.now)
+        if (!manual && context.lastSuccessfulCheck.has_value() && *context.lastSuccessfulCheck > context.now)
             return Result<UpdateCheckPlan>::Failure(MakeError(UpdateDiscoveryErrors::ClockMovedBackward));
         const bool automation = policy.automaticChecks || policy.mandatorySecurityChecks;
-        const bool due = !context.lastSuccessfulCheck || (context.now >= *context.lastSuccessfulCheck &&
-                                                          context.now - *context.lastSuccessfulCheck >= policy.intervalSeconds);
+        const bool due = !context.lastSuccessfulCheck.has_value() || (context.now >= *context.lastSuccessfulCheck &&
+                                                                      context.now - *context.lastSuccessfulCheck >= policy.intervalSeconds);
         return Result<UpdateCheckPlan>::Success({manual || (automation && due), policy.automaticDownloads, policy.telemetryConsent});
     }
 
@@ -63,8 +64,7 @@ namespace Horo::Release {
     UpdateDiscoveryResult AssessUpdate(const SignedUpdateManifest &manifest, const UpdateAdmissionContext &context,
                                        const UpdateTrustRootSnapshot &roots, std::shared_ptr<const Security::SignatureProvider> provider,
                                        const UpdatePackagePreferences &preferences) {
-        auto verified = VerifyUpdateManifest(manifest, context, roots, std::move(provider));
-        if (verified.HasError())
+        if (auto verified = VerifyUpdateManifest(manifest, context, roots, std::move(provider)); verified.HasError())
             return {UpdateDiscoveryStatus::Rejected, std::nullopt, verified.ErrorValue()};
         if (CompareReleaseVersionPrecedence(Version(manifest.Data().version), Version(context.installedVersion)) == 0)
             return {UpdateDiscoveryStatus::UpToDate, std::nullopt, std::nullopt};
