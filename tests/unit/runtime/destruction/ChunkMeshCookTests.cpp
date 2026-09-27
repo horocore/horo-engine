@@ -1,8 +1,11 @@
 #include "Horo/Destruction/ChunkMeshCook.h"
+#include "Horo/Destruction/StructuralGraphCook.h"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <limits>
+#include <utility>
 
 namespace Horo::Destruction {
     namespace {
@@ -261,5 +264,150 @@ namespace Horo::Destruction {
         auto stale = CookPreFracturedChunkMeshes(prepared.Value(), request, materials, {});
         REQUIRE(stale.HasError());
         CHECK(stale.ErrorValue().code.Value() == ChunkMeshCookErrors::Stale.code.Value());
+    }
+
+    TEST_CASE("Structural graph cooks deterministic contact support and islands", "[destruction][graph]") {
+        const auto source = Cube();
+        auto recipe = Recipe();
+        recipe.siteCount = 3;
+        recipe.siteIds.push_back(DestructionChunkId::Create(3).Value());
+        recipe.sites.push_back({0.5, 0.5, 0.75});
+        const auto generated = GenerateOfflineVoronoi(source, recipe, {});
+        REQUIRE(generated.HasValue());
+        const auto materials = Materials();
+        const auto mesh = Cook(generated.Value(), materials, recipe.limits);
+        REQUIRE(mesh.HasValue());
+        REQUIRE(mesh.Value()->chunks.size() == 3);
+        StructuralGraphCookRequest request;
+        request.content = mesh.Value()->content;
+        request.meshIntegrityDigest = mesh.Value()->integrityDigest;
+        request.ownerRevision = StructuralGraphOwnerRevision::Create(1).Value();
+        request.policyRevision = StructuralPolicyRevision::Create(7).Value();
+        request.limits = recipe.limits;
+        request.requiredFeatures.bits = DestructionFeatureBit<DestructionFeature::CookedSupport>;
+        request.chunks = {{mesh.Value()->chunks[0].id, {}, true, true},
+                          {mesh.Value()->chunks[1].id, {}, false, true},
+                          {mesh.Value()->chunks[2].id, {}, false, true}};
+        request.contacts = {{0, 1, 2.0}, {0, 2, 3.0}, {1, 2, 4.0}};
+        const auto first = CookStructuralGraph(*mesh.Value(), request, {});
+        const auto second = CookStructuralGraph(*mesh.Value(), request, {});
+        REQUIRE(first.HasValue());
+        REQUIRE(second.HasValue());
+        CHECK(first.Value()->integrityDigest == second.Value()->integrityDigest);
+        CHECK(first.Value()->validation.islandCount == 1);
+        CHECK(first.Value()->validation.contactCount == 3);
+        CHECK(first.Value()->chunks[0].supportWeight == 5.0);
+        CHECK(first.Value()->chunks[1].supportWeight == 6.0);
+        CHECK(first.Value()->chunks[2].supportWeight == 7.0);
+        const std::vector<std::uint32_t> expectedAdjacency{1, 2};
+        CHECK(first.Value()->chunks[0].adjacency == expectedAdjacency);
+        CHECK(first.Value()->chunks[2].flags.initiallySupported);
+
+        request.contacts = {{0, 1, 2.0}};
+        request.chunks[2].required = false;
+        const auto island = CookStructuralGraph(*mesh.Value(), request, {});
+        REQUIRE(island.HasValue());
+        CHECK(island.Value()->validation.islandCount == 2);
+        CHECK_FALSE(island.Value()->chunks[2].flags.initiallySupported);
+        CHECK(island.Value()->chunks[2].island == 1);
+        request.chunks[2].required = true;
+        const auto disconnected = CookStructuralGraph(*mesh.Value(), request, {});
+        REQUIRE(disconnected.HasError());
+        CHECK(disconnected.ErrorValue().code.Value() == StructuralGraphErrors::DisconnectedRequired.code.Value());
+
+        request.contacts = {{0, 1, 2.0}, {0, 3, 1.0}};
+        const auto invalidIndex = CookStructuralGraph(*mesh.Value(), request, {});
+        REQUIRE(invalidIndex.HasError());
+        CHECK(invalidIndex.ErrorValue().code.Value() == StructuralGraphErrors::InvalidIndex.code.Value());
+        request.contacts = {{0, 1, 2.0}, {0, 1, 2.0}};
+        const auto duplicate = CookStructuralGraph(*mesh.Value(), request, {});
+        REQUIRE(duplicate.HasError());
+        CHECK(duplicate.ErrorValue().code.Value() == StructuralGraphErrors::UnstableOrder.code.Value());
+        request.contacts = {{0, 2, 1.0}, {0, 1, 2.0}};
+        const auto unstable = CookStructuralGraph(*mesh.Value(), request, {});
+        REQUIRE(unstable.HasError());
+        CHECK(unstable.ErrorValue().code.Value() == StructuralGraphErrors::UnstableOrder.code.Value());
+        std::swap(request.chunks[0], request.chunks[1]);
+        const auto unstableChunks = CookStructuralGraph(*mesh.Value(), request, {});
+        REQUIRE(unstableChunks.HasError());
+        CHECK(unstableChunks.ErrorValue().code.Value() == StructuralGraphErrors::UnstableOrder.code.Value());
+        std::swap(request.chunks[0], request.chunks[1]);
+        request.contacts = {{0, 1, 2.0}, {0, 2, 3.0}};
+        request.contacts[0].weight = std::numeric_limits<double>::infinity();
+        const auto nonfinite = CookStructuralGraph(*mesh.Value(), request, {});
+        REQUIRE(nonfinite.HasError());
+        CHECK(nonfinite.ErrorValue().code.Value() == StructuralGraphErrors::InvalidInput.code.Value());
+        request.contacts[0].weight = 2.0;
+        request.chunks[0].parent = request.chunks[1].id;
+        request.chunks[1].parent = request.chunks[0].id;
+        const auto cycle = CookStructuralGraph(*mesh.Value(), request, {});
+        REQUIRE(cycle.HasError());
+        CHECK(cycle.ErrorValue().code.Value() == StructuralGraphErrors::HierarchyCycle.code.Value());
+    }
+
+    TEST_CASE("Structural graph bounds work and fences cancellation, replacement and shutdown", "[destruction][graph]") {
+        const auto generated = GenerateOfflineVoronoi(Cube(), Recipe(), {});
+        REQUIRE(generated.HasValue());
+        const auto materials = Materials();
+        const auto mesh = Cook(generated.Value(), materials, Recipe().limits);
+        REQUIRE(mesh.HasValue());
+        StructuralGraphCookOwner owner;
+        StructuralGraphCookRequest request;
+        request.content = mesh.Value()->content;
+        request.meshIntegrityDigest = mesh.Value()->integrityDigest;
+        request.ownerRevision = owner.Revision();
+        request.policyRevision = StructuralPolicyRevision::Create(1).Value();
+        request.limits = Recipe().limits;
+        request.chunks = {{mesh.Value()->chunks[0].id, {}, true, true}, {mesh.Value()->chunks[1].id, {}, false, true}};
+        request.contacts = {{0, 1, 1.0}};
+        const auto cooked = CookStructuralGraph(*mesh.Value(), request, {});
+        REQUIRE(cooked.HasValue());
+        CHECK(cooked.Value()->validation.workItems > 0);
+        auto staleRequest = request;
+        ++staleRequest.meshIntegrityDigest.bytes[0];
+        const auto stale = CookStructuralGraph(*mesh.Value(), staleRequest, {});
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == StructuralGraphErrors::Stale.code.Value());
+        auto unsupportedRequest = request;
+        unsupportedRequest.requiredFeatures.bits = DestructionFeatureBit<DestructionFeature::RuntimeGeometryGeneration>;
+        const auto unsupported = CookStructuralGraph(*mesh.Value(), unsupportedRequest, {});
+        REQUIRE(unsupported.HasError());
+        CHECK(unsupported.ErrorValue().code.Value() == StructuralGraphErrors::Unsupported.code.Value());
+        request.limits.maximumWorkItemsPerTransition = 2;
+        const auto bounded = CookStructuralGraph(*mesh.Value(), request, {});
+        REQUIRE(bounded.HasError());
+        CHECK(bounded.ErrorValue().code.Value() == StructuralGraphErrors::LimitExceeded.code.Value());
+        request.limits = Recipe().limits;
+        CancellationSource cancellation;
+        cancellation.RequestCancellation();
+        const auto cancelled = CookStructuralGraph(*mesh.Value(), request, cancellation.Token());
+        REQUIRE(cancelled.HasError());
+        CHECK(cancelled.ErrorValue().code.Value() == StructuralGraphErrors::Cancelled.code.Value());
+        const auto revision = owner.Revision();
+        const auto token = owner.Token();
+        REQUIRE(owner.Accept(cooked.Value(), revision, request.content, request.meshIntegrityDigest, request.policyRevision).HasValue());
+        const auto published = owner.Snapshot();
+        CHECK(
+            owner
+                .Accept(cooked.Value(), revision, request.content, request.meshIntegrityDigest, StructuralPolicyRevision::Create(2).Value())
+                .HasError());
+        CHECK(owner.Snapshot() == published);
+        REQUIRE(owner.Invalidate().HasValue());
+        CHECK(token.IsCancellationRequested());
+        CHECK(owner.Accept(cooked.Value(), revision, request.content, request.meshIntegrityDigest, request.policyRevision).HasError());
+        CHECK(owner.Accept(cooked.Value(), owner.Revision(), request.content, request.meshIntegrityDigest, request.policyRevision)
+                  .HasError());
+        CHECK(owner.Snapshot() == published);
+        request.ownerRevision = owner.Revision();
+        const auto replacement = CookStructuralGraph(*mesh.Value(), request, owner.Token());
+        REQUIRE(replacement.HasValue());
+        REQUIRE(owner.Accept(replacement.Value(), owner.Revision(), request.content, request.meshIntegrityDigest, request.policyRevision)
+                    .HasValue());
+        CHECK(owner.Snapshot() == replacement.Value());
+        CHECK(owner.Snapshot() != published);
+        owner.Shutdown();
+        CHECK(owner.Token().IsCancellationRequested());
+        CHECK(owner.Invalidate().HasError());
+        CHECK(owner.Snapshot() == replacement.Value());
     }
 }  // namespace Horo::Destruction

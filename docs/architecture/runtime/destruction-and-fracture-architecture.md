@@ -218,6 +218,21 @@ submesh or native shape ID. DFR owns canonical interior classification, winding,
 material slots and UV policy. Render cannot reclassify faces, and Physics cannot change
 chunk membership while realizing collision.
 
+`Horo/Destruction/StructuralGraphCook.h` defines the DFR-002.6 companion graph cook
+over an exact immutable chunk mesh. The request binds fracture content, mesh integrity
+digest, owner revision and nonzero structural-policy revision. Its chunk intent is
+aligned to the stable-ID-ordered mesh table; contacts use checked canonical table
+indices and finite
+positive weights. Unsorted or duplicate contacts, invalid indices, parent cycles,
+unsupported feature requirements and required chunks disconnected from every anchor
+fail with typed, contextual diagnostics. Undirected contact cycles are valid. The
+detached result contains stable-order adjacency, summed contact support weights,
+anchor/required/initial-support flags, deterministic island numbers and finite
+validation counts. It carries no native handle or runtime mutation authority.
+The single-thread owner accepts a complete graph only for the exact current owner,
+content, mesh and policy revisions; cancellation, invalidation, replacement and
+shutdown preserve the last published immutable snapshot.
+
 The DFR cook fingerprint includes normalized source/recipe/dependency digests,
 algorithm/version/seed, coordinate/tolerance/repair policy, interior/material/UV and
 connectivity rules, selected tier/limits and artifact/toolchain schemas. Physics and
