@@ -289,7 +289,10 @@ namespace Horo::Release {
             }
             std::error_code error;
             const auto parent = std::filesystem::symlink_status(stageRoot.parent_path(), error);
-            return !error && std::filesystem::is_directory(parent) && !std::filesystem::exists(stageRoot, error) && !error;
+            if (error || !std::filesystem::is_directory(parent))
+                return false;
+            const bool stageExists = std::filesystem::exists(stageRoot, error);
+            return !error && !stageExists;
         }
 
         /** @brief Reserves capacity for the authenticated expanded archive before creating a staged tree. */
@@ -308,6 +311,13 @@ namespace Horo::Release {
 
         /** @brief Removes only the directory this call created after any failure. */
         struct StageCleanup final {
+            explicit StageCleanup(std::filesystem::path stageRoot) : root(std::move(stageRoot)) {}
+
+            StageCleanup(const StageCleanup &) = delete;
+            StageCleanup &operator=(const StageCleanup &) = delete;
+            StageCleanup(StageCleanup &&) = delete;
+            StageCleanup &operator=(StageCleanup &&) = delete;
+
             std::filesystem::path root;
             bool active{true};
 
