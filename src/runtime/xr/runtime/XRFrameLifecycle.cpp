@@ -28,12 +28,11 @@ namespace Horo::XR {
         return XRFrameStatus::Ok;
     }
 
-    /** @copydoc XRFrameLifecycle::RecordWait */
-    XRFrameWaitOutcome XRFrameLifecycle::RecordWait(const XRSessionId session, const XRRenderPredictionTime predictedDisplayTime,
-                                                    const bool shouldRender) noexcept {
+    /** @copydoc XRFrameLifecycle::ReserveWait */
+    XRFrameWaitOutcome XRFrameLifecycle::ReserveWait(const XRSessionId &session) noexcept {
         if (shutdown_)
             return {XRFrameStatus::Shutdown, {}};
-        if (!session.IsValid() || !predictedDisplayTime.IsValid())
+        if (!session.IsValid())
             return {XRFrameStatus::InvalidInput, {}};
         if (!configuration_.IsValid())
             return {XRFrameStatus::Unavailable, {}};
@@ -46,17 +45,42 @@ namespace Horo::XR {
             return {XRFrameStatus::Unavailable, {}};
         if (current_.phase != XRFramePhase::Idle)
             return {XRFrameStatus::Duplicate, {}};
-        if (shouldRender && (limits_.maximumViews == 0 || limits_.maximumImages == 0 || limits_.maximumLayers == 0))
-            return {XRFrameStatus::Unsupported, {}};
         if (nextSequence_ == 0)
             return {XRFrameStatus::SequenceExhausted, {}};
 
         const XRFrameId frame{session, configuration_, revision_, nextSequence_};
         ++nextSequence_;  // Zero after the maximum sequence permanently prevents reuse.
         current_.frame = frame;
+        current_.phase = XRFramePhase::WaitReserved;
+        return {XRFrameStatus::Ok, frame};
+    }
+
+    /** @copydoc XRFrameLifecycle::CancelWait */
+    XRFrameStatus XRFrameLifecycle::CancelWait() noexcept {
+        if (shutdown_)
+            return XRFrameStatus::Shutdown;
+        if (current_.phase != XRFramePhase::WaitReserved)
+            return XRFrameStatus::OutOfOrder;
+        ClearFrame();
+        return XRFrameStatus::Ok;
+    }
+
+    /** @copydoc XRFrameLifecycle::RecordWait */
+    XRFrameWaitOutcome XRFrameLifecycle::RecordWait(const XRRenderPredictionTime predictedDisplayTime, const bool shouldRender) noexcept {
+        if (shutdown_)
+            return {XRFrameStatus::Shutdown, {}};
+        if (current_.phase != XRFramePhase::WaitReserved)
+            return {XRFrameStatus::OutOfOrder, {}};
+
+        const XRFrameId frame = current_.frame;
         current_.predictedDisplayTime = predictedDisplayTime;
         current_.phase = XRFramePhase::Waited;
         current_.shouldRender = shouldRender;
+        if (!predictedDisplayTime.IsValid())
+            return {XRFrameStatus::InvalidInput, frame};
+        if (shouldRender && (limits_.maximumViews == 0 || limits_.maximumImages == 0 || limits_.maximumLayers == 0))
+            return {XRFrameStatus::Unsupported, frame};
+        current_.renderAdmitted = shouldRender;
         return {XRFrameStatus::Ok, frame};
     }
 
@@ -74,7 +98,7 @@ namespace Horo::XR {
     XRFrameStatus XRFrameLifecycle::LocateViews(const XRFrameId &frame, const std::uint32_t viewCount) noexcept {
         if (const XRFrameStatus valid = ValidateCurrent(frame); valid != XRFrameStatus::Ok)
             return valid;
-        if (!current_.shouldRender)
+        if (!current_.renderAdmitted)
             return XRFrameStatus::Unsupported;
         if (current_.phase != XRFramePhase::Begun)
             return XRFrameStatus::OutOfOrder;
@@ -91,7 +115,7 @@ namespace Horo::XR {
     XRFrameStatus XRFrameLifecycle::Acquire(const XRFrameId &frame, const XRSwapchainImageId &image) noexcept {
         if (const XRFrameStatus valid = ValidateCurrent(frame); valid != XRFrameStatus::Ok)
             return valid;
-        if (!current_.shouldRender)
+        if (!current_.renderAdmitted)
             return XRFrameStatus::Unsupported;
         if (current_.phase != XRFramePhase::ViewsLocated && current_.phase != XRFramePhase::ImagesAcquired)
             return XRFrameStatus::OutOfOrder;
@@ -115,7 +139,7 @@ namespace Horo::XR {
     XRFrameStatus XRFrameLifecycle::Submit(const XRFrameId &frame, const std::span<const XRSwapchainImageId> completedImages) noexcept {
         if (const XRFrameStatus valid = ValidateCurrent(frame); valid != XRFrameStatus::Ok)
             return valid;
-        if (!current_.shouldRender)
+        if (!current_.renderAdmitted)
             return XRFrameStatus::Unsupported;
         if (current_.phase != XRFramePhase::ImagesAcquired)
             return XRFrameStatus::OutOfOrder;
@@ -139,7 +163,7 @@ namespace Horo::XR {
         using enum XRFramePhase;
         if (const XRFrameStatus valid = ValidateCurrent(frame); valid != XRFrameStatus::Ok)
             return valid;
-        if (!current_.shouldRender)
+        if (!current_.renderAdmitted)
             return XRFrameStatus::Unsupported;
         if (current_.phase != Begun && current_.phase != ViewsLocated && current_.phase != ImagesAcquired &&
             current_.phase != RendererSubmitted && current_.phase != ImagesReleased)
@@ -182,7 +206,7 @@ namespace Horo::XR {
             return XRFrameStatus::CapacityExceeded;
         if (current_.releasedImages != current_.acquiredImages)
             return XRFrameStatus::ImageNotReleased;
-        if (current_.shouldRender) {
+        if (current_.renderAdmitted) {
             if (layerCount == 0) {
                 if (!aborted_)
                     return XRFrameStatus::OutOfOrder;

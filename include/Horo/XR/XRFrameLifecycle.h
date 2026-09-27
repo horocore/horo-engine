@@ -40,6 +40,7 @@ namespace Horo::XR {
     /** @brief Exact transaction phase; native calls remain with the selected XROpenXR adapter. */
     enum class XRFramePhase : std::uint8_t {
         Idle,
+        WaitReserved,
         Waited,
         Begun,
         ViewsLocated,
@@ -75,7 +76,10 @@ namespace Horo::XR {
         std::uint32_t maximumLayers{}; /**< Maximum native composition layers at end. */
     };
 
-    /** @brief Typed wait completion or a rejected request with no frame identity. */
+    /**
+     * @brief Typed wait outcome. A failed reservation has no frame; a rejected completed native wait retains a frame
+     * that must still be begun and ended with zero layers, or retired after host-proved native quiescence.
+     */
     struct XRFrameWaitOutcome final {
         XRFrameStatus status{XRFrameStatus::InvalidInput};
         XRFrameId frame;
@@ -89,14 +93,23 @@ namespace Horo::XR {
         std::uint32_t locatedViews{};
         std::uint32_t acquiredImages{};
         std::uint32_t releasedImages{};
-        bool shouldRender{};
+        bool shouldRender{};   /**< Unmodified runtime intent, even when rendering cannot be admitted. */
+        bool renderAdmitted{}; /**< False for a zero-layer native completion obligation. */
     };
 
     /**
      * @brief Single-control-thread XR frame gate; records completed adapter operations without performing native work.
      *
      * XRSessionLifecycle and the selected backend/Renderer owner outlive this gate. Methods cannot race or be re-entered.
-     * The host calls native wait/begin/locate/acquire/submit/release/end at the owning adapter, then records successful
+     * The host reserves a frame before native wait, cancels that reservation only when native wait fails, and records
+     * every successful native wait even if its prediction or render intent is unusable. Such a completed wait still
+     * returns a valid frame to begin/end with zero layers while the native session remains live; the host must never
+     * discard it solely because of a non-Ok render status.
+     * Single-thread ownership does not itself prevent session mutation between reservation and native wait completion.
+     * The host must defer session replacement, loss publication and resource retirement until the native frame is
+     * ended, or first prove native quiescence and use ResetAfterQuiescence. If the session changes unexpectedly, the
+     * recorded frame remains open but currentness checks fence further native work; only quiescent recovery retires it.
+     * The host calls native begin/locate/acquire/submit/release/end at the owning adapter, then records successful
      * completions here in the matching order. It must not perform the next native operation when this gate rejects its
      * precursor. Native failure after begin is resolved through the backend's legal abort/zero-layer path; this gate
      * never manufactures an OpenXR success or GPU completion. ResetAfterQuiescence and Shutdown are legal only after
@@ -122,14 +135,26 @@ namespace Horo::XR {
                                                       XRFrameLimits limits) noexcept;
 
         /**
-         * @brief Record one successful native wait and its exact predicted display evidence.
+         * @brief Reserve one exact frame before invoking native wait; reject unavailable/stale/duplicate/exhausted work first.
          * @param session Current session admitted for frames by XRSessionLifecycle.
-         * @param predictedDisplayTime Runtime prediction; it is never used to pace Renderer here.
-         * @param shouldRender Runtime-supplied render intent, not a product or Renderer policy.
-         * @return New frame or typed rejection; success opens exactly one transaction.
+         * @return Reserved frame or typed rejection with no native wait debt.
          */
-        [[nodiscard]] XRFrameWaitOutcome RecordWait(XRSessionId session, XRRenderPredictionTime predictedDisplayTime,
-                                                    bool shouldRender) noexcept;
+        [[nodiscard]] XRFrameWaitOutcome ReserveWait(const XRSessionId &session) noexcept;
+
+        /**
+         * @brief Cancel a reserved frame only after native wait failed without producing a frame.
+         * @return Ok or OutOfOrder; sequence identity is never reused.
+         */
+        [[nodiscard]] XRFrameStatus CancelWait() noexcept;
+
+        /**
+         * @brief Record the successful native wait against the single reserved frame.
+         * @param predictedDisplayTime Runtime prediction; it is never used to pace Renderer here.
+         * @param shouldRender Runtime-supplied intent, preserved even when rendering is unsupported.
+         * @return A retained frame after a valid reservation; non-Ok render status requires zero-layer begin/end while
+         * the native session is live, or host-proved quiescent recovery if that session was retired or lost.
+         */
+        [[nodiscard]] XRFrameWaitOutcome RecordWait(XRRenderPredictionTime predictedDisplayTime, bool shouldRender) noexcept;
 
         /** @brief Record native begin for the waited frame. @param frame Exact open frame. @return Typed order/owner result. */
         [[nodiscard]] XRFrameStatus Begin(const XRFrameId &frame) noexcept;

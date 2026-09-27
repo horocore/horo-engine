@@ -61,9 +61,12 @@ namespace Horo::XR {
         }
 
         XRFrameId Wait(XRFrameLifecycle &frames, const XRSessionId &session, const bool shouldRender = true) {
-            const auto waited = frames.RecordWait(session, Prediction(10'000), shouldRender);
+            const auto reserved = frames.ReserveWait(session);
+            REQUIRE(reserved.status == XRFrameStatus::Ok);
+            const auto waited = frames.RecordWait(Prediction(10'000), shouldRender);
             REQUIRE(waited.status == XRFrameStatus::Ok);
             REQUIRE(waited.frame.IsValid());
+            REQUIRE(waited.frame == reserved.frame);
             return waited.frame;
         }
 
@@ -79,6 +82,7 @@ namespace Horo::XR {
             REQUIRE(frame.capabilityRevision == capabilities.Revision());
             REQUIRE(frames.Snapshot().predictedDisplayTime == Prediction(10'000));
             REQUIRE(frames.Snapshot().shouldRender);
+            REQUIRE(frames.Snapshot().renderAdmitted);
             REQUIRE(frames.Begin(frame) == XRFrameStatus::Ok);
             REQUIRE(frames.LocateViews(frame, 2) == XRFrameStatus::Ok);
             const auto first = Image(session, 1);
@@ -102,16 +106,56 @@ namespace Horo::XR {
             const XRSessionId session = Activate(sessions, capabilities);
             XRFrameLifecycle frames{sessions};
             REQUIRE(frames.BindConfiguration(Configuration(session), capabilities, {}) == XRFrameStatus::Ok);
-            REQUIRE(frames.RecordWait(session, Prediction(10'000), true).status == XRFrameStatus::Unsupported);
+            const auto reserved = frames.ReserveWait(session);
+            REQUIRE(reserved.status == XRFrameStatus::Ok);
+            const auto unsupported = frames.RecordWait(Prediction(10'000), true);
+            REQUIRE(unsupported.status == XRFrameStatus::Unsupported);
+            REQUIRE(unsupported.frame == reserved.frame);
+            REQUIRE(frames.Snapshot().shouldRender);
+            REQUIRE_FALSE(frames.Snapshot().renderAdmitted);
+            REQUIRE(frames.ReserveWait(session).status == XRFrameStatus::Duplicate);
+            REQUIRE(frames.Begin(unsupported.frame) == XRFrameStatus::Ok);
+            REQUIRE(frames.End(unsupported.frame, 0) == XRFrameStatus::Ok);
             const XRFrameId frame = Wait(frames, session, false);
             REQUIRE_FALSE(frames.Snapshot().shouldRender);
-            REQUIRE(frames.RecordWait(session, Prediction(11'000), false).status == XRFrameStatus::Duplicate);
+            REQUIRE_FALSE(frames.Snapshot().renderAdmitted);
+            REQUIRE(frames.ReserveWait(session).status == XRFrameStatus::Duplicate);
             REQUIRE(frames.Begin(frame) == XRFrameStatus::Ok);
             REQUIRE(frames.LocateViews(frame, 1) == XRFrameStatus::Unsupported);
             REQUIRE(frames.Acquire(frame, Image(session, 1)) == XRFrameStatus::Unsupported);
             REQUIRE(frames.Submit(frame, {}) == XRFrameStatus::Unsupported);
             REQUIRE(frames.End(frame, 1) == XRFrameStatus::CapacityExceeded);
             REQUIRE(frames.End(frame, 0) == XRFrameStatus::Ok);
+        }
+
+        TEST_CASE("XR wait reservation rejects native work early and cancellation never reuses a frame", "[unit][xr][frame]") {
+            NoopResources resources;
+            XRSessionLifecycle sessions{resources};
+            const auto capabilities = Capabilities();
+            const XRSessionId session = Activate(sessions, capabilities);
+            XRFrameLifecycle frames{sessions};
+            REQUIRE(frames.BindConfiguration(Configuration(session), capabilities, StereoLimits) == XRFrameStatus::Ok);
+            REQUIRE(frames.RecordWait(Prediction(10'000), true).status == XRFrameStatus::OutOfOrder);
+            REQUIRE(frames.CancelWait() == XRFrameStatus::OutOfOrder);
+
+            const auto reserved = frames.ReserveWait(session);
+            REQUIRE(reserved.status == XRFrameStatus::Ok);
+            REQUIRE(frames.Snapshot().phase == XRFramePhase::WaitReserved);
+            REQUIRE(frames.ReserveWait(session).status == XRFrameStatus::Duplicate);
+            REQUIRE(frames.Begin(reserved.frame) == XRFrameStatus::OutOfOrder);
+            REQUIRE(frames.CancelWait() == XRFrameStatus::Ok);
+            REQUIRE(frames.Snapshot().phase == XRFramePhase::Idle);
+            REQUIRE(frames.RecordWait(Prediction(10'000), true).status == XRFrameStatus::OutOfOrder);
+
+            const auto next = frames.ReserveWait(session);
+            REQUIRE(next.status == XRFrameStatus::Ok);
+            REQUIRE(next.frame.sequence > reserved.frame.sequence);
+            const auto waited = frames.RecordWait(Prediction(20'000), false);
+            REQUIRE(waited.status == XRFrameStatus::Ok);
+            REQUIRE(waited.frame == next.frame);
+            REQUIRE(frames.CancelWait() == XRFrameStatus::OutOfOrder);
+            REQUIRE(frames.Begin(waited.frame) == XRFrameStatus::Ok);
+            REQUIRE(frames.End(waited.frame, 0) == XRFrameStatus::Ok);
         }
 
         TEST_CASE("XR frame gate rejects skipped and duplicate operations without advancing state", "[unit][xr][frame]") {
@@ -146,7 +190,7 @@ namespace Horo::XR {
             const auto capabilities = Capabilities();
             const XRSessionId session = Activate(sessions, capabilities);
             XRFrameLifecycle frames{sessions};
-            REQUIRE(frames.RecordWait(session, Prediction(10'000), true).status == XRFrameStatus::Unavailable);
+            REQUIRE(frames.ReserveWait(session).status == XRFrameStatus::Unavailable);
             REQUIRE(frames.BindConfiguration({}, capabilities, StereoLimits) == XRFrameStatus::InvalidInput);
             REQUIRE(frames.BindConfiguration(Configuration(session), Capabilities(2, capabilities.Revision().Value()), StereoLimits) ==
                     XRFrameStatus::StaleSession);
@@ -155,8 +199,15 @@ namespace Horo::XR {
             REQUIRE(frames.BindConfiguration(Configuration(session), capabilities, {.maximumViews = 17}) ==
                     XRFrameStatus::CapacityExceeded);
             REQUIRE(frames.BindConfiguration(Configuration(session), capabilities, StereoLimits) == XRFrameStatus::Ok);
-            REQUIRE(frames.RecordWait({}, Prediction(10'000), true).status == XRFrameStatus::InvalidInput);
-            REQUIRE(frames.RecordWait(session, {}, true).status == XRFrameStatus::InvalidInput);
+            REQUIRE(frames.ReserveWait({}).status == XRFrameStatus::InvalidInput);
+            const auto reserved = frames.ReserveWait(session);
+            REQUIRE(reserved.status == XRFrameStatus::Ok);
+            const auto invalidPrediction = frames.RecordWait({}, true);
+            REQUIRE(invalidPrediction.status == XRFrameStatus::InvalidInput);
+            REQUIRE(invalidPrediction.frame == reserved.frame);
+            REQUIRE_FALSE(frames.Snapshot().renderAdmitted);
+            REQUIRE(frames.Begin(invalidPrediction.frame) == XRFrameStatus::Ok);
+            REQUIRE(frames.End(invalidPrediction.frame, 0) == XRFrameStatus::Ok);
             const XRFrameId frame = Wait(frames, session);
             REQUIRE(frames.BindConfiguration(Configuration(session, 2), capabilities, StereoLimits) == XRFrameStatus::OutOfOrder);
             REQUIRE(frames.Begin(frame) == XRFrameStatus::Ok);
@@ -189,23 +240,30 @@ namespace Horo::XR {
             REQUIRE(frames.End(frame, 0) == XRFrameStatus::Ok);
         }
 
-        TEST_CASE("XR session replacement fences old frames until explicit quiescent reset", "[unit][xr][frame]") {
+        TEST_CASE("XR session replacement retains completed wait debt until explicit quiescent reset", "[unit][xr][frame]") {
             NoopResources resources;
             XRSessionLifecycle sessions{resources};
             const auto firstCapabilities = Capabilities();
             const XRSessionId firstSession = Activate(sessions, firstCapabilities);
             XRFrameLifecycle frames{sessions};
             REQUIRE(frames.BindConfiguration(Configuration(firstSession), firstCapabilities, StereoLimits) == XRFrameStatus::Ok);
-            const XRFrameId oldFrame = Wait(frames, firstSession);
+            const auto reserved = frames.ReserveWait(firstSession);
+            REQUIRE(reserved.status == XRFrameStatus::Ok);
             const auto replacementCapabilities = Capabilities(2);
             const XRSessionId replacement = Activate(sessions, replacementCapabilities);
-            REQUIRE(frames.Begin(oldFrame) == XRFrameStatus::StaleSession);
-            REQUIRE(frames.RecordWait(replacement, Prediction(20'000), true).status == XRFrameStatus::StaleSession);
+            const auto completed = frames.RecordWait(Prediction(10'000), true);
+            REQUIRE(completed.status == XRFrameStatus::Ok);
+            REQUIRE(completed.frame == reserved.frame);
+            REQUIRE(frames.Snapshot().phase == XRFramePhase::Waited);
+            REQUIRE(frames.Begin(completed.frame) == XRFrameStatus::StaleSession);
+            REQUIRE(frames.Snapshot().phase == XRFramePhase::Waited);
+            REQUIRE(frames.ReserveWait(replacement).status == XRFrameStatus::StaleSession);
+            // The test resource port is quiescent; a real host must prove native wait/frame and lease retirement first.
             frames.ResetAfterQuiescence();
             REQUIRE(frames.BindConfiguration(Configuration(replacement), replacementCapabilities, StereoLimits) == XRFrameStatus::Ok);
             const XRFrameId newFrame = Wait(frames, replacement);
-            REQUIRE(newFrame.sequence > oldFrame.sequence);
-            REQUIRE(frames.Begin(oldFrame) == XRFrameStatus::StaleSession);
+            REQUIRE(newFrame.sequence > completed.frame.sequence);
+            REQUIRE(frames.Begin(completed.frame) == XRFrameStatus::StaleSession);
             REQUIRE(frames.Begin(newFrame) == XRFrameStatus::Ok);
             REQUIRE(frames.Abort(newFrame) == XRFrameStatus::Ok);
             REQUIRE(frames.End(newFrame, 0) == XRFrameStatus::Ok);
@@ -230,7 +288,7 @@ namespace Horo::XR {
             REQUIRE(frames.End(frame, 0) == XRFrameStatus::Ok);
             frames.Shutdown();
             frames.Shutdown();
-            REQUIRE(frames.RecordWait(session, Prediction(30'000), true).status == XRFrameStatus::Shutdown);
+            REQUIRE(frames.ReserveWait(session).status == XRFrameStatus::Shutdown);
             REQUIRE(frames.BindConfiguration(Configuration(session), capabilities, StereoLimits) == XRFrameStatus::Shutdown);
             REQUIRE(frames.Begin(frame) == XRFrameStatus::Shutdown);
             REQUIRE(frames.Snapshot().phase == XRFramePhase::Idle);
@@ -247,7 +305,7 @@ namespace Horo::XR {
             REQUIRE(sessions.ApplyEvent(session, XRSessionEvent::Stopping).HasValue());
             REQUIRE(frames.Begin(frame) == XRFrameStatus::Ok);
             REQUIRE(frames.End(frame, 0) == XRFrameStatus::Ok);
-            REQUIRE(frames.RecordWait(session, Prediction(20'000), false).status == XRFrameStatus::Unavailable);
+            REQUIRE(frames.ReserveWait(session).status == XRFrameStatus::Unavailable);
         }
     }  // namespace
 }  // namespace Horo::XR
