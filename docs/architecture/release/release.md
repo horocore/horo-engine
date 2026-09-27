@@ -689,8 +689,14 @@ release application target. Its host-owned client resolves an existing tagged
 release, uploads only final-manifest files and canonical `manifest.json`, reads
 each remote asset back for size and SHA-256 verification, and binds the channel
 commit to the same remote release ID. A missing release or changed ID fails
-without creating a tag or release. The concrete authenticated HTTP client and
-`Release Binaries` workflow composition remain separate host work.
+without creating a tag or release. The `GitHubReleaseCliClient` uses the host's
+authenticated `gh` installation through the bounded, shell-free process runner;
+it never passes credentials in arguments or emits GitHub CLI diagnostic text.
+It treats an existing remote asset as an idempotent retry only after downloading
+and hashing its bytes, and changes the stable channel only after verifying the
+remote manifest and confirming the release is GitHub's latest. Other channels
+fail until they have an explicit remote mapping. `Release Binaries` workflow
+composition remains separate host work.
 
 ## Security
 

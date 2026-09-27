@@ -259,6 +259,12 @@ add_library(HoroEngine::ReleaseGitHub ALIAS HoroReleaseGitHub)
 target_compile_features(HoroReleaseGitHub PUBLIC cxx_std_20)
 target_link_libraries(HoroReleaseGitHub PUBLIC HoroEngine::Application)
 
+add_library(HoroReleaseGitHubCli STATIC application/release/GitHubReleaseCliClient.cpp)
+add_library(HoroEngine::ReleaseGitHubCli ALIAS HoroReleaseGitHubCli)
+target_compile_features(HoroReleaseGitHubCli PUBLIC cxx_std_20)
+target_link_libraries(HoroReleaseGitHubCli PUBLIC HoroEngine::ReleaseGitHub HoroEngine::Platform
+        PRIVATE nlohmann_json::nlohmann_json)
+
 add_library(HoroUpdateManifest STATIC application/release/UpdateManifest.cpp application/release/UpdateManifestErrors.cpp
         application/release/UpdateSignatureCodec.cpp application/release/UpdateTrustRoot.cpp)
 add_library(HoroEngine::UpdateManifest ALIAS HoroUpdateManifest)

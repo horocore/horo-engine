@@ -141,6 +141,9 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroReleaseGitHub PUBLIC_HEADERS
     Horo/Release/GitHubReleasePublication.h
 )
+horo_configure_target_header_boundary(HoroReleaseGitHubCli PUBLIC_HEADERS
+    Horo/Release/GitHubReleaseCliClient.h
+)
 horo_configure_target_header_boundary(HoroUpdateManifest PUBLIC_HEADERS
     Horo/Release/UpdateManifest.h
     Horo/Release/UpdateManifestErrors.h
