@@ -42,7 +42,9 @@ namespace Horo::Destruction::OfflineVoronoiErrors {
 
 namespace Horo::Destruction {
     /** @copydoc OfflineVoronoiCandidate::IsIntact */
-    bool OfflineVoronoiCandidate::IsIntact() const { return outputChecksum_ == Detail::VoronoiOutputChecksum(*this); }
+    bool OfflineVoronoiCandidate::IsIntact() const {
+        return outputChecksum_ == Detail::VoronoiOutputChecksum(*this);
+    }
 
     namespace {
         using namespace VoronoiDetail;
