@@ -3,6 +3,7 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 #include <algorithm>
+#include <memory>
 #include <utility>
 
 namespace Horo::Editor {
@@ -94,6 +95,6 @@ namespace Horo::Editor {
 
     const Release::ReleaseJobSnapshot *BuildReleaseModalSession::Find(const Release::ReleaseJobId job) const noexcept {
         const auto found = std::ranges::find(snapshots_, job, &Release::ReleaseJobSnapshot::id);
-        return found == snapshots_.end() ? nullptr : &*found;
+        return found == snapshots_.end() ? nullptr : std::to_address(found);
     }
 }  // namespace Horo::Editor
