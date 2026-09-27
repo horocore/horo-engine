@@ -164,6 +164,9 @@ TEST_CASE("Verified update activation atomically selects the healthy staged vers
     auto target = EncodeActiveUpdateRecord(request.staged.package);
     REQUIRE(target.HasValue());
     CHECK(Read(install.root / "active-version") == target.Value());
+    auto previous = EncodeActiveUpdateRecord(request.current.package);
+    REQUIRE(previous.HasValue());
+    CHECK(Read(install.root / "last-known-good-version") == previous.Value());
     CHECK_FALSE(std::filesystem::exists(install.root / "activation.pending"));
     CHECK(host.stops == 1U);
     CHECK(host.probes == 1U);
@@ -181,6 +184,21 @@ TEST_CASE("Failed startup health restores the previous active version", "[releas
     auto previous = EncodeActiveUpdateRecord(request.current.package);
     REQUIRE(previous.HasValue());
     CHECK(Read(install.root / "active-version") == previous.Value());
+    CHECK_FALSE(std::filesystem::exists(install.root / "activation.pending"));
+}
+
+TEST_CASE("Failed startup health preserves the existing last-known-good pin", "[release][update][rollback]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = Request(install, files, verifier);
+    auto priorPin = EncodeActiveUpdateRecord(Package("prior", "signed package prior"));
+    REQUIRE(priorPin.HasValue());
+    REQUIRE(files.WriteDurable(install.root / "last-known-good-version", std::as_bytes(std::span{priorPin.Value()})).HasValue());
+    Host host;
+    host.healthy = false;
+    CHECK(ActivateVerifiedUpdate(request, files, verifier, host).HasError());
+    CHECK(Read(install.root / "last-known-good-version") == priorPin.Value());
     CHECK_FALSE(std::filesystem::exists(install.root / "activation.pending"));
 }
 
@@ -206,7 +224,7 @@ TEST_CASE("Interrupted activation restores the previous version before a retry",
     auto target = EncodeActiveUpdateRecord(request.staged.package);
     REQUIRE(previous.HasValue());
     REQUIRE(target.HasValue());
-    const std::string pending = "horo-update-activation-v1\n" + previous.Value() + target.Value();
+    const std::string pending = "horo-update-activation-v2\n" + previous.Value() + target.Value() + "pin-absent\n";
     REQUIRE(files.WriteDurable(install.root / "activation.pending", std::as_bytes(std::span{pending})).HasValue());
     REQUIRE(files.WriteDurable(install.root / "active-version", std::as_bytes(std::span{target.Value()})).HasValue());
     Host host;
@@ -216,6 +234,30 @@ TEST_CASE("Interrupted activation restores the previous version before a retry",
     CHECK(Read(install.root / "active-version") == previous.Value());
     CHECK_FALSE(std::filesystem::exists(install.root / "activation.pending"));
     CHECK(host.probes == 0U);
+}
+
+TEST_CASE("Interrupted activation restores the previous rollback pin", "[release][update][rollback]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = Request(install, files, verifier);
+    auto previous = EncodeActiveUpdateRecord(request.current.package);
+    auto target = EncodeActiveUpdateRecord(request.staged.package);
+    auto priorPin = EncodeActiveUpdateRecord(Package("prior", "signed package prior"));
+    REQUIRE(previous.HasValue());
+    REQUIRE(target.HasValue());
+    REQUIRE(priorPin.HasValue());
+    const std::string pending = "horo-update-activation-v2\n" + previous.Value() + target.Value() + "pin-present\n" + priorPin.Value();
+    REQUIRE(files.WriteDurable(install.root / "activation.pending", std::as_bytes(std::span{pending})).HasValue());
+    REQUIRE(files.WriteDurable(install.root / "active-version", std::as_bytes(std::span{target.Value()})).HasValue());
+    REQUIRE(files.WriteDurable(install.root / "last-known-good-version", std::as_bytes(std::span{previous.Value()})).HasValue());
+    Host host;
+    auto recovered = ActivateVerifiedUpdate(request, files, verifier, host);
+    REQUIRE(recovered.HasValue());
+    CHECK(recovered.Value() == UpdateActivationOutcome::RecoveredPrevious);
+    CHECK(Read(install.root / "active-version") == previous.Value());
+    CHECK(Read(install.root / "last-known-good-version") == priorPin.Value());
+    CHECK_FALSE(std::filesystem::exists(install.root / "activation.pending"));
 }
 
 TEST_CASE("Activation rejects a staged tree changed after ready publication", "[release][update]") {

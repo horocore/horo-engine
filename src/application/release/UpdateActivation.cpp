@@ -2,7 +2,9 @@
 
 #include "Horo/Release/UpdateActivationErrors.h"
 
+#include <algorithm>
 #include <fstream>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <system_error>
@@ -11,7 +13,9 @@
 namespace Horo::Release {
     namespace {
         constexpr std::string_view ActiveHeader = "horo-active-version-v1\n";
-        constexpr std::string_view PendingHeader = "horo-update-activation-v1\n";
+        constexpr std::string_view PendingHeader = "horo-update-activation-v2\n";
+        constexpr std::string_view PinPresent = "pin-present\n";
+        constexpr std::string_view PinAbsent = "pin-absent\n";
         constexpr std::uintmax_t MaximumRecordBytes = 1024U;
 
         struct ActivationPaths final {
@@ -19,6 +23,8 @@ namespace Horo::Release {
             std::filesystem::path versions;
             std::filesystem::path active;
             std::filesystem::path prepared;
+            std::filesystem::path lastKnownGood;
+            std::filesystem::path lastKnownGoodPrepared;
             std::filesystem::path pending;
             std::filesystem::path lock;
         };
@@ -29,6 +35,8 @@ namespace Horo::Release {
                     root / "versions",
                     root / "active-version",
                     root / "active-version.prepared",
+                    root / "last-known-good-version",
+                    root / "last-known-good-version.prepared",
                     root / "activation.pending",
                     root / ".activation.lock"};
         }
@@ -100,6 +108,72 @@ namespace Horo::Release {
             return error ? Result<bool>::Failure(MakeError(UpdateActivationErrors::PendingMismatch)) : Result<bool>::Success(true);
         }
 
+        /** @brief Admits only a canonical pointer record before preserving an existing rollback pin. */
+        [[nodiscard]] bool ValidPointerRecord(const std::string_view record) {
+            if (!record.starts_with(ActiveHeader))
+                return false;
+            const auto body = record.substr(ActiveHeader.size());
+            const auto separator = body.find('\n');
+            if (separator == std::string_view::npos || !IsValidDistributionIdentity(body.substr(0, separator)))
+                return false;
+            const auto digest = body.substr(separator + 1U);
+            if (digest.size() != 72U || !digest.starts_with("sha256:") || digest.back() != '\n')
+                return false;
+            return std::ranges::all_of(digest.substr(7U, 64U), [](const char digit) {
+                return (digit >= '0' && digit <= '9') || (digit >= 'a' && digit <= 'f');
+            });
+        }
+
+        /** @brief Preserves the prior rollback pin in the journal before activation can replace it. */
+        [[nodiscard]] Result<std::optional<std::string>> ReadPriorPin(const ActivationPaths &paths) {
+            auto prepared = PendingExists(paths.lastKnownGoodPrepared);
+            if (prepared.HasError() || prepared.Value())
+                return Result<std::optional<std::string>>::Failure(MakeError(UpdateActivationErrors::PendingMismatch));
+            auto present = PendingExists(paths.lastKnownGood);
+            if (present.HasError())
+                return Result<std::optional<std::string>>::Failure(present.ErrorValue());
+            if (!present.Value())
+                return Result<std::optional<std::string>>::Success(std::nullopt);
+            auto record = ReadRecord(paths.lastKnownGood, UpdateActivationErrors::PendingMismatch);
+            if (record.HasError() || !ValidPointerRecord(record.Value()))
+                return Result<std::optional<std::string>>::Failure(MakeError(UpdateActivationErrors::PendingMismatch));
+            return Result<std::optional<std::string>>::Success(std::move(record).Value());
+        }
+
+        /** @brief Rejects a journal that cannot prove its exact previous pin state. */
+        [[nodiscard]] Result<std::optional<std::string>> DecodePriorPin(const std::string &journal, const std::string &previous,
+                                                                        const std::string &target) {
+            const std::string prefix = std::string{PendingHeader} + previous + target;
+            if (!journal.starts_with(prefix))
+                return Result<std::optional<std::string>>::Failure(MakeError(UpdateActivationErrors::PendingMismatch));
+            const std::string_view suffix{journal.data() + prefix.size(), journal.size() - prefix.size()};
+            if (suffix == PinAbsent)
+                return Result<std::optional<std::string>>::Success(std::nullopt);
+            if (!suffix.starts_with(PinPresent) || !ValidPointerRecord(suffix.substr(PinPresent.size())))
+                return Result<std::optional<std::string>>::Failure(MakeError(UpdateActivationErrors::PendingMismatch));
+            return Result<std::optional<std::string>>::Success(std::string{suffix.substr(PinPresent.size())});
+        }
+
+        /** @brief Atomically publishes a rollback pin under the shared activation lock. */
+        [[nodiscard]] Result<void> ReplacePin(const ActivationPaths &paths, const std::string &record, NativeDurableFileSystem &files) {
+            if (auto removed = files.RemoveDurable(paths.lastKnownGoodPrepared); removed.HasError())
+                return removed;
+            if (auto written = files.AppendPrivateDurable(paths.lastKnownGoodPrepared, 0U, std::as_bytes(std::span{record}));
+                written.HasError())
+                return written;
+            return files.AtomicReplace(paths.lastKnownGoodPrepared, paths.lastKnownGood);
+        }
+
+        /** @brief Restores the old rollback pin, or its proven absence, before clearing the journal. */
+        [[nodiscard]] Result<void> RestorePriorPin(const ActivationPaths &paths, const std::optional<std::string> &priorPin,
+                                                   NativeDurableFileSystem &files) {
+            if (priorPin)
+                return ReplacePin(paths, *priorPin, files);
+            if (auto removed = files.RemoveDurable(paths.lastKnownGoodPrepared); removed.HasError())
+                return removed;
+            return files.RemoveDurable(paths.lastKnownGood);
+        }
+
         /** @brief Writes one pointer through an absent prepared file and a durable atomic replacement. */
         [[nodiscard]] Result<void> ReplaceActive(const ActivationPaths &paths, const std::string &record, NativeDurableFileSystem &files) {
             if (auto removed = files.RemoveDurable(paths.prepared); removed.HasError())
@@ -111,51 +185,55 @@ namespace Horo::Release {
 
         /** @brief Returns to the previous pointer, retaining the journal if replacement is uncertain. */
         [[nodiscard]] Result<void> RestorePrevious(const ActivationPaths &paths, const std::string &previous,
-                                                   NativeDurableFileSystem &files) {
+                                                   const std::optional<std::string> &priorPin, NativeDurableFileSystem &files) {
             if (auto replaced = ReplaceActive(paths, previous, files); replaced.HasError())
                 return Result<void>::Failure(WrapError(UpdateActivationErrors::RollbackFailed, replaced.ErrorValue()));
+            if (auto restored = RestorePriorPin(paths, priorPin, files); restored.HasError())
+                return Result<void>::Failure(WrapError(UpdateActivationErrors::RollbackFailed, restored.ErrorValue()));
             return files.RemoveDurable(paths.pending);
         }
 
         /** @brief Resolves an interrupted transaction to its verified previous version. */
         [[nodiscard]] Result<UpdateActivationOutcome> RecoverPending(const ActivationPaths &paths, const std::string &previous,
                                                                      const std::string &target, NativeDurableFileSystem &files) {
-            const std::string expected = std::string{PendingHeader} + previous + target;
             auto pending = ReadRecord(paths.pending, UpdateActivationErrors::PendingMismatch);
             auto active = ReadRecord(paths.active, UpdateActivationErrors::CurrentMismatch);
-            if (pending.HasError() || active.HasError() || pending.Value() != expected)
+            if (pending.HasError() || active.HasError())
                 return Result<UpdateActivationOutcome>::Failure(MakeError(UpdateActivationErrors::PendingMismatch));
-            if (active.Value() == target) {
-                if (auto restored = RestorePrevious(paths, previous, files); restored.HasError())
-                    return Result<UpdateActivationOutcome>::Failure(restored.ErrorValue());
-            } else if (active.Value() == previous) {
-                if (auto removed = files.RemoveDurable(paths.pending); removed.HasError())
-                    return Result<UpdateActivationOutcome>::Failure(removed.ErrorValue());
-            } else {
+            auto priorPin = DecodePriorPin(pending.Value(), previous, target);
+            if (priorPin.HasError() || (active.Value() != target && active.Value() != previous))
                 return Result<UpdateActivationOutcome>::Failure(MakeError(UpdateActivationErrors::PendingMismatch));
-            }
+            if (auto restored = RestorePrevious(paths, previous, priorPin.Value(), files); restored.HasError())
+                return Result<UpdateActivationOutcome>::Failure(restored.ErrorValue());
             return Result<UpdateActivationOutcome>::Success(UpdateActivationOutcome::RecoveredPrevious);
         }
 
         /** @brief Publishes the rollback record before changing the active pointer. */
         [[nodiscard]] Result<void> StartTransaction(const ActivationPaths &paths, const std::string &previous, const std::string &target,
-                                                    NativeDurableFileSystem &files) {
-            const std::string pending = std::string{PendingHeader} + previous + target;
+                                                    const std::optional<std::string> &priorPin, NativeDurableFileSystem &files) {
+            const std::string pending =
+                std::string{PendingHeader} + previous + target + (priorPin ? std::string{PinPresent} + *priorPin : std::string{PinAbsent});
             return files.AppendPrivateDurable(paths.pending, 0U, std::as_bytes(std::span{pending}));
         }
 
         /** @brief Runs the probe and clears the journal only after a healthy new version. */
         [[nodiscard]] Result<UpdateActivationOutcome> FinishActivation(const UpdateActivationRequest &request, const ActivationPaths &paths,
-                                                                       const std::string &previous, NativeDurableFileSystem &files,
-                                                                       IUpdateActivationHost &host) {
+                                                                       const std::string &previous,
+                                                                       const std::optional<std::string> &priorPin,
+                                                                       NativeDurableFileSystem &files, IUpdateActivationHost &host) {
             auto health = host.ProbeStartupHealth(request.staged.stageRoot, request.healthTimeout);
             if (health.HasError()) {
-                if (auto restored = RestorePrevious(paths, previous, files); restored.HasError())
+                if (auto restored = RestorePrevious(paths, previous, priorPin, files); restored.HasError())
                     return Result<UpdateActivationOutcome>::Failure(restored.ErrorValue());
                 return Result<UpdateActivationOutcome>::Failure(WrapError(UpdateActivationErrors::HealthFailed, health.ErrorValue()));
             }
+            if (auto pinned = ReplacePin(paths, previous, files); pinned.HasError()) {
+                if (auto restored = RestorePrevious(paths, previous, priorPin, files); restored.HasError())
+                    return Result<UpdateActivationOutcome>::Failure(restored.ErrorValue());
+                return Result<UpdateActivationOutcome>::Failure(pinned.ErrorValue());
+            }
             if (auto removed = files.RemoveDurable(paths.pending); removed.HasError()) {
-                if (auto restored = RestorePrevious(paths, previous, files); restored.HasError())
+                if (auto restored = RestorePrevious(paths, previous, priorPin, files); restored.HasError())
                     return Result<UpdateActivationOutcome>::Failure(restored.ErrorValue());
                 return Result<UpdateActivationOutcome>::Failure(removed.ErrorValue());
             }
@@ -200,10 +278,13 @@ namespace Horo::Release {
         auto active = ReadRecord(paths.active, UpdateActivationErrors::CurrentMismatch);
         if (active.HasError() || active.Value() != previous.Value())
             return Result<UpdateActivationOutcome>::Failure(MakeError(UpdateActivationErrors::CurrentMismatch));
-        if (auto started = StartTransaction(paths, previous.Value(), target.Value(), files); started.HasError())
+        auto priorPin = ReadPriorPin(paths);
+        if (priorPin.HasError())
+            return Result<UpdateActivationOutcome>::Failure(priorPin.ErrorValue());
+        if (auto started = StartTransaction(paths, previous.Value(), target.Value(), priorPin.Value(), files); started.HasError())
             return Result<UpdateActivationOutcome>::Failure(started.ErrorValue());
         if (auto switched = ReplaceActive(paths, target.Value(), files); switched.HasError())
             return Result<UpdateActivationOutcome>::Failure(switched.ErrorValue());
-        return FinishActivation(request, paths, previous.Value(), files, host);
+        return FinishActivation(request, paths, previous.Value(), priorPin.Value(), files, host);
     }
 }  // namespace Horo::Release

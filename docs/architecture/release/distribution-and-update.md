@@ -388,6 +388,14 @@ bounded startup probe; a failed probe leaves the newer verified version active.
 The host must establish authorization and the version floor from trusted state,
 not from package-provided or UI-provided values.
 
+After a healthy activation, the helper atomically publishes the verified
+previous version as `last-known-good-version` before clearing its transaction
+journal. The journal also preserves the prior pin or its absence. A failed
+probe or interrupted activation restores both the previous active pointer and
+the prior pin; uncertain restoration retains the journal for recovery. Cleanup
+must verify that the pin is distinct from the active version and reauthenticate
+its package before treating it as rollback-safe content.
+
 `PlanUpdateRetention` uses a complete host-owned installed-version snapshot and
 measured occupied bytes. It protects exactly one active and one distinct
 last-known-good version. When those pins alone exceed the configured budget,
