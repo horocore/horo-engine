@@ -80,12 +80,11 @@ namespace Horo::Mcp {
                 if (bound != schema.end() && (!bound->is_number() || (kind != "number" && kind != "integer")))
                     return false;
             }
-            for (const auto [lower, upper] :
-                 {std::pair{"minItems", "maxItems"}, std::pair{"minLength", "maxLength"}, std::pair{"minimum", "maximum"}}) {
-                if (schema.contains(lower) && schema.contains(upper) && schema[lower] > schema[upper])
-                    return false;
-            }
-            return true;
+            static constexpr std::array bounds{std::pair{"minItems", "maxItems"}, std::pair{"minLength", "maxLength"},
+                                               std::pair{"minimum", "maximum"}};
+            return std::ranges::none_of(bounds, [&schema](const auto &bound) {
+                return schema.contains(bound.first) && schema.contains(bound.second) && schema[bound.first] > schema[bound.second];
+            });
         }
 
         /** @brief Checks supported scalar bounds and ensures enum members can satisfy the declared schema. */
@@ -149,8 +148,8 @@ namespace Horo::Mcp {
             if (type == schema.end() || !type->is_string())
                 return false;
             const std::string_view kind = type->get_ref<const std::string &>();
-            static constexpr std::array<std::string_view, 7> kinds{"object", "array", "string", "integer", "number", "boolean", "null"};
-            if (std::ranges::find(kinds, kind) == kinds.end())
+            if (static constexpr std::array<std::string_view, 7> kinds{"object", "array", "string", "integer", "number", "boolean", "null"};
+                std::ranges::find(kinds, kind) == kinds.end())
                 return false;
             if (const auto properties = schema.find("properties");
                 properties != schema.end() && (kind != "object" || !ValidProperties(*properties, depth, nodes)))
@@ -184,7 +183,7 @@ namespace Horo::Mcp {
         }
 
         /** @brief Checks one object member against a declared property or the additional-property rule. */
-        [[nodiscard]] bool MatchesObjectMember(const nlohmann::json &schema, const nlohmann::json::const_iterator properties,
+        [[nodiscard]] bool MatchesObjectMember(const nlohmann::json &schema, const nlohmann::json::const_iterator &properties,
                                                const std::string &name, const nlohmann::json &value) {
             if (properties != schema.end()) {
                 const auto property = properties->find(name);
