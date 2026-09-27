@@ -258,6 +258,13 @@ still owns transport, private-file I/O, cancellation, and progress dispatch.
 `VerifyCompletedUpdateTransfer` then checks the complete private-file size,
 hash, and publisher signature before any extractor or staging marker consumes
 it.
+After package authentication, a format-specific reader must expose the complete
+archive index to `ValidateUpdateArchiveIndex` before extracting any entry. The
+preflight uses the release artifact path grammar and rejects links, special
+files, nonportable or colliding paths, file parents, and excess entry or
+expanded-byte counts under host policy limits.
+The reader and staging host remain responsible for proving that extracted bytes
+match the archive and its declared per-file inventory.
 Partial-file checkpoint evidence uses a bounded canonical schema. Recovery
 parses it as untrusted bytes and rechecks it against the selected signed package
 and the new transport response before appending any downloaded bytes.

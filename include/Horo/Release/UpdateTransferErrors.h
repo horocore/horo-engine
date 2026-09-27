@@ -16,4 +16,8 @@ namespace Horo::Release::UpdateTransferErrors {
     extern const ErrorCodeDescriptor ResumeMismatch;
     /** @brief Persisted checkpoint bytes are malformed, oversized, or from an unsupported schema. */
     extern const ErrorCodeDescriptor InvalidCheckpoint;
+    /** @brief Archive metadata contains unsafe names, links, collisions, or invalid entry types. */
+    extern const ErrorCodeDescriptor InvalidArchive;
+    /** @brief Archive entry count or expanded file size exceeds host policy. */
+    extern const ErrorCodeDescriptor ArchiveResourceLimit;
 }  // namespace Horo::Release::UpdateTransferErrors

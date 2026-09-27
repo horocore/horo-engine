@@ -1,3 +1,4 @@
+#include "Horo/Release/UpdateArchiveIndex.h"
 #include "Horo/Release/UpdateTransfer.h"
 
 #include <array>
@@ -160,4 +161,34 @@ TEST_CASE("Completed update bytes require the signed package hash and publisher"
     bytes[0] = std::byte{};
     checkpoint.durableBytes = package.size - 1U;
     CHECK(VerifyCompletedUpdateTransfer(package, checkpoint, bytes, verifier).HasError());
+}
+
+TEST_CASE("Update archive preflight accepts bounded regular content", "[release][update]") {
+    constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 12U, .maximumExpandedBytes = 20U};
+    const std::array entries{UpdateArchiveEntry{"bin", UpdateArchiveEntryKind::Directory, 0U},
+                             UpdateArchiveEntry{"bin/horo", UpdateArchiveEntryKind::File, 12U},
+                             UpdateArchiveEntry{"README.txt", UpdateArchiveEntryKind::File, 8U}};
+    CHECK(ValidateUpdateArchiveIndex(entries, limits).HasValue());
+    CHECK(ValidateUpdateArchiveIndex(entries, {.maximumEntries = 2U, .maximumFileBytes = 12U, .maximumExpandedBytes = 20U}).HasError());
+    CHECK(ValidateUpdateArchiveIndex(entries, {.maximumEntries = 4U, .maximumFileBytes = 11U, .maximumExpandedBytes = 20U}).HasError());
+    CHECK(ValidateUpdateArchiveIndex(entries, {.maximumEntries = 4U, .maximumFileBytes = 12U, .maximumExpandedBytes = 19U}).HasError());
+}
+
+TEST_CASE("Update archive preflight rejects traversal, links, and ambiguous names", "[release][update]") {
+    constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 12U, .maximumExpandedBytes = 20U};
+    const std::array unsafePath{UpdateArchiveEntry{"../horo", UpdateArchiveEntryKind::File, 1U}};
+    const std::array link{UpdateArchiveEntry{"horo", UpdateArchiveEntryKind::SymbolicLink, 1U}};
+    const std::array duplicate{UpdateArchiveEntry{"Bin/horo", UpdateArchiveEntryKind::File, 1U},
+                               UpdateArchiveEntry{"bin/HORO", UpdateArchiveEntryKind::File, 1U}};
+    const std::array fileParent{UpdateArchiveEntry{"bin", UpdateArchiveEntryKind::File, 1U},
+                                UpdateArchiveEntry{"bin/horo", UpdateArchiveEntryKind::File, 1U}};
+    const std::array fileChild{UpdateArchiveEntry{"bin/horo", UpdateArchiveEntryKind::File, 1U},
+                               UpdateArchiveEntry{"bin", UpdateArchiveEntryKind::File, 1U}};
+    const std::array nonemptyDirectory{UpdateArchiveEntry{"bin", UpdateArchiveEntryKind::Directory, 1U}};
+    CHECK(ValidateUpdateArchiveIndex(unsafePath, limits).HasError());
+    CHECK(ValidateUpdateArchiveIndex(link, limits).HasError());
+    CHECK(ValidateUpdateArchiveIndex(duplicate, limits).HasError());
+    CHECK(ValidateUpdateArchiveIndex(fileParent, limits).HasError());
+    CHECK(ValidateUpdateArchiveIndex(fileChild, limits).HasError());
+    CHECK(ValidateUpdateArchiveIndex(nonemptyDirectory, limits).HasError());
 }

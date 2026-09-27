@@ -29,4 +29,17 @@ namespace Horo::Release::UpdateTransferErrors {
                                                 .summary = "Partial update checkpoint is invalid or unsupported.",
                                                 .remediationHint = "Discard the partial download and restart from byte zero.",
                                                 .userActionable = true};
+    const ErrorCodeDescriptor InvalidArchive{.domain = Domain,
+                                             .code = ErrorCode{"release.update_transfer.invalid_archive"},
+                                             .defaultSeverity = ErrorSeverity::Error,
+                                             .summary = "Update archive contains unsafe or inconsistent entries.",
+                                             .remediationHint = "Discard the package and use a trusted update source.",
+                                             .userActionable = true};
+    const ErrorCodeDescriptor ArchiveResourceLimit{.domain = Domain,
+                                                   .code = ErrorCode{"release.update_transfer.archive_resource_limit"},
+                                                   .defaultSeverity = ErrorSeverity::Error,
+                                                   .summary = "Update archive exceeds extraction resource limits.",
+                                                   .remediationHint =
+                                                       "Choose a compatible update package or increase administrator limits.",
+                                                   .userActionable = true};
 }  // namespace Horo::Release::UpdateTransferErrors
