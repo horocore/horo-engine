@@ -191,7 +191,9 @@ namespace Horo::Destruction {
             DestructionReplicationPayload payload{.schema = Detail::SchemaId(), .version = DestructionReplicationVersion};
             payload.fields.reserve(Detail::FieldValues.size());
             const auto add = [&payload](const std::size_t index, Writer writer) {
-                payload.fields.emplace_back(DestructionReplicationField{Detail::FieldId(index), std::move(writer).Finish()});
+                auto &field = payload.fields.emplace_back();
+                field.id = Detail::FieldId(index);
+                field.canonical = std::move(writer).Finish();
             };
             Writer target;
             target.Octets(SerializeDestructionHandle(state.target));
