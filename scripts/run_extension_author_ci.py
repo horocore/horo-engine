@@ -14,6 +14,8 @@ import subprocess  # nosec B404 - fixed SDK and CMake tools are the contract und
 import sys
 import tempfile
 import tomllib
+# The bounded parser below rejects DTD/entities and disables parameter entities.
+# nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
 from xml.parsers import expat
 
 
@@ -30,7 +32,7 @@ def run(sdk: Path, tool: str, *arguments: str) -> None:
         raise ValueError(f"unsupported extension CI tool: {tool}")
     # Only named tools are executable. Project-derived values remain separate
     # argv elements, never shell text; SDK tools came from the digest-checked ZIP.
-    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args,python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
     subprocess.run((executable, *arguments), check=True, shell=False)  # nosec B603
 
 

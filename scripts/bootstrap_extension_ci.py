@@ -120,7 +120,7 @@ def main() -> int:
                        "--sdk-sha256", digest]
             # The runner came from the SHA-256-pinned archive, arguments are separate
             # argv values, and no user-provided text is interpreted by a shell.
-            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args,python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
             return subprocess.run(command, check=False, shell=False).returncode  # nosec B603
     except (OSError, ValueError, KeyError, json.JSONDecodeError, zipfile.BadZipFile) as error:
         print(f"extension CI bootstrap: {error}", file=sys.stderr)
