@@ -111,7 +111,7 @@ namespace Horo::Destruction {
 
     /** @copydoc ChunkMeshCookOwner::Accept */
     Result<void> ChunkMeshCookOwner::Accept(std::shared_ptr<const ChunkMeshArtifact> candidate, std::uint64_t expectedRevision,
-                                            FractureArtifactContentIdentity currentContent) {
+                                            const FractureArtifactContentIdentity &currentContent) {
         if (shutdown_)
             return Result<void>::Failure(MakeError(ChunkMeshCookErrors::Shutdown));
         if (revision_ != expectedRevision || cancellation_.Token().IsCancellationRequested() || !candidate || !currentContent.IsValid() ||

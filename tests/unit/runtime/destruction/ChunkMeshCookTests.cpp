@@ -3,8 +3,11 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <type_traits>
 
 namespace Horo::Destruction {
+    static_assert(!std::is_default_constructible_v<ChunkMeshArtifact>);
+
     namespace {
         OfflineVoronoiSource Cube() {
             OfflineVoronoiSource source;

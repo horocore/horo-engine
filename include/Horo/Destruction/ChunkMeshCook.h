@@ -92,6 +92,23 @@ namespace Horo::Destruction {
 
     /** @brief Complete detached artifact payload, owned only through a const shared snapshot. */
     struct ChunkMeshArtifact final {
+    private:
+        struct CookKey final {
+            CookKey(const CookKey &) = default;
+
+        private:
+            CookKey() = default;
+            friend struct ChunkMeshArtifact;
+        };
+
+        static CookKey ConstructionKey() {
+            return {};
+        }
+
+    public:
+        /** @brief Constructs a detached artifact only for authorized cooks. @param key Cook construction key. */
+        explicit ChunkMeshArtifact([[maybe_unused]] const CookKey &key) {}
+
         ChunkMeshArtifact(const ChunkMeshArtifact &) = delete;
         ChunkMeshArtifact &operator=(const ChunkMeshArtifact &) = delete;
         ChunkMeshArtifact(ChunkMeshArtifact &&) = delete;
@@ -115,9 +132,8 @@ namespace Horo::Destruction {
         std::uint64_t workItems{};
 
     private:
-        ChunkMeshArtifact() = default;
         friend Result<std::shared_ptr<const ChunkMeshArtifact>> CookChunkMeshes(const OfflineVoronoiCandidate &,
-                                                                                FractureArtifactContentIdentity,
+                                                                                const FractureArtifactContentIdentity &,
                                                                                 std::span<const ChunkMaterialBinding>, ChunkUvPolicy,
                                                                                 const DestructionLimits &, const CancellationToken &);
         friend Result<std::shared_ptr<const ChunkMeshArtifact>> CookPreFracturedChunkMeshes(const PreFracturedCandidate &,
@@ -167,7 +183,7 @@ namespace Horo::Destruction {
      * @return Immutable detached artifact or typed failure without partial publication.
      */
     [[nodiscard]] Result<std::shared_ptr<const ChunkMeshArtifact>> CookChunkMeshes(const OfflineVoronoiCandidate &source,
-                                                                                   FractureArtifactContentIdentity content,
+                                                                                   const FractureArtifactContentIdentity &content,
                                                                                    std::span<const ChunkMaterialBinding> materials,
                                                                                    ChunkUvPolicy uv, const DestructionLimits &limits,
                                                                                    const CancellationToken &cancellation);
@@ -210,7 +226,7 @@ namespace Horo::Destruction {
          * @return Success or typed failure retaining the previous snapshot.
          */
         [[nodiscard]] Result<void> Accept(std::shared_ptr<const ChunkMeshArtifact> candidate, std::uint64_t expectedRevision,
-                                          FractureArtifactContentIdentity currentContent);
+                                          const FractureArtifactContentIdentity &currentContent);
         /** @brief Cancels pending work and advances the generation. @return Success or exhaustion/shutdown failure. */
         [[nodiscard]] Result<void> Invalidate();
         /** @brief Closes admission and cancels pending work while retaining the last snapshot. */

@@ -181,7 +181,7 @@ namespace Horo::Destruction::ChunkMeshDetail {
     };
 
     [[nodiscard]] inline Result<void> CheckInterior(const OfflineVoronoiChunk &source, const std::map<DestructionChunkId, Point> &sites,
-                                                    const Point &a, const Point &b, const Point &c, const Point &normal, double area,
+                                                    const std::array<Point, 3> &points, const Point &normal, double area,
                                                     std::map<InteriorPair, InteriorArea> &areas) {
         DestructionChunkId match{};
         for (const auto neighbor : source.neighbors) {
@@ -195,9 +195,9 @@ namespace Horo::Destruction::ChunkMeshDetail {
             if (!(distance > 1.0e-9))
                 return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInterior));
             const double tolerance = 2.0e-4 * std::max(1.0, distance);
-            if (std::abs(Dot(Sub(a, middle), direction) / distance) < tolerance &&
-                std::abs(Dot(Sub(b, middle), direction) / distance) < tolerance &&
-                std::abs(Dot(Sub(c, middle), direction) / distance) < tolerance) {
+            if (std::abs(Dot(Sub(points[0], middle), direction) / distance) < tolerance &&
+                std::abs(Dot(Sub(points[1], middle), direction) / distance) < tolerance &&
+                std::abs(Dot(Sub(points[2], middle), direction) / distance) < tolerance) {
                 if (Dot(normal, direction) <= 0)
                     return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInterior));
                 if (match.IsValid())
@@ -222,18 +222,16 @@ namespace Horo::Destruction::ChunkMeshDetail {
             return index >= source.positions.size();
         }))
             return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInput));
-        const Point a = Position(source.positions[face.indices[0]]);
-        const Point b = Position(source.positions[face.indices[1]]);
-        const Point c = Position(source.positions[face.indices[2]]);
-        if (!Finite(a) || !Finite(b) || !Finite(c))
+        const std::array<Point, 3> points{Position(source.positions[face.indices[0]]), Position(source.positions[face.indices[1]]),
+                                          Position(source.positions[face.indices[2]])};
+        if (!Finite(points[0]) || !Finite(points[1]) || !Finite(points[2]))
             return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInput));
-        const Point cross = Cross(Sub(b, a), Sub(c, a));
+        const Point cross = Cross(Sub(points[1], points[0]), Sub(points[2], points[0]));
         const double length = std::sqrt(Dot(cross, cross));
         if (!(length > 1.0e-12) || !std::isfinite(length))
             return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInput));
         if (face.interior && !sites.empty()) {
-            auto checked = CheckInterior(source, sites, a, b, c, cross, length * 0.5, areas);
-            if (checked.HasError())
+            if (auto checked = CheckInterior(source, sites, points, cross, length * 0.5, areas); checked.HasError())
                 return checked;
         }
         const Point normal{cross[0] / length, cross[1] / length, cross[2] / length};
@@ -245,7 +243,7 @@ namespace Horo::Destruction::ChunkMeshDetail {
         const Point bitangent = Cross(normal, tangent);
         const double scale = face.interior ? uv.interiorScale : uv.exteriorScale;
         ChunkMeshFace outputFace{{}, face.materialSlot, face.interior};
-        for (const Point &point : {a, b, c}) {
+        for (const Point &point : points) {
             const double u = Dot(point, tangent) * scale;
             const double v = Dot(point, bitangent) * scale;
             if (!std::isfinite(u) || !std::isfinite(v) || std::abs(u) > std::numeric_limits<float>::max() ||
