@@ -14,8 +14,6 @@
 
 namespace Horo::Release {
     namespace {
-        constexpr std::string_view InventoryName = "horo-update-files-v1.txt";
-        constexpr std::string_view InventoryHeader = "horo-update-files-v1\n";
         constexpr std::uint64_t MaximumInventoryBytes = 1024U * 1024U;
 
         struct ZipReader final {
@@ -161,25 +159,25 @@ namespace Horo::Release {
                 return Result<DeclaredFiles>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
             };
             const auto inventory = std::ranges::find_if(index, [](const UpdateArchiveEntry &entry) {
-                return entry.path == InventoryName && entry.kind == UpdateArchiveEntryKind::File;
+                return entry.path == UpdateFileInventoryPath && entry.kind == UpdateArchiveEntryKind::File;
             });
-            if (inventory == index.end() || inventory->expandedBytes < InventoryHeader.size() ||
+            if (inventory == index.end() || inventory->expandedBytes < UpdateFileInventoryHeader.size() ||
                 inventory->expandedBytes > std::min(limits.maximumFileBytes, MaximumInventoryBytes))
                 return invalid();
             const auto item = static_cast<mz_uint>(std::distance(index.begin(), inventory));
             std::string bytes(static_cast<std::size_t>(inventory->expandedBytes), '\0');
-            if (!mz_zip_reader_extract_to_mem(&zip, item, bytes.data(), bytes.size(), 0U) || !bytes.starts_with(InventoryHeader) ||
-                !bytes.ends_with('\n'))
+            if (!mz_zip_reader_extract_to_mem(&zip, item, bytes.data(), bytes.size(), 0U) ||
+                !bytes.starts_with(UpdateFileInventoryHeader) || !bytes.ends_with('\n'))
                 return invalid();
             DeclaredFiles declared;
             std::string previous;
-            std::size_t position = InventoryHeader.size();
+            std::size_t position = UpdateFileInventoryHeader.size();
             while (position < bytes.size()) {
                 const auto end = bytes.find('\n', position);
                 if (end == std::string::npos || end == position)
                     return invalid();
                 auto row = ParseInventoryRow(std::string_view{bytes}.substr(position, end - position));
-                if (row.HasError() || row.Value().path <= previous || row.Value().path == InventoryName ||
+                if (row.HasError() || row.Value().path <= previous || row.Value().path == UpdateFileInventoryPath ||
                     row.Value().size > limits.maximumFileBytes)
                     return invalid();
                 previous = row.Value().path;
@@ -190,7 +188,7 @@ namespace Horo::Release {
                 return invalid();
             std::size_t files = 0U;
             for (const auto &entry : index) {
-                if (entry.kind != UpdateArchiveEntryKind::File || entry.path == InventoryName)
+                if (entry.kind != UpdateArchiveEntryKind::File || entry.path == UpdateFileInventoryPath)
                     continue;
                 const auto found = declared.find(entry.path);
                 if (found == declared.end() || found->second.size != entry.expandedBytes)
@@ -264,7 +262,7 @@ namespace Horo::Release {
             for (mz_uint item = 0U; item < index.size(); ++item) {
                 if (cancellation.IsCancellationRequested())
                     return Result<std::vector<UpdateStagedFile>>::Failure(MakeError(UpdateTransferErrors::Cancelled));
-                if (index[item].kind == UpdateArchiveEntryKind::Directory || index[item].path == InventoryName)
+                if (index[item].kind == UpdateArchiveEntryKind::Directory || index[item].path == UpdateFileInventoryPath)
                     continue;
                 auto extracted = ExtractFile(zip, item, index[item], root, files);
                 if (extracted.HasError())

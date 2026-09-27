@@ -51,6 +51,40 @@ namespace Horo::Release {
         }
     }  // namespace
 
+    /** @copydoc BuildCanonicalUpdateFileInventory */
+    Result<std::string> BuildCanonicalUpdateFileInventory(const std::span<const UpdateStagedFile> files,
+                                                          const UpdateArchiveLimits &limits) {
+        const auto invalid = [] {
+            return Result<std::string>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
+        };
+        constexpr std::size_t MaximumInventoryBytes = 1024U * 1024U;
+        if (files.empty() || files.size() >= limits.maximumEntries)
+            return invalid();
+        std::vector<const UpdateStagedFile *> ordered;
+        ordered.reserve(files.size());
+        for (const auto &file : files)
+            ordered.push_back(&file);
+        std::ranges::sort(ordered, {}, [](const UpdateStagedFile *file) -> const std::string & {
+            return file->path;
+        });
+        std::string bytes{UpdateFileInventoryHeader};
+        std::vector<UpdateArchiveEntry> index;
+        index.reserve(files.size() + 1U);
+        for (const auto *file : ordered) {
+            if (file->path == UpdateFileInventoryPath)
+                return invalid();
+            const std::string row = file->path + '\t' + std::to_string(file->size) + '\t' + FormatSha256(file->digest) + '\n';
+            if (row.size() > MaximumInventoryBytes - bytes.size())
+                return Result<std::string>::Failure(MakeError(UpdateTransferErrors::ArchiveResourceLimit));
+            bytes += row;
+            index.push_back({file->path, UpdateArchiveEntryKind::File, file->size});
+        }
+        index.push_back({std::string{UpdateFileInventoryPath}, UpdateArchiveEntryKind::File, bytes.size()});
+        if (auto validated = ValidateUpdateArchiveIndex(index, limits); validated.HasError())
+            return Result<std::string>::Failure(validated.ErrorValue());
+        return Result<std::string>::Success(std::move(bytes));
+    }
+
     /** @copydoc VerifyUpdateStagedTree */
     Result<void> VerifyUpdateStagedTree(const std::filesystem::path &root, const std::span<const UpdateStagedFile> files,
                                         const UpdateArchiveLimits &limits) {

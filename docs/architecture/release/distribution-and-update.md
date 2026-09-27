@@ -282,7 +282,9 @@ duplicate, mismatched, or noncanonical rows before extraction, then compares
 every decompressed file with its declared digest and size. It writes into an
 absent sibling directory durably, checks the completed tree again, and removes
 the new tree on failure before any ready marker can survive. ZIP producers must
-write this inventory before package signing. Other package formats require
+write this inventory before package signing; they can use
+`BuildCanonicalUpdateFileInventory` to produce the bounded, sorted bytes.
+Other package formats require
 readers with the same preflight and durable publication sequence.
 Partial-file checkpoint evidence uses a bounded canonical schema. Recovery
 parses it as untrusted bytes and rechecks it against the selected signed package

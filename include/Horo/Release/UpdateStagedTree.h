@@ -13,14 +13,29 @@
 #include <filesystem>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace Horo::Release {
+    /** @brief Reserved ZIP entry for the signed package's canonical file inventory. */
+    inline constexpr std::string_view UpdateFileInventoryPath = "horo-update-files-v1.txt";
+    /** @brief Version marker at the start of the canonical file inventory. */
+    inline constexpr std::string_view UpdateFileInventoryHeader = "horo-update-files-v1\n";
+
     /** @brief One file declared by the authenticated package's internal inventory. */
     struct UpdateStagedFile final {
         std::string path;
         std::uint64_t size{};
         Sha256Digest digest;
     };
+
+    /**
+     * @brief Encodes the exact internal file inventory required in signed ZIP update packages.
+     * @param files Complete unsigned package file list, excluding the reserved inventory entry.
+     * @param limits Host policy bounds for the complete archive including its inventory entry.
+     * @return Canonical sorted inventory bytes to place at UpdateFileInventoryPath before package signing.
+     */
+    [[nodiscard]] Result<std::string> BuildCanonicalUpdateFileInventory(std::span<const UpdateStagedFile> files,
+                                                                        const UpdateArchiveLimits &limits);
 
     /**
      * @brief Verifies every staged file and rejects undeclared content, links, or nonportable paths.

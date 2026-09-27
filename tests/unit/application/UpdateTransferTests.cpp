@@ -313,6 +313,25 @@ TEST_CASE("Update staging rejects hard links to files outside the private tree",
     std::filesystem::remove(outside);
 }
 
+TEST_CASE("Update file inventory builder sorts paths and reserves its own archive entry", "[release][update]") {
+    constexpr std::string_view first = "a";
+    constexpr std::string_view second = "bb";
+    const auto firstDigest = Horo::ComputeSha256(std::as_bytes(std::span{first}));
+    const auto secondDigest = Horo::ComputeSha256(std::as_bytes(std::span{second}));
+    const std::array files{UpdateStagedFile{"bin/b", second.size(), secondDigest}, UpdateStagedFile{"bin/a", first.size(), firstDigest}};
+    constexpr UpdateArchiveLimits limits{.maximumEntries = 3U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
+    auto built = BuildCanonicalUpdateFileInventory(files, limits);
+    REQUIRE(built.HasValue());
+    CHECK(built.Value() == std::string{UpdateFileInventoryHeader} + "bin/a\t1\t" + Horo::FormatSha256(firstDigest) + '\n' + "bin/b\t2\t" +
+                               Horo::FormatSha256(secondDigest) + '\n');
+    CHECK(BuildCanonicalUpdateFileInventory(files, {.maximumEntries = 2U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U})
+              .HasError());
+    const std::array reserved{UpdateStagedFile{std::string{UpdateFileInventoryPath}, 1U, firstDigest}};
+    CHECK(BuildCanonicalUpdateFileInventory(reserved, limits).HasError());
+    const std::array collision{UpdateStagedFile{"bin/a", 1U, firstDigest}, UpdateStagedFile{"Bin/A", 1U, firstDigest}};
+    CHECK(BuildCanonicalUpdateFileInventory(collision, limits).HasError());
+}
+
 TEST_CASE("Private transfer checkpoint recovery requires exact durable partial bytes", "[release][update]") {
     TemporaryStage stage;
     const auto partialPath = stage.path / "package partial";
