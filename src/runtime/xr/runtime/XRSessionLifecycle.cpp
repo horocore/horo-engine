@@ -99,8 +99,7 @@ namespace Horo::XR {
                                                      const XRCapabilityRequirement &requirement) {
         if (destroyed_)
             return Result<XRSessionId>::Failure(MakeError(XRErrors::OperationUnavailable));
-        const auto admission = AdmitXRCapability(capabilities, activeSystem, expectedRevision, requirement);
-        if (admission.HasError())
+        if (const auto admission = AdmitXRCapability(capabilities, activeSystem, expectedRevision, requirement); admission.HasError())
             return Result<XRSessionId>::Failure(admission.ErrorValue());
         if (lastSessionGeneration_ == std::numeric_limits<std::uint32_t>::max())
             return Result<XRSessionId>::Failure(MakeError(XRErrors::CapacityExceeded));
@@ -165,9 +164,10 @@ namespace Horo::XR {
     }
 
     void XRSessionLifecycle::PublishState(const XRSessionState state) noexcept {
+        using enum XRSessionState;
         snapshot_.state = state;
-        snapshot_.admitsFrames = state == XRSessionState::Running || state == XRSessionState::Visible || state == XRSessionState::Focused;
-        snapshot_.admitsActions = state == XRSessionState::Focused;
+        snapshot_.admitsFrames = state == Running || state == Visible || state == Focused;
+        snapshot_.admitsActions = state == Focused;
     }
 
     /** @copydoc XRSessionLifecycle::Shutdown */
