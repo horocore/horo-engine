@@ -1,5 +1,6 @@
 #include "ReferenceModelStream.h"
 
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -55,15 +56,15 @@ namespace Horo::Agent::Detail {
             return {ModelError{ModelErrorCode::Protocol, "Incomplete or invalid model stream", std::nullopt}};
         for (const auto &[index, tool] : m_tools) {
             (void)index;
-            const auto arguments = Json::parse(tool.argumentsJson, nullptr, false);
-            if (tool.callId.empty() || tool.name.empty() || !arguments.is_object())
+            if (const auto arguments = Json::parse(tool.argumentsJson, nullptr, false);
+                tool.callId.empty() || tool.name.empty() || !arguments.is_object())
                 return {ModelError{ModelErrorCode::Protocol, "Incomplete tool intent", std::nullopt}};
             if (!Emit({ModelEventKind::ToolIntent, {}, tool, {}}))
                 break;
         }
         if (m_cancelled)
             return {ModelError{ModelErrorCode::Cancelled, "Model request cancelled", std::nullopt}};
-        if ((m_usage.inputTokens || m_usage.outputTokens) && !Emit({ModelEventKind::Usage, {}, {}, m_usage}))
+        if ((m_usage.inputTokens.has_value() || m_usage.outputTokens.has_value()) && !Emit({ModelEventKind::Usage, {}, {}, m_usage}))
             return {ModelError{ModelErrorCode::Cancelled, "Model request cancelled", std::nullopt}};
         if (!Emit({ModelEventKind::Completed, {}, {}, {}}))
             return {ModelError{ModelErrorCode::Cancelled, "Model request cancelled", std::nullopt}};
@@ -138,8 +139,11 @@ namespace Horo::Agent::Detail {
                 return false;
             }
             std::string callId = call.value("id", std::string{});
-            if (callId.empty())
-                callId = "ollama-" + std::to_string(m_invocation) + "-" + std::to_string(m_tools.size());
+            if (callId.empty()) {
+                std::ostringstream generated;
+                generated << "ollama-" << m_invocation << '-' << m_tools.size();
+                callId = generated.str();
+            }
             ModelToolIntent tool{std::move(callId), function["name"].get<std::string>(),
                                  function["arguments"].is_string() ? function["arguments"].get<std::string>()
                                                                    : function["arguments"].dump()};
@@ -147,7 +151,7 @@ namespace Horo::Agent::Detail {
                 m_error = true;
                 return false;
             }
-            m_tools.emplace(m_tools.size(), std::move(tool));
+            m_tools.try_emplace(m_tools.size(), std::move(tool));
         }
         return true;
     }
@@ -182,32 +186,39 @@ namespace Horo::Agent::Detail {
     /** @copydoc StreamParser::OpenAITools */
     bool StreamParser::OpenAITools(const Json &fragments) {
         for (const auto &fragment : fragments) {
-            if (!fragment.is_object() || !fragment.value("index", Json()).is_number_unsigned()) {
+            if (!ApplyOpenAIFragment(fragment))
+                return false;
+        }
+        return true;
+    }
+
+    /** @copydoc StreamParser::ApplyOpenAIFragment */
+    bool StreamParser::ApplyOpenAIFragment(const Json &fragment) {
+        if (!fragment.is_object() || !fragment.value("index", Json()).is_number_unsigned()) {
+            m_error = true;
+            return false;
+        }
+        const auto index = fragment["index"].get<std::size_t>();
+        if (index >= 64) {
+            m_error = true;
+            return false;
+        }
+        auto &tool = m_tools[index];
+        if (m_tools.size() > 64) {
+            m_error = true;
+            return false;
+        }
+        if (fragment.contains("id") && fragment["id"].is_string())
+            tool.callId = fragment["id"].get<std::string>();
+        if (fragment.contains("function") && fragment["function"].is_object()) {
+            const auto &function = fragment["function"];
+            if (function.contains("name") && function["name"].is_string())
+                tool.name += function["name"].get<std::string>();
+            if (function.contains("arguments") && function["arguments"].is_string())
+                tool.argumentsJson += function["arguments"].get<std::string>();
+            if (tool.name.size() > 256 || tool.argumentsJson.size() > kMaximumLineBytes) {
                 m_error = true;
                 return false;
-            }
-            const auto index = fragment["index"].get<std::size_t>();
-            if (index >= 64) {
-                m_error = true;
-                return false;
-            }
-            auto &tool = m_tools[index];
-            if (m_tools.size() > 64) {
-                m_error = true;
-                return false;
-            }
-            if (fragment.contains("id") && fragment["id"].is_string())
-                tool.callId = fragment["id"].get<std::string>();
-            if (fragment.contains("function") && fragment["function"].is_object()) {
-                const auto &function = fragment["function"];
-                if (function.contains("name") && function["name"].is_string())
-                    tool.name += function["name"].get<std::string>();
-                if (function.contains("arguments") && function["arguments"].is_string())
-                    tool.argumentsJson += function["arguments"].get<std::string>();
-                if (tool.name.size() > 256 || tool.argumentsJson.size() > kMaximumLineBytes) {
-                    m_error = true;
-                    return false;
-                }
             }
         }
         return true;

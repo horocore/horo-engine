@@ -36,6 +36,7 @@ namespace Horo::Agent::Detail {
         bool OllamaTools(const Json &calls);
         bool OpenAIFrame(const Json &frame);
         bool OpenAITools(const Json &fragments);
+        bool ApplyOpenAIFragment(const Json &fragment);
 
         Protocol m_protocol;
         const ModelEventSink &m_sink;
