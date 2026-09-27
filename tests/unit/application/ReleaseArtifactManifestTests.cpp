@@ -1,11 +1,38 @@
 #include "Horo/Release/ReleaseArtifactManifest.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <span>
+#include <string_view>
 
 using namespace Horo;
 using namespace Horo::Release;
 
 namespace {
+    class TemporaryDirectory final {
+    public:
+        TemporaryDirectory()
+            : path(std::filesystem::temp_directory_path() /
+                   ("horo-release-manifest-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+            std::filesystem::create_directories(path);
+        }
+
+        ~TemporaryDirectory() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+
+        std::filesystem::path path;
+    };
+
+    void WriteFile(const std::filesystem::path &path, const std::string_view bytes) {
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream output(path, std::ios::binary);
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    }
+
     ReleaseArtifactManifestData Fixture() {
         ReleaseArtifactManifestData data;
         data.candidate = ReleaseCandidateId{42U};
@@ -84,4 +111,26 @@ TEST_CASE("Final release manifest rejects traversal, duplicate identities, and i
     auto invalidSigning = Fixture();
     invalidSigning.signing = ReleaseManifestSigning{"bad algorithm", "horo", "release_key", {}};
     CHECK(ReleaseArtifactManifest::Create(std::move(invalidSigning)).HasError());
+}
+
+TEST_CASE("Final release tree verification accounts for every published byte", "[release][manifest]") {
+    TemporaryDirectory directory;
+    auto data = Fixture();
+    data.artifacts = {{"bin/game", ReleaseArtifactRole::Binary, 4U, ComputeSha256(std::as_bytes(std::span{"game", 4U}))},
+                      {"assets.horo", ReleaseArtifactRole::AssetArchive, 6U, ComputeSha256(std::as_bytes(std::span{"assets", 6U}))}};
+    auto manifest = ReleaseArtifactManifest::Create(std::move(data));
+    REQUIRE(manifest.HasValue());
+    WriteFile(directory.path / "manifest.json", manifest.Value().CanonicalJson());
+    WriteFile(directory.path / "bin/game", "game");
+    WriteFile(directory.path / "assets.horo", "assets");
+    CHECK(VerifyReleaseArtifactTree(directory.path, manifest.Value()).HasValue());
+
+    WriteFile(directory.path / "bin/game", "bad!");
+    CHECK(VerifyReleaseArtifactTree(directory.path, manifest.Value()).HasError());
+    WriteFile(directory.path / "bin/game", "game");
+    WriteFile(directory.path / "unlisted.txt", "unexpected");
+    CHECK(VerifyReleaseArtifactTree(directory.path, manifest.Value()).HasError());
+    std::filesystem::remove(directory.path / "unlisted.txt");
+    std::filesystem::remove(directory.path / "assets.horo");
+    CHECK(VerifyReleaseArtifactTree(directory.path, manifest.Value()).HasError());
 }

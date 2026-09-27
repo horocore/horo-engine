@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
@@ -104,4 +105,12 @@ namespace Horo::Release {
         std::string json_;
         Sha256Digest digest_;
     };
+
+    /**
+     * @brief Verifies exact final file bytes and rejects undeclared files or symbolic links in a private staging tree.
+     * @param root Private, quiescent staging directory containing manifest.json and every declared artifact.
+     * @param manifest Expected immutable final manifest.
+     * @return Success only when all recorded sizes, hashes, and canonical manifest bytes match the tree.
+     */
+    [[nodiscard]] Result<void> VerifyReleaseArtifactTree(const std::filesystem::path &root, const ReleaseArtifactManifest &manifest);
 }  // namespace Horo::Release
