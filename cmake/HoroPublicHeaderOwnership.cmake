@@ -305,6 +305,8 @@ horo_configure_target_header_boundary(HoroGameplayLua PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
+    Horo/Assets/AssetArchive.h
+    Horo/Assets/AssetChunkPlan.h
     Horo/Assets/AssetDependency.h
     Horo/Assets/AssetCook.h
     Horo/Assets/AssetCookCache.h

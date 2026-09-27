@@ -2076,6 +2076,11 @@ add_executable(HoroAssetCookTests
 )
 target_compile_features(HoroAssetCookTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAssetCookTests PRIVATE HoroEngine::Assets)
+add_executable(HoroAssetChunkPlanTests
+        unit/runtime/assets/AssetChunkPlanTests.cpp
+        unit/runtime/assets/AssetArchiveTests.cpp)
+target_link_libraries(HoroAssetChunkPlanTests PRIVATE HoroEngine::Assets)
+horo_register_catch_test(HoroAssetChunkPlanTests LABELS "assets;release;headless")
 add_executable(HoroCookCatalogTests
         unit/runtime/assets/CookCatalogTests.cpp
 )
