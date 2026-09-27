@@ -5,6 +5,8 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <string>
 #include <string_view>
 
 using namespace Horo;
@@ -98,5 +100,23 @@ TEST_CASE("Release candidate publisher preserves the stage and final path on inv
     auto manifest = Manifest(plan, stage.Value().Candidate());
     CHECK(publisher.Promote(plan, stage.Value(), manifest).HasError());
     CHECK(std::filesystem::is_directory(stage.Value().StageRoot()));
+    CHECK_FALSE(std::filesystem::exists(stage.Value().FinalRoot()));
+}
+
+TEST_CASE("Release candidate publisher never replaces an existing staged manifest", "[release][staging]") {
+    TemporaryDirectory output;
+    auto plan = Plan(output.path);
+    NativeDurableFileSystem files;
+    NativeReleaseCandidatePublisher publisher{files};
+    auto stage = publisher.Begin(plan, ReleaseCandidateId{44U});
+    REQUIRE(stage.HasValue());
+    WriteFile(stage.Value().StageRoot() / "bin/editor", "editor");
+    WriteFile(stage.Value().StageRoot() / "manifest.json", "existing metadata");
+    auto manifest = Manifest(plan, stage.Value().Candidate());
+
+    CHECK(publisher.Promote(plan, stage.Value(), manifest).HasError());
+    std::ifstream existing(stage.Value().StageRoot() / "manifest.json", std::ios::binary);
+    const std::string bytes{std::istreambuf_iterator<char>{existing}, std::istreambuf_iterator<char>{}};
+    CHECK(bytes == "existing metadata");
     CHECK_FALSE(std::filesystem::exists(stage.Value().FinalRoot()));
 }
