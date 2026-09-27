@@ -129,34 +129,194 @@ namespace Horo::Destruction {
             facts.estimatedBytes += bytes;
             return Result<void>::Success();
         }
+
+        [[nodiscard]] Result<void> ValidateRequest(const ChunkMeshArtifact &mesh, const StructuralGraphCookRequest &request,
+                                                   const CancellationToken &cancellation) {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(StructuralGraphErrors::Cancelled));
+            if (!mesh.content.IsValid() || request.content != mesh.content || !Nonzero(mesh.integrityDigest) ||
+                request.meshIntegrityDigest != mesh.integrityDigest || !request.ownerRevision.IsValid() ||
+                !request.policyRevision.IsValid() || mesh.schemaVersion != ChunkMeshCookSchemaVersion || mesh.chunks.empty() ||
+                request.chunks.size() != mesh.chunks.size())
+                return Result<void>::Failure(MakeError(StructuralGraphErrors::Stale));
+            const auto profile = GetDestructionTierProfile(mesh.tier);
+            if (profile.HasError() || !request.requiredFeatures.IsValid() ||
+                (request.requiredFeatures.bits & ~profile.Value().supportedFeatures.bits) != 0 ||
+                !profile.Value().supportedFeatures.Contains(DestructionFeature::CookedSupport))
+                return Result<void>::Failure(MakeError(StructuralGraphErrors::Unsupported));
+            if (!ValidLimits(request.limits, profile.Value().limits) || mesh.chunks.size() > request.limits.maximumChunksPerDestructible ||
+                mesh.chunks.size() * 2 - 1 > request.limits.maximumWorkItemsPerTransition ||
+                request.contacts.size() > request.limits.maximumWorkItemsPerTransition)
+                return Result<void>::Failure(MakeError(StructuralGraphErrors::LimitExceeded));
+            for (std::size_t index = 1; index < request.chunks.size(); ++index) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(StructuralGraphErrors::Cancelled));
+                if (request.chunks[index - 1].id >= request.chunks[index].id || mesh.chunks[index - 1].id >= mesh.chunks[index].id)
+                    return Result<void>::Failure(Context(StructuralGraphErrors::UnstableOrder, "chunk", index));
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> BuildChunks(StructuralGraphArtifact &graph, const ChunkMeshArtifact &mesh,
+                                               const StructuralGraphCookRequest &request, const CancellationToken &cancellation) {
+            auto charged = Charge(graph.validation, request.limits, mesh.chunks.size() * 2 - 1,
+                                  sizeof(StructuralGraphArtifact) + mesh.chunks.size() * sizeof(StructuralGraphChunk));
+            if (charged.HasError())
+                return charged;
+            graph.chunks.reserve(mesh.chunks.size());
+            for (std::size_t index = 0; index < mesh.chunks.size(); ++index) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(StructuralGraphErrors::Cancelled));
+                const auto &input = request.chunks[index];
+                if (!input.id.IsValid() || input.id != mesh.chunks[index].id || input.parent == input.id)
+                    return Result<void>::Failure(Context(StructuralGraphErrors::InvalidInput, "chunk", index));
+                const auto parent = std::ranges::lower_bound(mesh.chunks, input.parent, {}, &ChunkMesh::id);
+                if (input.parent.IsValid() && (parent == mesh.chunks.end() || parent->id != input.parent))
+                    return Result<void>::Failure(Context(StructuralGraphErrors::InvalidInput, "parent", index));
+                StructuralGraphChunk chunk;
+                chunk.id = input.id;
+                chunk.parent = input.parent;
+                chunk.flags = {input.anchor, input.required, input.anchor, input.parent.IsValid()};
+                graph.validation.anchorCount += input.anchor;
+                graph.validation.requiredCount += input.required;
+                graph.chunks.push_back(std::move(chunk));
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> BuildContacts(StructuralGraphArtifact &graph, const StructuralGraphCookRequest &request,
+                                                 const CancellationToken &cancellation) {
+            for (std::size_t index = 0; index < request.contacts.size(); ++index) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(StructuralGraphErrors::Cancelled));
+                const auto &contact = request.contacts[index];
+                if (contact.low >= graph.chunks.size() || contact.high >= graph.chunks.size())
+                    return Result<void>::Failure(Context(StructuralGraphErrors::InvalidIndex, "contact", index));
+                if (contact.low >= contact.high || !std::isfinite(contact.weight) || contact.weight <= 0.0)
+                    return Result<void>::Failure(Context(StructuralGraphErrors::InvalidInput, "contact", index));
+                if (index != 0 &&
+                    std::pair{request.contacts[index - 1].low, request.contacts[index - 1].high} >= std::pair{contact.low, contact.high})
+                    return Result<void>::Failure(Context(StructuralGraphErrors::UnstableOrder, "contact", index));
+                auto &low = graph.chunks[contact.low];
+                auto &high = graph.chunks[contact.high];
+                if (!std::isfinite(low.supportWeight + contact.weight) || !std::isfinite(high.supportWeight + contact.weight))
+                    return Result<void>::Failure(Context(StructuralGraphErrors::InvalidInput, "weight", index));
+                const auto charged =
+                    Charge(graph.validation, request.limits, 2, sizeof(StructuralContactInput) + 2 * sizeof(std::uint32_t));
+                if (charged.HasError())
+                    return charged;
+                low.supportWeight += contact.weight;
+                high.supportWeight += contact.weight;
+                low.adjacency.push_back(contact.high);
+                high.adjacency.push_back(contact.low);
+            }
+            graph.contacts = request.contacts;
+            for (auto &chunk : graph.chunks)
+                std::ranges::sort(chunk.adjacency);
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateHierarchy(StructuralGraphArtifact &graph, const StructuralGraphCookRequest &request,
+                                                     DestructionFeatureSet supportedFeatures, const CancellationToken &cancellation) {
+            for (std::size_t index = 0; index < graph.chunks.size(); ++index) {
+                std::uint32_t depth = 1;
+                auto parent = graph.chunks[index].parent;
+                while (parent.IsValid()) {
+                    if (cancellation.IsCancellationRequested())
+                        return Result<void>::Failure(MakeError(StructuralGraphErrors::Cancelled));
+                    const auto charged = Charge(graph.validation, request.limits, 1);
+                    if (charged.HasError())
+                        return charged;
+                    if (++depth > graph.chunks.size())
+                        return Result<void>::Failure(Context(StructuralGraphErrors::HierarchyCycle, "chunk", index));
+                    const auto it = std::ranges::lower_bound(graph.chunks, parent, {}, &StructuralGraphChunk::id);
+                    if (it == graph.chunks.end() || it->id != parent)
+                        return Result<void>::Failure(Context(StructuralGraphErrors::InvalidInput, "parent", index));
+                    parent = it->parent;
+                }
+                if (depth > request.limits.maximumHierarchyDepth)
+                    return Result<void>::Failure(Context(StructuralGraphErrors::LimitExceeded, "depth", index));
+                graph.validation.maximumHierarchyDepth = std::max(graph.validation.maximumHierarchyDepth, depth);
+            }
+            if (graph.validation.maximumHierarchyDepth > 1)
+                graph.producedFeatures.bits |= DestructionFeatureBit<DestructionFeature::HierarchicalFracture>;
+            if ((graph.producedFeatures.bits & ~supportedFeatures.bits) != 0 ||
+                (request.requiredFeatures.bits & ~graph.producedFeatures.bits) != 0)
+                return Result<void>::Failure(MakeError(StructuralGraphErrors::Unsupported));
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> MarkSupport(StructuralGraphArtifact &graph, const DestructionLimits &limits,
+                                               const CancellationToken &cancellation) {
+            std::vector<bool> supported(graph.chunks.size());
+            std::vector<std::uint32_t> queue;
+            queue.reserve(graph.chunks.size());
+            for (std::uint32_t index = 0; index < graph.chunks.size(); ++index) {
+                if (graph.chunks[index].flags.anchor) {
+                    supported[index] = true;
+                    queue.push_back(index);
+                }
+            }
+            for (std::size_t head = 0; head < queue.size(); ++head) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(StructuralGraphErrors::Cancelled));
+                for (const auto neighbor : graph.chunks[queue[head]].adjacency) {
+                    const auto charged = Charge(graph.validation, limits, 1);
+                    if (charged.HasError())
+                        return charged;
+                    if (!supported[neighbor]) {
+                        supported[neighbor] = true;
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+            for (std::uint32_t index = 0; index < graph.chunks.size(); ++index) {
+                graph.chunks[index].flags.initiallySupported = supported[index];
+                if (graph.chunks[index].flags.required && !supported[index])
+                    return Result<void>::Failure(Context(StructuralGraphErrors::DisconnectedRequired, "chunk", index));
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> AssignIslands(StructuralGraphArtifact &graph, const DestructionLimits &limits,
+                                                 const CancellationToken &cancellation) {
+            std::vector<bool> visited(graph.chunks.size());
+            std::vector<std::uint32_t> queue;
+            queue.reserve(graph.chunks.size());
+            for (std::uint32_t index = 0; index < graph.chunks.size(); ++index) {
+                if (visited[index])
+                    continue;
+                queue.clear();
+                queue.push_back(index);
+                visited[index] = true;
+                for (std::size_t head = 0; head < queue.size(); ++head) {
+                    if (cancellation.IsCancellationRequested())
+                        return Result<void>::Failure(MakeError(StructuralGraphErrors::Cancelled));
+                    auto &chunk = graph.chunks[queue[head]];
+                    chunk.island = graph.validation.islandCount;
+                    for (const auto neighbor : chunk.adjacency) {
+                        const auto charged = Charge(graph.validation, limits, 1);
+                        if (charged.HasError())
+                            return charged;
+                        if (!visited[neighbor]) {
+                            visited[neighbor] = true;
+                            queue.push_back(neighbor);
+                        }
+                    }
+                }
+                ++graph.validation.islandCount;
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc CookStructuralGraph */
     Result<std::shared_ptr<const StructuralGraphArtifact>> CookStructuralGraph(const ChunkMeshArtifact &mesh,
                                                                                const StructuralGraphCookRequest &request,
                                                                                const CancellationToken &cancellation) {
-        if (cancellation.IsCancellationRequested())
-            return Output::Failure(MakeError(StructuralGraphErrors::Cancelled));
-        if (!mesh.content.IsValid() || request.content != mesh.content || !Nonzero(mesh.integrityDigest) ||
-            request.meshIntegrityDigest != mesh.integrityDigest || !request.ownerRevision.IsValid() || !request.policyRevision.IsValid() ||
-            mesh.schemaVersion != ChunkMeshCookSchemaVersion || mesh.chunks.empty() || request.chunks.size() != mesh.chunks.size())
-            return Output::Failure(MakeError(StructuralGraphErrors::Stale));
-        const auto profile = GetDestructionTierProfile(mesh.tier);
-        if (profile.HasError() || !request.requiredFeatures.IsValid() ||
-            (request.requiredFeatures.bits & ~profile.Value().supportedFeatures.bits) != 0 ||
-            !profile.Value().supportedFeatures.Contains(DestructionFeature::CookedSupport))
-            return Output::Failure(MakeError(StructuralGraphErrors::Unsupported));
-        if (!ValidLimits(request.limits, profile.Value().limits) || mesh.chunks.size() > request.limits.maximumChunksPerDestructible ||
-            mesh.chunks.size() * 2 - 1 > request.limits.maximumWorkItemsPerTransition ||
-            request.contacts.size() > request.limits.maximumWorkItemsPerTransition)
-            return Output::Failure(MakeError(StructuralGraphErrors::LimitExceeded));
-        for (std::size_t index = 1; index < request.chunks.size(); ++index) {
-            if (cancellation.IsCancellationRequested())
-                return Output::Failure(MakeError(StructuralGraphErrors::Cancelled));
-            if (request.chunks[index - 1].id >= request.chunks[index].id || mesh.chunks[index - 1].id >= mesh.chunks[index].id)
-                return Output::Failure(Context(StructuralGraphErrors::UnstableOrder, "chunk", index));
-        }
-
+        const auto valid = ValidateRequest(mesh, request, cancellation);
+        if (valid.HasError())
+            return Output::Failure(valid.ErrorValue());
         auto graph = std::make_shared<StructuralGraphArtifact>();
         graph->content = request.content;
         graph->meshIntegrityDigest = request.meshIntegrityDigest;
@@ -166,134 +326,22 @@ namespace Horo::Destruction {
         graph->producedFeatures.bits = mesh.producedFeatures.bits | DestructionFeatureBit<DestructionFeature::CookedSupport>;
         graph->validation.chunkCount = static_cast<std::uint32_t>(mesh.chunks.size());
         graph->validation.contactCount = static_cast<std::uint32_t>(request.contacts.size());
-        auto charged = Charge(graph->validation, request.limits, mesh.chunks.size() * 2 - 1,
-                              sizeof(StructuralGraphArtifact) + mesh.chunks.size() * sizeof(StructuralGraphChunk));
-        if (charged.HasError())
-            return Output::Failure(charged.ErrorValue());
-        graph->chunks.reserve(mesh.chunks.size());
-        for (std::size_t index = 0; index < mesh.chunks.size(); ++index) {
-            if (cancellation.IsCancellationRequested())
-                return Output::Failure(MakeError(StructuralGraphErrors::Cancelled));
-            const auto &input = request.chunks[index];
-            if (!input.id.IsValid() || input.id != mesh.chunks[index].id || input.parent == input.id)
-                return Output::Failure(Context(StructuralGraphErrors::InvalidInput, "chunk", index));
-            if (input.parent.IsValid() && std::ranges::lower_bound(mesh.chunks, input.parent, {}, &ChunkMesh::id) == mesh.chunks.end())
-                return Output::Failure(Context(StructuralGraphErrors::InvalidInput, "parent", index));
-            StructuralGraphChunk chunk;
-            chunk.id = input.id;
-            chunk.parent = input.parent;
-            chunk.flags = {input.anchor, input.required, input.anchor, input.parent.IsValid()};
-            graph->validation.anchorCount += input.anchor;
-            graph->validation.requiredCount += input.required;
-            graph->chunks.push_back(std::move(chunk));
-        }
-
-        for (std::size_t index = 0; index < request.contacts.size(); ++index) {
-            if (cancellation.IsCancellationRequested())
-                return Output::Failure(MakeError(StructuralGraphErrors::Cancelled));
-            const auto &contact = request.contacts[index];
-            if (contact.low >= graph->chunks.size() || contact.high >= graph->chunks.size())
-                return Output::Failure(Context(StructuralGraphErrors::InvalidIndex, "contact", index));
-            if (contact.low >= contact.high || !std::isfinite(contact.weight) || contact.weight <= 0.0)
-                return Output::Failure(Context(StructuralGraphErrors::InvalidInput, "contact", index));
-            if (index != 0 &&
-                std::pair{request.contacts[index - 1].low, request.contacts[index - 1].high} >= std::pair{contact.low, contact.high})
-                return Output::Failure(Context(StructuralGraphErrors::UnstableOrder, "contact", index));
-            auto &low = graph->chunks[contact.low];
-            auto &high = graph->chunks[contact.high];
-            if (!std::isfinite(low.supportWeight + contact.weight) || !std::isfinite(high.supportWeight + contact.weight))
-                return Output::Failure(Context(StructuralGraphErrors::InvalidInput, "weight", index));
-            low.supportWeight += contact.weight;
-            high.supportWeight += contact.weight;
-            low.adjacency.push_back(contact.high);
-            high.adjacency.push_back(contact.low);
-            charged = Charge(graph->validation, request.limits, 2, sizeof(StructuralContactInput) + 2 * sizeof(std::uint32_t));
-            if (charged.HasError())
-                return Output::Failure(charged.ErrorValue());
-        }
-        graph->contacts = request.contacts;
-        for (auto &chunk : graph->chunks)
-            std::ranges::sort(chunk.adjacency);
-
-        // Parent chains are separate from undirected adjacency: contact cycles are valid.
-        for (std::size_t index = 0; index < graph->chunks.size(); ++index) {
-            std::uint32_t depth = 1;
-            auto parent = graph->chunks[index].parent;
-            while (parent.IsValid()) {
-                if (cancellation.IsCancellationRequested())
-                    return Output::Failure(MakeError(StructuralGraphErrors::Cancelled));
-                charged = Charge(graph->validation, request.limits, 1);
-                if (charged.HasError())
-                    return Output::Failure(charged.ErrorValue());
-                if (++depth > graph->chunks.size())
-                    return Output::Failure(Context(StructuralGraphErrors::HierarchyCycle, "chunk", index));
-                const auto it = std::ranges::lower_bound(graph->chunks, parent, {}, &StructuralGraphChunk::id);
-                if (it == graph->chunks.end() || it->id != parent)
-                    return Output::Failure(Context(StructuralGraphErrors::InvalidInput, "parent", index));
-                parent = it->parent;
-            }
-            if (depth > request.limits.maximumHierarchyDepth)
-                return Output::Failure(Context(StructuralGraphErrors::LimitExceeded, "depth", index));
-            graph->validation.maximumHierarchyDepth = std::max(graph->validation.maximumHierarchyDepth, depth);
-        }
-        if (graph->validation.maximumHierarchyDepth > 1)
-            graph->producedFeatures.bits |= DestructionFeatureBit<DestructionFeature::HierarchicalFracture>;
-        if ((graph->producedFeatures.bits & ~profile.Value().supportedFeatures.bits) != 0 ||
-            (request.requiredFeatures.bits & ~graph->producedFeatures.bits) != 0)
-            return Output::Failure(MakeError(StructuralGraphErrors::Unsupported));
-
-        std::vector<bool> supported(graph->chunks.size());
-        std::vector<std::uint32_t> queue;
-        queue.reserve(graph->chunks.size());
-        for (std::uint32_t index = 0; index < graph->chunks.size(); ++index) {
-            if (graph->chunks[index].flags.anchor) {
-                supported[index] = true;
-                queue.push_back(index);
-            }
-        }
-        for (std::size_t head = 0; head < queue.size(); ++head) {
-            if (cancellation.IsCancellationRequested())
-                return Output::Failure(MakeError(StructuralGraphErrors::Cancelled));
-            for (const auto neighbor : graph->chunks[queue[head]].adjacency) {
-                charged = Charge(graph->validation, request.limits, 1);
-                if (charged.HasError())
-                    return Output::Failure(charged.ErrorValue());
-                if (!supported[neighbor]) {
-                    supported[neighbor] = true;
-                    queue.push_back(neighbor);
-                }
-            }
-        }
-        for (std::uint32_t index = 0; index < graph->chunks.size(); ++index) {
-            graph->chunks[index].flags.initiallySupported = supported[index];
-            if (graph->chunks[index].flags.required && !supported[index])
-                return Output::Failure(Context(StructuralGraphErrors::DisconnectedRequired, "chunk", index));
-        }
-
-        std::vector<bool> visited(graph->chunks.size());
-        for (std::uint32_t index = 0; index < graph->chunks.size(); ++index) {
-            if (visited[index])
-                continue;
-            queue.clear();
-            queue.push_back(index);
-            visited[index] = true;
-            for (std::size_t head = 0; head < queue.size(); ++head) {
-                if (cancellation.IsCancellationRequested())
-                    return Output::Failure(MakeError(StructuralGraphErrors::Cancelled));
-                auto &chunk = graph->chunks[queue[head]];
-                chunk.island = graph->validation.islandCount;
-                for (const auto neighbor : chunk.adjacency) {
-                    charged = Charge(graph->validation, request.limits, 1);
-                    if (charged.HasError())
-                        return Output::Failure(charged.ErrorValue());
-                    if (!visited[neighbor]) {
-                        visited[neighbor] = true;
-                        queue.push_back(neighbor);
-                    }
-                }
-            }
-            ++graph->validation.islandCount;
-        }
+        auto stage = BuildChunks(*graph, mesh, request, cancellation);
+        if (stage.HasError())
+            return Output::Failure(stage.ErrorValue());
+        stage = BuildContacts(*graph, request, cancellation);
+        if (stage.HasError())
+            return Output::Failure(stage.ErrorValue());
+        const auto profile = GetDestructionTierProfile(mesh.tier);
+        stage = ValidateHierarchy(*graph, request, profile.Value().supportedFeatures, cancellation);
+        if (stage.HasError())
+            return Output::Failure(stage.ErrorValue());
+        stage = MarkSupport(*graph, request.limits, cancellation);
+        if (stage.HasError())
+            return Output::Failure(stage.ErrorValue());
+        stage = AssignIslands(*graph, request.limits, cancellation);
+        if (stage.HasError())
+            return Output::Failure(stage.ErrorValue());
         graph->integrityDigest = GraphDigest(*graph);
         return Output::Success(std::move(graph));
     }
