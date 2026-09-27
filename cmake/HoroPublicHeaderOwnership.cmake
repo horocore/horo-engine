@@ -137,6 +137,15 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/ReleaseTargetMatrix.h
     Horo/Release/ReleaseVersion.h
 )
+horo_configure_target_header_boundary(HoroUpdateManifest PUBLIC_HEADERS
+    Horo/Release/UpdateManifest.h
+    Horo/Release/UpdateManifestErrors.h
+    Horo/Release/UpdateTrustRoot.h
+)
+horo_configure_target_header_boundary(HoroUpdateDiscovery PUBLIC_HEADERS
+    Horo/Release/UpdateDiscovery.h
+    Horo/Release/UpdateDiscoveryErrors.h
+)
 horo_configure_target_header_boundary(HoroReleaseProcess PUBLIC_HEADERS
     Horo/Release/ReleaseCandidatePublisher.h
     Horo/Release/ReleaseProcess.h
@@ -602,6 +611,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/CookedWorldIndexManifest.h
     Horo/WorldStreaming/FallbackStreamingProvider.h
     Horo/WorldStreaming/StreamingBudgetModel.h
+    Horo/WorldStreaming/SharedAssetResidency.h
     Horo/WorldStreaming/StreamingCellOperation.h
     Horo/WorldStreaming/StreamingCellCandidate.h
     Horo/WorldStreaming/StreamingCellAssetRequest.h

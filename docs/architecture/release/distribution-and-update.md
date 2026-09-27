@@ -129,33 +129,57 @@ Moving to a less stable channel requires explicit user action. Returning to an
 older version is treated as a deliberate rollback with project compatibility
 warnings.
 
+`UpdateDiscoveryPolicy` records the selected channel, check interval, automatic
+check and download preferences, mandatory security check policy, and telemetry
+consent. The host supplies its installed channel and last successful check to
+`PlanUpdateCheck`; a channel change is scheduled only after an explicit action.
+Startup and periodic checks are scheduling decisions: the host must dispatch
+source access asynchronously and must not wait for it before normal startup.
+`AssessUpdate` authenticates fetched metadata against installed trust roots and
+selects only a host-supported package for the installed product and target.
+Source failures and incompatible packages remain diagnostic results and do not
+modify the installation. The product host owns source adapters, persistence,
+security-update classification, and download decisions.
+
 ## Update Manifest
 
 ```json
 {
-  "schemaVersion": 1,
-  "product": "horo-editor",
-  "channel": "stable",
-  "version": "0.8.2",
-  "buildId": "build_...",
-  "publishedAt": "2026-06-14T12:00:00Z",
-  "minimumUpdaterVersion": "1",
-  "packages": [
-    {
-      "platform": "macos",
-      "arch": "arm64",
-      "url": "https://...",
-      "size": 12345678,
-      "sha256": "...",
-      "signature": "..."
-    }
-  ]
+  "manifest": {
+    "schemaVersion": 1,
+    "product": {"kind": "editor", "componentId": ""},
+    "channel": "stable",
+    "version": "0.8.2",
+    "buildId": "build_123",
+    "sequence": 12,
+    "publishedAt": 1781438400,
+    "expiresAt": 1782043200,
+    "minimumUpdaterVersion": 1,
+    "minimumRootRevision": 2,
+    "packages": [
+      {
+        "platform": "macos",
+        "architecture": "arm64",
+        "format": "mac-dmg",
+        "packageId": "editor-macos-arm64",
+        "installationId": "horo-editor",
+        "url": "https://example.invalid/editor.dmg",
+        "size": 12345678,
+        "sha256": "<64 lowercase hex digits>",
+        "signature": {"algorithm": "ecdsa-p256-sha256", "publisherId": "com.horo", "keyId": "update-2", "signature": "<128 lowercase hex digits>"}
+      }
+    ]
+  },
+  "signature": {"algorithm": "ecdsa-p256-sha256", "publisherId": "com.horo", "keyId": "update-2", "signature": "<128 lowercase hex digits>"}
 }
 ```
 
-The manifest and package identity are verified according to
-[Release Security](./release-security.md). Transport security does not replace
-artifact signature and hash verification.
+The signed document uses canonical JSON with exact schema fields; the signature
+covers the canonical `manifest` object. Time values are Unix seconds in UTC.
+The installed updater persists the highest accepted sequence and root revision;
+transport responses cannot lower either value. The manifest and package identity
+are verified according to [Release Security](./release-security.md). Transport
+security does not replace artifact signature and hash verification.
 
 ## Update Trust Root And Metadata Freshness
 
@@ -182,6 +206,14 @@ Signing key rotation and revocation are handled through a versioned trust-root
 update policy. A compromised update key invalidates affected manifests and
 requires a fail-closed updater response unless an administrator recovery policy
 is active.
+
+An installer-authenticated revision-one root establishes the initial key set.
+Each subsequent canonical root document carries a complete replacement key set,
+its parent revision, a strictly increasing revision, a nondecreasing manifest
+sequence floor, and expiry. The currently installed root verifies its detached
+signature before the updater may durably replace the root snapshot. Omitting an
+old key from the replacement set revokes it. A network response cannot bootstrap
+a root or skip revisions; administrator recovery needs a separate explicit path.
 
 ## Update State Machine
 
