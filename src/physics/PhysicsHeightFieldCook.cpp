@@ -155,31 +155,41 @@ namespace Horo::Physics {
                    std::isfinite(static_cast<float>(static_cast<double>(origin.z) + spacingZ));
         }
 
-        [[nodiscard]] Result<Math::Aabb> ComputeBounds(const std::uint32_t width, const std::uint32_t height, const Math::Vec3 origin,
-                                                       const float spacingX, const float spacingZ, const float sampleScaleY,
-                                                       const std::span<const float> samples,
-                                                       const CancellationToken *cancellation = nullptr) {
-            const auto maximumX = static_cast<float>(static_cast<double>(origin.x) + static_cast<double>(width - 1U) * spacingX);
-            const auto maximumZ = static_cast<float>(static_cast<double>(origin.z) + static_cast<double>(height - 1U) * spacingZ);
-            if (!std::isfinite(maximumX) || !std::isfinite(maximumZ) || maximumX <= origin.x || maximumZ <= origin.z)
+        struct HeightFieldGridView final {
+            std::uint32_t width{};
+            std::uint32_t height{};
+            Math::Vec3 origin{};
+            float spacingX{};
+            float spacingZ{};
+            float sampleScaleY{};
+            std::span<const float> samples;
+        };
+
+        [[nodiscard]] Result<Math::Aabb> ComputeBounds(const HeightFieldGridView &grid, const CancellationToken *cancellation = nullptr) {
+            const auto maximumX =
+                static_cast<float>(static_cast<double>(grid.origin.x) + static_cast<double>(grid.width - 1U) * grid.spacingX);
+            const auto maximumZ =
+                static_cast<float>(static_cast<double>(grid.origin.z) + static_cast<double>(grid.height - 1U) * grid.spacingZ);
+            if (!std::isfinite(maximumX) || !std::isfinite(maximumZ) || maximumX <= grid.origin.x || maximumZ <= grid.origin.z)
                 return Failure<Math::Aabb>(PhysicsErrors::ShapeCookSourceInvalid,
                                            "Heightfield tile horizontal extent is not representable.");
             float minimumY = std::numeric_limits<float>::infinity();
             float maximumY = -std::numeric_limits<float>::infinity();
-            for (std::size_t index = 0; index < samples.size(); ++index) {
+            for (std::size_t index = 0; index < grid.samples.size(); ++index) {
                 if (cancellation != nullptr && index % 4096U == 0 && cancellation->IsCancellationRequested())
                     return Failure<Math::Aabb>(PhysicsErrors::ShapeCookCancelled,
                                                "Heightfield cook was cancelled during sample validation.");
-                const float sample = samples[index];
+                const float sample = grid.samples[index];
                 if (!std::isfinite(sample))
                     return Failure<Math::Aabb>(PhysicsErrors::ShapeCookSourceInvalid, "Heightfield tile contains a non-finite sample.");
-                const auto y = static_cast<float>(static_cast<double>(origin.y) + static_cast<double>(sample) * sampleScaleY);
+                const auto y = static_cast<float>(static_cast<double>(grid.origin.y) + static_cast<double>(sample) * grid.sampleScaleY);
                 if (!std::isfinite(y))
                     return Failure<Math::Aabb>(PhysicsErrors::ShapeCookSourceInvalid, "Heightfield tile height is not representable.");
                 minimumY = std::min(minimumY, y);
                 maximumY = std::max(maximumY, y);
             }
-            return Result<Math::Aabb>::Success({.minimum = {origin.x, minimumY, origin.z}, .maximum = {maximumX, maximumY, maximumZ}});
+            return Result<Math::Aabb>::Success(
+                {.minimum = {grid.origin.x, minimumY, grid.origin.z}, .maximum = {maximumX, maximumY, maximumZ}});
         }
 
         [[nodiscard]] Result<void> ValidateMappings(const std::span<const std::uint8_t> holes,
@@ -220,8 +230,8 @@ namespace Horo::Physics {
                 request.settings.algorithmVersion != PhysicsHeightFieldCookSettings::CurrentAlgorithmVersion ||
                 !Bounded(request.settings.limits))
                 return Failure<Math::Aabb>(PhysicsErrors::ProfileUnsupported, Context(request, "cook settings are unsupported."));
-            const auto &limits = request.settings.limits;
-            if (request.width < 2 || request.height < 2 || request.width > limits.maxDimension || request.height > limits.maxDimension ||
+            if (const auto &limits = request.settings.limits;
+                request.width < 2 || request.height < 2 || request.width > limits.maxDimension || request.height > limits.maxDimension ||
                 SampleCount(request.width, request.height) > limits.maxSamples || request.materialSlots.size() > limits.maxMaterialSlots)
                 return Failure<Math::Aabb>(PhysicsErrors::ShapeCookLimitExceeded,
                                            Context(request, "tile dimensions, sample count or material count exceed qualified limits."));
@@ -234,8 +244,9 @@ namespace Horo::Physics {
             if (const auto mapping = ValidateMappings(request.cellHoles, request.cellMaterials, request.materialSlots, &cancellation);
                 mapping.HasError())
                 return Result<Math::Aabb>::Failure(mapping.ErrorValue());
-            auto bounds = ComputeBounds(request.width, request.height, request.origin, request.spacingX, request.spacingZ,
-                                        request.sampleScaleY, request.samples, &cancellation);
+            auto bounds = ComputeBounds({request.width, request.height, request.origin, request.spacingX, request.spacingZ,
+                                         request.sampleScaleY, request.samples},
+                                        &cancellation);
             if (bounds.HasError())
                 return Result<Math::Aabb>::Failure(bounds.ErrorValue());
             return bounds;
@@ -415,10 +426,10 @@ namespace Horo::Physics {
                 return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield tile dimensions or scale are invalid.");
             const auto samples = SampleCount(loaded.width, loaded.height);
             const auto cells = CellCount(loaded.width, loaded.height);
-            const auto expectedBytes = HeaderBytes + 36ULL + samples * sizeof(float) +
-                                       cells * (sizeof(std::uint8_t) + sizeof(std::uint64_t)) +
-                                       static_cast<std::uint64_t>(materialCount) * sizeof(std::uint64_t);
-            if (expectedBytes != payloadBytes)
+            if (const auto expectedBytes = HeaderBytes + 36ULL + samples * sizeof(float) +
+                                           cells * (sizeof(std::uint8_t) + sizeof(std::uint64_t)) +
+                                           static_cast<std::uint64_t>(materialCount) * sizeof(std::uint64_t);
+                expectedBytes != payloadBytes)
                 return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield artifact table extent is inconsistent.");
             return Result<void>::Success();
         }
@@ -463,9 +474,9 @@ namespace Horo::Physics {
                 return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield artifact has trailing bytes.");
             if (const auto mapping = ValidateMappings(loaded.cellHoles, loaded.cellMaterials, loaded.materialSlots); mapping.HasError())
                 return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, mapping.ErrorValue().message);
-            const auto measured = ComputeBounds(loaded.width, loaded.height, loaded.origin, loaded.spacingX, loaded.spacingZ,
-                                                loaded.sampleScaleY, loaded.samples);
-            if (measured.HasError() || measured.Value().minimum != bounds.minimum || measured.Value().maximum != bounds.maximum)
+            if (const auto measured = ComputeBounds(
+                    {loaded.width, loaded.height, loaded.origin, loaded.spacingX, loaded.spacingZ, loaded.sampleScaleY, loaded.samples});
+                measured.HasError() || measured.Value().minimum != bounds.minimum || measured.Value().maximum != bounds.maximum)
                 return Failure<void>(PhysicsErrors::ShapeArtifactInvalid, "Heightfield artifact bounds do not match its sample grid.");
             return Result<void>::Success();
         }
@@ -538,9 +549,10 @@ namespace Horo::Physics {
 
     /** @copydoc ValidatePhysicsHeightFieldMotion */
     Result<void> ValidatePhysicsHeightFieldMotion(const PhysicsMotionType motion) {
-        if (motion == PhysicsMotionType::Static)
+        using enum PhysicsMotionType;
+        if (motion == Static)
             return Result<void>::Success();
-        if (motion == PhysicsMotionType::Kinematic || motion == PhysicsMotionType::Dynamic)
+        if (motion == Kinematic || motion == Dynamic)
             return Failure<void>(PhysicsErrors::ShapeMotionUnsupported, "Heightfield collision supports static bodies only.");
         return Failure<void>(PhysicsErrors::OperationUnsupported, "Unknown body motion mode.");
     }
