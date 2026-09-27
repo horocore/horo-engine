@@ -62,6 +62,14 @@ add_test(NAME HoroExtensionScaffoldsTest
 set_tests_properties(HoroExtensionScaffoldsTest PROPERTIES
     LABELS "extensions;sdk;cmake")
 
+add_test(NAME HoroExtensionAuthorCiTest
+    COMMAND "${CMAKE_COMMAND}"
+        "-DHORO_EXTENSION_SDK_PACKAGE_DIR=${HORO_EXTENSION_SDK_PACKAGE_DIR}"
+        "-DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}"
+        "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/extension-author-ci"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunExtensionAuthorCiTest.cmake")
+set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk;cmake")
+
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()

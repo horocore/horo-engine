@@ -248,6 +248,7 @@ def cmake_project(package_id: str, version: str, modules: tuple[Module, ...]) ->
         ])
     lines.extend([
         'install(FILES "${CMAKE_CURRENT_BINARY_DIR}/extension.json" DESTINATION .)',
+        'install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/horo-package.toml" DESTINATION .)',
         f'set(CPACK_PACKAGE_NAME "{package_id}")',
         f'set(CPACK_PACKAGE_VERSION "{version}")',
         f'set(CPACK_PACKAGE_FILE_NAME "{package_id}-{version}")',
@@ -259,10 +260,20 @@ def cmake_project(package_id: str, version: str, modules: tuple[Module, ...]) ->
     return "\n".join(lines)
 
 
+def ci_template_dir() -> Path:
+    root = Path(__file__).resolve().parent.parent
+    packaged = root / "share/horo/extension-sdk/ci"
+    if packaged.is_dir():
+        return packaged
+    return root / "sdk/ci"
+
+
 def write_project(root: Path, package_id: str, name: str, version: str, shape: str) -> None:
     modules = SHAPES[shape]
     (root / "src").mkdir(parents=True)
     (root / "tests").mkdir()
+    (root / ".github/workflows").mkdir(parents=True)
+    (root / ".horo/ci").mkdir(parents=True)
     # Every destination below is a fixed or closed-table child of the private staging root.
     (root / "CMakeLists.txt").write_text(  # NOSONAR
         cmake_project(package_id, version, modules), encoding="utf-8"
@@ -270,6 +281,22 @@ def write_project(root: Path, package_id: str, name: str, version: str, shape: s
     (root / "extension.json.in").write_text(  # NOSONAR
         json.dumps(manifest(package_id, name, version, modules), indent=2) + "\n", encoding="utf-8"
     )
+    (root / "horo-package.toml").write_text(  # NOSONAR
+        "schemaVersion = 1\n\n[package]\n"
+        f"id = {json.dumps(package_id, ensure_ascii=False)}\n"
+        f"version = {json.dumps(version, ensure_ascii=False)}\n"
+        "kind = \"extension\"\n"
+        f"displayName = {json.dumps(name, ensure_ascii=False)}\n",
+        encoding="utf-8",
+    )
+    templates = ci_template_dir()
+    lock_file = templates / "extension-ci.lock.json"
+    if not lock_file.is_file():
+        lock_file = templates / "extension-ci.lock.json.in"
+    shutil.copyfile(templates / "extension-author-ci.yml", root / ".github/workflows/extension-ci.yml")
+    shutil.copyfile(templates / "bootstrap.py" if (templates / "bootstrap.py").is_file()
+                    else Path(__file__).with_name("bootstrap_extension_ci.py"), root / ".horo/ci/bootstrap.py")
+    shutil.copyfile(lock_file, root / ".horo/extension-ci.lock.json")
     for module in modules:
         replacements = {"MODULE_ID": module_id(package_id, module), "VERSION": version}
         (root / "src" / f"{module.suffix}.c").write_text(  # NOSONAR
@@ -282,7 +309,13 @@ def write_project(root: Path, package_id: str, name: str, version: str, shape: s
         f"# {name}\n\nGenerated `{shape}` Horo extension scaffold.\n\n"
         "Configure with `HoroEngineExtensionSdk_DIR` pointing to the SDK's "
         "`lib/cmake/HoroEngineExtensionSdk` directory. Build, run CTest, then build "
-        "the `package` target to create the ZIP artifact.\n",
+        "the `package` target to create the ZIP artifact.\n\n"
+        "For source-free author CI, edit `.horo/extension-ci.lock.json` with the "
+        "version-matched HTTPS SDK ZIP URL and SHA-256 for each platform. The "
+        "pinned `.github/workflows/extension-ci.yml` builds, validates, tests, "
+        "packages and verifies the unsigned archive on Linux, macOS and Windows. "
+        "It publishes an attributable `.horopkg` and provenance, but does not "
+        "sign releases or establish publisher trust.\n",
         encoding="utf-8",
     )
 
