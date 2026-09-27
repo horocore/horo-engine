@@ -48,7 +48,8 @@ def generate_certificate(root: Path, openssl: str) -> tuple[Path, Path]:
                              "[dn]\nCN=127.0.0.1\n[v3_req]\nsubjectAltName=IP:127.0.0.1\n",
                              encoding="ascii")
     # Resolved openssl path and generated temporary paths; shell remains disabled.
-    subprocess.run(  # nosec B603,B607
+    # nosemgrep
+    subprocess.run(  # nosec B603
         [openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-config", str(configuration),
          "-keyout", str(private_key), "-out", str(certificate)],
         check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -68,7 +69,8 @@ def run_scenarios(server: ThreadingHTTPServer, root: Path, certificate: Path, cl
         stage.mkdir()
         ca_bundle = "" if mode == "untrusted" else str(certificate)
         # CMake supplies the built test executable; fixed arguments and no shell.
-        subprocess.run([client, url, ca_bundle, str(stage), mode],  # nosec B603,B607
+        # nosemgrep
+        subprocess.run([client, url, ca_bundle, str(stage), mode],  # nosec B603
                        check=True, env=environment, timeout=20)
         if mode == "untrusted":
             if server.requests:
