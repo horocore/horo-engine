@@ -195,6 +195,34 @@ namespace Horo::Runtime::Ui {
             CHECK(queue.QueuedCount() == 0);
         }
 
+        TEST_CASE("Runtime UI feedback fences navigation result handles after action admission", "[runtime_ui][feedback]") {
+            auto queue = Queue();
+            const auto request = NavigationRequest();
+            const UiElementHandle differentSource{request.source.owner.instance.ownership, 7, 1};
+            const UiElementHandle target{request.source.owner.instance.ownership, 8, 1};
+            const auto wrongFrom = UiDefaultNavigationResult::FocusMoved(differentSource, target);
+            REQUIRE(wrongFrom.HasValue());
+            ExpectError(queue.ObserveAction(request, NavigationResult(request, wrongFrom.Value())), UiErrors::FeedbackSourceStale);
+
+            const auto wrongDispatch = UiDefaultNavigationResult::SubmitDispatched(target);
+            REQUIRE(wrongDispatch.HasValue());
+            ExpectError(queue.ObserveAction(request, NavigationResult(request, wrongDispatch.Value())), UiErrors::FeedbackSourceStale);
+            CHECK(queue.QueuedCount() == 0);
+        }
+
+        TEST_CASE("Runtime UI feedback emits only user-requested action cancellation", "[runtime_ui][feedback]") {
+            auto queue = Queue();
+            const auto request = NavigationRequest();
+            const UiActionOperationId operation{request.source.owner.instance.ownership, RevisionValue<UiActionOperationSequence>(4)};
+            const auto reload = UiActionResult::Cancelled(request.id, operation, UiActionCancellationReason::Reload);
+            const auto requested = UiActionResult::Cancelled(request.id, operation, UiActionCancellationReason::Requested);
+            REQUIRE(reload.HasValue());
+            REQUIRE(requested.HasValue());
+            CHECK_FALSE(queue.ObserveAction(request, reload.Value()).Value());
+            REQUIRE(queue.ObserveAction(request, requested.Value()).Value());
+            CHECK(PopKind(queue) == UiFeedbackKind::Cancel);
+        }
+
         TEST_CASE("Runtime UI feedback fences a new presented revision and does not cue reload focus recovery", "[runtime_ui][feedback]") {
             auto queue = Queue();
             const auto revisedRequest = NavigationRequest(Source(Owner(31, 4)));

@@ -20,6 +20,64 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiActionOwnerContext ActionOwner(const UiFocusOwnerContext &owner) noexcept {
             return {owner.instance, owner.canvas, owner.document, owner.documentRevision, owner.treeRevision, owner.interaction};
         }
+
+        /** @brief Translate a correlated navigation result after fencing its source and target ownership. */
+        [[nodiscard]] Result<UiFeedbackIntent> NavigationIntent(const UiActionRequest &request,
+                                                                const UiDefaultNavigationResult &navigation) {
+            if (UiActionCommandKindOf(request.command) != UiActionCommandKind::Navigation)
+                return Failure<UiFeedbackIntent>(UiErrors::FeedbackInvalid);
+            if (navigation.from.has_value() && *navigation.from != request.source.element)
+                return Failure<UiFeedbackIntent>(UiErrors::FeedbackSourceStale);
+            if (navigation.target.has_value() && navigation.target->ownership != request.source.owner.instance.ownership)
+                return Failure<UiFeedbackIntent>(UiErrors::FeedbackSourceStale);
+
+            using enum UiDefaultNavigationOutcome;
+            if ((navigation.outcome == SubmitDispatched || navigation.outcome == CancelDispatched) &&
+                navigation.target != request.source.element)
+                return Failure<UiFeedbackIntent>(UiErrors::FeedbackSourceStale);
+
+            UiFeedbackIntent intent{.source = request.source, .target = navigation.target};
+            switch (navigation.outcome) {
+                case FocusMoved:
+                    intent.kind = UiFeedbackKind::Navigate;
+                    break;
+                case SubmitDispatched:
+                    intent.kind = UiFeedbackKind::Confirm;
+                    break;
+                case CancelDispatched:
+                    intent.kind = UiFeedbackKind::Cancel;
+                    break;
+                case NoTarget:
+                    intent.kind = UiFeedbackKind::Boundary;
+                    break;
+                case Count:
+                    return Failure<UiFeedbackIntent>(UiErrors::FeedbackInvalid);
+            }
+            return Result<UiFeedbackIntent>::Success(std::move(intent));
+        }
+
+        /** @brief Translate an admitted action outcome without emitting cues for lifecycle-only results. */
+        [[nodiscard]] Result<std::optional<UiFeedbackIntent>> ActionIntent(const UiActionRequest &request, const UiActionResult &result) {
+            UiFeedbackIntent intent{.source = request.source};
+            if (result.kind == UiActionResultKind::Rejected) {
+                using enum UiActionRejectionReason;
+                if (result.rejection == Stale || result.rejection == Retiring)
+                    return Result<std::optional<UiFeedbackIntent>>::Success(std::nullopt);
+                intent.kind = result.rejection == NoTarget ? UiFeedbackKind::Boundary : UiFeedbackKind::Error;
+            } else if (result.kind == UiActionResultKind::Cancelled) {
+                if (result.cancellation != UiActionCancellationReason::Requested)
+                    return Result<std::optional<UiFeedbackIntent>>::Success(std::nullopt);
+                intent.kind = UiFeedbackKind::Cancel;
+            } else if (result.kind == UiActionResultKind::Completed && result.navigation.has_value()) {
+                auto navigation = NavigationIntent(request, *result.navigation);
+                if (navigation.HasError())
+                    return Result<std::optional<UiFeedbackIntent>>::Failure(navigation.ErrorValue());
+                intent = std::move(navigation).Value();
+            } else {
+                return Result<std::optional<UiFeedbackIntent>>::Success(std::nullopt);
+            }
+            return Result<std::optional<UiFeedbackIntent>>::Success(std::move(intent));
+        }
     }  // namespace
 
     /** @copydoc UiFeedbackIntent::IsValid */
@@ -97,48 +155,12 @@ namespace Horo::Runtime::Ui {
         if (!Matches(request.source))
             return Failure<bool>(UiErrors::FeedbackSourceStale);
 
-        UiFeedbackIntent intent{.source = request.source};
-        if (result.kind == UiActionResultKind::Rejected) {
-            if (result.rejection == UiActionRejectionReason::Stale || result.rejection == UiActionRejectionReason::Retiring)
-                return Result<bool>::Success(false);
-            intent.kind = result.rejection == UiActionRejectionReason::NoTarget ? UiFeedbackKind::Boundary : UiFeedbackKind::Error;
-        } else if (result.kind == UiActionResultKind::Cancelled) {
-            if (result.cancellation != UiActionCancellationReason::Requested)
-                return Result<bool>::Success(false);
-            intent.kind = UiFeedbackKind::Cancel;
-        } else if (result.kind == UiActionResultKind::Completed && result.navigation.has_value()) {
-            if (UiActionCommandKindOf(request.command) != UiActionCommandKind::Navigation)
-                return Failure<bool>(UiErrors::FeedbackInvalid);
-            const UiDefaultNavigationResult &navigation = *result.navigation;
-            if (navigation.from.has_value() && *navigation.from != request.source.element)
-                return Failure<bool>(UiErrors::FeedbackSourceStale);
-            if (navigation.target.has_value() && navigation.target->ownership != request.source.owner.instance.ownership)
-                return Failure<bool>(UiErrors::FeedbackSourceStale);
-            if ((navigation.outcome == UiDefaultNavigationOutcome::SubmitDispatched ||
-                 navigation.outcome == UiDefaultNavigationOutcome::CancelDispatched) &&
-                navigation.target != request.source.element)
-                return Failure<bool>(UiErrors::FeedbackSourceStale);
-            intent.target = navigation.target;
-            switch (navigation.outcome) {
-                case UiDefaultNavigationOutcome::FocusMoved:
-                    intent.kind = UiFeedbackKind::Navigate;
-                    break;
-                case UiDefaultNavigationOutcome::SubmitDispatched:
-                    intent.kind = UiFeedbackKind::Confirm;
-                    break;
-                case UiDefaultNavigationOutcome::CancelDispatched:
-                    intent.kind = UiFeedbackKind::Cancel;
-                    break;
-                case UiDefaultNavigationOutcome::NoTarget:
-                    intent.kind = UiFeedbackKind::Boundary;
-                    break;
-                case UiDefaultNavigationOutcome::Count:
-                    return Failure<bool>(UiErrors::FeedbackInvalid);
-            }
-        } else {
+        auto intent = ActionIntent(request, result);
+        if (intent.HasError())
+            return Result<bool>::Failure(intent.ErrorValue());
+        if (!intent.Value().has_value())
             return Result<bool>::Success(false);
-        }
-        return Enqueue(std::move(intent));
+        return Enqueue(std::move(*intent.Value()));
     }
 
     /** @copydoc UiFeedbackQueue::ObserveFocus */
