@@ -1193,6 +1193,7 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/FallbackStreamingProvider.cpp
         runtime/world_streaming/StreamingBudgetModel.cpp
         runtime/world_streaming/SharedAssetResidency.cpp
+        runtime/world_streaming/SharedAssetResidencyErrors.cpp
         runtime/world_streaming/StreamingCellOperation.cpp
         runtime/world_streaming/StreamingCellCandidate.cpp
         runtime/world_streaming/StreamingCellAssetRequest.cpp
