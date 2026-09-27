@@ -71,6 +71,15 @@ class PackageCommands(unittest.TestCase):
         self.assertEqual(public[0], 4)
         return private, public
 
+    def signed_package(self):
+        archive = self.pack()
+        private, public = self.signing_key()
+        trust = self.trust(public)
+        signature = self.root / "signature.json"
+        signed = self.run_tool("sign", archive, "--publisher", "com.example.author", "--key-id", "release-1", "--key", private,
+                               "--output", signature)
+        return archive, private, public, trust, signature, signed
+
     def test_pack_reproducible_and_source_free_distribution(self):
         first = self.pack("first.horopkg")
         os.utime(self.source / "assets" / "payload.txt", (time.time() + 60, time.time() + 60))
@@ -119,12 +128,7 @@ class PackageCommands(unittest.TestCase):
         self.assertFalse(output.exists())
 
     def test_sign_verify_and_reject_untrusted_or_tampered_evidence(self):
-        archive = self.pack()
-        private, public = self.signing_key()
-        trust = self.trust(public)
-        signature = self.root / "signature.json"
-        signed = self.run_tool("sign", archive, "--publisher", "com.example.author", "--key-id", "release-1", "--key", private,
-                               "--output", signature)
+        archive, _, public, trust, signature, signed = self.signed_package()
         self.assertNotIn("PRIVATE KEY", signed.stdout + signed.stderr + signature.read_text())
         self.assertIn("verified", self.run_tool("verify", archive, "--package-id", "com.example.package", "--trust", trust,
                                                  "--signature", signature).stdout)
@@ -145,12 +149,7 @@ class PackageCommands(unittest.TestCase):
         self.run_tool("verify", archive, "--package-id", "com.example.package", "--trust", trust)
 
     def test_rejects_malformed_trust_and_signature_documents(self):
-        archive = self.pack()
-        private, public = self.signing_key()
-        trust = self.trust(public)
-        signature = self.root / "signature.json"
-        self.run_tool("sign", archive, "--publisher", "com.example.author", "--key-id", "release-1", "--key", private,
-                      "--output", signature)
+        archive, _, public, trust, signature, _ = self.signed_package()
         trust.write_text('{"schemaVersion":1,"schemaVersion":1,"allowUnsigned":false,"publishers":[]}')
         self.run_tool("verify", archive, "--package-id", "com.example.package", "--trust", trust, "--signature", signature,
                       expected=1)
@@ -168,12 +167,7 @@ class PackageCommands(unittest.TestCase):
         self.run_tool("verify", archive, "--package-id", "not an id", "--trust", trust, expected=1)
 
     def test_signed_artifact_binds_exact_bytes_and_rejects_bad_key(self):
-        archive = self.pack()
-        private, public = self.signing_key()
-        trust = self.trust(public)
-        signature = self.root / "signature.json"
-        self.run_tool("sign", archive, "--publisher", "com.example.author", "--key-id", "release-1", "--key", private,
-                      "--output", signature)
+        archive, private, _, trust, signature, _ = self.signed_package()
         self.run_tool("sign", archive, "--publisher", "com.example.author", "--key-id", "release-1", "--key", private,
                       "--output", signature, expected=1)
         self.run_tool("verify", archive, "--package-id", "com.example.package", "--trust", trust, "--signature", signature)
@@ -191,12 +185,8 @@ class PackageCommands(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "POSIX permission contract")
     def test_outputs_are_private_and_existing_output_is_untouched(self):
-        archive = self.pack()
+        archive, private, _, _, signature, _ = self.signed_package()
         self.assertEqual(archive.stat().st_mode & 0o777, 0o600)
-        signature = self.root / "signature.json"
-        private, _ = self.signing_key()
-        self.run_tool("sign", archive, "--publisher", "com.example.author", "--key-id", "release-1", "--key", private,
-                      "--output", signature)
         self.assertEqual(signature.stat().st_mode & 0o777, 0o600)
         initial = signature.read_bytes()
         self.run_tool("sign", archive, "--publisher", "com.example.author", "--key-id", "release-1", "--key", private,

@@ -53,7 +53,7 @@ namespace Horo::PackageCommand {
             std::size_t size{};
         };
 
-        [[nodiscard]] Outcome SignPayload(const std::filesystem::path &keyPath, Security::DetachedSignatureEnvelope &envelope) {
+        [[nodiscard]] Outcome LoadSigningKey(const std::filesystem::path &keyPath, SigningState &state) {
             std::error_code error;
             const auto permissions = std::filesystem::status(keyPath, error).permissions();
             if (error)
@@ -75,7 +75,6 @@ namespace Horo::PackageCommand {
             Security::SecureZero(std::span{privateBytes});
             if (privateKey.bytes.empty() || privateKey.bytes.back() != 0)
                 privateKey.bytes.push_back(0);
-            SigningState state;
             constexpr unsigned char Personalization[] = "horo-package-sign-v1";
             const int seeded =
                 mbedtls_ctr_drbg_seed(&state.random, mbedtls_entropy_func, &state.entropy, Personalization, sizeof(Personalization) - 1U);
@@ -87,6 +86,14 @@ namespace Horo::PackageCommand {
             auto *ec = mbedtls_pk_ec(state.key);
             if (!ec || ec->MBEDTLS_PRIVATE(grp).id != MBEDTLS_ECP_DP_SECP256R1)
                 return Failure("package.key_invalid", "Private key must be P-256 EC.");
+            return Success();
+        }
+
+        [[nodiscard]] Outcome SignPayload(const std::filesystem::path &keyPath, Security::DetachedSignatureEnvelope &envelope) {
+            SigningState state;
+            if (const auto loaded = LoadSigningKey(keyPath, state); !loaded.success)
+                return loaded;
+            auto *ec = mbedtls_pk_ec(state.key);
             const auto digest = Security::ComputeSignaturePayloadDigest(envelope);
             if (mbedtls_ecdsa_sign(&ec->MBEDTLS_PRIVATE(grp), &state.r, &state.s, &ec->MBEDTLS_PRIVATE(d), digest.bytes.data(),
                                    digest.bytes.size(), mbedtls_ctr_drbg_random, &state.random) != 0)
