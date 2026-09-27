@@ -224,6 +224,17 @@ connectivity rules, selected tier/limits and artifact/toolchain schemas. Physics
 Render add their own native target fingerprints to the accepted DFR artifact identity;
 a solver/backend upgrade invalidates its derived product without changing DFR topology.
 
+The DFR-002.3 offline Voronoi cook entry point accepts a closed, outward-wound
+normalized source, exact source digest/revision and recipe/toolchain provenance. It
+partitions a non-convex source along its deterministic surface-plane arrangement into
+bounded convex regions, then clips each region against every ordered site bisector.
+The result contains closed solver-neutral convex collision pieces under stable semantic
+chunk IDs, visible exterior/interior faces, per-face material slots, volume/center-of-
+mass inputs and site-neighbor connectivity. If the finite region, work or output budget
+cannot hold the complete result, generation fails before publication. The detached
+candidate is for later Assets publication and separate Physics/Render derived cooking;
+runtime composition has no call into this cook entry point.
+
 ## Runtime Pre-Cooked Fracture
 
 Runtime fracture can be triggered by:
@@ -391,6 +402,26 @@ Destruction state is replicated through the normal authority and replication bou
 - Cosmetic chunks/debris may simulate client-side but cannot affect gameplay, saves or
   canonical hashes
 
+The DFR-006.4 adapter contributes one exact Network schema (version 1.0) whose ten
+required, server-only fields have stable numeric IDs: `1` exact DFR handle, `2`
+fracture-content identity, `3` configuration revision, `4` authority epoch, `5`
+semantic revision, `6` phase and unsigned Q16.16 health, `7` versioned seed/cursor,
+`8` four content-scoped bit masks, `9` sorted stable support-anchor IDs plus
+progress cursor, and `10` resolved closed capability bits. Authoritative replication
+must be explicitly present; renderer tier cannot infer it. Integers use network byte
+order; masks use bit zero for the first entry in the exact immutable artifact chunk
+table. A record carries all fields in
+ascending ID order, with no optional default or unknown-field fallback in v1.0.
+`NetworkRuntime` supplies outer session/object/tick/baseline framing and pins the
+descriptor/serializer generation. The DFR adapter validates the trusted exact-content
+chunk table, counts, high bits, active/dormant disjointness, required broken membership,
+anchor membership, authority, exact configuration revision and resolved capabilities,
+and replacement fences before returning an owned apply candidate. It never directly
+commits `DestructionWorld`, duplicates paired Physics
+motion, or transmits transient presentation and native state. Dropping a failed or
+cancelled candidate leaves prior owner state untouched; aggregate publication remains
+the DFR/Scene/Physics owner's safe-point responsibility.
+
 ## Editor Authoring
 
 Fracture authoring tools:
@@ -400,6 +431,19 @@ Fracture authoring tools:
 - Fracture preview (play fracture animation in editor viewport)
 - Chunk connectivity visualization
 - Damage threshold and behavior configuration
+
+The DFR-002.2 importer reads an FBX mesh occurrence named
+`HoroChunk_<nonzero decimal ID>` with an optional `__display_label` suffix.
+The numeric token is an explicit authored semantic chunk ID; the display label,
+FBX element position and source path are not identities. The token must be
+canonical decimal without leading zeroes and unique within the source. Mesh
+ancestors define the imported chunk hierarchy. Assets copies normalized
+world-space geometry, transform evidence and material assignment into a bounded
+detached source under normalization schema 1. Destruction Cook schema 1 validates
+the complete closed triangle topology,
+IDs, hierarchy, finite transforms, material coverage and profile limits before
+returning a sorted detached candidate. Import does not infer absent IDs, weld
+surfaces, invent materials, publish an artifact, or activate a runtime world.
 
 Each asset opens as one persistent `FractureAssetDocument` rooted at stable asset and
 accepted source revision. The document owns working recipe/source/graph intent, typed

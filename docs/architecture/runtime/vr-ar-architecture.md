@@ -27,6 +27,18 @@ never reuse lost evidence. The target also owns the `horo.xr` error descriptor c
 not discover or activate an XR runtime and therefore does not constitute OpenXR,
 platform, headset, or product-profile support.
 
+`HoroEngine::XRRuntime` now implements the backend-neutral session lifecycle
+boundary, not a concrete OpenXR runtime. Host composition supplies the selected
+resource port and immutable capability evidence. A private session candidate
+is admitted against the host's exact current system and capability revision, so
+retained evidence cannot re-activate a replaced runtime. The candidate then
+prepares ordered resources before Ready publication; failure retires completed
+candidate stages in reverse order and leaves an existing generation published.
+Native events alone advance Running/Visible/Focused/Stopping/Lost, and loss or
+replacement fences retained session identities before downstream admission.
+Activation/replacement/shutdown are host lifecycle operations, not frame work.
+Headless compositions continue to omit both XRRuntime and XROpenXR.
+
 [ADR-157](../../adr/157-xr-ownership-runtime-composition-and-capability-tier.md)
 is the normative foundation for XR module ownership, host composition, typed
 capability admission, 1.0 profiles, unsupported paths and lifecycle. The sections
@@ -211,6 +223,44 @@ The descriptor set returned by `XRErrors::Descriptors()` is the complete bounded
 `horo.xr` contribution for later host module registration. XRRuntime and XROpenXR
 must extend this Horo-owned vocabulary through their owning module descriptors;
 they must not expose native result integers or branch on native message text.
+
+`XRSessionLifecycle.h` is the new XRRuntime-owned public session boundary; existing
+XRApi headers stay owned by XRApi. Consumers needing lifecycle events or admission
+now depend on `HoroEngine::XRRuntime` instead of adding native policy to XRApi.
+The host-owned `IXRSessionResources` port must outlive the coordinator, clean a
+failing preparation stage before returning, and retire each completed stage for
+the exact generation without affecting a replacement. This is a new boundary;
+there is no previous lifecycle API to migrate. Native session, predicted-frame,
+and OpenXR adapter implementations remain separate follow-up capabilities.
+`XRSessionErrors::Descriptors()` is XRRuntime's distinct `horo.xr` diagnostic
+contribution; XRApi's descriptor list and ownership remain unchanged.
+
+`XRFrameLifecycle.h` is the XRRuntime-owned predicted-frame transaction contract.
+It is additive and has no existing caller migration. A host binds the exact active
+view configuration, accepted capability snapshot and finite view/image/layer limits
+after session readiness. The selected native adapter owns actual wait/begin/locate/
+acquire/release/end calls; Renderer owns GPU submission/completion evidence. The
+single-control-thread coordinator reserves a frame before native wait, cancels the
+reservation only if native wait fails, and records every completed native wait. A
+completed wait with invalid prediction or unsupported render intent still returns an
+exact frame identity: the host must begin/end that native frame with zero layers, not
+discard the typed non-Ok render status. The coordinator records later completed steps
+as typed state transitions and never invokes native code, blocks for an image, waits for GPU
+completion, or chooses frame pacing. Each frame ID captures session, configuration,
+capability revision and a non-reused sequence; the wait result preserves the runtime
+prediction and `shouldRender`. Non-rendering frames still begin/end with zero layers.
+Rendering frames require complete view location, bounded unique image acquisition,
+complete Renderer submission, and exact image release before a positive-layer end.
+An explicit backend-confirmed abort keeps release obligations and permits zero-layer
+end only after they are met. The host serializes session replacement, loss publication,
+and resource retirement with an outstanding native wait/frame; single-control-thread
+access alone does not make a blocking native wait and later session mutation atomic.
+If a session changes unexpectedly after reservation, `RecordWait` retains a completed
+wait's frame debt, but currentness checks fence begin/end on the retired native session.
+The host must first prove native quiescence, including disposition of that outstanding
+wait/frame and any acquired images, before `ResetAfterQuiescence` discards the logical
+debt and a new session can bind. This contract does not claim a
+production OpenXR frame loop or a qualified Renderer bridge.
 
 Capabilities are discovered from the selected runtime, platform host, renderer,
 device, permissions, and admitted optional extensions. They are not inferred

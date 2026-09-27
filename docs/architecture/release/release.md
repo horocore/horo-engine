@@ -146,6 +146,15 @@ GUI       CLI       MCP       CI
 `ReleaseService` owns use-case validation, job lifecycle, cancellation,
 progress, and structured results.
 
+The shared service schedules one frozen target per job and retains bounded active
+and recent snapshots after a submitting GUI, CLI, MCP or CI observer exits. Its
+stage executor checks the frozen input identities before each worker invocation,
+passes only typed outputs to the next stage, and reserves candidate identities
+before final metadata is computed. Stage workers use the injected bounded
+`ReleaseProcessRunner` for shell-free child invocations when a tool is needed.
+The service projects a coarse status to `OperationStore`; release snapshots and
+bounded diagnostic IDs remain the authoritative detailed observation path.
+
 [ADR-060](../../adr/060-release-domain-model-and-state-machine.md) defines the
 authoritative typed identities, single-target job state, stage attempts,
 candidate state, revisioned snapshots, terminal results and ownership rules.
@@ -309,6 +318,33 @@ membership for a matrix of independent release jobs and aggregates their verifie
 outputs by that identity. Adapters never infer a matrix from labels, timestamps,
 paths or request order. A failed required target cannot be represented as a
 successful multi-platform release.
+
+`PlanReleaseTargetMatrix` admits each group member separately. Every cell has a
+distinct service-assigned job identity, stable target identity, requirement,
+single-target preflight plan and validated
+target evidence, or field-specific validation failures. The host supplies an
+exact toolchain descriptor bound to the preflight toolchain digest; a broad
+"cross compiler available" observation alone never admits cross-compilation.
+The descriptor names the host and target OS/architecture, an enabled and
+compile/link-validated toolchain, an installed target SDK, supported minimum
+platform range and package formats. Native builds require an exact host/target
+tuple. Cross builds require an explicit compatible profile, including when only
+the CPU architecture differs. Non-macOS hosts cannot target macOS. The currently
+qualified desktop architectures are Windows and Linux x86_64, and macOS x86_64
+and arm64. The product/profile package-format policy and the selected toolchain
+must both admit the format. The validated SDK, platform floor, format capabilities
+and toolchain digest travel with the frozen single-target plan. Duplicate target
+identities, equivalent project/profile/OS/architecture/configuration/toolchain
+tuples and colliding canonical output roots are rejected within the group.
+
+The service schedules one job per admitted cell and preserves validation
+rejections as terminal cell evidence. `SummarizeReleaseTargetMatrix` derives a
+group decision from complete immutable membership and terminal outcomes. It
+remains incomplete while any admitted cell lacks a terminal outcome. Results
+must match group, job and target identity; duplicate or foreign terminal results
+fail closed. Success requires every required member
+to succeed with a final-verified candidate; optional failures remain visible.
+The summary never replaces a job's terminal result or candidate verification.
 
 ## Output Layout
 

@@ -5,7 +5,7 @@ target_compile_features(HoroHostModuleComposition PUBLIC cxx_std_20)
 target_include_directories(HoroHostModuleComposition PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
-target_link_libraries(HoroHostModuleComposition PUBLIC HoroEngine::Foundation)
+target_link_libraries(HoroHostModuleComposition PUBLIC HoroEngine::Foundation HoroEngine::PlatformServices)
 
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine
@@ -54,6 +54,36 @@ add_custom_command(
     VERBATIM)
 add_custom_target(HoroExtensionSdkConformanceStage ALL
     DEPENDS "${HORO_EXTENSION_CONFORMANCE_SDK_PATH}")
+
+add_executable(horo-package
+    horo-package/main.cpp
+    horo-package/PackageIo.cpp
+    horo-package/Pack.cpp
+    horo-package/SignatureDocument.cpp
+    horo-package/Sign.cpp
+    horo-package/Verify.cpp
+)
+target_compile_features(horo-package PRIVATE cxx_std_20)
+target_link_libraries(horo-package PRIVATE HoroEngine::PackageSecurity HoroEngine::Packages HoroEngine::Security
+    miniz nlohmann_json::nlohmann_json MbedTLS::mbedcrypto)
+set(HORO_PACKAGE_SDK_PATH
+    "${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/horo-package${CMAKE_EXECUTABLE_SUFFIX}")
+add_custom_command(
+    OUTPUT "${HORO_PACKAGE_SDK_PATH}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "$<TARGET_FILE:horo-package>"
+        "${HORO_PACKAGE_SDK_PATH}"
+    DEPENDS horo-package
+    COMMENT "Staging the package authoring commands in the versioned SDK"
+    VERBATIM)
+add_custom_target(HoroExtensionSdkPackageStage ALL DEPENDS "${HORO_PACKAGE_SDK_PATH}")
+
+# Focused SDK-author qualification can stage its three source-free tools without
+# building unrelated applications.
+add_custom_target(HoroExtensionAuthorCiStage DEPENDS
+    HoroExtensionSdkValidatorStage
+    HoroExtensionSdkConformanceStage
+    HoroExtensionSdkPackageStage)
 
 # The graphical executable is an optional composition root. Foundation and
 # headless hosts must remain buildable when the GUI adapter is intentionally off.

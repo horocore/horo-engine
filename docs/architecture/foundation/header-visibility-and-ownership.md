@@ -30,6 +30,39 @@ the synchronous invocation, then publish a detached candidate against the exact
 current source revision. Format and codec types do not enter TerrainApi or runtime
 headers. The generated public-header consumer compiles the header through the new
 target's staged include view.
+
+## DFR-002.2 Import Boundary
+
+`HoroEngine::Assets` owns the additive `Horo/Assets/PreFracturedSource.h` FBX
+normalization contract. `HoroEngine::DestructionCook` owns the additive
+`Horo/Destruction/PreFracturedImport.h` semantic validation and detached
+candidate contract, linking `HoroEngine::DestructionApi` and Assets. Existing
+`core.mesh` FBX import callers do not migrate: that flattened preview path remains
+unchanged. Fracture authoring callers use the new cook target, capture the import
+owner revision before preparation, and explicitly accept only the completed
+candidate. The generated Assets and DestructionCook public-header consumers
+enforce both boundaries. Neither header publishes ufbx, native Physics, or Render
+types.
+The authoring owner must call `Invalidate()` on source changes to cancel older
+preparations before accepting any later candidate; acceptance itself also rotates
+the revision and cancellation token. Shutdown closes acceptance but retains the
+last immutable snapshot for existing readers.
+
+## REL-001.6 Release Pipeline Boundary
+
+`HoroEngine::Application` owns the additive `ReleaseJobTracker.h` and
+`ReleasePipelineExecutor.h` contracts. `HoroEngine::ReleaseService` owns
+`ReleaseService.h` and depends only on Application and Foundation. Hosts that
+submit release jobs create one process-lifetime service, inject a thread-safe
+facts provider and worker factory, and query the service's typed snapshots;
+presentation sessions do not own a job. `HoroEngine::ReleaseProcess` owns
+`ReleaseProcess.h` and adapts stage-scoped child invocations to the existing
+Platform process runner. Existing preflight, profile and target-matrix callers
+have no signature migration. New stage workers implement the typed handoffs and
+keep their temporary resources until the attempt completes or cancellation is
+acknowledged. The three generated standalone public-header consumers verify
+ownership and transitive dependencies.
+
 ## MCP-001.2 Session Boundary
 
 `HoroEngine::McpSession` owns the additive `Horo/Mcp/McpErrors.h`,
@@ -49,6 +82,18 @@ plan owns its nodes, pin schemas, routes, defaults, capability requirements, and
 canonical bytes. No existing PCG caller changes signature. Future evaluators must
 consume the validated cooked plan, not source graph references or runtime handles.
 The generated PCG public-header consumer covers the new sole-owned header.
+
+## DFR-002.3 Offline Generator Boundary
+
+`HoroEngine::DestructionCook` owns the additive
+`Horo/Destruction/OfflineVoronoi.h` contract. Authoring and asset-cook callers link
+that target, capture normalized source bytes and an exact source revision, and provide
+an explicit seed, recipe revision, limits, tier, and pinned toolchain fingerprint.
+`GenerateOfflineVoronoi` returns a detached candidate. The authoring owner compares
+the captured owner/source/recipe generation at `Accept`; generation alone never
+publishes a durable asset or changes a runtime world. Existing pre-fractured import
+callers do not migrate. The generated DestructionCook public-header consumer covers
+the additive header without exposing Physics, Render, editor, or parser types.
 
 ## PCG-1.5 Provenance Boundary
 
@@ -847,6 +892,19 @@ descriptors must explicitly migrate to version 2 and set
 before validation. Version-1 data is rejected; there is no second legacy policy path.
 Existing `HoroEngine::DestructionApi` consumers continue linking their current target
 for the identity, descriptor and state-machine contracts.
+
+## DFR-006.4 Replication Boundary
+
+`HoroEngine::DestructionReplication` owns
+`Horo/Destruction/DestructionReplication.h` and publicly depends on the existing
+`DestructionApi` and `NetworkApi` owners. NetworkApi does not depend on Destruction:
+the DFR adapter contributes an inert Network-owned descriptor and bounded typed
+serializers at host composition, then encodes owner-captured semantic values. The
+generated public-header boundary and `HoroDestructionReplicationTests` exercise this
+new consumer dependency. Hosts migrate DFR replication contributions to this target;
+they must not mirror the state by generic property paths, native body handles or a
+second Network-owned destruction authority. The schema is exact version 1.0; future
+semantic field changes require a new ID/version and explicit compatibility migration.
 
 ## NAV-002.7 Migration Notes
 

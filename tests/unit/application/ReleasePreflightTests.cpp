@@ -1,92 +1,6 @@
-#include "Horo/Release/ReleasePreflight.h"
+#include "ReleaseTestFixtures.h"
 
-#include <algorithm>
-#include <catch2/catch_test_macros.hpp>
-#include <chrono>
-#include <nlohmann/json.hpp>
-#include <string_view>
-
-namespace {
-    using namespace Horo;
-    using namespace Horo::Release;
-
-    [[nodiscard]] Sha256Digest Digest(const std::string_view text) {
-        return ComputeSha256(std::as_bytes(std::span{text.data(), text.size()}));
-    }
-
-    [[nodiscard]] EffectiveReleaseProfile Profile(const ReleaseSigningPolicy signing = ReleaseSigningPolicy::Disabled,
-                                                  const bool allowPublication = false) {
-        ReleaseProfilePreset preset;
-        preset.id = {"shipping"};
-        preset.product = DistributionProductIdentity{DistributionProductKind::Editor, {}};
-        preset.artifactClass = DistributionArtifactClass::InstallableProduct;
-        preset.platform = DistributionPlatform::Linux;
-        preset.packageFormat =
-            signing == ReleaseSigningPolicy::Required ? DistributionPackageFormat::LinuxAppImage : DistributionPackageFormat::TarGzip;
-        preset.content = ReleaseContentPolicy{true, true, ReleaseAssetPolicy::SinglePackage, false, false};
-        preset.symbols = ReleaseSymbolPolicy::Omit;
-        preset.signing = signing;
-        preset.notarizationRequired = false;
-        preset.includeLicensesAndNotices = true;
-        preset.includeReleaseNotes = true;
-        preset.updateEligible = false;
-        preset.patchEligible = false;
-        preset.eligibleDestinations =
-            allowPublication ? std::vector<ReleaseDestinationId>{{"github-releases"}} : std::vector<ReleaseDestinationId>{};
-        preset.requiredCapabilities = std::vector<ReleaseCapabilityId>{{"release.packaging"}};
-        auto catalog = ReleaseProfileCatalog::Create({std::move(preset)});
-        REQUIRE(catalog.HasValue());
-        const ReleaseCapabilityId capability{"release.packaging"};
-        auto profile = catalog.Value().Resolve({"shipping"}, std::span{&capability, 1U});
-        REQUIRE(profile.HasValue());
-        return std::move(profile).Value();
-    }
-
-    [[nodiscard]] ReleasePreflightRequest Request() {
-        auto version = ParseReleaseVersion("0.4.2");
-        REQUIRE(version.HasValue());
-        return {.projectRoot = std::filesystem::temp_directory_path() / "horo-release-source",
-                .projectId = "horo-editor",
-                .version = {EngineProductVersion{version.Value()}, ReleaseSourceRevision{"commit-123"}},
-                .profile = Profile(),
-                .architecture = DistributionArchitecture::X64,
-                .configuration = ReleaseBuildConfiguration::Shipping,
-                .toolchainId = "clang-20",
-                .outputRoot = std::filesystem::temp_directory_path() / "horo-release-output",
-                .requiredFreeBytes = 1024,
-                .credentials = {{42}},
-                .reproducible = true};
-    }
-
-    [[nodiscard]] ReleasePreflightFacts Facts(const ReleasePreflightRequest &request) {
-        return {.requestedProjectRoot = request.projectRoot,
-                .requestedOutputRoot = request.outputRoot,
-                .canonicalProjectRoot = request.projectRoot,
-                .canonicalOutputRoot = request.outputRoot,
-                .projectReadable = true,
-                .outputWritable = true,
-                .outputExists = false,
-                .availableBytes = 2048,
-                .hostPlatform = DistributionPlatform::Linux,
-                .targetSupported = true,
-                .crossCompilerAvailable = false,
-                .toolchainAvailable = true,
-                .currentVersion = request.version,
-                .sourceTreeDigest = Digest("source-tree"),
-                .dependencyLockDigest = Digest("dependency-lock"),
-                .profileDigest = Digest(request.profile.SerializeCanonical()),
-                .toolchainDigest = Digest("toolchain"),
-                .policyDigest = Digest("policy"),
-                .availableCapabilities = {{"release.packaging"}},
-                .availableCredentials = {{42}}};
-    }
-
-    [[nodiscard]] bool HasIssue(const ReleasePreflightOutcome &outcome, const ReleasePreflightIssueCode code) {
-        return std::ranges::any_of(outcome.issues, [code](const ReleasePreflightIssue &issue) {
-            return issue.code == code;
-        });
-    }
-}  // namespace
+using namespace ReleaseTestFixtures;
 
 TEST_CASE("Release preflight captures exact validated inputs without exposing credential values",
           "[unit][application][release][preflight]") {
@@ -99,7 +13,10 @@ TEST_CASE("Release preflight captures exact validated inputs without exposing cr
     CHECK(outcome.plan->Request().projectRoot == request.projectRoot);
     CHECK(outcome.plan->Request().outputRoot == request.outputRoot);
     CHECK(outcome.plan->Identities().sourceTree == facts.sourceTreeDigest);
-    CHECK(outcome.plan->Summary().find("42") == std::string::npos);
+    CHECK(outcome.plan->Identities().notes == Digest(facts.releaseNotesSnapshot));
+    CHECK(outcome.plan->ReleaseNotesSnapshot() == facts.releaseNotesSnapshot);
+    CHECK(outcome.plan->Summary().find("Credentials: 1 opaque handle(s)") != std::string::npos);
+    CHECK(outcome.plan->Summary().find("Credentials: 42") == std::string::npos);
     CHECK(outcome.plan->Summary().find(FormatSha256(facts.sourceTreeDigest)) != std::string::npos);
     CHECK(outcome.plan->Summary().find(FormatSha256(facts.dependencyLockDigest)) != std::string::npos);
 
@@ -110,6 +27,10 @@ TEST_CASE("Release preflight captures exact validated inputs without exposing cr
     CHECK(snapshot.at("signingSelected") == false);
     CHECK(snapshot.at("publicationDestination").is_null());
     CHECK(snapshot.at("identities").at("dependencyLock") == FormatSha256(facts.dependencyLockDigest));
+    CHECK(snapshot.at("releaseNotes").at("digest") == FormatSha256(Digest(facts.releaseNotesSnapshot)));
+    CHECK(snapshot.at("releaseNotes").at("bytes") == facts.releaseNotesSnapshot);
+    CHECK(nlohmann::json::parse(snapshot.at("releaseNotes").at("bytes").get<std::string>()).at("markdown") ==
+          "## [0.4.2] — 2026-09-26\n\n### Added\n- Reviewed candidate behavior.\n");
     CHECK(outcome.plan->SerializeCanonical() == outcome.plan->SerializeCanonical());
     CHECK(ValidateReleaseInputFreeze(*outcome.plan, facts).empty());
 }
@@ -279,4 +200,83 @@ TEST_CASE("Release plan detects policy and required capability drift", "[unit][a
     CHECK(changes[1].field == "policy");
     CHECK(changes[2].field == "capabilities");
     CHECK(changes[3].field == "credentials");
+}
+
+TEST_CASE("Release notes failures are field-specific and cannot create a candidate", "[unit][application][release][preflight]") {
+    const ReleasePreflightRequest request = Request();
+    ReleasePreflightFacts facts = Facts(request);
+    facts.releaseNotesSnapshot.clear();
+    CHECK(HasIssue(PreflightRelease(request, facts), ReleasePreflightIssueCode::NotesMissing));
+    facts.releaseNotesSnapshot = "{bad json";
+    CHECK(HasIssue(PreflightRelease(request, facts), ReleasePreflightIssueCode::NotesMalformed));
+    facts.releaseNotesSnapshot.assign(MaximumReleaseNotesSnapshotBytes + 1, 'x');
+    CHECK(HasIssue(PreflightRelease(request, facts), ReleasePreflightIssueCode::NotesOversized));
+    facts.releaseNotesSnapshot = Notes("0.4.2+another");
+    CHECK(HasIssue(PreflightRelease(request, facts), ReleasePreflightIssueCode::NotesVersionMismatch));
+    facts.releaseNotesSnapshot = Notes("0.4.2", "another-product");
+    CHECK(HasIssue(PreflightRelease(request, facts), ReleasePreflightIssueCode::NotesProductMismatch));
+    facts.releaseNotesSnapshot = Notes();
+    auto malformed = nlohmann::json::parse(facts.releaseNotesSnapshot);
+    malformed["markdown"] = "different text";
+    facts.releaseNotesSnapshot = malformed.dump();
+    CHECK(HasIssue(PreflightRelease(request, facts), ReleasePreflightIssueCode::NotesMalformed));
+    for (const std::string_view unsafe : {"a < b", "a > b", "[bad](javascript:evil)"}) {
+        malformed = nlohmann::json::parse(Notes());
+        malformed["sections"][0]["items"][0] = unsafe;
+        malformed["markdown"] = std::format("## [0.4.2] — 2026-09-26\n\n### Added\n- {}\n", unsafe);
+        facts.releaseNotesSnapshot = malformed.dump();
+        CHECK(HasIssue(PreflightRelease(request, facts), ReleasePreflightIssueCode::NotesMalformed));
+    }
+}
+
+TEST_CASE("Release candidate retains reviewed notes and rejects later source changes", "[unit][application][release][preflight]") {
+    const ReleasePreflightRequest request = Request();
+    ReleasePreflightFacts facts = Facts(request);
+    const ReleasePreflightOutcome accepted = PreflightRelease(request, facts);
+    REQUIRE(accepted.plan.has_value());
+    const std::string frozen = accepted.plan->ReleaseNotesSnapshot();
+    facts.releaseNotesSnapshot = Notes("0.4.2", "horo-editor");
+    auto changed = nlohmann::json::parse(facts.releaseNotesSnapshot);
+    changed["sections"][0]["items"][0] = "Edited after candidate creation.";
+    changed["markdown"] = "## [0.4.2] — 2026-09-26\n\n### Added\n- Edited after candidate creation.\n";
+    facts.releaseNotesSnapshot = changed.dump() + '\n';
+    CHECK(accepted.plan->ReleaseNotesSnapshot() == frozen);
+    const auto issues = ValidateReleaseInputFreeze(*accepted.plan, facts);
+    CHECK(std::ranges::any_of(issues, [](const ReleasePreflightIssue &issue) {
+        return issue.code == ReleasePreflightIssueCode::NotesChanged && issue.field == "notes";
+    }));
+}
+
+TEST_CASE("Release notes reject forged structure and excessive item counts", "[unit][application][release][preflight]") {
+    const ReleasePreflightRequest request = Request();
+    ReleasePreflightFacts facts = Facts(request);
+    const nlohmann::json valid = nlohmann::json::parse(Notes());
+
+    auto checkMalformed = [&](const nlohmann::json &notes) {
+        facts.releaseNotesSnapshot = notes.dump();
+        const ReleasePreflightOutcome outcome = PreflightRelease(request, facts);
+        CHECK_FALSE(outcome.plan.has_value());
+        CHECK(HasIssue(outcome, ReleasePreflightIssueCode::NotesMalformed));
+    };
+
+    auto malformed = valid;
+    malformed["locale"] = "bad-locale";
+    checkMalformed(malformed);
+    malformed = valid;
+    malformed["date"] = "2026-02-30";
+    checkMalformed(malformed);
+    malformed = valid;
+    malformed["sections"][0]["category"] = "Unknown";
+    checkMalformed(malformed);
+    malformed = valid;
+    malformed["sections"].push_back(malformed["sections"][0]);
+    checkMalformed(malformed);
+    malformed = valid;
+    malformed["sections"][0]["items"] = nlohmann::json::array();
+    checkMalformed(malformed);
+    malformed = valid;
+    malformed["sections"][0]["items"] = nlohmann::json::array();
+    for (int index = 0; index < 65; ++index)
+        malformed["sections"][0]["items"].push_back("Reviewed item.");
+    checkMalformed(malformed);
 }

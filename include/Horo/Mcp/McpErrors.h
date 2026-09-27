@@ -34,4 +34,18 @@ namespace Horo::Mcp::McpErrors {
     extern const ErrorCodeDescriptor ControllerFailed;
     /** @brief Shutdown closed admission but callbacks did not drain within the declared wait. */
     extern const ErrorCodeDescriptor DrainTimedOut;
+    /** @brief A tool descriptor, schema, or finite bound is malformed or unsupported. */
+    extern const ErrorCodeDescriptor ToolDescriptorInvalid;
+    /** @brief A candidate registry contains the same stable tool identity more than once. */
+    extern const ErrorCodeDescriptor ToolDuplicate;
+    /** @brief Replacement changes a published tool's major contract or regresses its version. */
+    extern const ErrorCodeDescriptor ToolIncompatible;
+    /** @brief The requested tool is absent from the current immutable snapshot. */
+    extern const ErrorCodeDescriptor ToolUnavailable;
+    /** @brief The admitted session lacks a capability declared by the tool. */
+    extern const ErrorCodeDescriptor ToolCapabilityUnavailable;
+    /** @brief Input does not satisfy the registered bounded schema. */
+    extern const ErrorCodeDescriptor ToolInputInvalid;
+    /** @brief An adapter returned data outside its registered bounded output schema. */
+    extern const ErrorCodeDescriptor ToolOutputInvalid;
 }  // namespace Horo::Mcp::McpErrors

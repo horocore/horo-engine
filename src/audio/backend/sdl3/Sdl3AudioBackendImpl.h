@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <new>
@@ -175,6 +176,7 @@ namespace Horo::Audio::Backend {
         std::vector<AudioSample *> planes;
         std::vector<AudioSample> interleaved;
         RenderPort render;
+        AudioCallbackWatchdog watchdog;
         CallbackState callback;
 
         bool Initialize() noexcept {
@@ -233,6 +235,9 @@ namespace Horo::Audio::Backend {
         }
 
         bool FeedBlock(SDL_AudioStream *nativeStream, const int bytesPerBlock) noexcept {
+#if !defined(NDEBUG)
+            const auto started = std::chrono::steady_clock::now();
+#endif
             for (auto *plane : planes)
                 std::fill_n(plane, callbackFrames, 0.0F);
             const auto frame = callback.sampleFrame.load();
@@ -246,14 +251,21 @@ namespace Horo::Audio::Backend {
                                                          .planes = planes,
                                                          .validFrames = callbackFrames,
                                                          .capacityFrames = callbackFrames}};
-            const auto result = render.process(render.context, invocation);
+            const auto result = watchdog.InvokeWithoutDeadline(render, invocation);
             if (const bool finite = OutputIsFinite(); !finite || !Sdl3Detail::IsExpectedResult(phase, result)) {
                 std::ranges::fill(interleaved, 0.0F);
                 PublishFault(frame, Sdl3Detail::FaultCode(finite, result.fault));
             } else {
                 Interleave();
             }
-            if (!SDL_PutAudioStreamData(nativeStream, interleaved.data(), bytesPerBlock))
+            const bool submitted = SDL_PutAudioStreamData(nativeStream, interleaved.data(), bytesPerBlock);
+#if !defined(NDEBUG)
+            if (const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count();
+                elapsed > 0)
+                watchdog.ObserveDuration(epoch, frame, static_cast<std::uint64_t>(elapsed));
+#endif
+            if (!submitted)
                 return false;
             const auto nextFrame = frame + callbackFrames;
             callback.sampleFrame.store(nextFrame);
@@ -468,6 +480,10 @@ namespace Horo::Audio::Backend {
         Result<void> Apply(const Start &request, const OperationId &operation) {
             SDL_AudioSpec source{SDL_AUDIO_F32, static_cast<int>(planes.size()), static_cast<int>(format.sampleRate)};
             stream = SDL_CreateAudioStream(&source, nullptr);
+#if !defined(NDEBUG)
+            static_cast<void>(std::chrono::steady_clock::now());  // Warm the chosen clock off the native callback thread.
+#endif
+            watchdog.Configure(static_cast<std::uint64_t>(callbackFrames) * 1'000'000'000ULL / format.sampleRate, format.sampleRate);
             render = request.render;
             callback.ready.store(false);
             callback.quiesced.store(false);

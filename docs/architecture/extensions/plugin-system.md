@@ -406,6 +406,15 @@ restart quarantine. Importer-only package behavior is unchanged. Mixed provider
 and importer packages require a future cross-catalog atomic commit and are
 rejected before module load.
 
+ABI 1.3 leaves those 1.0/1.1/1.2 entry points and the version-1 provider
+descriptor prefix intact. A provider that needs service operations declares
+minimum host minor 3 and supplies descriptor version 2 with the appended
+versioned operation table. A 1.2 module still loads with its original descriptor
+size; it cannot activate the operation lifecycle host until rebuilt for version 2.
+The service host resolves the immutable exact provider identity, then owns the
+session/completion sink and request leases through native drain. Product routing
+policy beyond this narrow composition belongs to the later profile work.
+
 The catalog is intentionally typed. A package cannot draw arbitrary UI, mutate
 scene state, or open sockets merely because it is installed. It must contribute
 to the matching extension point and receive the matching approved permissions.
@@ -774,6 +783,18 @@ stage-specific human or JSON outcomes. Compatible legacy/current fixtures and
 intentionally incompatible version/table fixtures protect the harness contract.
 Because this command executes native module code in its own process, it is a
 developer conformance tool rather than a trust or sandbox boundary.
+
+The versioned SDK also carries an extension-author CI template and source-free
+runner. A generated project retains the workflow and bootstrap in its own
+repository; a checked-in lock binds each supported host platform to an HTTPS SDK
+ZIP, exact SDK version, and SHA-256. The bootstrap validates that archive before
+executing SDK tools. CI builds and tests the project, validates the installed
+manifest, runs the ABI conformance harness against trusted build outputs, packs
+and integrity-verifies the native package, and publishes commit/platform/SDK/
+artifact-digest provenance. CI has read-only repository permission and no signing
+key. Its explicit unsigned trust policy checks package bytes only; release
+publisher authentication and full typed package-manifest semantics are distinct
+gates, not implied by a passing author CI run.
 
 Project gameplay modules may use the SDK-generation C++ boundary documented in
 [Gameplay Module Boundary](./gameplay-module-boundary.md). That boundary is
