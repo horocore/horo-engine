@@ -39,7 +39,7 @@ namespace Horo::Release {
      * @param checkpoint Durable checkpoint for the complete quiescent package file.
      * @param packageFile Complete private package file outside the stage.
      * @param stageRoot Absent stage directory below the same protected parent as packageFile.
-     * @param limits Maximum entry count, per-file bytes, and total expanded bytes.
+     * @param limits Maximum entry count, per-file bytes, total expanded bytes, and free-space reserve.
      * @param files Native durable filesystem held alive for this call.
      * @param verifier Trusted publisher signature verifier.
      * @param cancellation Cooperative cancellation during indexing and extraction.
