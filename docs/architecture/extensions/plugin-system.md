@@ -406,6 +406,15 @@ restart quarantine. Importer-only package behavior is unchanged. Mixed provider
 and importer packages require a future cross-catalog atomic commit and are
 rejected before module load.
 
+ABI 1.3 leaves those 1.0/1.1/1.2 entry points and the version-1 provider
+descriptor prefix intact. A provider that needs service operations declares
+minimum host minor 3 and supplies descriptor version 2 with the appended
+versioned operation table. A 1.2 module still loads with its original descriptor
+size; it cannot activate the operation lifecycle host until rebuilt for version 2.
+The service host resolves the immutable exact provider identity, then owns the
+session/completion sink and request leases through native drain. Product routing
+policy beyond this narrow composition belongs to the later profile work.
+
 The catalog is intentionally typed. A package cannot draw arbitrary UI, mutate
 scene state, or open sockets merely because it is installed. It must contribute
 to the matching extension point and receive the matching approved permissions.

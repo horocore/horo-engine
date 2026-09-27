@@ -8,7 +8,8 @@ select the legacy 1.0 contract, not an inferred newer ABI.
 ## Version and size rules
 
 - `HoroExtensionHostApi::abiVersion` remains the major version, currently 1.
-  The appended `abiMinorVersion` is 1; `reserved` is zero.
+  The appended `abiMinorVersion` is 3; `reserved` is zero. Earlier minor
+  requirements of 0, 1 and 2 still negotiate against their original prefixes.
 - A query fills `HoroExtensionRequirements` in host-owned storage. It must return
   the complete supported requirements size, matching major, a minimum minor no
   greater than the host's, and a host size the host can supply.
@@ -47,3 +48,30 @@ destroyed through the originating module, including transaction rollback.
 
 This bootstrap is not a sandbox or package trust decision. It cannot prevent a
 malicious native module from ignoring buffer bounds or accessing process memory.
+
+## Platform provider operation profile migration (ABI 1.3)
+
+The host minor is now 3; the major and all 1.0/1.1/1.2 host-table prefixes are
+unchanged. Existing 1.2 provider modules keep `abiVersion == 1` and set
+`HoroPlatformServicesProviderDescriptor::structSize` to
+`offsetof(HoroPlatformServicesProviderDescriptor, operations)`. Recompiling an
+old initializer with the new `sizeof` would incorrectly advertise a tail it does
+not implement. The host validates that original prefix and never reads the tail
+from a version-1 descriptor.
+
+To use the operation lifecycle, a native module's inert query requires host minor
+3, then load registers descriptor `abiVersion == 2` with the full size and a
+non-null `HoroPlatformProviderOperations` table at its exact version-1 table
+size. The host copies the function pointers during registration. The module
+retains ownership of its code and candidate. It keeps every host sink pointer
+valid only through close-ingress and drain; drain may return BUSY and must be
+retried on the owner lane before candidate retire/destroy. Callback payloads are
+borrowed only for one call and copied into the host's finite queue. Old
+factory-only modules remain loadable but exact operation-host startup reports
+`platform.lifecycle.unsupported_profile`.
+
+The affected callers are the extension registration adapter, the exact
+capability resolver, provider admission, and the narrow Platform Services
+lifecycle host. Native C fixture modes 10 and 11 exercise old-prefix loading
+and the appended operation profile respectively; service-host tests cover
+startup rollback, BUSY drain, off-thread callback ingress and repeat teardown.
