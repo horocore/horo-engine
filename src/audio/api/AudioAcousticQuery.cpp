@@ -1,5 +1,6 @@
 #include "Horo/Audio/AudioAcousticQuery.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace Horo::Audio {
@@ -11,9 +12,9 @@ namespace Horo::Audio {
 
         /** @brief Restrict a provider's terminal state to this contract version. */
         [[nodiscard]] bool IsKnownResultState(const AudioAcousticResultState state) noexcept {
-            return state == AudioAcousticResultState::Value || state == AudioAcousticResultState::Unsupported ||
-                   state == AudioAcousticResultState::Unavailable || state == AudioAcousticResultState::TimedOut ||
-                   state == AudioAcousticResultState::Cancelled || state == AudioAcousticResultState::Failed;
+            using enum AudioAcousticResultState;
+            return state == Value || state == Unsupported || state == Unavailable || state == TimedOut || state == Cancelled ||
+                   state == Failed;
         }
 
         /** @brief Translate an admitted non-value terminal result without treating it as a numeric value. */
@@ -43,11 +44,9 @@ namespace Horo::Audio {
             capabilities.minimumUpdateInterval == 0 || capabilities.maximumSmoothingUpdates > MaximumAudioAcousticSmoothingUpdates)
             return false;
 
-        for (const bool supported : capabilities.features) {
-            if (supported)
-                return true;
-        }
-        return false;
+        return std::ranges::any_of(capabilities.features, [](const bool supported) {
+            return supported;
+        });
     }
 
     /** @copydoc AudioAcousticQueryLedger::AudioAcousticQueryLedger */
@@ -55,13 +54,14 @@ namespace Horo::Audio {
 
     /** @copydoc AudioAcousticQueryLedger::ConfigureProvider */
     AudioAcousticStatus AudioAcousticQueryLedger::ConfigureProvider(const AudioAcousticProviderCapabilities &capabilities) noexcept {
+        using enum AudioAcousticStatus;
         if (!ValidateAudioAcousticProviderCapabilities(capabilities))
-            return AudioAcousticStatus::InvalidCapabilities;
+            return InvalidCapabilities;
         if (provider_.provider.IsValid() && provider_.provider == capabilities.provider) {
             if (capabilities.generation < provider_.generation)
-                return AudioAcousticStatus::ProviderStale;
+                return ProviderStale;
             if (capabilities.generation == provider_.generation)
-                return capabilities == provider_ ? AudioAcousticStatus::Ok : AudioAcousticStatus::ProviderStale;
+                return capabilities == provider_ ? Ok : ProviderStale;
         }
 
         for (SourceSlot &slot : sources_) {
@@ -70,18 +70,19 @@ namespace Horo::Audio {
         }
         outstanding_ = 0;
         provider_ = capabilities;
-        return AudioAcousticStatus::Ok;
+        return Ok;
     }
 
     /** @copydoc AudioAcousticQueryLedger::BindSource */
     AudioAcousticStatus AudioAcousticQueryLedger::BindSource(const AudioAcousticSourceHandle source) noexcept {
+        using enum AudioAcousticStatus;
         SourceSlot *const slot = FindSlot(source);
         if (slot == nullptr)
-            return AudioAcousticStatus::InvalidSource;
+            return InvalidSource;
         if (source.generation < slot->source.generation || (source.generation == slot->source.generation && !slot->active))
-            return AudioAcousticStatus::SourceStale;
+            return SourceStale;
         if (source.generation == slot->source.generation)
-            return AudioAcousticStatus::Ok;
+            return Ok;
 
         if (slot->pending)
             --outstanding_;
@@ -90,50 +91,52 @@ namespace Horo::Audio {
         slot->lastIssuedUpdate = 0;
         slot->active = true;
         slot->pending = false;
-        return AudioAcousticStatus::Ok;
+        return Ok;
     }
 
     /** @copydoc AudioAcousticQueryLedger::RetireSource */
     AudioAcousticStatus AudioAcousticQueryLedger::RetireSource(const AudioAcousticSourceHandle source) noexcept {
+        using enum AudioAcousticStatus;
         SourceSlot *const slot = FindSlot(source);
         if (slot == nullptr)
-            return AudioAcousticStatus::InvalidSource;
+            return InvalidSource;
         if (!slot->active || slot->source != source)
-            return AudioAcousticStatus::SourceStale;
+            return SourceStale;
 
         if (slot->pending)
             --outstanding_;
         slot->active = false;
         slot->pending = false;
         slot->pendingQuery = {};
-        return AudioAcousticStatus::Ok;
+        return Ok;
     }
 
     /** @copydoc AudioAcousticQueryLedger::BeginQuery */
     AudioAcousticQueryOutcome AudioAcousticQueryLedger::BeginQuery(const AudioAcousticQueryInput &input) noexcept {
+        using enum AudioAcousticStatus;
         if (!provider_.provider.IsValid())
-            return {AudioAcousticStatus::ProviderUnavailable, {}};
+            return {ProviderUnavailable, {}};
         SourceSlot *const slot = FindSlot(input.source);
         if (slot == nullptr)
-            return {AudioAcousticStatus::InvalidSource, {}};
+            return {InvalidSource, {}};
         if (!slot->active || slot->source != input.source)
-            return {AudioAcousticStatus::SourceStale, {}};
+            return {SourceStale, {}};
         if (!input.listener.IsValid() || input.listener.owner != owner_ || !Math::IsFinite(input.sourcePosition) ||
             !Math::IsFinite(input.listenerPosition) || input.controlUpdate == 0 || !IsKnownFeature(input.feature))
-            return {AudioAcousticStatus::InvalidQuery, {}};
+            return {InvalidQuery, {}};
         if (!provider_.features[static_cast<std::size_t>(input.feature)])
-            return {AudioAcousticStatus::Unsupported, {}};
+            return {Unsupported, {}};
         if (input.smoothingUpdates > provider_.maximumSmoothingUpdates)
-            return {AudioAcousticStatus::InvalidQuery, {}};
+            return {InvalidQuery, {}};
         if (slot->pending)
-            return {AudioAcousticStatus::QueryPending, {}};
+            return {QueryPending, {}};
         if (outstanding_ >= provider_.maximumOutstandingQueries)
-            return {AudioAcousticStatus::CapacityExceeded, {}};
+            return {CapacityExceeded, {}};
         if (slot->lastIssuedUpdate != 0 && (input.controlUpdate <= slot->lastIssuedUpdate ||
                                             input.controlUpdate - slot->lastIssuedUpdate < provider_.minimumUpdateInterval))
-            return {AudioAcousticStatus::TooFrequent, {}};
+            return {TooFrequent, {}};
         if (nextSequence_ == 0)
-            return {AudioAcousticStatus::SequenceExhausted, {}};
+            return {SequenceExhausted, {}};
 
         AudioAcousticQuery query{{owner_, nextSequence_}, provider_.provider, provider_.generation, input};
         ++nextSequence_;  // Wraps only after issuing the maximum sequence; zero permanently disables further queries.
@@ -141,29 +144,30 @@ namespace Horo::Audio {
         slot->pending = true;
         slot->lastIssuedUpdate = input.controlUpdate;
         ++outstanding_;
-        return {AudioAcousticStatus::Ok, query};
+        return {Ok, query};
     }
 
     /** @copydoc AudioAcousticQueryLedger::AcceptResult */
     AudioAcousticApplyOutcome AudioAcousticQueryLedger::AcceptResult(const AudioAcousticResult &result) noexcept {
+        using enum AudioAcousticStatus;
         if (!result.query.IsValid() || result.query.owner != owner_ || !result.provider.IsValid() || result.providerGeneration == 0 ||
             !result.source.IsValid() || !result.listener.IsValid() || !IsKnownFeature(result.feature) ||
             !IsKnownResultState(result.state) || !std::isfinite(result.value) ||
             (result.state == AudioAcousticResultState::Value ? (result.value < 0.0F || result.value > 1.0F) : result.value != 0.0F))
-            return {AudioAcousticStatus::InvalidResult, {}};
+            return {InvalidResult, {}};
         if (result.provider != provider_.provider || result.providerGeneration != provider_.generation)
-            return {AudioAcousticStatus::ProviderStale, {}};
+            return {ProviderStale, {}};
 
         SourceSlot *const slot = FindSlot(result.source);
         if (slot == nullptr)
-            return {AudioAcousticStatus::InvalidSource, {}};
+            return {InvalidSource, {}};
         if (!slot->active || slot->source != result.source)
-            return {AudioAcousticStatus::SourceStale, {}};
+            return {SourceStale, {}};
         if (!slot->pending || slot->pendingQuery.id != result.query)
-            return {AudioAcousticStatus::QueryStale, {}};
+            return {QueryStale, {}};
         const AudioAcousticQuery &pending = slot->pendingQuery;
         if (pending.input.listener != result.listener || pending.input.feature != result.feature)
-            return {AudioAcousticStatus::InvalidResult, {}};
+            return {InvalidResult, {}};
 
         AudioAcousticAppliedValue applied;
         if (result.state == AudioAcousticResultState::Value)
