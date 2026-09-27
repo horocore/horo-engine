@@ -79,15 +79,16 @@ namespace Horo::Release {
         }
 
         [[nodiscard]] bool SafeRelativePath(const std::string_view path) {
-            if (path.empty() || path.size() > 512U || path.front() == '/' || path.back() == '/' || path.find('\\') != path.npos)
+            if (path.empty() || path.size() > 512U || path.front() == '/' || path.back() == '/' ||
+                path.find('\\') != std::string_view::npos)
                 return false;
             std::size_t start = 0;
             while (start < path.size()) {
                 const auto end = path.find('/', start);
-                const auto segment = path.substr(start, end == path.npos ? path.npos : end - start);
-                if (segment == "." || segment == ".." || !PortableFilename(segment))
+                if (const auto segment = path.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
+                    segment == "." || segment == ".." || !PortableFilename(segment))
                     return false;
-                if (end == path.npos)
+                if (end == std::string_view::npos)
                     break;
                 start = end + 1U;
             }
@@ -113,11 +114,10 @@ namespace Horo::Release {
             for (const auto &feature : data.runtimeFeatures)
                 if (!SafeToken(feature))
                     return false;
-            for (const auto &extension : data.extensions)
-                if (extension.name.find('.') == extension.name.npos || !SafeToken(extension.name) || extension.version == 0U ||
-                    extension.canonicalJson.size() > 16'384U)
-                    return false;
-            return true;
+            return std::ranges::all_of(data.extensions, [](const ReleaseManifestExtension &extension) {
+                return extension.name.find('.') != std::string::npos && SafeToken(extension.name) && extension.version != 0U &&
+                       extension.canonicalJson.size() <= 16'384U;
+            });
         }
 
         [[nodiscard]] Json WriteManifest(const ReleaseArtifactManifestData &data) {
@@ -179,8 +179,7 @@ namespace Horo::Release {
                 return false;
             data.candidate = ReleaseCandidateId{document.at("candidate").get<std::uint64_t>()};
             data.product = {*kind, product.at("componentId").get<std::string>()};
-            const auto versionKind = product.at("versionKind").get<std::string>();
-            if (versionKind == "engine")
+            if (const auto versionKind = product.at("versionKind").get<std::string>(); versionKind == "engine")
                 data.version = EngineProductVersion{version.Value()};
             else if (versionKind == "game")
                 data.version = GameProductVersion{version.Value()};
@@ -227,11 +226,12 @@ namespace Horo::Release {
                 auto digest = ParseSha256(item.at("sha256").get<std::string>());
                 if (!role || digest.HasError())
                     return false;
-                data.artifacts.push_back({item.at("path").get<std::string>(), *role, item.at("size").get<std::uint64_t>(), digest.Value()});
+                data.artifacts.emplace_back(item.at("path").get<std::string>(), *role, item.at("size").get<std::uint64_t>(),
+                                            digest.Value());
             }
             for (const auto &item : extensions)
-                data.extensions.push_back(
-                    {item.at("name").get<std::string>(), item.at("version").get<std::uint32_t>(), item.at("value").dump()});
+                data.extensions.emplace_back(item.at("name").get<std::string>(), item.at("version").get<std::uint32_t>(),
+                                             item.at("value").dump());
             return true;
         }
 
@@ -249,7 +249,7 @@ namespace Horo::Release {
         }
     }  // namespace
 
-    ReleaseArtifactManifest::ReleaseArtifactManifest(ReleaseArtifactManifestData data, std::string json, Sha256Digest digest)
+    ReleaseArtifactManifest::ReleaseArtifactManifest(ReleaseArtifactManifestData data, std::string json, const Sha256Digest &digest)
         : data_(std::move(data)), json_(std::move(json)), digest_(digest) {}
 
     /** @copydoc ReleaseArtifactManifest::Create */

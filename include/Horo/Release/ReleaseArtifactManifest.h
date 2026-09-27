@@ -101,7 +101,7 @@ namespace Horo::Release {
         [[nodiscard]] const ReleaseArtifactManifestData &Data() const noexcept;
 
     private:
-        ReleaseArtifactManifest(ReleaseArtifactManifestData data, std::string json, Sha256Digest digest);
+        ReleaseArtifactManifest(ReleaseArtifactManifestData data, std::string json, const Sha256Digest &digest);
 
         ReleaseArtifactManifestData data_;
         std::string json_;
