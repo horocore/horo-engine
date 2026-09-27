@@ -503,6 +503,22 @@ baseline contains no source path, cache key, native format, decoder pointer or l
 audio handle; import, codec selection, cooking and runtime streaming remain separate
 responsibilities.
 
+The initial `HoroAudioCook` contribution consumes the bounded WAV/Ogg importer
+through an invocation-scoped AST source view and emits a versioned PCM binary32
+payload with an exact-target compatibility manifest. Its resolved profile records
+container/codec, exact binary32 quality, sample rate, semantic layout, compression, resident/stream threshold,
+stream chunk size, encoder delay/padding and target-override provenance. The
+built-in encoder currently supports uncompressed PCM at the decoded source rate
+and layout; requests for another codec, compression or unavailable rate/layout
+conversion fail planning with a typed error rather than silently falling back.
+PCM output has zero encoder delay/padding. The manifest preserves effective
+settings and target-override provenance alongside source container/codec,
+decoder, toolchain and configuration digests. A streamed choice yields bounded
+seekable PCM chunks inside the logical AST payload; it does not create a second
+Audio cache or publication authority. AST owns generic artifact staging and
+publication, while the Audio strategy validates its manifest on both fresh cooks
+and exact cache hits.
+
 ### Loudness And Metering Metadata
 
 Cooked audio assets carry loudness metadata for mixing, normalization, and
@@ -960,6 +976,27 @@ public:
 
 The interface is an internal semantic sketch. Package providers use their typed
 ADR-069 acoustic capability and may not expose Physics/native types through Audio.
+
+`AudioAcousticQuery.h` is the implemented AUD-006.1 **control-side contract**,
+not an implementation of the sketch's virtual callback. The host first admits a
+versioned, bounded capability declaration, binds generation-safe source handles,
+and prepares one typed query per source at a permitted control-update cadence.
+It dispatches queries to a selected provider only during scene extraction or a
+non-real-time audio update, never from `RenderPort` or an audio callback. Provider
+results carry the exact query, provider generation, source and listener identity,
+feature, and a terminal value or typed failure. The fixed-capacity ledger rejects
+malformed, late, duplicate, retired-source, reused-slot, and superseded-provider
+results before any numeric value can be staged as an ordinary bounded audio
+command. It retains the highest retired source generation; no same-generation
+rebinding is allowed. The result's smoothing hint comes from the admitted query,
+not from untrusted provider output. The ledger is single-control-owner state and
+has no provider function pointer, callback access, Physics dependency, or native
+API types.
+
+This is an additive Audio API contract with no existing caller migration. Actual
+physics-backed raycasts, zone extraction, deadline/fallback policy, provider
+selection, and host-to-runtime command composition remain later AUD-006 work;
+admitting a provider or query here does not claim those capabilities are active.
 
 The 1.0 baseline ships a null/reference provider plus a qualified basic physics-
 backed raycast provider. It may raycast outside the real-time callback, then feed

@@ -20,6 +20,22 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## DFR-002.2 Import Boundary
+
+`HoroEngine::Assets` owns the additive `Horo/Assets/PreFracturedSource.h` FBX
+normalization contract. `HoroEngine::DestructionCook` owns the additive
+`Horo/Destruction/PreFracturedImport.h` semantic validation and detached
+candidate contract, linking `HoroEngine::DestructionApi` and Assets. Existing
+`core.mesh` FBX import callers do not migrate: that flattened preview path remains
+unchanged. Fracture authoring callers use the new cook target, capture the import
+owner revision before preparation, and explicitly accept only the completed
+candidate. The generated Assets and DestructionCook public-header consumers
+enforce both boundaries. Neither header publishes ufbx, native Physics, or Render
+types.
+The authoring owner must call `Invalidate()` on source changes to cancel older
+preparations before accepting any later candidate; acceptance itself also rotates
+the revision and cancellation token. Shutdown closes acceptance but retains the
+last immutable snapshot for existing readers.
 ## MCP-001.2 Session Boundary
 
 `HoroEngine::McpSession` owns the additive `Horo/Mcp/McpErrors.h`,
@@ -39,6 +55,18 @@ plan owns its nodes, pin schemas, routes, defaults, capability requirements, and
 canonical bytes. No existing PCG caller changes signature. Future evaluators must
 consume the validated cooked plan, not source graph references or runtime handles.
 The generated PCG public-header consumer covers the new sole-owned header.
+
+## DFR-002.3 Offline Generator Boundary
+
+`HoroEngine::DestructionCook` owns the additive
+`Horo/Destruction/OfflineVoronoi.h` contract. Authoring and asset-cook callers link
+that target, capture normalized source bytes and an exact source revision, and provide
+an explicit seed, recipe revision, limits, tier, and pinned toolchain fingerprint.
+`GenerateOfflineVoronoi` returns a detached candidate. The authoring owner compares
+the captured owner/source/recipe generation at `Accept`; generation alone never
+publishes a durable asset or changes a runtime world. Existing pre-fractured import
+callers do not migrate. The generated DestructionCook public-header consumer covers
+the additive header without exposing Physics, Render, editor, or parser types.
 
 ## PCG-1.5 Provenance Boundary
 
@@ -837,6 +865,19 @@ descriptors must explicitly migrate to version 2 and set
 before validation. Version-1 data is rejected; there is no second legacy policy path.
 Existing `HoroEngine::DestructionApi` consumers continue linking their current target
 for the identity, descriptor and state-machine contracts.
+
+## DFR-006.4 Replication Boundary
+
+`HoroEngine::DestructionReplication` owns
+`Horo/Destruction/DestructionReplication.h` and publicly depends on the existing
+`DestructionApi` and `NetworkApi` owners. NetworkApi does not depend on Destruction:
+the DFR adapter contributes an inert Network-owned descriptor and bounded typed
+serializers at host composition, then encodes owner-captured semantic values. The
+generated public-header boundary and `HoroDestructionReplicationTests` exercise this
+new consumer dependency. Hosts migrate DFR replication contributions to this target;
+they must not mirror the state by generic property paths, native body handles or a
+second Network-owned destruction authority. The schema is exact version 1.0; future
+semantic field changes require a new ID/version and explicit compatibility migration.
 
 ## NAV-002.7 Migration Notes
 

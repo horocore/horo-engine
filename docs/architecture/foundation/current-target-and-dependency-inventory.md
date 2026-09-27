@@ -79,6 +79,7 @@ device backend.
 | `HoroInput` (`HoroEngine::Input`) | Always | Owns the backend-neutral `Runtime/Input.h` contract and runtime implementation. | Foundation (public) |
 | `HoroAudioMemory` (`HoroEngine::AudioMemory`) | Always | Owns `Audio/AudioMemory.h`, bounded scratch storage and generation-safe fixed pools with explicit deferred reuse. Aligned allocation details remain target-private. | AudioApi (public) |
 | `HoroAudioCommands` (`HoroEngine::AudioCommands`) | Always | Owns `Audio/AudioCommands.h`, `Audio/AudioCommandBuffer.h` and `Audio/AudioCommandStaging.h`: typed intents, normalization/coalescing, bounded MPSC/control/SPSC transport and scene/barrier admission. | AudioMemory (public) |
+| `HoroAudioCook` (`HoroEngine::AudioCook`) | Always | Owns `Audio/AudioCookProfile.h` and `Audio/AudioCooker.h`: immutable exact-target quality policy, deterministic PCM payloads, compatibility manifests and an inert AST cooker contribution. It neither caches nor publishes on its own. | AudioImport, Assets (public) |
 | `HoroInputSdl` (`HoroEngine::InputSdl`) | Editor GUI only | Owns the SDL input adapter. It has no dedicated public Horo header; its implementation path is nevertheless exported as a public include directory. | Input (public) |
 
 ### Gameplay And Extensions

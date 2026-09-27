@@ -78,6 +78,11 @@ add_library(HoroEngine::McpSession ALIAS HoroMcpSession)
 target_compile_features(HoroMcpSession PUBLIC cxx_std_20)
 target_link_libraries(HoroMcpSession PUBLIC HoroEngine::Foundation nlohmann_json::nlohmann_json)
 
+add_library(HoroMcpRegistry STATIC mcp/McpToolRegistry.cpp)
+add_library(HoroEngine::McpRegistry ALIAS HoroMcpRegistry)
+target_compile_features(HoroMcpRegistry PUBLIC cxx_std_20)
+target_link_libraries(HoroMcpRegistry PUBLIC HoroEngine::McpSession)
+
 if (HORO_ENABLE_OPENTELEMETRY)
     add_library(HoroOpenTelemetry STATIC
             foundation/telemetry/OpenTelemetrySink.cpp
@@ -576,6 +581,7 @@ add_library(HoroAssets STATIC
         runtime/assets/importer/builtin/obj_mesh/ObjMeshPreviewProvider.cpp
         runtime/assets/importer/builtin/fbx_mesh/FbxMeshImporter.cpp
         runtime/assets/importer/builtin/fbx_mesh/FbxMeshParser.cpp
+        runtime/assets/importer/builtin/fbx_mesh/PreFracturedFbxParser.cpp
 )
 add_library(HoroEngine::Assets ALIAS HoroAssets)
 target_compile_features(HoroAssets PUBLIC cxx_std_20)
@@ -597,6 +603,7 @@ target_link_libraries(HoroPhysicsModel PUBLIC HoroEngine::Foundation HoroEngine:
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::PhysicsModel)
 
 add_library(HoroAudioApi STATIC
+        audio/api/AudioAcousticQuery.cpp
         audio/api/AudioAssetSchema.cpp
         audio/api/AudioBackendCapabilities.cpp
         audio/api/AudioCallbackEvents.cpp
@@ -628,6 +635,15 @@ target_link_libraries(HoroAudioImport
         PUBLIC HoroEngine::AudioApi
         PRIVATE HoroThirdParty::Miniaudio
 )
+
+add_library(HoroAudioCook STATIC
+        audio/cook/AudioCookProfile.cpp
+        audio/cook/AudioCooker.cpp
+        audio/cook/AudioCookInspector.cpp
+)
+add_library(HoroEngine::AudioCook ALIAS HoroAudioCook)
+target_compile_features(HoroAudioCook PUBLIC cxx_std_20)
+target_link_libraries(HoroAudioCook PUBLIC HoroEngine::AudioImport HoroEngine::Assets)
 
 # Build-tree-only contract shared privately by Audio control and concrete backend adapters.
 add_library(HoroAudioBackendContract INTERFACE)
@@ -908,12 +924,32 @@ add_library(HoroEngine::DestructionApi ALIAS HoroDestructionApi)
 target_compile_features(HoroDestructionApi PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
+add_library(HoroDestructionCook STATIC
+        runtime/destruction/cook/OfflineVoronoi.cpp
+        runtime/destruction/cook/OfflineVoronoiChunks.cpp
+        runtime/destruction/cook/OfflineVoronoiClipping.cpp
+        runtime/destruction/cook/OfflineVoronoiProvenance.cpp
+        runtime/destruction/cook/OfflineVoronoiValidation.cpp
+        runtime/destruction/cook/PreFracturedIntersection.cpp
+        runtime/destruction/cook/PreFracturedImport.cpp
+)
+add_library(HoroEngine::DestructionCook ALIAS HoroDestructionCook)
+target_compile_features(HoroDestructionCook PUBLIC cxx_std_20)
+target_link_libraries(HoroDestructionCook PUBLIC HoroEngine::DestructionApi HoroEngine::Assets)
 add_library(HoroDestructionRuntime STATIC
         runtime/destruction/runtime/DestructionDamageRuntime.cpp
 )
 add_library(HoroEngine::DestructionRuntime ALIAS HoroDestructionRuntime)
 target_compile_features(HoroDestructionRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionRuntime PUBLIC HoroEngine::DestructionApi)
+
+add_library(HoroDestructionReplication STATIC
+        runtime/destruction/network/DestructionReplicationDescriptor.cpp
+        runtime/destruction/network/DestructionReplicationEncoding.cpp
+)
+add_library(HoroEngine::DestructionReplication ALIAS HoroDestructionReplication)
+target_compile_features(HoroDestructionReplication PUBLIC cxx_std_20)
+target_link_libraries(HoroDestructionReplication PUBLIC HoroEngine::DestructionApi HoroEngine::NetworkApi)
 
 add_library(HoroCinematicModel STATIC
         runtime/cinematic/model/CurveSampling.cpp

@@ -71,6 +71,10 @@ horo_configure_target_header_boundary(HoroMcpSession PUBLIC_HEADERS
     Horo/Mcp/McpLocalTransport.h
 )
 
+horo_configure_target_header_boundary(HoroMcpRegistry PUBLIC_HEADERS
+    Horo/Mcp/McpToolRegistry.h
+)
+
 horo_configure_target_header_boundary(HoroOpenTelemetry PUBLIC_HEADERS
     Horo/Foundation/Telemetry/OpenTelemetrySink.h)
 
@@ -308,11 +312,13 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/AssetReimport.h
     Horo/Assets/CookCatalog.h
     Horo/Assets/MeshEditorPayload.h
+    Horo/Assets/PreFracturedSource.h
 )
 horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioAssetSchema.h
     Horo/Audio/AudioBackendCapabilities.h
     Horo/Audio/AudioCallbackEvents.h
+    Horo/Audio/AudioAcousticQuery.h
     Horo/Audio/AudioDeviceDiscovery.h
     Horo/Audio/AudioDeviceNegotiation.h
     Horo/Audio/AudioDeviceTiming.h
@@ -330,6 +336,10 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroAudioImport PUBLIC_HEADERS
     Horo/Audio/AudioSourceImporter.h
+)
+horo_configure_target_header_boundary(HoroAudioCook PUBLIC_HEADERS
+    Horo/Audio/AudioCookProfile.h
+    Horo/Audio/AudioCooker.h
 )
 horo_configure_target_header_boundary(HoroAudioDsp PUBLIC_HEADERS
     Horo/Audio/AudioDSPNode.h
@@ -461,8 +471,15 @@ horo_configure_target_header_boundary(HoroDestructionApi PUBLIC_HEADERS
     Horo/Destruction/DestructionRegistry.h
     Horo/Destruction/DestructionStateMachine.h
 )
+horo_configure_target_header_boundary(HoroDestructionCook PUBLIC_HEADERS
+    Horo/Destruction/OfflineVoronoi.h
+    Horo/Destruction/PreFracturedImport.h
+)
 horo_configure_target_header_boundary(HoroDestructionRuntime PUBLIC_HEADERS
     Horo/Destruction/DestructionDamageRuntime.h
+)
+horo_configure_target_header_boundary(HoroDestructionReplication PUBLIC_HEADERS
+    Horo/Destruction/DestructionReplication.h
 )
 horo_configure_target_header_boundary(HoroCinematicModel PUBLIC_HEADERS
     Horo/Cinematic/CurveSampling.h

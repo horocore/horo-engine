@@ -299,6 +299,7 @@ add_dependencies(HoroNetworkTransportCompositionTests HoroNetworkDisabledLinkPro
 horo_register_catch_test(HoroNetworkTransportCompositionTests LABELS "unit;network;headless")
 add_executable(HoroAudioApiTests
         support/AllocationProbe.cpp
+        unit/runtime/audio/AudioAcousticQueryTests.cpp
         unit/runtime/audio/AudioAssetSchemaTests.cpp
         unit/runtime/audio/MixerAssetSchemaTests.cpp
         unit/runtime/audio/AudioSoundReferenceTests.cpp
@@ -329,6 +330,12 @@ add_executable(HoroAudioImportTests
 target_compile_features(HoroAudioImportTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioImportTests PRIVATE HoroEngine::AudioImport)
 horo_register_catch_test(HoroAudioImportTests LABELS "unit;audio;headless")
+add_executable(HoroAudioCookTests
+        unit/runtime/audio/AudioCookerTests.cpp
+)
+target_compile_features(HoroAudioCookTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAudioCookTests PRIVATE HoroEngine::AudioCook)
+horo_register_catch_test(HoroAudioCookTests LABELS "unit;audio;headless")
 add_executable(HoroAudioBackendContractTests
         unit/runtime/audio/AudioBackendContractTests.cpp
 )
@@ -538,12 +545,33 @@ target_link_libraries(HoroDestructionApiTests PRIVATE HoroEngine::DestructionApi
 target_include_directories(HoroDestructionApiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 horo_register_catch_test(HoroDestructionApiTests LABELS "unit;destruction;headless")
 
+add_executable(HoroPreFracturedImportTests
+        unit/runtime/destruction/PreFracturedImportTests.cpp
+        unit/runtime/destruction/PreFracturedIntersectionTests.cpp
+)
+target_compile_features(HoroPreFracturedImportTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPreFracturedImportTests PRIVATE HoroEngine::DestructionCook)
+target_include_directories(HoroPreFracturedImportTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/destruction/cook)
+target_compile_definitions(HoroPreFracturedImportTests PRIVATE HORO_UFBX_TEST_DATA_DIR="${ufbx_SOURCE_DIR}/data")
+horo_register_catch_test(HoroPreFracturedImportTests LABELS "unit;destruction;headless")
 add_executable(HoroDestructionRuntimeTests
         unit/runtime/destruction/DestructionDamageRuntimeTests.cpp
 )
 target_compile_features(HoroDestructionRuntimeTests PRIVATE cxx_std_20)
 target_link_libraries(HoroDestructionRuntimeTests PRIVATE HoroEngine::DestructionRuntime)
 horo_register_catch_test(HoroDestructionRuntimeTests LABELS "unit;destruction;headless")
+
+add_executable(HoroOfflineVoronoiTests unit/runtime/destruction/OfflineVoronoiTests.cpp)
+target_compile_features(HoroOfflineVoronoiTests PRIVATE cxx_std_20)
+target_link_libraries(HoroOfflineVoronoiTests PRIVATE HoroEngine::DestructionCook)
+horo_register_catch_test(HoroOfflineVoronoiTests LABELS "unit;destruction;headless")
+
+add_executable(HoroDestructionReplicationTests
+        unit/runtime/destruction/DestructionReplicationTests.cpp
+)
+target_compile_features(HoroDestructionReplicationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroDestructionReplicationTests PRIVATE HoroEngine::DestructionReplication)
+horo_register_catch_test(HoroDestructionReplicationTests LABELS "unit;destruction;network;headless")
 
 add_executable(HoroCinematicModelTests
         support/AllocationProbe.cpp
@@ -1316,6 +1344,11 @@ add_executable(HoroMcpSessionTests
 target_compile_features(HoroMcpSessionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroMcpSessionTests PRIVATE HoroEngine::McpSession Threads::Threads)
 horo_register_catch_test(HoroMcpSessionTests LABELS "unit;mcp;headless")
+
+add_executable(HoroMcpRegistryTests unit/mcp/McpToolRegistryTests.cpp)
+target_compile_features(HoroMcpRegistryTests PRIVATE cxx_std_20)
+target_link_libraries(HoroMcpRegistryTests PRIVATE HoroEngine::McpRegistry Threads::Threads)
+horo_register_catch_test(HoroMcpRegistryTests LABELS "unit;mcp;headless")
 
 add_executable(HoroFoundationErrorCodeRegistryTests
         unit/foundation/ErrorCodeRegistryTests.cpp
