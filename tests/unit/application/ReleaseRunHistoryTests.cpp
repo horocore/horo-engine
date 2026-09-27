@@ -49,7 +49,12 @@ TEST_CASE("Release history retains bounded typed state across store restart", "[
     first.revision = 1U;
     first.stages[0].state = ReleaseStageState::Succeeded;
     REQUIRE(history->Record(first, 1100).HasValue());
-    CHECK(history->Record(Snapshot(2U), 1200).HasValue());
+    first.state = ReleaseJobState::Failed;
+    first.revision = 2U;
+    REQUIRE(history->Record(first, 1150).HasValue());
+    auto second = Snapshot(2U);
+    second.state = ReleaseJobState::Failed;
+    CHECK(history->Record(second, 1200).HasValue());
     CHECK(history->Record(Snapshot(3U), 1300).HasValue());
     CHECK(history->Dropped() == 1U);
     history.reset();
@@ -65,6 +70,39 @@ TEST_CASE("Release history retains bounded typed state across store restart", "[
     const std::string stored{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
     CHECK(stored.find("message") == std::string::npos);
     CHECK(stored.find("credential") == std::string::npos);
+}
+
+TEST_CASE("Release history preserves active jobs and rejects admission when only active jobs fit", "[release][history]") {
+    TemporaryHistoryDirectory directory;
+    NativeDurableFileSystem files;
+    const auto path = directory.path / "history.json";
+    auto opened = ReleaseRunHistory::Open(files, path, 2U);
+    REQUIRE(opened.HasValue());
+    auto history = std::move(opened).Value();
+    auto first = Snapshot(1U);
+    REQUIRE(history->Record(first, 1000).HasValue());
+    auto second = Snapshot(2U);
+    second.state = ReleaseJobState::Failed;
+    REQUIRE(history->Record(second, 1100).HasValue());
+    REQUIRE(history->Record(Snapshot(3U), 1200).HasValue());
+    const auto active = history->List();
+    REQUIRE(active.size() == 2U);
+    CHECK(active[0].job.value == 1U);
+    CHECK(active[1].job.value == 3U);
+    CHECK(history->Dropped() == 1U);
+
+    CHECK(history->Record(Snapshot(4U), 1300).HasError());
+    CHECK(history->List().size() == 2U);
+    CHECK(history->Dropped() == 1U);
+    first.state = ReleaseJobState::Failed;
+    first.revision = 1U;
+    REQUIRE(history->Record(first, 1400).HasValue());
+    REQUIRE(history->Record(Snapshot(4U), 1500).HasValue());
+    const auto recent = history->List();
+    REQUIRE(recent.size() == 2U);
+    CHECK(recent[0].job.value == 3U);
+    CHECK(recent[1].job.value == 4U);
+    CHECK(history->Dropped() == 2U);
 }
 
 TEST_CASE("Release history rejects stale updates and corrupt or unsafe storage", "[release][history]") {
@@ -98,6 +136,7 @@ TEST_CASE("Release history retains candidate identity after its job ages out", "
     auto history = std::move(opened).Value();
     auto completed = Snapshot(1U);
     completed.candidate = ReleaseCandidateSnapshot{ReleaseCandidateId{42U}, ReleaseCandidateState::FinalVerified};
+    completed.state = ReleaseJobState::Succeeded;
     REQUIRE(history->Record(completed, 1000).HasValue());
     REQUIRE(history->Record(Snapshot(2U), 2000).HasValue());
     CHECK(history->HighestCandidate() == 42U);

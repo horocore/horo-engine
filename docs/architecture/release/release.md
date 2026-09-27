@@ -519,8 +519,10 @@ creation, update, and terminal times; it excludes worker messages, arbitrary
 paths, and credentials.
 Publication uses a durable prepared file and atomic replacement. Recovery rejects
 malformed or oversized history and retains the highest candidate ID even after
-its job record ages out. Hosts that do not supply the optional store retain the
-existing in-memory behavior; no existing constructor call needs migration.
+its job record ages out. Retention evicts the oldest terminal job; active jobs
+remain queryable, and admission fails when the store is full of active jobs.
+Hosts that do not supply the optional store retain the existing in-memory
+behavior; no existing constructor call needs migration.
 
 Logs are separated by release job and stage. Log records include timestamp,
 severity, subsystem, target, and stage. User-facing adapters may render logs

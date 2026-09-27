@@ -23,6 +23,11 @@ namespace Horo::Release {
             return MakeError(ReleaseErrors::PipelineOutputInvalid);
         }
 
+        /** @brief Only completed jobs may leave durable history while another job is active. */
+        [[nodiscard]] bool IsTerminal(const ReleaseJobState state) {
+            return state == ReleaseJobState::Succeeded || state == ReleaseJobState::Failed || state == ReleaseJobState::Cancelled;
+        }
+
         /** @brief Checks the closed enum ranges before accepting durable records. */
         [[nodiscard]] bool ValidEntry(const ReleaseRunHistoryEntry &entry) {
             if (entry.job.value == 0U || entry.target.value == 0U || entry.operation == 0U || entry.createdUtcMilliseconds <= 0 ||
@@ -170,8 +175,7 @@ namespace Horo::Release {
             entry.candidate = snapshot.candidate->id;
         entry.createdUtcMilliseconds = updatedUtcMilliseconds;
         entry.updatedUtcMilliseconds = updatedUtcMilliseconds;
-        const bool terminal = entry.state == ReleaseJobState::Succeeded || entry.state == ReleaseJobState::Failed ||
-                              entry.state == ReleaseJobState::Cancelled;
+        const bool terminal = IsTerminal(entry.state);
         if (terminal)
             entry.finishedUtcMilliseconds = updatedUtcMilliseconds;
         if (!ValidEntry(entry))
@@ -194,7 +198,12 @@ namespace Horo::Release {
             updated.insert(found, entry);
         std::uint64_t nextDropped = dropped_;
         if (updated.size() > capacity_) {
-            updated.erase(updated.begin());
+            const auto evicted = std::ranges::find_if(updated, [](const ReleaseRunHistoryEntry &value) {
+                return IsTerminal(value.state);
+            });
+            if (evicted == updated.end())
+                return Result<void>::Failure(InvalidHistory());
+            updated.erase(evicted);
             if (nextDropped == std::numeric_limits<std::uint64_t>::max())
                 return Result<void>::Failure(InvalidHistory());
             ++nextDropped;
