@@ -253,7 +253,8 @@ target_compile_features(HoroUpdateDiscovery PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateDiscovery PUBLIC HoroEngine::UpdateManifest)
 
 add_library(HoroUpdateTransfer STATIC application/release/UpdateTransfer.cpp application/release/UpdateTransferErrors.cpp
-        application/release/UpdateArchiveIndex.cpp application/release/UpdateStagedTree.cpp)
+        application/release/UpdateArchiveIndex.cpp application/release/UpdateStagedTree.cpp
+        application/release/UpdateTransferCheckpointStore.cpp)
 add_library(HoroEngine::UpdateTransfer ALIAS HoroUpdateTransfer)
 target_compile_features(HoroUpdateTransfer PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateTransfer PUBLIC HoroEngine::UpdateManifest)

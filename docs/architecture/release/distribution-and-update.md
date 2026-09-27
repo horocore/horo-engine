@@ -271,7 +271,10 @@ may be published. The host must keep the private stage quiescent during this
 check; the archive reader must supply the complete authenticated file inventory.
 Partial-file checkpoint evidence uses a bounded canonical schema. Recovery
 parses it as untrusted bytes and rechecks it against the selected signed package
-and the new transport response before appending any downloaded bytes.
+and the new transport response before appending any downloaded bytes. The
+private checkpoint store publishes canonical evidence with a durable prepared
+file and atomic replacement, then recovery requires both the partial file and
+checkpoint to exist as regular files with exactly matching durable byte counts.
 
 ## Staging
 

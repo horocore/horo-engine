@@ -1,6 +1,7 @@
 #include "Horo/Release/UpdateArchiveIndex.h"
 #include "Horo/Release/UpdateStagedTree.h"
 #include "Horo/Release/UpdateTransfer.h"
+#include "Horo/Release/UpdateTransferCheckpointStore.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -255,4 +256,57 @@ TEST_CASE("Update staging rejects missing, linked, and oversized content", "[rel
     std::filesystem::create_symlink(stage.path / "outside", stage.path / "bin/editor", linkError);
     if (!linkError)
         CHECK(VerifyUpdateStagedTree(stage.path, files, limits).HasError());
+}
+
+TEST_CASE("Private transfer checkpoint recovery requires exact durable partial bytes", "[release][update]") {
+    TemporaryStage stage;
+    const auto partialPath = stage.path / "package partial";
+    const auto checkpointPath = stage.path / "package checkpoint";
+    auto empty = LoadUpdateTransferCheckpoint(partialPath, checkpointPath);
+    REQUIRE(empty.HasValue());
+    CHECK_FALSE(empty.Value().has_value());
+
+    WriteStageFile(partialPath, std::string(40U, 'p'));
+    CHECK(LoadUpdateTransferCheckpoint(partialPath, checkpointPath).HasError());
+    Horo::NativeDurableFileSystem files;
+    const auto checkpoint = PartialCheckpoint(Package());
+    REQUIRE(SaveUpdateTransferCheckpoint(files, partialPath, checkpointPath, checkpoint).HasValue());
+    auto recovered = LoadUpdateTransferCheckpoint(partialPath, checkpointPath);
+    REQUIRE(recovered.HasValue());
+    REQUIRE(recovered.Value().has_value());
+    CHECK(recovered.Value()->durableBytes == 40U);
+    CHECK(recovered.Value()->packageDigest == checkpoint.packageDigest);
+
+    WriteStageFile(partialPath, std::string(39U, 'p'));
+    CHECK(LoadUpdateTransferCheckpoint(partialPath, checkpointPath).HasError());
+    CHECK(SaveUpdateTransferCheckpoint(files, partialPath, checkpointPath, checkpoint).HasError());
+    WriteStageFile(partialPath, std::string(40U, 'p'));
+    WriteStageFile(checkpointPath, "horo-update-transfer-v2\n");
+    CHECK(LoadUpdateTransferCheckpoint(partialPath, checkpointPath).HasError());
+    WriteStageFile(checkpointPath, std::string(4601U, 'x'));
+    CHECK(LoadUpdateTransferCheckpoint(partialPath, checkpointPath).HasError());
+}
+
+TEST_CASE("Private checkpoint publication rejects aliases of package bytes", "[release][update]") {
+    TemporaryStage stage;
+    const auto partialPath = stage.path / "package.partial";
+    const auto checkpointPath = stage.path / "package.checkpoint";
+    WriteStageFile(partialPath, std::string(40U, 'p'));
+    const auto checkpoint = PartialCheckpoint(Package());
+    Horo::NativeDurableFileSystem files;
+    std::error_code linkError;
+    std::filesystem::create_hard_link(partialPath, checkpointPath, linkError);
+    if (!linkError) {
+        CHECK(LoadUpdateTransferCheckpoint(partialPath, checkpointPath).HasError());
+        CHECK(SaveUpdateTransferCheckpoint(files, partialPath, checkpointPath, checkpoint).HasError());
+        std::filesystem::remove(checkpointPath);
+    }
+    auto prepared = checkpointPath;
+    prepared += ".next";
+    linkError.clear();
+    std::filesystem::create_hard_link(partialPath, prepared, linkError);
+    if (!linkError) {
+        CHECK(SaveUpdateTransferCheckpoint(files, partialPath, checkpointPath, checkpoint).HasError());
+        CHECK(std::filesystem::file_size(partialPath) == 40U);
+    }
 }
