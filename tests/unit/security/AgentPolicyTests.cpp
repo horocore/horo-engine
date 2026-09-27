@@ -76,6 +76,24 @@ namespace Horo::Security::Tests {
         CHECK(policy.AuthorizeContextDispatch(secondEnvelope).reason == AgentPolicyReason::StaleAuthority);
     }
 
+    TEST_CASE("An incomplete context consumes consent without creating dispatch authority", "[Security][Agent]") {
+        AgentPolicy policy;
+        REQUIRE(policy.SetProjectTrust(true, 1));
+        const auto first = Visible(1, AgentDataClass::EditorContext, "first");
+        const auto second = Visible(2, AgentDataClass::AssetMetadata, "second");
+        REQUIRE(policy.GrantContextConsent(AgentProviderResidence::Cloud, 3, {first, second}, 1).Allowed());
+        auto [envelope, decision] = policy.BuildContext(AgentProviderResidence::Cloud, 3, {first}, 1);
+        CHECK_FALSE(decision.Allowed());
+        CHECK(decision.reason == AgentPolicyReason::ContextNotAdmitted);
+        CHECK(envelope.items.empty());
+        CHECK(policy.BuildContext(AgentProviderResidence::Cloud, 3, {first, second}, 1).second.reason ==
+              AgentPolicyReason::ConsentRequired);
+        envelope.provider = AgentProviderResidence::Cloud;
+        envelope.requestId = 3;
+        envelope.projectRevision = 1;
+        CHECK(policy.AuthorizeContextDispatch(envelope).reason == AgentPolicyReason::ConsentRequired);
+    }
+
     TEST_CASE("Consent cannot authorize changed, hidden, or newly sensitive context", "[Security][Agent]") {
         AgentPolicy policy;
         REQUIRE(policy.SetProjectTrust(true, 1));

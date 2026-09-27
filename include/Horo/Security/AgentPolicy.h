@@ -235,6 +235,9 @@ namespace Horo::Security {
             std::uint64_t revision{};
         };
 
+        /** @brief Assembles an exact-preview dispatch envelope after one-request consent is consumed. */
+        [[nodiscard]] std::pair<AgentContextEnvelope, AgentPolicyDecision> AssembleAdmittedContext(
+            ContextGrant grant, const std::vector<AgentContextCandidate> &candidates);
         [[nodiscard]] AgentPolicyDecision Decision(AgentProviderResidence provider, AgentPolicyReason reason,
                                                    std::optional<AgentDataClass> dataClass = std::nullopt,
                                                    std::optional<AgentToolRisk> toolRisk = std::nullopt, std::uint64_t subjectId = 0,

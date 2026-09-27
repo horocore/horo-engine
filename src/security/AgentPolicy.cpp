@@ -154,15 +154,24 @@ namespace Horo::Security {
             contextGrant_->revision != revision)
             return {std::move(empty), Decision(provider, AgentPolicyReason::ConsentRequired)};
 
-        const ContextGrant grant = std::move(*contextGrant_);
+        ContextGrant grant = std::move(*contextGrant_);
         contextGrant_.reset();
+        return AssembleAdmittedContext(std::move(grant), candidates);
+    }
+
+    /** @copydoc AgentPolicy::AssembleAdmittedContext */
+    std::pair<AgentContextEnvelope, AgentPolicyDecision> AgentPolicy::AssembleAdmittedContext(
+        ContextGrant grant, const std::vector<AgentContextCandidate> &candidates) {
+        AgentContextEnvelope empty;
+        const AgentProviderResidence provider = grant.provider;
+        const std::uint64_t requestId = grant.requestId;
         if (candidates.size() > limits_.maximumContextItems)
             return {std::move(empty), Decision(provider, AgentPolicyReason::ContextLimitExceeded)};
 
         AgentContextEnvelope result;
         result.provider = provider;
         result.requestId = requestId;
-        result.projectRevision = revision;
+        result.projectRevision = grant.revision;
         std::unordered_set<std::uint64_t> seen;
         for (const AgentContextCandidate &candidate : candidates) {
             if (candidate.itemId == 0 || !seen.insert(candidate.itemId).second || !ValidDataClass(candidate.dataClass))
