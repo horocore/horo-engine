@@ -15,30 +15,25 @@ namespace Horo::Physics {
                                                      const std::span<const PhysicsDebugRecord> contacts,
                                                      const std::span<const PhysicsDebugRecord> pipeline,
                                                      const std::size_t truncatedContacts) {
+            using enum PhysicsDebugCategory;
+            using enum PhysicsDebugAvailability;
             PhysicsDebugSource source{.world = world,
                                       .simulationTick = published.completedTick,
                                       .publicationRevision = published.publicationRevision};
-            source.categories[static_cast<std::size_t>(PhysicsDebugCategory::Body)] = {.availability = PhysicsDebugAvailability::Available,
-                                                                                       .records = projected.bodies,
-                                                                                       .truncatedBeforeCapture = projected.truncatedBodies};
-            source.categories[static_cast<std::size_t>(PhysicsDebugCategory::Shape)] = {.availability = PhysicsDebugAvailability::Available,
-                                                                                        .records = projected.shapes,
-                                                                                        .truncatedBeforeCapture =
-                                                                                            projected.truncatedShapes};
-            source.categories[static_cast<std::size_t>(PhysicsDebugCategory::Contact)] = {.availability =
-                                                                                              PhysicsDebugAvailability::Available,
-                                                                                          .records = contacts,
-                                                                                          .truncatedBeforeCapture = truncatedContacts,
-                                                                                          .droppedBeforeCapture =
-                                                                                              published.droppedEventCount};
-            source.categories[static_cast<std::size_t>(PhysicsDebugCategory::Constraint)] = {.availability =
-                                                                                                 PhysicsDebugAvailability::Available,
-                                                                                             .records = projected.constraints,
-                                                                                             .truncatedBeforeCapture =
-                                                                                                 projected.truncatedConstraints};
-            source.categories[static_cast<std::size_t>(PhysicsDebugCategory::Pipeline)] = {.availability =
-                                                                                               PhysicsDebugAvailability::Available,
-                                                                                           .records = pipeline};
+            source.categories[static_cast<std::size_t>(Body)] = {.availability = Available,
+                                                                 .records = projected.bodies,
+                                                                 .truncatedBeforeCapture = projected.truncatedBodies};
+            source.categories[static_cast<std::size_t>(Shape)] = {.availability = Available,
+                                                                  .records = projected.shapes,
+                                                                  .truncatedBeforeCapture = projected.truncatedShapes};
+            source.categories[static_cast<std::size_t>(Contact)] = {.availability = Available,
+                                                                    .records = contacts,
+                                                                    .truncatedBeforeCapture = truncatedContacts,
+                                                                    .droppedBeforeCapture = published.droppedEventCount};
+            source.categories[static_cast<std::size_t>(Constraint)] = {.availability = Available,
+                                                                       .records = projected.constraints,
+                                                                       .truncatedBeforeCapture = projected.truncatedConstraints};
+            source.categories[static_cast<std::size_t>(Pipeline)] = {.availability = Available, .records = pipeline};
             return source;
         }
 
