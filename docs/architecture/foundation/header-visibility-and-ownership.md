@@ -30,6 +30,15 @@ target depends only on `HoroEngine::UpdateManifest`; transports and application
 composition remain outside its public interface. Generated standalone public
 header consumers verify both headers and their declared dependencies.
 
+## REL-002.4 Update Transfer Boundary
+
+`HoroEngine::UpdateTransfer` owns the additive `Horo/Release/UpdateTransfer.h`
+and `UpdateTransferErrors.h` contracts. There are no prior transfer callers to
+migrate. The product host supplies transport-observed response evidence and
+persists checkpoints only after private-file durability. This target depends on
+`HoroEngine::UpdateManifest` and contains no concrete network or filesystem
+backend. Generated standalone public-header consumers verify both headers.
+
 ## DFR-002.2 Import Boundary
 
 `HoroEngine::Assets` owns the additive `Horo/Assets/PreFracturedSource.h` FBX

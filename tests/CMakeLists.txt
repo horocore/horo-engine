@@ -1067,6 +1067,11 @@ target_compile_features(HoroUpdateDiscoveryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateDiscoveryTests PRIVATE HoroEngine::UpdateDiscovery)
 horo_register_catch_test(HoroUpdateDiscoveryTests LABELS "release;update;headless")
 
+add_executable(HoroUpdateTransferTests unit/application/UpdateTransferTests.cpp)
+target_compile_features(HoroUpdateTransferTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUpdateTransferTests PRIVATE HoroEngine::UpdateTransfer)
+horo_register_catch_test(HoroUpdateTransferTests LABELS "release;update;headless")
+
 add_executable(HoroReleaseChecksumsTests
         unit/application/ReleaseChecksumsTests.cpp)
 target_compile_features(HoroReleaseChecksumsTests PRIVATE cxx_std_20)

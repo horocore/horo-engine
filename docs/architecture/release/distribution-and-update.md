@@ -246,6 +246,18 @@ Downloads use:
 - cancellation without damaging an installed version
 
 Downloaded bytes are untrusted until all expected hashes and signatures pass.
+`PlanUpdateTransfer` admits a fresh body only for the exact signed package URL,
+declared byte count, and a complete response. It permits a range resume only
+when a durable partial-file checkpoint matches the package hash and size,
+original and effective URL, strong ETag, exact start offset, and total length.
+A changed validator, unexpected redirect, or server response that ignores the
+range fails closed; the caller must explicitly discard the old partial file
+before a new transfer. `CheckUpdateTransferSpace` reserves host-requested free
+capacity, and checkpoints advance only after bytes are durably stored. The host
+still owns transport, private-file I/O, cancellation, and progress dispatch.
+`VerifyCompletedUpdateTransfer` then checks the complete private-file size,
+hash, and publisher signature before any extractor or staging marker consumes
+it.
 
 ## Staging
 
