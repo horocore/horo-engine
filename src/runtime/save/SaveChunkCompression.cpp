@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cstring>
 #include <limits>
 #include <memory>
 #include <miniz.h>
@@ -97,9 +96,12 @@ namespace Horo::Runtime {
         /** @brief Copies miniz output only while it fits the pre-admitted decoded length. */
         int CopyDecodedBytes(const void *source, const int length, void *context) noexcept {
             auto &output = *static_cast<DecodedOutput *>(context);
-            if (length < 0 || static_cast<std::size_t>(length) > output.bytes.size() - output.written)
+            if (length < 0 || (length > 0 && source == nullptr) || output.written > output.bytes.size() ||
+                static_cast<std::size_t>(length) > output.bytes.size() - output.written)
                 return 0;
-            std::memcpy(output.bytes.data() + output.written, source, static_cast<std::size_t>(length));
+            const std::span input{static_cast<const std::byte *>(source), static_cast<std::size_t>(length)};
+            const auto destination = output.bytes.subspan(output.written, input.size());
+            std::ranges::copy(input, destination.begin());
             output.written += static_cast<std::size_t>(length);
             return 1;
         }

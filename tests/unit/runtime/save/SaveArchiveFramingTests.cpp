@@ -109,7 +109,7 @@ namespace {
         CHECK(EncodeSaveChunk(canonical, {.preferred = SaveChunkCodec::Deflate, .required = true}, limits).HasError());
     }
 
-    TEST_CASE("Compressed chunks accept an independent zlib-wrapped Deflate stream", "[runtime][save][compression]") {
+    TEST_CASE("Compressed chunks admit an independent zlib stream only at its exact decoded length", "[runtime][save][compression]") {
         constexpr std::array compressed{std::byte{0x78}, std::byte{0x9c}, std::byte{0x63}, std::byte{0x64},
                                         std::byte{0x62}, std::byte{0x06}, std::byte{0x00}, std::byte{0x00},
                                         std::byte{0x0d}, std::byte{0x00}, std::byte{0x07}};
@@ -122,6 +122,14 @@ namespace {
         directory.entries[0].storedByteLength = compressed.size();
         directory.entries[1].offset = compressed.size();
         directory.entries[2].offset = compressed.size() + directory.entries[1].storedByteLength;
+        auto undersized = directory;
+        undersized.entries[0].decodedByteLength = 2;
+        const auto undersizedProof = ValidateSaveChunkDirectory(std::move(undersized), Manifest());
+        REQUIRE(undersizedProof.HasValue());
+        const auto rejected = SelectSaveChunkPayload(payload, undersizedProof.Value(), Id<SaveRecordId>(20));
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == SaveErrors::ArchiveChunkDecodeFailed.code.Value());
+
         const auto validated = ValidateSaveChunkDirectory(std::move(directory), Manifest());
         REQUIRE(validated.HasValue());
         const auto selected = SelectSaveChunkPayload(payload, validated.Value(), Id<SaveRecordId>(20));
