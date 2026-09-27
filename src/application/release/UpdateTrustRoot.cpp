@@ -181,8 +181,8 @@ namespace Horo::Release {
             next.minimumManifestSequence < data_.minimumManifestSequence || next.expiresAt <= now)
             return Result<UpdateTrustRootSnapshot>::Failure(MakeError(UpdateManifestErrors::Stale));
         Security::ArtifactVerifier verifier{std::move(provider), roots_};
-        auto authenticated = verifier.Verify(std::as_bytes(std::span{proposed.CanonicalPayload()}), proposed.Signature());
-        if (authenticated.HasError())
+        if (auto authenticated = verifier.Verify(std::as_bytes(std::span{proposed.CanonicalPayload()}), proposed.Signature());
+            authenticated.HasError())
             return Result<UpdateTrustRootSnapshot>::Failure(authenticated.ErrorValue());
         auto roots = BuildRoots(next);
         return Result<UpdateTrustRootSnapshot>::Success(UpdateTrustRootSnapshot{next, std::move(roots)});

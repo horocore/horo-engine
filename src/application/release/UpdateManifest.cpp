@@ -317,8 +317,8 @@ namespace Horo::Release {
         if (roots.Product() != context.installedProduct)
             return Result<void>::Failure(MakeError(UpdateManifestErrors::Incompatible));
         Security::ArtifactVerifier verifier{std::move(provider), roots.Roots()};
-        auto authenticated = verifier.Verify(std::as_bytes(std::span{manifest.CanonicalPayload()}), manifest.Signature());
-        if (authenticated.HasError())
+        if (auto authenticated = verifier.Verify(std::as_bytes(std::span{manifest.CanonicalPayload()}), manifest.Signature());
+            authenticated.HasError())
             return Result<void>::Failure(authenticated.ErrorValue());
         if (context.now < data.publishedAt || context.now > data.expiresAt || context.now > roots.ExpiresAt() ||
             data.sequence < std::max(context.minimumAcceptedSequence, roots.MinimumManifestSequence()) ||
@@ -331,17 +331,15 @@ namespace Horo::Release {
                    package.selection.artifact.architecture == context.architecture;
         }))
             return Result<void>::Failure(MakeError(UpdateManifestErrors::Incompatible));
-        const auto candidate = std::visit([](const auto &version) {
-            return version.value;
-        }, data.version);
-        const auto installed = std::visit([](const auto &version) {
-            return version.value;
-        }, context.installedVersion);
-        if (!ValidVersionKind(data.product.kind, context.installedVersion) ||
+        const auto version = [](const auto &value) {
+            return value.value;
+        };
+        const auto candidate = std::visit(version, data.version);
+        if (const auto installed = std::visit(version, context.installedVersion);
+            !ValidVersionKind(data.product.kind, context.installedVersion) ||
             (CompareReleaseVersionPrecedence(candidate, installed) < 0 && !context.authorizedDowngrade) ||
-            (data.minimumAllowedVersion && CompareReleaseVersionPrecedence(candidate, std::visit([](const auto &version) {
-            return version.value;
-        }, *data.minimumAllowedVersion)) < 0))
+            (data.minimumAllowedVersion &&
+             CompareReleaseVersionPrecedence(candidate, std::visit(version, *data.minimumAllowedVersion)) < 0))
             return Result<void>::Failure(MakeError(UpdateManifestErrors::Rollback));
         return Result<void>::Success();
     }
@@ -351,8 +349,7 @@ namespace Horo::Release {
                                      const Security::ArtifactVerifier &verifier) {
         if (bytes.size() != package.size || ComputeSha256(bytes) != package.digest)
             return Result<void>::Failure(MakeError(UpdateManifestErrors::Invalid));
-        auto verified = verifier.Verify(bytes, package.signature);
-        if (verified.HasError())
+        if (auto verified = verifier.Verify(bytes, package.signature); verified.HasError())
             return Result<void>::Failure(verified.ErrorValue());
         return Result<void>::Success();
     }
