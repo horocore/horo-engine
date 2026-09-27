@@ -522,6 +522,20 @@ Given identical declared inputs and a reproducible toolchain, release content
 hashes should be identical. Non-deterministic platform signing metadata is
 tracked separately from reproducible unsigned content.
 
+`ReleaseBuildProvenance` is the canonical, public-safe unsigned evidence
+contract. It records the frozen source, dependency lock, profile, toolchain,
+policy, and reviewed notes digests; a build-script digest; sorted runtime
+features; named digests of declared non-secret environment values; the source
+epoch used by deterministic generators; and sorted relative file sizes and
+hashes. Its locale and timezone contract is `C` and `UTC`. Signed bytes and
+signing credentials belong only to the final candidate manifest. A comparison
+of two provenance values names each changed input field and unsigned file.
+The capture boundary streams exact files from a quiescent private unsigned tree
+without serializing the host path, and rejects symbolic links, special files,
+unreadable content, and portable-path collisions.
+Build and cook workers must capture this evidence from actual inputs and bytes
+and apply the declared normalization before claiming reproducibility.
+
 ## Job History And Logs
 
 Persistent job history contains:
