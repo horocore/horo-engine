@@ -639,6 +639,15 @@ target_include_directories(HoroXRApiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroXRApiTests PRIVATE HoroEngine::XRApi)
 horo_register_catch_test(HoroXRApiTests LABELS "unit;xr;headless")
 
+add_executable(HoroXRRuntimeTests
+        support/AllocationProbe.cpp
+        unit/runtime/xr/XRSessionLifecycleTests.cpp
+)
+target_compile_features(HoroXRRuntimeTests PRIVATE cxx_std_20)
+target_include_directories(HoroXRRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroXRRuntimeTests PRIVATE HoroEngine::XRRuntime)
+horo_register_catch_test(HoroXRRuntimeTests LABELS "unit;xr;headless;lifecycle")
+
 add_executable(HoroTerrainApiTests
         unit/runtime/terrain/FoliageDefinitionTests.cpp
         unit/runtime/terrain/TerrainCompositionTests.cpp

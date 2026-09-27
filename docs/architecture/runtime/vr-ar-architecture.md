@@ -27,6 +27,18 @@ never reuse lost evidence. The target also owns the `horo.xr` error descriptor c
 not discover or activate an XR runtime and therefore does not constitute OpenXR,
 platform, headset, or product-profile support.
 
+`HoroEngine::XRRuntime` now implements the backend-neutral session lifecycle
+boundary, not a concrete OpenXR runtime. Host composition supplies the selected
+resource port and immutable capability evidence. A private session candidate
+is admitted against the host's exact current system and capability revision, so
+retained evidence cannot re-activate a replaced runtime. The candidate then
+prepares ordered resources before Ready publication; failure retires completed
+candidate stages in reverse order and leaves an existing generation published.
+Native events alone advance Running/Visible/Focused/Stopping/Lost, and loss or
+replacement fences retained session identities before downstream admission.
+Activation/replacement/shutdown are host lifecycle operations, not frame work.
+Headless compositions continue to omit both XRRuntime and XROpenXR.
+
 [ADR-157](../../adr/157-xr-ownership-runtime-composition-and-capability-tier.md)
 is the normative foundation for XR module ownership, host composition, typed
 capability admission, 1.0 profiles, unsupported paths and lifecycle. The sections
@@ -211,6 +223,17 @@ The descriptor set returned by `XRErrors::Descriptors()` is the complete bounded
 `horo.xr` contribution for later host module registration. XRRuntime and XROpenXR
 must extend this Horo-owned vocabulary through their owning module descriptors;
 they must not expose native result integers or branch on native message text.
+
+`XRSessionLifecycle.h` is the new XRRuntime-owned public session boundary; existing
+XRApi headers stay owned by XRApi. Consumers needing lifecycle events or admission
+now depend on `HoroEngine::XRRuntime` instead of adding native policy to XRApi.
+The host-owned `IXRSessionResources` port must outlive the coordinator, clean a
+failing preparation stage before returning, and retire each completed stage for
+the exact generation without affecting a replacement. This is a new boundary;
+there is no previous lifecycle API to migrate. Native session, predicted-frame,
+and OpenXR adapter implementations remain separate follow-up capabilities.
+`XRSessionErrors::Descriptors()` is XRRuntime's distinct `horo.xr` diagnostic
+contribution; XRApi's descriptor list and ownership remain unchanged.
 
 Capabilities are discovered from the selected runtime, platform host, renderer,
 device, permissions, and admitted optional extensions. They are not inferred
