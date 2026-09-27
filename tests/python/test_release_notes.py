@@ -40,6 +40,21 @@ SOURCE = """# Changelog
 """
 
 
+def write_archive_fixture(root: Path, snapshot: bytes) -> tuple[Path, Path]:
+    tar_path = root / "release.tar.gz"
+    zip_path = root / "release.zip"
+    with tarfile.open(tar_path, "w:gz") as package:
+        directory = tarfile.TarInfo("HoroEngine/")
+        directory.type = tarfile.DIRTYPE
+        package.addfile(directory)
+        member = tarfile.TarInfo("HoroEngine/release-notes.json")
+        member.size = len(snapshot)
+        package.addfile(member, io.BytesIO(snapshot))
+    with zipfile.ZipFile(zip_path, "w") as package:
+        package.writestr("release-notes.json", snapshot)
+    return tar_path, zip_path
+
+
 class ReleaseNotesTests(unittest.TestCase):
     def test_exact_version_and_unreleased_exclusion(self):
         entries = parse_changelog(SOURCE)
@@ -125,17 +140,7 @@ class ReleaseNotesTests(unittest.TestCase):
         snapshot = snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor"))
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            tar_path = root / "release.tar.gz"
-            zip_path = root / "release.zip"
-            with tarfile.open(tar_path, "w:gz") as package:
-                directory = tarfile.TarInfo("HoroEngine/")
-                directory.type = tarfile.DIRTYPE
-                package.addfile(directory)
-                member = tarfile.TarInfo("HoroEngine/release-notes.json")
-                member.size = len(snapshot)
-                package.addfile(member, io.BytesIO(snapshot))
-            with zipfile.ZipFile(zip_path, "w") as package:
-                package.writestr("release-notes.json", snapshot)
+            tar_path, zip_path = write_archive_fixture(root, snapshot)
             verify_archive(snapshot, tar_path)
             verify_archive(snapshot, zip_path)
             for archive in (tar_path, zip_path):
@@ -153,6 +158,19 @@ class ReleaseNotesTests(unittest.TestCase):
             with self.assertRaisesRegex(NotesError, "exactly one"):
                 verify_archive(snapshot, duplicate)
 
+            with self.assertRaisesRegex(NotesError, "unsupported release archive format"):
+                verify_archive(snapshot, root / "release.7z")
+            with self.assertRaisesRegex(NotesError, "missing or oversized"):
+                verify_archive(b"", zip_path)
+            with self.assertRaisesRegex(NotesError, "missing or oversized"):
+                verify_archive(b"x" * 32769, zip_path)
+
+    def test_archive_rejects_traversal_and_non_file_notes(self):
+        snapshot = snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor"))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tar_path, zip_path = write_archive_fixture(root, snapshot)
+
             for unsafe in ("../release-notes.json", "/release-notes.json",
                            "package/../release-notes.json", "package\\release-notes.json"):
                 with self.subTest(unsafe=unsafe):
@@ -165,13 +183,6 @@ class ReleaseNotesTests(unittest.TestCase):
                     for archive in (tar_path, zip_path):
                         with self.assertRaisesRegex(NotesError, "unsafe package member path"):
                             verify_archive(snapshot, archive)
-
-            with self.assertRaisesRegex(NotesError, "unsupported release archive format"):
-                verify_archive(snapshot, root / "release.7z")
-            with self.assertRaisesRegex(NotesError, "missing or oversized"):
-                verify_archive(b"", zip_path)
-            with self.assertRaisesRegex(NotesError, "missing or oversized"):
-                verify_archive(b"x" * 32769, zip_path)
 
             # A valid notes entry cannot excuse a hostile sibling archive path.
             with tarfile.open(tar_path, "w:gz") as package:
