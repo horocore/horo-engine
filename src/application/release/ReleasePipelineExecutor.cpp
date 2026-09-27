@@ -49,19 +49,28 @@ namespace Horo::Release {
 
         /** @brief Stops between stages after a service or caller cancellation request. */
         [[nodiscard]] bool StopIfCancelled(ReleaseJobTracker &tracker, const CancellationToken &cancellation) {
-            const ReleaseJobSnapshot before = tracker.Snapshot();
-            if (cancellation.IsCancellationRequested() && before.state == ReleaseJobState::Running)
+            using enum ReleaseJobState;
+            if (const ReleaseJobSnapshot before = tracker.Snapshot(); cancellation.IsCancellationRequested() && before.state == Running)
                 (void)tracker.RequestCancel();
-            if (tracker.Snapshot().state == ReleaseJobState::Cancelling)
+            if (tracker.Snapshot().state == Cancelling)
                 (void)tracker.AcknowledgeCancellation();
-            return tracker.Snapshot().state == ReleaseJobState::Cancelled;
+            return tracker.Snapshot().state == Cancelled;
         }
+
+        /** @brief Shared immutable inputs and tracker authority for each stage attempt. */
+        struct StageRuntime final {
+            ReleaseJobTracker &tracker;
+            const ReleaseExecutionPlan &plan;
+            IReleasePreflightFactsProvider &facts;
+            const CancellationToken &cancellation;
+            ReleasePipelineLimits limits;
+        };
 
         /** @brief Executes one worker with fresh frozen-input checks and a closed tracker transition. */
         template <typename Worker>
-        [[nodiscard]] bool RunStage(ReleaseJobTracker &tracker, const ReleaseExecutionPlan &plan, IReleasePreflightFactsProvider &facts,
-                                    const CancellationToken &cancellation, const ReleasePipelineLimits limits, const ReleaseStage stage,
-                                    Worker &&worker, const std::optional<ReleaseCandidateId> *candidate = nullptr) {
+        [[nodiscard]] bool RunStage(StageRuntime &runtime, const ReleaseStage stage, Worker &&worker,
+                                    const std::optional<ReleaseCandidateId> *candidate = nullptr) {
+            auto &[tracker, plan, facts, cancellation, limits] = runtime;
             if (StopIfCancelled(tracker, cancellation))
                 return false;
             const auto attemptResult = tracker.BeginStage(stage);
@@ -91,10 +100,8 @@ namespace Horo::Release {
                 if (std::chrono::steady_clock::now() >= deadline)
                     return fail(MakeError(ReleaseErrors::PipelineStageTimeout));
 
-                auto result = worker(context);
-                if (result.HasError()) {
-                    const Error &error = result.ErrorValue();
-                    if (error.code.Value() == ReleaseErrors::PipelineProcessCancelled.code.Value() &&
+                if (auto result = worker(context); result.HasError()) {
+                    if (result.ErrorValue().code.Value() == ReleaseErrors::PipelineProcessCancelled.code.Value() &&
                         StopIfCancelled(tracker, cancellation))
                         return false;
                     return fail(std::move(result).ErrorValue());
@@ -103,7 +110,7 @@ namespace Horo::Release {
                     return false;
                 if (std::chrono::steady_clock::now() >= deadline)
                     return fail(MakeError(ReleaseErrors::PipelineStageTimeout));
-            } catch (...) {
+            } catch (...) {  // NOSONAR: Worker plugins may throw non-standard exceptions; preserve the stage terminal.
                 return fail(MakeError(ReleaseErrors::PipelineStageException));
             }
 
@@ -117,6 +124,98 @@ namespace Horo::Release {
             if (completed.HasError())
                 return fail(std::move(completed).ErrorValue());
             return true;
+        }
+
+        /** @brief Produces a verified unsigned payload through the ordered build and cook stages. */
+        [[nodiscard]] std::optional<ReleasePreSignVerifiedPayload> PrepareUnsignedPayload(StageRuntime &runtime,
+                                                                                          IReleasePipelineStages &stages) {
+            std::optional<ReleaseConfiguredTarget> configured;
+            std::optional<ReleaseBuiltPayload> built;
+            std::optional<ReleaseCookedPayload> cooked;
+            std::optional<ReleaseStagedPayload> staged;
+            if (!RunStage(runtime, ReleaseStage::Validating, [&stages](const ReleaseStageContext &context) {
+                return stages.Validate(context);
+            }))
+                return std::nullopt;
+            if (!RunStage(runtime, ReleaseStage::Configuring, [&stages, &configured](const ReleaseStageContext &context) {
+                auto result = stages.Configure(context);
+                if (result.HasError())
+                    return Result<void>::Failure(std::move(result).ErrorValue());
+                configured = std::move(result).Value();
+                return !configured->root.empty() && HasDigest(configured->configurationDigest) ? Result<void>::Success()
+                                                                                               : Result<void>::Failure(InvalidOutput());
+            }))
+                return std::nullopt;
+            if (!RunStage(runtime, ReleaseStage::Building, [&stages, &configured, &built](const ReleaseStageContext &context) {
+                auto result = stages.Build(context, *configured);
+                if (result.HasError())
+                    return Result<void>::Failure(std::move(result).ErrorValue());
+                built = std::move(result).Value();
+                return !built->root.empty() && HasDigest(built->bytesDigest) ? Result<void>::Success()
+                                                                             : Result<void>::Failure(InvalidOutput());
+            }))
+                return std::nullopt;
+            if (!RunStage(runtime, ReleaseStage::Cooking, [&stages, &configured, &built, &cooked](const ReleaseStageContext &context) {
+                auto result = stages.Cook(context, *configured, *built);
+                if (result.HasError())
+                    return Result<void>::Failure(std::move(result).ErrorValue());
+                cooked = std::move(result).Value();
+                return !cooked->root.empty() && HasDigest(cooked->bytesDigest) ? Result<void>::Success()
+                                                                               : Result<void>::Failure(InvalidOutput());
+            }))
+                return std::nullopt;
+            if (!RunStage(runtime, ReleaseStage::Packaging, [&stages, &built, &cooked, &staged](const ReleaseStageContext &context) {
+                auto result = stages.Package(context, *built, *cooked);
+                if (result.HasError())
+                    return Result<void>::Failure(std::move(result).ErrorValue());
+                staged = std::move(result).Value();
+                return !staged->root.empty() && HasDigest(staged->bytesDigest) ? Result<void>::Success()
+                                                                               : Result<void>::Failure(InvalidOutput());
+            }))
+                return std::nullopt;
+            if (!RunStage(runtime, ReleaseStage::PreSignVerifying, [&stages, &staged](const ReleaseStageContext &context) {
+                return stages.PreSignVerify(context, *staged);
+            }))
+                return std::nullopt;
+            return ReleasePreSignVerifiedPayload{*staged};
+        }
+
+        /** @brief Seals final bytes, verifies metadata, and optionally publishes the candidate. */
+        [[nodiscard]] bool FinishCandidate(StageRuntime &runtime, IReleasePipelineStages &stages, const ReleaseStagePlan expected,
+                                           const ReleaseCandidateId candidate, const ReleasePreSignVerifiedPayload &verified) {
+            std::optional<ReleaseSignedPayload> signedPayload;
+            if (expected.signing &&
+                !RunStage(runtime, ReleaseStage::Signing, [&stages, &verified, &signedPayload](const ReleaseStageContext &context) {
+                auto result = stages.Sign(context, verified);
+                if (result.HasError())
+                    return Result<void>::Failure(std::move(result).ErrorValue());
+                signedPayload = std::move(result).Value();
+                return !signedPayload->root.empty() && HasDigest(signedPayload->bytesDigest) ? Result<void>::Success()
+                                                                                             : Result<void>::Failure(InvalidOutput());
+            }))
+                return false;
+            const ReleaseFinalBytes finalBytes = signedPayload ? ReleaseFinalBytes{*signedPayload} : ReleaseFinalBytes{verified};
+            std::optional<ReleaseFinalMetadata> metadata;
+            std::optional<ReleaseCandidateId> candidateId;
+            if (!RunStage(runtime, ReleaseStage::FinalizingMetadata,
+                          [&stages, candidate, &finalBytes, &metadata, &candidateId](const ReleaseStageContext &context) {
+                auto result = stages.FinalizeMetadata(context, candidate, finalBytes);
+                if (result.HasError())
+                    return Result<void>::Failure(std::move(result).ErrorValue());
+                metadata = ReleaseFinalMetadata{candidate, std::move(result).Value()};
+                candidateId = candidate;
+                return HasDigest(metadata->manifestDigest) ? Result<void>::Success() : Result<void>::Failure(InvalidOutput());
+            }, &candidateId))
+                return false;
+            const ReleaseFinalizedCandidate finalized{finalBytes, *metadata};
+            if (!RunStage(runtime, ReleaseStage::FinalVerifying, [&stages, &finalized](const ReleaseStageContext &context) {
+                return stages.FinalVerify(context, finalized);
+            }))
+                return false;
+            return !expected.publishing ||
+                   RunStage(runtime, ReleaseStage::Publishing, [&stages, &finalized](const ReleaseStageContext &context) {
+                return stages.Publish(context, ReleaseFinalVerifiedCandidate{finalized});
+            });
         }
     }  // namespace
 
@@ -162,91 +261,10 @@ namespace Horo::Release {
         if (tracker.Start().HasError())
             return tracker.Snapshot();
 
-        std::optional<ReleaseConfiguredTarget> configured;
-        std::optional<ReleaseBuiltPayload> built;
-        std::optional<ReleaseCookedPayload> cooked;
-        std::optional<ReleaseStagedPayload> staged;
-        std::optional<ReleasePreSignVerifiedPayload> preSignVerified;
-        std::optional<ReleaseSignedPayload> signedPayload;
-        std::optional<ReleaseFinalizedCandidate> finalized;
+        StageRuntime runtime{tracker, plan, facts, cancellation, limits};
 
-        if (!RunStage(tracker, plan, facts, cancellation, limits, ReleaseStage::Validating, [&](const ReleaseStageContext &context) {
-            return stages.Validate(context);
-        }))
-            return tracker.Snapshot();
-        if (!RunStage(tracker, plan, facts, cancellation, limits, ReleaseStage::Configuring, [&](const ReleaseStageContext &context) {
-            auto result = stages.Configure(context);
-            if (result.HasError())
-                return Result<void>::Failure(std::move(result).ErrorValue());
-            configured = std::move(result).Value();
-            return !configured->root.empty() && HasDigest(configured->configurationDigest) ? Result<void>::Success()
-                                                                                           : Result<void>::Failure(InvalidOutput());
-        }))
-            return tracker.Snapshot();
-        if (!RunStage(tracker, plan, facts, cancellation, limits, ReleaseStage::Building, [&](const ReleaseStageContext &context) {
-            auto result = stages.Build(context, *configured);
-            if (result.HasError())
-                return Result<void>::Failure(std::move(result).ErrorValue());
-            built = std::move(result).Value();
-            return !built->root.empty() && HasDigest(built->bytesDigest) ? Result<void>::Success() : Result<void>::Failure(InvalidOutput());
-        }))
-            return tracker.Snapshot();
-        if (!RunStage(tracker, plan, facts, cancellation, limits, ReleaseStage::Cooking, [&](const ReleaseStageContext &context) {
-            auto result = stages.Cook(context, *configured, *built);
-            if (result.HasError())
-                return Result<void>::Failure(std::move(result).ErrorValue());
-            cooked = std::move(result).Value();
-            return !cooked->root.empty() && HasDigest(cooked->bytesDigest) ? Result<void>::Success()
-                                                                           : Result<void>::Failure(InvalidOutput());
-        }))
-            return tracker.Snapshot();
-        if (!RunStage(tracker, plan, facts, cancellation, limits, ReleaseStage::Packaging, [&](const ReleaseStageContext &context) {
-            auto result = stages.Package(context, *built, *cooked);
-            if (result.HasError())
-                return Result<void>::Failure(std::move(result).ErrorValue());
-            staged = std::move(result).Value();
-            return !staged->root.empty() && HasDigest(staged->bytesDigest) ? Result<void>::Success()
-                                                                           : Result<void>::Failure(InvalidOutput());
-        }))
-            return tracker.Snapshot();
-        if (!RunStage(tracker, plan, facts, cancellation, limits, ReleaseStage::PreSignVerifying, [&](const ReleaseStageContext &context) {
-            return stages.PreSignVerify(context, *staged);
-        }))
-            return tracker.Snapshot();
-        preSignVerified = ReleasePreSignVerifiedPayload{*staged};
-        if (expected.signing &&
-            !RunStage(tracker, plan, facts, cancellation, limits, ReleaseStage::Signing, [&](const ReleaseStageContext &context) {
-            auto result = stages.Sign(context, *preSignVerified);
-            if (result.HasError())
-                return Result<void>::Failure(std::move(result).ErrorValue());
-            signedPayload = std::move(result).Value();
-            return !signedPayload->root.empty() && HasDigest(signedPayload->bytesDigest) ? Result<void>::Success()
-                                                                                         : Result<void>::Failure(InvalidOutput());
-        }))
-            return tracker.Snapshot();
-
-        const ReleaseFinalBytes finalBytes = signedPayload ? ReleaseFinalBytes{*signedPayload} : ReleaseFinalBytes{*preSignVerified};
-        std::optional<ReleaseFinalMetadata> metadata;
-        std::optional<ReleaseCandidateId> candidateId;
-        if (!RunStage(tracker, plan, facts, cancellation, limits, ReleaseStage::FinalizingMetadata,
-                      [&](const ReleaseStageContext &context) {
-            auto result = stages.FinalizeMetadata(context, candidate, finalBytes);
-            if (result.HasError())
-                return Result<void>::Failure(std::move(result).ErrorValue());
-            metadata = ReleaseFinalMetadata{candidate, std::move(result).Value()};
-            candidateId = candidate;
-            return HasDigest(metadata->manifestDigest) ? Result<void>::Success() : Result<void>::Failure(InvalidOutput());
-        }, &candidateId))
-            return tracker.Snapshot();
-        finalized = ReleaseFinalizedCandidate{finalBytes, *metadata};
-        if (!RunStage(tracker, plan, facts, cancellation, limits, ReleaseStage::FinalVerifying, [&](const ReleaseStageContext &context) {
-            return stages.FinalVerify(context, *finalized);
-        }))
-            return tracker.Snapshot();
-        if (expected.publishing &&
-            !RunStage(tracker, plan, facts, cancellation, limits, ReleaseStage::Publishing, [&](const ReleaseStageContext &context) {
-            return stages.Publish(context, ReleaseFinalVerifiedCandidate{*finalized});
-        }))
+        auto unsignedPayload = PrepareUnsignedPayload(runtime, stages);
+        if (!unsignedPayload || !FinishCandidate(runtime, stages, expected, candidate, *unsignedPayload))
             return tracker.Snapshot();
         if (StopIfCancelled(tracker, cancellation))
             return tracker.Snapshot();
