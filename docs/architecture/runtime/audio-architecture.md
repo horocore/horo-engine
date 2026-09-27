@@ -1849,6 +1849,32 @@ Audio exposes:
 
 No ordinary log formatting occurs on the callback thread.
 
+### Development callback safety watchdog
+
+The build-tree-only `AudioCallbackWatchdog` instruments each SDL3 Horo render-port
+invocation when `NDEBUG` is not defined. Its deadline is the negotiated block
+period (`callbackFrames / sampleRate`); it measures preparation, Horo render work,
+conversion and SDL stream submission, not downstream device/driver latency. The
+callback publishes only fixed
+epoch/sample-frame facts to a 64-slot SPSC ring, plus lock-free sampled-count and
+latest-duration summaries. Per-kind records are limited to
+one per sample-rate worth of frames; overflow and rate-limited counts remain
+observable. `AudioBackend::DrainSafetyViolations` runs only on audio control and
+returns caller-owned values for subsequent OBS formatting/storage. Callback
+detachment must precede watchdog destruction. NullAudio retains deterministic
+simulated time: it participates in explicit forbidden-operation hooks but has
+no physical deadline samples.
+
+Explicit callback-safety hooks run immediately before heap construction in the
+Horo audio memory pool and scratch arena, and before each ingress staging mutex
+attempt. These are control-only operations under the normal ownership contract;
+if a supplied render port invokes one from a callback, the active backend scope
+records the forbidden attempt. The hooks do not globally interpose C++/C
+allocation or third-party/native locks; such operations require separate platform
+or sanitizer qualification. They are inert outside the instrumented callback
+scope and in `NDEBUG` builds. No callback log, exception, heap fallback, blocking
+wait, or unbounded scan is added by the instrumentation itself.
+
 ## Testing
 
 The following is the cumulative contract catalogue. The 1.0 qualification gate
