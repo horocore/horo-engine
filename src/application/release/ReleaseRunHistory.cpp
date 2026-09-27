@@ -25,22 +25,23 @@ namespace Horo::Release {
 
         /** @brief Only completed jobs may leave durable history while another job is active. */
         [[nodiscard]] bool IsTerminal(const ReleaseJobState state) {
-            return state == ReleaseJobState::Succeeded || state == ReleaseJobState::Failed || state == ReleaseJobState::Cancelled;
+            using enum ReleaseJobState;
+            return state == Succeeded || state == Failed || state == Cancelled;
         }
 
         /** @brief Checks the closed enum ranges before accepting durable records. */
         [[nodiscard]] bool ValidEntry(const ReleaseRunHistoryEntry &entry) {
             if (entry.job.value == 0U || entry.target.value == 0U || entry.operation == 0U || entry.createdUtcMilliseconds <= 0 ||
                 entry.updatedUtcMilliseconds < entry.createdUtcMilliseconds ||
-                (entry.finishedUtcMilliseconds && (*entry.finishedUtcMilliseconds < entry.createdUtcMilliseconds ||
-                                                   *entry.finishedUtcMilliseconds != entry.updatedUtcMilliseconds)) ||
-                entry.state > ReleaseJobState::Cancelled || (entry.candidate && entry.candidate->value == 0U) ||
-                (entry.interruptedByRestart && (entry.state != ReleaseJobState::Failed || entry.finishedUtcMilliseconds)))
+                (entry.finishedUtcMilliseconds.has_value() && (*entry.finishedUtcMilliseconds < entry.createdUtcMilliseconds ||
+                                                               *entry.finishedUtcMilliseconds != entry.updatedUtcMilliseconds)) ||
+                entry.state > ReleaseJobState::Cancelled || (entry.candidate.has_value() && entry.candidate->value == 0U) ||
+                (entry.interruptedByRestart && (entry.state != ReleaseJobState::Failed || entry.finishedUtcMilliseconds.has_value())))
                 return false;
             return std::ranges::all_of(entry.stages, [](const ReleaseStageState state) {
                 return state <= ReleaseStageState::NotApplicable;
             }) && std::ranges::all_of(entry.attempts, [](const std::optional<ReleaseStageAttemptId> attempt) {
-                return !attempt || attempt->value != 0U;
+                return !attempt.has_value() || attempt->value != 0U;
             });
         }
 
@@ -51,7 +52,7 @@ namespace Horo::Release {
             for (const auto state : entry.stages)
                 stages.push_back(static_cast<std::uint8_t>(state));
             for (const auto attempt : entry.attempts)
-                attempts.push_back(attempt ? Json(attempt->value) : Json(nullptr));
+                attempts.push_back(attempt.has_value() ? Json(attempt->value) : Json(nullptr));
             return {{"job", entry.job.value},
                     {"target", entry.target.value},
                     {"operation", entry.operation},
@@ -59,9 +60,10 @@ namespace Horo::Release {
                     {"state", static_cast<std::uint8_t>(entry.state)},
                     {"stages", std::move(stages)},
                     {"attempts", std::move(attempts)},
-                    {"candidate", entry.candidate ? Json(entry.candidate->value) : Json(nullptr)},
+                    {"candidate", entry.candidate.has_value() ? Json(entry.candidate->value) : Json(nullptr)},
                     {"createdUtcMilliseconds", entry.createdUtcMilliseconds},
-                    {"finishedUtcMilliseconds", entry.finishedUtcMilliseconds ? Json(*entry.finishedUtcMilliseconds) : Json(nullptr)},
+                    {"finishedUtcMilliseconds",
+                     entry.finishedUtcMilliseconds.has_value() ? Json(*entry.finishedUtcMilliseconds) : Json(nullptr)},
                     {"updatedUtcMilliseconds", entry.updatedUtcMilliseconds},
                     {"interruptedByRestart", entry.interruptedByRestart}};
         }
@@ -154,7 +156,7 @@ namespace Horo::Release {
                 for (const auto &value : document.at("entries")) {
                     auto entry = ReadEntry(value, schemaVersion);
                     if ((!entries.empty() && entries.back().job.value >= entry.job.value) ||
-                        (entry.candidate && entry.candidate->value > highestCandidate))
+                        (entry.candidate.has_value() && entry.candidate->value > highestCandidate))
                         return Result<std::unique_ptr<ReleaseRunHistory>>::Failure(InvalidHistory());
                     if (!IsTerminal(entry.state)) {
                         entry.state = ReleaseJobState::Failed;
@@ -163,12 +165,15 @@ namespace Horo::Release {
                     }
                     entries.push_back(std::move(entry));
                 }
-            } catch (const std::exception &) {
+            } catch (const Json::exception &) {
+                return Result<std::unique_ptr<ReleaseRunHistory>>::Failure(InvalidHistory());
+            } catch (const std::invalid_argument &) {
                 return Result<std::unique_ptr<ReleaseRunHistory>>::Failure(InvalidHistory());
             }
         }
-        return Result<std::unique_ptr<ReleaseRunHistory>>::Success(std::unique_ptr<ReleaseRunHistory>(
-            new ReleaseRunHistory(files, path, capacity, std::move(lock).Value(), std::move(entries), dropped, highestCandidate)));
+        return Result<std::unique_ptr<ReleaseRunHistory>>::Success(
+            std::unique_ptr<ReleaseRunHistory>(  // NOSONAR: Private constructor requires explicit lock ownership.
+                new ReleaseRunHistory(files, path, capacity, std::move(lock).Value(), std::move(entries), dropped, highestCandidate)));
     }
 
     /** @copydoc ReleaseRunHistory::Record */
@@ -183,7 +188,7 @@ namespace Horo::Release {
             entry.stages[index] = snapshot.stages[index].state;
             entry.attempts[index] = snapshot.stages[index].attempt;
         }
-        if (snapshot.candidate)
+        if (snapshot.candidate.has_value())
             entry.candidate = snapshot.candidate->id;
         entry.createdUtcMilliseconds = updatedUtcMilliseconds;
         entry.updatedUtcMilliseconds = updatedUtcMilliseconds;
@@ -194,10 +199,11 @@ namespace Horo::Release {
             return Result<void>::Failure(InvalidHistory());
         std::lock_guard lock(mutex_);
         auto updated = entries_;
-        auto found = std::ranges::lower_bound(updated, entry.job.value, {}, [](const ReleaseRunHistoryEntry &value) {
+        if (auto found = std::ranges::lower_bound(updated, entry.job.value, {},
+                                                  [](const ReleaseRunHistoryEntry &value) {
             return value.job.value;
         });
-        if (found != updated.end() && found->job == entry.job) {
+            found != updated.end() && found->job == entry.job) {
             if (entry.revision < found->revision || entry.target != found->target || entry.operation != found->operation ||
                 found->interruptedByRestart || (IsTerminal(found->state) && !terminal))
                 return Result<void>::Failure(InvalidHistory());
@@ -221,7 +227,7 @@ namespace Horo::Release {
             ++nextDropped;
         }
         const std::uint64_t nextHighestCandidate =
-            entry.candidate ? std::max(highestCandidate_, entry.candidate->value) : highestCandidate_;
+            entry.candidate.has_value() ? std::max(highestCandidate_, entry.candidate->value) : highestCandidate_;
         Json document = {{"schemaVersion", 2},
                          {"dropped", nextDropped},
                          {"highestCandidate", nextHighestCandidate},
@@ -233,11 +239,9 @@ namespace Horo::Release {
             return Result<void>::Failure(InvalidHistory());
         auto prepared = path_;
         prepared += ".pending";
-        auto written = files_.WriteDurable(prepared, std::as_bytes(std::span{bytes}));
-        if (written.HasError())
+        if (auto written = files_.WriteDurable(prepared, std::as_bytes(std::span{bytes})); written.HasError())
             return written;
-        auto replaced = files_.AtomicReplace(prepared, path_);
-        if (replaced.HasError())
+        if (auto replaced = files_.AtomicReplace(prepared, path_); replaced.HasError())
             return replaced;
         entries_ = std::move(updated);
         dropped_ = nextDropped;

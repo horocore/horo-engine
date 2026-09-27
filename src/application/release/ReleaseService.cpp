@@ -170,7 +170,7 @@ namespace Horo::Release {
     }
 
     /** @copydoc ReleaseService::PersistSnapshot */
-    Result<void> ReleaseService::PersistSnapshot(const ReleaseJobSnapshot &snapshot) {
+    Result<void> ReleaseService::PersistSnapshot(const ReleaseJobSnapshot &snapshot) const {
         if (!config_.history)
             return Result<void>::Success();
         const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(config_.wallClock->UtcNow().time_since_epoch());
@@ -242,7 +242,9 @@ namespace Horo::Release {
                                                                                                    .phase = "release",
                                                                                                    .message = "Release pipeline running."});
                     (void)ReleasePipelineExecutor{}.Execute(record->tracker, record->candidate, record->plan, facts_, *worker.Value(),
-                                                            token, config_.pipeline, config_.history ? &historyObserver : nullptr);
+                                                            token,
+                                                            ReleasePipelineExecutionOptions{config_.pipeline,
+                                                                                            config_.history ? &historyObserver : nullptr});
                 }
             } catch (...) {  // NOSONAR: Worker implementations may throw non-standard exceptions.
                 FailUnexpected(record->tracker);

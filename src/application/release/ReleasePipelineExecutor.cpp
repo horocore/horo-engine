@@ -263,7 +263,9 @@ namespace Horo::Release {
     ReleaseJobSnapshot ReleasePipelineExecutor::Execute(ReleaseJobTracker &tracker, const ReleaseCandidateId candidate,
                                                         const ReleaseExecutionPlan &plan, IReleasePreflightFactsProvider &facts,
                                                         IReleasePipelineStages &stages, const CancellationToken &cancellation,
-                                                        const ReleasePipelineLimits limits, IReleaseJobObserver *observer) const {
+                                                        const ReleasePipelineExecutionOptions options) const {
+        const auto limits = options.limits;
+        auto *observer = options.observer;
         if (StopIfCancelled(tracker, cancellation))
             return tracker.Snapshot();
         const ReleaseJobSnapshot initial = tracker.Snapshot();

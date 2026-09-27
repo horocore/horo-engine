@@ -512,6 +512,10 @@ Persistent job history contains:
 History never contains credentials or raw secret values.
 
 The service accepts an optional host-owned `ReleaseRunHistory` and UTC clock.
+The executor receives its stage limits and borrowed synchronous observer in one
+`ReleasePipelineExecutionOptions` value. Callers that previously passed separate
+limits and observer arguments move both into that value; the release service is
+the current production caller, and calls without custom options retain defaults.
 When supplied, admission, stage boundaries, and terminal transitions replace a
 bounded typed snapshot under an exclusive writer lock. The durable snapshot
 contains IDs, revision, stage states and attempts, candidate identity, and UTC
