@@ -133,29 +133,41 @@ warnings.
 
 ```json
 {
-  "schemaVersion": 1,
-  "product": "horo-editor",
-  "channel": "stable",
-  "version": "0.8.2",
-  "buildId": "build_...",
-  "publishedAt": "2026-06-14T12:00:00Z",
-  "minimumUpdaterVersion": "1",
-  "packages": [
-    {
-      "platform": "macos",
-      "arch": "arm64",
-      "url": "https://...",
-      "size": 12345678,
-      "sha256": "...",
-      "signature": "..."
-    }
-  ]
+  "manifest": {
+    "schemaVersion": 1,
+    "product": {"kind": "editor", "componentId": ""},
+    "channel": "stable",
+    "version": "0.8.2",
+    "buildId": "build_123",
+    "sequence": 12,
+    "publishedAt": 1781438400,
+    "expiresAt": 1782043200,
+    "minimumUpdaterVersion": 1,
+    "minimumRootRevision": 2,
+    "packages": [
+      {
+        "platform": "macos",
+        "architecture": "arm64",
+        "format": "mac-dmg",
+        "packageId": "editor-macos-arm64",
+        "installationId": "horo-editor",
+        "url": "https://example.invalid/editor.dmg",
+        "size": 12345678,
+        "sha256": "<64 lowercase hex digits>",
+        "signature": {"algorithm": "ecdsa-p256-sha256", "publisherId": "com.horo", "keyId": "update-2", "signature": "<128 lowercase hex digits>"}
+      }
+    ]
+  },
+  "signature": {"algorithm": "ecdsa-p256-sha256", "publisherId": "com.horo", "keyId": "update-2", "signature": "<128 lowercase hex digits>"}
 }
 ```
 
-The manifest and package identity are verified according to
-[Release Security](./release-security.md). Transport security does not replace
-artifact signature and hash verification.
+The signed document uses canonical JSON with exact schema fields; the signature
+covers the canonical `manifest` object. Time values are Unix seconds in UTC.
+The installed updater persists the highest accepted sequence and root revision;
+transport responses cannot lower either value. The manifest and package identity
+are verified according to [Release Security](./release-security.md). Transport
+security does not replace artifact signature and hash verification.
 
 ## Update Trust Root And Metadata Freshness
 
