@@ -1010,8 +1010,17 @@ add_executable(HoroReleasePreflightTests
         unit/application/ReleasePreflightTests.cpp
 )
 target_compile_features(HoroReleasePreflightTests PRIVATE cxx_std_20)
-target_link_libraries(HoroReleasePreflightTests PRIVATE HoroEngine::Application HoroEngine::ReleaseService
-                                                        nlohmann_json::nlohmann_json)
+target_link_libraries(HoroReleasePreflightTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
+add_executable(HoroReleasePipelineExecutorTests
+        unit/application/ReleasePipelineExecutorTests.cpp
+)
+target_compile_features(HoroReleasePipelineExecutorTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReleasePipelineExecutorTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
+add_executable(HoroReleaseServiceTests
+        unit/application/ReleaseServiceTests.cpp
+)
+target_compile_features(HoroReleaseServiceTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReleaseServiceTests PRIVATE HoroEngine::ReleaseService nlohmann_json::nlohmann_json)
 add_executable(HoroReleaseTargetMatrixTests
         unit/application/ReleaseTargetMatrixTests.cpp
 )
@@ -2539,6 +2548,8 @@ set(HORO_CATCH_TEST_TARGETS
         HoroDistributionModelTests
         HoroReleaseProfileTests
         HoroReleasePreflightTests
+        HoroReleasePipelineExecutorTests
+        HoroReleaseServiceTests
         HoroReleaseTargetMatrixTests
         HoroReleaseJobTrackerTests
         HoroReleaseProcessTests
