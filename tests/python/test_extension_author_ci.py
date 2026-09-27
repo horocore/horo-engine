@@ -69,6 +69,14 @@ def test_bootstrap_reconstructs_only_fixed_width_lowercase_commit():
             BOOTSTRAP.canonical_commit(malicious)
 
 
+def test_bootstrap_reconstructs_only_bounded_repository_identity():
+    assert BOOTSTRAP.canonical_repository("example/author") == "example/author"
+    for malicious in ("--output /outside", "--output/repo", "example/author;exec", "example/author/extra",
+                      "example/author\n--output", "example\\author"):
+        with pytest.raises(ValueError, match="repository attribution"):
+            BOOTSTRAP.canonical_repository(malicious)
+
+
 def test_scaffold_carries_versioned_ci_contract_without_source_path(tmp_path):
     output = tmp_path / "author"
     SCAFFOLDER.write_project(output, "com.example.author", "Author", "1.0.0", "backend")
@@ -275,6 +283,7 @@ def test_bootstrap_checks_downloaded_sdk_version_before_runner(monkeypatch, tmp_
     assert Path(launched[0][0][1]) == sdk_root / "bin/horo-extension-author-ci.py"
     assert launched[0][0][launched[0][0].index("--platform") + 1] == "linux-x64"
     assert launched[0][0][launched[0][0].index("--commit") + 1] == "a" * 40
+    assert launched[0][0][launched[0][0].index("--repository") + 1] == "example/author"
     assert "--sdk-sha256" in launched[0][0]
     assert digest in launched[0][0]
 
