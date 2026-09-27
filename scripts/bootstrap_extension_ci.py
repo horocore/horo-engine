@@ -30,8 +30,8 @@ HOSTS = {
 }
 
 
-def read_lock(path: Path, platform: str) -> tuple[str, str, str]:
-    document = json.loads(path.read_text(encoding="utf-8"))
+def read_lock(project: Path, platform: str) -> tuple[str, str, str]:
+    document = json.loads((project / ".horo/extension-ci.lock.json").read_text(encoding="utf-8"))
     if document.get("schemaVersion") != 1 or not isinstance(document.get("sdkVersion"), str):
         raise ValueError("invalid extension CI lock schema or SDK version")
     platforms = document.get("platforms")
@@ -61,6 +61,36 @@ def fetch_archive(url: str, digest: str) -> bytes:
     return data
 
 
+def safe_member_path(member: zipfile.ZipInfo, seen: set[str]) -> PurePosixPath:
+    path = PurePosixPath(member.filename)
+    mode = member.external_attr >> 16
+    components = member.filename.rstrip("/").split("/")
+    if (not member.filename or "\\" in member.filename or path.is_absolute() or
+            any(part in ("", ".", "..") for part in components) or
+            ":" in components[0] or path.as_posix() != member.filename.rstrip("/") or
+            (mode & 0o170000) not in (0, 0o100000, 0o040000) or member.filename.casefold() in seen):
+        raise ValueError("SDK archive contains an unsafe or duplicate path")
+    if member.is_dir() != ((mode & 0o170000) == 0o040000) and (mode & 0o170000) != 0:
+        raise ValueError("SDK archive entry type disagrees with its path")
+    seen.add(member.filename.casefold())
+    return path
+
+
+def extract_member(archive: zipfile.ZipFile, member: zipfile.ZipInfo, destination: Path,
+                   path: PurePosixPath) -> None:
+    target = destination.joinpath(*path.parts)
+    if member.is_dir():
+        target.mkdir(parents=True, exist_ok=True)
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with archive.open(member) as source, target.open("xb") as output:
+        while block := source.read(1024 * 1024):
+            output.write(block)
+    mode = member.external_attr >> 16
+    if os.name != "nt" and (mode & 0o170000) == 0o100000:
+        target.chmod(mode & 0o777)
+
+
 def extract_sdk(data: bytes, destination: Path) -> None:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         members = archive.infolist()
@@ -68,27 +98,24 @@ def extract_sdk(data: bytes, destination: Path) -> None:
             raise ValueError("SDK archive exceeds bounded extraction limits")
         seen: set[str] = set()
         for member in members:
-            path = PurePosixPath(member.filename)
-            mode = member.external_attr >> 16
-            components = member.filename.rstrip("/").split("/")
-            if (not member.filename or "\\" in member.filename or path.is_absolute() or
-                    any(part in ("", ".", "..") for part in components) or
-                    ":" in components[0] or path.as_posix() != member.filename.rstrip("/") or
-                    (mode & 0o170000) not in (0, 0o100000, 0o040000) or member.filename.casefold() in seen):
-                raise ValueError("SDK archive contains an unsafe or duplicate path")
-            if member.is_dir() != ((mode & 0o170000) == 0o040000) and (mode & 0o170000) != 0:
-                raise ValueError("SDK archive entry type disagrees with its path")
-            seen.add(member.filename.casefold())
-            target = destination.joinpath(*path.parts)
-            if member.is_dir():
-                target.mkdir(parents=True, exist_ok=True)
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(member) as source, target.open("xb") as output:
-                    while block := source.read(1024 * 1024):
-                        output.write(block)
-                if os.name != "nt" and (mode & 0o170000) == 0o100000:
-                    target.chmod(mode & 0o777)
+            path = safe_member_path(member, seen)
+            extract_member(archive, member, destination, path)
+
+
+def author_paths(args: argparse.Namespace) -> tuple[Path, Path]:
+    project = args.project.resolve(strict=True)
+    if not project.is_dir():
+        raise ValueError("author project must be a directory")
+    lock = project / ".horo/extension-ci.lock.json"
+    output = project / "ci-artifacts"
+    if args.lock.absolute() != lock or lock.resolve(strict=True) != lock:
+        raise ValueError("extension CI lock must be the author project's .horo lock")
+    if args.output.absolute() != output or output.is_symlink():
+        raise ValueError("extension CI output must be the author project's ci-artifacts")
+    if re.fullmatch(r"[0-9a-f]{40}", args.commit) is None or \
+            re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repository) is None:
+        raise ValueError("invalid source commit or repository attribution")
+    return project, output
 
 
 def main() -> int:
@@ -104,7 +131,8 @@ def main() -> int:
         operating_system, machines = HOSTS[args.platform]
         if host_platform.system() != operating_system or host_platform.machine() not in machines:
             raise ValueError("CI runner architecture does not match the locked platform")
-        version, url, digest = read_lock(args.lock, args.platform)
+        project, output = author_paths(args)
+        version, url, digest = read_lock(project, args.platform)
         with tempfile.TemporaryDirectory(prefix="horo-extension-sdk-") as temporary:
             root = Path(temporary)
             extract_sdk(fetch_archive(url, digest), root)
@@ -114,15 +142,15 @@ def main() -> int:
             runner = root / "bin/horo-extension-author-ci.py"
             if not runner.is_file() or runner.is_symlink():
                 raise ValueError("downloaded SDK does not contain the author CI tool")
-            command = [sys.executable, str(runner), "--sdk", str(root), "--project", str(args.project),
-                       "--output", str(args.output), "--platform", args.platform,
+            command = [sys.executable, str(runner), "--sdk", str(root), "--project", str(project),
+                       "--output", str(output), "--platform", args.platform,
                        "--repository", args.repository, "--commit", args.commit,
                        "--sdk-sha256", digest]
             # The runner came from the SHA-256-pinned archive, arguments are separate
             # argv values, and no user-provided text is interpreted by a shell.
             # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args,python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
             return subprocess.run(command, check=False, shell=False).returncode  # nosec B603
-    except (OSError, ValueError, KeyError, json.JSONDecodeError, zipfile.BadZipFile) as error:
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
         print(f"extension CI bootstrap: {error}", file=sys.stderr)
         return 2
 

@@ -21,6 +21,10 @@ from xml.parsers import expat
 
 MAXIMUM_JUNIT_BYTES = 8 * 1024 * 1024
 SDK_TOOLS = frozenset(("horo-extension-validate", "horo-extension-conformance", "horo-package"))
+MANIFEST_NAME = "extension.json"
+JUNIT_NAME = "ctest.xml"
+ARCHIVE_NAME = "extension.horopkg"
+PROVENANCE_NAME = "provenance.json"
 
 
 def run(sdk: Path, tool: str, *arguments: str) -> None:
@@ -47,7 +51,7 @@ def sdk_tool(root: Path, name: str) -> str:
 
 
 def module_paths(stage: Path) -> tuple[Path, ...]:
-    manifest = stage / "extension.json"
+    manifest = stage / MANIFEST_NAME
     document = json.loads(manifest.read_text(encoding="utf-8"))
     package_id = document.get("id")
     modules = document.get("modules")
@@ -67,7 +71,7 @@ def module_paths(stage: Path) -> tuple[Path, ...]:
 
 
 def package_identity(stage: Path) -> str:
-    manifest = json.loads((stage / "extension.json").read_text(encoding="utf-8"))
+    manifest = json.loads((stage / MANIFEST_NAME).read_text(encoding="utf-8"))
     with (stage / "horo-package.toml").open("rb") as source:
         package = tomllib.load(source)
     identity = package.get("package", {})
@@ -122,30 +126,30 @@ def build_and_stage(sdk: Path, project: Path, scratch: Path) -> Path:
         f"-DHoroEngineExtensionSdk_DIR={sdk / 'lib/cmake/HoroEngineExtensionSdk'}")
     run(sdk, "cmake", "--build", str(build), "--config", "Release", "--parallel", "2")
     run(sdk, "ctest", "--test-dir", str(build), "-C", "Release", "--output-on-failure",
-        "--output-junit", str(scratch / "ctest.xml"))
-    require_executed_tests(scratch / "ctest.xml")
+        "--output-junit", str(scratch / JUNIT_NAME))
+    require_executed_tests(scratch / JUNIT_NAME)
     run(sdk, "cmake", "--install", str(build), "--config", "Release", "--prefix", str(stage))
     return stage
 
 
 def package_and_publish(sdk: Path, stage: Path, scratch: Path, output: Path, args: argparse.Namespace,
                         sdk_version: str) -> None:
-    manifest = stage / "extension.json"
+    manifest = stage / MANIFEST_NAME
     run(sdk, "horo-extension-validate", "--json", "--schema-version", "1", str(manifest))
     for binary in module_paths(stage):
         run(sdk, "horo-extension-conformance", "--json", str(binary))
     if not (stage / "horo-package.toml").is_file():
         raise ValueError("project must install horo-package.toml for canonical packaging")
     package_id = package_identity(stage)
-    archive = scratch / "extension.horopkg"
+    archive = scratch / ARCHIVE_NAME
     run(sdk, "horo-package", "pack", str(stage), str(archive))
     trust = scratch / "ci-integrity-only-trust.json"
     trust.write_text('{"schemaVersion":1,"allowUnsigned":true,"publishers":[]}', encoding="utf-8")
     run(sdk, "horo-package", "verify", str(archive), "--package-id", package_id, "--trust", str(trust))
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     output.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(archive, output / "extension.horopkg")
-    shutil.copyfile(scratch / "ctest.xml", output / "ctest.xml")
+    shutil.copyfile(archive, output / ARCHIVE_NAME)
+    shutil.copyfile(scratch / JUNIT_NAME, output / JUNIT_NAME)
     provenance = {
         "schemaVersion": 1,
         "repository": args.repository,
@@ -154,11 +158,11 @@ def package_and_publish(sdk: Path, stage: Path, scratch: Path, output: Path, arg
         "sdkVersion": sdk_version,
         "sdkSha256": args.sdk_sha256,
         "packageId": package_id,
-        "artifact": "extension.horopkg",
+        "artifact": ARCHIVE_NAME,
         "artifactSha256": digest,
         "verification": "archive-integrity-unsigned",
     }
-    (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
+    (output / PROVENANCE_NAME).write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
 
 
 def main() -> int:
@@ -178,7 +182,9 @@ def main() -> int:
             raise ValueError("invalid commit, repository or SDK digest attribution")
         sdk = args.sdk.resolve(strict=True)
         project = args.project.resolve(strict=True)
-        output = args.output.absolute()
+        output = project / "ci-artifacts"
+        if args.output.absolute() != output:
+            raise ValueError("artifact output must be the author project's ci-artifacts")
         if output.is_symlink():
             raise ValueError("artifact output cannot be a symlink")
         if output.exists() and (not output.is_dir() or any(output.iterdir())):
@@ -189,7 +195,7 @@ def main() -> int:
             scratch = Path(temporary)
             stage = build_and_stage(sdk, project, scratch)
             package_and_publish(sdk, stage, scratch, output, args, sdk_version)
-    except (OSError, ValueError, KeyError, json.JSONDecodeError, subprocess.CalledProcessError,
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError,
             expat.ExpatError) as error:
         print(f"extension author CI: {error}", file=sys.stderr)
         return 2

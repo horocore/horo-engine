@@ -35,7 +35,8 @@ Extensions declare the exact minimum host minor they require through
 `share/horo/extension-sdk/ci/extension-author-ci.yml` is the versioned GitHub
 Actions template. The SDK scaffolder copies it into each generated project's
 `.github/workflows/extension-ci.yml`, with a bootstrap script and
-`.horo/extension-ci.lock.json`. Authors pin an HTTPS SDK ZIP and its SHA-256 for
+`.horo/extension-ci.lock.json`. The lock must stay at that path, and CI writes
+only to the author project's `ci-artifacts/` directory. Authors pin an HTTPS SDK ZIP and its SHA-256 for
 **each** Linux x64, macOS arm64, macOS x64 and Windows x64 job. The ZIP must contain this
 SDK package's `bin/`, `lib/`, `include/` and `share/` directories at its root.
 The bootstrap refuses unpinned, mismatched, oversized or unsafe archives and
