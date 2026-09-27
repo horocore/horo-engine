@@ -43,6 +43,12 @@ namespace Horo::PackageCommand {
         struct PrivateKeyBuffer final {
             std::vector<unsigned char> bytes;
 
+            PrivateKeyBuffer() = default;
+            PrivateKeyBuffer(const PrivateKeyBuffer &) = delete;
+            PrivateKeyBuffer &operator=(const PrivateKeyBuffer &) = delete;
+            PrivateKeyBuffer(PrivateKeyBuffer &&) = delete;
+            PrivateKeyBuffer &operator=(PrivateKeyBuffer &&) = delete;
+
             ~PrivateKeyBuffer() {
                 Security::SecureZero(std::as_writable_bytes(std::span{bytes}));
             }
@@ -75,16 +81,19 @@ namespace Horo::PackageCommand {
             Security::SecureZero(std::span{privateBytes});
             if (privateKey.bytes.empty() || privateKey.bytes.back() != 0)
                 privateKey.bytes.push_back(0);
-            constexpr unsigned char Personalization[] = "horo-package-sign-v1";
+            constexpr std::string_view Personalization = "horo-package-sign-v1";
+            std::array<unsigned char, Personalization.size()> personalization{};
+            std::ranges::transform(Personalization, personalization.begin(), [](const char value) {
+                return static_cast<unsigned char>(value);
+            });
             const int seeded =
-                mbedtls_ctr_drbg_seed(&state.random, mbedtls_entropy_func, &state.entropy, Personalization, sizeof(Personalization) - 1U);
-            const int parsed = seeded == 0 ? mbedtls_pk_parse_key(&state.key, privateKey.bytes.data(), privateKey.bytes.size(), nullptr, 0,
-                                                                  mbedtls_ctr_drbg_random, &state.random)
-                                           : -1;
-            if (parsed != 0)
+                mbedtls_ctr_drbg_seed(&state.random, mbedtls_entropy_func, &state.entropy, personalization.data(), personalization.size());
+            if (const int parsed = seeded == 0 ? mbedtls_pk_parse_key(&state.key, privateKey.bytes.data(), privateKey.bytes.size(), nullptr,
+                                                                      0, mbedtls_ctr_drbg_random, &state.random)
+                                               : -1;
+                parsed != 0)
                 return Failure("package.key_invalid", "Private key could not be parsed as unencrypted P-256 PEM.");
-            auto *ec = mbedtls_pk_ec(state.key);
-            if (!ec || ec->MBEDTLS_PRIVATE(grp).id != MBEDTLS_ECP_DP_SECP256R1)
+            if (const auto *ec = mbedtls_pk_ec(state.key); !ec || ec->MBEDTLS_PRIVATE(grp).id != MBEDTLS_ECP_DP_SECP256R1)
                 return Failure("package.key_invalid", "Private key must be P-256 EC.");
             return Success();
         }

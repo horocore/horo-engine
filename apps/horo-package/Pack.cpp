@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <cstdlib>
 #include <format>
 #include <memory>
 #include <miniz.h>
@@ -100,7 +99,7 @@ namespace Horo::PackageCommand {
                 const auto permissions = status.permissions();
                 const auto execute =
                     std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec | std::filesystem::perms::others_exec;
-                files.emplace_back(File{name, std::move(bytes), (permissions & execute) != std::filesystem::perms::none});
+                files.emplace_back(name, std::move(bytes), (permissions & execute) != std::filesystem::perms::none);
                 total += size;
                 hasManifest |= name == "horo-package.toml";
             }
@@ -128,22 +127,29 @@ namespace Horo::PackageCommand {
                 bytes[offset + shift / 8] = static_cast<std::byte>((value >> shift) & 0xffU);
         }
 
+        [[nodiscard]] bool SetMode(std::vector<std::byte> &bytes, const File &file, mz_zip_archive &reader, const mz_uint index) {
+            mz_zip_archive_file_stat stat{};
+            if (!mz_zip_reader_file_stat(&reader, index, &stat))
+                return false;
+            const auto offset = static_cast<std::size_t>(reader.m_central_directory_file_ofs + stat.m_central_dir_ofs + 38U);
+            if (offset > bytes.size() || bytes.size() - offset < 4U)
+                return false;
+            Write32(bytes, offset, (file.executable ? 0100755U : 0100644U) << 16U);
+            return true;
+        }
+
         [[nodiscard]] Outcome SetModes(std::vector<std::byte> &bytes, const std::vector<File> &files) {
             mz_zip_archive reader{};
             if (!mz_zip_reader_init_mem(&reader, bytes.data(), bytes.size(), 0))
                 return Failure("package.archive_invalid", "Packed archive could not be inspected.");
             bool valid = mz_zip_reader_get_num_files(&reader) == files.size() + 1;
-            for (mz_uint index = 0; index < files.size(); ++index) {
-                if (!valid)
-                    break;
-                mz_zip_archive_file_stat stat{};
-                valid = mz_zip_reader_file_stat(&reader, index, &stat);
-                if (!valid)
-                    break;
-                const auto offset = static_cast<std::size_t>(reader.m_central_directory_file_ofs + stat.m_central_dir_ofs + 38U);
-                valid = offset <= bytes.size() && bytes.size() - offset >= 4U;
-                if (valid)
-                    Write32(bytes, offset, (files[index].executable ? 0100755U : 0100644U) << 16U);
+            if (valid) {
+                for (mz_uint index = 0; index < files.size(); ++index) {
+                    if (!SetMode(bytes, files[index], reader, index)) {
+                        valid = false;
+                        break;
+                    }
+                }
             }
             mz_zip_reader_end(&reader);
             return valid ? Success() : Failure("package.archive_invalid", "Packed file metadata could not be finalized.");
@@ -161,18 +167,13 @@ namespace Horo::PackageCommand {
             void *buffer{};
             std::size_t size{};
             valid &= mz_zip_writer_finalize_heap_archive(&writer, &buffer, &size) != 0;
-            const std::unique_ptr<void, void (*)(void *)> owned{buffer, [](void *memory) {
-                std::free(memory);
+            const std::unique_ptr<std::byte, void (*)(std::byte *)> owned{static_cast<std::byte *>(buffer), [](std::byte *memory) {
+                mz_free(memory);
             }};
-            if (valid && size <= MaximumArtifactBytes) {
-                const auto *first = static_cast<const std::byte *>(buffer);
-                bytes.assign(first, first + size);
-            } else {
-                valid = false;
-            }
             mz_zip_writer_end(&writer);
-            if (!valid)
+            if (!valid || !owned || size > MaximumArtifactBytes)
                 return Failure("package.pack_failed", "Archive assembly failed or exceeded the package limit.");
+            bytes.assign(owned.get(), owned.get() + size);
             return SetModes(bytes, files);
         }
     }  // namespace
