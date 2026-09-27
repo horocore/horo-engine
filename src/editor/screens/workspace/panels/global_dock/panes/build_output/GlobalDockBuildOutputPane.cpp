@@ -172,8 +172,12 @@ namespace Horo::Editor {
     }
 
     /** @copydoc GlobalDockBuildOutputPane::Attach */
-    void GlobalDockBuildOutputPane::Attach(const IBuildOutputQuery *buildOutputQuery) noexcept {
+    void GlobalDockBuildOutputPane::Attach(const IBuildOutputQuery *buildOutputQuery,
+                                           const Application::GameplayBuildService *gameplayBuilds,
+                                           const std::string_view projectRoot) {
         m_buildOutputQuery = buildOutputQuery;
+        m_gameplayBuilds = gameplayBuilds;
+        m_projectRoot = projectRoot;
         m_snapshot = {};
         m_revision = 0;
         m_filteredIndices.clear();
@@ -184,6 +188,8 @@ namespace Horo::Editor {
     /** @copydoc GlobalDockBuildOutputPane::Detach */
     void GlobalDockBuildOutputPane::Detach() noexcept {
         m_buildOutputQuery = nullptr;
+        m_gameplayBuilds = nullptr;
+        m_projectRoot.clear();
         m_snapshot = {};
         m_revision = 0;
         m_filteredIndices.clear();
@@ -196,9 +202,12 @@ namespace Horo::Editor {
         if (m_filterDirty)
             RebuildFilter();
         const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
-        const GlobalDockPaneRegions regions =
-            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
+        GlobalDockPaneRegions regions = ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight,
+                                                                      {.hasToolbar = true});
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
+        const auto active = m_gameplayBuilds != nullptr && !m_projectRoot.empty()
+                                ? m_gameplayBuilds->QueryActiveProject(m_projectRoot)
+                                : std::nullopt;
 
         std::size_t errorCount = 0U;
         std::size_t warningCount = 0U;
@@ -207,6 +216,14 @@ namespace Horo::Editor {
             warningCount += IsWarningRecord(record) ? 1U : 0U;
         }
         DrawToolbar(regions, metrics, context, errorCount, warningCount);
+        if (active.has_value()) {
+            const float activeHeight = std::min(metrics.toolbarHeight, std::max(0.0F, regions.contentHeight - metrics.tableHeaderHeight));
+            if (activeHeight >= metrics.controlHeight) {
+                DrawActiveBuild(*active, regions, metrics, context, activeHeight);
+                regions.contentOrigin.y += activeHeight;
+                regions.contentHeight -= activeHeight;
+            }
+        }
         DrawTable(regions, metrics, context, command, snapshotChanged);
     }
 

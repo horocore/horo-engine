@@ -221,7 +221,6 @@ namespace Horo::Editor {
         Extensions::ExtensionInventory *extensionInventory_{};
         Extensions::ExtensionMarketplaceService *extensionMarketplace_{};
         NativeDialogs *nativeDialogs_{};
-        Input::InputRouter *inputRouter_{};
 
         EditorServiceRegistry services_;
         ScreenRegistry screenRegistry_;
