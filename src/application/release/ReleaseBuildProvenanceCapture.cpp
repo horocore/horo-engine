@@ -44,8 +44,7 @@ namespace Horo::Release {
         if (!inputs.files.empty())
             return Result<ReleaseBuildProvenance>::Failure(InvalidTree());
         std::error_code error;
-        const auto rootStatus = std::filesystem::symlink_status(root, error);
-        if (error || !std::filesystem::is_directory(rootStatus))
+        if (const auto rootStatus = std::filesystem::symlink_status(root, error); error || !std::filesystem::is_directory(rootStatus))
             return Result<ReleaseBuildProvenance>::Failure(InvalidTree());
         std::filesystem::recursive_directory_iterator entry{root, error};
         if (error)
