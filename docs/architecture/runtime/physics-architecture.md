@@ -148,8 +148,25 @@ both graphical and headless hosts that require simulation; `Null` explicitly
 reports omitted Physics and unsupported features. It is never an automatic fallback.
 The initial lifecycle implementation advertises canonical world creation, analytic
 scene-shape admission, rigid-body and fixed/distance-constraint staging, and the
-owner-thread immediate-query capability. Snapshot-query and origin-rebasing behavior
-remain unsupported. Simulation filters remain closed until the validated collision-
+owner-thread immediate-query capability. Immutable solver snapshot queries and origin-
+rebasing behavior remain unsupported. A bounded queued batch accepts copied query
+commands on the owner thread and runs them only when the owner calls
+`ProcessQueryBatch` outside a fixed step. This lets a frame submit without waiting
+for query execution; a worker may poll or cancel its result handle, but may not
+submit or execute native queries. At most one batch is pending per world. Each
+batch's request count fits the world's query budget. Its total requested hit
+capacity has an independent hard cap of `MaximumPhysicsQueryBatchHits` (4096),
+regardless of the world's query-count setting. Admitted
+requests also consume the per-tick query count, including batches later cancelled;
+saturation rejects admission. The result is published all-or-nothing in request order, with
+owned Horo hit values that remain readable after world retirement. Cancellation,
+capability revocation, world retirement and publication changes terminate pending
+batches with distinct typed errors. Cancellation that arrives after publication
+leaves the completed result intact. Cancellation and completion race at one terminal
+mutex: cancellation before publication discards every prepared hit, while completed
+publication makes later cancellation ineffective. Hosts must pump the explicit owner-thread safe
+point; a batch does not schedule itself or require a worker/job service.
+Simulation filters remain closed until the validated collision-
 profile table is installed; scene activation still validates authored profiles and
 materials and publishes complete body/shape/constraint bindings, but does not claim
 contact filtering support from the closed native filter. Immediate-query fixtures
@@ -336,6 +353,18 @@ triangle meshes, height fields and compounds use bounded canonical geometry and
 stable child/material mappings. Dynamic bodies accept primitives, convex hulls and
 convex compounds; triangle meshes, height fields and static planes remain static.
 Scale is validated and baked before cook rather than applied to runtime shapes.
+
+The HeightField V1 tile cook consumes a bounded row-major sample grid with positive
+horizontal spacing and vertical sample scale, plus one explicit hole bit and
+material slot per cell. Hole cells carry no material identity. It publishes an
+exact target-keyed artifact with verified bounds, table extents, source digest and
+payload digest; the runtime loader owns canonical tables but performs no source
+import or native solver construction. Each tile uses its own persistent
+asset-local subresource ID. Cache eviction and shutdown release only the cache
+retain, so a terrain-streaming replacement can prepare a new generation while
+old readers hold their prior lease. Publication into a live world still belongs
+to the Physics pre-step/aggregate scene barrier described below, not to the
+offline cooker or cache.
 
 Analytic authoring resolves one owned body-local pose and typed positive finite
 scale into scale-free geometry before admission. Boxes admit component-wise
@@ -668,9 +697,14 @@ When the 64-bit publication revision is exhausted, the next structural edit or
 fixed tick fails with `physics.generation.exhausted` before mutating the world or
 publishing another snapshot. Revision zero is never reused for an active world.
 
-Immediate queries execute on the physics owner thread outside a step. Parallel
-or asynchronous queries use a read-only broadphase snapshot with documented
-staleness.
+Immediate and queued batch queries execute on the physics owner thread outside a
+step. The current native solver path does not publish an immutable broadphase or
+shape lease set, so parallel solver reads and off-thread query execution remain
+unsupported. Existing immediate callers do not need migration. Consumers needing
+non-blocking completion may submit the batch through their existing world-bound
+capability, arrange one owner-thread `ProcessQueryBatch` safe point, and poll the
+returned handle from any thread. Result handles own copied hits and never keep the
+world or native solver alive.
 
 CanonicalV1 currently admits bounded analytic query fixtures (box, sphere, capsule
 and static plane) through the active world solely to exercise this query contract
@@ -843,6 +877,28 @@ Physics exposes:
 
 Debug draw data is extracted into a bounded render snapshot. The renderer does
 not access live physics storage.
+
+`PhysicsDebugSnapshot` is the backend-neutral diagnostic value boundary for one
+successfully published tick. The owner thread calls
+`PhysicsWorld::CaptureDebugSnapshot` after `AdvanceFixedTick` returns and before
+the next tick or world mutation. The call is opt-in and bounded by both record
+and retained-record-storage byte limits; normal fixed ticks do no debug capture
+work. The current canonical producer copies body, shape and constraint identities
+from its private Horo handle registries, contact records from the published event
+buffer, and applied-command/event counts from the completed-tick marker. It does
+not report body pose or sleep state: the current scene registry retains admission
+pose, which is not a reliable post-step value. Per-category availability
+distinguishes an absent producer from an available empty category. Captured,
+budget-truncated and producer-dropped counts remain separate. Consumers compare
+world identity, tick and publication revision with the current marker; retaining
+the snapshot never retains a world, solver object or native pointer.
+
+There are no per-pair broadphase records or query history (immediate query hits
+live in caller-owned buffers), so those categories remain explicitly unavailable.
+The pipeline record contains actual publication counts, not stage timings; the
+existing observer reports phase names only. An unavailable category cannot be
+represented as an available empty result. This model does not add editor UI or
+expose native solver containers.
 
 ## Error Handling
 
