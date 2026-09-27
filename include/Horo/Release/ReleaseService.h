@@ -88,7 +88,7 @@ namespace Horo::Release {
         /** @brief Projects one terminal and applies bounded recent retention exactly once. */
         void RecordTerminal(const std::shared_ptr<Record> &record);
         /** @brief Durably records a credential-free snapshot when a history store was supplied. */
-        [[nodiscard]] Result<void> PersistSnapshot(const ReleaseJobSnapshot &snapshot);
+        [[nodiscard]] Result<void> PersistSnapshot(const ReleaseJobSnapshot &snapshot) const;
         /** @brief Applies an operation cancellation request while coordinating service teardown. */
         static void CancelOperation(const std::shared_ptr<CancellationSource> &cancellation, const std::shared_ptr<CancellationSlot> &slot,
                                     const std::shared_ptr<CancellationGate> &gate);

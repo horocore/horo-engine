@@ -84,6 +84,12 @@ namespace Horo::Release {
         virtual void OnSnapshot(const ReleaseJobSnapshot &snapshot) noexcept = 0;
     };
 
+    /** @brief Service-owned execution limits and optional synchronous history projection. */
+    struct ReleasePipelineExecutionOptions final {
+        ReleasePipelineLimits limits;
+        IReleaseJobObserver *observer{}; /**< Borrowed only for the synchronous Execute call. */
+    };
+
     struct ReleaseStageContext;
 
     /** @brief Narrow synchronous reporting authority for one active stage. */
@@ -179,13 +185,11 @@ namespace Horo::Release {
          * @param facts Host-owned source of fresh read-only observations.
          * @param stages Host-owned typed stage workers.
          * @param cancellation Service-owned cooperative cancellation token.
-         * @param limits Maximum elapsed time for each stage attempt.
-         * @param observer Optional host-owned durable projection, called only after committed transitions.
+         * @param options Stage limits and optional host-owned durable projection.
          * @return Owned final job snapshot; the service retains the tracker.
          */
         [[nodiscard]] ReleaseJobSnapshot Execute(ReleaseJobTracker &tracker, ReleaseCandidateId candidate, const ReleaseExecutionPlan &plan,
                                                  IReleasePreflightFactsProvider &facts, IReleasePipelineStages &stages,
-                                                 const CancellationToken &cancellation, ReleasePipelineLimits limits = {},
-                                                 IReleaseJobObserver *observer = nullptr) const;
+                                                 const CancellationToken &cancellation, ReleasePipelineExecutionOptions options = {}) const;
     };
 }  // namespace Horo::Release
