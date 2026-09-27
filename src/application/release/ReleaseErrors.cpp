@@ -120,6 +120,20 @@ namespace Horo::Release::ReleaseErrors {
                                                         "Inspect the stage diagnostics and rerun after correcting its worker.",
                                                     .retryable = false,
                                                     .userActionable = false};
+    const ErrorCodeDescriptor PipelineOutputCollision{.domain = Domain,
+                                                      .code = ErrorCode{"release.pipeline.output_collision"},
+                                                      .defaultSeverity = ErrorSeverity::Error,
+                                                      .summary = "A release candidate stage or final path already exists.",
+                                                      .remediationHint = "Inspect the existing candidate before choosing a new attempt.",
+                                                      .retryable = false,
+                                                      .userActionable = true};
+    const ErrorCodeDescriptor PipelineStagingIoFailed{.domain = Domain,
+                                                      .code = ErrorCode{"release.pipeline.staging_io_failed"},
+                                                      .defaultSeverity = ErrorSeverity::Error,
+                                                      .summary = "Release staging could not be durably prepared or promoted.",
+                                                      .remediationHint = "Inspect output storage and recover the preserved staging tree.",
+                                                      .retryable = true,
+                                                      .userActionable = true};
     const ErrorCodeDescriptor PipelineStageException{.domain = Domain,
                                                      .code = ErrorCode{"release.pipeline.stage_exception"},
                                                      .defaultSeverity = ErrorSeverity::Error,

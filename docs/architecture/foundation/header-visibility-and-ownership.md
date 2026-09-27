@@ -32,6 +32,16 @@ snapshot. `NetworkTransportEvent` now carries an explicit zero-based `channel`;
 the existing GNS baseline supplies channel zero, so current callers retain their
 wire behavior. The NetworkRuntime public-header consumer covers the new header.
 
+## REL-002.3 Update Discovery Boundary
+
+`HoroEngine::UpdateDiscovery` owns the additive
+`Horo/Release/UpdateDiscovery.h` and `UpdateDiscoveryErrors.h` contracts. There
+are no existing discovery callers to migrate. Product hosts link this target,
+persist channel/check policy, and queue source access away from startup. The
+target depends only on `HoroEngine::UpdateManifest`; transports and application
+composition remain outside its public interface. Generated standalone public
+header consumers verify both headers and their declared dependencies.
+
 ## AIA-001.3 Model Provider Boundary
 
 `HoroEngine::ModelProvider` owns the additive `Horo/Agent/ModelProvider.h`
@@ -46,6 +56,17 @@ packaged game/server targets do not link either target. Generated standalone
 public-header consumers cover both headers without exposing HTTP or SDK types.
 The host opts into tool capability only after confirming support for its selected
 model; default configuration advertises streaming and optional provider usage.
+
+## TRF-002.2 Import Boundary
+
+`HoroTerrainImport` owns `Horo/Terrain/TerrainSourceImport.h` and depends on
+`HoroTerrainApi`; runtime Terrain consumers continue to link `HoroTerrainApi` alone.
+The new header is additive: there are no callers to migrate. Hosts that import
+Terrain sources link `HoroTerrainImport`, pin any optional decoder contribution for
+the synchronous invocation, then publish a detached candidate against the exact
+current source revision. Format and codec types do not enter TerrainApi or runtime
+headers. The generated public-header consumer compiles the header through the new
+target's staged include view.
 
 ## DFR-002.2 Import Boundary
 
@@ -186,6 +207,17 @@ Existing Physics structural-command callers migrate from one admission-ordered
 sequence to the complete tick/world/scene/target/source key; no second legacy
 ordering authority remains. Consumers continue linking `HoroEngine::Physics`, and
 native solver identities or random providers are not exposed.
+
+## Physics Debug Snapshot Boundary
+
+`Horo/Physics/PhysicsDebugSnapshot.h` is owned by `HoroPhysics`. It adds an
+opt-in completed-tick value model and `PhysicsWorld::CaptureDebugSnapshot` without
+changing existing tick or query callers. The world projects current private
+Horo identities and its published event/tick evidence into the new source
+contract; future backend-neutral producers can fill the remaining unavailable
+categories. No compatibility adapter or native solver type is exposed.
+Standalone public-header consumer coverage is generated for the new header by
+the ownership registry.
 
 ## PHY-004.9 Query And Event Capability Boundary
 
@@ -828,6 +860,15 @@ character controller, Scene Runtime, network, renderer, platform clock or native
 backend type. Hosts retain source registration and clock ownership; the public
 function only projects immutable caller-supplied evidence. The generated public
 header consumer continues to verify the Foundation/Assets-only staged boundary.
+
+`[WST-003.5]` adds `Horo/WorldStreaming/SharedAssetResidency.h` to the existing
+`HoroWorldStreaming` owner. The public boundary uses the already declared Assets
+dependency for stable `AssetId` and World Streaming's own revision, fence, service
+and owner identities. It does not expose an asset-cache implementation, raw cached
+object, allocator, filesystem, renderer or native provider type. Hosts and cache
+adapters migrate by presenting exact cache allocation revision/byte facts and by
+routing actual retirement acknowledgements back to the authority; consumers do not
+become cache owners. Existing public consumers retain the same target dependency.
 
 ANI-001.6 adds `Horo/Animation/AnimationClip.h` to the same owner. Asset and runtime
 composition replace ad hoc floating-point cursors and untyped wrap flags with exact
