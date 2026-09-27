@@ -290,6 +290,11 @@ read against the pre-sign inventory, writes the canonical internal inventory,
 and records the final package digest. Hosts install it explicitly for ZIP
 selections and provide the same archive limits used by staging. Existing
 package backends do not gain ZIP behavior implicitly.
+`PrepareZipUpdateStageHttps` is the blocking host worker operation for ZIP
+updates: it resumes or downloads into the protected private package file, then
+authenticates and extracts that same file before returning a durable ready
+marker. A complete checkpoint reuses its verified bytes without network work.
+The host owns background dispatch, private-path allocation, and quiescence.
 Other package formats require
 readers with the same preflight and durable publication sequence.
 Partial-file checkpoint evidence uses a bounded canonical schema. Recovery

@@ -157,6 +157,7 @@ horo_configure_target_header_boundary(HoroUpdateDownload PUBLIC_HEADERS
     Horo/Release/UpdateHttpDownload.h
     Horo/Release/UpdateStageReady.h
     Horo/Release/UpdateZipPackageProducer.h
+    Horo/Release/UpdateZipStagingJob.h
 )
 horo_configure_target_header_boundary(HoroReleaseProcess PUBLIC_HEADERS
     Horo/Release/ReleaseCandidatePublisher.h

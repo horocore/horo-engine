@@ -1,6 +1,8 @@
 #include "Horo/Release/UpdateStageReady.h"
 #include "Horo/Release/UpdateStagedTree.h"
+#include "Horo/Release/UpdateTransferCheckpointStore.h"
 #include "Horo/Release/UpdateZipPackageProducer.h"
+#include "Horo/Release/UpdateZipStagingJob.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -124,9 +126,23 @@ TEST_CASE("ZIP producer emits deterministic exact bytes and the staging inventor
     CHECK(ReadFile(directory.root / "second/update.zip") == firstBytes);
     CHECK(ProduceReleasePackage(first, producers).HasError());
 
+    WriteFile(directory.root / "source/bin/game", "evil");
+    CHECK(ProduceReleasePackage(second, producers).HasError());
+}
+
+TEST_CASE("ZIP package producer output stages from a complete durable checkpoint", "[release][update][package]") {
+    TemporaryDirectory directory;
+    WriteFile(directory.root / "source/bin/game", "game");
+    auto inventory = Inventory();
+    UpdateZipPackageProducer producer{{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U}};
+    IReleasePackageProducer *producers[]{&producer};
+    ReleasePackageRequest request{Selection(), inventory, directory.root / "source", directory.root / "first"};
+    auto result = ProduceReleasePackage(request, producers);
+    REQUIRE(result.HasValue());
+
     UpdatePackageRecord package;
     package.url = "https://updates.example.test/game.zip";
-    package.size = firstBytes.size();
+    package.size = result.Value().files.front().size;
     package.digest = result.Value().files.front().digest;
     package.signature = {.publisherId = "com.horo.updates",
                          .keyId = "key-1",
@@ -142,14 +158,13 @@ TEST_CASE("ZIP producer emits deterministic exact bytes and the staging inventor
     auto checkpoint = AdvanceUpdateTransfer(plan.Value(), package.size);
     REQUIRE(checkpoint.HasValue());
     NativeDurableFileSystem files;
+    const UpdateDownloadPaths paths{directory.root / "first/update.zip", directory.root / "first/update.checkpoint"};
+    REQUIRE(SaveUpdateTransferCheckpoint(files, paths.partialFile, paths.checkpointFile, checkpoint.Value()).HasValue());
     auto staged =
-        StageVerifiedZipUpdate(package, checkpoint.Value(), directory.root / "first/update.zip", directory.root / "first/candidate",
-                               {.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U}, files, Verifier(), {});
+        PrepareZipUpdateStageHttps(package, paths, directory.root / "first/candidate", {.maximumPackageBytes = 4096U, .reserveBytes = 0U},
+                                   {.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U}, files, Verifier(), {});
     REQUIRE(staged.HasValue());
     CHECK(ReadFile(directory.root / "first/candidate/bin/game") == "game");
-
-    WriteFile(directory.root / "source/bin/game", "evil");
-    CHECK(ProduceReleasePackage(second, producers).HasError());
 }
 
 TEST_CASE("ZIP producer preserves empty declared files", "[release][update][package]") {
