@@ -100,6 +100,17 @@ keep their temporary resources until the attempt completes or cancellation is
 acknowledged. The three generated standalone public-header consumers verify
 ownership and transitive dependencies.
 
+## REL-001.22 GitHub Releases Host Boundary
+
+`HoroEngine::ReleaseGitHub` owns the provider-neutral release publication
+adapter's GitHub identity contract. `HoroEngine::ReleaseGitHubCli` owns the
+additive `GitHubReleaseCliClient.h` host adapter and depends on ReleaseGitHub
+and Platform for bounded, shell-free GitHub CLI invocation. Existing release
+application callers have no signature migration. Hosts that opt into this
+destination compose the CLI client with their process runner and authenticated
+`gh` environment; the generated standalone public-header consumer verifies its
+transitive dependency boundary.
+
 ## MCP-001.2 Session Boundary
 
 `HoroEngine::McpSession` owns the additive `Horo/Mcp/McpErrors.h`,

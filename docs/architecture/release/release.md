@@ -684,6 +684,29 @@ Promotion never rebuilds artifacts. It moves or references an already verified
 release candidate. If a promotion fails, the candidate remains valid but the
 channel state is unchanged.
 
+The GitHub Releases destination lives in `HoroReleaseGitHub`, outside the shared
+release application target. Its host-owned client resolves an existing tagged
+release, uploads only final-manifest files and canonical `manifest.json`, reads
+each remote asset back for size and SHA-256 verification, and binds the channel
+commit to the same remote release ID. The destination requires a canonical Git
+commit SHA in the candidate and peels the existing Git tag to that exact commit.
+A missing release, retargeted tag, or changed release ID fails
+without creating a tag or release. The `GitHubReleaseCliClient` uses the host's
+authenticated `gh` installation through the bounded, shell-free process runner;
+it never passes credentials in arguments or emits GitHub CLI diagnostic text.
+It treats an existing remote asset as an idempotent retry only after downloading
+and hashing its bytes, and changes the stable channel only after verifying the
+remote manifest and confirming the release is GitHub's latest. Other channels
+fail until they have an explicit remote mapping. `Release Binaries` workflow
+composition remains separate host work.
+
+The destination also compares the existing GitHub Release body to the exact
+reviewed Markdown in the frozen notes snapshot before upload and at every later
+identity check. This extends `GitHubReleaseIdentity` with a bounded body field;
+host clients constructing that identity must return the existing release body.
+Callers with an older client implementation must supply it or publication fails
+closed. Tests cover mismatched and changed release bodies before channel commit.
+
 ## Security
 
 Release credentials, encryption, signing, CI trust, transport, logging, and

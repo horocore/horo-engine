@@ -1150,6 +1150,17 @@ target_compile_features(HoroReleasePublicationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReleasePublicationTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroReleasePublicationTests LABELS "release;publication;headless")
 
+add_executable(HoroGitHubReleasePublicationTests
+        unit/application/GitHubReleasePublicationTests.cpp)
+target_compile_features(HoroGitHubReleasePublicationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroGitHubReleasePublicationTests PRIVATE HoroEngine::ReleaseGitHub nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroGitHubReleasePublicationTests LABELS "release;github;headless")
+
+add_executable(HoroGitHubReleaseCliClientTests unit/application/GitHubReleaseCliClientTests.cpp)
+target_compile_features(HoroGitHubReleaseCliClientTests PRIVATE cxx_std_20)
+target_link_libraries(HoroGitHubReleaseCliClientTests PRIVATE HoroEngine::ReleaseGitHubCli nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroGitHubReleaseCliClientTests LABELS "release;github;headless")
+
 add_executable(HoroReleaseBuildProvenanceTests
         unit/application/ReleaseBuildProvenanceTests.cpp)
 target_compile_features(HoroReleaseBuildProvenanceTests PRIVATE cxx_std_20)
