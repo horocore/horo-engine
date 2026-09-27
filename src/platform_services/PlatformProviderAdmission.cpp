@@ -283,7 +283,8 @@ namespace Horo::PlatformServices {
         return state_->operations;
     }
 
-    void *PlatformProviderCandidateLease::NativeCandidate() const noexcept {
+    // The public C ABI owns the opaque candidate.
+    void *PlatformProviderCandidateLease::NativeCandidate() const noexcept {  // NOSONAR(cpp:S5008)
         return state_->candidate;
     }
 

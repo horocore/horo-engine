@@ -105,10 +105,12 @@ namespace Horo::PlatformServices {
                                                       .sessionRevision = entry.sessionRevision,
                                                       .service = static_cast<std::uint32_t>(entry.service),
                                                       .operation = entry.operation,
-                                                      .payload = reinterpret_cast<const std::uint8_t *>(entry.payload.data()),
+                                                      // The public C ABI requires a uint8_t byte span.
+                                                      .payload = reinterpret_cast<const std::uint8_t *>(  // NOSONAR(cpp:S6022)
+                                                          entry.payload.data()),
                                                       .payloadSize = static_cast<std::uint32_t>(entry.payload.size())};
-            const auto submission = Detail::InvokeProvider(state.operations.submit, state.candidate, &input);
-            if (submission == HORO_EXTENSION_ERROR_CANCELLED) {
+            if (const auto submission = Detail::InvokeProvider(state.operations.submit, state.candidate, &input);
+                submission == HORO_EXTENSION_ERROR_CANCELLED) {
                 static_cast<void>(state.requests.RequestCancel(handle));
                 static_cast<void>(state.requests.CompleteCancelled(handle, MakeError(RequestErrors::Cancelled)));
             } else if (submission != HORO_EXTENSION_SUCCESS)
@@ -124,8 +126,8 @@ namespace Horo::PlatformServices {
                                           const PlatformProviderLifecycleHost::RequestHandle &handle,
                                           const std::chrono::steady_clock::time_point now) {
             const auto snapshot = state.requests.Query(handle);
-            const bool eligibleIngress = entry.lease && now >= entry.deadline && HasEligibleIngress(state, entry);
-            if (now >= entry.deadline && !eligibleIngress) {
+            if (const bool eligibleIngress = entry.lease && now >= entry.deadline && HasEligibleIngress(state, entry);
+                now >= entry.deadline && !eligibleIngress) {
                 static_cast<void>(state.requests.CompleteTimedOut(handle, MakeError(RequestErrors::TimedOut)));
                 if (entry.lease && !entry.cancellationSent) {
                     entry.cancellationSent = true;
@@ -144,8 +146,8 @@ namespace Horo::PlatformServices {
     }  // namespace
 
     /** @copydoc PlatformProviderLifecycleHost::DispatchCompletions */
-    std::size_t PlatformProviderLifecycleHost::DispatchCompletions(const std::size_t maximum,
-                                                                   const std::chrono::steady_clock::time_point now) {
+    std::size_t PlatformProviderLifecycleHost::DispatchCompletions(  // NOSONAR(cpp:S5817) Mutates shared lifecycle state.
+        const std::size_t maximum, const std::chrono::steady_clock::time_point now) {
         auto &state = *state_;
         std::size_t processed{};
         while (processed < maximum) {
