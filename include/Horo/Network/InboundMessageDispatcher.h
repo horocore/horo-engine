@@ -109,6 +109,7 @@ namespace Horo::Network {
                                                  const NetworkTransportEvent &event, const MessageEnvelope &message, std::uint64_t nowTick);
         [[nodiscard]] Result<void> RejectAndClose(ConnectionHandle connection, Error error);
         [[nodiscard]] Result<void> CheckOwner() const;
+        void DiscardQueuedPrefix(std::size_t count) noexcept;
 
         INetworkTransport &transport_;
         const MessageCodecRegistry &codecs_;

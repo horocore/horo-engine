@@ -313,23 +313,23 @@ namespace Horo::Network {
                     report.lastPacketRejection.emplace(std::move(delivered).ErrorValue());
                     continue;
                 }
-                const auto oldQueued = queued_;
-                for (std::size_t remaining = index + 1; remaining < queued_; ++remaining)
-                    queue_[remaining - index - 1] = std::move(queue_[remaining]);
-                queued_ -= index + 1;
-                for (std::size_t stale = queued_; stale < oldQueued; ++stale)
-                    queue_[stale] = {};
+                DiscardQueuedPrefix(index + 1);
                 return Result<InboundDispatchReport>::Failure(delivered.ErrorValue());
             }
         }
+        DiscardQueuedPrefix(count);
+        report.processedEvents = count;
+        return Result<InboundDispatchReport>::Success(std::move(report));
+    }
+
+    /** @brief Preserves queued suffix order and releases every consumed payload. */
+    void InboundMessageDispatcher::DiscardQueuedPrefix(const std::size_t count) noexcept {
         const auto oldQueued = queued_;
-        for (std::size_t index = count; index < queued_; ++index)
+        for (std::size_t index = count; index < oldQueued; ++index)
             queue_[index - count] = std::move(queue_[index]);
         queued_ -= count;
         for (std::size_t stale = queued_; stale < oldQueued; ++stale)
             queue_[stale] = {};
-        report.processedEvents = count;
-        return Result<InboundDispatchReport>::Success(std::move(report));
     }
 
     /** @copydoc InboundMessageDispatcher::Shutdown */

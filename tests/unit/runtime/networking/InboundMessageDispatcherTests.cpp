@@ -26,6 +26,7 @@ namespace Horo::Network {
             bool stopped{};
             bool polling{};
             bool failPoll{};
+            bool failClose{};
 
             Result<void> Initialize(const NetworkTransportConfig &) override {
                 return Result<void>::Success();
@@ -45,6 +46,8 @@ namespace Horo::Network {
 
             Result<void> Close(ConnectionHandle) override {
                 ++closed;
+                if (failClose)
+                    return Result<void>::Failure(MakeError(NetworkErrors::TransportNativeUnavailable));
                 return Result<void>::Success();
             }
 
@@ -387,6 +390,20 @@ namespace Horo::Network {
         REQUIRE(fixture.transport.stopped);
         REQUIRE(fixture.handler->called == 0);
         RequireError(fixture.router->RunNetworkPoll(24), NetworkErrors::SessionShuttingDown);
+    }
+
+    TEST_CASE("Inbound dispatch preserves later owned packets when a nonpacket event fails", "[unit][network][dispatch]") {
+        Fixture fixture;
+        fixture.Register();
+        fixture.Enqueue(1);
+        fixture.transport.pending.insert(fixture.transport.pending.begin(),
+                                         {.kind = NetworkTransportEventKind::Accepted, .connection = Connection(4)});
+        fixture.transport.failClose = true;
+        RequireError(fixture.router->RunNetworkPoll(23), NetworkErrors::TransportNativeUnavailable);
+        REQUIRE(fixture.handler->called == 0);
+        fixture.transport.failClose = false;
+        REQUIRE(fixture.router->RunNetworkPoll(24).HasValue());
+        REQUIRE(fixture.handler->called == 1);
     }
 
     TEST_CASE("A hostile session cannot exhaust another session's typed handler rate", "[unit][network][dispatch]") {
