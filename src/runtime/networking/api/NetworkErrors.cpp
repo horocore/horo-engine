@@ -10,6 +10,35 @@ namespace Horo::Network::NetworkErrors {
         }
     }  // namespace
 
+    const ErrorCodeDescriptor NetworkModeInvalid{NetworkDomain,
+                                                 ErrorCode{"network.mode.invalid"},
+                                                 ErrorSeverity::Error,
+                                                 "The runtime network mode plan or participant set is invalid.",
+                                                 "Select one supported mode with its exact worlds and required host services.",
+                                                 false,
+                                                 true};
+    const ErrorCodeDescriptor NetworkModeUnavailable{NetworkDomain,
+                                                     ErrorCode{"network.mode.unavailable"},
+                                                     ErrorSeverity::Error,
+                                                     "A required runtime mode participant is unavailable.",
+                                                     "Install and configure the exact required host capability before startup.",
+                                                     false,
+                                                     true};
+    const ErrorCodeDescriptor NetworkModeStale{NetworkDomain,
+                                               ErrorCode{"network.mode.stale"},
+                                               ErrorSeverity::Error,
+                                               "The runtime mode generation or world/session identity is stale.",
+                                               "Use the current host, Scene, session and authority generation.",
+                                               false,
+                                               false};
+    const ErrorCodeDescriptor NetworkModeShuttingDown{NetworkDomain,
+                                                      ErrorCode{"network.mode.shutting_down"},
+                                                      ErrorSeverity::Error,
+                                                      "The runtime mode composition is shutting down.",
+                                                      "Wait for a new host generation before submitting work.",
+                                                      false,
+                                                      false};
+
     const ErrorCodeDescriptor
         NetworkAddressInvalid{NetworkDomain,
                               ErrorCode{"network.address.invalid"},
@@ -762,6 +791,42 @@ namespace Horo::Network::NetworkErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor
+        MessageDeliveryInvalid{NetworkDomain,
+                               ErrorCode{"network.message.delivery_invalid"},
+                               ErrorSeverity::Error,
+                               "Message delivery metadata or owner clock is invalid.",
+                               "Use the exact live generation, configured channel and policy, and monotonic owner time.",
+                               false,
+                               false};
+    const ErrorCodeDescriptor MessageDeliveryDuplicate{NetworkDomain,
+                                                       ErrorCode{"network.message.delivery_duplicate"},
+                                                       ErrorSeverity::Warning,
+                                                       "Message was already admitted on this channel.",
+                                                       "Discard repeated delivery without invoking gameplay handling.",
+                                                       false,
+                                                       false};
+    const ErrorCodeDescriptor MessageDeliveryOutOfOrder{NetworkDomain,
+                                                        ErrorCode{"network.message.delivery_out_of_order"},
+                                                        ErrorSeverity::Warning,
+                                                        "Message violates channel order or replay window.",
+                                                        "Discard the stale arrival; use a new session for exhausted sequence space.",
+                                                        false,
+                                                        false};
+    const ErrorCodeDescriptor MessageDeliveryExpired{NetworkDomain,
+                                                     ErrorCode{"network.message.delivery_expired"},
+                                                     ErrorSeverity::Warning,
+                                                     "Message expired before application admission.",
+                                                     "Discard the late message without invoking gameplay handling.",
+                                                     false,
+                                                     false};
+    const ErrorCodeDescriptor MessageDeliveryTerminal{NetworkDomain,
+                                                      ErrorCode{"network.message.delivery_terminal"},
+                                                      ErrorSeverity::Info,
+                                                      "Message admission is closed for this session.",
+                                                      "Use a new authenticated session generation after shutdown or disconnect.",
+                                                      false,
+                                                      false};
     const ErrorCodeDescriptor TerminalRecordInvalid{NetworkDomain,
                                                     ErrorCode{"network.terminal.invalid"},
                                                     ErrorSeverity::Error,

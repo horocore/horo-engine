@@ -166,6 +166,7 @@ jobs:
             --filter "$GITHUB_WORKSPACE/include" \
             --filter "$GITHUB_WORKSPACE/src" \
             --filter "$GITHUB_WORKSPACE/apps/common" \
+            --filter "$GITHUB_WORKSPACE/apps/horo-engine" \
             --filter "$GITHUB_WORKSPACE/apps/horo-package" \
             --exclude-throw-branches \
             --exclude-unreachable-branches \

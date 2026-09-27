@@ -38,6 +38,12 @@ namespace Horo::Assets {
         Sha256Digest artifactHash; /**< SHA-256 of the artifact envelope bytes. */
     };
 
+    /** @brief Exact cooked generation inventory and verified encoded artifacts. */
+    struct AssetCookGenerationContents {
+        std::vector<AssetCookManifestEntry> entries;
+        std::vector<std::vector<std::uint8_t>> artifacts;
+    };
+
     /**
      * @brief Resolves the current active generation from a target root's current.json.
      * @param targetRoot Root directory for this target's cooked output (e.g., build/cooked/headless-null).
@@ -46,6 +52,17 @@ namespace Horo::Assets {
      */
     [[nodiscard]] Result<AssetCookGeneration> ResolveCurrentCookGeneration(const std::filesystem::path &targetRoot,
                                                                            const AssetCookLimits &limits = {});
+
+    /**
+     * @brief Reads one pinned generation without consulting the mutable current.json pointer.
+     * @param generation Exact target, manifest digest, generation root, and count previously frozen by the caller.
+     * @param maximumTotalBytes Aggregate allocation ceiling for all encoded artifacts.
+     * @param limits Per-artifact and count ceilings.
+     * @return Canonical manifest entries and matching verified cooked envelopes, or a typed failure.
+     */
+    [[nodiscard]] Result<AssetCookGenerationContents> ReadCookGenerationContents(const AssetCookGeneration &generation,
+                                                                                 std::size_t maximumTotalBytes,
+                                                                                 const AssetCookLimits &limits = {});
 
     /**
      * @brief Publishes a complete generation atomically.

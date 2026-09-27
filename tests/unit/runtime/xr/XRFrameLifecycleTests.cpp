@@ -20,7 +20,12 @@ namespace Horo::XR {
                 .limits = {.maximumViews = 4, .maximumSpaces = 8, .maximumActions = 8, .maximumDevices = 4},
             };
             descriptor.states.fill(XRCapabilityState::Unsupported);
-            descriptor.states[static_cast<std::size_t>(XRCapability::Projection)] = XRCapabilityState::Available;
+            for (const XRCapability feature :
+                 {XRCapability::Projection, XRCapability::PrimaryOpaqueStereo, XRCapability::OrientationTracking,
+                  XRCapability::PositionTracking, XRCapability::ViewSpace, XRCapability::LocalSpace, XRCapability::BooleanActions,
+                  XRCapability::FloatActions, XRCapability::Vector2Actions, XRCapability::PoseActions, XRCapability::PredictedFrames,
+                  XRCapability::ExternalColorTargets, XRCapability::SessionLossLifecycle, XRCapability::CanonicalInputProjection})
+                descriptor.states[static_cast<std::size_t>(feature)] = XRCapabilityState::Available;
             auto created = XRCapabilitySnapshot::Create(descriptor);
             REQUIRE(created.HasValue());
             return created.Value();
@@ -28,7 +33,7 @@ namespace Horo::XR {
 
         class NoopResources final : public IXRSessionResources {
         public:
-            Result<void> Prepare(XRSessionPreparation, const XRSessionId &) override {
+            Result<void> Prepare(XRSessionPreparation, const XRSessionId &, const XRFeaturePlan &) override {
                 return Result<void>::Success();
             }
 
@@ -36,8 +41,14 @@ namespace Horo::XR {
         };
 
         XRSessionId Activate(XRSessionLifecycle &sessions, const XRCapabilitySnapshot &capabilities) {
-            constexpr XRCapabilityRequirement projection{.capability = XRCapability::Projection, .views = 2};
-            auto result = sessions.Activate(capabilities, capabilities.System(), capabilities.Revision(), projection);
+            constexpr XRFeatureNegotiationRequest projection{.profile = XRFeatureProfile::Projection1_0,
+                                                             .requestedLimits = {.maximumViews = 2,
+                                                                                 .maximumSpaces = 2,
+                                                                                 .maximumActions = 4,
+                                                                                 .maximumDevices = 1}};
+            const auto plan = NegotiateXRFeatures(capabilities, capabilities.System(), capabilities.Revision(), projection);
+            REQUIRE(plan.status == XRFeatureNegotiationStatus::Ok);
+            auto result = sessions.Activate(capabilities, capabilities.System(), capabilities.Revision(), *plan.plan);
             REQUIRE(result.HasValue());
             const XRSessionId session = result.Value();
             REQUIRE(sessions.ApplyEvent(session, XRSessionEvent::Started).HasValue());
