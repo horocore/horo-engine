@@ -1115,9 +1115,10 @@ target_compile_features(HoroReleasePipelineExecutorTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReleasePipelineExecutorTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
 add_executable(HoroReleaseServiceTests
         unit/application/ReleaseServiceTests.cpp
+        unit/application/ReleaseRunHistoryTests.cpp
 )
 target_compile_features(HoroReleaseServiceTests PRIVATE cxx_std_20)
-target_link_libraries(HoroReleaseServiceTests PRIVATE HoroEngine::ReleaseService nlohmann_json::nlohmann_json)
+target_link_libraries(HoroReleaseServiceTests PRIVATE HoroEngine::ReleaseService HoroEngine::Platform nlohmann_json::nlohmann_json)
 add_executable(HoroReleaseTargetMatrixTests
         unit/application/ReleaseTargetMatrixTests.cpp
 )
