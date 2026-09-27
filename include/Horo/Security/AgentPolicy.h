@@ -129,7 +129,7 @@ namespace Horo::Security {
     class AgentPolicy final {
     public:
         /** @brief Creates a policy with finite limits; invalid limits fail closed. @param limits Host budgets. */
-        explicit AgentPolicy(AgentPolicyLimits limits = {}) noexcept;
+        explicit AgentPolicy(const AgentPolicyLimits &limits = {}) noexcept;
         AgentPolicy(const AgentPolicy &) = delete;
         AgentPolicy &operator=(const AgentPolicy &) = delete;
         AgentPolicy(AgentPolicy &&) = delete;
