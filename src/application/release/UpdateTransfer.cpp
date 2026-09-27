@@ -54,8 +54,9 @@ namespace Horo::Release {
 
         /** @brief Validates a fresh complete response without silently accepting range fields. */
         [[nodiscard]] bool FreshResponse(const UpdatePackageRecord &package, const UpdateTransferResponse &response) {
-            return response.status == 200U && response.contentLength == package.size && !response.rangeStart && !response.rangeEnd &&
-                   !response.rangeTotal && (response.strongEtag.empty() || ValidStrongEtag(response.strongEtag));
+            return response.status == 200U && response.contentLength == package.size && !response.rangeStart.has_value() &&
+                   !response.rangeEnd.has_value() && !response.rangeTotal.has_value() &&
+                   (response.strongEtag.empty() || ValidStrongEtag(response.strongEtag));
         }
 
         /** @brief Validates exact source, strong validator, and complete range arithmetic. */
@@ -64,8 +65,9 @@ namespace Horo::Release {
             if (prior.packageDigest != package.digest || prior.packageSize != package.size || prior.durableBytes == 0U ||
                 prior.durableBytes >= package.size || prior.requestedUrl != package.url || prior.effectiveUrl != package.url ||
                 !ValidStrongEtag(prior.strongEtag) || response.strongEtag != prior.strongEtag || response.status != 206U ||
-                !response.rangeStart || !response.rangeEnd || !response.rangeTotal || *response.rangeStart != prior.durableBytes ||
-                *response.rangeTotal != package.size || *response.rangeEnd < *response.rangeStart || *response.rangeEnd >= package.size)
+                !response.rangeStart.has_value() || !response.rangeEnd.has_value() || !response.rangeTotal.has_value() ||
+                *response.rangeStart != prior.durableBytes || *response.rangeTotal != package.size ||
+                *response.rangeEnd < *response.rangeStart || *response.rangeEnd >= package.size)
                 return false;
             return response.contentLength == *response.rangeEnd - *response.rangeStart + 1U;
         }

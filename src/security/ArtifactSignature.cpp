@@ -156,7 +156,10 @@ namespace Horo::Security {
                                                                   const DetachedSignatureEnvelope &envelope) const {
         std::error_code error;
         const auto status = std::filesystem::symlink_status(path, error);
-        if (error || !std::filesystem::is_regular_file(status) || std::filesystem::file_size(path, error) != expectedBytes || error)
+        if (error || !std::filesystem::is_regular_file(status))
+            return Result<VerifiedArtifactEvidence>::Failure(MakeError(SecurityErrors::MissingEvidence));
+        const auto actualBytes = std::filesystem::file_size(path, error);
+        if (error || actualBytes != expectedBytes)
             return Result<VerifiedArtifactEvidence>::Failure(MakeError(SecurityErrors::MissingEvidence));
         std::ifstream input{path, std::ios::binary};
         if (!input)
