@@ -511,6 +511,16 @@ Persistent job history contains:
 
 History never contains credentials or raw secret values.
 
+The service accepts an optional host-owned `ReleaseRunHistory` and UTC clock.
+When supplied, admission, stage boundaries, and terminal transitions replace a
+bounded typed snapshot under an exclusive writer lock. The durable snapshot
+contains IDs, revision, stage states and attempts, candidate identity, and UTC
+update time; it excludes worker messages, arbitrary paths, and credentials.
+Publication uses a durable prepared file and atomic replacement. Recovery rejects
+malformed or oversized history and retains the highest candidate ID even after
+its job record ages out. Hosts that do not supply the optional store retain the
+existing in-memory behavior; no existing constructor call needs migration.
+
 Logs are separated by release job and stage. Log records include timestamp,
 severity, subsystem, target, and stage. User-facing adapters may render logs
 differently but do not alter the underlying diagnostic identity.

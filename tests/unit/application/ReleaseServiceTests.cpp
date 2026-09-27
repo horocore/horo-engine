@@ -1,6 +1,10 @@
 #include "Horo/Release/ReleaseService.h"
 #include "ReleaseTestFixtures.h"
 
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+
 using namespace ReleaseTestFixtures;
 
 namespace {
@@ -120,6 +124,107 @@ TEST_CASE("Release service retains a completed job after its submitting scope en
     REQUIRE(projected->operations.size() == 1);
     CHECK(projected->operations.front().state == OperationState::Succeeded);
     service.Shutdown();
+}
+
+TEST_CASE("Release service recovers durable job identities and terminal stage state", "[unit][application][release][service]") {
+    const auto directory = std::filesystem::temp_directory_path() /
+                           ("horo-release-service-history-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto path = directory / "history.json";
+    NativeDurableFileSystem files;
+    SystemWallClock clock;
+    const ReleasePreflightRequest request = Request();
+    const ReleasePreflightFacts facts = Facts(request);
+    auto outcome = PreflightRelease(request, facts);
+    REQUIRE(outcome.plan.has_value());
+    auto opened = ReleaseRunHistory::Open(files, path, 4U);
+    REQUIRE(opened.HasValue());
+    auto history = std::move(opened).Value();
+    ReleaseJobId firstJob;
+    {
+        FixedReleaseFacts current{facts};
+        ServiceWorkerFactory factory;
+        OperationStore operations{4, 4};
+        ReleaseServiceConfig config;
+        config.history = history.get();
+        config.wallClock = &clock;
+        ReleaseService service{operations, current, factory, config};
+        auto submitted = service.Submit(*outcome.plan);
+        REQUIRE(submitted.HasValue());
+        firstJob = submitted.Value().job;
+        REQUIRE(WaitForTerminal(service, firstJob).has_value());
+        service.Shutdown();
+        const auto records = service.ListHistory();
+        REQUIRE(records.size() == 1U);
+        CHECK(records.front().state == ReleaseJobState::Succeeded);
+        CHECK(records.front().stages[static_cast<std::size_t>(ReleaseStage::FinalVerifying)] == ReleaseStageState::Succeeded);
+    }
+    history.reset();
+
+    std::ifstream input(path, std::ios::binary);
+    const std::string bytes{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    CHECK(bytes.find("Validation started") == std::string::npos);
+    auto reopened = ReleaseRunHistory::Open(files, path, 4U);
+    REQUIRE(reopened.HasValue());
+    history = std::move(reopened).Value();
+    {
+        FixedReleaseFacts current{facts};
+        ServiceWorkerFactory factory;
+        OperationStore operations{4, 4};
+        ReleaseServiceConfig config;
+        config.history = history.get();
+        config.wallClock = &clock;
+        ReleaseService service{operations, current, factory, config};
+        auto submitted = service.Submit(*outcome.plan);
+        REQUIRE(submitted.HasValue());
+        CHECK(submitted.Value().job.value > firstJob.value);
+        service.Shutdown();
+    }
+    history.reset();
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+}
+
+TEST_CASE("Release history records active stage attempts before worker completion", "[unit][application][release][service]") {
+    const auto directory = std::filesystem::temp_directory_path() /
+                           ("horo-release-active-history-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    NativeDurableFileSystem files;
+    SystemWallClock clock;
+    auto opened = ReleaseRunHistory::Open(files, directory / "history.json", 4U);
+    REQUIRE(opened.HasValue());
+    auto history = std::move(opened).Value();
+    const ReleasePreflightRequest request = Request();
+    const ReleasePreflightFacts facts = Facts(request);
+    auto outcome = PreflightRelease(request, facts);
+    REQUIRE(outcome.plan.has_value());
+    {
+        FixedReleaseFacts current{facts};
+        ServiceWorkerFactory factory;
+        factory.block = true;
+        OperationStore operations{4, 4};
+        ReleaseServiceConfig config;
+        config.history = history.get();
+        config.wallClock = &clock;
+        ReleaseService service{operations, current, factory, config};
+        auto submitted = service.Submit(*outcome.plan);
+        REQUIRE(submitted.HasValue());
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+        while (!factory.entered->load() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        REQUIRE(factory.entered->load());
+        const auto active = service.ListHistory();
+        REQUIRE(active.size() == 1U);
+        CHECK(active.front().state == ReleaseJobState::Running);
+        CHECK(active.front().stages[0] == ReleaseStageState::Running);
+        REQUIRE(active.front().attempts[0].has_value());
+        CHECK(active.front().attempts[0]->value != 0U);
+        REQUIRE(service.RequestCancel(submitted.Value().job).HasValue());
+        REQUIRE(WaitForTerminal(service, submitted.Value().job).has_value());
+        service.Shutdown();
+        CHECK(service.ListHistory().front().state == ReleaseJobState::Cancelled);
+    }
+    history.reset();
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
 }
 
 TEST_CASE("Release service bounds admission and cancels an active worker", "[unit][application][release][service]") {

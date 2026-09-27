@@ -7,6 +7,7 @@
 
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Release/ReleasePipelineExecutor.h"
+#include "Horo/Release/ReleaseRunHistory.h"
 
 #include <condition_variable>
 #include <cstddef>
@@ -33,6 +34,8 @@ namespace Horo::Release {
         std::size_t recentCapacity{32};
         JobSystemConfig workers{2, 32, 32};
         ReleasePipelineLimits pipeline;
+        ReleaseRunHistory *history{}; /**< Optional host-owned durable history; must outlive the service. */
+        WallClock *wallClock{};       /**< Required host-owned UTC clock when history is set. */
     };
 
     /** @brief Durable identities returned to every GUI, CLI, MCP or CI adapter. */
@@ -67,6 +70,8 @@ namespace Horo::Release {
         [[nodiscard]] std::optional<ReleaseJobSnapshot> Query(ReleaseJobId job) const;
         /** @brief Copies all retained active and recent jobs in ID order. @return Bounded snapshots. */
         [[nodiscard]] std::vector<ReleaseJobSnapshot> List() const;
+        /** @brief Copies restart-readable typed job summaries. @return Persisted records, or empty when no history is configured. */
+        [[nodiscard]] std::vector<ReleaseRunHistoryEntry> ListHistory() const;
         /** @brief Copies one retained diagnostic. @param job Owning job. @param diagnostic Diagnostic identity.
          * @return Record or none when unknown/expired. */
         [[nodiscard]] std::optional<ReleaseDiagnostic> Diagnostic(ReleaseJobId job, ReleaseDiagnosticId diagnostic) const;
@@ -82,6 +87,8 @@ namespace Horo::Release {
         struct CancellationGate;
         /** @brief Projects one terminal and applies bounded recent retention exactly once. */
         void RecordTerminal(const std::shared_ptr<Record> &record);
+        /** @brief Durably records a credential-free snapshot when a history store was supplied. */
+        [[nodiscard]] Result<void> PersistSnapshot(const ReleaseJobSnapshot &snapshot);
         /** @brief Applies an operation cancellation request while coordinating service teardown. */
         static void CancelOperation(const std::shared_ptr<CancellationSource> &cancellation, const std::shared_ptr<CancellationSlot> &slot,
                                     const std::shared_ptr<CancellationGate> &gate);

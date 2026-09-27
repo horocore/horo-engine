@@ -64,13 +64,14 @@ namespace Horo::Release {
             IReleasePreflightFactsProvider &facts;
             const CancellationToken &cancellation;
             ReleasePipelineLimits limits;
+            IReleaseJobObserver *observer{};
         };
 
         /** @brief Executes one worker with fresh frozen-input checks and a closed tracker transition. */
         template <typename Worker>
         [[nodiscard]] bool RunStage(StageRuntime &runtime, const ReleaseStage stage, Worker &&worker,
                                     const std::optional<ReleaseCandidateId> *candidate = nullptr) {
-            auto &[tracker, plan, facts, cancellation, limits] = runtime;
+            auto &[tracker, plan, facts, cancellation, limits, observer] = runtime;
             if (StopIfCancelled(tracker, cancellation))
                 return false;
             const auto attemptResult = tracker.BeginStage(stage);
@@ -79,8 +80,12 @@ namespace Horo::Release {
                 return false;
             }
             const ReleaseStageAttemptId attempt = attemptResult.Value();
+            if (observer)
+                observer->OnSnapshot(tracker.Snapshot());
             const auto fail = [&](Error error) {
                 (void)tracker.FailStage(stage, attempt, std::move(error));
+                if (observer)
+                    observer->OnSnapshot(tracker.Snapshot());
                 return false;
             };
             const auto deadline = std::chrono::steady_clock::now() + limits.stageTimeout;
@@ -123,6 +128,8 @@ namespace Horo::Release {
                 completed = tracker.CompleteStage(stage, attempt);
             if (completed.HasError())
                 return fail(std::move(completed).ErrorValue());
+            if (observer)
+                observer->OnSnapshot(tracker.Snapshot());
             return true;
         }
 
@@ -256,7 +263,7 @@ namespace Horo::Release {
     ReleaseJobSnapshot ReleasePipelineExecutor::Execute(ReleaseJobTracker &tracker, const ReleaseCandidateId candidate,
                                                         const ReleaseExecutionPlan &plan, IReleasePreflightFactsProvider &facts,
                                                         IReleasePipelineStages &stages, const CancellationToken &cancellation,
-                                                        const ReleasePipelineLimits limits) const {
+                                                        const ReleasePipelineLimits limits, IReleaseJobObserver *observer) const {
         if (StopIfCancelled(tracker, cancellation))
             return tracker.Snapshot();
         const ReleaseJobSnapshot initial = tracker.Snapshot();
@@ -278,8 +285,10 @@ namespace Horo::Release {
         }
         if (tracker.Start().HasError())
             return tracker.Snapshot();
+        if (observer)
+            observer->OnSnapshot(tracker.Snapshot());
 
-        StageRuntime runtime{tracker, plan, facts, cancellation, limits};
+        StageRuntime runtime{tracker, plan, facts, cancellation, limits, observer};
 
         if (auto unsignedPayload = PrepareUnsignedPayload(runtime, stages);
             !unsignedPayload || !FinishCandidate(runtime, stages, expected, candidate, *unsignedPayload))

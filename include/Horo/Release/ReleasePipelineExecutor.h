@@ -76,6 +76,14 @@ namespace Horo::Release {
         std::chrono::steady_clock::duration stageTimeout{std::chrono::minutes{30}};
     };
 
+    /** @brief Optional synchronous observer of committed job and stage boundaries. */
+    class IReleaseJobObserver {
+    public:
+        virtual ~IReleaseJobObserver() = default;
+        /** @brief Observes an immutable tracker copy after a transition; implementations must not throw. */
+        virtual void OnSnapshot(const ReleaseJobSnapshot &snapshot) noexcept = 0;
+    };
+
     struct ReleaseStageContext;
 
     /** @brief Narrow synchronous reporting authority for one active stage. */
@@ -172,10 +180,12 @@ namespace Horo::Release {
          * @param stages Host-owned typed stage workers.
          * @param cancellation Service-owned cooperative cancellation token.
          * @param limits Maximum elapsed time for each stage attempt.
+         * @param observer Optional host-owned durable projection, called only after committed transitions.
          * @return Owned final job snapshot; the service retains the tracker.
          */
         [[nodiscard]] ReleaseJobSnapshot Execute(ReleaseJobTracker &tracker, ReleaseCandidateId candidate, const ReleaseExecutionPlan &plan,
                                                  IReleasePreflightFactsProvider &facts, IReleasePipelineStages &stages,
-                                                 const CancellationToken &cancellation, ReleasePipelineLimits limits = {}) const;
+                                                 const CancellationToken &cancellation, ReleasePipelineLimits limits = {},
+                                                 IReleaseJobObserver *observer = nullptr) const;
     };
 }  // namespace Horo::Release
