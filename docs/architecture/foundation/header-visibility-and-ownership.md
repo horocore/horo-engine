@@ -866,6 +866,19 @@ before validation. Version-1 data is rejected; there is no second legacy policy 
 Existing `HoroEngine::DestructionApi` consumers continue linking their current target
 for the identity, descriptor and state-machine contracts.
 
+## DFR-006.4 Replication Boundary
+
+`HoroEngine::DestructionReplication` owns
+`Horo/Destruction/DestructionReplication.h` and publicly depends on the existing
+`DestructionApi` and `NetworkApi` owners. NetworkApi does not depend on Destruction:
+the DFR adapter contributes an inert Network-owned descriptor and bounded typed
+serializers at host composition, then encodes owner-captured semantic values. The
+generated public-header boundary and `HoroDestructionReplicationTests` exercise this
+new consumer dependency. Hosts migrate DFR replication contributions to this target;
+they must not mirror the state by generic property paths, native body handles or a
+second Network-owned destruction authority. The schema is exact version 1.0; future
+semantic field changes require a new ID/version and explicit compatibility migration.
+
 ## NAV-002.7 Migration Notes
 
 `HoroEngine::NavigationApi` additionally owns `Horo/Navigation/NavMeshData.h`.

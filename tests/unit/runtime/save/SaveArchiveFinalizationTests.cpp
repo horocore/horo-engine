@@ -151,6 +151,38 @@ namespace {
         CHECK(finalizer.AppendChunk(Id<SaveRecordId>(20), fixture.first).HasValue());
     }
 
+    TEST_CASE("Version two finalization verifies compressed chunks before publication", "[runtime][save][finalization]") {
+        Fixture fixture;
+        std::vector<std::byte> canonical(2'048);
+        for (std::size_t index = 0; index < canonical.size(); ++index)
+            canonical[index] = static_cast<std::byte>(index % 64);
+        const auto encoded = EncodeSaveChunk(canonical, {.preferred = SaveChunkCodec::Deflate, .required = true}, {});
+        REQUIRE(encoded.HasValue());
+        REQUIRE(encoded.Value().codec == SaveChunkCodec::Deflate);
+        auto directory = fixture.Directory();
+        directory.entries[0].codec = encoded.Value().codec;
+        directory.entries[0].storedByteLength = encoded.Value().stored.size();
+        directory.entries[0].decodedByteLength = encoded.Value().decodedByteLength;
+        directory.entries[0].decodedHash = encoded.Value().decodedHash;
+        directory.entries[1].offset = encoded.Value().stored.size();
+        directory.entries[2].offset = encoded.Value().stored.size() + fixture.second.size();
+        directory.payloadByteLength = encoded.Value().stored.size() + fixture.second.size() + 1;
+
+        CHECK(SaveArchiveFinalizer::Create(fixture.preamble, fixture.manifest, directory).ErrorValue().code.Value() ==
+              SaveErrors::ArchiveCodecUnsupported.code.Value());
+        fixture.preamble[8] = std::byte{2};
+        fixture.preamble[9] = fixture.preamble[10] = fixture.preamble[11] = std::byte{};
+        auto finalizer = std::move(SaveArchiveFinalizer::Create(fixture.preamble, fixture.manifest, directory)).Value();
+        auto corrupt = encoded.Value().stored;
+        corrupt[0] = std::byte{};
+        CHECK(finalizer.AppendChunk(Id<SaveRecordId>(20), corrupt).HasError());
+        REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(20), encoded.Value().stored).HasValue());
+        REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(21), fixture.second).HasValue());
+        const std::array last{std::byte{6}};
+        REQUIRE(finalizer.AppendChunk(Id<SaveRecordId>(22), last).HasValue());
+        CHECK(finalizer.Finalize().HasValue());
+    }
+
     TEST_CASE("Save archive finalization enforces the archive size budget before staging", "[runtime][save][finalization]") {
         Fixture fixture;
         SaveArchiveFinalizationLimits limits;

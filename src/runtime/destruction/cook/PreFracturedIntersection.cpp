@@ -236,23 +236,25 @@ namespace Horo::Destruction::Detail {
 
     IntersectionCheck CheckSelfIntersection(const Assets::PreFracturedSourceNode &node, std::uint64_t &remainingWork,
                                             const CancellationToken &cancellation) {
+        using enum IntersectionCheck;
+
         const auto triangles = SortedTriangles(node);
         for (std::size_t left = 0; left < triangles.size(); ++left) {
             if (cancellation.IsCancellationRequested())
-                return IntersectionCheck::Cancelled;
+                return Cancelled;
             const auto &a = triangles[left];
             for (std::size_t right = left + 1U; right < triangles.size() && triangles[right].minimum[0] <= a.maximum[0]; ++right) {
                 if (remainingWork == 0)
-                    return IntersectionCheck::TooMuchWork;
+                    return TooMuchWork;
                 --remainingWork;
                 const auto &b = triangles[right];
                 if (a.maximum[1] < b.minimum[1] || b.maximum[1] < a.minimum[1] || a.maximum[2] < b.minimum[2] ||
                     b.maximum[2] < a.minimum[2])
                     continue;
                 if (TrianglesIntersect(node, a, b))
-                    return IntersectionCheck::Intersecting;
+                    return Intersecting;
             }
         }
-        return IntersectionCheck::Clear;
+        return Clear;
     }
 }  // namespace Horo::Destruction::Detail
