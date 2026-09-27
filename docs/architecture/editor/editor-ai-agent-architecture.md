@@ -709,6 +709,19 @@ retain the visible proposal and revision-bound approval boundary.
 
 The system supports pluggable LLM backends:
 
+The `HoroEngine::ModelProvider` contract owns copied requests, ordered text and
+tool-intent events, provider-reported usage, sanitized errors, cooperative
+cancellation, discovery, and explicit feature admission. `HoroEngine::ModelProviderAdapters`
+provides real Ollama and OpenAI-compatible HTTP adapters. The editor host registers
+factories explicitly, selects one provider before inference, and passes an opaque
+credential reference plus a dispatch-time resolver for cloud access. A registered
+factory has no ambient side effect. Tool intents are proposals for the agent's
+separate policy and approval path; adapters never invoke MCP tools. A host may
+advertise tool support only after confirming it for the selected model; missing
+support returns `UnsupportedCapability` before transport work. HTTP and provider
+JSON types remain private to the adapter target. This seam belongs only to the
+editor agent, never `HoroAI` gameplay or packaged runtime composition.
+
 ```cpp
 enum class AgentProvider {
     Local,
