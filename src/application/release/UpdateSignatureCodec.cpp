@@ -48,9 +48,8 @@ namespace Horo::Release::Detail {
         std::string result;
         result.reserve(bytes.size() * 2U);
         for (const std::byte value : bytes) {
-            const auto byte = std::to_integer<std::uint8_t>(value);
-            result.push_back("0123456789abcdef"[byte >> 4U]);
-            result.push_back("0123456789abcdef"[byte & 0x0fU]);
+            result.push_back("0123456789abcdef"[std::to_integer<unsigned>(value >> 4U)]);
+            result.push_back("0123456789abcdef"[std::to_integer<unsigned>(value & std::byte{0x0f})]);
         }
         return result;
     }
