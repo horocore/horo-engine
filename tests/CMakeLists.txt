@@ -1126,6 +1126,12 @@ target_compile_features(HoroReleaseSigningBoundaryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReleaseSigningBoundaryTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroReleaseSigningBoundaryTests LABELS "release;signing;headless")
 
+add_executable(HoroReleaseCandidateVerificationTests
+        unit/application/ReleaseCandidateVerificationTests.cpp)
+target_compile_features(HoroReleaseCandidateVerificationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReleaseCandidateVerificationTests PRIVATE HoroEngine::Application)
+horo_register_catch_test(HoroReleaseCandidateVerificationTests LABELS "release;verification;headless")
+
 add_executable(HoroReleaseBuildProvenanceTests
         unit/application/ReleaseBuildProvenanceTests.cpp)
 target_compile_features(HoroReleaseBuildProvenanceTests PRIVATE cxx_std_20)

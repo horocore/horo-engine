@@ -214,6 +214,7 @@ add_library(HoroApplication STATIC
         application/project_migration/ProjectMigrationExecution.cpp
         application/release/DistributionModel.cpp
         application/release/ReleaseArtifactManifest.cpp
+        application/release/ReleaseCandidateVerification.cpp
         application/release/ReleaseArtifactVerification.cpp
         application/release/ReleaseChecksums.cpp
         application/release/ReleaseBuildProvenance.cpp

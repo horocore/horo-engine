@@ -632,6 +632,16 @@ A release succeeds only when:
 Packaged artifacts are the objects tested and published. CI does not publish
 artifacts that bypass release verification.
 
+The candidate verification dispatcher first checks every final manifest file
+and byte, requires a host signature verifier when the manifest declares
+signing, and then runs each distinct policy-required smoke probe exactly once.
+Missing or duplicate required probes fail closed. It checks final files again
+after the probes so a probe cannot silently alter the candidate it approved.
+Success issues a typed candidate identity carrying the final manifest digest
+and checked root; downstream publication must recheck the bytes before upload.
+This is an additive dispatch boundary; concrete archive, runtime, install,
+launch, and compatibility probes still need host composition and qualification.
+
 Additional required tests cover:
 
 - platform package format selection
