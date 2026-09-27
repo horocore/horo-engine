@@ -114,7 +114,7 @@ namespace Horo::Network {
     };
 
     /** @brief Host-owned factory; no concrete transport is linked by NetworkRuntime itself. */
-    using NetworkModeServiceFactory = std::function<Result<std::unique_ptr<INetworkModeService>>(NetworkModeServiceRequest)>;
+    using NetworkModeServiceFactory = std::function<Result<std::unique_ptr<INetworkModeService>>(const NetworkModeServiceRequest &)>;
 
     /** @brief Exact factories supplied at the application composition root. */
     struct NetworkModeFactories final {
@@ -179,7 +179,8 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> BuildEntries();
         void ReleaseEntries() noexcept;
         [[nodiscard]] std::size_t WorldIndex(NetworkModeWorldKind kind) const noexcept;
-        [[nodiscard]] Result<void> AppendTravelEntry(std::array<Entry, 5> &prepared, std::size_t &count, NetworkModeServiceRequest request);
+        [[nodiscard]] Result<void> AppendTravelEntry(std::array<Entry, 5> &prepared, std::size_t &count,
+                                                     const NetworkModeServiceRequest &request);
         [[nodiscard]] Result<std::size_t> PrepareTravelEntries(std::span<const NetworkModeWorld> replacements,
                                                                std::array<Entry, 5> &prepared);
         static void DiscardTravelEntries(std::array<Entry, 5> &prepared, std::size_t count) noexcept;

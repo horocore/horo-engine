@@ -23,7 +23,7 @@ namespace Horo::Application::Internal {
             if (pending_ || worlds.empty() || worlds.size() > nextWorlds_.size())
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "Invalid or overlapping travel request."));
-            std::copy(worlds.begin(), worlds.end(), nextWorlds_.begin());
+            std::ranges::copy(worlds, nextWorlds_.begin());
             nextWorldCount_ = worlds.size();
             nextSession_ = session;
             travelFailure_.reset();
@@ -42,12 +42,11 @@ namespace Horo::Application::Internal {
         }
 
         Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &) override {
-            auto advanced = mode_.RunPhase(phase);
-            if (advanced.HasError() || phase != Runtime::RuntimePhase::CommitDeferredLifecycleChanges || !pending_)
+            if (auto advanced = mode_.RunPhase(phase);
+                advanced.HasError() || phase != Runtime::RuntimePhase::CommitDeferredLifecycleChanges || !pending_)
                 return advanced;
             pending_ = false;
-            auto traveled = mode_.Travel({nextWorlds_.data(), nextWorldCount_}, phase, nextSession_);
-            if (traveled.HasError())
+            if (auto traveled = mode_.Travel({nextWorlds_.data(), nextWorldCount_}, phase, nextSession_); traveled.HasError())
                 travelFailure_ = traveled.ErrorValue();
             return Result<void>::Success();
         }
@@ -71,7 +70,7 @@ namespace Horo::Application::Internal {
         bool pending_{};
     };
 
-    NetworkProductHost::NetworkProductHost(std::unique_ptr<Runtime::RuntimeHost> runtime, ModeParticipant *mode) noexcept
+    NetworkProductHost::NetworkProductHost(ConstructionKey, std::unique_ptr<Runtime::RuntimeHost> runtime, ModeParticipant *mode) noexcept
         : runtime_(std::move(runtime)), mode_(mode) {}
 
     NetworkProductHost::~NetworkProductHost() noexcept {
@@ -100,11 +99,10 @@ namespace Horo::Application::Internal {
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(runtime.ErrorValue());
         auto participant = std::make_unique<ModeParticipant>(std::move(composition).Value());
         auto *mode = participant.get();
-        auto added = runtime.Value()->AddParticipant(std::move(participant));
-        if (added.HasError())
+        if (auto added = runtime.Value()->AddParticipant(std::move(participant)); added.HasError())
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(added.ErrorValue());
         return Result<std::unique_ptr<NetworkProductHost>>::Success(
-            std::unique_ptr<NetworkProductHost>(new NetworkProductHost(std::move(runtime).Value(), mode)));
+            std::make_unique<NetworkProductHost>(ConstructionKey{}, std::move(runtime).Value(), mode));
     }
 
     Result<void> NetworkProductHost::Startup() {

@@ -24,6 +24,8 @@ namespace Horo::Application::Internal {
 
     // Application-owned bridge: target admission precedes the canonical runtime lifecycle.
     class NetworkProductHost final {
+        struct ConstructionKey final {};
+
     public:
         [[nodiscard]] static Result<std::unique_ptr<NetworkProductHost>> Create(Clock &clock, const NetworkProductHostInputs &inputs,
                                                                                 Network::NetworkModeFactories factories,
@@ -31,6 +33,7 @@ namespace Horo::Application::Internal {
 
         NetworkProductHost(const NetworkProductHost &) = delete;
         NetworkProductHost &operator=(const NetworkProductHost &) = delete;
+        NetworkProductHost(ConstructionKey, std::unique_ptr<Runtime::RuntimeHost> runtime, ModeParticipant *mode) noexcept;
         ~NetworkProductHost() noexcept;
 
         [[nodiscard]] Result<void> Startup();
@@ -46,8 +49,6 @@ namespace Horo::Application::Internal {
         void Shutdown() noexcept;
 
     private:
-        NetworkProductHost(std::unique_ptr<Runtime::RuntimeHost> runtime, ModeParticipant *mode) noexcept;
-
         std::unique_ptr<Runtime::RuntimeHost> runtime_;
         ModeParticipant *mode_{};  // Borrowed from runtime_'s lifecycle participant.
     };

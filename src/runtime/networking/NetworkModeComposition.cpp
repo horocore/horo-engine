@@ -38,25 +38,26 @@ namespace Horo::Network {
 
         [[nodiscard]] bool Needs(const NetworkModePlan &plan, const NetworkModeServiceKind service) noexcept {
             const bool networked = plan.mode != NetworkProjectRole::Standalone;
+            using enum NetworkModeServiceKind;
             switch (service) {
-                case NetworkModeServiceKind::Transport:
-                case NetworkModeServiceKind::Session:
-                case NetworkModeServiceKind::Replication:
+                case Transport:
+                case Session:
+                case Replication:
                     return networked;
-                case NetworkModeServiceKind::Scene:
-                case NetworkModeServiceKind::Physics:
+                case Scene:
+                case Physics:
                     return true;
-                case NetworkModeServiceKind::Audio:
+                case Audio:
                     return plan.presentation.audio;
-                case NetworkModeServiceKind::Renderer:
+                case Renderer:
                     return plan.presentation.renderer;
-                case NetworkModeServiceKind::Gui:
+                case Gui:
                     return plan.presentation.gui;
-                case NetworkModeServiceKind::Input:
+                case Input:
                     return plan.presentation.input;
-                case NetworkModeServiceKind::LocalPlayer:
+                case LocalPlayer:
                     return plan.presentation.localPlayer;
-                case NetworkModeServiceKind::Count:
+                case Count:
                     return false;
             }
             return false;
@@ -111,7 +112,7 @@ namespace Horo::Network {
                              .protocolVersion = selection.protocolVersion,
                              .presentation = presentation,
                              .worldCount = worlds.size()};
-        std::copy(worlds.begin(), worlds.end(), plan.worlds.begin());
+        std::ranges::copy(worlds, plan.worlds.begin());
         return Result<NetworkModePlan>::Success(plan);
     }
 
@@ -160,7 +161,7 @@ namespace Horo::Network {
     }
 
     Result<void> NetworkModeComposition::BuildEntries() {
-        const auto append = [this](const NetworkModeServiceRequest request) -> Result<void> {
+        const auto append = [this](const NetworkModeServiceRequest &request) {
             auto created = factories_.services[static_cast<std::size_t>(request.service)](request);
             if (created.HasError())
                 return Result<void>::Failure(created.ErrorValue());
@@ -217,8 +218,7 @@ namespace Horo::Network {
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeShuttingDown, "Mode composition has stopped."));
         if (started_)
             return Invalid("Mode composition has already started.");
-        auto built = BuildEntries();
-        if (built.HasError()) {
+        if (auto built = BuildEntries(); built.HasError()) {
             ReleaseEntries();
             return built;
         }
@@ -283,8 +283,7 @@ namespace Horo::Network {
         const auto index = WorldIndex(world);
         if (world != NetworkModeWorldKind::Client || index == plan_.worldCount)
             return Invalid("Only the selected client world may receive an admitted gameplay session.");
-        auto admitted = session.AdmitGameplay(connection, generation, nowTick);
-        if (admitted.HasError())
+        if (auto admitted = session.AdmitGameplay(connection, generation, nowTick); admitted.HasError())
             return admitted;
         if (sessions_[index].has_value() && sessions_[index] == generation)
             return Result<void>::Success();
@@ -309,7 +308,7 @@ namespace Horo::Network {
     }
 
     Result<void> NetworkModeComposition::AppendTravelEntry(std::array<Entry, 5> &prepared, std::size_t &count,
-                                                           const NetworkModeServiceRequest request) {
+                                                           const NetworkModeServiceRequest &request) {
         auto created = factories_.services[static_cast<std::size_t>(request.service)](request);
         if (created.HasError())
             return Result<void>::Failure(created.ErrorValue());
@@ -380,7 +379,7 @@ namespace Horo::Network {
                 }
             }
         }
-        std::copy(replacements.begin(), replacements.end(), plan_.worlds.begin());
+        std::ranges::copy(replacements, plan_.worlds.begin());
         for (std::size_t index = count; index != 0; --index)
             oldServices[index - 1]->Shutdown();
         started_ = true;
@@ -400,8 +399,8 @@ namespace Horo::Network {
                 (index != 0 && replacements[0].scene == replacements[index].scene))
                 return Invalid("Travel must supply fresh distinct Scene and authority generations.");
         }
-        const auto clientIndex = WorldIndex(NetworkModeWorldKind::Client);
-        if (clientIndex != plan_.worldCount && (!admittedClientSession.has_value() || sessions_[clientIndex] != admittedClientSession))
+        if (const auto clientIndex = WorldIndex(NetworkModeWorldKind::Client);
+            clientIndex != plan_.worldCount && (!admittedClientSession.has_value() || sessions_[clientIndex] != admittedClientSession))
             return Stale("Client travel requires the current admitted session generation.");
         std::array<Entry, 5> prepared{};
         auto ready = PrepareTravelEntries(replacements, prepared);

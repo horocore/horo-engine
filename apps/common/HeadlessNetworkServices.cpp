@@ -24,7 +24,7 @@ namespace Horo::Application::Internal {
 
         class WorldService final : public Network::INetworkModeService {
         public:
-            WorldService(std::shared_ptr<WorldOwners> owners, const Network::NetworkModeServiceRequest request)
+            WorldService(std::shared_ptr<WorldOwners> owners, const Network::NetworkModeServiceRequest &request)
                 : owners_(std::move(owners)), request_(request) {}
 
             Result<void> Prepare() override {
@@ -117,10 +117,9 @@ namespace Horo::Application::Internal {
     Network::NetworkModeFactories ComposeHeadlessNetworkServices(std::shared_ptr<const Runtime::RuntimeSceneDefinition> sceneDefinition,
                                                                  Network::NetworkModeFactories selectedFactories) {
         const auto owners = std::make_shared<WorldOwners>(std::move(sceneDefinition));
-        for (const auto service : {Network::NetworkModeServiceKind::Scene, Network::NetworkModeServiceKind::Physics,
-                                   Network::NetworkModeServiceKind::Replication}) {
-            selectedFactories.services[static_cast<std::size_t>(service)] =
-                [owners](const Network::NetworkModeServiceRequest request) -> Result<std::unique_ptr<Network::INetworkModeService>> {
+        using enum Network::NetworkModeServiceKind;
+        for (const auto service : {Scene, Physics, Replication}) {
+            selectedFactories.services[static_cast<std::size_t>(service)] = [owners](const Network::NetworkModeServiceRequest &request) {
                 return Result<std::unique_ptr<Network::INetworkModeService>>::Success(std::make_unique<WorldService>(owners, request));
             };
         }

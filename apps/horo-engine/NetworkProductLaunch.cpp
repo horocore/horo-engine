@@ -173,20 +173,21 @@ namespace Horo::Application::Internal {
         }
 
         [[nodiscard]] std::optional<Net::NetworkProjectRole> ParseRole(const std::string_view text) noexcept {
+            using enum Net::NetworkProjectRole;
             if (text == "standalone")
-                return Net::NetworkProjectRole::Standalone;
+                return Standalone;
             if (text == "client")
-                return Net::NetworkProjectRole::Client;
+                return Client;
             if (text == "listen")
-                return Net::NetworkProjectRole::ListenServer;
+                return ListenServer;
             if (text == "dedicated")
-                return Net::NetworkProjectRole::DedicatedServer;
+                return DedicatedServer;
             return std::nullopt;
         }
 
         class SessionOrLocalPlayerService final : public Net::INetworkModeService {
         public:
-            explicit SessionOrLocalPlayerService(const Net::NetworkModeServiceRequest request) : request_(request) {}
+            explicit SessionOrLocalPlayerService(const Net::NetworkModeServiceRequest &request) : request_(request) {}
 
             Result<void> Prepare() override {
                 if (request_.service == Net::NetworkModeServiceKind::LocalPlayer && !request_.scene.IsValid())
@@ -206,7 +207,9 @@ namespace Horo::Application::Internal {
                 return Result<void>::Success();
             }
 
-            void Shutdown() noexcept override {}
+            void Shutdown() noexcept override {
+                // This service owns only a request value and no external resource.
+            }
 
         private:
             Net::NetworkModeServiceRequest request_;
@@ -215,7 +218,7 @@ namespace Horo::Application::Internal {
 #if HORO_PRODUCT_HAS_GNS
         class RejectedConnectionCollector final : public Net::INetworkTransportEventConsumer {
         public:
-            void Consume(Net::NetworkTransportEvent event) noexcept override {
+            void Consume(Net::NetworkTransportEvent event) noexcept override {  // NOSONAR: owned-event override requires value.
                 if ((event.kind == Net::NetworkTransportEventKind::Accepted || event.kind == Net::NetworkTransportEventKind::Connected) &&
                     rejectedCount_ < rejected_.size())
                     rejected_[rejectedCount_++] = event.connection;
@@ -232,7 +235,7 @@ namespace Horo::Application::Internal {
 
         class GnsProductTransport final : public Net::INetworkModeService {
         public:
-            GnsProductTransport(const Net::NetworkProjectRole role, Net::NetworkAddress bind, Net::NetworkAddress connect)
+            GnsProductTransport(const Net::NetworkProjectRole role, const Net::NetworkAddress &bind, const Net::NetworkAddress &connect)
                 : role_(role), bind_(bind), connect_(connect) {}
 
             Result<void> Prepare() override {
@@ -244,13 +247,14 @@ namespace Horo::Application::Internal {
             }
 
             Result<void> Activate() override {
-                if (role_ == Net::NetworkProjectRole::ListenServer || role_ == Net::NetworkProjectRole::DedicatedServer) {
+                using enum Net::NetworkProjectRole;
+                if (role_ == ListenServer || role_ == DedicatedServer) {
                     auto listening = transport_->Listen({.bindAddress = bind_, .maximumConnections = 8});
                     if (listening.HasError())
                         return Result<void>::Failure(listening.ErrorValue());
                     listener_ = listening.Value();
                 }
-                if (role_ == Net::NetworkProjectRole::Client || role_ == Net::NetworkProjectRole::ListenServer) {
+                if (role_ == Client || role_ == ListenServer) {
                     auto connecting = transport_->Connect({.endpoint = connect_});
                     if (connecting.HasError())
                         return Result<void>::Failure(connecting.ErrorValue());
@@ -262,8 +266,7 @@ namespace Horo::Application::Internal {
                 if (phase != Runtime::RuntimePhase::NetworkPoll)
                     return Result<void>::Success();
                 RejectedConnectionCollector collector;
-                auto polled = transport_->PollEvents(collector);
-                if (polled.HasError())
+                if (auto polled = transport_->PollEvents(collector); polled.HasError())
                     return Result<void>::Failure(polled.ErrorValue());
                 // No credential policy is installed by this minimal headless product; reject explicitly.
                 for (const auto connection : collector.Rejected()) {
@@ -300,15 +303,14 @@ namespace Horo::Application::Internal {
                                                                  const Net::NetworkAddress &connect) {
             Net::NetworkModeFactories factories;
             for (const auto kind : {Net::NetworkModeServiceKind::Session, Net::NetworkModeServiceKind::LocalPlayer}) {
-                factories.services[static_cast<std::size_t>(kind)] =
-                    [](const Net::NetworkModeServiceRequest request) -> Result<std::unique_ptr<Net::INetworkModeService>> {
+                factories.services[static_cast<std::size_t>(kind)] = [](const Net::NetworkModeServiceRequest &request) {
                     return Result<std::unique_ptr<Net::INetworkModeService>>::Success(
                         std::make_unique<SessionOrLocalPlayerService>(request));
                 };
             }
 #if HORO_PRODUCT_HAS_GNS
             factories.services[static_cast<std::size_t>(Net::NetworkModeServiceKind::Transport)] =
-                [role, bind, connect](const Net::NetworkModeServiceRequest) -> Result<std::unique_ptr<Net::INetworkModeService>> {
+                [role, bind, connect](const Net::NetworkModeServiceRequest &) {
                 return Result<std::unique_ptr<Net::INetworkModeService>>::Success(
                     std::make_unique<GnsProductTransport>(role, bind, connect));
             };
@@ -429,8 +431,7 @@ namespace Horo::Application::Internal {
         }
 
         [[nodiscard]] int RunProductFrames(NetworkProductHost &runtime, const ProductLaunch &launch, const ProductWorlds &worlds) {
-            auto started = runtime.Startup();
-            if (started.HasError()) {
+            if (auto started = runtime.Startup(); started.HasError()) {
                 std::cerr << "horo-engine: product startup failed: " << started.ErrorValue().message << '\n';
                 return 3;
             }
