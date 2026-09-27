@@ -31,7 +31,8 @@ namespace {
 
     class FakeGitHubProcess final : public IExternalProcessRunner {
     public:
-        explicit FakeGitHubProcess(const bool authorized = true) : authenticated(authorized) {}
+        explicit FakeGitHubProcess(const bool authorized = true, const bool retargeted = false)
+            : authenticated(authorized), changedTagTarget(retargeted) {}
 
         [[nodiscard]] Result<ExternalProcessResult> Run(const ExternalProcessRequest &request, const CancellationToken &) override {
             REQUIRE(request.executable == "gh");
@@ -131,8 +132,9 @@ TEST_CASE("GitHub CLI client verifies uploaded bytes and treats matching retry a
     processes.assets["bin%2Feditor"] = "changed";
     CHECK(client.UploadExact(release.Value(), "bin%2Feditor", file.path, artifact).HasError());
     CHECK(processes.uploads == 1);
-    processes.changedTagTarget = true;
-    CHECK(client.ReadAsset(release.Value(), "bin%2Feditor").HasError());
+    FakeGitHubProcess retargeted{true, true};
+    GitHubReleaseCliClient changedClient{retargeted};
+    CHECK(changedClient.ReadAsset(release.Value(), "bin%2Feditor").HasError());
 }
 
 TEST_CASE("GitHub CLI client fails closed on missing authorization and verifies stable commit", "[release][github]") {
@@ -141,17 +143,18 @@ TEST_CASE("GitHub CLI client fails closed on missing authorization and verifies 
     CHECK(client.FindExisting("horocore/horo-engine", "v0.4.2").HasError());
     CHECK(processes.uploads == 0);
 
-    processes.authenticated = true;
-    auto release = client.FindExisting("horocore/horo-engine", "v0.4.2");
+    FakeGitHubProcess authorized;
+    GitHubReleaseCliClient ready{authorized};
+    auto release = ready.FindExisting("horocore/horo-engine", "v0.4.2");
     REQUIRE(release.HasValue());
-    processes.assets["manifest.json"] = "manifest";
-    CHECK(client.Commit(release.Value(), {ReleaseChannelKind::Preview, {}}, Digest("manifest")).HasError());
-    CHECK(processes.commits == 0);
-    REQUIRE(client.Commit(release.Value(), {ReleaseChannelKind::Stable, {}}, Digest("manifest")).HasValue());
-    CHECK(processes.commits == 1);
-    CHECK(processes.latestReleaseId == release.Value().releaseId);
-    CHECK(client.Commit(release.Value(), {ReleaseChannelKind::Stable, {}}, Digest("wrong")).HasError());
-    CHECK(processes.commits == 1);
+    authorized.assets["manifest.json"] = "manifest";
+    CHECK(ready.Commit(release.Value(), {ReleaseChannelKind::Preview, {}}, Digest("manifest")).HasError());
+    CHECK(authorized.commits == 0);
+    REQUIRE(ready.Commit(release.Value(), {ReleaseChannelKind::Stable, {}}, Digest("manifest")).HasValue());
+    CHECK(authorized.commits == 1);
+    CHECK(authorized.latestReleaseId == release.Value().releaseId);
+    CHECK(ready.Commit(release.Value(), {ReleaseChannelKind::Stable, {}}, Digest("wrong")).HasError());
+    CHECK(authorized.commits == 1);
 }
 
 TEST_CASE("GitHub CLI client resolves an interrupted upload only after remote verification", "[release][github]") {
