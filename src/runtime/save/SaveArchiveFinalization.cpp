@@ -57,10 +57,10 @@ namespace Horo::Runtime {
         auto validatedDirectory = ValidateSaveChunkDirectory(std::move(directory), manifest, limits.directory);
         if (validatedDirectory.HasError())
             return Result<SaveArchiveFinalizer>::Failure(validatedDirectory.ErrorValue());
-        const std::uint32_t archiveVersion =
-            std::to_integer<std::uint32_t>(preamble[8]) | (std::to_integer<std::uint32_t>(preamble[9]) << 8U) |
-            (std::to_integer<std::uint32_t>(preamble[10]) << 16U) | (std::to_integer<std::uint32_t>(preamble[11]) << 24U);
-        if (archiveVersion != 2 && std::ranges::any_of(validatedDirectory.Value().Entries(), [](const SaveChunkDirectoryEntry &entry) {
+        if (const std::uint32_t archiveVersion =
+                std::to_integer<std::uint32_t>(preamble[8]) | (std::to_integer<std::uint32_t>(preamble[9]) << 8U) |
+                (std::to_integer<std::uint32_t>(preamble[10]) << 16U) | (std::to_integer<std::uint32_t>(preamble[11]) << 24U);
+            archiveVersion != 2 && std::ranges::any_of(validatedDirectory.Value().Entries(), [](const SaveChunkDirectoryEntry &entry) {
             return entry.codec != SaveChunkCodec::Raw;
         }))
             return Result<SaveArchiveFinalizer>::Failure(MakeError(SaveErrors::ArchiveCodecUnsupported));

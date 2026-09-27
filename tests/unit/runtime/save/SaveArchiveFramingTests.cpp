@@ -109,6 +109,28 @@ namespace {
         CHECK(EncodeSaveChunk(canonical, {.preferred = SaveChunkCodec::Deflate, .required = true}, limits).HasError());
     }
 
+    TEST_CASE("Compressed chunks accept an independent zlib-wrapped Deflate stream", "[runtime][save][compression]") {
+        constexpr std::array compressed{std::byte{0x78}, std::byte{0x9c}, std::byte{0x63}, std::byte{0x64},
+                                        std::byte{0x62}, std::byte{0x06}, std::byte{0x00}, std::byte{0x00},
+                                        std::byte{0x0d}, std::byte{0x00}, std::byte{0x07}};
+        const auto raw = Payload();
+        std::vector<std::byte> payload{compressed.begin(), compressed.end()};
+        payload.insert(payload.end(), raw.begin() + 3, raw.end());
+        auto directory = Directory(raw);
+        directory.payloadByteLength = payload.size();
+        directory.entries[0].codec = SaveChunkCodec::Deflate;
+        directory.entries[0].storedByteLength = compressed.size();
+        directory.entries[1].offset = compressed.size();
+        directory.entries[2].offset = compressed.size() + directory.entries[1].storedByteLength;
+        const auto validated = ValidateSaveChunkDirectory(std::move(directory), Manifest());
+        REQUIRE(validated.HasValue());
+        const auto selected = SelectSaveChunkPayload(payload, validated.Value(), Id<SaveRecordId>(20));
+        REQUIRE(selected.HasValue());
+        REQUIRE(selected.Value());
+        const std::vector<std::byte> expected{raw.begin(), raw.begin() + 3};
+        CHECK(*selected.Value() == expected);
+    }
+
     TEST_CASE("Compressed chunks reject trailing bytes inside their declared stored range", "[runtime][save][compression]") {
         std::vector<std::byte> canonical(2'048);
         for (std::size_t index = 0; index < canonical.size(); ++index)

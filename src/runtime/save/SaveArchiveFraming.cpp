@@ -142,7 +142,7 @@ namespace Horo::Runtime {
         }
     }  // namespace
 
-    ValidatedSaveChunkDirectory::ValidatedSaveChunkDirectory(SaveChunkDirectory directory, SaveChunkDirectoryLimits limits)
+    ValidatedSaveChunkDirectory::ValidatedSaveChunkDirectory(SaveChunkDirectory directory, const SaveChunkDirectoryLimits &limits)
         : directory_(std::move(directory)), limits_(limits) {}
 
     /** @copydoc ValidatedSaveChunkDirectory::PayloadByteLength */

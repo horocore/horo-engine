@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <limits>
+#include <memory>
 #include <miniz.h>
 #include <new>
 #include <utility>
@@ -19,7 +21,7 @@ namespace Horo::Runtime {
         /** @brief Finds an installed stateless codec without consulting platform or module state. */
         [[nodiscard]] const SaveChunkCodecCapability *FindCodec(const SaveChunkCodec codec) noexcept {
             const auto found = std::ranges::find(kCodecs, codec, &SaveChunkCodecCapability::codec);
-            return found == kCodecs.end() ? nullptr : &*found;
+            return found == kCodecs.end() ? nullptr : std::to_address(found);
         }
 
         /** @brief Verifies every untrusted declared size before allocating decoded storage. */
@@ -69,25 +71,37 @@ namespace Horo::Runtime {
                                                                    const SaveChunkDirectoryLimits &limits) {
             if (decoded.size() > std::numeric_limits<mz_ulong>::max())
                 return Result<std::vector<std::byte>>::Failure(MakeError(SaveErrors::ArchiveDecompressionLimitExceeded));
-            const mz_ulong bound = mz_compressBound(static_cast<mz_ulong>(decoded.size()));
-            const mz_ulong capacity = static_cast<mz_ulong>(std::min<std::uint64_t>(bound, limits.maximumStoredChunkBytes));
+            const auto bound = mz_compressBound(static_cast<mz_ulong>(decoded.size()));
+            const auto capacity = std::min<std::uint64_t>(bound, limits.maximumStoredChunkBytes);
             if (capacity == 0 || capacity > std::numeric_limits<std::size_t>::max())
                 return Result<std::vector<std::byte>>::Failure(MakeError(SaveErrors::ArchiveDecompressionLimitExceeded));
             try {
                 std::vector<std::byte> stored(static_cast<std::size_t>(capacity));
-                auto storedLength = capacity;
-                const int status =
-                    mz_compress2(reinterpret_cast<unsigned char *>(stored.data()), &storedLength,
-                                 reinterpret_cast<const unsigned char *>(decoded.data()), static_cast<mz_ulong>(decoded.size()), level);
-                if (status == MZ_BUF_ERROR)
-                    return Result<std::vector<std::byte>>::Failure(MakeError(SaveErrors::ArchiveDecompressionLimitExceeded));
-                if (status != MZ_OK || storedLength == 0)
-                    return Result<std::vector<std::byte>>::Failure(MakeError(SaveErrors::ArchiveCompressionFailed));
+                const auto flags = tdefl_create_comp_flags_from_zip_params(level, MZ_DEFAULT_WINDOW_BITS, MZ_DEFAULT_STRATEGY);
+                const auto storedLength = tdefl_compress_mem_to_mem(stored.data(), stored.size(), decoded.data(), decoded.size(), flags);
+                if (storedLength == 0)
+                    return Result<std::vector<std::byte>>::Failure(
+                        MakeError(capacity < bound ? SaveErrors::ArchiveDecompressionLimitExceeded : SaveErrors::ArchiveCompressionFailed));
                 stored.resize(static_cast<std::size_t>(storedLength));
                 return Result<std::vector<std::byte>>::Success(std::move(stored));
             } catch (const std::bad_alloc &) {
                 return Result<std::vector<std::byte>>::Failure(MakeError(SaveErrors::ArchiveAllocationFailed));
             }
+        }
+
+        struct DecodedOutput final {
+            std::span<std::byte> bytes;
+            std::size_t written{};
+        };
+
+        /** @brief Copies miniz output only while it fits the pre-admitted decoded length. */
+        int CopyDecodedBytes(const void *source, const int length, void *context) noexcept {
+            auto &output = *static_cast<DecodedOutput *>(context);
+            if (length < 0 || static_cast<std::size_t>(length) > output.bytes.size() - output.written)
+                return 0;
+            std::memcpy(output.bytes.data() + output.written, source, static_cast<std::size_t>(length));
+            output.written += static_cast<std::size_t>(length);
+            return 1;
         }
 
         /** @brief Compares an exact decoded/stored ratio without overflowing multiplication. */
@@ -119,11 +133,11 @@ namespace Horo::Runtime {
                 return Result<std::vector<std::byte>>::Failure(MakeError(SaveErrors::ArchiveDecompressionLimitExceeded));
             try {
                 std::vector<std::byte> decoded(static_cast<std::size_t>(entry.decodedByteLength));
-                auto length = static_cast<mz_ulong>(decoded.size());
-                auto storedLength = static_cast<mz_ulong>(stored.size());
-                const int status = mz_uncompress2(reinterpret_cast<unsigned char *>(decoded.data()), &length,
-                                                  reinterpret_cast<const unsigned char *>(stored.data()), &storedLength);
-                if (status != MZ_OK || length != decoded.size() || storedLength != stored.size())
+                DecodedOutput output{decoded};
+                auto storedLength = stored.size();
+                if (const int status = tinfl_decompress_mem_to_callback(stored.data(), &storedLength, CopyDecodedBytes, &output,
+                                                                        TINFL_FLAG_PARSE_ZLIB_HEADER);
+                    status != 1 || output.written != decoded.size() || storedLength != stored.size())
                     return Result<std::vector<std::byte>>::Failure(MakeError(SaveErrors::ArchiveChunkDecodeFailed));
                 return Result<std::vector<std::byte>>::Success(std::move(decoded));
             } catch (const std::bad_alloc &) {
@@ -145,9 +159,7 @@ namespace Horo::Runtime {
             (policy.level < codec->minimumLevel || policy.level > codec->maximumLevel))
             return Result<EncodedSaveChunk>::Failure(MakeError(SaveErrors::ArchiveCompressionPolicyInvalid));
 
-        const bool useRaw =
-            policy.metadata || policy.preferred == SaveChunkCodec::Raw || codec == nullptr || decoded.size() < policy.minimumByteLength;
-        if (useRaw) {
+        if (policy.metadata || policy.preferred == SaveChunkCodec::Raw || codec == nullptr || decoded.size() < policy.minimumByteLength) {
             if (policy.required && policy.preferred != SaveChunkCodec::Raw && !policy.metadata)
                 return Result<EncodedSaveChunk>::Failure(MakeError(SaveErrors::ArchiveCompressionPolicyInvalid));
             return EncodeRaw(decoded, limits);

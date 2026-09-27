@@ -138,7 +138,7 @@ namespace Horo::Runtime {
         [[nodiscard]] const SaveChunkDirectoryLimits &Limits() const noexcept;
 
     private:
-        explicit ValidatedSaveChunkDirectory(SaveChunkDirectory directory, SaveChunkDirectoryLimits limits);
+        explicit ValidatedSaveChunkDirectory(SaveChunkDirectory directory, const SaveChunkDirectoryLimits &limits);
         SaveChunkDirectory directory_;
         SaveChunkDirectoryLimits limits_;
 
