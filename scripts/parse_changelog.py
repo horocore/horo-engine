@@ -118,16 +118,21 @@ def parse_entry(version: str, date: str | None, lines: str) -> dict:
     return {"version": version, "date": date, "sections": parse_sections(version, lines)}
 
 
-def parse_changelog(text: str) -> list[dict]:
-    """Parse bounded released entries; Unreleased is never candidate content."""
-    if len(text.encode("utf-8")) > MAX_SOURCE_BYTES:
-        raise NotesError(f"CHANGELOG.md exceeds {MAX_SOURCE_BYTES} bytes")
+def release_headings(text: str) -> list[re.Match]:
     for line in text.splitlines():
         if line.startswith("## ") and HEADER.fullmatch(line) is None:
             raise NotesError(f"malformed release heading: {line[:80]}")
     headings = list(HEADER.finditer(text))
     if not headings:
         raise NotesError("CHANGELOG.md has no version headings")
+    return headings
+
+
+def parse_changelog(text: str) -> list[dict]:
+    """Parse bounded released entries; Unreleased is never candidate content."""
+    if len(text.encode("utf-8")) > MAX_SOURCE_BYTES:
+        raise NotesError(f"CHANGELOG.md exceeds {MAX_SOURCE_BYTES} bytes")
+    headings = release_headings(text)
     entries = []
     seen = set()
     for index, heading in enumerate(headings):

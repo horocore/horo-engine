@@ -21,6 +21,7 @@ def notes_member(name: str) -> bool:
 
 
 def verify_tar(snapshot: bytes, archive: Path) -> None:
+    # Read-only tar stream: extractfile returns bytes and never materializes member paths.
     with tarfile.open(archive, "r:gz") as package:
         members = [member for member in package.getmembers()
                    if notes_member(member.name.rstrip("/"))]

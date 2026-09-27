@@ -168,10 +168,11 @@ class ReleaseNotesTests(unittest.TestCase):
     def test_archive_rejects_traversal_and_non_file_notes(self):
         snapshot = snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor"))
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary) / "work"
+            root.mkdir()
             tar_path, zip_path = write_archive_fixture(root, snapshot)
 
-            for unsafe in ("../release-notes.json", "/release-notes.json",
+            for unsafe in ("../release-notes.json", str(root.parent / "absolute-release-notes.json"),
                            "package/../release-notes.json", "package\\release-notes.json"):
                 with self.subTest(unsafe=unsafe):
                     with tarfile.open(tar_path, "w:gz") as package:
@@ -183,6 +184,8 @@ class ReleaseNotesTests(unittest.TestCase):
                     for archive in (tar_path, zip_path):
                         with self.assertRaisesRegex(NotesError, "unsafe package member path"):
                             verify_archive(snapshot, archive)
+                    self.assertFalse((root.parent / "outside.txt").exists())
+                    self.assertFalse((root.parent / "absolute-release-notes.json").exists())
 
             # A valid notes entry cannot excuse a hostile sibling archive path.
             with tarfile.open(tar_path, "w:gz") as package:
@@ -206,6 +209,7 @@ class ReleaseNotesTests(unittest.TestCase):
                 package.addfile(member)
             with self.assertRaisesRegex(NotesError, "exactly one"):
                 verify_archive(snapshot, tar_path)
+            self.assertFalse((root.parent / "outside.txt").exists())
             with zipfile.ZipFile(zip_path, "w") as package:
                 package.writestr("release-notes.json/", b"")
             with self.assertRaisesRegex(NotesError, "exactly one"):
