@@ -975,6 +975,14 @@ add_library(HoroEngine::XRApi ALIAS HoroXRApi)
 target_compile_features(HoroXRApi PUBLIC cxx_std_20)
 target_link_libraries(HoroXRApi PUBLIC HoroEngine::Foundation HoroEngine::RenderApi)
 
+add_library(HoroXRRuntime STATIC
+        runtime/xr/runtime/XRSessionErrors.cpp
+        runtime/xr/runtime/XRSessionLifecycle.cpp
+)
+add_library(HoroEngine::XRRuntime ALIAS HoroXRRuntime)
+target_compile_features(HoroXRRuntime PUBLIC cxx_std_20)
+target_link_libraries(HoroXRRuntime PUBLIC HoroEngine::XRApi)
+
 add_library(HoroTerrainApi STATIC
         runtime/terrain/api/FoliageDefinition.cpp
         runtime/terrain/api/TerrainComposition.cpp
