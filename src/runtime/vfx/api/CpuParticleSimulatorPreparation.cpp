@@ -2,8 +2,12 @@
 #include "Horo/Vfx/VfxErrors.h"
 
 #include <algorithm>
+#include <array>
+#include <format>
 #include <limits>
 #include <new>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace Horo::Vfx::CpuParticleSimulatorDetail {
@@ -14,13 +18,13 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             std::uint32_t customFloatStreams{};
         };
 
-        [[nodiscard]] bool ValidCurve(const std::span<const CpuParticleCurveKey> keys) noexcept {
+        [[nodiscard]] bool ValidCurve(const std::span<const CpuParticleCurveKey> keys, const bool unitRange) noexcept {
             if (keys.size() > CpuParticleSimulationHardLimits::CurveKeys)
                 return false;
             float previous = -1.0F;
             for (const auto &key : keys) {
                 if (!Finite(key.normalizedAge) || !Finite(key.value) || key.normalizedAge < 0.0F || key.normalizedAge > 1.0F ||
-                    key.normalizedAge < previous)
+                    key.normalizedAge <= previous || key.value < 0.0F || (unitRange && key.value > 1.0F))
                     return false;
                 previous = key.normalizedAge;
             }
@@ -33,7 +37,8 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             float previous = -1.0F;
             for (const auto &key : keys) {
                 if (!Finite(key.normalizedAge) || !Finite(key.color) || key.normalizedAge < 0.0F || key.normalizedAge > 1.0F ||
-                    key.normalizedAge < previous)
+                    key.normalizedAge <= previous || key.color.x < 0.0F || key.color.x > 1.0F || key.color.y < 0.0F || key.color.y > 1.0F ||
+                    key.color.z < 0.0F || key.color.z > 1.0F || key.color.w < 0.0F || key.color.w > 1.0F)
                     return false;
                 previous = key.normalizedAge;
             }
@@ -41,8 +46,15 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
         }
 
         [[nodiscard]] bool ValidForce(const CpuParticleForceModule &force) noexcept {
-            return force.kind < CpuParticleForceKind::Count && Finite(force.vector) && Finite(force.center) && Finite(force.strength) &&
-                   Finite(force.falloff) && Finite(force.frequency) && force.falloff >= 0.0F && force.frequency >= 0.0F;
+            using enum CpuParticleForceKind;
+            if (force.kind >= Count || !Finite(force.vector) || !Finite(force.center) || !Finite(force.strength) ||
+                !Finite(force.falloff) || !Finite(force.frequency) || force.falloff < 0.0F || force.frequency < 0.0F)
+                return false;
+            if (force.kind == Noise)
+                return force.randomChannel >= 10 && Finite(force.strength * force.frequency);
+            if (force.kind == Gravity || force.kind == Wind)
+                return Finite(force.vector * force.strength);
+            return true;
         }
 
         [[nodiscard]] Result<void> ValidateBasic(const ParticleSystemDescriptorData &data, const CpuParticleSimulatorCreateInfo &info) {
@@ -53,16 +65,23 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                 data.collisionMode >= ParticleCollisionMode::Count || info.collisionResponse >= CpuParticleCollisionResponse::Count ||
                 info.forces.size() > CpuParticleSimulationHardLimits::ForceModules ||
                 info.planes.size() > CpuParticleSimulationHardLimits::Planes ||
-                info.payloadChannels.size() > CpuParticleSimulationHardLimits::PayloadChannels || !ValidCurve(info.sizeOverLife) ||
-                !ValidCurve(info.opacityOverLife) || !ValidColorCurve(info.colorOverLife))
+                info.payloadChannels.size() > CpuParticleSimulationHardLimits::PayloadChannels ||
+                info.payloadModules.size() > CpuParticleSimulationHardLimits::PayloadChannels || !ValidCurve(info.sizeOverLife, false) ||
+                !ValidCurve(info.opacityOverLife, true) || !ValidColorCurve(info.colorOverLife))
                 return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
             return Result<void>::Success();
         }
 
         [[nodiscard]] Result<void> ValidateForces(const std::span<const CpuParticleForceModule> forces) {
+            std::array<bool, 256> noiseChannelSeen{};
             for (const auto &force : forces) {
                 if (!ValidForce(force))
                     return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
+                if (force.kind == CpuParticleForceKind::Noise) {
+                    if (noiseChannelSeen[force.randomChannel])
+                        return Failure<void>(VfxErrors::ParticleSimulationDescriptorInvalid);
+                    noiseChannelSeen[force.randomChannel] = true;
+                }
             }
             return Result<void>::Success();
         }
@@ -76,7 +95,7 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
                     channel.customFloatStream == std::numeric_limits<std::uint32_t>::max())
                     return Failure<std::uint32_t>(VfxErrors::ParticlePayloadSchemaMismatch);
                 for (const auto &other : channels) {
-                    if (&channel != &other && channel.channel == other.channel)
+                    if (&channel != &other && (channel.channel == other.channel || channel.customFloatStream == other.customFloatStream))
                         return Failure<std::uint32_t>(VfxErrors::ParticlePayloadSchemaMismatch);
                 }
                 const std::uint32_t requiredStreams = channel.customFloatStream + 1U;
@@ -87,6 +106,68 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             if (streams > CpuParticleBufferHardLimits::CustomFloatStreams)
                 return Failure<std::uint32_t>(VfxErrors::ParticlePayloadSchemaMismatch);
             return Result<std::uint32_t>::Success(streams);
+        }
+
+        /** @brief Returns a typed module-contract failure with a stable descriptor path. */
+        [[nodiscard]] Result<void> PayloadModuleFailure(const ErrorCodeDescriptor &code, const std::size_t index,
+                                                        const std::string_view field) {
+            Error error = MakeError(code);
+            error.diagnostics.push_back({.code = DiagnosticCode{"vfx.payload.module_contract"},
+                                         .severity = DiagnosticSeverity::Error,
+                                         .message = std::string{code.summary},
+                                         .path = std::format("payloadModules[{}].{}", index, field)});
+            return Result<void>::Failure(std::move(error));
+        }
+
+        /** @brief Resolves a declared semantic channel without exposing its storage to gameplay. */
+        [[nodiscard]] std::size_t PayloadChannelIndex(const std::span<const CpuParticlePayloadChannel> channels,
+                                                      const std::uint16_t channel) noexcept {
+            for (std::size_t index = 0; index < channels.size(); ++index) {
+                if (channels[index].channel == channel)
+                    return index;
+            }
+            return channels.size();
+        }
+
+        /** @brief Checks the complete output domain of one prepared transform. */
+        [[nodiscard]] bool ValidPayloadRange(const CpuParticlePayloadModule &payload, const CpuParticlePayloadChannel &source,
+                                             const CpuParticlePayloadChannel &target) noexcept {
+            if (payload.operation == CpuParticlePayloadOperation::Affine) {
+                const double low = (static_cast<double>(source.minimum) * payload.scale) + payload.bias;
+                const double high = (static_cast<double>(source.maximum) * payload.scale) + payload.bias;
+                return std::min(low, high) >= target.minimum && std::max(low, high) <= target.maximum;
+            }
+            return payload.threshold >= source.minimum && payload.threshold <= source.maximum && payload.belowValue >= target.minimum &&
+                   payload.belowValue <= target.maximum && payload.atOrAboveValue >= target.minimum &&
+                   payload.atOrAboveValue <= target.maximum;
+        }
+
+        /** @brief Validates every declared read/write edge before publishing a simulator. */
+        [[nodiscard]] Result<void> ValidatePayloadModules(const CpuParticleSimulatorCreateInfo &info) {
+            std::array<bool, CpuParticleSimulationHardLimits::PayloadChannels> writerSeen{};
+            for (std::size_t index = 0; index < info.payloadModules.size(); ++index) {
+                const auto &payload = info.payloadModules[index];
+                if (payload.stage != CpuParticleStage::Integrate)
+                    return PayloadModuleFailure(VfxErrors::ParticleStageContractViolation, index, "stage");
+                if (payload.operation >= CpuParticlePayloadOperation::Count)
+                    return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "operation");
+                if (!Finite(payload.scale) || !Finite(payload.bias) || !Finite(payload.threshold) || !Finite(payload.belowValue) ||
+                    !Finite(payload.atOrAboveValue))
+                    return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "parameters");
+                const std::size_t read = PayloadChannelIndex(info.payloadChannels, payload.readChannel);
+                const std::size_t write = PayloadChannelIndex(info.payloadChannels, payload.writeChannel);
+                if (read == info.payloadChannels.size() || write == info.payloadChannels.size())
+                    return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "channels");
+                if (info.payloadChannels[read].classification != CpuParticlePayloadClass::GameplayInput ||
+                    info.payloadChannels[write].classification != CpuParticlePayloadClass::GameplayOutput)
+                    return PayloadModuleFailure(VfxErrors::ParticleGameplayAccessDenied, index, "channels");
+                if (writerSeen[write])
+                    return PayloadModuleFailure(VfxErrors::ParticleStageContractViolation, index, "writeChannel");
+                writerSeen[write] = true;
+                if (!ValidPayloadRange(payload, info.payloadChannels[read], info.payloadChannels[write]))
+                    return PayloadModuleFailure(VfxErrors::ParticlePayloadSchemaMismatch, index, "range");
+            }
+            return Result<void>::Success();
         }
 
         [[nodiscard]] Result<void> ValidateCollision(const ParticleSystemDescriptorData &data, const CpuParticleSimulatorCreateInfo &info) {
@@ -160,11 +241,30 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             std::copy(info.colorOverLife.begin(), info.colorOverLife.end(), state.colorOverLife.begin());
         }
 
-        void CopyPayloadSchema(Detail::CpuParticleSimulatorState &state, const std::span<const CpuParticlePayloadChannel> channels) {
+        void CopyPayloadSchema(Detail::CpuParticleSimulatorState &state, const CpuParticleSimulatorCreateInfo &info) {
+            const auto channels = info.payloadChannels;
             state.payloadChannelCount = static_cast<std::uint32_t>(channels.size());
             std::copy(channels.begin(), channels.end(), state.payloadChannels.begin());
             for (std::uint32_t index = 0; index < state.payloadChannelCount; ++index)
                 state.inputValues[index] = state.payloadChannels[index].minimum;
+            state.payloadModuleCount = static_cast<std::uint32_t>(info.payloadModules.size());
+            for (std::uint32_t index = 0; index < state.payloadModuleCount; ++index) {
+                const auto &payload = info.payloadModules[index];
+                const std::size_t read = PayloadChannelIndex(channels, payload.readChannel);
+                const std::size_t write = PayloadChannelIndex(channels, payload.writeChannel);
+                state.payloadModules[index] = {.stage = payload.stage,
+                                               .operation = payload.operation,
+                                               .readChannel = payload.readChannel,
+                                               .writeChannel = payload.writeChannel,
+                                               .readStream = channels[read].customFloatStream,
+                                               .writeStream = channels[write].customFloatStream,
+                                               .scale = payload.scale,
+                                               .bias = payload.bias,
+                                               .threshold = payload.threshold,
+                                               .belowValue = payload.belowValue,
+                                               .atOrAboveValue = payload.atOrAboveValue};
+                state.outputHasModule[write] = true;
+            }
         }
 
         void AllocateScratch(Detail::CpuParticleSimulatorState &state) {
@@ -197,6 +297,8 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             return Result<std::unique_ptr<Detail::CpuParticleSimulatorState>>::Failure(result.ErrorValue());
         if (auto result = ValidateForces(info.forces); result.HasError())
             return Result<std::unique_ptr<Detail::CpuParticleSimulatorState>>::Failure(result.ErrorValue());
+        if (auto result = ValidatePayloadModules(info); result.HasError())
+            return Result<std::unique_ptr<Detail::CpuParticleSimulatorState>>::Failure(result.ErrorValue());
         if (auto result = ValidateCollision(data, info); result.HasError())
             return Result<std::unique_ptr<Detail::CpuParticleSimulatorState>>::Failure(result.ErrorValue());
         const auto customStreams = DetermineCustomFloatStreams(info.payloadChannels, info.customFloatStreams);
@@ -211,7 +313,7 @@ namespace Horo::Vfx::CpuParticleSimulatorDetail {
             state->customFloatStreams = customStreams.Value();
             CopyPreparedInputs(*state, data, info);
             CopyCompiledKernels(*state, info);
-            CopyPayloadSchema(*state, info.payloadChannels);
+            CopyPayloadSchema(*state, info);
             AllocateScratch(*state);
             InitializeCursors(*state, info, data);
             return Result<std::unique_ptr<Detail::CpuParticleSimulatorState>>::Success(std::move(state));

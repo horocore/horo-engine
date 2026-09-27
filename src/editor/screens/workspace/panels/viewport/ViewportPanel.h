@@ -57,11 +57,13 @@ namespace Horo::Editor {
                                         const EditorViewportTextureView &textureView, bool hasRenderedViewport);
 
         static void DrawProjectionControl(const ImVec2 &origin, const EditorWorkspaceViewModel &viewModel,
-                                          EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
+                                          EditorWorkspaceViewCommandData &command, const EditorGuiContext &context, bool inputEligible);
         static void DrawObjectCount(const ImVec2 &origin, const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context);
         static void DrawMissingRendererMessage(float centerX, float originY, float height, const EditorGuiContext &context);
 
         IEditorViewportRenderer *viewportRenderer_{nullptr};
+        Input::InputRouter *inputRouter_{nullptr};
+        Input::InputContextToken *workspaceInputContext_{nullptr};
         ViewportInteractionController interaction_;
         bool lightMarkerFailureReported_{false};
     };

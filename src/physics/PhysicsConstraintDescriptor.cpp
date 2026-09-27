@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numbers>
 
 namespace Horo::Physics {
     namespace {
@@ -38,6 +39,25 @@ namespace Horo::Physics {
                     MakeError(PhysicsErrors::DescriptorInvalid, "Constraint distances must be finite with 0 <= minimum <= maximum."));
             return Result<void>::Success();
         }
+
+        /** @brief Checks the finite hinge interval supported by the canonical solver. */
+        Result<void> ValidateHinge(const PhysicsHingeConstraint &hinge) {
+            if (!std::isfinite(hinge.minimumRadians) || !std::isfinite(hinge.maximumRadians) ||
+                hinge.minimumRadians < -std::numbers::pi_v<float> || hinge.minimumRadians > 0.0F || hinge.maximumRadians < 0.0F ||
+                hinge.maximumRadians > std::numbers::pi_v<float>)
+                return Result<void>::Failure(
+                    MakeError(PhysicsErrors::DescriptorInvalid, "Hinge limits must be finite with -pi <= minimum <= 0 <= maximum <= pi."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks the finite slider interval supported by the canonical solver. */
+        Result<void> ValidateSlider(const PhysicsSliderConstraint &slider) {
+            if (!std::isfinite(slider.minimumMeters) || !std::isfinite(slider.maximumMeters) || slider.minimumMeters > 0.0F ||
+                slider.maximumMeters < 0.0F)
+                return Result<void>::Failure(
+                    MakeError(PhysicsErrors::DescriptorInvalid, "Slider limits must be finite with minimum <= 0 <= maximum in meters."));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc ValidatePhysicsConstraintDescriptor */
@@ -46,8 +66,15 @@ namespace Horo::Physics {
             return first;
         if (const auto second = ValidateSecondAnchor(descriptor, expectedWorld); second.HasError())
             return second;
+        if (descriptor.collisionPolicy != PhysicsJointCollisionPolicy::DisableBetweenBodies &&
+            descriptor.collisionPolicy != PhysicsJointCollisionPolicy::AllowBetweenBodies)
+            return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Unknown joint collision policy."));
         if (const auto *distance = std::get_if<PhysicsDistanceConstraint>(&descriptor.parameters))
             return ValidateDistance(*distance);
+        if (const auto *hinge = std::get_if<PhysicsHingeConstraint>(&descriptor.parameters))
+            return ValidateHinge(*hinge);
+        if (const auto *slider = std::get_if<PhysicsSliderConstraint>(&descriptor.parameters))
+            return ValidateSlider(*slider);
         return Result<void>::Success();
     }
 

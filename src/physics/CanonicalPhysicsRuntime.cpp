@@ -73,6 +73,7 @@ namespace Horo::Physics::Detail {
         scene.shapes.reserve(scene.maximumShapes);
         scene.bodies.reserve(scene.maximumBodies);
         scene.constraints.reserve(scene.maximumConstraints);
+        scene.disabledJointCollisionPairs.reserve(scene.maximumConstraints);
     }
 
     CanonicalWorld::~CanonicalWorld() {

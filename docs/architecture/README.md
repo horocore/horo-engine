@@ -156,6 +156,8 @@ dependency direction in [System Design](./foundation/system-design.md).
   CPU/GPU particle systems, VFX graphs, decals, and volumetric effects.
 - [VFX Foundation Contract Qualification](./runtime/vfx-foundation-contract-qualification.md):
   determinism, allocation, parser, identity, buffer, tier, path, and platform evidence.
+- [Cinematic Foundation Contract Qualification](./runtime/cinematic-foundation-contract-qualification.md):
+  identity byte order, hostile sequence parsing, deterministic sampling, allocation budget, and platform matrix.
 - [Character Controller Architecture](./runtime/character-controller-architecture.md):
   kinematic capsule controller, slopes, steps, moving platforms, surface
   materials, and surface events.
@@ -188,6 +190,9 @@ dependency direction in [System Design](./foundation/system-design.md).
 - [Physics Determinism Capability and Support Tiers](../adr/088-physics-determinism-capability-and-support-tiers.md):
   fail-closed tier negotiation, exact execution fingerprints, same-build/platform
   support target, future cross-platform groups, exclusions and evidence gates.
+- [Physics Material, Surface and Cross-System Identity](../adr/181-physics-material-surface-and-cross-system-identity.md):
+  distinct physical and semantic IDs, explicit collider-slot mapping, committed
+  surface evidence and downstream consumer ownership.
 - [Audio Architecture](./runtime/audio-architecture.md): ADR-backed ownership,
   clocks, formats, assets, mixer, spatial, devices, tooling and explicit 1.0 versus
   Post-1.0 product boundaries.
@@ -313,6 +318,8 @@ dependency direction in [System Design](./foundation/system-design.md).
 - [Terrain And Foliage Architecture](./runtime/terrain-and-foliage-architecture.md):
   heightfields, terrain layers, instanced foliage, wind, LOD, collision,
   streaming, and editor tools.
+- [Terrain Source Import Contract](./runtime/terrain-source-import.md): exact built-in
+  height, weight and hole formats, optional decoder seam, bounds and source publication.
 - [Terrain and Foliage Ownership, Data, Tier and Lifecycle](../adr/137-terrain-foliage-ownership-data-tier-and-lifecycle.md):
   public/runtime module boundaries, authored/cooked/live data strata, typed identity
   and revisions, provider-neutral tier resolution, aggregate lifecycle and retirement.

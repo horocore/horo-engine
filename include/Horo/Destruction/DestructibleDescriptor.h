@@ -11,8 +11,8 @@
 #include <cstdint>
 
 namespace Horo::Destruction {
-    /** @brief Version of the first portable destructible descriptor contract. */
-    inline constexpr std::uint32_t CurrentDestructibleDescriptorContractVersion = 1;
+    /** @brief Version of the portable descriptor contract with fixed-tick damage cooldown policy. */
+    inline constexpr std::uint32_t CurrentDestructibleDescriptorContractVersion = 2;
 
     struct DestructionConfigurationRevisionTag;
     /** @brief Non-zero immutable publication revision of one destructible configuration. */
@@ -151,6 +151,8 @@ namespace Horo::Destruction {
         DestructionTriggerPolicy trigger{DestructionTriggerPolicy::AccumulatedDamage};  /**< Admitted command/evidence sources. */
         DestructionSupportPolicy support{DestructionSupportPolicy::CookedReachability}; /**< Exact cooked support policy. */
         DestructionRepairPolicy repair{DestructionRepairPolicy::Forbidden};             /**< Explicit repair capability intent. */
+        std::uint32_t
+            minimumDamageIntervalTicks{}; /**< Minimum fixed-tick gap between committed damage commands; zero disables cooldown. */
 
         [[nodiscard]] constexpr auto operator<=>(const DestructionBehaviorPolicy &) const noexcept = default;
     };

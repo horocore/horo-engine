@@ -1,5 +1,6 @@
 #include "AlignedAudioStorage.h"
 #include "Horo/Audio/AudioMemory.h"
+#include "Horo/Audio/Internal/AudioCallbackSafetyHooks.h"
 
 #include <algorithm>
 #include <array>
@@ -114,6 +115,7 @@ namespace Horo::Audio {
         if (descriptor.slots > descriptor.budgetBytes / (stride + sizeof(Slot))) {
             return Result<AudioMemoryPool>::Failure(MakeError(AudioErrors::MemoryBudgetExceeded));
         }
+        Safety::OnAudioAllocationAttempt();
         try {
             return Result<AudioMemoryPool>::Success(AudioMemoryPool{std::make_unique<State>(descriptor, stride)});
         } catch (const std::bad_alloc &) {

@@ -45,6 +45,7 @@ namespace Horo::Editor {
             IEditorViewportRenderer *viewportRenderer{nullptr};
             const Log::IStructuredLogQuery *logQuery{nullptr};
             const IBuildOutputQuery *buildOutputQuery{nullptr};
+            const Application::GameplayBuildService *gameplayBuilds{nullptr};
             const IOperationQuery *operationQuery{nullptr};
             IOperationControl *operationControl{nullptr};
         };
@@ -135,6 +136,7 @@ namespace Horo::Editor {
                       .viewportRenderer = services.TryGet<IEditorViewportRenderer>(),
                       .logQuery = services.TryGetConst<Log::IStructuredLogQuery>(),
                       .buildOutputQuery = services.TryGetConst<IBuildOutputQuery>(),
+                      .gameplayBuilds = services.TryGetConst<Application::GameplayBuildService>(),
                       .operationQuery = services.TryGetConst<IOperationQuery>(),
                       .operationControl = services.TryGet<IOperationControl>(),
                   },
@@ -204,6 +206,8 @@ namespace Horo::Editor {
                     .workspaceInputContext = &workspaceInputContext_,
                     .logQuery = panelServices_.logQuery,
                     .buildOutputQuery = panelServices_.buildOutputQuery,
+                    .gameplayBuilds = panelServices_.gameplayBuilds,
+                    .projectRoot = controller_->ViewModel().projectRoot,
                     .operationQuery = panelServices_.operationQuery,
                     .operationControl = panelServices_.operationControl,
                     // Built-in panels have no extension activation identity; extension hosts inject
@@ -236,18 +240,27 @@ namespace Horo::Editor {
                 }
             }
 
-            void OnFixedUpdate(const double fixedDeltaSeconds) override {
+            void OnInputSnapshot() override {
+                if (!controller_ || (controller_->ViewModel().playState != EditorPlayState::Playing &&
+                                     controller_->ViewModel().playState != EditorPlayState::Paused)) {
+                    gameplayInputFrames_.Reset();
+                    return;
+                }
+                gameplayInputFrames_.Capture(inputRouter_, workspaceInputContext_);
+            }
+
+            void OnFixedUpdate(const std::uint64_t simulationTick, const double fixedDeltaSeconds) override {
                 if (!controller_ || (controller_->ViewModel().playState != EditorPlayState::Playing &&
                                      controller_->ViewModel().playState != EditorPlayState::Paused)) {
                     return;
                 }
-                const Input::ActionValue move = inputRouter_.ReadAction(workspaceInputContext_, Input::ActionId{kGameplayMoveAction});
+                const Input::GameplayInputFrame command = gameplayInputFrames_.Consume(simulationTick);
                 const Gameplay::GameplayInputAction action{Gameplay::GameplayActionId{kGameplayMoveAction},
-                                                           move.x,
-                                                           move.y,
-                                                           move.down,
-                                                           move.pressed,
-                                                           move.released};
+                                                           command.moveX,
+                                                           command.moveY,
+                                                           command.moveDown,
+                                                           command.movePressed,
+                                                           command.moveReleased};
                 controller_->UpdatePlayFixed({&action, 1}, fixedDeltaSeconds);
                 PublishViewportSceneIfChanged();
             }
@@ -643,6 +656,7 @@ namespace Horo::Editor {
             EditorStatusItemRegistry &statusItems_;
             Input::InputRouter &inputRouter_;
             Input::InputContextToken workspaceInputContext_;
+            Input::GameplayInputFrameBuilder gameplayInputFrames_{Input::ActionId{kGameplayMoveAction}, {}, {}, {}};
             EditorWorkspaceView view_;
             EditorViewportSceneState &viewportSceneState_;
             Runtime::RuntimeSceneService &runtimeScene_;

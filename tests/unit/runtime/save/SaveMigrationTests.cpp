@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -275,6 +276,38 @@ namespace {
         const auto tampered = SaveMigrationExecutor::Migrate(source, tamperedPlan);
         REQUIRE(tampered.HasError());
         CHECK(tampered.ErrorValue().code.Value() == "save.migration.plan_invalid");
+    }
+
+    TEST_CASE("Migration steps consume one cumulative work budget", "[runtime][save][migration]") {
+        bool sawBudgetContext = false;
+        auto first = ArchiveStep("archive.1_to_2", 1, 2);
+        first.migrate = [&sawBudgetContext](SaveMigrationCandidate candidate, const SaveMigrationStepContext &context) {
+            sawBudgetContext = context.remainingWorkBytes != 0 && context.maximumArchiveBytes != 0 &&
+                               context.maximumParticipantPayloadBytes != 0 && context.maximumTotalPayloadBytes != 0;
+            return BumpArchive(2, "archive.1_to_2")(std::move(candidate), context);
+        };
+        auto registry =
+            SaveMigrationRegistry::Create(std::vector<SaveMigrationDefinition>{std::move(first), ArchiveStep("archive.2_to_3", 2, 3)});
+        REQUIRE(registry.HasValue());
+        auto snapshot = registry.Value().Snapshot();
+        REQUIRE(snapshot.HasValue());
+        auto plan = snapshot.Value().Plan(Source(), Support(3, 1, 1, 1));
+        REQUIRE(plan.HasValue());
+        SaveMigrationLimits limits;
+        limits.maximumCumulativeWorkBytes = 200;
+        CHECK(SaveMigrationExecutor::Migrate(Source(), plan.Value(), limits).HasValue());
+        CHECK(sawBudgetContext);
+        limits.maximumCumulativeWorkBytes = 100;
+        const auto exhausted = SaveMigrationExecutor::Migrate(Source(), plan.Value(), limits);
+        REQUIRE(exhausted.HasError());
+        CHECK(exhausted.ErrorValue().code.Value() == SaveErrors::MigrationLimitExceeded.code.Value());
+        REQUIRE(exhausted.ErrorValue().diagnostics.size() == 1);
+        CHECK(exhausted.ErrorValue().diagnostics.front().code.Value() == "save.migration.limit.cumulative_work");
+        limits.maximumCumulativeWorkBytes = std::numeric_limits<std::uint64_t>::max();
+        CHECK(SaveMigrationExecutor::Migrate(Source(), plan.Value(), limits).HasError());
+        limits = {};
+        limits.maximumPlanSteps = MaximumSaveMigrationPlanSteps + 1;
+        CHECK(SaveMigrationExecutor::Migrate(Source(), plan.Value(), limits).HasError());
     }
 
     TEST_CASE("Executor rejects participant steps that modify unrelated state", "[runtime][save][migration]") {

@@ -54,6 +54,36 @@ namespace Horo::Terrain::TerrainErrors {
     extern const ErrorCodeDescriptor FoliageWindInvalid;
     /** @brief Optional foliage collision dimensions or flags are inconsistent. */
     extern const ErrorCodeDescriptor FoliageCollisionInvalid;
+    /** @brief A Terrain/Foliage registry identity, capability set, or limit profile is malformed. */
+    extern const ErrorCodeDescriptor RegistryDescriptorInvalid;
+    /** @brief A registry publication already contains the requested typed identity. */
+    extern const ErrorCodeDescriptor RegistryDuplicate;
+    /** @brief A registry publication is closed to new mutation or snapshot capture. */
+    extern const ErrorCodeDescriptor RegistryClosed;
+    /** @brief A registry publication generation cannot advance without wrapping. */
+    extern const ErrorCodeDescriptor RegistryGenerationExhausted;
+    /** @brief A registry handle does not represent a usable typed publication identity. */
+    extern const ErrorCodeDescriptor RegistryHandleInvalid;
+    /** @brief A registry handle belongs to another or older immutable publication. */
+    extern const ErrorCodeDescriptor RegistryHandleStale;
+    /** @brief A requested Terrain/Foliage capability is not explicitly installed. */
+    extern const ErrorCodeDescriptor CapabilityUnsupported;
+    /** @brief A Terrain product composition has malformed version, profile, revision, facts, or lifecycle evidence. */
+    extern const ErrorCodeDescriptor CompositionInvalid;
+    /** @brief The explicitly selected unsupported product profile admits no Terrain work. */
+    extern const ErrorCodeDescriptor CompositionProfileUnsupported;
+    /** @brief Cancellation closed admission for a captured Terrain composition. */
+    extern const ErrorCodeDescriptor CompositionCancelled;
+    /** @brief A bounded asynchronous Terrain work request or owner fence is malformed. */
+    extern const ErrorCodeDescriptor WorkInvalid;
+    /** @brief A Terrain work identity is not retained by this owner. */
+    extern const ErrorCodeDescriptor WorkUnknown;
+    /** @brief A Terrain work record has not reached a releasable terminal state. */
+    extern const ErrorCodeDescriptor WorkNotReady;
+    /** @brief A Terrain work owner method was called outside its declared owner lane. */
+    extern const ErrorCodeDescriptor WorkWrongThread;
+    /** @brief Candidate publication threw before a valid terminal result could be recorded. */
+    extern const ErrorCodeDescriptor WorkPublicationFailed;
 
     /**
      * @brief Returns every stable TerrainApi descriptor for module-registry contribution.

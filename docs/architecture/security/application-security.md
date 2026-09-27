@@ -89,6 +89,15 @@ Opening an untrusted project permits safe inspection and validation but blocks:
 The editor presents the requested capabilities and their source before trust is
 granted. Trust records are user-local and not stored in the project.
 
+The public `Horo/Security/AgentPolicy.h` contract adds a host-owned, in-memory
+agent-policy boundary without changing existing credential or MCP APIs. Host
+composition must pass an exact project/trust revision when previewing agent
+context or approving a tool; replacing that revision invalidates pending grants.
+Migration is additive: future agent-provider and MCP-controller callers must use
+the policy at dispatch, while existing non-agent security callers are unchanged.
+The policy stores only bounded typed decision metadata and content hashes for
+pending consent, never raw preview text, arguments, or secrets.
+
 ## Path Security
 
 All project-relative paths are normalized and checked against their allowed

@@ -318,6 +318,13 @@ retry counts and stage/readback/signing deadlines. Aggregate admission counts ol
 and new snapshots/runtimes/retired resources together; declared local participant
 limits are not extra capacity. Exceeding a bound fails or defers explicitly, never
 silently unbounds a worker or guarantees a frame-time target.
+Parser profile overrides may lower or raise individual bounds only within compiled
+secure ceilings. Archive admission reserves cumulative validation work before hashing
+and shares the remaining allowance with repeated chunk selections. Canonical child
+readers share decoded-memory and byte-inspection counters even when reopened; migration
+charges source staging and each step's input, declared work, and output against one
+operation budget. A bounded failure reports a stable category and trusted structural
+location, never untrusted text or payload bytes.
 Serialization, compression, hashing, signing, quota queries, directory scans, flush,
 AtomicReplace, deletion and cleanup run on admitted worker/storage roles. No normal
 owner/render/transport frame waits for them. ADR-010 governs allowed teardown drains.
@@ -457,9 +464,20 @@ relative offset, stored/decoded lengths, alignment and decoded SHA-256. Header a
 manifest records are first, followed by manifest-owned chunk records in stable
 record order; their data ranges must be contiguous from the first data byte through
 the exact payload end. v1 rejects extension records and codecs other than raw before
-any decompression or participant decode. The reader verifies the finalized envelope
+any decompression or participant decode. Archive/container v2 retains that exact
+framing and adds codec ID 1 (`Deflate`, zlib-wrapped DEFLATE) for chunk records only;
+header and manifest stay raw. Both version fields must agree. Readers of v1 still
+reject Deflate rather than silently changing old-format interpretation. The built-in
+codec inventory declares supported levels 1–9 and no dictionary capability. Writer
+policy retains metadata and small/ineffective chunks raw, with explicit required
+codec failure rather than silent fallback. Per-chunk stored and decoded lengths,
+expansion ratio and total decode work are checked before output allocation. Unknown
+required codec IDs fail as a typed compatibility error. The reader verifies the finalized envelope
 hash first, then uses the existing metadata and chunk-directory validators and
-returns only an immutable detached view; it owns no filesystem, module callback or
+returns only an immutable detached view. Selected chunks now return owned decoded
+bytes (including v1 raw selections) rather than a borrowed archive span; callers
+must consume or move that owned value, and no selected bytes outlive their own
+result accidentally. The reader owns no filesystem, module callback or
 gameplay activation authority.
 
 | Logical payload entry | Content |
@@ -547,6 +565,36 @@ anti-rollback require separately trusted generation/anti-replay state, not a
 timestamp inside the attacker-controlled file. The archive is not encrypted by this
 protocol.
 
+### Optional Authenticated-Encryption Provider Boundary
+
+`SaveArchiveProtection.h` defines a host-composed seam outside the v1 archive
+format. `UnencryptedLocal` is an explicit local policy; `RequireAuthenticatedEncryption`
+rejects plaintext without a fallback. The host selects an opaque provider ID and
+non-secret key reference, supplies bounded associated data binding the namespace,
+slot, generation and protection format, and composes a provider that mints a fresh
+nonce and authenticates the complete sealed bytes before returning plaintext.
+The protected admission function checks finite lengths, provider identity and
+capabilities before invoking that provider; only its successful authenticated
+plaintext reaches the bounded v1 reader. It does not treat `ArchiveContentHash`
+as authentication. Provider error text and key material cannot enter the returned
+diagnostic; stable unavailable, rotated, revoked, unsupported and authentication
+failures remain distinguishable.
+
+`SaveArchiveAuthenticity.h` adds the separate v1 signature-verifier seam.
+Disabled rejects signed input, Optional verifies every present signature, and
+Required rejects missing signatures. A bounded trailer preflight constructs the
+exact ADR-112 Ed25519 signature message and calls a host-selected verifier with
+host-selected scope before the archive reader can decode metadata. The reader
+then checks the signed `ArchiveContentHash` against exact bytes before decode.
+The verifier owns trusted roots, key rotation/revocation and cryptographic work;
+Runtime Save exposes no public key source supplied by the archive. This does not
+add a signing backend or make a signed archive fresh or semantically valid.
+
+This seam is not a `.horosave` encryption format, key store, production crypto
+backend or encrypted storage integration. A separately reviewed envelope and
+vetted platform/credential provider are required before shipping encrypted saves;
+the existing v1 writer and reader remain unencrypted and unchanged.
+
 ### Untrusted Input And Threat Policy
 
 Every archive begins as untrusted bytes, including a file already present in the
@@ -598,6 +646,15 @@ scope, capture revision, chunk hashes, lengths and signature metadata internally
 The storage adapter resolves paths, performs quota checks and reserves peak space
 for old file, temporary file and any required recovery copy. Quota estimates do not
 replace handling a later disk-full/write error.
+
+The local archive file primitive maps only typed namespace and slot identities below
+the resolved product root. It holds directory handles across reads and publication,
+rejects redirected directory entries, reparse/symlink targets, hard-linked archives,
+and case aliases where the platform folds names. It writes a complete temporary
+archive through the held slot directory before replacing a generation. Callers must
+still hold the namespace and per-slot lease and reconcile a reported error after
+the atomic rename, because a post-publication durability failure cannot restore
+the previous generation by assumption.
 
 Cancellation is cooperative until the worker atomically enters CommitStarted after
 its final cancellation check and before replacement. That gate is the practical point
@@ -911,6 +968,10 @@ non-equivalent checkpoints. `SaveMigrationExecutor` copies the validated source
 into bounded detached staging and returns a new candidate; callbacks cannot
 receive a mutable source or live runtime reference, and the source is checked
 again before success.
+The step context carries remaining operation work and candidate byte ceilings so
+callbacks can reject expansion before allocating. The executor charges source
+staging, each step's input and declared work, and each bounded output against one
+operation budget.
 
 Compatibility preflight proceeds through framing/limits, archive version, outer
 integrity/signature, save schema, required participant set/schema, then semantic
@@ -1032,6 +1093,28 @@ The storage authority owns one immutable revisioned catalog projection per open
 namespace. Records include address, category, bounded presentation metadata, current
 generation/content/state identities and lifecycle state. UI retains addresses and
 expected catalog revisions; it never loads/deletes by label, timestamp or row index.
+
+`SaveManagerProjection` is the read-only presentation boundary over a published
+`SaveSlotIndex`, the active namespace binding, host-provided opaque profile summaries,
+generation-specific compatibility/integrity assessments, operation progress, and
+typed diagnostic categories. The producer deep-copies bounded values into a shared
+const publication before an editor, runtime UI, CLI, or test adapter can retain it.
+It never retains archive bytes, storage providers, account handles, live operation
+handles, mutable index objects, paths, or raw terminal error text. Profile display
+metadata and account authority remain with the profile owner; this projection exposes
+only typed namespace IDs and availability. A host increments the publication revision
+for any changed row, assessment, operation or diagnostic, even when the catalog itself
+does not change.
+
+Queries use stable slot-identity order, bounded exact-byte filters and pages. A
+continuation cursor binds the exact namespace/binding/catalog/publication revisions
+and filter; a changed publication requires a fresh query. Load/delete intents carry
+those same revisions plus the selected slot's exact generation. The latest view
+revalidates them before dispatch, and the owning service **also** revalidates under
+its mutation lease; a view check alone is never commit authority. The public header
+is owned by `HoroRuntime` in the header-ownership registry. Existing catalog/storage
+callers need no migration; presentation adapters should replace retained catalog or
+storage objects with this immutable view and command preconditions.
 
 ### Physical mapping and safety
 

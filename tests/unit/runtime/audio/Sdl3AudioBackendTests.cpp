@@ -36,11 +36,16 @@ namespace Horo::Audio::Backend {
         struct Trace final {
             std::atomic<std::size_t> calls{};
             std::atomic<bool> invalidResponse{};
+            std::atomic<bool> safetyHooks{};
         };
 
         RenderResult Render(void *context, const RenderInvocation &invocation) noexcept {
             auto &trace = *static_cast<Trace *>(context);
             trace.calls.fetch_add(1, std::memory_order_relaxed);
+            if (trace.safetyHooks.load(std::memory_order_relaxed)) {
+                AudioCallbackWatchdog::OnAllocationAttempt();
+                AudioCallbackWatchdog::OnLockAttempt();
+            }
             for (auto *plane : invocation.output.planes)
                 std::fill_n(plane, invocation.output.validFrames, 0.125F);
             if (trace.invalidResponse.load(std::memory_order_relaxed))
@@ -136,6 +141,22 @@ namespace Horo::Audio::Backend {
             StartRendering(*backend, epoch, trace);
             REQUIRE(backend->CommitRendering(epoch).HasValue());
             REQUIRE(trace.calls.load(std::memory_order_relaxed) > 0);
+            trace.safetyHooks.store(true, std::memory_order_relaxed);
+            std::array<AudioCallbackViolation, 4> safety{};
+            AudioCallbackViolationDrain safetyDrain;
+#if !defined(NDEBUG)
+            const auto safetyDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            while (safetyDrain.count == 0 && std::chrono::steady_clock::now() < safetyDeadline) {
+                safetyDrain = backend->DrainSafetyViolations(safety);
+                std::this_thread::yield();
+            }
+            REQUIRE(safetyDrain.count > 0);
+            CHECK(safety[0].epoch == epoch);
+#else
+            safetyDrain = backend->DrainSafetyViolations(safety);
+            REQUIRE(safetyDrain.count == 0);
+#endif
+            trace.safetyHooks.store(false, std::memory_order_relaxed);
             trace.invalidResponse.store(true, std::memory_order_relaxed);
             REQUIRE(WaitForEvent(*backend, ExpectedCallbackEvent::Fault));
             trace.invalidResponse.store(false, std::memory_order_relaxed);

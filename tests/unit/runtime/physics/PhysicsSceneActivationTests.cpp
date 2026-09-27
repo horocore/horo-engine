@@ -514,5 +514,155 @@ namespace Horo::Physics {
             REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, Context(cancellation.Token())).HasValue());
             REQUIRE_FALSE(scenes.ActiveScene().has_value());
         }
+
+        TEST_CASE("Play worlds commit and stop only at the lifecycle safe point", "[physics][play][lifecycle]") {
+            auto runtime = RequireRuntime();
+            const auto definition = Definition();
+            auto scene = RequireScene(definition);
+            PhysicsPlayWorldSession play{*runtime, Settings()};
+
+            REQUIRE(play.Prepare(definition, scene->View()).HasValue());
+            REQUIRE(play.HasPendingCandidate());
+            REQUIRE_FALSE(play.IsActive());
+            Test::RequireError(play.Commit(Runtime::RuntimePhase::FixedUpdate, scene->View()), PhysicsErrors::InvalidState);
+            REQUIRE(play.HasPendingCandidate());
+            REQUIRE(play.Commit(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, scene->View()).HasValue());
+            const PhysicsWorldId first = play.WorldIdentity();
+            REQUIRE(first.IsValid());
+            REQUIRE_FALSE(play.HasPendingCandidate());
+
+            REQUIRE(play.Prepare(definition, scene->View()).HasValue());
+            Test::RequireError(play.Prepare(definition, scene->View()), PhysicsErrors::InvalidState);
+            Test::RequireError(play.Stop(Runtime::RuntimePhase::FixedUpdate), PhysicsErrors::InvalidState);
+            REQUIRE(play.IsActive());
+            REQUIRE(play.Stop(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
+            REQUIRE(play.Stop(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
+            REQUIRE_FALSE(play.IsActive());
+            REQUIRE_FALSE(play.HasPendingCandidate());
+            REQUIRE_FALSE(play.WorldIdentity().IsValid());
+            Test::RequireError(play.Commit(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, scene->View()),
+                               PhysicsErrors::InvalidState);
+        }
+
+        TEST_CASE("Play preparation checks scene evidence and owner thread without disturbing an active world",
+                  "[physics][play][validation]") {
+            auto runtime = RequireRuntime();
+            const auto definition = Definition();
+            auto scene = RequireScene(definition);
+            PhysicsPlayWorldSession play{*runtime, Settings()};
+            REQUIRE(play.Prepare(definition, scene->View()).HasValue());
+            REQUIRE(play.Commit(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, scene->View()).HasValue());
+            const PhysicsWorldId first = play.WorldIdentity();
+
+            Test::RequireError(play.Prepare(Definition(2), scene->View()), PhysicsErrors::QuerySnapshotStale);
+            REQUIRE(play.WorldIdentity() == first);
+            REQUIRE_FALSE(play.HasPendingCandidate());
+
+            const Runtime::RuntimeSceneView preparedSource = scene->View();
+            REQUIRE(play.Prepare(definition, preparedSource).HasValue());
+            Runtime::SceneCommandBuffer commands;
+            Math::Transform moved;
+            moved.translation.x = 5.0F;
+            commands.SetLocalTransform(*scene->View().Find({1}), moved);
+            REQUIRE(scene->Commit(commands).HasValue());
+            Test::RequireError(play.Commit(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, preparedSource),
+                               PhysicsErrors::QuerySnapshotStale);
+            REQUIRE(play.WorldIdentity() == first);
+            REQUIRE_FALSE(play.HasPendingCandidate());
+
+            bool rejected = false;
+            std::thread foreign([&] {
+                const auto result = play.Stop(Runtime::RuntimePhase::CommitDeferredLifecycleChanges);
+                rejected = result.HasError() && result.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+            });
+            foreign.join();
+            REQUIRE(rejected);
+            REQUIRE(play.WorldIdentity() == first);
+            REQUIRE(play.Stop(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
+        }
+
+        TEST_CASE("Play candidate cannot publish after its process runtime shuts down", "[physics][play][shutdown]") {
+            auto runtime = RequireRuntime();
+            const auto definition = Definition();
+            auto scene = RequireScene(definition);
+            PhysicsPlayWorldSession play{*runtime, Settings()};
+            REQUIRE(play.Prepare(definition, scene->View()).HasValue());
+
+            runtime->Shutdown();
+            Test::RequireError(play.Commit(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, scene->View()),
+                               PhysicsErrors::InvalidState);
+            REQUIRE_FALSE(play.IsActive());
+            REQUIRE_FALSE(play.HasPendingCandidate());
+        }
+
+#if HORO_TEST_PHYSICS_NATIVE
+        TEST_CASE("Play worlds isolate authored state and invalidate bindings on reload and stop", "[physics][play][canonical]") {
+            auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
+            REQUIRE(runtime.HasValue());
+            AssetSceneFixture assets;
+            const auto definition = PhysicsDefinition(assets.material, assets.materialType);
+            const Runtime::RuntimeSceneView scene = assets.Prepare(definition);
+            const Math::Transform authored = definition.Entities().front().localTransform;
+            PhysicsPlayWorldSession first{*runtime.Value(), Settings()};
+            PhysicsPlayWorldSession second{*runtime.Value(), Settings()};
+
+            REQUIRE(first.Prepare(definition, scene).HasValue());
+            REQUIRE(second.Prepare(definition, scene).HasValue());
+            REQUIRE(first.Commit(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, scene).HasValue());
+            REQUIRE(second.Commit(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, scene).HasValue());
+            REQUIRE(first.WorldIdentity() != second.WorldIdentity());
+            const BodyHandle firstBody = first.ResolveBody({1}, {100}).Value();
+            const BodyHandle secondBody = second.ResolveBody({1}, {100}).Value();
+            REQUIRE(first.ValidateBody(firstBody).HasValue());
+            REQUIRE(second.ValidateBody(secondBody).HasValue());
+            Test::RequireError(second.ValidateBody(firstBody), PhysicsErrors::HandleWorldMismatch);
+            Test::RequireError(first.ResolveBody({99}, {100}), PhysicsErrors::HandleStale);
+
+            const auto tick = PhysicsFixedTickInput{.simulationTick = 1,
+                                                    .sceneGeneration = scene.RuntimeId().value,
+                                                    .fixedDelta = Duration::FromNanoseconds(16'666'667)};
+            Test::RequireError(first.AdvanceFixedTick(
+                                   {.simulationTick = 1, .sceneGeneration = 999, .fixedDelta = Duration::FromNanoseconds(16'666'667)}),
+                               PhysicsErrors::QuerySnapshotStale);
+            REQUIRE(first.AdvanceFixedTick(tick).HasValue());
+            REQUIRE(first.PublishedTick().Value().completedTick == 1);
+            REQUIRE(second.PublishedTick().Value().completedTick == 0);
+            REQUIRE(definition.Entities().front().localTransform == authored);
+            REQUIRE(scene.Get(*scene.Find({1})).Value().localTransform->translation == authored.translation);
+
+            REQUIRE(first.Prepare(definition, scene).HasValue());
+            const PhysicsWorldId oldWorld = first.WorldIdentity();
+            REQUIRE(first.ValidateBody(firstBody).HasValue());
+            REQUIRE(first.Commit(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, scene).HasValue());
+            REQUIRE(first.WorldIdentity() != oldWorld);
+            REQUIRE(first.PublishedTick().Value().completedTick == 0);
+            Test::RequireError(first.ValidateBody(firstBody), PhysicsErrors::HandleWorldMismatch);
+            REQUIRE(first.ResolveBody({1}, {100}).HasValue());
+            REQUIRE(second.ValidateBody(secondBody).HasValue());
+            REQUIRE(first.Stop(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
+            Test::RequireError(first.ValidateBody(firstBody), PhysicsErrors::InvalidState);
+            REQUIRE(second.ValidateBody(secondBody).HasValue());
+        }
+
+        TEST_CASE("Failed play-world replacement preserves the old world and its bindings", "[physics][play][rollback]") {
+            auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
+            REQUIRE(runtime.HasValue());
+            AssetSceneFixture assets;
+            const auto definition = PhysicsDefinition(assets.material, assets.materialType, 1, false);
+            const Runtime::RuntimeSceneView scene = assets.Prepare(definition);
+            PhysicsPlayWorldSession play{*runtime.Value(), Settings(1)};
+            REQUIRE(play.Prepare(definition, scene).HasValue());
+            REQUIRE(play.Commit(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, scene).HasValue());
+            const BodyHandle oldBody = play.ResolveBody({1}, {100}).Value();
+            const PhysicsWorldId oldWorld = play.WorldIdentity();
+
+            const auto oversized = PhysicsDefinition(assets.material, assets.materialType, 2, false, 2);
+            const Runtime::RuntimeSceneView replacement = assets.Prepare(oversized);
+            Test::RequireError(play.Prepare(oversized, replacement), PhysicsErrors::CapacityExceeded);
+            REQUIRE(play.WorldIdentity() == oldWorld);
+            REQUIRE(play.ValidateBody(oldBody).HasValue());
+            REQUIRE_FALSE(play.HasPendingCandidate());
+        }
+#endif
     }  // namespace
 }  // namespace Horo::Physics

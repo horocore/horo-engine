@@ -190,14 +190,13 @@ namespace Horo::Physics {
         Test::RequireError(replacement.Value().ReadEvents(EventsAt(replacement.Value(), {}), events), PhysicsErrors::CapabilityStale);
     }
 
-    TEST_CASE("Query/event access rejects structural edits, unloaded fixtures and foreign threads", "[physics][query-event-capability]") {
+    TEST_CASE("Query/event access rejects foreign threads", "[physics][query-event-capability]") {
         auto active = MakeActiveWorld(55);
         auto &world = *active.world;
         auto capability = world.IssueQueryEventCapability().Value();
         PublishTick(world, 1);
         const auto before = world.PublishedTick();
         std::array<PhysicsEventRecord, 1> events{};
-        std::array<PhysicsQueryHit, 1> hits{};
 
         bool rejectedThread{};
         std::thread reader([&] {
@@ -206,6 +205,16 @@ namespace Horo::Physics {
         });
         reader.join();
         REQUIRE(rejectedThread);
+    }
+
+    TEST_CASE("Query/event access invalidates structural edits and unloaded fixtures", "[physics][query-event-capability]") {
+        auto active = MakeActiveWorld(56);
+        auto &world = *active.world;
+        auto capability = world.IssueQueryEventCapability().Value();
+        PublishTick(world, 1);
+        const auto before = world.PublishedTick();
+        std::array<PhysicsEventRecord, 1> events{};
+        std::array<PhysicsQueryHit, 1> hits{};
 
         const auto fixture = CreateQueryFixture(world, -5);
         const auto admitted = world.PublishedTick();

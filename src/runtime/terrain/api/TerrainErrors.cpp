@@ -208,15 +208,182 @@ namespace Horo::Terrain::TerrainErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor RegistryDescriptorInvalid{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.registry.descriptor_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain/Foliage registry descriptor or limit profile is malformed.",
+        .remediationHint = "Use valid typed identities, bounded records, and an explicit closed-vocabulary capability set.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor RegistryDuplicate{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.registry.duplicate"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain/Foliage registry publication already contains this identity.",
+        .remediationHint = "Use replacement with a newer typed revision or choose a distinct stable identity.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor RegistryClosed{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.registry.closed"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The Terrain/Foliage registry no longer admits mutation or snapshot capture.",
+        .remediationHint = "Stop submitting work and retain only already-issued immutable snapshots during shutdown.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor RegistryGenerationExhausted{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.registry.generation_exhausted"},
+        .defaultSeverity = ErrorSeverity::Critical,
+        .summary = "A Terrain/Foliage registry publication generation cannot advance.",
+        .remediationHint = "Close and recreate the host-owned registry; never wrap its publication identity.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor RegistryHandleInvalid{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.registry.handle_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain/Foliage registry handle is malformed or outside its snapshot.",
+        .remediationHint = "Use the typed handle returned by the same immutable registry snapshot.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor RegistryHandleStale{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.registry.handle_stale"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "A Terrain/Foliage registry handle belongs to another immutable publication.",
+        .remediationHint = "Capture a current snapshot and resolve the stable identity again.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor CapabilityUnsupported{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.capability.unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain/Foliage request requires a capability absent from the explicit host composition.",
+        .remediationHint = "Install the capability explicitly or reject the request; do not silently fall back.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor CompositionInvalid{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.composition.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain product composition contains malformed profile or capability evidence.",
+        .remediationHint = "Supply one complete typed host fact per capability and a valid version, profile, and revision.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor CompositionProfileUnsupported{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.composition.profile_unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "This product profile explicitly does not support Terrain work.",
+        .remediationHint = "Select a supported profile explicitly; no renderer or authoring fallback is installed.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor CompositionCancelled{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.composition.cancelled"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "Terrain composition work was cancelled before admission.",
+        .remediationHint = "Start a new operation against the current active composition when needed.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor WorkInvalid{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.work.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain/Foliage background-work request or owner fence is malformed.",
+        .remediationHint = "Provide complete typed identities, finite work limits and owned preparation/publication callbacks.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor WorkUnknown{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.work.unknown"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The Terrain work identity is not retained by this owner.",
+        .remediationHint = "Use the exact accepted work identity before releasing its terminal record.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor WorkNotReady{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.work.not_ready"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "Terrain work is not terminal or an owner publication is already active.",
+        .remediationHint = "Advance or replace after the current owner publication and accepted Foundation work have completed.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor WorkWrongThread{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.work.wrong_thread"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A Terrain work owner method ran outside its creating owner lane.",
+        .remediationHint = "Marshal admission, invalidation and publication to the TerrainRuntime owner thread.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor WorkPublicationFailed{
+        .domain = TerrainDomain,
+        .code = ErrorCode{"terrain.work.publication_failed"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Terrain candidate publication threw at the owner boundary.",
+        .remediationHint = "Make publication an atomic no-throw swap over previously validated candidate state.",
+        .retryable = false,
+        .userActionable = false,
+    };
 
     /** @copydoc Descriptors */
     std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
         static constexpr std::array descriptors{
-            &IdentityInvalid,    &SerializedIdentityInvalid, &DerivationInvalid,         &IdentityConflict,        &IdentityUnknown,
-            &GenerationStale,    &GenerationExhausted,       &CapacityExceeded,          &LifecycleUnavailable,    &DescriptorInvalid,
-            &TierInvalid,        &TierUnsupported,           &LimitProfileInvalid,       &LimitExceeded,           &RevisionStale,
-            &ReplacementInvalid, &FoliageDefinitionInvalid,  &FoliageFeatureUnsupported, &FoliagePlacementInvalid, &FoliageCullingInvalid,
-            &FoliageWindInvalid, &FoliageCollisionInvalid,
+            &IdentityInvalid,
+            &SerializedIdentityInvalid,
+            &DerivationInvalid,
+            &IdentityConflict,
+            &IdentityUnknown,
+            &GenerationStale,
+            &GenerationExhausted,
+            &CapacityExceeded,
+            &LifecycleUnavailable,
+            &DescriptorInvalid,
+            &TierInvalid,
+            &TierUnsupported,
+            &LimitProfileInvalid,
+            &LimitExceeded,
+            &RevisionStale,
+            &ReplacementInvalid,
+            &FoliageDefinitionInvalid,
+            &FoliageFeatureUnsupported,
+            &FoliagePlacementInvalid,
+            &FoliageCullingInvalid,
+            &FoliageWindInvalid,
+            &FoliageCollisionInvalid,
+            &RegistryDescriptorInvalid,
+            &RegistryDuplicate,
+            &RegistryClosed,
+            &RegistryGenerationExhausted,
+            &RegistryHandleInvalid,
+            &RegistryHandleStale,
+            &CapabilityUnsupported,
+            &CompositionInvalid,
+            &CompositionProfileUnsupported,
+            &CompositionCancelled,
+            &WorkInvalid,
+            &WorkUnknown,
+            &WorkNotReady,
+            &WorkWrongThread,
+            &WorkPublicationFailed,
         };
         return descriptors;
     }
