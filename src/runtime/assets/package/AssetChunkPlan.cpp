@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <deque>
 #include <numeric>
 #include <ranges>
 #include <utility>
@@ -27,12 +28,13 @@ namespace Horo::Assets {
         }
 
         [[nodiscard]] bool IsKnownKind(const AssetChunkKind kind) noexcept {
+            using enum AssetChunkKind;
             switch (kind) {
-                case AssetChunkKind::Base:
-                case AssetChunkKind::Optional:
-                case AssetChunkKind::Language:
-                case AssetChunkKind::Dlc:
-                case AssetChunkKind::DedicatedServer:
+                case Base:
+                case Optional:
+                case Language:
+                case Dlc:
+                case DedicatedServer:
                     return true;
             }
             return false;
@@ -45,27 +47,43 @@ namespace Horo::Assets {
         }
 
         [[nodiscard]] bool HasDependencyCycle(std::span<const AssetChunkDefinition> chunks) {
-            std::vector<std::size_t> indegree(chunks.size());
-            for (std::size_t index = 0; index < chunks.size(); ++index)
-                indegree[index] = chunks[index].dependencies.size();
+            struct PendingChunk final {
+                const AssetChunkDefinition *definition;
+                std::size_t dependencies;
+            };
 
-            std::vector<std::size_t> ready;
-            ready.reserve(chunks.size());
-            for (std::size_t index = 0; index < chunks.size(); ++index) {
-                if (indegree[index] == 0U)
-                    ready.push_back(index);
-            }
+            std::vector<PendingChunk> pending;
+            pending.reserve(chunks.size());
+            for (const auto &chunk : chunks)
+                pending.emplace_back(&chunk, chunk.dependencies.size());
+
+            std::deque<PendingChunk *> ready;
+            for (auto &chunk : pending)
+                if (chunk.dependencies == 0U)
+                    ready.push_back(&chunk);
 
             std::size_t visited{};
-            for (std::size_t offset = 0; offset < ready.size(); ++offset) {
-                const auto &finished = chunks[ready[offset]].id;
+            while (!ready.empty()) {
+                const auto &finished = ready.front()->definition->id;
+                ready.pop_front();
                 ++visited;
-                for (std::size_t index = 0; index < chunks.size(); ++index) {
-                    if (std::ranges::binary_search(chunks[index].dependencies, finished) && --indegree[index] == 0U)
-                        ready.push_back(index);
+                for (auto &chunk : pending) {
+                    if (!std::ranges::binary_search(chunk.definition->dependencies, finished))
+                        continue;
+                    --chunk.dependencies;
+                    if (chunk.dependencies == 0U)
+                        ready.push_back(&chunk);
                 }
             }
             return visited != chunks.size();
+        }
+
+        [[nodiscard]] bool HasMissingDependencies(std::span<const AssetChunkDefinition> chunks) {
+            for (const auto &chunk : chunks)
+                for (const auto &dependency : chunk.dependencies)
+                    if (!std::ranges::binary_search(chunks, dependency, {}, &AssetChunkDefinition::id))
+                        return true;
+            return false;
         }
     }  // namespace
 
@@ -121,12 +139,8 @@ namespace Horo::Assets {
         std::ranges::sort(allAssets);
         if (std::ranges::adjacent_find(allAssets) != allAssets.end())
             return Result<AssetChunkPlan>::Failure(MakeError(InvalidPlan));
-        for (const auto &chunk : chunks) {
-            for (const auto &dependency : chunk.dependencies) {
-                if (!std::ranges::binary_search(chunks, dependency, {}, &AssetChunkDefinition::id))
-                    return Result<AssetChunkPlan>::Failure(MakeError(DependencyInvalid));
-            }
-        }
+        if (HasMissingDependencies(chunks))
+            return Result<AssetChunkPlan>::Failure(MakeError(DependencyInvalid));
         if (HasDependencyCycle(chunks))
             return Result<AssetChunkPlan>::Failure(MakeError(DependencyInvalid));
         return Result<AssetChunkPlan>::Success(AssetChunkPlan{std::move(chunks)});
