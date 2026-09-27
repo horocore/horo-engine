@@ -118,7 +118,7 @@ namespace Horo::XR {
          * @param limits Finite runtime/product limits, no greater than the publication or XRFrameHardLimits.
          * @return Ok or typed invalid, stale, capacity, order, or shutdown status without partial mutation.
          */
-        [[nodiscard]] XRFrameStatus BindConfiguration(XRViewConfigurationId configuration, const XRCapabilitySnapshot &capabilities,
+        [[nodiscard]] XRFrameStatus BindConfiguration(const XRViewConfigurationId &configuration, const XRCapabilitySnapshot &capabilities,
                                                       XRFrameLimits limits) noexcept;
 
         /**
@@ -132,7 +132,7 @@ namespace Horo::XR {
                                                     bool shouldRender) noexcept;
 
         /** @brief Record native begin for the waited frame. @param frame Exact open frame. @return Typed order/owner result. */
-        [[nodiscard]] XRFrameStatus Begin(XRFrameId frame) noexcept;
+        [[nodiscard]] XRFrameStatus Begin(const XRFrameId &frame) noexcept;
 
         /**
          * @brief Record complete native view location before any image acquisition.
@@ -140,7 +140,7 @@ namespace Horo::XR {
          * @param viewCount Complete non-zero runtime view count, within admitted limits.
          * @return Typed order, unsupported, invalid, or capacity result.
          */
-        [[nodiscard]] XRFrameStatus LocateViews(XRFrameId frame, std::uint32_t viewCount) noexcept;
+        [[nodiscard]] XRFrameStatus LocateViews(const XRFrameId &frame, std::uint32_t viewCount) noexcept;
 
         /**
          * @brief Record one acquired and ready runtime image generation.
@@ -148,7 +148,7 @@ namespace Horo::XR {
          * @param image Exact session-owned image; duplicate or over-capacity input leaves state unchanged.
          * @return Typed order, identity, duplicate, or capacity result.
          */
-        [[nodiscard]] XRFrameStatus Acquire(XRFrameId frame, XRSwapchainImageId image) noexcept;
+        [[nodiscard]] XRFrameStatus Acquire(const XRFrameId &frame, const XRSwapchainImageId &image) noexcept;
 
         /**
          * @brief Record complete Renderer submission after the bridge has proved use/completion for every image.
@@ -156,14 +156,14 @@ namespace Horo::XR {
          * @param completedImages Complete acquired image identities in acquisition order.
          * @return Ok or typed incomplete/mismatched/order result; this does not wait for the GPU.
          */
-        [[nodiscard]] XRFrameStatus Submit(XRFrameId frame, std::span<const XRSwapchainImageId> completedImages) noexcept;
+        [[nodiscard]] XRFrameStatus Submit(const XRFrameId &frame, std::span<const XRSwapchainImageId> completedImages) noexcept;
 
         /**
          * @brief Choose a backend-confirmed legal zero-layer abort after begin, retaining image-release obligations.
          * @param frame Exact begun frame.
          * @return Typed order/owner result; no native abort is performed here.
          */
-        [[nodiscard]] XRFrameStatus Abort(XRFrameId frame) noexcept;
+        [[nodiscard]] XRFrameStatus Abort(const XRFrameId &frame) noexcept;
 
         /**
          * @brief Record exact native image release after submission or legal abort and completion proof.
@@ -171,7 +171,7 @@ namespace Horo::XR {
          * @param image Previously acquired and not-yet-released image.
          * @return Typed owner/order/duplicate/not-acquired result.
          */
-        [[nodiscard]] XRFrameStatus Release(XRFrameId frame, XRSwapchainImageId image) noexcept;
+        [[nodiscard]] XRFrameStatus Release(const XRFrameId &frame, const XRSwapchainImageId &image) noexcept;
 
         /**
          * @brief Record native end and close the exact transaction only after all release obligations are met.
@@ -179,7 +179,7 @@ namespace Horo::XR {
          * @param layerCount Finite submitted layers; zero for non-rendering or an explicit abort path.
          * @return Typed order, capacity, or unreleased-image result without partial close on failure.
          */
-        [[nodiscard]] XRFrameStatus End(XRFrameId frame, std::uint32_t layerCount) noexcept;
+        [[nodiscard]] XRFrameStatus End(const XRFrameId &frame, std::uint32_t layerCount) noexcept;
 
         /** @brief Return a fixed-size current publication. @return Copy of frame identity, phase, prediction, and counts. */
         [[nodiscard]] XRFrameSnapshot Snapshot() const noexcept;
@@ -192,9 +192,9 @@ namespace Horo::XR {
 
     private:
         /** @brief Fence one operation against current session, plan and frame identity without mutation. */
-        [[nodiscard]] XRFrameStatus ValidateCurrent(XRFrameId frame) const noexcept;
+        [[nodiscard]] XRFrameStatus ValidateCurrent(const XRFrameId &frame) const noexcept;
         /** @brief Find an acquired image in fixed storage or return MaximumImages as the missing sentinel. */
-        [[nodiscard]] std::uint32_t FindImage(XRSwapchainImageId image) const noexcept;
+        [[nodiscard]] std::uint32_t FindImage(const XRSwapchainImageId &image) const noexcept;
         /** @brief Clear the current logical transaction without issuing native cleanup. */
         void ClearFrame() noexcept;
 
