@@ -2125,6 +2125,13 @@ add_test(NAME HoroExtensionManifestValidatorIsPackaged
 set_tests_properties(HoroExtensionManifestValidatorIsPackaged PROPERTIES
     LABELS "extensions;sdk;cli")
 
+add_test(NAME HoroPackageAuthorCommands
+    COMMAND "${Python3_EXECUTABLE}"
+        "${PROJECT_SOURCE_DIR}/tests/python/test_horo_package_commands.py"
+        "${HORO_EXTENSION_SDK_PACKAGE_DIR}"
+        "${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/horo-package${CMAKE_EXECUTABLE_SUFFIX}")
+set_tests_properties(HoroPackageAuthorCommands PROPERTIES LABELS "packages;sdk;cli")
+
 add_executable(HoroExtensionManagerTests
         unit/extensions/ApplicationCapabilityRegistryTests.cpp
         unit/extensions/ExtensionActivationTransactionTests.cpp
