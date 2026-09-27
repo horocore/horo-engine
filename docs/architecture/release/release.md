@@ -371,13 +371,18 @@ Output is assembled in a private staging directory and atomically promoted to
 its final path only after verification succeeds.
 
 Package production selects exactly one host-installed backend for the validated
-product/platform/format tuple. The shared dispatcher verifies the frozen source
-tree against its canonical manifest before invoking that backend; a missing or
+product/platform/format tuple. The shared dispatcher verifies the unsigned
+Build/Cook source tree against its frozen input inventory before invoking the
+backend; a missing or
 duplicate format producer fails without fallback. Producers receive a distinct
 private output root and report produced files in canonical path order. Native
 tool handles and format-specific layout rules remain inside the backend. This
 contract is additive; existing release callers do not require a migration until
 the host installs concrete package producers.
+
+The input inventory is captured before packaging. A separate inventory of the
+packaged private stage is captured after package production for pre-sign
+verification; the final post-sign manifest does not exist during packaging.
 
 ## Artifact Manifest
 
