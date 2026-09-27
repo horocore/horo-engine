@@ -253,6 +253,12 @@ add_library(HoroEngine::ReleaseService ALIAS HoroReleaseService)
 target_compile_features(HoroReleaseService PUBLIC cxx_std_20)
 target_link_libraries(HoroReleaseService PUBLIC HoroEngine::Application HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
 
+add_library(HoroUpdateManifest STATIC application/release/UpdateManifest.cpp application/release/UpdateManifestErrors.cpp
+        application/release/UpdateSignatureCodec.cpp application/release/UpdateTrustRoot.cpp)
+add_library(HoroEngine::UpdateManifest ALIAS HoroUpdateManifest)
+target_compile_features(HoroUpdateManifest PUBLIC cxx_std_20)
+target_link_libraries(HoroUpdateManifest PUBLIC HoroEngine::Application HoroEngine::Security PRIVATE nlohmann_json::nlohmann_json)
+
 add_library(HoroProjectMigrations STATIC
         ${HORO_PROJECT_MIGRATION_CATALOG_CPP}
         ${HORO_PROJECT_MIGRATION_SOURCES}
