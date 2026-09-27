@@ -45,6 +45,40 @@ namespace Horo::Release {
             return input.gcount() == static_cast<std::streamsize>(bytes.size()) && bytes == canonicalJson &&
                    input.peek() == std::char_traits<char>::eof();
         }
+
+        /** @brief Tracks exact declared files independently from filesystem traversal. */
+        struct InventoryScan final {
+            explicit InventoryScan(const ReleaseArtifactManifest &expected)
+                : manifest(expected), seen(expected.Artifacts().size(), false) {}
+
+            [[nodiscard]] bool Accept(const std::filesystem::path &path, const std::string &relative) {
+                if (relative == "manifest.json") {
+                    if (manifestSeen || !MatchesManifest(path, manifest.CanonicalJson()))
+                        return false;
+                    manifestSeen = true;
+                    return true;
+                }
+                const auto artifacts = manifest.Artifacts();
+                const auto match = std::ranges::lower_bound(artifacts, relative, {}, &ReleaseArtifactRecord::path);
+                if (match == artifacts.end() || match->path != relative)
+                    return false;
+                const auto index = static_cast<std::size_t>(match - artifacts.begin());
+                if (seen[index] || !MatchesFile(path, *match))
+                    return false;
+                seen[index] = true;
+                return true;
+            }
+
+            [[nodiscard]] bool Complete() const {
+                return manifestSeen && std::ranges::all_of(seen, [](const bool value) {
+                    return value;
+                });
+            }
+
+            const ReleaseArtifactManifest &manifest;
+            std::vector<bool> seen;
+            bool manifestSeen{};
+        };
     }  // namespace
 
     /** @copydoc VerifyReleaseArtifactTree */
@@ -53,9 +87,7 @@ namespace Horo::Release {
         const auto rootStatus = std::filesystem::symlink_status(root, error);
         if (error || !std::filesystem::is_directory(rootStatus))
             return InvalidTree();
-        const auto artifacts = manifest.Artifacts();
-        std::vector<bool> seen(artifacts.size(), false);
-        bool manifestSeen = false;
+        InventoryScan scan{manifest};
         std::filesystem::recursive_directory_iterator entry{root, error};
         if (error)
             return InvalidTree();
@@ -73,28 +105,12 @@ namespace Horo::Release {
             if (!std::filesystem::is_regular_file(status))
                 return InvalidTree();
             const std::string relative = entry->path().lexically_relative(root).generic_string();
-            if (relative == "manifest.json") {
-                if (manifestSeen || !MatchesManifest(entry->path(), manifest.CanonicalJson()))
-                    return InvalidTree();
-                manifestSeen = true;
-            } else {
-                const auto match = std::ranges::lower_bound(artifacts, relative, {}, &ReleaseArtifactRecord::path);
-                if (match == artifacts.end() || match->path != relative)
-                    return InvalidTree();
-                const auto index = static_cast<std::size_t>(match - artifacts.begin());
-                if (seen[index] || !MatchesFile(entry->path(), *match))
-                    return InvalidTree();
-                seen[index] = true;
-            }
+            if (!scan.Accept(entry->path(), relative))
+                return InvalidTree();
             entry.increment(error);
             if (error)
                 return InvalidTree();
         }
-        return manifestSeen && std::ranges::all_of(seen,
-                                                   [](const bool value) {
-            return value;
-        })
-                   ? Result<void>::Success()
-                   : InvalidTree();
+        return scan.Complete() ? Result<void>::Success() : InvalidTree();
     }
 }  // namespace Horo::Release
