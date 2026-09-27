@@ -6,6 +6,7 @@
 #include <fstream>
 #include <ranges>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -36,7 +37,7 @@ namespace Horo::Release {
         }
 
         /** @brief Compares the canonical metadata file byte-for-byte without accepting extra content. */
-        [[nodiscard]] bool MatchesManifest(const std::filesystem::path &path, const std::string &canonicalJson) {
+        [[nodiscard]] bool MatchesManifest(const std::filesystem::path &path, const std::string_view canonicalJson) {
             std::ifstream input(path, std::ios::binary);
             if (!input)
                 return false;
@@ -84,8 +85,7 @@ namespace Horo::Release {
     /** @copydoc VerifyReleaseArtifactTree */
     Result<void> VerifyReleaseArtifactTree(const std::filesystem::path &root, const ReleaseArtifactManifest &manifest) {
         std::error_code error;
-        const auto rootStatus = std::filesystem::symlink_status(root, error);
-        if (error || !std::filesystem::is_directory(rootStatus))
+        if (const auto rootStatus = std::filesystem::symlink_status(root, error); error || !std::filesystem::is_directory(rootStatus))
             return InvalidTree();
         InventoryScan scan{manifest};
         std::filesystem::recursive_directory_iterator entry{root, error};
@@ -104,8 +104,7 @@ namespace Horo::Release {
             }
             if (!std::filesystem::is_regular_file(status))
                 return InvalidTree();
-            const std::string relative = entry->path().lexically_relative(root).generic_string();
-            if (!scan.Accept(entry->path(), relative))
+            if (const std::string relative = entry->path().lexically_relative(root).generic_string(); !scan.Accept(entry->path(), relative))
                 return InvalidTree();
             entry.increment(error);
             if (error)

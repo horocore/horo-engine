@@ -42,7 +42,7 @@ namespace Horo::Release {
          * @param candidate Nonzero candidate identity.
          * @return New stage, or an explicit collision/I/O failure; existing stages are preserved for recovery.
          */
-        [[nodiscard]] Result<ReleaseStagingArea> Begin(const ReleaseExecutionPlan &plan, ReleaseCandidateId candidate);
+        [[nodiscard]] Result<ReleaseStagingArea> Begin(const ReleaseExecutionPlan &plan, ReleaseCandidateId candidate) const;
 
         /**
          * @brief Writes final metadata, verifies the complete quiescent tree, and atomically promotes without replacement.
