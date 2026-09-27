@@ -318,7 +318,7 @@ namespace Horo::Physics {
             return Result<PhysicsCommandAdmission>::Failure(valid.ErrorValue());
         if (const auto mutation = ValidateBodyMutationAdmission(*impl_, command); mutation.HasError())
             return Result<PhysicsCommandAdmission>::Failure(mutation.ErrorValue());
-        if (const std::uint64_t completedOrActiveTick = impl_->stepping ? impl_->activeTick : impl_->published.completedTick;
+        if (const std::uint64_t completedOrActiveTick = impl_->stepping ? impl_->activeTick : impl_->publication.Snapshot().completedTick;
             command.order.simulationTick <= completedOrActiveTick || command.order.worldGeneration != impl_->identity.Value())
             return Result<PhysicsCommandAdmission>::Failure(
                 MakeError(PhysicsErrors::CommandOrderInvalid,
@@ -452,8 +452,7 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsWorld::PublishedTick */
     PhysicsPublishedTick PhysicsWorld::PublishedTick() const noexcept {
-        Detail::PublicationGuard publicationGuard{impl_->publicationLock};
-        return impl_->published;
+        return impl_->publication.Snapshot();
     }
 
     /** @copydoc PhysicsWorld::TickStatistics */
