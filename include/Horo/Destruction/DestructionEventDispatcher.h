@@ -72,6 +72,10 @@ namespace Horo::Destruction {
          * @return Ok or explicit denial; no source fact has committed yet.
          */
         [[nodiscard]] virtual DestructionEventStatus ReserveRequired(std::uint64_t transitionTicket, std::uint32_t count) noexcept = 0;
+        /** @brief Releases any pre-commit capacity for a failed or cancelled transition.
+         * @param transitionTicket Exact owner-issued ticket; duplicate cancellation is harmless.
+         */
+        virtual void CancelRequired(std::uint64_t transitionTicket) noexcept = 0;
         /**
          * @brief Admits a copied request at the destination owner boundary.
          * @param request Generation-fenced idempotent request.
@@ -128,6 +132,15 @@ namespace Horo::Destruction {
                                                        std::span<const DestructionAdapterSlot> adapters) const noexcept;
 
         /**
+         * @brief Releases required capacity if the aggregate transition fails before commit.
+         * @param transitionTicket Exact ticket previously passed to Preflight.
+         * @param adapters Borrowed same-generation adapters; cancellation is idempotent.
+         * @return Ok or owner-thread/lifecycle rejection.
+         */
+        [[nodiscard]] DestructionEventStatus CancelRequired(std::uint64_t transitionTicket,
+                                                            std::span<const DestructionAdapterSlot> adapters) const noexcept;
+
+        /**
          * @brief Dispatches at most one fact at an application safe point, after source aggregate commit.
          * @param stream Committed source journal, never an event bus or mutable state cache.
          * @param currentSource Canonical current handle for the fact about to be consumed.
@@ -162,6 +175,18 @@ namespace Horo::Destruction {
         [[nodiscard]] static IDestructionDestinationAdapter *FindAdapter(const DestructionEventBinding &binding,
                                                                          std::span<const DestructionAdapterSlot> adapters) noexcept;
         [[nodiscard]] bool Active(const DestructionEventBinding &binding) const noexcept;
+        [[nodiscard]] DestructionEventStatus ValidatePreflightInputs(std::span<const DestructionFact> facts,
+                                                                     std::span<const DestructionAdapterSlot> adapters) const noexcept;
+        [[nodiscard]] std::uint32_t RequiredRequestCount(const DestructionEventBinding &binding,
+                                                         std::span<const DestructionFact> facts) const noexcept;
+        [[nodiscard]] DestructionEventStatus ValidateRequiredAdapters(std::span<const DestructionAdapterSlot> adapters) const noexcept;
+        [[nodiscard]] DestructionEventStatus ReserveRequiredDestinations(std::span<const DestructionFact> facts,
+                                                                         std::span<const DestructionAdapterSlot> adapters) const noexcept;
+        [[nodiscard]] DestructionEventStatus CheckPumpSource(const DestructionEventStream &stream,
+                                                             DestructionHandle currentSource) const noexcept;
+        [[nodiscard]] DestructionEventStatus DeliverLayer(const DestructionEventBinding &binding, const DestructionFact &fact,
+                                                          std::span<const DestructionAdapterSlot> adapters,
+                                                          DestructionDispatchResult &result) const noexcept;
 
         DestructionWorldId world_{};
         std::uint64_t generation_{};

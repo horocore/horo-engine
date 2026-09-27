@@ -9,7 +9,8 @@ The aggregate owner creates one stream per `DestructionWorldId`. During transiti
 planning it calls `DestructionEventDispatcher::Preflight` for required destination
 capacity and `DestructionEventStream::Reserve` to validate and copy the complete
 planned fact batch before commit. A cancelled or failed transition discards the
-move-only reservation and publishes no fact. **Only after** the
+move-only reservation, calls `CancelRequired` on the preflighted adapters, and
+publishes no fact. **Only after** the
 complete Scene/Physics/Render aggregate root has become queryable does it call
 `Publish` with the exact current source generation and canonical fact batch. This
 is an explicit owner precondition, not something an event journal can infer from a

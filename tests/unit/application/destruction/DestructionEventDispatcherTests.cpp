@@ -57,6 +57,7 @@ namespace Horo::Destruction {
             DestructionEventStatus reserveOutcome{DestructionEventStatus::Ok};
             DestructionEventStatus submitOutcome{DestructionEventStatus::Ok};
             std::uint32_t reserved{};
+            std::uint32_t cancelled{};
             std::uint32_t submitted{};
             DestructionDestinationRequestId last{};
             std::uint64_t lastTicket{};
@@ -69,6 +70,11 @@ namespace Horo::Destruction {
                 lastTicket = transitionTicket;
                 reserved += count;
                 return reserveOutcome;
+            }
+
+            void CancelRequired(const std::uint64_t transitionTicket) noexcept override {
+                lastTicket = transitionTicket;
+                ++cancelled;
             }
 
             DestructionEventStatus Submit(const DestructionDestinationRequest &request) noexcept override {
@@ -165,6 +171,39 @@ namespace Horo::Destruction {
         ineligible.headlessEligible = false;
         CHECK(DestructionEventDispatcher::Create(Handle().world, 1, std::span(&ineligible, 1), true).first ==
               DestructionEventStatus::Invalid);
+    }
+
+    TEST_CASE("Preflight checks every required schema even when layers share one destination", "[unit][destruction][adapter]") {
+        auto alternate = Gameplay;
+        alternate.factKind = DestructionFactKind::ChunksActivated;
+        alternate.requestSchema = 2;
+        const std::array bindings{Gameplay, alternate};
+        auto [status, dispatcher] = DestructionEventDispatcher::Create(Handle().world, 3, bindings, false);
+        REQUIRE(status == DestructionEventStatus::Ok);
+        Adapter gameplay, audio;
+        const std::array facts{Fact()};
+        CHECK(dispatcher.Preflight(facts, Slots(gameplay, audio)) == DestructionEventStatus::ConsumerUnavailable);
+        CHECK(gameplay.reserved == 0);
+    }
+
+    TEST_CASE("Failed later required reservation cancels earlier capacity and explicit rollback is idempotent",
+              "[unit][destruction][adapter]") {
+        auto accessibility = Gameplay;
+        accessibility.destination = DestructionDestinationKind::Accessibility;
+        accessibility.destinationId = 3;
+        const std::array bindings{Gameplay, accessibility};
+        auto [status, dispatcher] = DestructionEventDispatcher::Create(Handle().world, 3, bindings, true);
+        REQUIRE(status == DestructionEventStatus::Ok);
+        Adapter gameplay, caption;
+        caption.reserveOutcome = DestructionEventStatus::ConsumerCapacityExceeded;
+        const std::array slots{DestructionAdapterSlot{DestructionDestinationKind::Gameplay, 1, &gameplay},
+                               DestructionAdapterSlot{DestructionDestinationKind::Accessibility, 3, &caption}};
+        const std::array facts{Fact()};
+        CHECK(dispatcher.Preflight(facts, slots) == DestructionEventStatus::ConsumerCapacityExceeded);
+        CHECK(gameplay.reserved == 1);
+        CHECK(gameplay.cancelled == 1);
+        CHECK(dispatcher.CancelRequired(1, slots) == DestructionEventStatus::Ok);
+        CHECK(gameplay.cancelled == 2);
     }
 
     TEST_CASE("Dispatcher owner-thread fence rejects cross-thread delivery", "[unit][destruction][adapter]") {
