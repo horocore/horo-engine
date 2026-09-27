@@ -42,6 +42,55 @@ Character checkpoint.
 - **Typed Runtime Mode Plan**: ADR-102 separates package-supported modes from the one standalone, client, listen-server or dedicated-server plan selected before world publication. Gameplay receives world/session-generation-scoped roles and capabilities; process globals, locality and headless state never grant authority.
 - **Shared Typed Configuration**: ADR-103 applies ADR-009 once across editor, CLI, MCP, CI and packaged hosts. Project defaults, preview preferences, release role, host requests and credential bindings retain distinct owners; product capability/security floors constrain runtime selection.
 
+### Host mode composition boundary
+
+`ResolveNetworkModePlan` consumes one admitted `AssessNetworkTarget` result and its
+exact selection. It validates the closed Standalone/Client/ListenServer/
+DedicatedServer world shape, distinct Scene instances, server-only authority epoch,
+and host presentation selection before any factory runs. A mode plan is immutable
+for its host generation; neither listener presence nor a renderer/headless state
+can create authority. The application composition root supplies concrete factories
+for the required transport, session, replication, Scene, Physics and optional
+presentation/local-player participants. `NetworkRuntime` owns no concrete factory.
+
+`NetworkModeComposition` prepares the complete selected participant set, activates
+it through the same ordered lifecycle, and publishes world-scoped role evidence
+only after all participants succeed. Standalone invokes no transport, session or
+replication factory. Dedicated uses the same authority-world Scene/Physics and
+network participant contract as listen mode, with no GUI, renderer, audio, input
+or local-player participant. Absent presentation participants are no-ops in the
+canonical `RuntimePhase` schedule, not an alternative headless scheduler. The
+runtime host, not this contract, drives `FrameScheduler` and supplies concrete
+Scene/Physics implementations.
+
+The headless `horo-engine --run-network-product` path is an application-owned
+composition consumer. Its product declaration is baked into that executable;
+package inventory is derived from its actual optional GNS link edge, never from
+the selected mode. The no-GNS artifact declares standalone only and invokes no
+transport factory. The GNS artifact may select client, listen or dedicated only
+with explicit bind/connect endpoints; it does not substitute Null or loopback for
+an unavailable production provider. `NetworkProductHost` applies target admission
+before factory invocation and installs the mode as a `RuntimeHost` participant, so
+all modes execute the same canonical phases. `HeadlessNetworkServices` supplies
+the same runtime Scene and canonical Physics world construction to standalone,
+listen and dedicated worlds; dedicated selects no presentation or local-player
+factory. This built-in minimal Scene is not a general authored-project loader.
+The reference executable has no installed credential/trust authorities: native
+`Accepted` and `Connected` events are bounded by its transport poll and explicitly
+closed, never admitted as gameplay sessions. A policy-backed transport-to-session
+path and player roster belong to NET-007.3; typed project/map server launch
+configuration belongs to NET-007.4. Neither is implied by this reference path.
+
+Client session exposure requires `PeerSessionLifecycle::AdmitGameplay` for the
+exact connection and generation; pre-Active transport connectivity is invisible
+to gameplay. Disconnect revokes only the matching client session and never
+promotes it to standalone or transfers the listen server's authority. Aggregate
+travel prepares all replacement Scene/Physics/local-player participants, then
+swaps fresh Scene and authority identities at `CommitDeferredLifecycleChanges`;
+failure retains the old pair. Shutdown revokes role views first and releases
+participants in reverse construction order. Host-provided factories remain
+responsible for their concrete worker, lease, and native-resource teardown.
+
 ## Target Topology and Module Ownership
 
 The network subsystem is organized into four distinct CMake targets with strict compile-time boundaries:

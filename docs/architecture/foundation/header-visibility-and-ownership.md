@@ -1052,3 +1052,15 @@ in must supply owner-stamped fixed-tick samples, advance only after committed
 local fixed ticks, and treat stale quality as evidence rather than permission to
 run extra simulation steps. The generated standalone NetworkRuntime public-header
 consumer and `HoroNetworkRuntimeTests` cover the new boundary.
+
+## NET-007.2 Host Mode Composition Boundary
+
+`HoroEngine::NetworkRuntime` solely owns the additive public
+`Horo/Network/NetworkModeComposition.h` contract. It consumes the existing
+NetworkApi target assessment, PeerSessionLifecycle admission, and RuntimeScene
+identities and Runtime fixed-phase contexts through explicit public dependencies;
+it publishes no native transport, GUI, renderer or Physics
+type. Existing callers require no signature migration. Application roots supply
+exact concrete participant factories and retain their code and resources through
+composition shutdown. `HoroNetworkModePublicHeaderConsumer`, the runtime mode
+tests, and the concrete headless host integration consumer cover this boundary.

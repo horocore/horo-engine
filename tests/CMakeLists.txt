@@ -264,6 +264,7 @@ if(HORO_BUILD_NETWORK_GNS)
 endif()
 add_executable(HoroNetworkRuntimeTests
         unit/runtime/networking/AuthenticationSessionAdapterTests.cpp
+        unit/runtime/networking/NetworkModeCompositionTests.cpp
         unit/runtime/networking/NetworkDiagnosticsTests.cpp
         unit/runtime/networking/HandshakeNegotiationTests.cpp
         unit/runtime/networking/NetworkObjectMappingTests.cpp
@@ -274,6 +275,28 @@ add_executable(HoroNetworkRuntimeTests
 target_compile_features(HoroNetworkRuntimeTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkRuntimeTests PRIVATE HoroEngine::NetworkRuntime)
 horo_register_catch_test(HoroNetworkRuntimeTests LABELS "unit;network;headless")
+add_executable(HoroNetworkModePublicHeaderConsumer support/NetworkModePublicHeaderConsumer.cpp)
+target_compile_features(HoroNetworkModePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroNetworkModePublicHeaderConsumer PRIVATE HoroEngine::NetworkRuntime)
+add_test(NAME HoroNetworkModePublicHeaderConsumer COMMAND HoroNetworkModePublicHeaderConsumer)
+set_tests_properties(HoroNetworkModePublicHeaderConsumer PROPERTIES LABELS "unit;network;headless")
+add_executable(HoroNetworkModeHostIntegrationTests
+        integration/network/NetworkModeHostIntegrationTests.cpp
+)
+target_compile_features(HoroNetworkModeHostIntegrationTests PRIVATE cxx_std_20)
+target_include_directories(HoroNetworkModeHostIntegrationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking)
+target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroNetworkProductHost HoroEngine::NetworkTransportNull
+    HoroEngine::Platform)
+horo_register_catch_test(HoroNetworkModeHostIntegrationTests LABELS "integration;network;headless")
+add_test(NAME HoroNetworkStandaloneProductLaunch COMMAND $<TARGET_FILE:horo-engine> --run-network-product standalone 2)
+set_tests_properties(HoroNetworkStandaloneProductLaunch PROPERTIES LABELS "integration;network;headless;product")
+if(HORO_BUILD_NETWORK_GNS)
+    add_test(NAME HoroNetworkDedicatedProductLaunch COMMAND $<TARGET_FILE:horo-engine> --run-network-product dedicated 1 127.0.0.1:38981)
+    set_tests_properties(HoroNetworkDedicatedProductLaunch PROPERTIES LABELS "integration;network;headless;product")
+else()
+    add_test(NAME HoroNetworkUnsupportedProductMode COMMAND $<TARGET_FILE:horo-engine> --run-network-product dedicated 1 127.0.0.1:38981)
+    set_tests_properties(HoroNetworkUnsupportedProductMode PROPERTIES WILL_FAIL TRUE LABELS "integration;network;headless;product")
+endif()
 include(${PROJECT_SOURCE_DIR}/cmake/HoroNetworkTransportComposition.cmake)
 add_executable(HoroNetworkDisabledLinkProbe support/NetworkTransportLinkProbe.cpp)
 horo_configure_network_transport_profile(HoroNetworkDisabledLinkProbe DISABLED)
