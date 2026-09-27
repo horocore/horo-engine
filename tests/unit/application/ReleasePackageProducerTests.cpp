@@ -31,31 +31,20 @@ namespace {
         output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     }
 
-    ReleaseArtifactManifest Manifest() {
-        ReleaseArtifactManifestData data;
-        data.candidate = ReleaseCandidateId{42U};
-        data.product = {DistributionProductKind::GameRuntime, {}};
-        data.version = GameProductVersion{{1U, 2U, 3U, {}, {}}};
-        data.sourceRevision = {"abc123"};
-        data.platform = DistributionPlatform::Linux;
-        data.architecture = DistributionArchitecture::X64;
-        data.configuration = ReleaseBuildConfiguration::Shipping;
-        data.build = {"build_42"};
-        data.toolchainId = "clang_20";
-        data.artifacts = {{"bin/game", ReleaseArtifactRole::Binary, 4U, ComputeSha256(std::as_bytes(std::span{"game", 4U}))}};
-        auto manifest = ReleaseArtifactManifest::Create(std::move(data));
-        REQUIRE(manifest.HasValue());
-        return std::move(manifest).Value();
+    ReleasePreSignInventory Inventory() {
+        auto inventory = ReleasePreSignInventory::Create(ReleaseCandidateId{42U}, {{"bin/game", ReleaseArtifactRole::Binary, 4U,
+                                                                                    ComputeSha256(std::as_bytes(std::span{"game", 4U}))}});
+        REQUIRE(inventory.HasValue());
+        return std::move(inventory).Value();
     }
 
-    DistributionPackageSelection Selection(const ReleaseArtifactManifest &manifest) {
-        const auto &data = manifest.Data();
+    DistributionPackageSelection Selection() {
         DistributionArtifactIdentity artifact;
-        artifact.product = data.product;
-        artifact.version = data.version;
-        artifact.platform = data.platform;
-        artifact.architecture = data.architecture;
-        artifact.build = data.build;
+        artifact.product = {DistributionProductKind::GameRuntime, {}};
+        artifact.version = GameProductVersion{{1U, 2U, 3U, {}, {}}};
+        artifact.platform = DistributionPlatform::Linux;
+        artifact.architecture = DistributionArchitecture::X64;
+        artifact.build = {"build_42"};
         artifact.package = {"package_42"};
         artifact.installation = DistributionInstallationId{"game_42"};
         auto selection = ValidateDistributionPackageSelection(artifact, DistributionPackageFormat::TarGzip);
@@ -86,10 +75,9 @@ namespace {
 
 TEST_CASE("Release package dispatch selects one explicit backend after verifying frozen bytes", "[release][package]") {
     TemporaryDirectory directory;
-    auto manifest = Manifest();
-    WriteFile(directory.root / "source/manifest.json", manifest.CanonicalJson());
+    auto inventory = Inventory();
     WriteFile(directory.root / "source/bin/game", "game");
-    ReleasePackageRequest request{Selection(manifest), manifest, directory.root / "source", directory.root / "output"};
+    ReleasePackageRequest request{Selection(), inventory, directory.root / "source", directory.root / "output"};
     FakeProducer other{DistributionPackageFormat::ZipArchive};
     FakeProducer selected{DistributionPackageFormat::TarGzip};
     IReleasePackageProducer *producers[]{&other, &selected};
@@ -107,10 +95,9 @@ TEST_CASE("Release package dispatch selects one explicit backend after verifying
 
 TEST_CASE("Release package dispatch rejects missing, duplicate, or conflicting producers", "[release][package]") {
     TemporaryDirectory directory;
-    auto manifest = Manifest();
-    WriteFile(directory.root / "source/manifest.json", manifest.CanonicalJson());
+    auto inventory = Inventory();
     WriteFile(directory.root / "source/bin/game", "game");
-    ReleasePackageRequest request{Selection(manifest), manifest, directory.root / "source", directory.root / "output"};
+    ReleasePackageRequest request{Selection(), inventory, directory.root / "source", directory.root / "output"};
     FakeProducer first{DistributionPackageFormat::TarGzip};
     FakeProducer second{DistributionPackageFormat::TarGzip};
     IReleasePackageProducer *duplicate[]{&first, &second};
