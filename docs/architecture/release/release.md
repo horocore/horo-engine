@@ -642,6 +642,14 @@ and checked root; downstream publication must recheck the bytes before upload.
 This is an additive dispatch boundary; concrete archive, runtime, install,
 launch, and compatibility probes still need host composition and qualification.
 
+The publication dispatcher accepts only that verified identity and the same
+final manifest under a preflight-authorized destination. It checks local bytes,
+asks the destination adapter to upload only declared files, validates the
+receipt identity, asks the adapter to verify remote bytes and signatures, and
+rechecks local bytes before committing the channel. The adapter must keep
+upload idempotent and channel commit atomic. Concrete destination qualification
+and approval policy still belong to host composition.
+
 Additional required tests cover:
 
 - platform package format selection
