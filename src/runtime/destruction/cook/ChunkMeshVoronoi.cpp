@@ -9,7 +9,7 @@ namespace Horo::Destruction {
             std::map<InteriorPair, InteriorArea> areas;
             Budget budget;
 
-            VoronoiContext(const DestructionLimits &limits) : budget{sizeof(ChunkMeshArtifact), 0, limits} {}
+            explicit VoronoiContext(const DestructionLimits &limits) : budget{sizeof(ChunkMeshArtifact), 0, limits} {}
         };
 
         [[nodiscard]] Result<void> ValidateSource(const OfflineVoronoiCandidate &source, FractureArtifactContentIdentity content,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Destruction/ChunkMeshCook.h"
+#include "OfflineVoronoiInternal.h"
 
 #include <algorithm>
 #include <bit>
@@ -11,29 +12,12 @@
 #include <string_view>
 
 namespace Horo::Destruction::ChunkMeshDetail {
-    using Point = std::array<double, 3>;
-
-    [[nodiscard]] inline Point Sub(const Point &a, const Point &b) {
-        return {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
-    }
-
-    [[nodiscard]] inline double Dot(const Point &a, const Point &b) {
-        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    }
-
-    [[nodiscard]] inline Point Cross(const Point &a, const Point &b) {
-        return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
-    }
-
-    [[nodiscard]] inline Point Position(const std::array<float, 3> &p) {
-        return {p[0], p[1], p[2]};
-    }
-
-    [[nodiscard]] inline bool Finite(const Point &p) {
-        return std::ranges::all_of(p, [](double v) {
-            return std::isfinite(v);
-        });
-    }
+    using VoronoiDetail::Cross;
+    using VoronoiDetail::Dot;
+    using VoronoiDetail::Finite;
+    using VoronoiDetail::Point;
+    using VoronoiDetail::Position;
+    using VoronoiDetail::Sub;
 
     [[nodiscard]] inline bool Nonzero(const Sha256Digest &digest) {
         return std::ranges::any_of(digest.bytes, [](std::uint8_t byte) {

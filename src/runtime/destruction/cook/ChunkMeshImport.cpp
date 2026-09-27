@@ -24,7 +24,7 @@ namespace Horo::Destruction {
             Budget budget;
             DestructionChunkId previous{};
 
-            ImportContext(const DestructionLimits &limits) : budget{sizeof(ChunkMeshArtifact), 0, limits} {}
+            explicit ImportContext(const DestructionLimits &limits) : budget{sizeof(ChunkMeshArtifact), 0, limits} {}
         };
 
         [[nodiscard]] Result<void> ValidateImport(const PreFracturedCandidate &source, const ImportedChunkMeshCookRequest &request,
