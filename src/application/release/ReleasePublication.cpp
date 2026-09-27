@@ -43,15 +43,13 @@ namespace Horo::Release {
             receipt.remoteIdentity.empty())
             return Result<ReleasePublicationReceipt>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
 
-        auto remote = adapter.VerifyRemote(request, receipt);
-        if (remote.HasError())
+        if (auto remote = adapter.VerifyRemote(request, receipt); remote.HasError())
             return Result<ReleasePublicationReceipt>::Failure(remote.ErrorValue());
         local = VerifyReleaseArtifactTree(request.verified.Root(), request.manifest);
         if (local.HasError())
             return Result<ReleasePublicationReceipt>::Failure(local.ErrorValue());
 
-        auto committed = adapter.CommitChannel(request, receipt);
-        if (committed.HasError())
+        if (auto committed = adapter.CommitChannel(request, receipt); committed.HasError())
             return Result<ReleasePublicationReceipt>::Failure(committed.ErrorValue());
         return uploaded;
     }
