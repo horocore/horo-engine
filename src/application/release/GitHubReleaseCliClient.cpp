@@ -8,12 +8,18 @@
 #include <cstdlib>
 #include <format>
 #include <fstream>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <random>
 #include <span>
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <sddl.h>
+#include <windows.h>
+#endif
 
 namespace Horo::Release {
     namespace {
@@ -97,7 +103,8 @@ namespace Horo::Release {
 
             TemporaryAsset() {
                 std::error_code error;
-                const auto temporary = std::filesystem::temp_directory_path(error);
+                // Only an atomically created owner-only child of this shared directory is used for files.
+                const auto temporary = std::filesystem::temp_directory_path(error);  // NOSONAR(cpp:S5443)
                 if (error)
                     return;
 #if !defined(_WIN32)
@@ -107,18 +114,21 @@ namespace Horo::Release {
                 if (const char *created = mkdtemp(buffer.data()))
                     root_ = created;
 #else
+                PSECURITY_DESCRIPTOR rawDescriptor = nullptr;
+                if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;FA;;;OW)(A;;FA;;;SY)", SDDL_REVISION_1, &rawDescriptor,
+                                                                          nullptr))
+                    return;
+                const std::unique_ptr<void, decltype(&LocalFree)> descriptor{rawDescriptor, &LocalFree};
+                SECURITY_ATTRIBUTES attributes{sizeof(SECURITY_ATTRIBUTES), descriptor.get(), FALSE};
                 std::random_device random;
                 for (int attempt = 0; attempt < 8; ++attempt) {
                     root_ = temporary / ("horo-release-" + std::to_string(random()) + "-" + std::to_string(random()));
-                    if (std::filesystem::create_directory(root_, error)) {
-                        std::filesystem::permissions(root_, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace,
-                                                     error);
-                        if (!error)
-                            return;
-                        std::filesystem::remove(root_, error);
-                    }
+                    if (CreateDirectoryW(root_.c_str(), &attributes))
+                        return;
+                    const auto createError = GetLastError();
                     root_.clear();
-                    error.clear();
+                    if (createError != ERROR_ALREADY_EXISTS)
+                        return;
                 }
 #endif
             }
