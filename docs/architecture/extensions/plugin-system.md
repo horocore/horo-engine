@@ -784,6 +784,18 @@ intentionally incompatible version/table fixtures protect the harness contract.
 Because this command executes native module code in its own process, it is a
 developer conformance tool rather than a trust or sandbox boundary.
 
+The versioned SDK also carries an extension-author CI template and source-free
+runner. A generated project retains the workflow and bootstrap in its own
+repository; a checked-in lock binds each supported host platform to an HTTPS SDK
+ZIP, exact SDK version, and SHA-256. The bootstrap validates that archive before
+executing SDK tools. CI builds and tests the project, validates the installed
+manifest, runs the ABI conformance harness against trusted build outputs, packs
+and integrity-verifies the native package, and publishes commit/platform/SDK/
+artifact-digest provenance. CI has read-only repository permission and no signing
+key. Its explicit unsigned trust policy checks package bytes only; release
+publisher authentication and full typed package-manifest semantics are distinct
+gates, not implied by a passing author CI run.
+
 Project gameplay modules may use the SDK-generation C++ boundary documented in
 [Gameplay Module Boundary](./gameplay-module-boundary.md). That boundary is
 rebuilt with the project and SDK generation; it is not the same compatibility

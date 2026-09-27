@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "sdkVersion": "@HORO_EXTENSION_SDK_VERSION@",
+  "platforms": {
+    "linux-x64": {"url": "https://REPLACE_WITH_PINNED_SDK_ZIP_URL", "sha256": "REPLACE_WITH_64_HEX_SHA256"},
+    "macos-arm64": {"url": "https://REPLACE_WITH_PINNED_SDK_ZIP_URL", "sha256": "REPLACE_WITH_64_HEX_SHA256"},
+    "macos-x64": {"url": "https://REPLACE_WITH_PINNED_SDK_ZIP_URL", "sha256": "REPLACE_WITH_64_HEX_SHA256"},
+    "windows-x64": {"url": "https://REPLACE_WITH_PINNED_SDK_ZIP_URL", "sha256": "REPLACE_WITH_64_HEX_SHA256"}
+  }
+}

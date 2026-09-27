@@ -30,6 +30,38 @@ publishes declarations through ABI
 Extensions declare the exact minimum host minor they require through
 `horo_extension_query`; incompatible hosts reject the module before load.
 
+## Source-free extension author CI
+
+`share/horo/extension-sdk/ci/extension-author-ci.yml` is the versioned GitHub
+Actions template. The SDK scaffolder copies it into each generated project's
+`.github/workflows/extension-ci.yml`, with a bootstrap script and
+`.horo/extension-ci.lock.json`. The lock must stay at that path, and CI writes
+only to the author project's `ci-artifacts/` directory. Authors pin an HTTPS SDK ZIP and its SHA-256 for
+**each** Linux x64, macOS arm64, macOS x64 and Windows x64 job. The ZIP must contain this
+SDK package's `bin/`, `lib/`, `include/` and `share/` directories at its root.
+The bootstrap refuses unpinned, mismatched, oversized or unsafe archives and
+checks the downloaded SDK version against the lock. The author repository needs
+no engine source checkout. The workflow pins action commits, Python and CMake
+versions, uses read-only permissions, and never receives signing credentials.
+The SDK CI runner parses bounded CTest JUnit input with DTD and entity declarations
+disabled; it has no extra Python package dependency.
+
+The SDK's `bin/horo-extension-author-ci.py` then configures and builds the
+project, runs all CTest tests, installs the package root, validates
+`extension.json`, checks every native module's ABI, packs a canonical
+`.horopkg`, and verifies archive integrity. It publishes the package, JUnit
+test output and a provenance JSON containing repository, source commit, SDK
+version and digest, platform and package digest. The CI trust policy permits
+unsigned *integrity* verification only; it does not attest publisher identity,
+grant runtime trust, or sign a release. A release pipeline must separately sign
+with an approved protected key and verify against publisher trust policy. The
+package tool does not yet validate full typed TOML semantics or activation.
+
+Custom projects using this template must install `extension.json`,
+`horo-package.toml`, and every manifest-declared native binary to the package
+root. The scaffold demonstrates that layout. Keep SDK URLs/digests in the
+version-controlled lock, and update them deliberately for an SDK upgrade.
+
 See `share/horo/extension-sdk/extension-sdk.json` for machine-readable package
 metadata. Validate a manifest without loading extension code with:
 

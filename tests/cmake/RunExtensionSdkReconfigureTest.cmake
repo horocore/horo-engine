@@ -10,6 +10,7 @@ file(REMOVE_RECURSE "${HORO_TEST_BINARY_DIR}")
 file(MAKE_DIRECTORY
     "${test_source_dir}/include/Horo/Extensions"
     "${test_source_dir}/scripts"
+    "${test_source_dir}/sdk/ci"
     "${test_source_dir}/sdk/cmake"
     "${test_source_dir}/sdk/schemas")
 
@@ -21,7 +22,11 @@ foreach(source_file IN ITEMS
         LICENSE
         include/Horo/Extensions/ExtensionAbi.h
         scripts/scaffold_extension.py
+        scripts/bootstrap_extension_ci.py
+        scripts/run_extension_author_ci.py
         sdk/ExtensionSdkREADME.md.in
+        sdk/ci/extension-author-ci.yml
+        sdk/ci/extension-ci.lock.json.in
         sdk/extension-sdk.json.in
         sdk/cmake/HoroEngineExtensionSdkConfig.cmake.in
         sdk/schemas/extension-manifest-v1.schema.json)
@@ -69,10 +74,14 @@ list(SORT staged_files)
 set(expected_files
     LICENSE
     README.md
+    bin/horo-extension-author-ci.py
     bin/horo-scaffold-extension.py
     include/Horo/Extensions/ExtensionAbi.h
     lib/cmake/HoroEngineExtensionSdk/HoroEngineExtensionSdkConfig.cmake
     lib/cmake/HoroEngineExtensionSdk/HoroEngineExtensionSdkConfigVersion.cmake
+    share/horo/extension-sdk/ci/bootstrap.py
+    share/horo/extension-sdk/ci/extension-author-ci.yml
+    share/horo/extension-sdk/ci/extension-ci.lock.json
     share/horo/extension-sdk/extension-manifest-v1.schema.json
     share/horo/extension-sdk/extension-sdk.json)
 list(SORT expected_files)

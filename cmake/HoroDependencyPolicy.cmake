@@ -133,6 +133,8 @@ horo_allow_target_dependencies(TARGET horo-extension-conformance DEPENDENCIES Ho
 horo_allow_target_dependencies(TARGET HoroExtensionSdkConformanceStage DEPENDENCIES horo-extension-conformance)
 horo_allow_target_dependencies(TARGET horo-package DEPENDENCIES HoroPackageSecurity HoroPackages HoroSecurity)
 horo_allow_target_dependencies(TARGET HoroExtensionSdkPackageStage DEPENDENCIES horo-package)
+horo_allow_target_dependencies(TARGET HoroExtensionAuthorCiStage
+    DEPENDENCIES HoroExtensionSdkValidatorStage HoroExtensionSdkConformanceStage HoroExtensionSdkPackageStage)
 horo_allow_target_dependencies(TARGET HoroEditor
     DEPENDENCIES
         HoroGui
