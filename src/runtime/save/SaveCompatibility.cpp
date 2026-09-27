@@ -120,23 +120,25 @@ namespace Horo::Runtime {
         [[nodiscard]] std::optional<SaveCompatibilityDecision> EvaluateDeclaredParticipants(const SaveGameManifest &manifest,
                                                                                             const SaveCompatibilityPolicy &policy,
                                                                                             bool &migrationRequired) {
+            using enum SaveCompatibilityReason;
+            using enum VersionAdmission;
             for (const auto &support : policy.participants) {
                 const auto found =
                     std::ranges::lower_bound(manifest.participants, support.participant, {}, &SaveManifestParticipant::participant);
                 if (found == manifest.participants.end() || found->participant != support.participant) {
                     if (support.required)
-                        return Reject(SaveCompatibilityReason::MissingRequiredParticipant, support.participant);
+                        return Reject(MissingRequiredParticipant, support.participant);
                     continue;
                 }
                 if (support.required)
                     if (const auto missing = MissingRequiredDependency(manifest, support))
-                        return Reject(SaveCompatibilityReason::MissingRequiredParticipant, *missing);
+                        return Reject(MissingRequiredParticipant, *missing);
                 const VersionAdmission admission = ClassifyVersion(found->schemaVersion, support.versions);
-                if (admission == VersionAdmission::Rejected && (support.required || found->required))
-                    return Reject(SaveCompatibilityReason::UnsupportedParticipantSchema, support.participant);
-                if (admission == VersionAdmission::Rejected)
+                if (admission == Rejected && (support.required || found->required))
+                    return Reject(UnsupportedParticipantSchema, support.participant);
+                if (admission == Rejected)
                     continue;
-                migrationRequired |= admission == VersionAdmission::Migration;
+                migrationRequired |= admission == Migration;
             }
             return std::nullopt;
         }
