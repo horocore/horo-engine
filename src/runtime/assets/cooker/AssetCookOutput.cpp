@@ -232,6 +232,42 @@ namespace Horo::Assets {
 
             return std::string(json.substr(pos, end - pos));
         }
+
+        /** @brief Confirms that a resolved generation directory still holds the exact pinned manifest bytes. */
+        [[nodiscard]] bool HasPinnedManifest(const std::filesystem::path &targetRoot, const std::filesystem::path &generationRoot,
+                                             const Sha256Digest &digest, const AssetCookLimits &limits) {
+            std::error_code error;
+            if (!IsSafePathWithin(targetRoot, generationRoot))
+                return false;
+            const auto generationStatus = std::filesystem::symlink_status(generationRoot, error);
+            if (error || !std::filesystem::is_directory(generationStatus) || std::filesystem::is_symlink(generationStatus))
+                return false;
+            const auto manifestPath = generationRoot / "manifest.json";
+            const auto manifestStatus = std::filesystem::symlink_status(manifestPath, error);
+            if (error || !std::filesystem::is_regular_file(manifestStatus) || std::filesystem::is_symlink(manifestStatus))
+                return false;
+            auto manifest = ReadFile(manifestPath, limits.maximumArtifactBytes);
+            return manifest.HasValue() && ComputeSha256(std::as_bytes(std::span{manifest.Value()})) == digest;
+        }
+
+        /** @brief Writes the exact staged files before publishing the mutable current pointer. */
+        [[nodiscard]] Result<void> WriteGenerationFiles(const std::filesystem::path &root,
+                                                        const std::span<const AssetCookManifestEntry> entries,
+                                                        const std::span<const std::vector<std::uint8_t>> payloads,
+                                                        const std::span<const std::uint8_t> manifestBytes) {
+            for (std::size_t i = 0; i < entries.size(); ++i) {
+                if (!IsSafeArtifactFile(entries[i].artifactFile))
+                    return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
+                const auto artifactPath = root / entries[i].artifactFile;
+                if (!IsSafePathWithin(root, artifactPath))
+                    return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
+                auto writeResult = WriteAtomic(artifactPath, payloads[i]);
+                if (writeResult.HasError())
+                    return writeResult;
+            }
+            const std::vector<std::uint8_t> manifest(manifestBytes.begin(), manifestBytes.end());
+            return WriteAtomic(root / "manifest.json", manifest);
+        }
     }  // namespace
 
     // ---------------------------------------------------------------------------
@@ -283,18 +319,7 @@ namespace Horo::Assets {
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
 
         const std::filesystem::path generationRoot = targetRoot / relPath;
-        if (relPath.is_absolute() || !IsSafePathWithin(targetRoot, generationRoot))
-            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
-
-        const auto generationStatus = std::filesystem::symlink_status(generationRoot, statusError);
-        if (statusError || !std::filesystem::is_directory(generationStatus) || std::filesystem::is_symlink(generationStatus))
-            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
-        const auto manifestPath = generationRoot / "manifest.json";
-        const auto manifestStatus = std::filesystem::symlink_status(manifestPath, statusError);
-        if (statusError || !std::filesystem::is_regular_file(manifestStatus) || std::filesystem::is_symlink(manifestStatus))
-            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
-        auto manifest = ReadFile(manifestPath, limits.maximumArtifactBytes);
-        if (manifest.HasError() || ComputeSha256(std::as_bytes(std::span{manifest.Value()})) != digest.Value())
+        if (relPath.is_absolute() || !HasPinnedManifest(targetRoot, generationRoot, digest.Value(), limits))
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
 
         return Result<AssetCookGeneration>::Success(AssetCookGeneration{
@@ -422,26 +447,8 @@ namespace Horo::Assets {
         if (directoryError)
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
 
-        // Write each artifact
-        for (std::size_t i = 0; i < entries.size(); ++i) {
-            if (!IsSafeArtifactFile(entries[i].artifactFile))
-                return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
-            auto artifactPath = genRoot / entries[i].artifactFile;
-            if (!IsSafePathWithin(genRoot, artifactPath))
-                return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
-            auto writeResult = WriteAtomic(artifactPath, artifactPayloads[i]);
-            if (writeResult.HasError())
-                return Result<AssetCookGeneration>::Failure(writeResult.ErrorValue());
-        }
-
-        // Write manifest.json
-        auto manifestPath = genRoot / "manifest.json";
-        {
-            auto manifestVec = std::vector<std::uint8_t>(manifestBytes.begin(), manifestBytes.end());
-            auto writeResult = WriteAtomic(manifestPath, manifestVec);
-            if (writeResult.HasError())
-                return Result<AssetCookGeneration>::Failure(writeResult.ErrorValue());
-        }
+        if (auto written = WriteGenerationFiles(genRoot, entries, artifactPayloads, manifestBytes); written.HasError())
+            return Result<AssetCookGeneration>::Failure(std::move(written).ErrorValue());
 
         // Build and write current.json atomically
         const std::string currentStr =

@@ -235,6 +235,40 @@ namespace Horo::Assets {
             }
             return Result<AssetChunkDefinition>::Success(std::move(chunk));
         }
+
+        struct ParsedArchiveAsset {
+            AssetId id;
+            std::size_t offset{};
+            std::size_t size{};
+        };
+
+        /** @brief Reads and verifies one complete archived cooked envelope. */
+        [[nodiscard]] Result<ParsedArchiveAsset> ReadArchiveAsset(Reader &reader, const AssetCookTargetId &expectedTarget,
+                                                                  const AssetArchiveLimits &limits) {
+            std::span<const std::uint8_t> idBytes;
+            std::string_view typeText;
+            std::uint64_t byteCount{};
+            std::span<const std::uint8_t> expectedDigest;
+            if (!reader.Bytes(16U, idBytes) || !reader.Text(typeText) || !reader.U64(byteCount) || !reader.Bytes(32U, expectedDigest) ||
+                byteCount == 0U || byteCount > limits.maximumAssetBytes)
+                return Result<ParsedArchiveAsset>::Failure(MakeError(InvalidArchive));
+            std::array<std::uint8_t, 16> idArray;
+            std::ranges::copy(idBytes, idArray.begin());
+            const AssetId id = AssetId::FromBytes(idArray);
+            auto type = AssetTypeId::Parse(typeText);
+            if (!id.IsValid() || type.HasError())
+                return Result<ParsedArchiveAsset>::Failure(MakeError(InvalidArchive));
+            const std::size_t offset = reader.Offset();
+            std::span<const std::uint8_t> cookedBytes;
+            if (!reader.Bytes(static_cast<std::size_t>(byteCount), cookedBytes) ||
+                !std::ranges::equal(Digest(cookedBytes).bytes, expectedDigest))
+                return Result<ParsedArchiveAsset>::Failure(MakeError(InvalidArchive));
+            auto decoded = DecodeCookedArtifact(cookedBytes, {.maximumArtifactBytes = limits.maximumAssetBytes});
+            if (decoded.HasError() || decoded.Value().id != id || decoded.Value().type != type.Value() ||
+                decoded.Value().target != expectedTarget)
+                return Result<ParsedArchiveAsset>::Failure(MakeError(InvalidArchive));
+            return Result<ParsedArchiveAsset>::Success({id, offset, static_cast<std::size_t>(byteCount)});
+        }
     }  // namespace
 
     /** @copydoc BuildAssetArchive */
@@ -333,30 +367,11 @@ namespace Horo::Assets {
                 return Result<AssetArchiveProvider>::Failure(MakeError(ArchiveTooLarge));
             chunk.assets.reserve(count);
             for (std::uint32_t index = 0; index < count; ++index) {
-                std::span<const std::uint8_t> idBytes;
-                std::string_view typeText;
-                std::uint64_t byteCount{};
-                std::span<const std::uint8_t> expectedDigest;
-                if (!reader.Bytes(16U, idBytes) || !reader.Text(typeText) || !reader.U64(byteCount) || !reader.Bytes(32U, expectedDigest) ||
-                    byteCount == 0U || byteCount > limits.maximumAssetBytes)
-                    return Result<AssetArchiveProvider>::Failure(MakeError(InvalidArchive));
-                std::array<std::uint8_t, 16> idArray;
-                std::ranges::copy(idBytes, idArray.begin());
-                const AssetId id = AssetId::FromBytes(idArray);
-                auto type = AssetTypeId::Parse(typeText);
-                if (!id.IsValid() || type.HasError())
-                    return Result<AssetArchiveProvider>::Failure(MakeError(InvalidArchive));
-                const std::size_t offset = reader.Offset();
-                std::span<const std::uint8_t> cookedBytes;
-                if (!reader.Bytes(static_cast<std::size_t>(byteCount), cookedBytes) ||
-                    !std::ranges::equal(Digest(cookedBytes).bytes, expectedDigest))
-                    return Result<AssetArchiveProvider>::Failure(MakeError(InvalidArchive));
-                auto decoded = DecodeCookedArtifact(cookedBytes, {.maximumArtifactBytes = limits.maximumAssetBytes});
-                if (decoded.HasError() || decoded.Value().id != id || decoded.Value().type != type.Value() ||
-                    decoded.Value().target != expectedTarget)
-                    return Result<AssetArchiveProvider>::Failure(MakeError(InvalidArchive));
-                chunk.assets.push_back(id);
-                entries.push_back({id, offset, static_cast<std::size_t>(byteCount)});
+                auto parsed = ReadArchiveAsset(reader, expectedTarget, limits);
+                if (parsed.HasError())
+                    return Result<AssetArchiveProvider>::Failure(std::move(parsed).ErrorValue());
+                chunk.assets.push_back(parsed.Value().id);
+                entries.push_back({parsed.Value().id, parsed.Value().offset, parsed.Value().size});
             }
             chunks.push_back(std::move(chunk));
         }
