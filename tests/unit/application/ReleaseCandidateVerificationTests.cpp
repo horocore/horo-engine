@@ -96,7 +96,11 @@ TEST_CASE("Final candidate verification gates smoke probes on exact bytes and pl
 
     CHECK(VerifyReleaseCandidate(candidate.root, manifest, required, nullptr, probes).HasError());
     CHECK(archive.calls == 0);
-    REQUIRE(VerifyReleaseCandidate(candidate.root, manifest, required, &signature, probes).HasValue());
+    auto verified = VerifyReleaseCandidate(candidate.root, manifest, required, &signature, probes);
+    REQUIRE(verified.HasValue());
+    CHECK(verified.Value().Candidate() == manifest.Data().candidate);
+    CHECK(verified.Value().ManifestDigest() == manifest.Digest());
+    CHECK(verified.Value().Root() == candidate.root);
     CHECK(signature.calls == 1);
     CHECK(archive.calls == 1);
     CHECK(launch.calls == 1);

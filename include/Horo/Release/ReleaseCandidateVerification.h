@@ -12,6 +12,33 @@
 #include <span>
 
 namespace Horo::Release {
+    enum class ReleaseCandidateSmokeKind : std::uint8_t;
+    class IReleaseCandidateSignatureVerifier;
+    class IReleaseCandidateSmokeProbe;
+
+    /** @brief Candidate identity issued only after complete final verification. */
+    class VerifiedReleaseCandidate final {
+    public:
+        /** @brief Returns the verified candidate identity. @return Service candidate ID. */
+        [[nodiscard]] ReleaseCandidateId Candidate() const noexcept;
+        /** @brief Returns the canonical manifest digest. @return Exact finalized metadata identity. */
+        [[nodiscard]] const Sha256Digest &ManifestDigest() const noexcept;
+        /** @brief Returns the checked directory. @return Borrowed immutable path. */
+        [[nodiscard]] const std::filesystem::path &Root() const noexcept;
+
+    private:
+        friend Result<VerifiedReleaseCandidate> VerifyReleaseCandidate(const std::filesystem::path &, const ReleaseArtifactManifest &,
+                                                                       std::span<const ReleaseCandidateSmokeKind>,
+                                                                       IReleaseCandidateSignatureVerifier *,
+                                                                       std::span<IReleaseCandidateSmokeProbe *const>);
+        /** @brief Issued only by the complete final verifier. */
+        VerifiedReleaseCandidate(ReleaseCandidateId candidate, Sha256Digest manifestDigest, std::filesystem::path root);
+
+        ReleaseCandidateId candidate_;
+        Sha256Digest manifestDigest_;
+        std::filesystem::path root_;
+    };
+
     /** @brief Host-specific smoke checks selected by release policy. */
     enum class ReleaseCandidateSmokeKind : std::uint8_t {
         ArchiveReadable,
@@ -60,8 +87,9 @@ namespace Horo::Release {
      * @param probes Host-installed smoke adapters; missing or duplicate required kinds fail closed.
      * @return Success only after every required check passes on the exact candidate.
      */
-    [[nodiscard]] Result<void> VerifyReleaseCandidate(const std::filesystem::path &root, const ReleaseArtifactManifest &manifest,
-                                                      std::span<const ReleaseCandidateSmokeKind> requiredSmoke,
-                                                      IReleaseCandidateSignatureVerifier *signatureVerifier,
-                                                      std::span<IReleaseCandidateSmokeProbe *const> probes);
+    [[nodiscard]] Result<VerifiedReleaseCandidate> VerifyReleaseCandidate(const std::filesystem::path &root,
+                                                                          const ReleaseArtifactManifest &manifest,
+                                                                          std::span<const ReleaseCandidateSmokeKind> requiredSmoke,
+                                                                          IReleaseCandidateSignatureVerifier *signatureVerifier,
+                                                                          std::span<IReleaseCandidateSmokeProbe *const> probes);
 }  // namespace Horo::Release
