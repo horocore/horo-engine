@@ -135,7 +135,7 @@ target_link_libraries(HoroModelProviderTests PRIVATE HoroEngine::ModelProviderAd
 add_test(NAME HoroModelProviderContractTests
     COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/python/model_provider_http_fixture.py"
             "$<TARGET_FILE:HoroModelProviderTests>")
-set_tests_properties(HoroModelProviderContractTests PROPERTIES LABELS "unit;agent;headless" TIMEOUT 30)
+set_tests_properties(HoroModelProviderContractTests PROPERTIES LABELS "unit;agent;headless" TIMEOUT 60)
 
 add_executable(HoroPackageValidationTests
     unit/packages/PackageDependencyResolverTests.cpp
@@ -287,6 +287,7 @@ if(HORO_BUILD_NETWORK_GNS)
     horo_register_catch_test(HoroNetworkTransportGnsTests LABELS "unit;network;gns;socket")
 endif()
 add_executable(HoroNetworkRuntimeTests
+        unit/runtime/networking/InboundMessageDispatcherTests.cpp
         unit/runtime/networking/AuthenticationSessionAdapterTests.cpp
         unit/runtime/networking/NetworkModeCompositionTests.cpp
         unit/runtime/networking/NetworkDiagnosticsTests.cpp

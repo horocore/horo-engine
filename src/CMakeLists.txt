@@ -539,6 +539,7 @@ target_include_directories(HoroRuntimeScene PUBLIC ${PROJECT_SOURCE_DIR}/include
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::Foundation HoroEngine::Runtime HoroEngine::GameplayApi HoroEngine::RuntimeUi)
 
 add_library(HoroNetworkRuntime STATIC
+        runtime/networking/InboundMessageDispatcher.cpp
         runtime/networking/NetworkModeComposition.cpp
         runtime/networking/TransportBackendComposition.cpp
         runtime/networking/TransportTargetComposition.cpp

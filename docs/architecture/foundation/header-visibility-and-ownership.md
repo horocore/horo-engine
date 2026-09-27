@@ -20,6 +20,18 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## NET-002.7 Inbound Dispatch Boundary
+
+`HoroEngine::NetworkRuntime` owns the additive
+`Horo/Network/InboundMessageDispatcher.h` public contract. Existing transport,
+codec and session callers retain their signatures. Hosts opting into typed inbound
+dispatch construct this route after selecting the transport and codec snapshot,
+then install only host-admitted active sessions and weak application handlers.
+They must stop/revoke the route before destroying the borrowed transport or codec
+snapshot. `NetworkTransportEvent` now carries an explicit zero-based `channel`;
+the existing GNS baseline supplies channel zero, so current callers retain their
+wire behavior. The NetworkRuntime public-header consumer covers the new header.
+
 ## REL-002.3 Update Discovery Boundary
 
 `HoroEngine::UpdateDiscovery` owns the additive
@@ -29,6 +41,7 @@ persist channel/check policy, and queue source access away from startup. The
 target depends only on `HoroEngine::UpdateManifest`; transports and application
 composition remain outside its public interface. Generated standalone public
 header consumers verify both headers and their declared dependencies.
+
 ## AIA-001.3 Model Provider Boundary
 
 `HoroEngine::ModelProvider` owns the additive `Horo/Agent/ModelProvider.h`

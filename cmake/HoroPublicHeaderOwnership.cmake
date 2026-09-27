@@ -271,6 +271,7 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/TransportBackendInstance.h
 )
 horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
+    Horo/Network/InboundMessageDispatcher.h
     Horo/Network/NetworkModeComposition.h
     Horo/Network/TransportBackendComposition.h
     Horo/Network/NetworkDiagnostics.h
