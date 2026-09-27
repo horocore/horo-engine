@@ -388,6 +388,14 @@ bounded startup probe; a failed probe leaves the newer verified version active.
 The host must establish authorization and the version floor from trusted state,
 not from package-provided or UI-provided values.
 
+`PlanUpdateRetention` uses a complete host-owned installed-version snapshot and
+measured occupied bytes. It protects exactly one active and one distinct
+last-known-good version. When those pins alone exceed the configured budget,
+the plan fails instead of deleting either. Otherwise it selects obsolete
+versions by oldest use generation, with package ID as a stable tie-breaker.
+The deletion host must recheck the active and rollback records under the same
+installation lock immediately before removing only the planned owned files.
+
 User projects, settings, caches, and credentials are not stored inside the
 versioned installation and are not deleted by rollback.
 
