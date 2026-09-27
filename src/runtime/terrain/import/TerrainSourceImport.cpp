@@ -7,7 +7,6 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
-#include <exception>
 #include <limits>
 #include <numeric>
 #include <string_view>
@@ -150,7 +149,7 @@ namespace Horo::Terrain {
             return Result<void>::Success();
         }
 
-        /** @brief Gives a contribution only pre-admitted output storage and translates callback failures. */
+        /** @brief Gives a contribution only pre-admitted output storage and contains all contribution failures. */
         [[nodiscard]] Result<void> PrepareExternalRaster(const TerrainSourceImportRequest &request, TerrainRasterInput &raster,
                                                          const std::uint64_t samples, const std::uint64_t maximumDecoded,
                                                          std::vector<std::vector<std::byte>> &storage,
@@ -191,9 +190,7 @@ namespace Horo::Terrain {
                 raster.format = decoded.format;
                 raster.byteOrder = decoded.byteOrder;
                 return Result<void>::Success();
-            } catch (const std::exception &) {
-                return Failed<void>(TerrainSourceErrors::DecoderFailed);
-            } catch (...) {  // NOSONAR(cpp:S1181) Non-std decoder throws must become typed errors.
+            } catch (...) {  // NOSONAR(cpp:S1181) Untrusted decoder/owned allocation failures must become typed errors without publication.
                 return Failed<void>(TerrainSourceErrors::DecoderFailed);
             }
         }
