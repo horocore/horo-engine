@@ -160,7 +160,8 @@ namespace Horo::Runtime::Ui {
             return Result<bool>::Failure(intent.ErrorValue());
         if (!intent.Value().has_value())
             return Result<bool>::Success(false);
-        return Enqueue(std::move(*intent.Value()));
+        auto selected = std::move(intent).Value();
+        return Enqueue(std::move(*selected));
     }
 
     /** @copydoc UiFeedbackQueue::ObserveFocus */
