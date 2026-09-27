@@ -30,8 +30,7 @@ namespace Horo::Release {
 
         /** @brief Confirms on-disk partial bytes exactly match the checkpoint's durable offset. */
         [[nodiscard]] bool MatchesPartialSize(const std::filesystem::path &path, const std::uint64_t durableBytes) {
-            auto regular = RegularOrAbsent(path);
-            if (regular.HasError() || !regular.Value())
+            if (auto regular = RegularOrAbsent(path); regular.HasError() || !regular.Value())
                 return false;
             std::error_code error;
             return durableBytes > 0U && std::filesystem::file_size(path, error) == durableBytes && !error;
@@ -53,8 +52,8 @@ namespace Horo::Release {
         if (partialFile.empty() || checkpointFile.empty() || partialFile == checkpointFile)
             return invalid();
         auto partial = RegularOrAbsent(partialFile);
-        auto checkpoint = RegularOrAbsent(checkpointFile);
-        if (partial.HasError() || checkpoint.HasError() || partial.Value() != checkpoint.Value())
+        if (auto checkpoint = RegularOrAbsent(checkpointFile);
+            partial.HasError() || checkpoint.HasError() || partial.Value() != checkpoint.Value())
             return invalid();
         if (!partial.Value())
             return Result<std::optional<UpdateTransferCheckpoint>>::Success(std::nullopt);
@@ -89,8 +88,8 @@ namespace Horo::Release {
         if (prepared == partialFile)
             return Result<void>::Failure(MakeError(UpdateTransferErrors::InvalidCheckpoint));
         auto existingCheckpoint = RegularOrAbsent(checkpointFile);
-        auto existingPrepared = RegularOrAbsent(prepared);
-        if (existingCheckpoint.HasError() || existingPrepared.HasError() ||
+        if (auto existingPrepared = RegularOrAbsent(prepared);
+            existingCheckpoint.HasError() || existingPrepared.HasError() ||
             (existingCheckpoint.Value() && SameExistingFile(partialFile, checkpointFile)) ||
             (existingPrepared.Value() &&
              (SameExistingFile(partialFile, prepared) || (existingCheckpoint.Value() && SameExistingFile(checkpointFile, prepared)))))

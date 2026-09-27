@@ -2,6 +2,7 @@
 
 #include "Horo/Release/UpdateTransferErrors.h"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <string_view>
@@ -16,22 +17,18 @@ namespace Horo::Release {
         [[nodiscard]] bool ValidStrongEtag(const std::string_view etag) {
             if (etag.size() < 2U || etag.size() > 256U || etag.front() != '"' || etag.back() != '"')
                 return false;
-            for (const unsigned char character : etag.substr(1U, etag.size() - 2U)) {
-                if (character < 0x21U || character == 0x7fU || character == '"')
-                    return false;
-            }
-            return true;
+            return std::ranges::none_of(etag.substr(1U, etag.size() - 2U), [](const unsigned char character) {
+                return character < 0x21U || character == 0x7fU || character == '"';
+            });
         }
 
         /** @brief Rejects delimiters, controls, and unbounded URL fields in private checkpoint data. */
         [[nodiscard]] bool ValidCheckpointUrl(const std::string_view url) {
             if (!url.starts_with("https://") || url.size() > 2048U)
                 return false;
-            for (const unsigned char character : url) {
-                if (character <= 0x20U || character >= 0x7fU)
-                    return false;
-            }
-            return true;
+            return std::ranges::none_of(url, [](const unsigned char character) {
+                return character <= 0x20U || character >= 0x7fU;
+            });
         }
 
         /** @brief Enforces the bounded schema before writing or accepting a checkpoint. */
@@ -124,8 +121,7 @@ namespace Horo::Release {
         checkpoint.requestedUrl = fields[4];
         checkpoint.effectiveUrl = fields[5];
         checkpoint.strongEtag = fields[6];
-        auto canonical = SerializeUpdateTransferCheckpoint(checkpoint);
-        if (canonical.HasError() || canonical.Value() != bytes)
+        if (const auto canonical = SerializeUpdateTransferCheckpoint(checkpoint); canonical.HasError() || canonical.Value() != bytes)
             return invalid();
         return Result<UpdateTransferCheckpoint>::Success(std::move(checkpoint));
     }
@@ -185,8 +181,7 @@ namespace Horo::Release {
             checkpoint.durableBytes != package.size || checkpoint.requestedUrl != package.url || checkpoint.effectiveUrl != package.url ||
             package.size == 0U || package.signature.artifactDigest != package.digest)
             return Result<void>::Failure(MakeError(UpdateTransferErrors::InvalidResponse));
-        auto verified = verifier.VerifyFile(partialFile, package.size, package.signature);
-        if (verified.HasError())
+        if (auto verified = verifier.VerifyFile(partialFile, package.size, package.signature); verified.HasError())
             return Result<void>::Failure(verified.ErrorValue());
         return Result<void>::Success();
     }

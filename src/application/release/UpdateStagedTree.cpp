@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <format>
 #include <fstream>
 #include <map>
 #include <set>
@@ -38,8 +39,8 @@ namespace Horo::Release {
         }
 
         /** @brief Derives the only directories permitted by declared file paths. */
-        [[nodiscard]] std::set<std::string> ParentDirectories(const std::span<const UpdateStagedFile> files) {
-            std::set<std::string> directories;
+        [[nodiscard]] std::set<std::string, std::less<>> ParentDirectories(const std::span<const UpdateStagedFile> files) {
+            std::set<std::string, std::less<>> directories;
             for (const auto &file : files) {
                 std::size_t separator = file.path.find('/');
                 while (separator != std::string::npos) {
@@ -63,7 +64,7 @@ namespace Horo::Release {
         std::vector<const UpdateStagedFile *> ordered;
         ordered.reserve(files.size());
         for (const auto &file : files)
-            ordered.push_back(&file);
+            ordered.emplace_back(&file);
         std::ranges::sort(ordered, {}, [](const UpdateStagedFile *file) -> const std::string & {
             return file->path;
         });
@@ -73,13 +74,13 @@ namespace Horo::Release {
         for (const auto *file : ordered) {
             if (file->path == UpdateFileInventoryPath)
                 return invalid();
-            const std::string row = file->path + '\t' + std::to_string(file->size) + '\t' + FormatSha256(file->digest) + '\n';
+            const std::string row = std::format("{}\t{}\t{}\n", file->path, file->size, FormatSha256(file->digest));
             if (row.size() > MaximumInventoryBytes - bytes.size())
                 return Result<std::string>::Failure(MakeError(UpdateTransferErrors::ArchiveResourceLimit));
             bytes += row;
-            index.push_back({file->path, UpdateArchiveEntryKind::File, file->size});
+            index.emplace_back(file->path, UpdateArchiveEntryKind::File, file->size);
         }
-        index.push_back({std::string{UpdateFileInventoryPath}, UpdateArchiveEntryKind::File, bytes.size()});
+        index.emplace_back(std::string{UpdateFileInventoryPath}, UpdateArchiveEntryKind::File, bytes.size());
         if (auto validated = ValidateUpdateArchiveIndex(index, limits); validated.HasError())
             return Result<std::string>::Failure(validated.ErrorValue());
         return Result<std::string>::Success(std::move(bytes));
@@ -94,7 +95,7 @@ namespace Horo::Release {
         std::vector<UpdateArchiveEntry> index;
         index.reserve(files.size());
         for (const auto &file : files)
-            index.push_back({file.path, UpdateArchiveEntryKind::File, file.size});
+            index.emplace_back(file.path, UpdateArchiveEntryKind::File, file.size);
         if (auto validation = ValidateUpdateArchiveIndex(index, limits); validation.HasError())
             return validation;
 
@@ -103,7 +104,7 @@ namespace Horo::Release {
             return invalid();
         std::map<std::string, const UpdateStagedFile *, std::less<>> expected;
         for (const auto &file : files)
-            expected.emplace(file.path, &file);
+            expected.try_emplace(file.path, &file);
         const auto directories = ParentDirectories(files);
         std::size_t matchedFiles = 0U;
         for (std::filesystem::recursive_directory_iterator entry(root, std::filesystem::directory_options::none, error), end;
@@ -117,8 +118,8 @@ namespace Horo::Release {
                     return invalid();
                 continue;
             }
-            const auto found = expected.find(relative);
-            if (!std::filesystem::is_regular_file(status) || found == expected.end() || !MatchesFile(entry->path(), *found->second))
+            if (const auto found = expected.find(relative);
+                !std::filesystem::is_regular_file(status) || found == expected.end() || !MatchesFile(entry->path(), *found->second))
                 return invalid();
             ++matchedFiles;
         }
