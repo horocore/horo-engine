@@ -16,8 +16,8 @@ namespace Horo::Release {
                 return false;
             std::size_t separator = collisionKey.find('/');
             while (separator != std::string::npos) {
-                const auto parent = paths.find(collisionKey.substr(0U, separator));
-                if (parent != paths.end() && parent->second != UpdateArchiveEntryKind::Directory)
+                if (const auto parent = paths.find(collisionKey.substr(0U, separator));
+                    parent != paths.end() && parent->second != UpdateArchiveEntryKind::Directory)
                     return false;
                 separator = collisionKey.find('/', separator + 1U);
             }
@@ -26,7 +26,7 @@ namespace Horo::Release {
                 if (child != paths.end() && child->first.starts_with(collisionKey + '/'))
                     return false;
             }
-            paths.emplace(collisionKey, kind);
+            paths.try_emplace(collisionKey, kind);
             return true;
         }
     }  // namespace

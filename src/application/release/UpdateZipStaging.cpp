@@ -107,13 +107,13 @@ namespace Horo::Release {
                 auto name = EntryName(zip, index, stat.m_is_directory != 0);
                 if (name.HasError())
                     return Result<std::vector<UpdateArchiveEntry>>::Failure(name.ErrorValue());
-                entries.push_back({std::move(name).Value(),
-                                   stat.m_is_directory ? UpdateArchiveEntryKind::Directory : UpdateArchiveEntryKind::File,
-                                   stat.m_uncomp_size});
+                entries.emplace_back(std::move(name).Value(),
+                                     stat.m_is_directory ? UpdateArchiveEntryKind::Directory : UpdateArchiveEntryKind::File,
+                                     stat.m_uncomp_size);
             }
             if (auto validated = ValidateUpdateArchiveIndex(entries, limits); validated.HasError())
                 return Result<std::vector<UpdateArchiveEntry>>::Failure(validated.ErrorValue());
-            std::set<std::string> fileParents;
+            std::set<std::string, std::less<>> fileParents;
             for (const auto &entry : entries) {
                 if (entry.kind != UpdateArchiveEntryKind::File)
                     continue;
@@ -181,7 +181,7 @@ namespace Horo::Release {
                     row.Value().size > limits.maximumFileBytes)
                     return invalid();
                 previous = row.Value().path;
-                declared.emplace(row.Value().path, std::move(row).Value());
+                declared.try_emplace(previous, std::move(row).Value());
                 position = end + 1U;
             }
             if (declared.empty())
@@ -190,8 +190,7 @@ namespace Horo::Release {
             for (const auto &entry : index) {
                 if (entry.kind != UpdateArchiveEntryKind::File || entry.path == UpdateFileInventoryPath)
                     continue;
-                const auto found = declared.find(entry.path);
-                if (found == declared.end() || found->second.size != entry.expandedBytes)
+                if (const auto found = declared.find(entry.path); found == declared.end() || found->second.size != entry.expandedBytes)
                     return invalid();
                 ++files;
             }
@@ -221,10 +220,13 @@ namespace Horo::Release {
         [[nodiscard]] Result<void> SyncStageDirectories(const std::filesystem::path &root, NativeDurableFileSystem &files) {
             std::error_code error;
             std::vector<std::filesystem::path> directories{root};
-            for (std::filesystem::recursive_directory_iterator entry(root, std::filesystem::directory_options::none, error), end;
-                 entry != end && !error; entry.increment(error)) {
+            std::filesystem::recursive_directory_iterator entry(root, std::filesystem::directory_options::none, error);
+            const std::filesystem::recursive_directory_iterator end;
+            while (entry != end && !error) {
                 if (entry->is_directory(error) && !error)
-                    directories.push_back(entry->path());
+                    directories.emplace_back(entry->path());
+                if (!error)
+                    entry.increment(error);
             }
             if (error)
                 return Result<void>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
@@ -267,9 +269,9 @@ namespace Horo::Release {
                 auto extracted = ExtractFile(zip, item, index[item], root, files);
                 if (extracted.HasError())
                     return Result<std::vector<UpdateStagedFile>>::Failure(extracted.ErrorValue());
-                const auto expected = declared.find(extracted.Value().path);
-                if (expected == declared.end() || extracted.Value().size != expected->second.size ||
-                    extracted.Value().digest != expected->second.digest)
+                if (const auto expected = declared.find(extracted.Value().path); expected == declared.end() ||
+                                                                                 extracted.Value().size != expected->second.size ||
+                                                                                 extracted.Value().digest != expected->second.digest)
                     return Result<std::vector<UpdateStagedFile>>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
                 inventory.push_back(std::move(extracted).Value());
             }
@@ -367,8 +369,7 @@ namespace Horo::Release {
             return Result<std::filesystem::path>::Failure(declared.ErrorValue());
         if (auto capacity = CheckStageCapacity(index.Value(), stageRoot, limits, files); capacity.HasError())
             return Result<std::filesystem::path>::Failure(capacity.ErrorValue());
-        std::error_code error;
-        if (!std::filesystem::create_directory(stageRoot, error) || error)
+        if (std::error_code error; !std::filesystem::create_directory(stageRoot, error) || error)
             return failed(UpdateTransferErrors::StageMismatch);
         StageCleanup cleanup{stageRoot};
         auto inventory = ExtractEntries(reader.archive, index.Value(), declared.Value(), stageRoot, files, cancellation);

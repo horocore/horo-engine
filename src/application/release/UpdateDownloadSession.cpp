@@ -3,6 +3,7 @@
 #include "Horo/Release/UpdateTransferCheckpointStore.h"
 #include "Horo/Release/UpdateTransferErrors.h"
 
+#include <algorithm>
 #include <system_error>
 #include <utility>
 
@@ -10,11 +11,9 @@ namespace Horo::Release {
     namespace {
         /** @brief Rejects lexical traversal through a host-owned private path. */
         [[nodiscard]] bool NoTraversal(const std::filesystem::path &path) {
-            for (const auto &part : path) {
-                if (part == "." || part == "..")
-                    return false;
-            }
-            return true;
+            return std::ranges::none_of(path, [](const auto &part) {
+                return part == "." || part == "..";
+            });
         }
 
         /** @brief Requires two distinct absolute files directly below one existing private directory. */
