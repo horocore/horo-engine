@@ -3,6 +3,7 @@
 #include "Horo/Release/UpdateTransferErrors.h"
 
 #include <algorithm>
+#include <format>
 #include <span>
 #include <string>
 #include <vector>
@@ -28,13 +29,13 @@ namespace Horo::Release {
             std::vector<const UpdateStagedFile *> ordered;
             ordered.reserve(inventory.size());
             for (const auto &file : inventory)
-                ordered.push_back(&file);
+                ordered.emplace_back(&file);
             std::ranges::sort(ordered, {}, [](const UpdateStagedFile *file) -> const std::string & {
                 return file->path;
             });
             Sha256Builder hash;
             for (const auto *file : ordered) {
-                const std::string row = file->path + '\t' + std::to_string(file->size) + '\t' + FormatSha256(file->digest) + '\n';
+                const std::string row = std::format("{}\t{}\t{}\n", file->path, file->size, FormatSha256(file->digest));
                 if (!hash.Update(std::as_bytes(std::span{row})))
                     return Result<Sha256Digest>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
             }
@@ -47,8 +48,8 @@ namespace Horo::Release {
             auto inventoryHash = InventoryDigest(inventory);
             if (inventoryHash.HasError())
                 return Result<std::string>::Failure(inventoryHash.ErrorValue());
-            return Result<std::string>::Success("horo-update-stage-ready-v1\n" + FormatSha256(package.digest) + '\n' +
-                                                std::to_string(package.size) + '\n' + FormatSha256(inventoryHash.Value()) + '\n');
+            return Result<std::string>::Success(std::format("horo-update-stage-ready-v1\n{}\n{}\n{}\n", FormatSha256(package.digest),
+                                                            package.size, FormatSha256(inventoryHash.Value())));
         }
 
         /** @brief Makes absence of a stale marker durable before any new validation. */
