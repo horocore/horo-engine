@@ -86,7 +86,7 @@ namespace Horo::Runtime::SaveArchiveReaderDetail {
                                          .storedByteLength = raw.storedByteLength,
                                          .decodedByteLength = raw.decodedByteLength,
                                          .alignment = raw.alignment,
-                                         .codec = SaveChunkCodec::Raw,
+                                         .codec = static_cast<SaveChunkCodec>(raw.codec),
                                          .decodedHash = raw.decodedHash});
         }
         return ValidateSaveChunkDirectory(std::move(directory), manifest, limits.chunks);
