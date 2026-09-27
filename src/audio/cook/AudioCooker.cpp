@@ -126,6 +126,36 @@ namespace Horo::Audio {
             return bytes;
         }
 
+        /** @brief Collects the exact source, policy and toolchain facts serialized into compatibility output. */
+        AudioCookManifest MakeManifest(const AudioCookPlan &plan, const AudioCookToolchain &toolchain,
+                                       const std::span<const std::uint8_t> source, const std::span<const std::uint8_t> payload,
+                                       const std::uint32_t chunkFrames, const std::uint32_t chunkCount) {
+            return {
+                .target = plan.target,
+                .sourceContainer = plan.sourceContainer,
+                .sourceCodec = plan.sourceCodec,
+                .container = plan.settings.container,
+                .codec = plan.settings.codec,
+                .compression = plan.settings.compression,
+                .quality = plan.settings.quality,
+                .format = plan.outputFormat,
+                .residency = plan.residency,
+                .targetOverride = plan.targetOverride,
+                .frameCount = plan.frameCount,
+                .streamThresholdFrames = plan.settings.streamThresholdFrames,
+                .chunkFrames = chunkFrames,
+                .chunkCount = chunkCount,
+                .encoderDelayFrames = plan.settings.encoderDelayFrames,
+                .encoderPaddingFrames = plan.settings.encoderPaddingFrames,
+                .payloadByteCount = payload.size(),
+                .sourceDigest = ComputeSha256(std::as_bytes(source)),
+                .decoderIdentityDigest = ComputeSha256(std::as_bytes(std::span{plan.decoderIdentity})),
+                .configurationDigest = plan.configurationDigest,
+                .toolchainDigest = ComputeSha256(std::as_bytes(std::span{toolchain.identity})),
+                .payloadDigest = ComputeSha256(std::as_bytes(payload)),
+            };
+        }
+
         class AudioCookerStrategy final : public Assets::ICookerStrategy {
         public:
             AudioCookerStrategy(AudioCookProfile profile, AssetCookTargetId target, AudioCookToolchain toolchain,
@@ -195,30 +225,7 @@ namespace Horo::Audio {
         const auto chunks = 1 + (resolved.frameCount - 1) / chunkFrames;
         if (chunks > MaximumChunkCount)
             return Result<AudioCookedOutput>::Failure(MakeError(AudioErrors::CookBudgetExceeded));
-        AudioCookManifest manifest{
-            .target = target,
-            .sourceContainer = resolved.sourceContainer,
-            .sourceCodec = resolved.sourceCodec,
-            .container = resolved.settings.container,
-            .codec = resolved.settings.codec,
-            .compression = resolved.settings.compression,
-            .quality = resolved.settings.quality,
-            .format = resolved.outputFormat,
-            .residency = resolved.residency,
-            .targetOverride = resolved.targetOverride,
-            .frameCount = resolved.frameCount,
-            .streamThresholdFrames = resolved.settings.streamThresholdFrames,
-            .chunkFrames = chunkFrames,
-            .chunkCount = static_cast<std::uint32_t>(chunks),
-            .encoderDelayFrames = resolved.settings.encoderDelayFrames,
-            .encoderPaddingFrames = resolved.settings.encoderPaddingFrames,
-            .payloadByteCount = sink.payload.size(),
-            .sourceDigest = ComputeSha256(std::as_bytes(source)),
-            .decoderIdentityDigest = ComputeSha256(std::as_bytes(std::span{resolved.decoderIdentity})),
-            .configurationDigest = configuration.Value(),
-            .toolchainDigest = ComputeSha256(std::as_bytes(std::span{toolchain.identity})),
-            .payloadDigest = ComputeSha256(std::as_bytes(std::span{sink.payload})),
-        };
+        auto manifest = MakeManifest(resolved, toolchain, source, sink.payload, chunkFrames, static_cast<std::uint32_t>(chunks));
         auto bytes = EncodeHeader(manifest);
         if (bytes.size() > MaximumCookedAudioPayloadBytes - sink.payload.size())
             return Result<AudioCookedOutput>::Failure(MakeError(AudioErrors::CookBudgetExceeded));

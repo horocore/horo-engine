@@ -79,6 +79,37 @@ namespace Horo::Audio {
         template <typename Value> bool HasCode(const Result<Value> &result, const ErrorCodeDescriptor &descriptor) {
             return result.HasError() && result.ErrorValue().code.Value() == descriptor.code.Value();
         }
+
+        void PrepareCookSource(const TemporaryCookRoot &root, Assets::AssetRegistry &registry, const Assets::AssetId &assetId,
+                               const Assets::AssetTypeId &type) {
+            const auto source = WaveFixture();
+            std::ofstream file(root.path / "assets/clip.wav", std::ios::binary);
+            file.write(reinterpret_cast<const char *>(source.data()), static_cast<std::streamsize>(source.size()));
+            REQUIRE(file.good());
+            file.close();
+            const auto sourcePath = ProjectPath::Parse("assets/clip.wav");
+            const auto metadataPath = ProjectPath::Parse("assets/clip.wav.horo");
+            REQUIRE(sourcePath.HasValue());
+            REQUIRE(metadataPath.HasValue());
+            REQUIRE(registry
+                        .Publish({Assets::AssetRecord{.id = assetId,
+                                                      .type = type,
+                                                      .sourcePath = sourcePath.Value(),
+                                                      .metadataPath = metadataPath.Value()}})
+                        .status == Assets::AssetRegistryBuildStatus::Complete);
+        }
+
+        Result<Assets::AssetCookReport> RunAudioCook(const Assets::AssetCookRequest &request, const Assets::AssetTypeId &type,
+                                                     const AssetCookTargetId &target, JobSystem &jobs, const AudioCookProfile &profile) {
+            Assets::CookerCatalog catalog;
+            auto contribution = MakeAudioCookerContribution(type, profile, target, Toolchain());
+            REQUIRE(contribution.HasValue());
+            REQUIRE(catalog.Register(std::move(contribution).Value()).HasValue());
+            auto snapshot = catalog.Publish();
+            REQUIRE(snapshot.HasValue());
+            Assets::AssetCookService service(jobs, snapshot.Value());
+            return service.Cook(request, CancellationToken{});
+        }
     }  // namespace
 
     TEST_CASE("Audio cook produces identical PCM payload and compatibility manifest for exact inputs", "[unit][audio][cook]") {
@@ -281,27 +312,12 @@ namespace Horo::Audio {
 
     TEST_CASE("AST publishes and reuses exact Audio cook generations", "[integration][audio][cook]") {
         TemporaryCookRoot root;
-        const auto source = WaveFixture();
-        {
-            std::ofstream file(root.path / "assets/clip.wav", std::ios::binary);
-            file.write(reinterpret_cast<const char *>(source.data()), static_cast<std::streamsize>(source.size()));
-            REQUIRE(file.good());
-        }
         const auto assetId = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000542");
         const auto type = Assets::AssetTypeId::Parse("core.audio_clip");
-        const auto sourcePath = ProjectPath::Parse("assets/clip.wav");
-        const auto metadataPath = ProjectPath::Parse("assets/clip.wav.horo");
         REQUIRE(assetId.HasValue());
         REQUIRE(type.HasValue());
-        REQUIRE(sourcePath.HasValue());
-        REQUIRE(metadataPath.HasValue());
         Assets::AssetRegistry registry;
-        REQUIRE(registry
-                    .Publish({Assets::AssetRecord{.id = assetId.Value(),
-                                                  .type = type.Value(),
-                                                  .sourcePath = sourcePath.Value(),
-                                                  .metadataPath = metadataPath.Value()}})
-                    .status == Assets::AssetRegistryBuildStatus::Complete);
+        PrepareCookSource(root, registry, assetId.Value(), type.Value());
         const auto target = Target("linux-desktop");
         Assets::AssetCookRequest request{
             .sourceRoot = root.path,
@@ -311,29 +327,18 @@ namespace Horo::Audio {
             .target = target,
         };
         JobSystem jobs;
-        const auto run = [&](const AudioCookProfile &profile) {
-            Assets::CookerCatalog catalog;
-            auto contribution = MakeAudioCookerContribution(type.Value(), profile, target, Toolchain());
-            REQUIRE(contribution.HasValue());
-            REQUIRE(catalog.Register(std::move(contribution).Value()).HasValue());
-            auto snapshot = catalog.Publish();
-            REQUIRE(snapshot.HasValue());
-            Assets::AssetCookService service(jobs, snapshot.Value());
-            return service.Cook(request, CancellationToken{});
-        };
-
         const AudioCookProfile baseline;
-        auto first = run(baseline);
+        auto first = RunAudioCook(request, type.Value(), target, jobs, baseline);
         REQUIRE(first.HasValue());
         CHECK(first.Value().cookedAssets == 1);
-        auto cached = run(baseline);
+        auto cached = RunAudioCook(request, type.Value(), target, jobs, baseline);
         REQUIRE(cached.HasValue());
         CHECK(cached.Value().cacheHits == 1);
 
         AudioCookProfile streamed;
         streamed.defaults.streamThresholdFrames = 2;
         streamed.defaults.streamChunkFrames = 2;
-        auto replaced = run(streamed);
+        auto replaced = RunAudioCook(request, type.Value(), target, jobs, streamed);
         REQUIRE(replaced.HasValue());
         CHECK(replaced.Value().cookedAssets == 1);
         CHECK(replaced.Value().cacheHits == 0);
