@@ -127,11 +127,9 @@ namespace Horo::Agent {
             return static_cast<HttpContext *>(user)->stop.stop_requested() ? 1 : 0;
         }
 
-        /** @brief Apply transport bounds and callbacks; request bodies remain caller-owned until perform returns. */
+        /** @brief Apply transport bounds and callbacks; URL and TLS policy are set before this call. */
         void ConfigureCurl(CURL *curl,  // NOSONAR: libcurl declares CURL as an opaque C handle (void).
-                           HttpContext &context, const ModelProviderConfig &config, const std::string &url, const std::string *body,
-                           curl_slist *headers) {
-            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+                           HttpContext &context, const ModelProviderConfig &config, const std::string *body, curl_slist *headers) {
             curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
             curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteResponse);
             curl_easy_setopt(curl, CURLOPT_WRITEDATA, &context);
@@ -183,15 +181,21 @@ namespace Horo::Agent {
             if (stop.stop_requested())
                 return {ModelError{ModelErrorCode::Cancelled, "Model request cancelled", std::nullopt}};
 
+            std::string url = config.endpoint;
+            if (url.ends_with('/'))
+                url.pop_back();
+            url += path;
+
             if (static const CURLcode curlInit = curl_global_init(CURL_GLOBAL_DEFAULT); curlInit != CURLE_OK)
                 return {ModelError{ModelErrorCode::Transport, "Cannot initialize model HTTP runtime", std::nullopt}};
             auto *curl = curl_easy_init();
             if (curl == nullptr)
                 return {ModelError{ModelErrorCode::Transport, "Cannot initialize model HTTP client", std::nullopt}};
-            // Every handle receives the TLS floor before URL selection; it is inert for loopback HTTP.
-            if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK) {
+            // URL and TLS policy are configured together before callbacks or any transfer.
+            if (curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) != CURLE_OK ||
+                curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK) {
                 curl_easy_cleanup(curl);
-                return {ModelError{ModelErrorCode::Transport, "Cannot enforce model TLS minimum", std::nullopt}};
+                return {ModelError{ModelErrorCode::Transport, "Cannot configure model HTTP transport", std::nullopt}};
             }
             curl_slist *headers = nullptr;
             headers = curl_slist_append(headers, "Accept: application/json");
@@ -204,11 +208,7 @@ namespace Horo::Agent {
             }
 
             HttpContext context{{}, consume, stop, curl};
-            std::string url = config.endpoint;
-            if (url.ends_with('/'))
-                url.pop_back();
-            url += path;
-            ConfigureCurl(curl, context, config, url, body, headers);
+            ConfigureCurl(curl, context, config, body, headers);
             const CURLcode result = curl_easy_perform(curl);
             long status = 0;
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
