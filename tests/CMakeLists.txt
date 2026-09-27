@@ -1073,7 +1073,7 @@ target_link_libraries(HoroUpdateTransferTests PRIVATE HoroEngine::UpdateTransfer
 horo_register_catch_test(HoroUpdateTransferTests LABELS "release;update;headless")
 add_executable(HoroUpdateDownloadTests unit/application/UpdateDownloadTests.cpp)
 target_compile_features(HoroUpdateDownloadTests PRIVATE cxx_std_20)
-target_link_libraries(HoroUpdateDownloadTests PRIVATE HoroEngine::UpdateDownload)
+target_link_libraries(HoroUpdateDownloadTests PRIVATE HoroEngine::UpdateDownload miniz)
 horo_register_catch_test(HoroUpdateDownloadTests LABELS "release;update;headless")
 add_executable(HoroUpdateHttpResponseTests unit/application/UpdateHttpResponseTests.cpp
         ${PROJECT_SOURCE_DIR}/src/application/release/UpdateHttpResponse.cpp)

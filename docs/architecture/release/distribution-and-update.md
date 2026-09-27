@@ -272,6 +272,13 @@ streams each private staged file through SHA-256, checks its declared length,
 and rejects missing, undeclared, linked, or special entries before a ready marker
 may be published. The host must keep the private stage quiescent during this
 check; the archive reader must supply the complete authenticated file inventory.
+For ZIP packages, `StageVerifiedZipUpdate` first authenticates the complete
+private package, preflights every central-directory entry and local header,
+then extracts into an absent sibling directory with durable bounded writes.
+It derives the per-file inventory from the authenticated ZIP entries and
+decompressed bytes, checks the completed tree again, and removes the new tree
+on failure before any ready marker can survive. Other package formats require
+their own readers with the same preflight and durable publication sequence.
 Partial-file checkpoint evidence uses a bounded canonical schema. Recovery
 parses it as untrusted bytes and rechecks it against the selected signed package
 and the new transport response before appending any downloaded bytes. The

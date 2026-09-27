@@ -8,10 +8,14 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
+#include <miniz.h>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -90,6 +94,27 @@ namespace {
     }
 
     constexpr UpdateDownloadLimits Limits{.maximumPackageBytes = 1024U, .reserveBytes = 0U};
+
+    [[nodiscard]] std::string ZipArchive(const std::string_view name, const std::string_view content) {
+        mz_zip_archive writer{};
+        REQUIRE(mz_zip_writer_init_heap(&writer, 0U, 0U));
+        REQUIRE(mz_zip_writer_add_mem(&writer, std::string{name}.c_str(), content.data(), content.size(), MZ_DEFAULT_COMPRESSION));
+        void *bytes = nullptr;
+        std::size_t size = 0U;
+        REQUIRE(mz_zip_writer_finalize_heap_archive(&writer, &bytes, &size));
+        std::string archive{static_cast<const char *>(bytes), size};
+        mz_free(bytes);
+        mz_zip_writer_end(&writer);
+        return archive;
+    }
+
+    [[nodiscard]] UpdateTransferCheckpoint CompleteCheckpoint(const UpdatePackageRecord &package) {
+        auto plan = PlanUpdateTransfer(package, Fresh(package), std::nullopt);
+        REQUIRE(plan.HasValue());
+        auto checkpoint = AdvanceUpdateTransfer(plan.Value(), package.size);
+        REQUIRE(checkpoint.HasValue());
+        return std::move(checkpoint).Value();
+    }
 }  // namespace
 
 TEST_CASE("Private download session checkpoints and verifies exact complete bytes", "[release][update]") {
@@ -282,4 +307,92 @@ TEST_CASE("Cancelled or invalid stage never publishes ready", "[release][update]
     }
     CHECK(PublishVerifiedUpdateStage(package, {}, marker, root, inventory, archiveLimits, files, Verifier(), {}).HasError());
     CHECK(std::filesystem::is_regular_file(marker));
+}
+
+TEST_CASE("Verified ZIP staging extracts bounded content and publishes ready", "[release][update]") {
+    TemporaryStage stage;
+    const auto archive = ZipArchive("bin/editor", "verified editor");
+    const auto package = Package(archive);
+    const auto paths = Paths(stage);
+    {
+        std::ofstream output(paths.partialFile, std::ios::binary);
+        output.write(archive.data(), static_cast<std::streamsize>(archive.size()));
+    }
+    Horo::NativeDurableFileSystem files;
+    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
+    const auto root = stage.path / "candidate";
+    auto published =
+        StageVerifiedZipUpdate(package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits, files, Verifier(), {});
+    REQUIRE(published.HasValue());
+    CHECK(std::filesystem::is_regular_file(published.Value()));
+    std::ifstream input(root / "bin/editor", std::ios::binary);
+    const std::string content{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    CHECK(content == "verified editor");
+}
+
+TEST_CASE("ZIP staging rejects escaped and oversized entries before creating a tree", "[release][update]") {
+    TemporaryStage stage;
+    Horo::NativeDurableFileSystem files;
+    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 8U, .maximumExpandedBytes = 8U};
+    const auto root = stage.path / "candidate";
+    for (const auto name : {"../escaped", "bin/editor"}) {
+        const auto archive = ZipArchive(name, name == std::string_view{"../escaped"} ? "safe" : "oversized editor");
+        const auto package = Package(archive);
+        const auto paths = Paths(stage);
+        {
+            std::ofstream output(paths.partialFile, std::ios::binary | std::ios::trunc);
+            output.write(archive.data(), static_cast<std::streamsize>(archive.size()));
+        }
+        CHECK(StageVerifiedZipUpdate(package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits, files, Verifier(), {})
+                  .HasError());
+        CHECK_FALSE(std::filesystem::exists(root));
+        CHECK_FALSE(std::filesystem::exists(root.string() + ".ready"));
+    }
+}
+
+TEST_CASE("ZIP staging persists empty files and cancellation clears stale ready evidence", "[release][update]") {
+    TemporaryStage stage;
+    const auto archive = ZipArchive("empty.txt", "");
+    const auto package = Package(archive);
+    const auto paths = Paths(stage);
+    {
+        std::ofstream output(paths.partialFile, std::ios::binary);
+        output.write(archive.data(), static_cast<std::streamsize>(archive.size()));
+    }
+    Horo::NativeDurableFileSystem files;
+    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 2U, .maximumFileBytes = 1U, .maximumExpandedBytes = 1U};
+    const auto root = stage.path / "candidate";
+    const auto marker = std::filesystem::path{root.string() + ".ready"};
+    {
+        std::ofstream output(marker);
+        output << "stale";
+    }
+    Horo::CancellationSource cancellation;
+    cancellation.RequestCancellation();
+    CHECK(StageVerifiedZipUpdate(package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits, files, Verifier(),
+                                 cancellation.Token())
+              .HasError());
+    CHECK_FALSE(std::filesystem::exists(marker));
+    CHECK_FALSE(std::filesystem::exists(root));
+    auto published =
+        StageVerifiedZipUpdate(package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits, files, Verifier(), {});
+    REQUIRE(published.HasValue());
+    CHECK(std::filesystem::is_regular_file(root / "empty.txt"));
+    CHECK(std::filesystem::file_size(root / "empty.txt") == 0U);
+}
+
+TEST_CASE("ZIP staging never removes a package whose path aliases its ready marker", "[release][update]") {
+    TemporaryStage stage;
+    const auto archive = ZipArchive("bin/editor", "verified editor");
+    const auto package = Package(archive);
+    const auto root = stage.path / "candidate";
+    const auto packageFile = std::filesystem::path{root.string() + ".ready"};
+    {
+        std::ofstream output(packageFile, std::ios::binary);
+        output.write(archive.data(), static_cast<std::streamsize>(archive.size()));
+    }
+    Horo::NativeDurableFileSystem files;
+    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
+    CHECK(StageVerifiedZipUpdate(package, CompleteCheckpoint(package), packageFile, root, archiveLimits, files, Verifier(), {}).HasError());
+    CHECK(std::filesystem::file_size(packageFile) == archive.size());
 }

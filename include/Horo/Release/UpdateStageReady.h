@@ -32,4 +32,22 @@ namespace Horo::Release {
         const UpdatePackageRecord &package, const UpdateTransferCheckpoint &checkpoint, const std::filesystem::path &packageFile,
         const std::filesystem::path &stageRoot, std::span<const UpdateStagedFile> inventory, const UpdateArchiveLimits &limits,
         NativeDurableFileSystem &files, const Security::ArtifactVerifier &verifier, CancellationToken cancellation);
+
+    /**
+     * @brief Authenticates and extracts a ZIP package into a new private stage, then publishes its ready marker.
+     * @param package Signed ZIP package identity selected by update discovery.
+     * @param checkpoint Durable checkpoint for the complete quiescent package file.
+     * @param packageFile Complete private package file outside the stage.
+     * @param stageRoot Absent stage directory below the same protected parent as packageFile.
+     * @param limits Maximum entry count, per-file bytes, and total expanded bytes.
+     * @param files Native durable filesystem held alive for this call.
+     * @param verifier Trusted publisher signature verifier.
+     * @param cancellation Cooperative cancellation during indexing and extraction.
+     * @return Atomically published ready marker path, or failure with the incomplete stage removed.
+     * @note The host keeps the package and private parent quiescent throughout this call.
+     */
+    [[nodiscard]] Result<std::filesystem::path> StageVerifiedZipUpdate(
+        const UpdatePackageRecord &package, const UpdateTransferCheckpoint &checkpoint, const std::filesystem::path &packageFile,
+        const std::filesystem::path &stageRoot, const UpdateArchiveLimits &limits, NativeDurableFileSystem &files,
+        const Security::ArtifactVerifier &verifier, CancellationToken cancellation);
 }  // namespace Horo::Release
