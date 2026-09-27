@@ -1,0 +1,72 @@
+#pragma once
+
+/**
+ * @file AssetArchive.h
+ * @brief Deterministic release asset archive and verified runtime provider.
+ */
+
+#include "Horo/Assets/AssetChunkPlan.h"
+#include "Horo/Assets/AssetProvider.h"
+#include "Horo/Foundation/AssetCookTargetId.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <vector>
+
+namespace Horo::Assets {
+    /** @brief One exact encoded cooked artifact selected for release packaging. */
+    struct AssetArchiveInput {
+        AssetId id;
+        std::vector<std::uint8_t> bytes;
+    };
+
+    /** @brief Archive size and shape ceilings checked before allocation or payload reads. */
+    struct AssetArchiveLimits {
+        std::size_t maximumArchiveBytes{1024U * 1024U * 1024U};
+        std::size_t maximumAssetBytes{256U * 1024U * 1024U};
+        std::size_t maximumAssets{100'000U};
+        std::size_t maximumChunks{1024U};
+    };
+
+    /**
+     * @brief Encodes one complete, canonical release archive from validated chunk membership and cooked envelopes.
+     * @param plan Validated chunk graph.
+     * @param target Exact cook target required in every envelope.
+     * @param artifacts Complete selected cooked envelope set; extra and missing assets reject publication.
+     * @param limits Finite host-owned bounds.
+     * @return Complete assets.horo bytes or a typed failure; no partial archive escapes.
+     */
+    [[nodiscard]] Result<std::vector<std::uint8_t>> BuildAssetArchive(const AssetChunkPlan &plan, const AssetCookTargetId &target,
+                                                                      std::span<const AssetArchiveInput> artifacts,
+                                                                      const AssetArchiveLimits &limits = {});
+
+    /** @brief Immutable archive-backed runtime provider with no filesystem fallback. */
+    class AssetArchiveProvider final : public IAssetProvider {
+    public:
+        /**
+         * @brief Validates an entire archive before exposing any asset.
+         * @param bytes Complete archive bytes.
+         * @param expectedTarget Exact runtime cook target.
+         * @param limits Allocation and format limits.
+         * @return Verified provider or typed corruption/compatibility failure.
+         */
+        [[nodiscard]] static Result<AssetArchiveProvider> Open(std::span<const std::uint8_t> bytes, const AssetCookTargetId &expectedTarget,
+                                                               const AssetArchiveLimits &limits = {});
+
+        [[nodiscard]] Result<bool> Exists(AssetId id, const CancellationToken &cancellation) const override;
+        [[nodiscard]] Result<std::vector<std::uint8_t>> Load(AssetId id, const CancellationToken &cancellation) const override;
+
+    private:
+        struct Entry {
+            AssetId id;
+            std::size_t offset{};
+            std::size_t size{};
+        };
+
+        AssetArchiveProvider(std::vector<std::uint8_t> bytes, std::vector<Entry> entries);
+
+        std::vector<std::uint8_t> bytes_;
+        std::vector<Entry> entries_;
+    };
+}  // namespace Horo::Assets

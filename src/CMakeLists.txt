@@ -567,6 +567,7 @@ target_link_libraries(HoroGameplayLua
 
 add_library(HoroAssets STATIC
         runtime/assets/AssetErrors.cpp
+        runtime/assets/package/AssetArchive.cpp
         runtime/assets/package/AssetChunkPlan.cpp
         runtime/assets/registry/AssetId.cpp
         runtime/assets/registry/AssetRegistry.cpp
