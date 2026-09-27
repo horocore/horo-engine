@@ -14,4 +14,6 @@ namespace Horo::Release::UpdateTransferErrors {
     extern const ErrorCodeDescriptor InvalidResponse;
     /** @brief A partial transfer cannot be continued under its original source and validator. */
     extern const ErrorCodeDescriptor ResumeMismatch;
+    /** @brief Persisted checkpoint bytes are malformed, oversized, or from an unsupported schema. */
+    extern const ErrorCodeDescriptor InvalidCheckpoint;
 }  // namespace Horo::Release::UpdateTransferErrors

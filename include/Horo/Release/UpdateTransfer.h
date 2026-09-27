@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace Horo::Release {
     /** @brief Durable evidence for bytes already written to one private partial file. */
@@ -21,6 +22,20 @@ namespace Horo::Release {
         std::string effectiveUrl;
         std::string strongEtag;
     };
+
+    /**
+     * @brief Encodes bounded checkpoint evidence for a host-owned durable private file.
+     * @param checkpoint Checkpoint produced after durable package bytes.
+     * @return Exact schema-v1 bytes or an invalid-checkpoint error.
+     */
+    [[nodiscard]] Result<std::string> SerializeUpdateTransferCheckpoint(const UpdateTransferCheckpoint &checkpoint);
+
+    /**
+     * @brief Parses exact canonical checkpoint bytes without trusting their source.
+     * @param bytes Complete checkpoint file, bounded to 4600 bytes.
+     * @return Parsed evidence to revalidate against signed package and response, or a typed error.
+     */
+    [[nodiscard]] Result<UpdateTransferCheckpoint> ParseUpdateTransferCheckpoint(std::string_view bytes);
 
     /** @brief Transport-observed response headers; the caller must not infer omitted range fields. */
     struct UpdateTransferResponse final {

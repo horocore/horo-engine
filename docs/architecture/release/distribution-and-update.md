@@ -258,6 +258,9 @@ still owns transport, private-file I/O, cancellation, and progress dispatch.
 `VerifyCompletedUpdateTransfer` then checks the complete private-file size,
 hash, and publisher signature before any extractor or staging marker consumes
 it.
+Partial-file checkpoint evidence uses a bounded canonical schema. Recovery
+parses it as untrusted bytes and rechecks it against the selected signed package
+and the new transport response before appending any downloaded bytes.
 
 ## Staging
 

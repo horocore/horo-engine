@@ -119,6 +119,26 @@ TEST_CASE("Update resume rejects stale package and checkpoint identities", "[rel
     CHECK(PlanUpdateTransfer(package, response, checkpoint).HasError());
 }
 
+TEST_CASE("Partial download checkpoints parse only canonical bounded schema", "[release][update]") {
+    const auto checkpoint = PartialCheckpoint(Package());
+    auto serialized = SerializeUpdateTransferCheckpoint(checkpoint);
+    REQUIRE(serialized.HasValue());
+    auto parsed = ParseUpdateTransferCheckpoint(serialized.Value());
+    REQUIRE(parsed.HasValue());
+    CHECK(parsed.Value().durableBytes == 40U);
+    CHECK(parsed.Value().packageDigest == checkpoint.packageDigest);
+    auto changed = serialized.Value();
+    changed.replace(0U, 23U, "horo-update-transfer-v2");
+    CHECK(ParseUpdateTransferCheckpoint(changed).HasError());
+    changed = serialized.Value();
+    changed.insert(changed.find("\n40\n") + 1U, "0");
+    CHECK(ParseUpdateTransferCheckpoint(changed).HasError());
+    CHECK(ParseUpdateTransferCheckpoint(std::string(4601U, 'x')).HasError());
+    auto invalid = checkpoint;
+    invalid.durableBytes = invalid.packageSize + 1U;
+    CHECK(SerializeUpdateTransferCheckpoint(invalid).HasError());
+}
+
 TEST_CASE("Completed update bytes require the signed package hash and publisher", "[release][update]") {
     std::array<std::byte, 100U> bytes{};
     auto package = Package();

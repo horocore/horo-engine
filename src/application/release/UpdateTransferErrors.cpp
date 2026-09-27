@@ -23,4 +23,10 @@ namespace Horo::Release::UpdateTransferErrors {
                                              .summary = "Partial update bytes no longer match the source validator.",
                                              .remediationHint = "Discard the partial download and restart from byte zero.",
                                              .userActionable = true};
+    const ErrorCodeDescriptor InvalidCheckpoint{.domain = Domain,
+                                                .code = ErrorCode{"release.update_transfer.invalid_checkpoint"},
+                                                .defaultSeverity = ErrorSeverity::Warning,
+                                                .summary = "Partial update checkpoint is invalid or unsupported.",
+                                                .remediationHint = "Discard the partial download and restart from byte zero.",
+                                                .userActionable = true};
 }  // namespace Horo::Release::UpdateTransferErrors
