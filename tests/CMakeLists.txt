@@ -1318,6 +1318,13 @@ target_compile_features(HoroGameplayBehaviorFilenameModalStateTests PRIVATE cxx_
 target_include_directories(HoroGameplayBehaviorFilenameModalStateTests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(HoroGameplayBehaviorFilenameModalStateTests PRIVATE HoroEngine::EditorServices)
 
+add_executable(HoroBuildReleaseModalSessionTests
+        unit/editor/BuildReleaseModalSessionTests.cpp
+)
+target_compile_features(HoroBuildReleaseModalSessionTests PRIVATE cxx_std_20)
+target_include_directories(HoroBuildReleaseModalSessionTests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(HoroBuildReleaseModalSessionTests PRIVATE HoroEngine::EditorServices)
+
 add_executable(HoroNotificationServiceTests
         unit/editor/NotificationServiceTests.cpp
 )
@@ -1680,6 +1687,7 @@ set(HORO_EDITOR_WHITE_BOX_TEST_TARGETS
         HoroProjectMigrationIntegrationTests
         HoroEditorWorkspaceControllerTests
         HoroGameplayBehaviorFilenameModalStateTests
+        HoroBuildReleaseModalSessionTests
         HoroEditorSelectionModelTests
         HoroEditorViewportModelTests
         HoroHierarchyPanelRenderTests
@@ -2750,6 +2758,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroWorkspaceSplitterInteractionTests
         HoroEditorWorkspaceControllerTests
         HoroGameplayBehaviorFilenameModalStateTests
+        HoroBuildReleaseModalSessionTests
         HoroNotificationServiceTests
         HoroEditorMenuModelTests
         HoroEditorStatusBarModelTests
