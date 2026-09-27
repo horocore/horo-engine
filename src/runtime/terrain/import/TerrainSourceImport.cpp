@@ -193,7 +193,7 @@ namespace Horo::Terrain {
                 return Result<void>::Success();
             } catch (const std::exception &) {
                 return Failed<void>(TerrainSourceErrors::DecoderFailed);
-            } catch (...) {  // NOSONAR(cpp:S2738) Contain even non-standard exceptions from optional decoder contributions.
+            } catch (...) {  // NOSONAR(cpp:S1181) Non-std decoder throws must become typed errors.
                 return Failed<void>(TerrainSourceErrors::DecoderFailed);
             }
         }

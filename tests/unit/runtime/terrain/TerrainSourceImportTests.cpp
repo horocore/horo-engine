@@ -106,6 +106,19 @@ namespace Horo::Terrain {
                 return Result<void>::Success();
             }
         };
+
+        class NonStandardThrowingDecoder final : public ITerrainRasterDecoder {
+        public:
+            [[nodiscard]] Result<TerrainRasterDecodeInfo> Probe(const TerrainRasterInput &, const CancellationToken &) const override {
+                throw 17;
+            }
+
+            [[nodiscard]] Result<void> DecodeInto(const TerrainRasterInput &, std::span<std::byte>,
+                                                  const CancellationToken &) const override {
+                FAIL("Probe failure must not invoke the decoder");
+                return Result<void>::Success();
+            }
+        };
     }  // namespace
 
     TEST_CASE("Raw height, weights and holes normalize into one canonical increasing-Z grid", "[terrain][import]") {
@@ -153,7 +166,7 @@ namespace Horo::Terrain {
         RequireError(NormalizeTerrainSource(request, {}), TerrainSourceErrors::LimitExceeded);
     }
 
-    TEST_CASE("Unsupported PNG channels, external formats and roles return typed errors", "[terrain][import]") {
+    TEST_CASE("Unsupported scalar roles and external decoder failures return typed errors", "[terrain][import]") {
         const auto rawHeight = Bytes({1, 0, 2, 0, 3, 0, 4, 0});
         auto request = Request(rawHeight, TerrainRasterFormat::RawU16);
         request.height.format = TerrainRasterFormat::Count;
@@ -172,10 +185,14 @@ namespace Horo::Terrain {
         RequireError(NormalizeTerrainSource(request, {}), TerrainSourceErrors::InvalidBytes);
         request.decoder = std::make_shared<ThrowingDecoder>();
         RequireError(NormalizeTerrainSource(request, {}), TerrainSourceErrors::DecoderFailed);
+        request.decoder = std::make_shared<NonStandardThrowingDecoder>();
+        RequireError(NormalizeTerrainSource(request, {}), TerrainSourceErrors::DecoderFailed);
+    }
 
+    TEST_CASE("Unsupported or malformed grayscale PNG inputs fail before publication", "[terrain][import]") {
         const auto png = Hex("89504e470d0a1a0a0000000d4948445200000002000000021000000000074d8ebb0000001249444154789c63606064606260606660010"
                              "0002b000b63bf1b1a0000000049454e44ae426082");
-        request = Request(png, TerrainRasterFormat::PngGray);
+        auto request = Request(png, TerrainRasterFormat::PngGray);
         auto colorPng = png;
         colorPng[25] = std::byte{2};
         request.height = Raster(colorPng, TerrainRasterFormat::PngGray);
@@ -184,6 +201,17 @@ namespace Horo::Terrain {
         request.height = Raster(png, TerrainRasterFormat::PngGray);
         request.holes = Raster(png, TerrainRasterFormat::PngGray);
         RequireError(NormalizeTerrainSource(request, {}), TerrainSourceErrors::UnsupportedFormat);
+
+        request.holes.reset();
+        auto truncatedPng = png;
+        truncatedPng.resize(33);
+        request.height = Raster(truncatedPng, TerrainRasterFormat::PngGray);
+        RequireError(NormalizeTerrainSource(request, {}), TerrainSourceErrors::InvalidBytes);
+
+        auto oversizedDimensions = png;
+        oversizedDimensions[16] = std::byte{0x80};
+        request.height = Raster(oversizedDimensions, TerrainRasterFormat::PngGray);
+        RequireError(NormalizeTerrainSource(request, {}), TerrainSourceErrors::InvalidDimensions);
     }
 
     TEST_CASE("Raw float32 byte order is explicit and non-finite samples are rejected", "[terrain][import]") {

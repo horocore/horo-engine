@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <span>
 #include <string_view>
 #include <utility>
 
@@ -39,6 +40,9 @@ namespace Horo::Terrain::ImportDetail {
                 return Failed<std::uint8_t>(TerrainSourceErrors::InvalidBytes);
             const std::uint32_t width = ReadBig32(source.bytes, 16);
             const std::uint32_t height = ReadBig32(source.bytes, 20);
+            if (width == 0 || height == 0 || width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+                height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()))
+                return Failed<std::uint8_t>(TerrainSourceErrors::InvalidDimensions);
             const std::uint8_t bitDepth = std::to_integer<std::uint8_t>(source.bytes[24]);
             if (const auto colorType = std::to_integer<std::uint8_t>(source.bytes[25]);
                 colorType != 0 || (bitDepth != 8 && bitDepth != 16) || source.bytes[26] != std::byte{0} ||
@@ -55,37 +59,38 @@ namespace Horo::Terrain::ImportDetail {
         /** @brief Copies decoded byte grayscale pixels into operation-owned canonical bytes. */
         [[nodiscard]] bool DecodePng8(const TerrainRasterInput &source, DecodedPngRaster &result, int &width, int &height,
                                       int &components) {
-            // NOSONAR(cpp:S6022) stb_image requires unsigned-byte input; the source remains owned as std::byte.
-            std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> pixels{stbi_load_from_memory(reinterpret_cast<const stbi_uc *>(
-                                                                                                  source.bytes.data()),
-                                                                                              static_cast<int>(source.bytes.size()), &width,
-                                                                                              &height, &components, 1),
-                                                                        stbi_image_free};
+            const auto *encoded =
+                reinterpret_cast<const stbi_uc *>(source.bytes.data());  // NOSONAR(cpp:S6022) stb's C API requires unsigned-byte input.
+            auto *decoded = stbi_load_from_memory(encoded, static_cast<int>(source.bytes.size()), &width, &height, &components, 1);
+            std::unique_ptr<std::byte, decltype(&stbi_image_free)> pixels{reinterpret_cast<std::byte *>(decoded), &stbi_image_free};
             if (pixels == nullptr)
                 return false;
             if (width != static_cast<int>(source.width) || height != static_cast<int>(source.height) || components != 1)
                 return false;
-            std::copy_n(reinterpret_cast<const std::byte *>(pixels.get()), result.bytes.size(), result.bytes.begin());
+            std::copy_n(pixels.get(), result.bytes.size(), result.bytes.begin());
             return true;
         }
 
         /** @brief Converts decoded host-order 16-bit PNG samples to canonical little-endian bytes. */
         [[nodiscard]] bool DecodePng16(const TerrainRasterInput &source, DecodedPngRaster &result, int &width, int &height,
                                        int &components) {
-            // NOSONAR(cpp:S6022) stb_image requires unsigned-byte input; the source remains owned as std::byte.
-            std::unique_ptr<stbi_us, decltype(&stbi_image_free)> pixels{stbi_load_16_from_memory(reinterpret_cast<const stbi_uc *>(
-                                                                                                     source.bytes.data()),
+            const auto *encoded =
+                reinterpret_cast<const stbi_uc *>(source.bytes.data());  // NOSONAR(cpp:S6022) stb's C API requires unsigned-byte input.
+            std::unique_ptr<stbi_us, decltype(&stbi_image_free)> pixels{stbi_load_16_from_memory(encoded,
                                                                                                  static_cast<int>(source.bytes.size()),
                                                                                                  &width, &height, &components, 1),
-                                                                        stbi_image_free};
+                                                                        &stbi_image_free};
             if (pixels == nullptr)
                 return false;
-            if (width != static_cast<int>(source.width) || height != static_cast<int>(source.height) || components != 1 ||
-                result.bytes.size() % 2 != 0)
+            const auto sampleCount = static_cast<std::uint64_t>(source.width) * source.height;
+            if (width <= 0 || height <= 0 || width != static_cast<int>(source.width) || height != static_cast<int>(source.height) ||
+                components != 1 || sampleCount > result.bytes.size() / sizeof(stbi_us) ||
+                result.bytes.size() != sampleCount * sizeof(stbi_us))
                 return false;
-            for (std::size_t i = 0; i < result.bytes.size() / 2; ++i) {
-                result.bytes[2 * i] = static_cast<std::byte>(pixels.get()[i] & 0xFFU);
-                result.bytes[2 * i + 1] = static_cast<std::byte>(pixels.get()[i] >> 8U);
+            const std::span<const stbi_us> samples{pixels.get(), static_cast<std::size_t>(sampleCount)};
+            for (std::size_t i = 0; i < samples.size(); ++i) {
+                result.bytes[2 * i] = static_cast<std::byte>(samples[i] & 0xFFU);
+                result.bytes[2 * i + 1] = static_cast<std::byte>(samples[i] >> 8U);
             }
             return true;
         }
