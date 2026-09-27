@@ -2,12 +2,16 @@
 
 #include "Horo/PCG/PCGErrors.h"
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <new>
 
 namespace Horo::PCGTerrain {
     struct TerrainInputSnapshot::State final {
+        State(TerrainInputCandidate candidate, const Terrain::TerrainFoliageRegistryBinding publication)
+            : input(std::move(candidate)), binding(publication) {}
+
         TerrainInputCandidate input;
         Terrain::TerrainFoliageRegistryBinding binding;
     };
@@ -25,8 +29,8 @@ namespace Horo::PCGTerrain {
                 sample.materialLayer >= layers || sample.height < candidate.bounds.minimum.y ||
                 sample.height > candidate.bounds.maximum.y || sample.normal.y < 0.0F)
                 return false;
-            const float squaredLength = Math::LengthSquared(sample.normal);
-            if (!std::isfinite(squaredLength) || std::abs(squaredLength - 1.0F) > NormalTolerance)
+            if (const float squaredLength = Math::LengthSquared(sample.normal);
+                !std::isfinite(squaredLength) || std::abs(squaredLength - 1.0F) > NormalTolerance)
                 return false;
             const float horizontal = std::hypot(sample.normal.x, sample.normal.z);
             const float slope = std::atan2(horizontal, sample.normal.y);
@@ -38,8 +42,8 @@ namespace Horo::PCGTerrain {
                                                const Terrain::TerrainRevisionedBounds &descriptorBounds) noexcept {
             const auto minimum = descriptorBounds.minimum.Millimeters();
             const auto maximum = descriptorBounds.maximum.Millimeters();
-            const float candidateMin[] = {candidate.bounds.minimum.x, candidate.bounds.minimum.y, candidate.bounds.minimum.z};
-            const float candidateMax[] = {candidate.bounds.maximum.x, candidate.bounds.maximum.y, candidate.bounds.maximum.z};
+            const std::array candidateMin{candidate.bounds.minimum.x, candidate.bounds.minimum.y, candidate.bounds.minimum.z};
+            const std::array candidateMax{candidate.bounds.maximum.x, candidate.bounds.maximum.y, candidate.bounds.maximum.z};
             for (std::size_t axis = 0; axis < 3; ++axis) {
                 const double offset = static_cast<double>(candidate.originCell[axis]) * CellMeters;
                 const double low = static_cast<double>(minimum[axis]) / 1'000.0 - offset;
@@ -148,12 +152,11 @@ namespace Horo::PCGTerrain {
         if (publication.HasError())
             return Result<TerrainInputSnapshot>::Failure(publication.ErrorValue());
         const auto &snapshot = publication.Value();
-        const Terrain::TerrainFoliageCapability required[] = {Terrain::TerrainFoliageCapability::TerrainQuery};
+        const std::array required{Terrain::TerrainFoliageCapability::TerrainQuery};
         auto requiredSet = Terrain::TerrainFoliageCapabilitySet::Create(required);
         if (requiredSet.HasError())
             return Result<TerrainInputSnapshot>::Failure(requiredSet.ErrorValue());
-        auto grant = snapshot.ProjectCapabilities(requiredSet.Value());
-        if (grant.HasError())
+        if (auto grant = snapshot.ProjectCapabilities(requiredSet.Value()); grant.HasError())
             return Result<TerrainInputSnapshot>::Failure(grant.ErrorValue());
         auto handle = snapshot.FindDataset(candidate.dataset);
         if (handle.HasError())
@@ -161,12 +164,10 @@ namespace Horo::PCGTerrain {
         auto registration = snapshot.Resolve(handle.Value());
         if (registration.HasError())
             return Result<TerrainInputSnapshot>::Failure(registration.ErrorValue());
-        auto validation = ValidateCandidate(candidate, registration.Value()->descriptor.Data());
-        if (validation.HasError())
+        if (auto validation = ValidateCandidate(candidate, registration.Value()->descriptor.Data()); validation.HasError())
             return Result<TerrainInputSnapshot>::Failure(validation.ErrorValue());
         try {
-            auto state =
-                std::make_shared<const TerrainInputSnapshot::State>(TerrainInputSnapshot::State{std::move(candidate), snapshot.Binding()});
+            auto state = std::make_shared<const TerrainInputSnapshot::State>(std::move(candidate), snapshot.Binding());
             auto latest = registry.Snapshot();
             if (latest.HasError())
                 return Result<TerrainInputSnapshot>::Failure(latest.ErrorValue());
