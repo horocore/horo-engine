@@ -126,13 +126,12 @@ namespace Horo::Destruction {
         }
 
         [[nodiscard]] bool ValidMask(const std::span<const std::byte> mask, const std::uint32_t count) noexcept {
-            const std::size_t bytes = (static_cast<std::size_t>(count) + 7U) / 8U;
-            if (mask.size() != bytes)
+            if (const std::size_t bytes = (static_cast<std::size_t>(count) + 7U) / 8U; mask.size() != bytes)
                 return false;
             if (count % 8U == 0)
                 return true;
-            const auto highBits = static_cast<std::uint8_t>(0xFFU << (count % 8U));
-            return (std::to_integer<std::uint8_t>(mask.back()) & highBits) == 0;
+            const auto highBits = std::byte{0xFF} << (count % 8U);
+            return (mask.back() & highBits) == std::byte{};
         }
 
         [[nodiscard]] Result<void> ValidateState(const DestructionReplicationState &state,
@@ -171,8 +170,8 @@ namespace Horo::Destruction {
                 if (std::ranges::find(artifact.canonicalChunks, anchor) == artifact.canonicalChunks.end())
                     return Fail<void>(DestructionErrors::ReplicationIncompatible);
             }
-            const std::size_t payloadBytes = Detail::FixedFieldBytes + 4U * masks.broken.size() + 8U * state.supportAnchors.size();
-            if (payloadBytes > limits.maximumBytes)
+            if (const std::size_t payloadBytes = Detail::FixedFieldBytes + 4U * masks.broken.size() + 8U * state.supportAnchors.size();
+                payloadBytes > limits.maximumBytes)
                 return Fail<void>(DestructionErrors::ReplicationLimitExceeded);
             return Result<void>::Success();
         }
@@ -192,7 +191,7 @@ namespace Horo::Destruction {
             DestructionReplicationPayload payload{.schema = Detail::SchemaId(), .version = DestructionReplicationVersion};
             payload.fields.reserve(Detail::FieldValues.size());
             const auto add = [&payload](const std::size_t index, Writer writer) {
-                payload.fields.push_back({Detail::FieldId(index), std::move(writer).Finish()});
+                payload.fields.emplace_back(DestructionReplicationField{Detail::FieldId(index), std::move(writer).Finish()});
             };
             Writer target;
             target.Octets(SerializeDestructionHandle(state.target));
@@ -311,11 +310,10 @@ namespace Horo::Destruction {
                 phase > static_cast<std::uint8_t>(DestructionStatePhase::Destroyed))
                 return Fail<void>(DestructionErrors::ReplicationInvalid);
             state.phase = static_cast<DestructionStatePhase>(phase);
-            Reader seed{payload.fields[6].canonical};
-            if (!seed.U32(state.seed.version) || !seed.U64(state.seed.value) || !seed.U64(state.seed.cursor) || !seed.Complete())
+            if (Reader seed{payload.fields[6].canonical};
+                !seed.U32(state.seed.version) || !seed.U64(state.seed.value) || !seed.U64(state.seed.cursor) || !seed.Complete())
                 return Fail<void>(DestructionErrors::ReplicationInvalid);
-            Reader features{payload.fields[9].canonical};
-            if (!features.U32(state.effectiveFeatures.bits) || !features.Complete())
+            if (Reader features{payload.fields[9].canonical}; !features.U32(state.effectiveFeatures.bits) || !features.Complete())
                 return Fail<void>(DestructionErrors::ReplicationInvalid);
             return Result<void>::Success();
         }
@@ -326,8 +324,8 @@ namespace Horo::Destruction {
             Reader reader{payload.fields[7].canonical};
             if (!reader.U32(state.masks.chunkCount) || state.masks.chunkCount == 0 || state.masks.chunkCount > limits.maximumChunks)
                 return Fail<void>(DestructionErrors::ReplicationLimitExceeded);
-            const std::size_t bytes = (static_cast<std::size_t>(state.masks.chunkCount) + 7U) / 8U;
-            if (!reader.Bytes(bytes, state.masks.broken) || !reader.Bytes(bytes, state.masks.active) ||
+            if (const std::size_t bytes = (static_cast<std::size_t>(state.masks.chunkCount) + 7U) / 8U;
+                !reader.Bytes(bytes, state.masks.broken) || !reader.Bytes(bytes, state.masks.active) ||
                 !reader.Bytes(bytes, state.masks.supported) || !reader.Bytes(bytes, state.masks.dormant) || !reader.Complete())
                 return Fail<void>(DestructionErrors::ReplicationInvalidChunkMask);
             return Result<void>::Success();
