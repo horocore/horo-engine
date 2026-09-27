@@ -370,6 +370,27 @@ the same version evidence lets the helper resolve the journal to the verified
 previous pointer before another activation attempt. A different or malformed
 journal fails closed for explicit operator recovery.
 
+## First Installation
+
+`BootstrapVerifiedInstallation` admits an absent installation pointer only.
+It uses the same authenticated ready-stage evidence, immutable package-ID
+directory, installation lock, and active-pointer record as the normal updater.
+The host checks the actual operating system, architecture, minimum OS,
+destination permissions, capacity, conflicts, and package policy before the
+transaction starts. The shared transaction writes a durable first-install
+journal before registering operating-system integration or activating the
+candidate. A bounded first-launch probe must succeed before the journal is
+removed. If registration, activation, or the probe fails, the candidate
+pointer and its integration are undone; an uncertain cleanup retains the
+journal and blocks a new install until recovery proves the state. Recovery
+never treats a marker alone as installation authority.
+
+The current authenticated stage reader supports portable ZIP packages. Native
+Windows, macOS, and Linux installer formats require format-specific stage
+readers and integration hosts with the same verification and rollback
+guarantees. Repair and uninstall use the installation lock and exact owned-file
+inventory; they preserve projects and apply an explicit user-data policy.
+
 ## Rollback
 
 At least one last-known-good version is retained within a disk budget. Rollback
