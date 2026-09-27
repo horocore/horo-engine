@@ -629,6 +629,15 @@ target_link_libraries(HoroAudioImport
         PRIVATE HoroThirdParty::Miniaudio
 )
 
+add_library(HoroAudioCook STATIC
+        audio/cook/AudioCookProfile.cpp
+        audio/cook/AudioCooker.cpp
+        audio/cook/AudioCookInspector.cpp
+)
+add_library(HoroEngine::AudioCook ALIAS HoroAudioCook)
+target_compile_features(HoroAudioCook PUBLIC cxx_std_20)
+target_link_libraries(HoroAudioCook PUBLIC HoroEngine::AudioImport HoroEngine::Assets)
+
 # Build-tree-only contract shared privately by Audio control and concrete backend adapters.
 add_library(HoroAudioBackendContract INTERFACE)
 target_compile_features(HoroAudioBackendContract INTERFACE cxx_std_20)

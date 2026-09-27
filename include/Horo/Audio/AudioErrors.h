@@ -37,6 +37,10 @@ namespace Horo::Audio::AudioErrors {
     extern const ErrorCodeDescriptor SourceLimitExceeded;
     extern const ErrorCodeDescriptor SourceReadFailed;
     extern const ErrorCodeDescriptor SourceDecodeFailed;
+    extern const ErrorCodeDescriptor CookProfileInvalid;
+    extern const ErrorCodeDescriptor CookCombinationUnsupported;
+    extern const ErrorCodeDescriptor CookBudgetExceeded;
+    extern const ErrorCodeDescriptor CookPayloadInvalid;
     extern const ErrorCodeDescriptor CommandBufferInvalid;
     extern const ErrorCodeDescriptor MemoryInvalid;
     extern const ErrorCodeDescriptor MemoryBudgetExceeded;
