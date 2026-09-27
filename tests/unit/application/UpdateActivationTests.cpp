@@ -1,5 +1,7 @@
 #include "Horo/Release/UpdateActivation.h"
 #include "Horo/Release/UpdateActivationErrors.h"
+#include "Horo/Release/UpdateRollback.h"
+#include "Horo/Release/UpdateRollbackErrors.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -263,4 +265,120 @@ TEST_CASE("A foreign recovery journal cannot switch an installation", "[release]
     CHECK(Read(install.root / "active-version") == previous.Value());
     CHECK(Read(install.root / "activation.pending") == foreign);
     CHECK(host.probes == 0U);
+}
+
+TEST_CASE("An acknowledged rollback selects the verified retained version", "[release][update][rollback]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto activation = Request(install, files, verifier);
+    std::swap(activation.current, activation.staged);
+    auto active = EncodeActiveUpdateRecord(activation.current.package);
+    REQUIRE(active.HasValue());
+    REQUIRE(files.WriteDurable(install.root / "active-version", std::as_bytes(std::span{active.Value()})).HasValue());
+    UpdateRollbackRequest rollback{std::move(activation), UpdateRollbackReason::ExplicitUserRequest, UpdateRollbackAuthority::NormalPolicy,
+                                   std::nullopt, true};
+    rollback.minimumAllowedVersion = rollback.activation.staged.package.selection.artifact.version;
+    Host host;
+    auto result = RollbackVerifiedUpdate(rollback, files, verifier, host);
+    REQUIRE(result.HasValue());
+    CHECK(result.Value() == UpdateActivationOutcome::Activated);
+    auto prior = EncodeActiveUpdateRecord(rollback.activation.staged.package);
+    REQUIRE(prior.HasValue());
+    CHECK(Read(install.root / "active-version") == prior.Value());
+    CHECK(host.probes == 1U);
+}
+
+TEST_CASE("Explicit downgrade requires acknowledgement and respects the version floor", "[release][update][rollback]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto activation = Request(install, files, verifier);
+    std::swap(activation.current, activation.staged);
+    auto active = EncodeActiveUpdateRecord(activation.current.package);
+    REQUIRE(active.HasValue());
+    REQUIRE(files.WriteDurable(install.root / "active-version", std::as_bytes(std::span{active.Value()})).HasValue());
+    UpdateRollbackRequest rollback{std::move(activation), UpdateRollbackReason::ExplicitUserRequest, UpdateRollbackAuthority::NormalPolicy,
+                                   std::nullopt, false};
+    Host host;
+    auto unacknowledged = RollbackVerifiedUpdate(rollback, files, verifier, host);
+    REQUIRE(unacknowledged.HasError());
+    CHECK(unacknowledged.ErrorValue().code.Value() == UpdateRollbackErrors::ConfirmationRequired.code.Value());
+    rollback.explicitWarningAcknowledged = true;
+    rollback.minimumAllowedVersion = rollback.activation.current.package.selection.artifact.version;
+    auto denied = RollbackVerifiedUpdate(rollback, files, verifier, host);
+    REQUIRE(denied.HasError());
+    CHECK(denied.ErrorValue().code.Value() == UpdateRollbackErrors::PolicyDenied.code.Value());
+    rollback.minimumAllowedVersion.reset();
+    auto missingFloor = RollbackVerifiedUpdate(rollback, files, verifier, host);
+    REQUIRE(missingFloor.HasError());
+    CHECK(missingFloor.ErrorValue().code.Value() == UpdateRollbackErrors::PolicyDenied.code.Value());
+    CHECK(Read(install.root / "active-version") == active.Value());
+    CHECK(host.stops == 0U);
+}
+
+TEST_CASE("Administrator recovery can restore a verified version below the normal floor", "[release][update][rollback]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto activation = Request(install, files, verifier);
+    std::swap(activation.current, activation.staged);
+    auto active = EncodeActiveUpdateRecord(activation.current.package);
+    REQUIRE(active.HasValue());
+    REQUIRE(files.WriteDurable(install.root / "active-version", std::as_bytes(std::span{active.Value()})).HasValue());
+    UpdateRollbackRequest rollback{std::move(activation), UpdateRollbackReason::FailedActivation,
+                                   UpdateRollbackAuthority::AdministratorRecovery, std::nullopt, false};
+    rollback.minimumAllowedVersion = rollback.activation.current.package.selection.artifact.version;
+    Host host;
+    auto result = RollbackVerifiedUpdate(rollback, files, verifier, host);
+    REQUIRE(result.HasValue());
+    CHECK(result.Value() == UpdateActivationOutcome::Activated);
+}
+
+TEST_CASE("Rollback rejects a target that is not an older version", "[release][update][rollback]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    UpdateRollbackRequest rollback{Request(install, files, verifier), UpdateRollbackReason::FailedActivation,
+                                   UpdateRollbackAuthority::NormalPolicy, std::nullopt, false};
+    rollback.minimumAllowedVersion = rollback.activation.current.package.selection.artifact.version;
+    Host host;
+    auto rejected = RollbackVerifiedUpdate(rollback, files, verifier, host);
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == UpdateRollbackErrors::InvalidTarget.code.Value());
+    CHECK(host.stops == 0U);
+}
+
+TEST_CASE("An invalid rollback authority cannot bypass the version floor", "[release][update][rollback]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto activation = Request(install, files, verifier);
+    std::swap(activation.current, activation.staged);
+    UpdateRollbackRequest rollback{std::move(activation), UpdateRollbackReason::FailedActivation, static_cast<UpdateRollbackAuthority>(255),
+                                   std::nullopt, false};
+    Host host;
+    auto rejected = RollbackVerifiedUpdate(rollback, files, verifier, host);
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == UpdateRollbackErrors::PolicyDenied.code.Value());
+    CHECK(host.stops == 0U);
+}
+
+TEST_CASE("Failed health during rollback leaves the newer version active", "[release][update][rollback]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto activation = Request(install, files, verifier);
+    std::swap(activation.current, activation.staged);
+    auto active = EncodeActiveUpdateRecord(activation.current.package);
+    REQUIRE(active.HasValue());
+    REQUIRE(files.WriteDurable(install.root / "active-version", std::as_bytes(std::span{active.Value()})).HasValue());
+    UpdateRollbackRequest rollback{std::move(activation), UpdateRollbackReason::FailedActivation, UpdateRollbackAuthority::NormalPolicy,
+                                   std::nullopt, false};
+    rollback.minimumAllowedVersion = rollback.activation.staged.package.selection.artifact.version;
+    Host host;
+    host.healthy = false;
+    CHECK(RollbackVerifiedUpdate(rollback, files, verifier, host).HasError());
+    CHECK(Read(install.root / "active-version") == active.Value());
+    CHECK_FALSE(std::filesystem::exists(install.root / "activation.pending"));
 }

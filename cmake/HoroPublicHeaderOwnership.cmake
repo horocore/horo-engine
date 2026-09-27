@@ -161,8 +161,10 @@ horo_configure_target_header_boundary(HoroUpdateDownload PUBLIC_HEADERS
     Horo/Release/UpdateZipStagingJob.h
 )
 horo_configure_target_header_boundary(HoroUpdateActivation PUBLIC_HEADERS
-    Horo/Release/UpdateActivation.h
-    Horo/Release/UpdateActivationErrors.h
+Horo/Release/UpdateActivation.h
+Horo/Release/UpdateActivationErrors.h
+Horo/Release/UpdateRollback.h
+Horo/Release/UpdateRollbackErrors.h
 )
 horo_configure_target_header_boundary(HoroReleaseProcess PUBLIC_HEADERS
     Horo/Release/ReleaseCandidatePublisher.h

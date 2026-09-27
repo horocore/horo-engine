@@ -379,6 +379,15 @@ is offered after:
 - startup health-check failure
 - explicit user selection
 
+`RollbackVerifiedUpdate` admits only a prior version of the same product and
+installation. Explicit user downgrades require acknowledgement, and normal
+policy rejects versions below the trusted floor. Administrator recovery is a
+separate host-authorized path. The rollback helper reuses authenticated staged
+version evidence, the installation lock, the durable activation journal, and a
+bounded startup probe; a failed probe leaves the newer verified version active.
+The host must establish authorization and the version floor from trusted state,
+not from package-provided or UI-provided values.
+
 User projects, settings, caches, and credentials are not stored inside the
 versioned installation and are not deleted by rollback.
 
