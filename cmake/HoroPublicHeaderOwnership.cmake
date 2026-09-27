@@ -71,6 +71,10 @@ horo_configure_target_header_boundary(HoroMcpSession PUBLIC_HEADERS
     Horo/Mcp/McpLocalTransport.h
 )
 
+horo_configure_target_header_boundary(HoroMcpRegistry PUBLIC_HEADERS
+    Horo/Mcp/McpToolRegistry.h
+)
+
 horo_configure_target_header_boundary(HoroOpenTelemetry PUBLIC_HEADERS
     Horo/Foundation/Telemetry/OpenTelemetrySink.h)
 

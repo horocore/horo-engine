@@ -78,6 +78,11 @@ add_library(HoroEngine::McpSession ALIAS HoroMcpSession)
 target_compile_features(HoroMcpSession PUBLIC cxx_std_20)
 target_link_libraries(HoroMcpSession PUBLIC HoroEngine::Foundation nlohmann_json::nlohmann_json)
 
+add_library(HoroMcpRegistry STATIC mcp/McpToolRegistry.cpp)
+add_library(HoroEngine::McpRegistry ALIAS HoroMcpRegistry)
+target_compile_features(HoroMcpRegistry PUBLIC cxx_std_20)
+target_link_libraries(HoroMcpRegistry PUBLIC HoroEngine::McpSession)
+
 if (HORO_ENABLE_OPENTELEMETRY)
     add_library(HoroOpenTelemetry STATIC
             foundation/telemetry/OpenTelemetrySink.cpp
