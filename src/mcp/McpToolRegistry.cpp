@@ -63,6 +63,37 @@ namespace Horo::Mcp {
 
         [[nodiscard]] bool MatchesSchema(const nlohmann::json &schema, const nlohmann::json &value);
 
+        /** @brief Checks supported scalar bounds and ensures enum members can satisfy the declared schema. */
+        [[nodiscard]] bool ValidSchemaConstraints(const nlohmann::json &schema, const std::string &kind) {
+            if (const auto choices = schema.find("enum"); choices != schema.end() && (!choices->is_array() || choices->empty()))
+                return false;
+            for (const std::string_view key : {"minItems", "maxItems", "minLength", "maxLength"}) {
+                const auto bound = schema.find(std::string{key});
+                if (bound != schema.end() &&
+                    (!ValidSizeBound(*bound) || ((key == "minItems" || key == "maxItems") ? kind != "array" : kind != "string")))
+                    return false;
+            }
+            for (const std::string_view key : {"minimum", "maximum"}) {
+                const auto bound = schema.find(std::string{key});
+                if (bound != schema.end() && (!bound->is_number() || (kind != "number" && kind != "integer")))
+                    return false;
+            }
+            for (const auto [lower, upper] :
+                 {std::pair{"minItems", "maxItems"}, std::pair{"minLength", "maxLength"}, std::pair{"minimum", "maximum"}}) {
+                if (schema.contains(lower) && schema.contains(upper) && schema[lower] > schema[upper])
+                    return false;
+            }
+            if (const auto choices = schema.find("enum"); choices != schema.end()) {
+                nlohmann::json withoutEnum = schema;
+                withoutEnum.erase("enum");
+                for (auto it = choices->begin(); it != choices->end(); ++it) {
+                    if (std::find(choices->begin(), it, *it) != it || !MatchesSchema(withoutEnum, *it))
+                        return false;
+                }
+            }
+            return true;
+        }
+
         /** @brief Rejects schemas outside the deliberately supported closed JSON Schema subset. */
         [[nodiscard]] bool ValidSchemaShape(const nlohmann::json &schema, const std::size_t depth, std::size_t &nodes) {
             if (!schema.is_object() || depth > MaximumSchemaDepth || ++nodes > MaximumSchemaNodes)
@@ -107,33 +138,7 @@ namespace Horo::Mcp {
             if (const auto items = schema.find("items");
                 items != schema.end() && (kind != "array" || !ValidSchemaShape(*items, depth + 1, nodes)))
                 return false;
-            if (const auto choices = schema.find("enum"); choices != schema.end() && (!choices->is_array() || choices->empty()))
-                return false;
-            for (const std::string_view key : {"minItems", "maxItems", "minLength", "maxLength"}) {
-                const auto bound = schema.find(std::string{key});
-                if (bound != schema.end() &&
-                    (!ValidSizeBound(*bound) || ((key == "minItems" || key == "maxItems") ? kind != "array" : kind != "string")))
-                    return false;
-            }
-            for (const std::string_view key : {"minimum", "maximum"}) {
-                const auto bound = schema.find(std::string{key});
-                if (bound != schema.end() && (!bound->is_number() || (kind != "number" && kind != "integer")))
-                    return false;
-            }
-            for (const auto [lower, upper] :
-                 {std::pair{"minItems", "maxItems"}, std::pair{"minLength", "maxLength"}, std::pair{"minimum", "maximum"}}) {
-                if (schema.contains(lower) && schema.contains(upper) && schema[lower] > schema[upper])
-                    return false;
-            }
-            if (const auto choices = schema.find("enum"); choices != schema.end()) {
-                nlohmann::json withoutEnum = schema;
-                withoutEnum.erase("enum");
-                for (auto it = choices->begin(); it != choices->end(); ++it) {
-                    if (std::find(choices->begin(), it, *it) != it || !MatchesSchema(withoutEnum, *it))
-                        return false;
-                }
-            }
-            return true;
+            return ValidSchemaConstraints(schema, kind);
         }
 
         /** @brief Validates one value against the accepted non-referencing schema subset. */
