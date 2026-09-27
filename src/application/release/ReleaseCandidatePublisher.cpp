@@ -177,8 +177,15 @@ namespace Horo::Release {
             !MatchesPlan(plan, manifest))
             return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
         std::error_code error;
-        if (ExistsIncludingSymlink(expectedFinal, error))
-            return Result<void>::Failure(CollisionError());
+        if (ExistsIncludingSymlink(expectedFinal, error)) {
+            if (ExistsIncludingSymlink(stage.StageRoot(), error))
+                return Result<void>::Failure(CollisionError());
+            if (error)
+                return Result<void>::Failure(StagingError());
+            if (VerifyReleaseArtifactTree(expectedFinal, manifest).HasError())
+                return Result<void>::Failure(CollisionError());
+            return files_.SyncDirectory(plan.OutputRoot()).HasError() ? Result<void>::Failure(StagingError()) : Result<void>::Success();
+        }
         if (error)
             return Result<void>::Failure(StagingError());
         if (ExistsIncludingSymlink(stage.StageRoot() / "manifest.json", error))
