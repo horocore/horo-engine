@@ -145,6 +145,11 @@ namespace Horo::Release {
         struct FlightGuard final {
             CancellationGate &gate;
 
+            explicit FlightGuard(CancellationGate &protectedGate) : gate(protectedGate) {}
+
+            FlightGuard(const FlightGuard &) = delete;
+            FlightGuard &operator=(const FlightGuard &) = delete;
+
             ~FlightGuard() {
                 {
                     std::lock_guard lock(gate.mutex);
@@ -152,7 +157,9 @@ namespace Horo::Release {
                 }
                 gate.idle.notify_all();
             }
-        } flight{*gate};
+        };
+
+        FlightGuard flight{*gate};
 
         std::shared_ptr<Record> record;
         {
