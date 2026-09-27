@@ -183,11 +183,50 @@ TEST_CASE("Completed update bytes require the signed package hash and publisher"
     auto checkpoint = PartialCheckpoint(package);
     checkpoint.durableBytes = package.size;
     CHECK(VerifyCompletedUpdateTransfer(package, checkpoint, bytes, verifier).HasValue());
+    TemporaryStage stage;
+    const auto partialFile = stage.path / "package.partial";
+    WriteStageFile(partialFile, std::string(100U, '\0'));
+    CHECK(VerifyCompletedUpdateTransfer(package, checkpoint, partialFile, verifier).HasValue());
+    WriteStageFile(partialFile, std::string(99U, '\0'));
+    CHECK(VerifyCompletedUpdateTransfer(package, checkpoint, partialFile, verifier).HasError());
+    WriteStageFile(partialFile, std::string(100U, 'x'));
+    CHECK(VerifyCompletedUpdateTransfer(package, checkpoint, partialFile, verifier).HasError());
+    std::filesystem::remove(partialFile);
+    std::error_code linkError;
+    std::filesystem::create_symlink(stage.path / "missing", partialFile, linkError);
+    if (!linkError)
+        CHECK(VerifyCompletedUpdateTransfer(package, checkpoint, partialFile, verifier).HasError());
     bytes[0] = std::byte{1};
     CHECK(VerifyCompletedUpdateTransfer(package, checkpoint, bytes, verifier).HasError());
     bytes[0] = std::byte{};
     checkpoint.durableBytes = package.size - 1U;
     CHECK(VerifyCompletedUpdateTransfer(package, checkpoint, bytes, verifier).HasError());
+}
+
+TEST_CASE("Large private update files are verified across streaming blocks", "[release][update]") {
+    const std::string payload(128U * 1024U + 1U, 'p');
+    auto package = Package();
+    package.size = payload.size();
+    package.digest = Horo::ComputeSha256(std::as_bytes(std::span{payload}));
+    package.signature = {.publisherId = "com.horo.updates",
+                         .keyId = "key-1",
+                         .artifactDigest = package.digest,
+                         .signature = std::vector<std::byte>(64U, std::byte{1})};
+    auto roots = std::make_shared<Horo::Security::TrustedRootStore>();
+    std::vector<std::byte> key(65U, std::byte{1});
+    key.front() = std::byte{0x04};
+    REQUIRE(roots->Add({.publisherId = "com.horo.updates", .keyId = "key-1", .publicKey = std::move(key)}).HasValue());
+    const Horo::Security::ArtifactVerifier verifier{std::make_shared<AcceptingProvider>(), roots};
+    auto checkpoint = PartialCheckpoint(package);
+    checkpoint.durableBytes = package.size;
+    TemporaryStage stage;
+    const auto partialFile = stage.path / "package.partial";
+    WriteStageFile(partialFile, payload);
+    CHECK(VerifyCompletedUpdateTransfer(package, checkpoint, partialFile, verifier).HasValue());
+    auto changed = payload;
+    changed[64U * 1024U] = 'x';
+    WriteStageFile(partialFile, changed);
+    CHECK(VerifyCompletedUpdateTransfer(package, checkpoint, partialFile, verifier).HasError());
 }
 
 TEST_CASE("Update archive preflight accepts bounded regular content", "[release][update]") {

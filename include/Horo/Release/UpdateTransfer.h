@@ -8,6 +8,7 @@
 #include "Horo/Release/UpdateManifest.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -96,4 +97,16 @@ namespace Horo::Release {
      */
     [[nodiscard]] Result<void> VerifyCompletedUpdateTransfer(const UpdatePackageRecord &package, const UpdateTransferCheckpoint &checkpoint,
                                                              std::span<const std::byte> bytes, const Security::ArtifactVerifier &verifier);
+
+    /**
+     * @brief Authenticates a complete private package file with bounded memory before extraction.
+     * @param package Authenticated package record selected by discovery.
+     * @param checkpoint Durable transfer checkpoint for the private file.
+     * @param partialFile Quiescent private regular file kept unchanged until extraction completes.
+     * @param verifier Host-composed publisher signature verifier.
+     * @return Success only for exact length, SHA-256 digest, trusted publisher, and signature.
+     */
+    [[nodiscard]] Result<void> VerifyCompletedUpdateTransfer(const UpdatePackageRecord &package, const UpdateTransferCheckpoint &checkpoint,
+                                                             const std::filesystem::path &partialFile,
+                                                             const Security::ArtifactVerifier &verifier);
 }  // namespace Horo::Release

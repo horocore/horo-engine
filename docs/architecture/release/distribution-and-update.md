@@ -257,7 +257,9 @@ capacity, and checkpoints advance only after bytes are durably stored. The host
 still owns transport, private-file I/O, cancellation, and progress dispatch.
 `VerifyCompletedUpdateTransfer` then checks the complete private-file size,
 hash, and publisher signature before any extractor or staging marker consumes
-it.
+it. The file-backed path streams the private package through SHA-256 in bounded
+memory; the host keeps that file quiescent through extraction so the verified
+bytes cannot change between the check and use.
 After package authentication, a format-specific reader must expose the complete
 archive index to `ValidateUpdateArchiveIndex` before extracting any entry. The
 preflight uses the release artifact path grammar and rejects links, special

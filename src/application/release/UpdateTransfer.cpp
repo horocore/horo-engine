@@ -175,4 +175,17 @@ namespace Horo::Release {
             return Result<void>::Failure(MakeError(UpdateTransferErrors::InvalidResponse));
         return VerifyUpdatePackage(package, bytes, verifier);
     }
+
+    /** @copydoc VerifyCompletedUpdateTransfer */
+    Result<void> VerifyCompletedUpdateTransfer(const UpdatePackageRecord &package, const UpdateTransferCheckpoint &checkpoint,
+                                               const std::filesystem::path &partialFile, const Security::ArtifactVerifier &verifier) {
+        if (checkpoint.packageDigest != package.digest || checkpoint.packageSize != package.size ||
+            checkpoint.durableBytes != package.size || checkpoint.requestedUrl != package.url || checkpoint.effectiveUrl != package.url ||
+            package.size == 0U || package.signature.artifactDigest != package.digest)
+            return Result<void>::Failure(MakeError(UpdateTransferErrors::InvalidResponse));
+        auto verified = verifier.VerifyFile(partialFile, package.size, package.signature);
+        if (verified.HasError())
+            return Result<void>::Failure(verified.ErrorValue());
+        return Result<void>::Success();
+    }
 }  // namespace Horo::Release
