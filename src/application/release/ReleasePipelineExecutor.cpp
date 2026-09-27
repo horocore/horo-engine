@@ -126,13 +126,16 @@ namespace Horo::Release {
             return true;
         }
 
-        /** @brief Produces a verified unsigned payload through the ordered build and cook stages. */
-        [[nodiscard]] std::optional<ReleasePreSignVerifiedPayload> PrepareUnsignedPayload(StageRuntime &runtime,
-                                                                                          IReleasePipelineStages &stages) {
+        /** @brief Outputs that have passed the validation, configuration, and build stages. */
+        struct BuildArtifacts final {
+            ReleaseConfiguredTarget configured;
+            ReleaseBuiltPayload built;
+        };
+
+        /** @brief Validates frozen inputs and produces the configured native build. */
+        [[nodiscard]] std::optional<BuildArtifacts> PrepareBuild(StageRuntime &runtime, IReleasePipelineStages &stages) {
             std::optional<ReleaseConfiguredTarget> configured;
             std::optional<ReleaseBuiltPayload> built;
-            std::optional<ReleaseCookedPayload> cooked;
-            std::optional<ReleaseStagedPayload> staged;
             if (!RunStage(runtime, ReleaseStage::Validating, [&stages](const ReleaseStageContext &context) {
                 return stages.Validate(context);
             }))
@@ -155,8 +158,16 @@ namespace Horo::Release {
                                                                              : Result<void>::Failure(InvalidOutput());
             }))
                 return std::nullopt;
-            if (!RunStage(runtime, ReleaseStage::Cooking, [&stages, &configured, &built, &cooked](const ReleaseStageContext &context) {
-                auto result = stages.Cook(context, *configured, *built);
+            return BuildArtifacts{std::move(*configured), std::move(*built)};
+        }
+
+        /** @brief Cooks and packages the build before the unsigned byte verification boundary. */
+        [[nodiscard]] std::optional<ReleasePreSignVerifiedPayload> PrepareCook(StageRuntime &runtime, IReleasePipelineStages &stages,
+                                                                               const BuildArtifacts &build) {
+            std::optional<ReleaseCookedPayload> cooked;
+            std::optional<ReleaseStagedPayload> staged;
+            if (!RunStage(runtime, ReleaseStage::Cooking, [&stages, &build, &cooked](const ReleaseStageContext &context) {
+                auto result = stages.Cook(context, build.configured, build.built);
                 if (result.HasError())
                     return Result<void>::Failure(std::move(result).ErrorValue());
                 cooked = std::move(result).Value();
@@ -164,8 +175,8 @@ namespace Horo::Release {
                                                                                : Result<void>::Failure(InvalidOutput());
             }))
                 return std::nullopt;
-            if (!RunStage(runtime, ReleaseStage::Packaging, [&stages, &built, &cooked, &staged](const ReleaseStageContext &context) {
-                auto result = stages.Package(context, *built, *cooked);
+            if (!RunStage(runtime, ReleaseStage::Packaging, [&stages, &build, &cooked, &staged](const ReleaseStageContext &context) {
+                auto result = stages.Package(context, build.built, *cooked);
                 if (result.HasError())
                     return Result<void>::Failure(std::move(result).ErrorValue());
                 staged = std::move(result).Value();
@@ -178,6 +189,13 @@ namespace Horo::Release {
             }))
                 return std::nullopt;
             return ReleasePreSignVerifiedPayload{*staged};
+        }
+
+        /** @brief Produces a verified unsigned payload through the ordered build and cook stages. */
+        [[nodiscard]] std::optional<ReleasePreSignVerifiedPayload> PrepareUnsignedPayload(StageRuntime &runtime,
+                                                                                          IReleasePipelineStages &stages) {
+            auto build = PrepareBuild(runtime, stages);
+            return build ? PrepareCook(runtime, stages, *build) : std::nullopt;
         }
 
         /** @brief Seals final bytes, verifies metadata, and optionally publishes the candidate. */
@@ -196,8 +214,8 @@ namespace Horo::Release {
                 return false;
             const ReleaseFinalBytes finalBytes = signedPayload ? ReleaseFinalBytes{*signedPayload} : ReleaseFinalBytes{verified};
             std::optional<ReleaseFinalMetadata> metadata;
-            std::optional<ReleaseCandidateId> candidateId;
-            if (!RunStage(runtime, ReleaseStage::FinalizingMetadata,
+            if (std::optional<ReleaseCandidateId> candidateId;
+                !RunStage(runtime, ReleaseStage::FinalizingMetadata,
                           [&stages, candidate, &finalBytes, &metadata, &candidateId](const ReleaseStageContext &context) {
                 auto result = stages.FinalizeMetadata(context, candidate, finalBytes);
                 if (result.HasError())
@@ -263,8 +281,8 @@ namespace Horo::Release {
 
         StageRuntime runtime{tracker, plan, facts, cancellation, limits};
 
-        auto unsignedPayload = PrepareUnsignedPayload(runtime, stages);
-        if (!unsignedPayload || !FinishCandidate(runtime, stages, expected, candidate, *unsignedPayload))
+        if (auto unsignedPayload = PrepareUnsignedPayload(runtime, stages);
+            !unsignedPayload || !FinishCandidate(runtime, stages, expected, candidate, *unsignedPayload))
             return tracker.Snapshot();
         if (StopIfCancelled(tracker, cancellation))
             return tracker.Snapshot();
