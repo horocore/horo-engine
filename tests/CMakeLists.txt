@@ -998,7 +998,7 @@ add_executable(HoroReleaseTargetMatrixTests
         unit/application/ReleaseTargetMatrixTests.cpp
 )
 target_compile_features(HoroReleaseTargetMatrixTests PRIVATE cxx_std_20)
-target_link_libraries(HoroReleaseTargetMatrixTests PRIVATE HoroEngine::Application)
+target_link_libraries(HoroReleaseTargetMatrixTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
 add_executable(HoroProjectMigrationTests
         unit/application/ProjectMigrationTests.cpp
         unit/application/ProjectMigrationCatalogTests.cpp
