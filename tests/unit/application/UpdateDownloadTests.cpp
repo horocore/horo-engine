@@ -95,10 +95,21 @@ namespace {
 
     constexpr UpdateDownloadLimits Limits{.maximumPackageBytes = 1024U, .reserveBytes = 0U};
 
-    [[nodiscard]] std::string ZipArchive(const std::string_view name, const std::string_view content) {
+    [[nodiscard]] std::string ZipArchive(const std::string_view name, const std::string_view content,
+                                         const std::optional<std::string_view> declaredContent = std::nullopt,
+                                         const std::optional<std::pair<std::string_view, std::string_view>> extraFile = std::nullopt,
+                                         const bool includeInventory = true) {
         mz_zip_archive writer{};
         REQUIRE(mz_zip_writer_init_heap(&writer, 0U, 0U));
+        const auto digest = Horo::ComputeSha256(std::as_bytes(std::span{declaredContent.value_or(content)}));
+        const std::string inventory =
+            "horo-update-files-v1\n" + std::string{name} + '\t' + std::to_string(content.size()) + '\t' + Horo::FormatSha256(digest) + '\n';
+        if (includeInventory)
+            REQUIRE(mz_zip_writer_add_mem(&writer, "horo-update-files-v1.txt", inventory.data(), inventory.size(), MZ_DEFAULT_COMPRESSION));
         REQUIRE(mz_zip_writer_add_mem(&writer, std::string{name}.c_str(), content.data(), content.size(), MZ_DEFAULT_COMPRESSION));
+        if (extraFile)
+            REQUIRE(mz_zip_writer_add_mem(&writer, std::string{extraFile->first}.c_str(), extraFile->second.data(),
+                                          extraFile->second.size(), MZ_DEFAULT_COMPRESSION));
         void *bytes = nullptr;
         std::size_t size = 0U;
         REQUIRE(mz_zip_writer_finalize_heap_archive(&writer, &bytes, &size));
@@ -333,10 +344,11 @@ TEST_CASE("Verified ZIP staging extracts bounded content and publishes ready", "
 TEST_CASE("ZIP staging rejects escaped and oversized entries before creating a tree", "[release][update]") {
     TemporaryStage stage;
     Horo::NativeDurableFileSystem files;
-    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 8U, .maximumExpandedBytes = 8U};
+    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
     const auto root = stage.path / "candidate";
     for (const auto name : {"../escaped", "bin/editor"}) {
-        const auto archive = ZipArchive(name, name == std::string_view{"../escaped"} ? "safe" : "oversized editor");
+        const auto content = name == std::string_view{"../escaped"} ? std::string{"safe"} : std::string(2000U, 'x');
+        const auto archive = ZipArchive(name, content);
         const auto package = Package(archive);
         const auto paths = Paths(stage);
         {
@@ -360,7 +372,7 @@ TEST_CASE("ZIP staging persists empty files and cancellation clears stale ready 
         output.write(archive.data(), static_cast<std::streamsize>(archive.size()));
     }
     Horo::NativeDurableFileSystem files;
-    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 2U, .maximumFileBytes = 1U, .maximumExpandedBytes = 1U};
+    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 2U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
     const auto root = stage.path / "candidate";
     const auto marker = std::filesystem::path{root.string() + ".ready"};
     {
@@ -395,4 +407,27 @@ TEST_CASE("ZIP staging never removes a package whose path aliases its ready mark
     constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
     CHECK(StageVerifiedZipUpdate(package, CompleteCheckpoint(package), packageFile, root, archiveLimits, files, Verifier(), {}).HasError());
     CHECK(std::filesystem::file_size(packageFile) == archive.size());
+}
+
+TEST_CASE("ZIP staging rejects undeclared files and declared digest mismatches", "[release][update]") {
+    TemporaryStage stage;
+    Horo::NativeDurableFileSystem files;
+    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
+    const auto root = stage.path / "candidate";
+    const std::array archives{ZipArchive("bin/editor", "verified editor", "altered editor"),
+                              ZipArchive("bin/editor", "verified editor", std::nullopt,
+                                         std::pair<std::string_view, std::string_view>{"extra.txt", "undeclared"}),
+                              ZipArchive("bin/editor", "verified editor", std::nullopt, std::nullopt, false)};
+    for (const auto &archive : archives) {
+        const auto package = Package(archive);
+        const auto paths = Paths(stage);
+        {
+            std::ofstream output(paths.partialFile, std::ios::binary | std::ios::trunc);
+            output.write(archive.data(), static_cast<std::streamsize>(archive.size()));
+        }
+        CHECK(StageVerifiedZipUpdate(package, CompleteCheckpoint(package), paths.partialFile, root, archiveLimits, files, Verifier(), {})
+                  .HasError());
+        CHECK_FALSE(std::filesystem::exists(root));
+        CHECK_FALSE(std::filesystem::exists(root.string() + ".ready"));
+    }
 }

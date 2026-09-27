@@ -2,8 +2,10 @@
 #include "Horo/Release/UpdateTransferErrors.h"
 
 #include <algorithm>
+#include <charconv>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <miniz.h>
 #include <set>
 #include <string>
@@ -12,6 +14,10 @@
 
 namespace Horo::Release {
     namespace {
+        constexpr std::string_view InventoryName = "horo-update-files-v1.txt";
+        constexpr std::string_view InventoryHeader = "horo-update-files-v1\n";
+        constexpr std::uint64_t MaximumInventoryBytes = 1024U * 1024U;
+
         struct ZipReader final {
             explicit ZipReader(const std::filesystem::path &path) : input(path, std::ios::binary) {}
 
@@ -128,6 +134,72 @@ namespace Horo::Release {
             return Result<std::vector<UpdateArchiveEntry>>::Success(std::move(entries));
         }
 
+        using DeclaredFiles = std::map<std::string, UpdateStagedFile, std::less<>>;
+
+        /** @brief Parses one canonical tab-delimited row from the authenticated ZIP inventory. */
+        [[nodiscard]] Result<UpdateStagedFile> ParseInventoryRow(const std::string_view row) {
+            const auto first = row.find('\t');
+            const auto second = first == std::string_view::npos ? first : row.find('\t', first + 1U);
+            if (first == std::string_view::npos || second == std::string_view::npos ||
+                row.find('\t', second + 1U) != std::string_view::npos)
+                return Result<UpdateStagedFile>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
+            const auto sizeText = row.substr(first + 1U, second - first - 1U);
+            std::uint64_t size{};
+            const auto [end, error] = std::from_chars(sizeText.data(), sizeText.data() + sizeText.size(), size);
+            if (error != std::errc{} || end != sizeText.data() + sizeText.size() || std::to_string(size) != sizeText)
+                return Result<UpdateStagedFile>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
+            auto digest = ParseSha256(row.substr(second + 1U));
+            if (digest.HasError())
+                return Result<UpdateStagedFile>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
+            return Result<UpdateStagedFile>::Success({std::string{row.substr(0U, first)}, size, std::move(digest).Value()});
+        }
+
+        /** @brief Binds every ZIP file to one separately declared size and digest. */
+        [[nodiscard]] Result<DeclaredFiles> ReadDeclaredFiles(mz_zip_archive &zip, const std::span<const UpdateArchiveEntry> index,
+                                                              const UpdateArchiveLimits &limits) {
+            const auto invalid = [] {
+                return Result<DeclaredFiles>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
+            };
+            const auto inventory = std::ranges::find_if(index, [](const UpdateArchiveEntry &entry) {
+                return entry.path == InventoryName && entry.kind == UpdateArchiveEntryKind::File;
+            });
+            if (inventory == index.end() || inventory->expandedBytes < InventoryHeader.size() ||
+                inventory->expandedBytes > std::min(limits.maximumFileBytes, MaximumInventoryBytes))
+                return invalid();
+            const auto item = static_cast<mz_uint>(std::distance(index.begin(), inventory));
+            std::string bytes(static_cast<std::size_t>(inventory->expandedBytes), '\0');
+            if (!mz_zip_reader_extract_to_mem(&zip, item, bytes.data(), bytes.size(), 0U) || !bytes.starts_with(InventoryHeader) ||
+                !bytes.ends_with('\n'))
+                return invalid();
+            DeclaredFiles declared;
+            std::string previous;
+            std::size_t position = InventoryHeader.size();
+            while (position < bytes.size()) {
+                const auto end = bytes.find('\n', position);
+                if (end == std::string::npos || end == position)
+                    return invalid();
+                auto row = ParseInventoryRow(std::string_view{bytes}.substr(position, end - position));
+                if (row.HasError() || row.Value().path <= previous || row.Value().path == InventoryName ||
+                    row.Value().size > limits.maximumFileBytes)
+                    return invalid();
+                previous = row.Value().path;
+                declared.emplace(row.Value().path, std::move(row).Value());
+                position = end + 1U;
+            }
+            if (declared.empty())
+                return invalid();
+            std::size_t files = 0U;
+            for (const auto &entry : index) {
+                if (entry.kind != UpdateArchiveEntryKind::File || entry.path == InventoryName)
+                    continue;
+                const auto found = declared.find(entry.path);
+                if (found == declared.end() || found->second.size != entry.expandedBytes)
+                    return invalid();
+                ++files;
+            }
+            return files == declared.size() ? Result<DeclaredFiles>::Success(std::move(declared)) : invalid();
+        }
+
         /** @brief Extracts a preflighted file into a newly created private tree. */
         [[nodiscard]] Result<UpdateStagedFile> ExtractFile(mz_zip_archive &zip, const mz_uint index, const UpdateArchiveEntry &entry,
                                                            const std::filesystem::path &root, NativeDurableFileSystem &files) {
@@ -184,7 +256,7 @@ namespace Horo::Release {
         /** @brief Extracts every indexed file and retains its exact digest for final tree verification. */
         [[nodiscard]] Result<std::vector<UpdateStagedFile>> ExtractEntries(mz_zip_archive &zip,
                                                                            const std::span<const UpdateArchiveEntry> index,
-                                                                           const std::filesystem::path &root,
+                                                                           const DeclaredFiles &declared, const std::filesystem::path &root,
                                                                            NativeDurableFileSystem &files,
                                                                            const CancellationToken &cancellation) {
             std::vector<UpdateStagedFile> inventory;
@@ -192,11 +264,15 @@ namespace Horo::Release {
             for (mz_uint item = 0U; item < index.size(); ++item) {
                 if (cancellation.IsCancellationRequested())
                     return Result<std::vector<UpdateStagedFile>>::Failure(MakeError(UpdateTransferErrors::Cancelled));
-                if (index[item].kind == UpdateArchiveEntryKind::Directory)
+                if (index[item].kind == UpdateArchiveEntryKind::Directory || index[item].path == InventoryName)
                     continue;
                 auto extracted = ExtractFile(zip, item, index[item], root, files);
                 if (extracted.HasError())
                     return Result<std::vector<UpdateStagedFile>>::Failure(extracted.ErrorValue());
+                const auto expected = declared.find(extracted.Value().path);
+                if (expected == declared.end() || extracted.Value().size != expected->second.size ||
+                    extracted.Value().digest != expected->second.digest)
+                    return Result<std::vector<UpdateStagedFile>>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
                 inventory.push_back(std::move(extracted).Value());
             }
             return Result<std::vector<UpdateStagedFile>>::Success(std::move(inventory));
@@ -264,11 +340,14 @@ namespace Horo::Release {
         auto index = ReadIndex(reader.archive, limits, cancellation);
         if (index.HasError())
             return Result<std::filesystem::path>::Failure(index.ErrorValue());
+        auto declared = ReadDeclaredFiles(reader.archive, index.Value(), limits);
+        if (declared.HasError())
+            return Result<std::filesystem::path>::Failure(declared.ErrorValue());
         std::error_code error;
         if (!std::filesystem::create_directory(stageRoot, error) || error)
             return failed(UpdateTransferErrors::StageMismatch);
         StageCleanup cleanup{stageRoot};
-        auto inventory = ExtractEntries(reader.archive, index.Value(), stageRoot, files, cancellation);
+        auto inventory = ExtractEntries(reader.archive, index.Value(), declared.Value(), stageRoot, files, cancellation);
         if (inventory.HasError())
             return Result<std::filesystem::path>::Failure(inventory.ErrorValue());
         if (auto synced = SyncStageDirectories(stageRoot, files); synced.HasError())

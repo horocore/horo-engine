@@ -34,7 +34,7 @@ namespace Horo::Release {
         NativeDurableFileSystem &files, const Security::ArtifactVerifier &verifier, CancellationToken cancellation);
 
     /**
-     * @brief Authenticates and extracts a ZIP package into a new private stage, then publishes its ready marker.
+     * @brief Authenticates a ZIP and its internal file inventory, extracts it into a new private stage, then publishes ready.
      * @param package Signed ZIP package identity selected by update discovery.
      * @param checkpoint Durable checkpoint for the complete quiescent package file.
      * @param packageFile Complete private package file outside the stage.

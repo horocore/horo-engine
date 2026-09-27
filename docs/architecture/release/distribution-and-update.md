@@ -274,11 +274,16 @@ may be published. The host must keep the private stage quiescent during this
 check; the archive reader must supply the complete authenticated file inventory.
 For ZIP packages, `StageVerifiedZipUpdate` first authenticates the complete
 private package, preflights every central-directory entry and local header,
-then extracts into an absent sibling directory with durable bounded writes.
-It derives the per-file inventory from the authenticated ZIP entries and
-decompressed bytes, checks the completed tree again, and removes the new tree
-on failure before any ready marker can survive. Other package formats require
-their own readers with the same preflight and durable publication sequence.
+then requires exactly one `horo-update-files-v1.txt` entry. Its canonical UTF-8
+payload starts with `horo-update-files-v1\n` and contains sorted rows of
+`<path>\t<decimal byte count>\t<sha256:64 lowercase hex digits>\n` for every other regular
+file. The inventory entry is not installed. The reader rejects missing, extra,
+duplicate, mismatched, or noncanonical rows before extraction, then compares
+every decompressed file with its declared digest and size. It writes into an
+absent sibling directory durably, checks the completed tree again, and removes
+the new tree on failure before any ready marker can survive. ZIP producers must
+write this inventory before package signing. Other package formats require
+readers with the same preflight and durable publication sequence.
 Partial-file checkpoint evidence uses a bounded canonical schema. Recovery
 parses it as untrusted bytes and rechecks it against the selected signed package
 and the new transport response before appending any downloaded bytes. The
