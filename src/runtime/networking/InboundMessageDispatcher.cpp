@@ -59,8 +59,8 @@ namespace Horo::Network {
             limits.maximumPacketsPerPoll > limits.maximumQueuedPackets || limits.envelope.maximumFrameBytes == 0)
             return Result<std::unique_ptr<InboundMessageDispatcher>>::Failure(MakeError(NetworkErrors::NetworkIoServiceInvalid));
         try {
-            auto created = std::unique_ptr<InboundMessageDispatcher>(
-                new InboundMessageDispatcher(transport, codecs, limits));  // NOSONAR: private constructor enforces this validated factory.
+            auto created = std::unique_ptr<InboundMessageDispatcher>(  // NOSONAR: make_unique cannot access this validated private ctor.
+                new InboundMessageDispatcher(transport, codecs, limits));
             return Result<std::unique_ptr<InboundMessageDispatcher>>::Success(std::move(created));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<InboundMessageDispatcher>>::Failure(MakeError(NetworkErrors::NetworkIoServiceCapacityExceeded));
