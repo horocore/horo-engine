@@ -208,6 +208,15 @@ namespace Horo::XR {
             REQUIRE_FALSE(frames.Snapshot().renderAdmitted);
             REQUIRE(frames.Begin(invalidPrediction.frame) == XRFrameStatus::Ok);
             REQUIRE(frames.End(invalidPrediction.frame, 0) == XRFrameStatus::Ok);
+        }
+
+        TEST_CASE("XR frame image and submission failures retain release obligations", "[unit][xr][frame]") {
+            NoopResources resources;
+            XRSessionLifecycle sessions{resources};
+            const auto capabilities = Capabilities();
+            const XRSessionId session = Activate(sessions, capabilities);
+            XRFrameLifecycle frames{sessions};
+            REQUIRE(frames.BindConfiguration(Configuration(session), capabilities, StereoLimits) == XRFrameStatus::Ok);
             const XRFrameId frame = Wait(frames, session);
             REQUIRE(frames.BindConfiguration(Configuration(session, 2), capabilities, StereoLimits) == XRFrameStatus::OutOfOrder);
             REQUIRE(frames.Begin(frame) == XRFrameStatus::Ok);
