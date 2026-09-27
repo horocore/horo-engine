@@ -464,6 +464,9 @@ horo_configure_target_header_boundary(HoroDestructionApi PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroDestructionRuntime PUBLIC_HEADERS
     Horo/Destruction/DestructionDamageRuntime.h
 )
+horo_configure_target_header_boundary(HoroDestructionReplication PUBLIC_HEADERS
+    Horo/Destruction/DestructionReplication.h
+)
 horo_configure_target_header_boundary(HoroCinematicModel PUBLIC_HEADERS
     Horo/Cinematic/CurveSampling.h
     Horo/Cinematic/CinematicErrors.h
