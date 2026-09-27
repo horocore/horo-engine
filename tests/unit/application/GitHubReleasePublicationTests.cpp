@@ -82,7 +82,8 @@ namespace {
                 return Result<GitHubReleaseIdentity>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
             return Result<GitHubReleaseIdentity>::Success(
                 {std::string{repository}, wrongTag ? "v0.4.3" : std::string{tag}, releaseId,
-                 wrongSource ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" : std::string{SourceCommit}});
+                 wrongSource ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" : std::string{SourceCommit},
+                 wrongBody ? "Unreviewed notes" : nlohmann::json::parse(Notes()).at("markdown").get<std::string>()});
         }
 
         [[nodiscard]] Result<void> UploadExact(const GitHubReleaseIdentity &release, const std::string_view name,
@@ -119,6 +120,7 @@ namespace {
         bool missing{};
         bool wrongTag{};
         bool wrongSource{};
+        bool wrongBody{};
     };
 }  // namespace
 
@@ -178,6 +180,12 @@ TEST_CASE("GitHub adapter rejects missing, changed, or corrupted remote release 
     CHECK(PublishVerifiedReleaseCandidate(request, wrongSourceAdapter).HasError());
     CHECK(wrongSourceClient.uploads == 0);
 
+    FakeGitHubClient wrongBodyClient;
+    wrongBodyClient.wrongBody = true;
+    GitHubReleasePublicationAdapter wrongBodyAdapter{"horocore/horo-engine", wrongBodyClient};
+    CHECK(PublishVerifiedReleaseCandidate(request, wrongBodyAdapter).HasError());
+    CHECK(wrongBodyClient.uploads == 0);
+
     FakeGitHubClient client;
     GitHubReleasePublicationAdapter adapter{"horocore/horo-engine", client};
     auto receipt = adapter.Upload(request);
@@ -186,6 +194,10 @@ TEST_CASE("GitHub adapter rejects missing, changed, or corrupted remote release 
     CHECK(adapter.VerifyRemote(request, receipt.Value()).HasError());
     CHECK(client.commits == 0);
     client.assets.at("bin%2Feditor").digest = Digest("editor");
+    client.wrongBody = true;
+    CHECK(adapter.VerifyRemote(request, receipt.Value()).HasError());
+    CHECK(adapter.CommitChannel(request, receipt.Value()).HasError());
+    client.wrongBody = false;
     ++client.releaseId;
     CHECK(adapter.VerifyRemote(request, receipt.Value()).HasError());
     CHECK(adapter.CommitChannel(request, receipt.Value()).HasError());

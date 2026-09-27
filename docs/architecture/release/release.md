@@ -700,6 +700,13 @@ remote manifest and confirming the release is GitHub's latest. Other channels
 fail until they have an explicit remote mapping. `Release Binaries` workflow
 composition remains separate host work.
 
+The destination also compares the existing GitHub Release body to the exact
+reviewed Markdown in the frozen notes snapshot before upload and at every later
+identity check. This extends `GitHubReleaseIdentity` with a bounded body field;
+host clients constructing that identity must return the existing release body.
+Callers with an older client implementation must supply it or publication fails
+closed. Tests cover mismatched and changed release bodies before channel commit.
+
 ## Security
 
 Release credentials, encryption, signing, CI trust, transport, logging, and

@@ -60,7 +60,7 @@ namespace {
         int HandleApi(const std::vector<std::string> &arguments, std::string &output) {
             const auto &endpoint = arguments[1] == "--method" ? arguments[3] : arguments[1];
             if (endpoint.find("/releases/tags/") != std::string::npos) {
-                output = R"({"id":72,"tag_name":"v0.4.2","draft":false})";
+                output = R"({"id":72,"tag_name":"v0.4.2","draft":false,"body":"Reviewed notes"})";
             } else if (endpoint.find("/git/ref/tags/") != std::string::npos) {
                 output = R"({"object":{"type":"tag","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}})";
             } else if (endpoint.find("/git/tags/") != std::string::npos) {
@@ -147,6 +147,7 @@ TEST_CASE("GitHub CLI client fails closed on missing authorization and verifies 
     GitHubReleaseCliClient ready{authorized};
     auto release = ready.FindExisting("horocore/horo-engine", "v0.4.2");
     REQUIRE(release.HasValue());
+    CHECK(release.Value().body == "Reviewed notes");
     authorized.assets["manifest.json"] = "manifest";
     CHECK(ready.Commit(release.Value(), {ReleaseChannelKind::Preview, {}}, Digest("manifest")).HasError());
     CHECK(authorized.commits == 0);

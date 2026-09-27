@@ -3,6 +3,9 @@
 #include "Horo/Release/ReleaseErrors.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -26,6 +29,28 @@ namespace Horo::Release {
             return commit.size() == 40U && std::ranges::all_of(commit, [](const char character) {
                 return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f');
             });
+        }
+
+        [[nodiscard]] std::optional<std::string> ReviewedBody(const ReleasePublicationRequest &request) {
+            try {
+                const auto notes = nlohmann::json::parse(request.plan.ReleaseNotesSnapshot());
+                if (!notes.is_object() || !notes.contains("markdown") || !notes.at("markdown").is_string())
+                    return std::nullopt;
+                return notes.at("markdown").get<std::string>();
+            } catch (const nlohmann::json::exception &) {
+                return std::nullopt;
+            }
+        }
+
+        [[nodiscard]] std::string NormalizeLineEndings(const std::string_view text) {
+            std::string normalized;
+            normalized.reserve(text.size());
+            for (std::size_t index = 0; index < text.size(); ++index) {
+                if (text[index] == '\r' && index + 1U < text.size() && text[index + 1U] == '\n')
+                    continue;
+                normalized.push_back(text[index]);
+            }
+            return normalized;
         }
 
         [[nodiscard]] std::string ExpectedTag(const ReleasePublicationRequest &request) {
@@ -57,7 +82,8 @@ namespace Horo::Release {
                                                                     const ReleasePublicationRequest &request,
                                                                     const std::string_view receiptId = {}) {
             const auto &source = request.manifest.Data().sourceRevision.value;
-            if (!ValidRepository(repository) || !ValidGitCommit(source) ||
+            const auto reviewedBody = ReviewedBody(request);
+            if (!ValidRepository(repository) || !ValidGitCommit(source) || !reviewedBody ||
                 (request.manifest.Data().version != request.plan.Request().version.productVersion))
                 return Result<GitHubReleaseIdentity>::Failure(MakeError(ReleaseErrors::PipelineInputChanged));
             const std::string tag = ExpectedTag(request);
@@ -66,6 +92,7 @@ namespace Horo::Release {
                 return found;
             if (const auto &release = found.Value(); release.repository != repository || release.tag != tag || release.releaseId == 0U ||
                                                      release.sourceCommit != source ||
+                                                     NormalizeLineEndings(release.body) != *reviewedBody ||
                                                      (!receiptId.empty() && std::to_string(release.releaseId) != receiptId))
                 return Result<GitHubReleaseIdentity>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
             return found;

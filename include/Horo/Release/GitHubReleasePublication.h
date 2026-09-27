@@ -19,6 +19,7 @@ namespace Horo::Release {
         std::string tag;
         std::uint64_t releaseId{};
         std::string sourceCommit; /**< Peeled commit SHA of the existing Git tag. */
+        std::string body;         /**< Reviewed release notes body returned by the existing GitHub Release. */
     };
 
     /** @brief Remote asset evidence measured by reading the uploaded bytes. */

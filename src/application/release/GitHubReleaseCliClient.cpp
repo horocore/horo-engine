@@ -186,12 +186,13 @@ namespace Horo::Release {
             const auto &document = parsed.Value();
             const auto id = document.at("id").get<std::uint64_t>();
             const auto remoteTag = document.at("tag_name").get<std::string>();
-            if (id == 0U || remoteTag != tag || document.at("draft").get<bool>())
+            const auto body = document.at("body").get<std::string>();
+            if (id == 0U || remoteTag != tag || document.at("draft").get<bool>() || body.size() > MaximumReleaseNotesSnapshotBytes)
                 return Result<GitHubReleaseIdentity>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
             auto commit = ResolveSourceCommit(repository, tag);
             if (commit.HasError())
                 return Result<GitHubReleaseIdentity>::Failure(commit.ErrorValue());
-            return Result<GitHubReleaseIdentity>::Success({std::string{repository}, remoteTag, id, std::move(commit).Value()});
+            return Result<GitHubReleaseIdentity>::Success({std::string{repository}, remoteTag, id, std::move(commit).Value(), body});
         } catch (const Json::exception &) {
             return Result<GitHubReleaseIdentity>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
         }
@@ -231,7 +232,8 @@ namespace Horo::Release {
         auto current = FindExisting(release.repository, release.tag);
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
-        if (current.Value().releaseId != release.releaseId || current.Value().sourceCommit != release.sourceCommit)
+        if (current.Value().releaseId != release.releaseId || current.Value().sourceCommit != release.sourceCommit ||
+            current.Value().body != release.body)
             return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
         return Result<void>::Success();
     }
