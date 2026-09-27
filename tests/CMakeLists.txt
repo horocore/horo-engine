@@ -1062,6 +1062,11 @@ target_compile_features(HoroUpdateManifestTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateManifestTests PRIVATE HoroEngine::UpdateManifest nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroUpdateManifestTests LABELS "release;update;headless")
 
+add_executable(HoroUpdateDiscoveryTests unit/application/UpdateDiscoveryTests.cpp)
+target_compile_features(HoroUpdateDiscoveryTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUpdateDiscoveryTests PRIVATE HoroEngine::UpdateDiscovery)
+horo_register_catch_test(HoroUpdateDiscoveryTests LABELS "release;update;headless")
+
 add_executable(HoroReleaseChecksumsTests
         unit/application/ReleaseChecksumsTests.cpp)
 target_compile_features(HoroReleaseChecksumsTests PRIVATE cxx_std_20)

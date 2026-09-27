@@ -20,6 +20,16 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## REL-002.3 Update Discovery Boundary
+
+`HoroEngine::UpdateDiscovery` owns the additive
+`Horo/Release/UpdateDiscovery.h` and `UpdateDiscoveryErrors.h` contracts. There
+are no existing discovery callers to migrate. Product hosts link this target,
+persist channel/check policy, and queue source access away from startup. The
+target depends only on `HoroEngine::UpdateManifest`; transports and application
+composition remain outside its public interface. Generated standalone public
+header consumers verify both headers and their declared dependencies.
+
 ## DFR-002.2 Import Boundary
 
 `HoroEngine::Assets` owns the additive `Horo/Assets/PreFracturedSource.h` FBX
