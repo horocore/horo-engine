@@ -39,7 +39,8 @@ namespace Horo::Release {
             return uploaded;
         const auto &receipt = uploaded.Value();
         if (receipt.destination != *plan.publicationDestination || receipt.candidate != request.verified.Candidate() ||
-            receipt.manifestDigest != request.verified.ManifestDigest() || receipt.artifactCount != request.manifest.Artifacts().size())
+            receipt.manifestDigest != request.verified.ManifestDigest() || receipt.artifactCount != request.manifest.Artifacts().size() ||
+            receipt.remoteIdentity.empty())
             return Result<ReleasePublicationReceipt>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
 
         auto remote = adapter.VerifyRemote(request, receipt);
