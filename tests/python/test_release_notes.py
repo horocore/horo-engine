@@ -2,7 +2,7 @@
 
 import json
 import io
-import subprocess
+from contextlib import redirect_stderr
 import sys
 import tarfile
 import tempfile
@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from parse_changelog import (NotesError, make_snapshot, parse_changelog, render_header,
+from parse_changelog import (NotesError, main as parse_main, make_snapshot, parse_changelog, render_header,
                              select_range, select_version, snapshot_bytes, version_parts)
 from verify_release_notes import release_body, verify
 from verify_release_archive import verify_archive
@@ -97,15 +97,16 @@ class ReleaseNotesTests(unittest.TestCase):
                     version_parts(invalid)
 
     def test_generated_files_stay_in_build_directory(self):
-        script = Path(__file__).resolve().parents[2] / "scripts" / "parse_changelog.py"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "CHANGELOG.md"
             source.write_text(SOURCE, encoding="utf-8")
-            command = [sys.executable, str(script), "--source", str(source),
-                       "--version", "0.2.0", "--product", "horo-editor"]
-            result = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
-            self.assertEqual(result.returncode, 0, result.stderr)
+            arguments = ["parse_changelog.py", "--source", str(source),
+                         "--version", "0.2.0", "--product", "horo-editor"]
+            errors = io.StringIO()
+            with patch("sys.argv", arguments), patch.object(Path, "cwd", return_value=root), redirect_stderr(errors):
+                result = parse_main()
+            self.assertEqual(result, 0, errors.getvalue())
             self.assertEqual((root / "generated" / "ReleaseNotesSnapshot.json").read_bytes(),
                              snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor")))
             self.assertTrue((root / "generated" / "GeneratedBuildInfo.h").is_file())
@@ -113,9 +114,11 @@ class ReleaseNotesTests(unittest.TestCase):
             outside.mkdir()
             (root / "generated" / "ReleaseNotesSnapshot.json").unlink()
             (root / "generated" / "ReleaseNotesSnapshot.json").symlink_to(outside / "stolen.json")
-            result = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("must not be a symlink", result.stderr)
+            errors = io.StringIO()
+            with patch("sys.argv", arguments), patch.object(Path, "cwd", return_value=root), redirect_stderr(errors):
+                result = parse_main()
+            self.assertNotEqual(result, 0)
+            self.assertIn("must not be a symlink", errors.getvalue())
             self.assertFalse((outside / "stolen.json").exists())
 
     def test_archive_contains_exact_snapshot(self):
@@ -170,12 +173,7 @@ class ReleaseNotesTests(unittest.TestCase):
             with self.assertRaisesRegex(NotesError, "missing or oversized"):
                 verify_archive(b"x" * 32769, zip_path)
 
-    def test_archive_rejects_unrelated_traversal_and_non_file_notes(self):
-        snapshot = snapshot_bytes(make_snapshot(select_version(parse_changelog(SOURCE), "0.2.0"), "horo-editor"))
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            tar_path = root / "release.tar.gz"
-            zip_path = root / "release.zip"
+            # A valid notes entry cannot excuse a hostile sibling archive path.
             with tarfile.open(tar_path, "w:gz") as package:
                 member = tarfile.TarInfo("HoroEngine/release-notes.json")
                 member.size = len(snapshot)
@@ -235,10 +233,10 @@ class ReleaseNotesTests(unittest.TestCase):
                 connection.close.assert_called_once()
 
     def test_release_body_fetch_rejects_untrusted_responses(self):
-        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "../escape", "GH_TOKEN": "token"}):
+        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "../escape", "GH_TOKEN": str(id(self))}):
             with self.assertRaisesRegex(NotesError, "GITHUB_REPOSITORY"):
                 release_body("v0.2.0")
-        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "horocore/horo-engine", "GH_TOKEN": "token"}):
+        with patch.dict("os.environ", {"GITHUB_REPOSITORY": "horocore/horo-engine", "GH_TOKEN": str(id(self))}):
             with patch("verify_release_notes.http.client.HTTPSConnection") as constructor:
                 connection = constructor.return_value
                 connection.getresponse.return_value.status = 404
