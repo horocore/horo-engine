@@ -381,6 +381,12 @@ the host installs concrete package producers.
 
 ## Artifact Manifest
 
+The private unsigned stage has its own canonical pre-sign inventory. It records
+the candidate ID and exact paths, roles, sizes, and SHA-256 digests before
+signing. Pre-sign verification rejects missing, changed, undeclared, or linked
+files. This inventory is a separate schema and cannot be parsed or published as
+the final candidate manifest; signing may change its recorded bytes.
+
 Every release contains a versioned machine-readable manifest describing:
 
 - engine and project versions
