@@ -396,6 +396,13 @@ signing. Pre-sign verification rejects missing, changed, undeclared, or linked
 files. This inventory is a separate schema and cannot be parsed or published as
 the final candidate manifest; signing may change its recorded bytes.
 
+The signing handoff verifies this complete unsigned tree immediately before it
+invokes a host-owned signer. It admits only a nonzero opaque credential handle
+already selected in the frozen release plan; credential values remain inside
+the signer. A successful handoff is not final candidate verification: signing
+may change files, so final metadata and exact post-sign verification still run.
+This boundary is additive and does not migrate existing host signing workers.
+
 Every release contains a versioned machine-readable manifest describing:
 
 - engine and project versions
@@ -624,6 +631,16 @@ A release succeeds only when:
 
 Packaged artifacts are the objects tested and published. CI does not publish
 artifacts that bypass release verification.
+
+The candidate verification dispatcher first checks every final manifest file
+and byte, requires a host signature verifier when the manifest declares
+signing, and then runs each distinct policy-required smoke probe exactly once.
+Missing or duplicate required probes fail closed. It checks final files again
+after the probes so a probe cannot silently alter the candidate it approved.
+Success issues a typed candidate identity carrying the final manifest digest
+and checked root; downstream publication must recheck the bytes before upload.
+This is an additive dispatch boundary; concrete archive, runtime, install,
+launch, and compatibility probes still need host composition and qualification.
 
 Additional required tests cover:
 

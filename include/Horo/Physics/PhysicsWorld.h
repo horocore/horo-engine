@@ -8,6 +8,7 @@
 #include "Horo/Physics/PhysicsBodyDescriptor.h"
 #include "Horo/Physics/PhysicsCapabilities.h"
 #include "Horo/Physics/PhysicsConstraintDescriptor.h"
+#include "Horo/Physics/PhysicsDebugSnapshot.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsIdentity.h"
 #include "Horo/Physics/PhysicsQuery.h"
@@ -297,6 +298,11 @@ namespace Horo::Physics {
          * @return Success, or a typed foreign/stale identity or owner-thread error.
          */
         [[nodiscard]] Result<void> RevokeQueryEventCapability(const PhysicsQueryEventCapability &capability) const;
+        /** @brief Executes at most one admitted query batch at an explicit owner-thread safe point.
+         * @return Success, or a typed affinity or lifecycle error. Per-batch failures publish to its handle.
+         * @pre Outside fixed-tick execution. No solver state is accessed from another thread.
+         */
+        [[nodiscard]] Result<void> ProcessQueryBatch();
         /** @brief Executes one exact host-issued fixed tick and publishes its results atomically.
          * @param input One-based next tick, exact immutable world delta and optional synchronous observer.
          * @return Success or typed affinity/lifecycle/sequence/delta/job/native-capacity error without partial publication.
@@ -310,6 +316,15 @@ namespace Horo::Physics {
          * @pre The caller keeps this PhysicsWorld alive for the complete call; the snapshot lock does not extend object lifetime.
          */
         [[nodiscard]] PhysicsPublishedTick PublishedTick() const noexcept;
+        /**
+         * @brief Copies optional backend-neutral debug evidence for the current completed tick.
+         * @param budget Explicit bounded category filters and payload limits.
+         * @return Independent immutable snapshot or a typed affinity, lifecycle, stale, or malformed error.
+         * @pre Active canonical world, owner thread, after successful AdvanceFixedTick and before the
+         * next tick or mutation. Physics projects only currently observable categories.
+         * @post No world or native storage is retained by the returned snapshot.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const PhysicsDebugSnapshot>> CaptureDebugSnapshot(const PhysicsDebugBudget &budget) const;
         /** @brief Reads allocation-free cumulative pipeline metrics. @return Owner-thread value snapshot. */
         [[nodiscard]] PhysicsTickStatistics TickStatistics() const noexcept;
 
