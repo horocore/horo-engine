@@ -6,6 +6,7 @@ horo_allow_target_dependencies(TARGET HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroSecurity DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroCliHost DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroMcpSession DEPENDENCIES HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroMcpRegistry DEPENDENCIES HoroMcpSession)
 horo_allow_target_dependencies(TARGET HoroOpenTelemetry DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroPlatform DEPENDENCIES HoroFoundation HoroSecurity)
 horo_allow_target_dependencies(TARGET HoroPlatformServices DEPENDENCIES HoroFoundation HoroPlatform)
@@ -29,6 +30,7 @@ if(HORO_BUILD_NETWORK_GNS)
 endif()
 horo_allow_target_dependencies(TARGET HoroAudioApi DEPENDENCIES HoroFoundation HoroAssets)
 horo_allow_target_dependencies(TARGET HoroAudioImport DEPENDENCIES HoroAudioApi)
+horo_allow_target_dependencies(TARGET HoroAudioCook DEPENDENCIES HoroAudioImport HoroAssets)
 horo_allow_target_dependencies(TARGET HoroAudioDsp DEPENDENCIES HoroAudioApi)
 horo_allow_target_dependencies(TARGET HoroAudioMetrics DEPENDENCIES HoroAudioCommands HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroAudioSafetyHooks)
@@ -131,6 +133,8 @@ horo_allow_target_dependencies(TARGET horo-extension-conformance DEPENDENCIES Ho
 horo_allow_target_dependencies(TARGET HoroExtensionSdkConformanceStage DEPENDENCIES horo-extension-conformance)
 horo_allow_target_dependencies(TARGET horo-package DEPENDENCIES HoroPackageSecurity HoroPackages HoroSecurity)
 horo_allow_target_dependencies(TARGET HoroExtensionSdkPackageStage DEPENDENCIES horo-package)
+horo_allow_target_dependencies(TARGET HoroExtensionAuthorCiStage
+    DEPENDENCIES HoroExtensionSdkValidatorStage HoroExtensionSdkConformanceStage HoroExtensionSdkPackageStage)
 horo_allow_target_dependencies(TARGET HoroEditor
     DEPENDENCIES
         HoroGui

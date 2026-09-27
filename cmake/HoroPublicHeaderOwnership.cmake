@@ -50,6 +50,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroSecurity PUBLIC_HEADERS
+    Horo/Security/AgentPolicy.h
     Horo/Security/ArtifactSignature.h
     Horo/Security/CredentialStore.h
     Horo/Security/SecureMemory.h
@@ -69,6 +70,10 @@ horo_configure_target_header_boundary(HoroMcpSession PUBLIC_HEADERS
     Horo/Mcp/McpSession.h
     Horo/Mcp/McpInProcessAdapter.h
     Horo/Mcp/McpLocalTransport.h
+)
+
+horo_configure_target_header_boundary(HoroMcpRegistry PUBLIC_HEADERS
+    Horo/Mcp/McpToolRegistry.h
 )
 
 horo_configure_target_header_boundary(HoroOpenTelemetry PUBLIC_HEADERS
@@ -136,6 +141,7 @@ horo_configure_target_header_boundary(HoroReleaseProcess PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroReleaseService PUBLIC_HEADERS
     Horo/Release/ReleaseService.h
+    Horo/Release/ReleaseRunHistory.h
 )
 horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
     Horo/Packages/PackageDependencyResolver.h
@@ -348,6 +354,10 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAudioImport PUBLIC_HEADERS
     Horo/Audio/AudioSourceImporter.h
 )
+horo_configure_target_header_boundary(HoroAudioCook PUBLIC_HEADERS
+    Horo/Audio/AudioCookProfile.h
+    Horo/Audio/AudioCooker.h
+)
 horo_configure_target_header_boundary(HoroAudioDsp PUBLIC_HEADERS
     Horo/Audio/AudioDSPNode.h
     Horo/Audio/AudioResampler.h
@@ -479,6 +489,7 @@ horo_configure_target_header_boundary(HoroDestructionApi PUBLIC_HEADERS
     Horo/Destruction/DestructionStateMachine.h
 )
 horo_configure_target_header_boundary(HoroDestructionCook PUBLIC_HEADERS
+    Horo/Destruction/OfflineVoronoi.h
     Horo/Destruction/PreFracturedImport.h
 )
 horo_configure_target_header_boundary(HoroDestructionRuntime PUBLIC_HEADERS
@@ -542,6 +553,7 @@ horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRViewRenderPlan.h
 )
 horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
+    Horo/XR/XRFrameLifecycle.h
     Horo/XR/XRSessionErrors.h
     Horo/XR/XRSessionLifecycle.h
 )

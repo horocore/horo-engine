@@ -82,9 +82,26 @@ TEST_CASE("Release candidate publisher promotes only a fully verified private st
     CHECK(std::filesystem::is_directory(stage.Value().FinalRoot()));
     CHECK_FALSE(std::filesystem::exists(stage.Value().StageRoot()));
     CHECK(VerifyReleaseArtifactTree(stage.Value().FinalRoot(), manifest).HasValue());
+    CHECK(publisher.Promote(plan, stage.Value(), manifest).HasValue());
     CHECK(publisher.Promote(plan, contender.Value(), Manifest(plan, contender.Value().Candidate())).HasError());
     CHECK(std::filesystem::is_directory(contender.Value().StageRoot()));
     CHECK(publisher.Begin(plan, ReleaseCandidateId{44U}).HasError());
+}
+
+TEST_CASE("Release candidate publisher refuses a retry when published bytes changed", "[release][staging][recovery]") {
+    TemporaryDirectory output;
+    auto plan = Plan(output.path);
+    NativeDurableFileSystem files;
+    NativeReleaseCandidatePublisher publisher{files};
+    auto stage = publisher.Begin(plan, ReleaseCandidateId{45U});
+    REQUIRE(stage.HasValue());
+    WriteFile(stage.Value().StageRoot() / "bin/editor", "editor");
+    auto manifest = Manifest(plan, stage.Value().Candidate());
+    REQUIRE(publisher.Promote(plan, stage.Value(), manifest).HasValue());
+
+    WriteFile(stage.Value().FinalRoot() / "bin/editor", "change");
+    CHECK(publisher.Promote(plan, stage.Value(), manifest).HasError());
+    CHECK_FALSE(std::filesystem::exists(stage.Value().StageRoot()));
 }
 
 TEST_CASE("Release candidate publisher preserves the stage and final path on invalid inventory", "[release][staging]") {

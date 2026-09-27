@@ -49,7 +49,8 @@ namespace Horo::Release {
          * @param plan The same frozen plan that created @p stage.
          * @param stage Private stage returned by Begin, after all byte-changing workers have stopped.
          * @param manifest Final post-sign manifest for the exact candidate and plan identities.
-         * @return Success after promotion, or an error that leaves an existing final candidate untouched.
+         * @return Success after promotion or an idempotent retry that verifies the same final candidate;
+         *         a conflicting or changed final candidate is never replaced.
          */
         [[nodiscard]] Result<void> Promote(const ReleaseExecutionPlan &plan, const ReleaseStagingArea &stage,
                                            const ReleaseArtifactManifest &manifest);

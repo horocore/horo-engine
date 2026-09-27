@@ -369,6 +369,10 @@ requires them.
 
 Output is assembled in a private staging directory and atomically promoted to
 its final path only after verification succeeds.
+After a successful rename, a retry may report success only when the original
+private stage is gone and the existing final tree still matches the exact
+candidate manifest. A conflicting or changed final tree remains a collision;
+retries never replace published bytes.
 
 Package production selects exactly one host-installed backend for the validated
 product/platform/format tuple. The shared dispatcher verifies the frozen source
@@ -546,6 +550,27 @@ Persistent job history contains:
 - manifest identity
 
 History never contains credentials or raw secret values.
+
+The service accepts an optional host-owned `ReleaseRunHistory` and UTC clock.
+The executor receives its stage limits and borrowed synchronous observer in one
+`ReleasePipelineExecutionOptions` value. Callers that previously passed separate
+limits and observer arguments move both into that value; the release service is
+the current production caller, and calls without custom options retain defaults.
+When supplied, admission, stage boundaries, and terminal transitions replace a
+bounded typed snapshot under an exclusive writer lock. The durable snapshot
+contains IDs, revision, stage states and attempts, candidate identity, and UTC
+creation, update, and terminal times; it excludes worker messages, arbitrary
+paths, and credentials.
+Publication uses a durable prepared file and atomic replacement. Recovery rejects
+malformed or oversized history and retains the highest candidate ID even after
+its job record ages out. Retention evicts the oldest terminal job; active jobs
+remain queryable, and admission fails when the store is full of active jobs.
+On process restart, a previously nonterminal record is projected as failed with
+`interruptedByRestart`; its last stage state remains visible, and no finish time
+is fabricated. Schema-v1 records remain readable and are rewritten as schema v2
+when the next snapshot is stored.
+Hosts that do not supply the optional store retain the existing in-memory
+behavior; no existing constructor call needs migration.
 
 Logs are separated by release job and stage. Log records include timestamp,
 severity, subsystem, target, and stage. User-facing adapters may render logs

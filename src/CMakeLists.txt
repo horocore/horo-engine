@@ -42,6 +42,7 @@ target_include_directories(HoroFoundation
         $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
 )
 add_library(HoroSecurity STATIC
+        security/AgentPolicy.cpp
         security/SecurityErrors.cpp
         security/SecureMemory.cpp
         security/CredentialStore.cpp
@@ -77,6 +78,11 @@ add_library(HoroMcpSession STATIC
 add_library(HoroEngine::McpSession ALIAS HoroMcpSession)
 target_compile_features(HoroMcpSession PUBLIC cxx_std_20)
 target_link_libraries(HoroMcpSession PUBLIC HoroEngine::Foundation nlohmann_json::nlohmann_json)
+
+add_library(HoroMcpRegistry STATIC mcp/McpToolRegistry.cpp)
+add_library(HoroEngine::McpRegistry ALIAS HoroMcpRegistry)
+target_compile_features(HoroMcpRegistry PUBLIC cxx_std_20)
+target_link_libraries(HoroMcpRegistry PUBLIC HoroEngine::McpSession)
 
 if (HORO_ENABLE_OPENTELEMETRY)
     add_library(HoroOpenTelemetry STATIC
@@ -229,10 +235,10 @@ add_library(HoroEngine::ReleaseProcess ALIAS HoroReleaseProcess)
 target_compile_features(HoroReleaseProcess PUBLIC cxx_std_20)
 target_link_libraries(HoroReleaseProcess PUBLIC HoroEngine::Application HoroEngine::Platform)
 
-add_library(HoroReleaseService STATIC application/release/ReleaseService.cpp)
+add_library(HoroReleaseService STATIC application/release/ReleaseService.cpp application/release/ReleaseRunHistory.cpp)
 add_library(HoroEngine::ReleaseService ALIAS HoroReleaseService)
 target_compile_features(HoroReleaseService PUBLIC cxx_std_20)
-target_link_libraries(HoroReleaseService PUBLIC HoroEngine::Application HoroEngine::Foundation)
+target_link_libraries(HoroReleaseService PUBLIC HoroEngine::Application HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroProjectMigrations STATIC
         ${HORO_PROJECT_MIGRATION_CATALOG_CPP}
@@ -653,6 +659,15 @@ target_link_libraries(HoroAudioImport
         PRIVATE HoroThirdParty::Miniaudio
 )
 
+add_library(HoroAudioCook STATIC
+        audio/cook/AudioCookProfile.cpp
+        audio/cook/AudioCooker.cpp
+        audio/cook/AudioCookInspector.cpp
+)
+add_library(HoroEngine::AudioCook ALIAS HoroAudioCook)
+target_compile_features(HoroAudioCook PUBLIC cxx_std_20)
+target_link_libraries(HoroAudioCook PUBLIC HoroEngine::AudioImport HoroEngine::Assets)
+
 # Build-tree-only contract shared privately by Audio control and concrete backend adapters.
 add_library(HoroAudioBackendContract INTERFACE)
 target_compile_features(HoroAudioBackendContract INTERFACE cxx_std_20)
@@ -933,6 +948,11 @@ target_compile_features(HoroDestructionApi PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
 add_library(HoroDestructionCook STATIC
+        runtime/destruction/cook/OfflineVoronoi.cpp
+        runtime/destruction/cook/OfflineVoronoiChunks.cpp
+        runtime/destruction/cook/OfflineVoronoiClipping.cpp
+        runtime/destruction/cook/OfflineVoronoiProvenance.cpp
+        runtime/destruction/cook/OfflineVoronoiValidation.cpp
         runtime/destruction/cook/PreFracturedIntersection.cpp
         runtime/destruction/cook/PreFracturedImport.cpp
 )
@@ -1046,6 +1066,7 @@ target_compile_features(HoroXRApi PUBLIC cxx_std_20)
 target_link_libraries(HoroXRApi PUBLIC HoroEngine::Foundation HoroEngine::RenderApi)
 
 add_library(HoroXRRuntime STATIC
+        runtime/xr/runtime/XRFrameLifecycle.cpp
         runtime/xr/runtime/XRSessionErrors.cpp
         runtime/xr/runtime/XRSessionLifecycle.cpp
 )

@@ -78,6 +78,13 @@ add_custom_command(
     VERBATIM)
 add_custom_target(HoroExtensionSdkPackageStage ALL DEPENDS "${HORO_PACKAGE_SDK_PATH}")
 
+# Focused SDK-author qualification can stage its three source-free tools without
+# building unrelated applications.
+add_custom_target(HoroExtensionAuthorCiStage DEPENDS
+    HoroExtensionSdkValidatorStage
+    HoroExtensionSdkConformanceStage
+    HoroExtensionSdkPackageStage)
+
 # The graphical executable is an optional composition root. Foundation and
 # headless hosts must remain buildable when the GUI adapter is intentionally off.
 if(HORO_BUILD_EDITOR_GUI)

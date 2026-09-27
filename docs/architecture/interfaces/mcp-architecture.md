@@ -180,6 +180,38 @@ mcpController.RegisterTool<ImportAssetTool>();
 mcpController.RegisterTool<BuildProjectTool>();
 ```
 
+### Registry delivery and migration boundary
+
+`HoroMcpRegistry` now owns inert `McpToolDescriptor` values, a complete-candidate
+`Publish`, and immutable, generation-numbered `McpToolSnapshot` readers. Host
+composition supplies application adapters explicitly; registration does not run
+them. The current tool identity is a stable lowercase token and the independent
+tool version is `{major, minor, patch}`. Replacing a published identity cannot
+change its major version or effect, or regress its version. A breaking contract
+therefore needs a new stable tool identity until a later version-migration policy
+is approved. Changes to effect, required capabilities, or schemas are likewise
+rejected for a published identity. A host supplies its available-capability
+inventory at publication; an unavailable descriptor rejects the whole candidate.
+Required capabilities are set-valued: publication rejects duplicate identities
+and stores them in canonical sorted order, so reordering the same grants does not
+make a replacement incompatible.
+Existing MCP session/transport callers are unaffected; later controller and
+owner-thread work can retain a snapshot while dispatching.
+
+The registry admits a deliberately closed, non-referencing JSON Schema subset:
+`type`, `properties`, `required`, boolean `additionalProperties`, `items`, `enum`,
+`minItems`, `maxItems`, `minLength`, `maxLength`, `minimum`, and `maximum`.
+Unsupported keywords fail registration rather than being ignored. Enum members
+must match their declared type and supported bounds; duplicates are rejected.
+String length bounds in this initial contract count UTF-8 bytes; descriptors
+needing Unicode scalar or grapheme length, references, unions, or conditional
+schemas require an explicit validator revision before admission. Per-tool byte,
+depth, and node limits apply before adapter invocation and to adapter output.
+Discovery is sorted and filtered by host-approved capability identities.
+Authentication, trust, approval, owner-thread scheduling, and protocol framing
+remain with their separate owners; registry capability filtering is not a
+substitute for them.
+
 The host validates tool names, schemas, capabilities, effect category,
 supported hosts, and permission requirements before advertising the tool to a
 client.
