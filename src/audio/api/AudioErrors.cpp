@@ -257,6 +257,42 @@ namespace Horo::Audio::AudioErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor CookProfileInvalid{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.cook.profile_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The audio cook profile, target override or toolchain identity is invalid.",
+        .remediationHint = "Use a bounded explicit policy with unique targets and a pinned toolchain identity.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor CookCombinationUnsupported{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.cook.combination_unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The requested audio codec, compression, rate or layout conversion is unavailable.",
+        .remediationHint = "Select an admitted PCM profile without unsupported conversions or install an explicit cooker contribution.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor CookBudgetExceeded{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.cook.budget_exceeded"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The cooked audio payload or chunk table exceeds its bounded budget.",
+        .remediationHint = "Lower source duration or target limits before cooking.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor CookPayloadInvalid{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.cook.payload_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The cooked audio compatibility header or media payload is invalid.",
+        .remediationHint = "Reject the artifact and recook the exact source/profile/toolchain identity.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor CommandBufferInvalid{
         .domain = AudioDomain,
         .code = ErrorCode{"audio.command_buffer.invalid"},
