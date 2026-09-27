@@ -369,6 +369,10 @@ requires them.
 
 Output is assembled in a private staging directory and atomically promoted to
 its final path only after verification succeeds.
+After a successful rename, a retry may report success only when the original
+private stage is gone and the existing final tree still matches the exact
+candidate manifest. A conflicting or changed final tree remains a collision;
+retries never replace published bytes.
 
 Package production selects exactly one host-installed backend for the validated
 product/platform/format tuple. The shared dispatcher verifies the unsigned
