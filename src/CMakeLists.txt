@@ -845,6 +845,13 @@ add_library(HoroEngine::PCG ALIAS HoroPCG)
 target_compile_features(HoroPCG PUBLIC cxx_std_20)
 target_link_libraries(HoroPCG PUBLIC HoroEngine::Foundation)
 
+add_library(HoroPCGTerrainAdapter STATIC
+        runtime/pcg/terrain/TerrainInputSnapshot.cpp
+)
+add_library(HoroEngine::PCGTerrainAdapter ALIAS HoroPCGTerrainAdapter)
+target_compile_features(HoroPCGTerrainAdapter PUBLIC cxx_std_20)
+target_link_libraries(HoroPCGTerrainAdapter PUBLIC HoroEngine::PCG HoroEngine::TerrainApi)
+
 add_library(HoroVfxApi STATIC
         runtime/vfx/api/CpuParticleBuffer.cpp
         runtime/vfx/api/CpuParticleSimulator.cpp
