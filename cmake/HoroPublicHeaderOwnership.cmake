@@ -311,6 +311,7 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioAssetSchema.h
     Horo/Audio/AudioBackendCapabilities.h
     Horo/Audio/AudioCallbackEvents.h
+    Horo/Audio/AudioAcousticQuery.h
     Horo/Audio/AudioDeviceDiscovery.h
     Horo/Audio/AudioDeviceNegotiation.h
     Horo/Audio/AudioDeviceTiming.h
