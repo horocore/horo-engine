@@ -14,19 +14,32 @@ import subprocess  # nosec B404 - fixed SDK and CMake tools are the contract und
 import sys
 import tempfile
 import tomllib
-import xml.etree.ElementTree as xml
+from xml.parsers import expat
 
 
-def run(*arguments: str) -> None:
-    # Arguments are passed without a shell; tools originate in the pinned SDK or CI toolchain.
-    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-    subprocess.run(arguments, check=True)  # nosec B603
+MAXIMUM_JUNIT_BYTES = 8 * 1024 * 1024
+SDK_TOOLS = frozenset(("horo-extension-validate", "horo-extension-conformance", "horo-package"))
+
+
+def run(sdk: Path, tool: str, *arguments: str) -> None:
+    if tool in ("cmake", "ctest"):
+        executable = tool
+    elif tool in SDK_TOOLS:
+        executable = sdk_tool(sdk, tool)
+    else:
+        raise ValueError(f"unsupported extension CI tool: {tool}")
+    # Only named tools are executable. Project-derived values remain separate
+    # argv elements, never shell text; SDK tools came from the digest-checked ZIP.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+    subprocess.run((executable, *arguments), check=True, shell=False)  # nosec B603
 
 
 def sdk_tool(root: Path, name: str) -> str:
+    if name not in SDK_TOOLS:
+        raise ValueError(f"unsupported extension SDK tool: {name}")
     suffix = ".exe" if os.name == "nt" else ""
     tool = root / "bin" / (name + suffix)
-    if not tool.is_file():
+    if not tool.is_file() or tool.is_symlink():
         raise ValueError(f"required SDK tool is missing: {name}")
     return str(tool)
 
@@ -64,10 +77,86 @@ def package_identity(stage: Path) -> str:
 
 
 def require_executed_tests(path: Path) -> None:
-    report = xml.parse(path).getroot()
-    executed = [case for case in report.iter("testcase") if case.find("skipped") is None]
+    with path.open("rb") as source:
+        report_bytes = source.read(MAXIMUM_JUNIT_BYTES + 1)
+    if len(report_bytes) > MAXIMUM_JUNIT_BYTES:
+        raise ValueError("CTest JUnit report exceeds the bounded parse size")
+    parser = expat.ParserCreate()
+    parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+    case_open, skipped, executed = False, False, 0
+
+    def reject_declaration(*_arguments: object) -> None:
+        raise ValueError("CTest JUnit report cannot contain DTD or entity declarations")
+
+    def start_element(name: str, _attributes: dict[str, str]) -> None:
+        nonlocal case_open, skipped
+        if name == "testcase":
+            if case_open:
+                raise ValueError("CTest JUnit report contains nested testcases")
+            case_open, skipped = True, False
+        elif name == "skipped" and case_open:
+            skipped = True
+
+    def end_element(name: str) -> None:
+        nonlocal case_open, executed
+        if name == "testcase":
+            if not skipped:
+                executed += 1
+            case_open = False
+
+    parser.StartDoctypeDeclHandler = reject_declaration
+    parser.EntityDeclHandler = reject_declaration
+    parser.ExternalEntityRefHandler = reject_declaration
+    parser.StartElementHandler = start_element
+    parser.EndElementHandler = end_element
+    parser.Parse(report_bytes, True)
     if not executed:
         raise ValueError("CTest reported no executed extension tests")
+
+
+def build_and_stage(sdk: Path, project: Path, scratch: Path) -> Path:
+    build, stage = scratch / "build", scratch / "stage"
+    run(sdk, "cmake", "-S", str(project), "-B", str(build), "-DCMAKE_BUILD_TYPE=Release",
+        f"-DHoroEngineExtensionSdk_DIR={sdk / 'lib/cmake/HoroEngineExtensionSdk'}")
+    run(sdk, "cmake", "--build", str(build), "--config", "Release", "--parallel", "2")
+    run(sdk, "ctest", "--test-dir", str(build), "-C", "Release", "--output-on-failure",
+        "--output-junit", str(scratch / "ctest.xml"))
+    require_executed_tests(scratch / "ctest.xml")
+    run(sdk, "cmake", "--install", str(build), "--config", "Release", "--prefix", str(stage))
+    return stage
+
+
+def package_and_publish(sdk: Path, stage: Path, scratch: Path, output: Path, args: argparse.Namespace,
+                        sdk_version: str) -> None:
+    manifest = stage / "extension.json"
+    run(sdk, "horo-extension-validate", "--json", "--schema-version", "1", str(manifest))
+    for binary in module_paths(stage):
+        run(sdk, "horo-extension-conformance", "--json", str(binary))
+    if not (stage / "horo-package.toml").is_file():
+        raise ValueError("project must install horo-package.toml for canonical packaging")
+    package_id = package_identity(stage)
+    archive = scratch / "extension.horopkg"
+    run(sdk, "horo-package", "pack", str(stage), str(archive))
+    trust = scratch / "ci-integrity-only-trust.json"
+    trust.write_text('{"schemaVersion":1,"allowUnsigned":true,"publishers":[]}', encoding="utf-8")
+    run(sdk, "horo-package", "verify", str(archive), "--package-id", package_id, "--trust", str(trust))
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    output.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(archive, output / "extension.horopkg")
+    shutil.copyfile(scratch / "ctest.xml", output / "ctest.xml")
+    provenance = {
+        "schemaVersion": 1,
+        "repository": args.repository,
+        "commit": args.commit,
+        "platform": args.platform,
+        "sdkVersion": sdk_version,
+        "sdkSha256": args.sdk_sha256,
+        "packageId": package_id,
+        "artifact": "extension.horopkg",
+        "artifactSha256": digest,
+        "verification": "archive-integrity-unsigned",
+    }
+    (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
 
 
 def main() -> int:
@@ -96,45 +185,10 @@ def main() -> int:
         sdk_version = metadata["sdk"]["version"]
         with tempfile.TemporaryDirectory(prefix="horo-extension-author-ci-") as temporary:
             scratch = Path(temporary)
-            build, stage = scratch / "build", scratch / "stage"
-            run("cmake", "-S", str(project), "-B", str(build), "-DCMAKE_BUILD_TYPE=Release",
-                f"-DHoroEngineExtensionSdk_DIR={sdk / 'lib/cmake/HoroEngineExtensionSdk'}")
-            run("cmake", "--build", str(build), "--config", "Release", "--parallel", "2")
-            run("ctest", "--test-dir", str(build), "-C", "Release", "--output-on-failure",
-                "--output-junit", str(scratch / "ctest.xml"))
-            require_executed_tests(scratch / "ctest.xml")
-            run("cmake", "--install", str(build), "--config", "Release", "--prefix", str(stage))
-            manifest = stage / "extension.json"
-            run(sdk_tool(sdk, "horo-extension-validate"), "--json", "--schema-version", "1", str(manifest))
-            for binary in module_paths(stage):
-                run(sdk_tool(sdk, "horo-extension-conformance"), "--json", str(binary))
-            if not (stage / "horo-package.toml").is_file():
-                raise ValueError("project must install horo-package.toml for canonical packaging")
-            package_id = package_identity(stage)
-            archive = scratch / "extension.horopkg"
-            package_tool = sdk_tool(sdk, "horo-package")
-            run(package_tool, "pack", str(stage), str(archive))
-            trust = scratch / "ci-integrity-only-trust.json"
-            trust.write_text('{"schemaVersion":1,"allowUnsigned":true,"publishers":[]}', encoding="utf-8")
-            run(package_tool, "verify", str(archive), "--package-id", package_id, "--trust", str(trust))
-            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-            output.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(archive, output / "extension.horopkg")
-            shutil.copyfile(scratch / "ctest.xml", output / "ctest.xml")
-            provenance = {
-                "schemaVersion": 1,
-                "repository": args.repository,
-                "commit": args.commit,
-                "platform": args.platform,
-                "sdkVersion": sdk_version,
-                "sdkSha256": args.sdk_sha256,
-                "packageId": package_id,
-                "artifact": "extension.horopkg",
-                "artifactSha256": digest,
-                "verification": "archive-integrity-unsigned",
-            }
-            (output / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
-    except (OSError, ValueError, KeyError, json.JSONDecodeError, subprocess.CalledProcessError, xml.ParseError) as error:
+            stage = build_and_stage(sdk, project, scratch)
+            package_and_publish(sdk, stage, scratch, output, args, sdk_version)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError, subprocess.CalledProcessError,
+            expat.ExpatError) as error:
         print(f"extension author CI: {error}", file=sys.stderr)
         return 2
     return 0

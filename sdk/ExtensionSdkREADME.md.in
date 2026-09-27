@@ -42,6 +42,8 @@ The bootstrap refuses unpinned, mismatched, oversized or unsafe archives and
 checks the downloaded SDK version against the lock. The author repository needs
 no engine source checkout. The workflow pins action commits, Python and CMake
 versions, uses read-only permissions, and never receives signing credentials.
+The SDK CI runner parses bounded CTest JUnit input with DTD and entity declarations
+disabled; it has no extra Python package dependency.
 
 The SDK's `bin/horo-extension-author-ci.py` then configures and builds the
 project, runs all CTest tests, installs the package root, validates

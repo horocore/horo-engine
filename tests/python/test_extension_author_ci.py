@@ -127,6 +127,8 @@ def test_sdk_archive_rejects_unsafe_paths(entry, tmp_path):
 
 
 def test_runner_rejects_missing_and_unsafe_module_entries(tmp_path):
+    with pytest.raises(ValueError, match="unsupported extension CI tool"):
+        AUTHOR_CI.run(tmp_path, "sh", "-c", "exit 0")
     stage = tmp_path / "stage"
     stage.mkdir()
     manifest = {"id": "com.example.author", "modules": [{"entry": "../outside"}]}
@@ -149,6 +151,18 @@ def test_runner_rejects_empty_test_report_and_mismatched_package_identity(tmp_pa
         AUTHOR_CI.require_executed_tests(report)
     report.write_text('<testsuite tests="1"><testcase name="contract"/></testsuite>', encoding="utf-8")
     AUTHOR_CI.require_executed_tests(report)
+
+    report.write_text('<testsuite><testcase name="skipped"><skipped/></testcase></testsuite>', encoding="utf-8")
+    with pytest.raises(ValueError, match="no executed"):
+        AUTHOR_CI.require_executed_tests(report)
+
+    report.write_text('<!DOCTYPE testsuite [<!ENTITY expanded "unsafe">]>'
+                      '<testsuite><testcase name="&expanded;"/></testsuite>', encoding="utf-8")
+    with pytest.raises(ValueError, match="DTD or entity"):
+        AUTHOR_CI.require_executed_tests(report)
+    report.write_bytes(b" " * (AUTHOR_CI.MAXIMUM_JUNIT_BYTES + 1))
+    with pytest.raises(ValueError, match="bounded parse size"):
+        AUTHOR_CI.require_executed_tests(report)
 
     stage = tmp_path / "stage"
     stage.mkdir()
@@ -183,8 +197,8 @@ def test_bootstrap_checks_downloaded_sdk_version_before_runner(monkeypatch, tmp_
     monkeypatch.setattr(BOOTSTRAP.host_platform, "machine", lambda: "x86_64")
     launched = []
 
-    def record(command, check):
-        launched.append((command, check))
+    def record(command, check, shell):
+        launched.append((command, check, shell))
         return type("Exit", (), {"returncode": 0})()
 
     monkeypatch.setattr(BOOTSTRAP.subprocess, "run", record)
@@ -193,6 +207,7 @@ def test_bootstrap_checks_downloaded_sdk_version_before_runner(monkeypatch, tmp_
                                        "--repository", "example/author", "--commit", "a" * 40])
     assert BOOTSTRAP.main() == 0
     assert len(launched) == 1
+    assert launched[0][2] is False
     assert "--sdk-sha256" in launched[0][0]
     assert digest in launched[0][0]
 
