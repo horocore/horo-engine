@@ -59,9 +59,12 @@ class PackageCommands(unittest.TestCase):
             raise RuntimeError("OpenSSL is required for the package CLI contract test")
         openssl = str(Path(openssl).resolve(strict=True))
         # Fixed OpenSSL command and test-owned output path; no shell.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
         subprocess.run([openssl, "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(private)],  # nosec B603
                        check=True, capture_output=True)
         private.chmod(0o600)
+        # Fixed OpenSSL command and test-owned input path; no shell.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
         public_der = subprocess.run([openssl, "pkey", "-in", str(private), "-pubout", "-outform", "DER"],  # nosec B603
                                     check=True, capture_output=True).stdout
         public = public_der[-65:]
