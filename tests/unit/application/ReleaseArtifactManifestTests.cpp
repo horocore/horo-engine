@@ -134,3 +134,41 @@ TEST_CASE("Final release tree verification accounts for every published byte", "
     std::filesystem::remove(directory.path / "assets.horo");
     CHECK(VerifyReleaseArtifactTree(directory.path, manifest.Value()).HasError());
 }
+
+TEST_CASE("Pre-sign inventory remains separate from the post-sign manifest", "[release][manifest][staging]") {
+    std::vector<ReleaseArtifactRecord> unsignedFiles{{"bin/game", ReleaseArtifactRole::Binary, 4U,
+                                                      ComputeSha256(std::as_bytes(std::span{"game", 4U}))},
+                                                     {"assets.horo", ReleaseArtifactRole::AssetArchive, 6U,
+                                                      ComputeSha256(std::as_bytes(std::span{"assets", 6U}))}};
+    auto inventory = ReleasePreSignInventory::Create(ReleaseCandidateId{42U}, unsignedFiles);
+    REQUIRE(inventory.HasValue());
+    CHECK(inventory.Value().Artifacts().front().path == "assets.horo");
+    auto parsed = ReleasePreSignInventory::ParseCanonical(inventory.Value().CanonicalJson());
+    REQUIRE(parsed.HasValue());
+    CHECK(parsed.Value().Digest() == inventory.Value().Digest());
+    CHECK(ReleaseArtifactManifest::ParseCanonical(inventory.Value().CanonicalJson()).HasError());
+
+    auto noncanonical = inventory.Value().CanonicalJson();
+    noncanonical.insert(1U, "\"unexpected\":true,");
+    CHECK(ReleasePreSignInventory::ParseCanonical(noncanonical).HasError());
+    unsignedFiles.push_back({"BIN/GAME", ReleaseArtifactRole::Binary, 4U, unsignedFiles.front().digest});
+    CHECK(ReleasePreSignInventory::Create(ReleaseCandidateId{42U}, std::move(unsignedFiles)).HasError());
+}
+
+TEST_CASE("Pre-sign verification rejects changed or undeclared staged bytes", "[release][manifest][staging]") {
+    TemporaryDirectory directory;
+    auto inventory = ReleasePreSignInventory::Create(ReleaseCandidateId{42U}, {{"bin/game", ReleaseArtifactRole::Binary, 4U,
+                                                                                ComputeSha256(std::as_bytes(std::span{"game", 4U}))}});
+    REQUIRE(inventory.HasValue());
+    WriteFile(directory.path / "bin/game", "game");
+    CHECK(VerifyReleaseStagedTree(directory.path, inventory.Value()).HasValue());
+
+    WriteFile(directory.path / "bin/game", "other");
+    CHECK(VerifyReleaseStagedTree(directory.path, inventory.Value()).HasError());
+    WriteFile(directory.path / "bin/game", "game");
+    WriteFile(directory.path / "manifest.json", "premature final metadata");
+    CHECK(VerifyReleaseStagedTree(directory.path, inventory.Value()).HasError());
+    std::filesystem::remove(directory.path / "manifest.json");
+    WriteFile(directory.path / "unlisted.txt", "unexpected");
+    CHECK(VerifyReleaseStagedTree(directory.path, inventory.Value()).HasError());
+}
