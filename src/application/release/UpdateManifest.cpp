@@ -2,6 +2,8 @@
 
 #include "Horo/Release/ReleaseVersion.h"
 #include "Horo/Release/UpdateManifestErrors.h"
+#include "Horo/Release/UpdateTrustRoot.h"
+#include "UpdateSignatureCodec.h"
 
 #include <algorithm>
 #include <array>
@@ -20,8 +22,10 @@ namespace Horo::Release {
         using Json = nlohmann::json;
         constexpr std::size_t MaximumDocumentBytes = 128U * 1024U;
         constexpr std::size_t MaximumPackages = 32U;
-        constexpr std::size_t SignatureBytes = 64U;
         constexpr std::uint64_t MaximumLifetimeSeconds = 366U * 24U * 60U * 60U;
+        using Detail::ReadEnvelope;
+        using Detail::ValidEnvelope;
+        using Detail::WriteEnvelope;
 
         template <typename Enum, std::size_t Count>
         [[nodiscard]] std::string_view Name(const Enum value, const std::array<std::pair<Enum, std::string_view>, Count> &names) {
@@ -43,15 +47,6 @@ namespace Horo::Release {
             return false;
         }
 
-        constexpr std::array ProductNames{
-            std::pair{DistributionProductKind::Editor, std::string_view{"editor"}},
-            std::pair{DistributionProductKind::EngineCli, std::string_view{"engine-cli"}},
-            std::pair{DistributionProductKind::PackageToolCli, std::string_view{"package-tool-cli"}},
-            std::pair{DistributionProductKind::PublicSdk, std::string_view{"public-sdk"}},
-            std::pair{DistributionProductKind::RendererComponent, std::string_view{"renderer-component"}},
-            std::pair{DistributionProductKind::GameRuntime, std::string_view{"game-runtime"}},
-            std::pair{DistributionProductKind::GameDedicatedServer, std::string_view{"game-dedicated-server"}},
-        };
         constexpr std::array PlatformNames{
             std::pair{DistributionPlatform::Windows, std::string_view{"windows"}},
             std::pair{DistributionPlatform::MacOS, std::string_view{"macos"}},
@@ -92,68 +87,6 @@ namespace Horo::Release {
             });
         }
 
-        [[nodiscard]] char HexDigit(const std::uint8_t nibble) {
-            return "0123456789abcdef"[nibble];
-        }
-
-        [[nodiscard]] std::string FormatSignature(const std::span<const std::byte> bytes) {
-            std::string result;
-            result.reserve(bytes.size() * 2U);
-            for (const std::byte value : bytes) {
-                const auto byte = std::to_integer<std::uint8_t>(value);
-                result.push_back(HexDigit(byte >> 4U));
-                result.push_back(HexDigit(byte & 0x0fU));
-            }
-            return result;
-        }
-
-        [[nodiscard]] int HexValue(const char character) {
-            if (character >= '0' && character <= '9')
-                return character - '0';
-            if (character >= 'a' && character <= 'f')
-                return character - 'a' + 10;
-            return -1;
-        }
-
-        [[nodiscard]] bool ParseSignature(const std::string_view text, std::vector<std::byte> &bytes) {
-            if (text.size() != SignatureBytes * 2U)
-                return false;
-            bytes.clear();
-            bytes.reserve(SignatureBytes);
-            for (std::size_t index = 0U; index < text.size(); index += 2U) {
-                const int high = HexValue(text[index]);
-                const int low = HexValue(text[index + 1U]);
-                if (high < 0 || low < 0)
-                    return false;
-                bytes.push_back(static_cast<std::byte>((high << 4U) | low));
-            }
-            return true;
-        }
-
-        [[nodiscard]] bool ValidEnvelope(const Security::DetachedSignatureEnvelope &envelope, const Sha256Digest &digest) {
-            return envelope.algorithm == Security::SignatureAlgorithm::EcdsaP256Sha256 && envelope.artifactDigest == digest &&
-                   IsValidDistributionIdentity(envelope.publisherId) && IsValidDistributionIdentity(envelope.keyId) &&
-                   envelope.signature.size() == SignatureBytes;
-        }
-
-        [[nodiscard]] Json WriteEnvelope(const Security::DetachedSignatureEnvelope &envelope) {
-            return {{"algorithm", "ecdsa-p256-sha256"},
-                    {"publisherId", envelope.publisherId},
-                    {"keyId", envelope.keyId},
-                    {"signature", FormatSignature(envelope.signature)}};
-        }
-
-        [[nodiscard]] bool ReadEnvelope(const Json &json, const Sha256Digest &digest, Security::DetachedSignatureEnvelope &envelope) {
-            if (!json.is_object() || json.size() != 4U || json.at("algorithm") != "ecdsa-p256-sha256" ||
-                !json.at("publisherId").is_string() || !json.at("keyId").is_string() || !json.at("signature").is_string())
-                return false;
-            envelope = {.algorithm = Security::SignatureAlgorithm::EcdsaP256Sha256,
-                        .publisherId = json.at("publisherId").get<std::string>(),
-                        .keyId = json.at("keyId").get<std::string>(),
-                        .artifactDigest = digest};
-            return ParseSignature(json.at("signature").get<std::string>(), envelope.signature) && ValidEnvelope(envelope, digest);
-        }
-
         [[nodiscard]] bool GameProduct(const DistributionProductKind kind) {
             return kind == DistributionProductKind::GameRuntime || kind == DistributionProductKind::GameDedicatedServer;
         }
@@ -189,7 +122,7 @@ namespace Horo::Release {
                                     {"signature", WriteEnvelope(package.signature)}});
             }
             Json payload{{"schemaVersion", 1},
-                         {"product", {{"kind", Name(data.product.kind, ProductNames)}, {"componentId", data.product.componentId}}},
+                         {"product", {{"kind", Detail::ProductName(data.product.kind)}, {"componentId", data.product.componentId}}},
                          {"channel", data.channel},
                          {"version", VersionText(data.version)},
                          {"buildId", data.build.value},
@@ -205,7 +138,7 @@ namespace Horo::Release {
         }
 
         [[nodiscard]] bool ValidData(const UpdateManifestData &data) {
-            if (Name(data.product.kind, ProductNames).empty() || !ValidVersionKind(data.product.kind, data.version) ||
+            if (Detail::ProductName(data.product.kind).empty() || !ValidVersionKind(data.product.kind, data.version) ||
                 !IsValidDistributionIdentity(data.build.value) || !ValidChannel(data.channel) || data.sequence == 0U ||
                 data.publishedAt == 0U || data.expiresAt <= data.publishedAt ||
                 data.expiresAt - data.publishedAt > MaximumLifetimeSeconds || data.minimumUpdaterVersion == 0U ||
@@ -247,7 +180,7 @@ namespace Horo::Release {
                 !json.at("product").is_object() || json.at("product").size() != 2U || !json.at("packages").is_array() ||
                 json.at("packages").size() > MaximumPackages)
                 return false;
-            if (!ParseName(json.at("product").at("kind").get<std::string>(), ProductNames, data.product.kind))
+            if (!Detail::ParseProductKind(json.at("product").at("kind").get<std::string>(), data.product.kind))
                 return false;
             data.product.componentId = json.at("product").at("componentId").get<std::string>();
             if (!ReadVersion(json.at("version").get<std::string>(), data.product.kind, data.version))
@@ -379,13 +312,17 @@ namespace Horo::Release {
 
     /** @copydoc VerifyUpdateManifest */
     Result<void> VerifyUpdateManifest(const SignedUpdateManifest &manifest, const UpdateAdmissionContext &context,
-                                      const Security::ArtifactVerifier &verifier) {
+                                      const UpdateTrustRootSnapshot &roots, std::shared_ptr<const Security::SignatureProvider> provider) {
         const auto &data = manifest.Data();
+        if (roots.Product() != context.installedProduct)
+            return Result<void>::Failure(MakeError(UpdateManifestErrors::Incompatible));
+        Security::ArtifactVerifier verifier{std::move(provider), roots.Roots()};
         auto authenticated = verifier.Verify(std::as_bytes(std::span{manifest.CanonicalPayload()}), manifest.Signature());
         if (authenticated.HasError())
             return Result<void>::Failure(authenticated.ErrorValue());
-        if (context.now < data.publishedAt || context.now > data.expiresAt || data.sequence < context.minimumAcceptedSequence ||
-            data.minimumRootRevision > context.trustedRootRevision)
+        if (context.now < data.publishedAt || context.now > data.expiresAt || context.now > roots.ExpiresAt() ||
+            data.sequence < std::max(context.minimumAcceptedSequence, roots.MinimumManifestSequence()) ||
+            data.minimumRootRevision > roots.Revision())
             return Result<void>::Failure(MakeError(UpdateManifestErrors::Stale));
         if (data.product != context.installedProduct || data.channel != context.channel ||
             data.minimumUpdaterVersion > context.updaterVersion ||

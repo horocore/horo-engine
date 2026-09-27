@@ -9,6 +9,7 @@
 #include "Horo/Security/ArtifactSignature.h"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -16,6 +17,8 @@
 #include <vector>
 
 namespace Horo::Release {
+    class UpdateTrustRootSnapshot;
+
     /** @brief One exact downloadable package named by authenticated update metadata. */
     struct UpdatePackageRecord final {
         DistributionPackageSelection selection;
@@ -92,7 +95,6 @@ namespace Horo::Release {
         DistributionPlatform platform{DistributionPlatform::Linux};
         DistributionArchitecture architecture{DistributionArchitecture::X64};
         std::uint32_t updaterVersion{};
-        std::uint64_t trustedRootRevision{};
         std::uint64_t minimumAcceptedSequence{};
         std::uint64_t now{}; /**< Unix seconds in UTC from a trusted host clock. */
         bool authorizedDowngrade{};
@@ -102,11 +104,13 @@ namespace Horo::Release {
      * @brief Authenticates metadata before applying freshness, product, platform and rollback policy.
      * @param manifest Canonical signed document.
      * @param context Installed product and monotonic trusted state.
-     * @param verifier Host-composed signature verifier and trust roots; no transport fallback exists.
+     * @param roots Installed versioned trust roots for this product.
+     * @param provider Host-composed signature provider; null fails closed.
      * @return Success only for authenticated, fresh, matching and policy-admitted metadata.
      */
     [[nodiscard]] Result<void> VerifyUpdateManifest(const SignedUpdateManifest &manifest, const UpdateAdmissionContext &context,
-                                                    const Security::ArtifactVerifier &verifier);
+                                                    const UpdateTrustRootSnapshot &roots,
+                                                    std::shared_ptr<const Security::SignatureProvider> provider);
 
     /**
      * @brief Verifies exact downloaded bytes against the selected signed package record.

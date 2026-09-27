@@ -195,6 +195,14 @@ update policy. A compromised update key invalidates affected manifests and
 requires a fail-closed updater response unless an administrator recovery policy
 is active.
 
+An installer-authenticated revision-one root establishes the initial key set.
+Each subsequent canonical root document carries a complete replacement key set,
+its parent revision, a strictly increasing revision, a nondecreasing manifest
+sequence floor, and expiry. The currently installed root verifies its detached
+signature before the updater may durably replace the root snapshot. Omitting an
+old key from the replacement set revokes it. A network response cannot bootstrap
+a root or skip revisions; administrator recovery needs a separate explicit path.
+
 ## Update State Machine
 
 ```text
