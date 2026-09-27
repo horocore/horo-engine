@@ -297,6 +297,22 @@ TEST_CASE("Update staging rejects missing, linked, and oversized content", "[rel
         CHECK(VerifyUpdateStagedTree(stage.path, files, limits).HasError());
 }
 
+TEST_CASE("Update staging rejects hard links to files outside the private tree", "[release][update]") {
+    TemporaryStage stage;
+    constexpr std::string_view bytes = "editor bytes";
+    const auto outside = stage.path.parent_path() / (stage.path.filename().string() + "-outside");
+    WriteStageFile(outside, bytes);
+    std::filesystem::create_directories(stage.path / "bin");
+    std::error_code linkError;
+    std::filesystem::create_hard_link(outside, stage.path / "bin/editor", linkError);
+    if (!linkError) {
+        const std::array files{UpdateStagedFile{"bin/editor", bytes.size(), Horo::ComputeSha256(std::as_bytes(std::span{bytes}))}};
+        constexpr UpdateArchiveLimits limits{.maximumEntries = 2U, .maximumFileBytes = 32U, .maximumExpandedBytes = 32U};
+        CHECK(VerifyUpdateStagedTree(stage.path, files, limits).HasError());
+    }
+    std::filesystem::remove(outside);
+}
+
 TEST_CASE("Private transfer checkpoint recovery requires exact durable partial bytes", "[release][update]") {
     TemporaryStage stage;
     const auto partialPath = stage.path / "package partial";

@@ -15,6 +15,8 @@ namespace Horo::Release {
         /** @brief Streams a bounded regular file into SHA-256 without loading it into memory. */
         [[nodiscard]] bool MatchesFile(const std::filesystem::path &path, const UpdateStagedFile &expected) {
             std::error_code error;
+            if (std::filesystem::hard_link_count(path, error) != 1U || error)
+                return false;
             if (std::filesystem::file_size(path, error) != expected.size || error)
                 return false;
             std::ifstream input(path, std::ios::binary);
