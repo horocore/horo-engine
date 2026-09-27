@@ -94,6 +94,29 @@ namespace {
         }
         return service.Query(job);
     }
+
+    void CompleteRecordedRelease(const ReleaseExecutionPlan &plan, const ReleasePreflightFacts &facts, ReleaseRunHistory &history,
+                                 WallClock &clock, ReleaseJobId &job) {
+        FixedReleaseFacts current{facts};
+        ServiceWorkerFactory factory;
+        OperationStore operations{4, 4};
+        ReleaseServiceConfig config;
+        config.history = &history;
+        config.wallClock = &clock;
+        ReleaseService service{operations, current, factory, config};
+        auto submitted = service.Submit(plan);
+        REQUIRE(submitted.HasValue());
+        job = submitted.Value().job;
+        REQUIRE(WaitForTerminal(service, job).has_value());
+        service.Shutdown();
+        const auto records = service.ListHistory();
+        REQUIRE(!records.empty());
+        CHECK(records.back().state == ReleaseJobState::Succeeded);
+        CHECK(records.back().createdUtcMilliseconds > 0);
+        REQUIRE(records.back().finishedUtcMilliseconds.has_value());
+        CHECK(*records.back().finishedUtcMilliseconds >= records.back().createdUtcMilliseconds);
+        CHECK(records.back().stages[static_cast<std::size_t>(ReleaseStage::FinalVerifying)] == ReleaseStageState::Succeeded);
+    }
 }  // namespace
 
 TEST_CASE("Release service retains a completed job after its submitting scope ends", "[unit][application][release][service]") {
@@ -140,27 +163,7 @@ TEST_CASE("Release service recovers durable job identities and terminal stage st
     REQUIRE(opened.HasValue());
     auto history = std::move(opened).Value();
     ReleaseJobId firstJob;
-    {
-        FixedReleaseFacts current{facts};
-        ServiceWorkerFactory factory;
-        OperationStore operations{4, 4};
-        ReleaseServiceConfig config;
-        config.history = history.get();
-        config.wallClock = &clock;
-        ReleaseService service{operations, current, factory, config};
-        auto submitted = service.Submit(*outcome.plan);
-        REQUIRE(submitted.HasValue());
-        firstJob = submitted.Value().job;
-        REQUIRE(WaitForTerminal(service, firstJob).has_value());
-        service.Shutdown();
-        const auto records = service.ListHistory();
-        REQUIRE(records.size() == 1U);
-        CHECK(records.front().state == ReleaseJobState::Succeeded);
-        CHECK(records.front().createdUtcMilliseconds > 0);
-        REQUIRE(records.front().finishedUtcMilliseconds.has_value());
-        CHECK(*records.front().finishedUtcMilliseconds >= records.front().createdUtcMilliseconds);
-        CHECK(records.front().stages[static_cast<std::size_t>(ReleaseStage::FinalVerifying)] == ReleaseStageState::Succeeded);
-    }
+    CompleteRecordedRelease(*outcome.plan, facts, *history, clock, firstJob);
     history.reset();
 
     std::ifstream input(path, std::ios::binary);
@@ -169,19 +172,9 @@ TEST_CASE("Release service recovers durable job identities and terminal stage st
     auto reopened = ReleaseRunHistory::Open(files, path, 4U);
     REQUIRE(reopened.HasValue());
     history = std::move(reopened).Value();
-    {
-        FixedReleaseFacts current{facts};
-        ServiceWorkerFactory factory;
-        OperationStore operations{4, 4};
-        ReleaseServiceConfig config;
-        config.history = history.get();
-        config.wallClock = &clock;
-        ReleaseService service{operations, current, factory, config};
-        auto submitted = service.Submit(*outcome.plan);
-        REQUIRE(submitted.HasValue());
-        CHECK(submitted.Value().job.value > firstJob.value);
-        service.Shutdown();
-    }
+    ReleaseJobId secondJob;
+    CompleteRecordedRelease(*outcome.plan, facts, *history, clock, secondJob);
+    CHECK(secondJob.value > firstJob.value);
     history.reset();
     std::error_code error;
     std::filesystem::remove_all(directory, error);
