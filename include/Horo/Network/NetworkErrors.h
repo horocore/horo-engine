@@ -244,6 +244,16 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor MessageEnvelopeTimedOut;
     /** @brief Caller-owned shutdown state rejected message codec admission. */
     extern const ErrorCodeDescriptor MessageEnvelopeShuttingDown;
+    /** @brief Delivery policy, generation, clock, sequence, or channel metadata is malformed. */
+    extern const ErrorCodeDescriptor MessageDeliveryInvalid;
+    /** @brief The same message replay key was already admitted on its channel. */
+    extern const ErrorCodeDescriptor MessageDeliveryDuplicate;
+    /** @brief An arrival violates ordered/sequenced policy or the finite replay window. */
+    extern const ErrorCodeDescriptor MessageDeliveryOutOfOrder;
+    /** @brief A message reached the application boundary at or after its expiry tick. */
+    extern const ErrorCodeDescriptor MessageDeliveryExpired;
+    /** @brief Admission is closed for this session generation. */
+    extern const ErrorCodeDescriptor MessageDeliveryTerminal;
     /** @brief A terminal failure record is malformed or uses an incompatible layer/kind/context combination. */
     extern const ErrorCodeDescriptor TerminalRecordInvalid;
     /** @brief A second terminal completion attempted to replace the immutable first result. */

@@ -762,6 +762,42 @@ namespace Horo::Network::NetworkErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor
+        MessageDeliveryInvalid{NetworkDomain,
+                               ErrorCode{"network.message.delivery_invalid"},
+                               ErrorSeverity::Error,
+                               "Message delivery metadata or owner clock is invalid.",
+                               "Use the exact live generation, configured channel and policy, and monotonic owner time.",
+                               false,
+                               false};
+    const ErrorCodeDescriptor MessageDeliveryDuplicate{NetworkDomain,
+                                                       ErrorCode{"network.message.delivery_duplicate"},
+                                                       ErrorSeverity::Warning,
+                                                       "Message was already admitted on this channel.",
+                                                       "Discard repeated delivery without invoking gameplay handling.",
+                                                       false,
+                                                       false};
+    const ErrorCodeDescriptor MessageDeliveryOutOfOrder{NetworkDomain,
+                                                        ErrorCode{"network.message.delivery_out_of_order"},
+                                                        ErrorSeverity::Warning,
+                                                        "Message violates channel order or replay window.",
+                                                        "Discard the stale arrival; use a new session for exhausted sequence space.",
+                                                        false,
+                                                        false};
+    const ErrorCodeDescriptor MessageDeliveryExpired{NetworkDomain,
+                                                     ErrorCode{"network.message.delivery_expired"},
+                                                     ErrorSeverity::Warning,
+                                                     "Message expired before application admission.",
+                                                     "Discard the late message without invoking gameplay handling.",
+                                                     false,
+                                                     false};
+    const ErrorCodeDescriptor MessageDeliveryTerminal{NetworkDomain,
+                                                      ErrorCode{"network.message.delivery_terminal"},
+                                                      ErrorSeverity::Info,
+                                                      "Message admission is closed for this session.",
+                                                      "Use a new authenticated session generation after shutdown or disconnect.",
+                                                      false,
+                                                      false};
     const ErrorCodeDescriptor TerminalRecordInvalid{NetworkDomain,
                                                     ErrorCode{"network.terminal.invalid"},
                                                     ErrorSeverity::Error,
