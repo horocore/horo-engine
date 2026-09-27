@@ -128,6 +128,7 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/ReleaseVersion.h
 )
 horo_configure_target_header_boundary(HoroReleaseProcess PUBLIC_HEADERS
+    Horo/Release/ReleaseCandidatePublisher.h
     Horo/Release/ReleaseProcess.h
 )
 horo_configure_target_header_boundary(HoroReleaseService PUBLIC_HEADERS

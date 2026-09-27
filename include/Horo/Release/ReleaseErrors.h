@@ -38,6 +38,10 @@ namespace Horo::Release::ReleaseErrors {
     extern const ErrorCodeDescriptor PipelineInputChanged;
     /** @brief A stage returned an incomplete or contradictory typed output. */
     extern const ErrorCodeDescriptor PipelineOutputInvalid;
+    /** @brief A candidate stage or final path already belongs to another attempt. */
+    extern const ErrorCodeDescriptor PipelineOutputCollision;
+    /** @brief A private stage could not be durably assembled or promoted. */
+    extern const ErrorCodeDescriptor PipelineStagingIoFailed;
     /** @brief A stage worker threw across the release execution boundary. */
     extern const ErrorCodeDescriptor PipelineStageException;
     /** @brief A stage exceeded its service-owned deadline. */

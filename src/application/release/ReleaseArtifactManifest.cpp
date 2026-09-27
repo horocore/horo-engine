@@ -316,4 +316,9 @@ namespace Horo::Release {
     std::span<const ReleaseArtifactRecord> ReleaseArtifactManifest::Artifacts() const noexcept {
         return data_.artifacts;
     }
+
+    /** @copydoc ReleaseArtifactManifest::Data */
+    const ReleaseArtifactManifestData &ReleaseArtifactManifest::Data() const noexcept {
+        return data_;
+    }
 }  // namespace Horo::Release

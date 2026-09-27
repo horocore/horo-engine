@@ -97,6 +97,8 @@ namespace Horo::Release {
         [[nodiscard]] const Sha256Digest &Digest() const noexcept;
         /** @brief Returns validated file evidence. @return Borrowed immutable inventory. */
         [[nodiscard]] std::span<const ReleaseArtifactRecord> Artifacts() const noexcept;
+        /** @brief Returns all typed final candidate evidence. @return Borrowed immutable evidence. */
+        [[nodiscard]] const ReleaseArtifactManifestData &Data() const noexcept;
 
     private:
         ReleaseArtifactManifest(ReleaseArtifactManifestData data, std::string json, Sha256Digest digest);

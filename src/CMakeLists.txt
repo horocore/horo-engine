@@ -218,7 +218,9 @@ target_link_libraries(HoroApplication
 )
 add_dependencies(HoroApplication HoroProjectCompatibilityCatalog)
 
-add_library(HoroReleaseProcess STATIC application/release/ReleaseProcess.cpp)
+add_library(HoroReleaseProcess STATIC
+        application/release/ReleaseProcess.cpp
+        application/release/ReleaseCandidatePublisher.cpp)
 add_library(HoroEngine::ReleaseProcess ALIAS HoroReleaseProcess)
 target_compile_features(HoroReleaseProcess PUBLIC cxx_std_20)
 target_link_libraries(HoroReleaseProcess PUBLIC HoroEngine::Application HoroEngine::Platform)
