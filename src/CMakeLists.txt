@@ -42,6 +42,7 @@ target_include_directories(HoroFoundation
         $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
 )
 add_library(HoroSecurity STATIC
+        security/AgentPolicy.cpp
         security/SecurityErrors.cpp
         security/SecureMemory.cpp
         security/CredentialStore.cpp
