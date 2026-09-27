@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Assets/AssetChunkPlan.h"
+#include "Horo/Assets/AssetCookOutput.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/AssetCookTargetId.h"
 
@@ -39,6 +40,16 @@ namespace Horo::Assets {
      */
     [[nodiscard]] Result<std::vector<std::uint8_t>> BuildAssetArchive(const AssetChunkPlan &plan, const AssetCookTargetId &target,
                                                                       std::span<const AssetArchiveInput> artifacts,
+                                                                      const AssetArchiveLimits &limits = {});
+
+    /**
+     * @brief Builds an archive from a pinned, fully verified cook generation.
+     * @param plan Exact chunk membership for the release.
+     * @param generation Frozen generation identity and manifest digest.
+     * @param limits Finite archive and artifact bounds.
+     * @return Archive bytes or a typed failure before any partial output escapes.
+     */
+    [[nodiscard]] Result<std::vector<std::uint8_t>> BuildAssetArchive(const AssetChunkPlan &plan, const AssetCookGeneration &generation,
                                                                       const AssetArchiveLimits &limits = {});
 
     /** @brief Immutable archive-backed runtime provider with no filesystem fallback. */

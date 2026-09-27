@@ -237,6 +237,20 @@ namespace Horo::Assets {
         }
     }  // namespace
 
+    /** @copydoc BuildAssetArchive */
+    Result<std::vector<std::uint8_t>> BuildAssetArchive(const AssetChunkPlan &plan, const AssetCookGeneration &generation,
+                                                        const AssetArchiveLimits &limits) {
+        const AssetCookLimits cookLimits{.maximumArtifactBytes = limits.maximumAssetBytes, .maximumAssets = limits.maximumAssets};
+        auto contents = ReadCookGenerationContents(generation, limits.maximumArchiveBytes, cookLimits);
+        if (contents.HasError())
+            return Result<std::vector<std::uint8_t>>::Failure(contents.ErrorValue());
+        std::vector<AssetArchiveInput> inputs;
+        inputs.reserve(contents.Value().entries.size());
+        for (std::size_t i = 0; i < contents.Value().entries.size(); ++i)
+            inputs.push_back({contents.Value().entries[i].assetId, std::move(contents.Value().artifacts[i])});
+        return BuildAssetArchive(plan, generation.target, inputs, limits);
+    }
+
     Result<std::vector<std::uint8_t>> BuildAssetArchive(const AssetChunkPlan &plan, const AssetCookTargetId &target,
                                                         const std::span<const AssetArchiveInput> artifacts,
                                                         const AssetArchiveLimits &limits) {

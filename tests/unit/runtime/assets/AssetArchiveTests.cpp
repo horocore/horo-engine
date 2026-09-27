@@ -3,6 +3,9 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <span>
 #include <utility>
 #include <vector>
@@ -117,4 +120,49 @@ TEST_CASE("Release archive fails closed on tampering and unsupported target", "[
     const auto featureDigest = ComputeSha256(std::as_bytes(std::span{tampered.data(), tampered.size() - 32U}));
     std::copy(featureDigest.bytes.begin(), featureDigest.bytes.end(), tampered.end() - 32);
     CHECK(AssetArchiveProvider::Open(tampered, target).HasError());
+}
+
+TEST_CASE("Release archive consumes only verified pinned cook generation", "[assets][release][archive]") {
+    const auto first = Id("00000000-0000-0000-0000-000000000001");
+    const auto second = Id("00000000-0000-0000-0000-000000000002");
+    const auto target = Target("headless-null");
+    const auto inputs = std::array{Cooked(first, target, {1U}), Cooked(second, target, {2U})};
+    const auto type = AssetTypeId::Parse("core.mesh").Value();
+    const std::array entries{AssetCookManifestEntry{first, type, first.ToString() + ".cooked",
+                                                    ComputeSha256(std::as_bytes(std::span{inputs[0].bytes}))},
+                             AssetCookManifestEntry{second, type, second.ToString() + ".cooked",
+                                                    ComputeSha256(std::as_bytes(std::span{inputs[1].bytes}))}};
+    const std::array payloads{inputs[0].bytes, inputs[1].bytes};
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("horo_release_archive_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+
+    struct Cleanup {
+        std::filesystem::path root;
+
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(root, error);
+        }
+    } cleanup{root};
+
+    std::filesystem::create_directories(root);
+    auto generation = PublishCookGeneration(root, target, entries, payloads);
+    REQUIRE(generation.HasValue());
+    auto archive = BuildAssetArchive(Plan(first, second), generation.Value());
+    REQUIRE(archive.HasValue());
+    auto provider = AssetArchiveProvider::Open(archive.Value(), target);
+    REQUIRE(provider.HasValue());
+
+    auto undersized = BuildAssetArchive(Plan(first, second), generation.Value(), {.maximumArchiveBytes = 1U});
+    CHECK(undersized.HasError());
+    auto incorrectDigest = generation.Value();
+    incorrectDigest.manifestDigest.bytes[0] ^= 1U;
+    CHECK(BuildAssetArchive(Plan(first, second), incorrectDigest).HasError());
+
+    const auto artifactPath = generation.Value().generationRoot / entries[0].artifactFile;
+    std::ofstream tamper(artifactPath, std::ios::binary | std::ios::trunc);
+    REQUIRE(tamper.good());
+    tamper.put('x');
+    tamper.close();
+    CHECK(BuildAssetArchive(Plan(first, second), generation.Value()).HasError());
 }
