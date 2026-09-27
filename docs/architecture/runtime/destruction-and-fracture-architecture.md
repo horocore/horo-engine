@@ -391,6 +391,23 @@ Destruction state is replicated through the normal authority and replication bou
 - Cosmetic chunks/debris may simulate client-side but cannot affect gameplay, saves or
   canonical hashes
 
+The DFR-006.4 adapter contributes one exact Network schema (version 1.0) whose nine
+required, server-only fields have stable numeric IDs: `1` exact DFR handle, `2`
+fracture-content identity, `3` configuration revision, `4` authority epoch, `5`
+semantic revision, `6` phase and unsigned Q16.16 health, `7` versioned seed/cursor,
+`8` four content-scoped bit masks, and `9` sorted stable support-anchor IDs plus
+progress cursor. Integers use network byte order; masks use bit zero for the first
+entry in the exact immutable artifact chunk table. A record carries all fields in
+ascending ID order, with no optional default or unknown-field fallback in v1.0.
+`NetworkRuntime` supplies outer session/object/tick/baseline framing and pins the
+descriptor/serializer generation. The DFR adapter validates the trusted exact-content
+chunk table, counts, high bits, active/dormant disjointness, required broken membership,
+anchor membership, authority, and replacement fences before returning an owned apply
+candidate. It never directly commits `DestructionWorld`, duplicates paired Physics
+motion, or transmits transient presentation and native state. Dropping a failed or
+cancelled candidate leaves prior owner state untouched; aggregate publication remains
+the DFR/Scene/Physics owner's safe-point responsibility.
+
 ## Editor Authoring
 
 Fracture authoring tools:
