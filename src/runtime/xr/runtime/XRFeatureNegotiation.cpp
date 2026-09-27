@@ -41,20 +41,21 @@ namespace Horo::XR {
         }
 
         [[nodiscard]] constexpr bool IsPostOne(const XRCapability capability) noexcept {
-            return capability == XRCapability::Passthrough || capability == XRCapability::EyeGaze ||
-                   capability == XRCapability::QuadViews || capability == XRCapability::SpaceWarp;
+            using enum XRCapability;
+            return capability == Passthrough || capability == EyeGaze || capability == QuadViews || capability == SpaceWarp;
         }
 
         [[nodiscard]] constexpr bool AllowsProjectionFallback(const XRCapability capability) noexcept {
-            return capability == XRCapability::DepthComposition || capability == XRCapability::FixedFoveation ||
-                   capability == XRCapability::RefreshRateSelection || capability == XRCapability::VisibilityMask;
+            using enum XRCapability;
+            return capability == DepthComposition || capability == FixedFoveation || capability == RefreshRateSelection ||
+                   capability == VisibilityMask;
         }
 
         [[nodiscard]] constexpr bool IsOptionalOne(const XRFeatureProfile profile, const XRCapability capability) noexcept {
-            return capability == XRCapability::StageSpace || capability == XRCapability::DepthComposition ||
-                   capability == XRCapability::FixedFoveation || capability == XRCapability::RefreshRateSelection ||
-                   capability == XRCapability::VisibilityMask || capability == XRCapability::AndroidStandalone ||
-                   (profile == XRFeatureProfile::TrackedInteraction1_0 && capability == XRCapability::ControllerPresentation);
+            using enum XRCapability;
+            return capability == StageSpace || capability == DepthComposition || capability == FixedFoveation ||
+                   capability == RefreshRateSelection || capability == VisibilityMask || capability == AndroidStandalone ||
+                   (profile == XRFeatureProfile::TrackedInteraction1_0 && capability == ControllerPresentation);
         }
 
         [[nodiscard]] bool LimitsFit(const XRSystemLimits &requested, const XRSystemLimits &available) noexcept {
@@ -92,11 +93,12 @@ namespace Horo::XR {
         }
 
         [[nodiscard]] constexpr XRFeatureNegotiationStatus RequiredFailure(const XRCapabilityState state) noexcept {
+            using enum XRFeatureNegotiationStatus;
             if (state == XRCapabilityState::Unsupported)
-                return XRFeatureNegotiationStatus::RequiredUnsupported;
+                return RequiredUnsupported;
             if (state == XRCapabilityState::Incompatible)
-                return XRFeatureNegotiationStatus::RequiredIncompatible;
-            return XRFeatureNegotiationStatus::RequiredUnavailable;
+                return RequiredIncompatible;
+            return RequiredUnavailable;
         }
 
         [[nodiscard]] XRFeatureNegotiationOutcome ResolveRequired(const XRCapabilitySnapshot &evidence,
@@ -172,73 +174,72 @@ namespace Horo::XR {
     XRFeatureNegotiationOutcome NegotiateXRFeatures(const XRCapabilitySnapshot &evidence, const XRSystemId &activeSystem,
                                                     const XRCapabilityRevision expectedRevision,
                                                     const XRFeatureNegotiationRequest &request) noexcept {
+        using enum XRFeatureNegotiationStatus;
         if (!activeSystem.IsValid())
-            return {XRFeatureNegotiationStatus::Unavailable, XRCapability::Count, {}, std::nullopt};
+            return {Unavailable, XRCapability::Count, {}, std::nullopt};
         if (!expectedRevision.IsValid() || request.profile >= XRFeatureProfile::Count || request.features.size() > FeatureCount)
-            return {XRFeatureNegotiationStatus::InvalidRequest, XRCapability::Count, {}, std::nullopt};
+            return {InvalidRequest, XRCapability::Count, {}, std::nullopt};
         if (evidence.System() != activeSystem)
-            return {XRFeatureNegotiationStatus::StaleSystem, XRCapability::Count, {}, std::nullopt};
+            return {StaleSystem, XRCapability::Count, {}, std::nullopt};
         if (evidence.Revision() != expectedRevision)
-            return {XRFeatureNegotiationStatus::StaleRevision, XRCapability::Count, {}, std::nullopt};
+            return {StaleRevision, XRCapability::Count, {}, std::nullopt};
         for (const XRFeatureRequest &feature : request.features) {
             if (IsPostOne(feature.capability))
-                return {XRFeatureNegotiationStatus::UnsupportedPath, feature.capability, evidence.State(feature.capability), std::nullopt};
+                return {UnsupportedPath, feature.capability, evidence.State(feature.capability), std::nullopt};
         }
         if (!ValidRequestShape(request))
-            return {XRFeatureNegotiationStatus::InvalidRequest, XRCapability::Count, {}, std::nullopt};
+            return {InvalidRequest, XRCapability::Count, {}, std::nullopt};
         if (!LimitsFit(request.requestedLimits, evidence.Limits()))
-            return {XRFeatureNegotiationStatus::CapacityExceeded, XRCapability::Count, {}, std::nullopt};
+            return {CapacityExceeded, XRCapability::Count, {}, std::nullopt};
 
         Decisions decisions{};
-        const auto projection = ResolveRequired(evidence, ProjectionRequired, decisions);
-        if (projection.status != XRFeatureNegotiationStatus::Ok)
+        if (const auto projection = ResolveRequired(evidence, ProjectionRequired, decisions); projection.status != Ok)
             return projection;
         if (request.profile == XRFeatureProfile::TrackedInteraction1_0) {
-            const auto interaction = ResolveRequired(evidence, InteractionRequired, decisions);
-            if (interaction.status != XRFeatureNegotiationStatus::Ok)
+            if (const auto interaction = ResolveRequired(evidence, InteractionRequired, decisions); interaction.status != Ok)
                 return interaction;
         }
-        const auto extras = ResolveExtras(evidence, request.features, decisions);
-        if (extras.status != XRFeatureNegotiationStatus::Ok)
+        if (const auto extras = ResolveExtras(evidence, request.features, decisions); extras.status != Ok)
             return extras;
         XRFeaturePlan plan{request.profile, evidence, request.requestedLimits, std::move(decisions)};
-        return {XRFeatureNegotiationStatus::Ok, XRCapability::Count, {}, std::move(plan)};
+        return {Ok, XRCapability::Count, {}, std::move(plan)};
     }
 
     /** @copydoc ValidateXRFeaturePlan */
     XRFeatureNegotiationStatus ValidateXRFeaturePlan(const XRFeaturePlan &plan, const XRCapabilitySnapshot &evidence,
                                                      const XRSystemId &activeSystem, const XRCapabilityRevision expectedRevision) noexcept {
+        using enum XRFeatureNegotiationStatus;
         if (!activeSystem.IsValid())
-            return XRFeatureNegotiationStatus::Unavailable;
+            return Unavailable;
         if (!expectedRevision.IsValid())
-            return XRFeatureNegotiationStatus::InvalidRequest;
+            return InvalidRequest;
         if (plan.System() != activeSystem || evidence.System() != activeSystem)
-            return XRFeatureNegotiationStatus::StaleSystem;
+            return StaleSystem;
         if (plan.Revision() != expectedRevision || evidence.Revision() != expectedRevision)
-            return XRFeatureNegotiationStatus::StaleRevision;
+            return StaleRevision;
         if (!LimitsFit(plan.Limits(), evidence.Limits()))
-            return XRFeatureNegotiationStatus::CapacityExceeded;
+            return CapacityExceeded;
         for (std::size_t index = 0; index < FeatureCount; ++index) {
-            const XRCapability capability = static_cast<XRCapability>(index);
+            const auto capability = static_cast<XRCapability>(index);
             const XRFeatureDecision decision = plan.Decision(capability);
             if (decision.state != XRFeatureDecisionState::NotRequested && decision.observed != evidence.State(capability))
-                return XRFeatureNegotiationStatus::StaleRevision;
+                return StaleRevision;
         }
-        return XRFeatureNegotiationStatus::Ok;
+        return Ok;
     }
 
     /** @copydoc AdmitXRPlannedFeature */
     XRFeatureNegotiationStatus AdmitXRPlannedFeature(const XRFeaturePlan &plan, const XRCapabilitySnapshot &evidence,
                                                      const XRSystemId &activeSystem, const XRCapabilityRevision expectedRevision,
                                                      const XRCapability capability) noexcept {
+        using enum XRFeatureNegotiationStatus;
         if (!IsKnown(capability))
-            return XRFeatureNegotiationStatus::InvalidRequest;
-        if (const auto current = ValidateXRFeaturePlan(plan, evidence, activeSystem, expectedRevision);
-            current != XRFeatureNegotiationStatus::Ok)
+            return InvalidRequest;
+        if (const auto current = ValidateXRFeaturePlan(plan, evidence, activeSystem, expectedRevision); current != Ok)
             return current;
-        const XRFeatureDecisionState decision = plan.Decision(capability).state;
-        if (decision == XRFeatureDecisionState::Required || decision == XRFeatureDecisionState::OptionalEnabled)
-            return XRFeatureNegotiationStatus::Ok;
-        return XRFeatureNegotiationStatus::FeatureDisabled;
+        if (const XRFeatureDecisionState decision = plan.Decision(capability).state;
+            decision == XRFeatureDecisionState::Required || decision == XRFeatureDecisionState::OptionalEnabled)
+            return Ok;
+        return FeatureDisabled;
     }
 }  // namespace Horo::XR
