@@ -74,7 +74,7 @@ namespace Horo::Agent {
         })) {
             return false;
         }
-        m_entries.push_back({std::move(id), std::move(factory)});
+        m_entries.emplace_back(std::move(id), std::move(factory));
         return true;
     }
 

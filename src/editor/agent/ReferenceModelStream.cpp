@@ -1,5 +1,6 @@
 #include "ReferenceModelStream.h"
 
+#include <algorithm>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -185,11 +186,9 @@ namespace Horo::Agent::Detail {
 
     /** @copydoc StreamParser::OpenAITools */
     bool StreamParser::OpenAITools(const Json &fragments) {
-        for (const auto &fragment : fragments) {
-            if (!ApplyOpenAIFragment(fragment))
-                return false;
-        }
-        return true;
+        return std::ranges::all_of(fragments, [this](const Json &fragment) {
+            return ApplyOpenAIFragment(fragment);
+        });
     }
 
     /** @copydoc StreamParser::ApplyOpenAIFragment */

@@ -128,12 +128,9 @@ namespace Horo::Agent {
         }
 
         /** @brief Apply transport bounds and callbacks; request bodies remain caller-owned until perform returns. */
-        bool ConfigureCurl(CURL *curl,  // NOSONAR: libcurl declares CURL as an opaque C handle (void).
+        void ConfigureCurl(CURL *curl,  // NOSONAR: libcurl declares CURL as an opaque C handle (void).
                            HttpContext &context, const ModelProviderConfig &config, const std::string &url, const std::string *body,
                            curl_slist *headers) {
-            // Fail closed if a TLS backend cannot enforce the required protocol floor.
-            if (url.starts_with("https://") && curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
-                return false;
             curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
             curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
             curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteResponse);
@@ -150,7 +147,6 @@ namespace Horo::Agent {
                 curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body->data());
                 curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(body->size()));
             }
-            return true;
         }
 
         /** @brief Translate a completed transfer and its final fragment into the neutral outcome. */
@@ -192,6 +188,11 @@ namespace Horo::Agent {
             auto *curl = curl_easy_init();
             if (curl == nullptr)
                 return {ModelError{ModelErrorCode::Transport, "Cannot initialize model HTTP client", std::nullopt}};
+            // Every handle receives the TLS floor before URL selection; it is inert for loopback HTTP.
+            if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK) {
+                curl_easy_cleanup(curl);
+                return {ModelError{ModelErrorCode::Transport, "Cannot enforce model TLS minimum", std::nullopt}};
+            }
             curl_slist *headers = nullptr;
             headers = curl_slist_append(headers, "Accept: application/json");
             if (body != nullptr)
@@ -207,12 +208,7 @@ namespace Horo::Agent {
             if (url.ends_with('/'))
                 url.pop_back();
             url += path;
-            if (!ConfigureCurl(curl, context, config, url, body, headers)) {
-                curl_slist_free_all(headers);
-                curl_easy_cleanup(curl);
-                std::ranges::fill(authorization, '\0');
-                return {ModelError{ModelErrorCode::Transport, "Cannot enforce model TLS minimum", std::nullopt}};
-            }
+            ConfigureCurl(curl, context, config, url, body, headers);
             const CURLcode result = curl_easy_perform(curl);
             long status = 0;
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
@@ -239,17 +235,18 @@ namespace Horo::Agent {
 
         /** @brief Serialize neutral conversation history into the selected provider's wire shape. */
         Json RequestMessages(const ModelRequest &request, Protocol protocol) {
+            using enum ModelRole;
             Json messages = Json::array();
             for (const auto &message : request.messages) {
                 std::string role = "user";
-                if (message.role == ModelRole::System)
+                if (message.role == System)
                     role = "system";
-                if (message.role == ModelRole::Assistant)
+                if (message.role == Assistant)
                     role = "assistant";
-                if (message.role == ModelRole::Tool)
+                if (message.role == Tool)
                     role = "tool";
                 Json item = {{"role", role}, {"content", message.text}};
-                if (message.role == ModelRole::Tool && protocol == Protocol::OpenAI)
+                if (message.role == Tool && protocol == Protocol::OpenAI)
                     item["tool_call_id"] = message.toolCallId;
                 if (!message.toolIntents.empty()) {
                     Json calls = RequestToolCalls(message.toolIntents, protocol);
@@ -338,8 +335,7 @@ namespace Horo::Agent {
                     const auto nameKey = m_protocol == Protocol::Ollama ? "name" : "id";
                     if (!item.contains(nameKey) || !item[nameKey].is_string())
                         continue;
-                    discovery.models.emplace_back(
-                        ModelDescriptor{item[nameKey].get<std::string>(), m_config.enabledFeatures, std::nullopt});
+                    discovery.models.emplace_back(item[nameKey].get<std::string>(), m_config.enabledFeatures, std::nullopt);
                 }
                 return discovery;
             }
