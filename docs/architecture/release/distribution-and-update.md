@@ -129,6 +129,18 @@ Moving to a less stable channel requires explicit user action. Returning to an
 older version is treated as a deliberate rollback with project compatibility
 warnings.
 
+`UpdateDiscoveryPolicy` records the selected channel, check interval, automatic
+check and download preferences, mandatory security check policy, and telemetry
+consent. The host supplies its installed channel and last successful check to
+`PlanUpdateCheck`; a channel change is scheduled only after an explicit action.
+Startup and periodic checks are scheduling decisions: the host must dispatch
+source access asynchronously and must not wait for it before normal startup.
+`AssessUpdate` authenticates fetched metadata against installed trust roots and
+selects only a host-supported package for the installed product and target.
+Source failures and incompatible packages remain diagnostic results and do not
+modify the installation. The product host owns source adapters, persistence,
+security-update classification, and download decisions.
+
 ## Update Manifest
 
 ```json
