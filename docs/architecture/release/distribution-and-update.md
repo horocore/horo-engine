@@ -359,6 +359,16 @@ The updater:
 
 Platform installers may implement the switch differently, but partial mixed
 versions are forbidden.
+`ActivateVerifiedUpdate` is the portable helper transaction for a versioned
+installation root. Its package IDs select immutable sibling version trees; a
+bounded active-pointer file names exactly one package ID and signed digest.
+The helper takes an exclusive installation lock, asks the host to prevent new
+product launches and wait for existing processes, rechecks both ready versions,
+then writes a durable pending journal before atomically replacing the pointer.
+A failed bounded startup probe restores the previous pointer. After a crash,
+the same version evidence lets the helper resolve the journal to the verified
+previous pointer before another activation attempt. A different or malformed
+journal fails closed for explicit operator recovery.
 
 ## Rollback
 
