@@ -2,9 +2,11 @@
 
 #include "Horo/Release/ReleaseErrors.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdlib>
+#include <format>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <random>
@@ -42,21 +44,19 @@ namespace Horo::Release {
         [[nodiscard]] bool SafeAssetName(const std::string_view name) {
             if (name.empty() || name.size() > 1024U || name.front() == '-')
                 return false;
-            for (const char character : name)
-                if (!((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
-                      (character >= '0' && character <= '9') || character == '.' || character == '_' || character == '-' ||
-                      character == '%'))
-                    return false;
-            return true;
+            return std::ranges::all_of(name, [](const char character) {
+                return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+                       (character >= '0' && character <= '9') || character == '.' || character == '_' || character == '-' ||
+                       character == '%';
+            });
         }
 
         [[nodiscard]] bool SafeGitObjectId(const std::string_view objectId) {
             if (objectId.size() != 40U)
                 return false;
-            for (const char character : objectId)
-                if (!((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')))
-                    return false;
-            return true;
+            return std::ranges::all_of(objectId, [](const char character) {
+                return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f');
+            });
         }
 
         [[nodiscard]] Result<Json> ParseResponse(const std::string &response) {
@@ -90,6 +90,11 @@ namespace Horo::Release {
 
         class TemporaryAsset final {
         public:
+            TemporaryAsset(const TemporaryAsset &) = delete;
+            TemporaryAsset &operator=(const TemporaryAsset &) = delete;
+            TemporaryAsset(TemporaryAsset &&) = delete;
+            TemporaryAsset &operator=(TemporaryAsset &&) = delete;
+
             TemporaryAsset() {
                 std::error_code error;
                 const auto temporary = std::filesystem::temp_directory_path(error);
@@ -140,6 +145,24 @@ namespace Horo::Release {
         [[nodiscard]] bool Matches(const GitHubReleaseAssetEvidence &actual, const ReleaseArtifactRecord &expected) {
             return actual.size == expected.size && actual.digest == expected.digest;
         }
+
+        /** @brief Finds one asset identity in a page and rejects duplicate names or invalid IDs. */
+        [[nodiscard]] Result<void> FindAssetOnPage(const Json &assets, const std::string_view name, std::uint64_t &found) {
+            try {
+                for (const auto &asset : assets) {
+                    if (asset.at("name").get<std::string>() != name)
+                        continue;
+                    if (found != 0U)
+                        return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputCollision));
+                    found = asset.at("id").get<std::uint64_t>();
+                    if (found == 0U)
+                        return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+                }
+            } catch (const Json::exception &) {
+                return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc GitHubReleaseCliClient::GitHubReleaseCliClient */
@@ -156,7 +179,7 @@ namespace Horo::Release {
         request.maximumOutputBytes = 4U * 1024U * 1024U;
         std::string output;
         bool truncated = false;
-        request.onOutput = [&](const ProcessOutputLine &line) {
+        request.onOutput = [&output, &request, &truncated](const ProcessOutputLine &line) {
             if (line.stream == ProcessOutputStream::StandardOutput) {
                 if (line.truncated || output.size() + line.text.size() + 1U > request.maximumOutputBytes) {
                     truncated = true;
@@ -166,8 +189,8 @@ namespace Horo::Release {
                 output.push_back('\n');
             }
         };
-        auto result = processes_.Run(request, cancellation_);
-        if (result.HasError() || result.Value().reason != ProcessTerminationReason::Exited || result.Value().exitCode != 0 || truncated)
+        if (auto result = processes_.Run(request, cancellation_);
+            result.HasError() || result.Value().reason != ProcessTerminationReason::Exited || result.Value().exitCode != 0 || truncated)
             return Result<std::string>::Failure(MakeError(ReleaseErrors::PipelineProcessFailed));
         return Result<std::string>::Success(std::move(output));
     }
@@ -242,26 +265,15 @@ namespace Horo::Release {
     Result<std::uint64_t> GitHubReleaseCliClient::AssetId(const GitHubReleaseIdentity &release, const std::string_view name) const {
         std::uint64_t found = 0U;
         for (std::uint32_t page = 1U; page <= 10U; ++page) {
-            auto response = Run({"api", "repos/" + release.repository + "/releases/" + std::to_string(release.releaseId) +
-                                            "/assets?per_page=100&page=" + std::to_string(page)});
+            auto response =
+                Run({"api", std::format("repos/{}/releases/{}/assets?per_page=100&page={}", release.repository, release.releaseId, page)});
             if (response.HasError())
                 return Result<std::uint64_t>::Failure(response.ErrorValue());
             auto parsed = ParseResponse(response.Value());
             if (parsed.HasError() || !parsed.Value().is_array())
                 return Result<std::uint64_t>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
-            try {
-                for (const auto &asset : parsed.Value()) {
-                    if (asset.at("name").get<std::string>() == name) {
-                        if (found != 0U)
-                            return Result<std::uint64_t>::Failure(MakeError(ReleaseErrors::PipelineOutputCollision));
-                        found = asset.at("id").get<std::uint64_t>();
-                        if (found == 0U)
-                            return Result<std::uint64_t>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
-                    }
-                }
-            } catch (const Json::exception &) {
-                return Result<std::uint64_t>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
-            }
+            if (auto foundOnPage = FindAssetOnPage(parsed.Value(), name, found); foundOnPage.HasError())
+                return Result<std::uint64_t>::Failure(foundOnPage.ErrorValue());
             if (parsed.Value().size() < 100U)
                 return Result<std::uint64_t>::Success(found);
         }
@@ -284,9 +296,9 @@ namespace Horo::Release {
         if (!temporary.Valid())
             return Result<GitHubReleaseAssetEvidence>::Failure(MakeError(ReleaseErrors::PipelineStagingIoFailed));
         const auto download = temporary.Path("asset");
-        auto result = Run({"release", "download", release.tag, "--repo", release.repository, "--pattern", std::string{name}, "--output",
-                           download.string()});
-        if (result.HasError())
+        if (auto result = Run({"release", "download", release.tag, "--repo", release.repository, "--pattern", std::string{name}, "--output",
+                               download.string()});
+            result.HasError())
             return Result<GitHubReleaseAssetEvidence>::Failure(result.ErrorValue());
         auto measured = MeasureFile(download, name);
         if (measured.HasError())
@@ -330,12 +342,10 @@ namespace Horo::Release {
             if (error)
                 return Result<void>::Failure(MakeError(ReleaseErrors::PipelineStagingIoFailed));
         }
-        auto stagedEvidence = MeasureFile(staged, name);
-        if (stagedEvidence.HasError() || !Matches(stagedEvidence.Value(), evidence))
+        if (auto stagedEvidence = MeasureFile(staged, name); stagedEvidence.HasError() || !Matches(stagedEvidence.Value(), evidence))
             return Result<void>::Failure(MakeError(ReleaseErrors::PipelineInputChanged));
         auto upload = Run({"release", "upload", release.tag, staged.string(), "--repo", release.repository});
-        auto remote = ReadAsset(release, name);
-        if (remote.HasValue() && Matches(remote.Value(), evidence))
+        if (auto remote = ReadAsset(release, name); remote.HasValue() && Matches(remote.Value(), evidence))
             return Result<void>::Success();
         if (upload.HasError())
             return Result<void>::Failure(upload.ErrorValue());
@@ -352,9 +362,9 @@ namespace Horo::Release {
             return Result<void>::Failure(manifest.ErrorValue());
         if (manifest.Value().digest != manifestDigest)
             return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
-        auto changed = Run({"api", "--method", "PATCH", "repos/" + release.repository + "/releases/" + std::to_string(release.releaseId),
-                            "--field", "make_latest=true", "--silent"});
-        if (changed.HasError())
+        if (auto changed = Run({"api", "--method", "PATCH", std::format("repos/{}/releases/{}", release.repository, release.releaseId),
+                                "--field", "make_latest=true", "--silent"});
+            changed.HasError())
             return Result<void>::Failure(changed.ErrorValue());
         auto latest = Run({"api", "repos/" + release.repository + "/releases/latest"});
         if (latest.HasError())
@@ -366,6 +376,7 @@ namespace Horo::Release {
             if (parsed.Value().at("id").get<std::uint64_t>() == release.releaseId)
                 return Result<void>::Success();
         } catch (const Json::exception &) {
+            return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
         }
         return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
     }
