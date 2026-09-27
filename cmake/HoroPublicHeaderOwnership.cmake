@@ -230,6 +230,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/MessageCodecRegistry.h
+    Horo/Network/MessageDeliveryGate.h
     Horo/Network/MessageEnvelope.h
     Horo/Network/NetworkAddress.h
     Horo/Network/NetworkErrors.h
@@ -259,6 +260,7 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/TransportBackendInstance.h
 )
 horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
+    Horo/Network/NetworkModeComposition.h
     Horo/Network/TransportBackendComposition.h
     Horo/Network/NetworkDiagnostics.h
     Horo/Network/AuthenticationSessionAdapter.h
@@ -400,6 +402,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/PhysicsConstraintDescriptor.h
     Horo/Physics/PhysicsConvexHullCook.h
     Horo/Physics/PhysicsCookedShapeCache.h
+    Horo/Physics/PhysicsHeightFieldCook.h
     Horo/Physics/PhysicsCookedShapeDescriptor.h
     Horo/Physics/PhysicsDiagnostics.h
     Horo/Physics/PhysicsDeterminismPolicy.h
@@ -495,6 +498,10 @@ horo_configure_target_header_boundary(HoroDestructionCook PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroDestructionRuntime PUBLIC_HEADERS
     Horo/Destruction/DestructionDamageRuntime.h
+    Horo/Destruction/DestructionEventStream.h
+)
+horo_configure_target_header_boundary(HoroDestructionApplication PUBLIC_HEADERS
+    Horo/Destruction/DestructionEventDispatcher.h
 )
 horo_configure_target_header_boundary(HoroDestructionReplication PUBLIC_HEADERS
     Horo/Destruction/DestructionReplication.h
@@ -554,6 +561,7 @@ horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRViewRenderPlan.h
 )
 horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
+    Horo/XR/XRFeatureNegotiation.h
     Horo/XR/XRFrameLifecycle.h
     Horo/XR/XRSessionErrors.h
     Horo/XR/XRSessionLifecycle.h
@@ -565,6 +573,9 @@ horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/TerrainErrors.h
     Horo/Terrain/TerrainFoliageRegistry.h
     Horo/Terrain/TerrainIdentity.h
+)
+horo_configure_target_header_boundary(HoroTerrainImport PUBLIC_HEADERS
+    Horo/Terrain/TerrainSourceImport.h
 )
 horo_configure_target_header_boundary(HoroTerrainRuntime PUBLIC_HEADERS
     Horo/Terrain/TerrainAsyncJobs.h
@@ -719,6 +730,12 @@ horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroEditorViewportScene)
 horo_configure_target_header_boundary(HoroEditorRenderExtraction)
+horo_configure_target_header_boundary(HoroModelProvider PUBLIC_HEADERS
+    Horo/Agent/ModelProvider.h
+)
+horo_configure_target_header_boundary(HoroModelProviderAdapters PUBLIC_HEADERS
+    Horo/Agent/ReferenceModelProviders.h
+)
 
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/ActivityBarLayout.h

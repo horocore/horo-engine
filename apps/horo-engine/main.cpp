@@ -4,6 +4,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Telemetry/Telemetry.h"
 #include "HostModuleComposition.h"
+#include "NetworkProductLaunch.h"
 
 #include <filesystem>
 #include <iostream>
@@ -62,9 +63,12 @@ namespace {
 }  // namespace
 
 int main(const int argc, char **argv) {
+    if (argc >= 2 && std::string_view{argv[1]} == "--run-network-product")
+        return Horo::Application::Internal::RunNetworkProduct(std::span{argv + 2, static_cast<std::size_t>(argc - 2)});
     const Options options = ParseOptions(std::span{argv, static_cast<std::size_t>(argc)});
     if (options.help) {
-        std::cout << "Usage: horo-engine [--emit-observability-smoke] [--diagnostic-bundle <absolute-output.zip>]\n";
+        std::cout << "Usage: horo-engine [--emit-observability-smoke] [--diagnostic-bundle <absolute-output.zip>]\n"
+                     "       horo-engine --run-network-product <standalone|client|listen|dedicated> <frames 1..10000> [bind] [connect]\n";
         return 0;
     }
 
