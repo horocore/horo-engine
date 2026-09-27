@@ -839,6 +839,15 @@ backend type. Hosts retain source registration and clock ownership; the public
 function only projects immutable caller-supplied evidence. The generated public
 header consumer continues to verify the Foundation/Assets-only staged boundary.
 
+`[WST-003.5]` adds `Horo/WorldStreaming/SharedAssetResidency.h` to the existing
+`HoroWorldStreaming` owner. The public boundary uses the already declared Assets
+dependency for stable `AssetId` and World Streaming's own revision, fence, service
+and owner identities. It does not expose an asset-cache implementation, raw cached
+object, allocator, filesystem, renderer or native provider type. Hosts and cache
+adapters migrate by presenting exact cache allocation revision/byte facts and by
+routing actual retirement acknowledgements back to the authority; consumers do not
+become cache owners. Existing public consumers retain the same target dependency.
+
 ANI-001.6 adds `Horo/Animation/AnimationClip.h` to the same owner. Asset and runtime
 composition replace ad hoc floating-point cursors and untyped wrap flags with exact
 nanosecond-tick time, reduced sample-rate metadata, stable generation-fenced clip and
