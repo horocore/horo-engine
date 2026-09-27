@@ -968,6 +968,11 @@ add_executable(HoroReleasePreflightTests
 )
 target_compile_features(HoroReleasePreflightTests PRIVATE cxx_std_20)
 target_link_libraries(HoroReleasePreflightTests PRIVATE HoroEngine::Application nlohmann_json::nlohmann_json)
+add_executable(HoroReleaseTargetMatrixTests
+        unit/application/ReleaseTargetMatrixTests.cpp
+)
+target_compile_features(HoroReleaseTargetMatrixTests PRIVATE cxx_std_20)
+target_link_libraries(HoroReleaseTargetMatrixTests PRIVATE HoroEngine::Application)
 add_executable(HoroProjectMigrationTests
         unit/application/ProjectMigrationTests.cpp
         unit/application/ProjectMigrationCatalogTests.cpp
@@ -2468,6 +2473,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroDistributionModelTests
         HoroReleaseProfileTests
         HoroReleasePreflightTests
+        HoroReleaseTargetMatrixTests
         HoroProjectMigrationTests
         HoroProjectMigrationTransactionTests
         HoroProjectOpenServiceTests
