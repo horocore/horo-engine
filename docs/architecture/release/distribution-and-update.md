@@ -280,8 +280,10 @@ payload starts with `horo-update-files-v1\n` and contains sorted rows of
 file. The inventory entry is not installed. The reader rejects missing, extra,
 duplicate, mismatched, or noncanonical rows before extraction, then compares
 every decompressed file with its declared digest and size. It writes into an
-absent sibling directory durably, checks the completed tree again, and removes
-the new tree on failure before any ready marker can survive. ZIP producers must
+absent sibling directory durably only after checking that the authenticated
+expanded size fits the available capacity with the host's free-space reserve.
+It checks the completed tree again and removes the new tree on failure before
+any ready marker can survive. ZIP producers must
 write this inventory before package signing; they can use
 `BuildCanonicalUpdateFileInventory` to produce the bounded, sorted bytes.
 `UpdateZipPackageProducer` is the ZIP backend for `ProduceReleasePackage`. It

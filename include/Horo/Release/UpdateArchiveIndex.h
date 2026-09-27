@@ -32,6 +32,7 @@ namespace Horo::Release {
         std::uint64_t maximumEntries{};
         std::uint64_t maximumFileBytes{};
         std::uint64_t maximumExpandedBytes{};
+        std::uint64_t reserveBytes{}; /**< Free capacity retained after staging. */
     };
 
     /**

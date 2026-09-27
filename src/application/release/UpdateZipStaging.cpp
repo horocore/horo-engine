@@ -292,6 +292,20 @@ namespace Horo::Release {
             return !error && std::filesystem::is_directory(parent) && !std::filesystem::exists(stageRoot, error) && !error;
         }
 
+        /** @brief Reserves capacity for the authenticated expanded archive before creating a staged tree. */
+        [[nodiscard]] Result<void> CheckStageCapacity(const std::vector<UpdateArchiveEntry> &index, const std::filesystem::path &stageRoot,
+                                                      const UpdateArchiveLimits &limits, NativeDurableFileSystem &files) {
+            std::uint64_t expandedBytes = 0U;
+            for (const auto &entry : index)
+                expandedBytes += entry.expandedBytes;  // ReadIndex already bounded the total.
+            auto available = files.AvailableBytes(stageRoot.parent_path());
+            if (available.HasError())
+                return Result<void>::Failure(available.ErrorValue());
+            if (limits.reserveBytes > available.Value() || expandedBytes > available.Value() - limits.reserveBytes)
+                return Result<void>::Failure(MakeError(UpdateTransferErrors::InsufficientSpace));
+            return Result<void>::Success();
+        }
+
         /** @brief Removes only the directory this call created after any failure. */
         struct StageCleanup final {
             std::filesystem::path root;
@@ -341,6 +355,8 @@ namespace Horo::Release {
         auto declared = ReadDeclaredFiles(reader.archive, index.Value(), limits);
         if (declared.HasError())
             return Result<std::filesystem::path>::Failure(declared.ErrorValue());
+        if (auto capacity = CheckStageCapacity(index.Value(), stageRoot, limits, files); capacity.HasError())
+            return Result<std::filesystem::path>::Failure(capacity.ErrorValue());
         std::error_code error;
         if (!std::filesystem::create_directory(stageRoot, error) || error)
             return failed(UpdateTransferErrors::StageMismatch);

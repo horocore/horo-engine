@@ -348,6 +348,26 @@ TEST_CASE("Verified ZIP staging extracts bounded content and publishes ready", "
     CHECK(content == "verified editor");
 }
 
+TEST_CASE("ZIP staging reserves disk space before creating the private tree", "[release][update]") {
+    TemporaryStage stage;
+    const auto archive = ZipArchive("bin/editor", "verified editor");
+    const auto package = Package(archive);
+    const auto paths = Paths(stage);
+    {
+        std::ofstream output(paths.partialFile, std::ios::binary);
+        output.write(archive.data(), static_cast<std::streamsize>(archive.size()));
+    }
+    Horo::NativeDurableFileSystem files;
+    constexpr UpdateArchiveLimits limits{.maximumEntries = 4U,
+                                         .maximumFileBytes = 1024U,
+                                         .maximumExpandedBytes = 1024U,
+                                         .reserveBytes = std::numeric_limits<std::uint64_t>::max()};
+    const auto root = stage.path / "candidate";
+    CHECK(StageVerifiedZipUpdate(package, CompleteCheckpoint(package), paths.partialFile, root, limits, files, Verifier(), {}).HasError());
+    CHECK_FALSE(std::filesystem::exists(root));
+    CHECK_FALSE(std::filesystem::exists(root.string() + ".ready"));
+}
+
 TEST_CASE("ZIP staging rejects escaped and oversized entries before creating a tree", "[release][update]") {
     TemporaryStage stage;
     Horo::NativeDurableFileSystem files;
