@@ -15,7 +15,7 @@ namespace Horo::Release {
     /** @brief Exact frozen inputs and private output location for one package format. */
     struct ReleasePackageRequest final {
         DistributionPackageSelection selection;
-        const ReleaseArtifactManifest &manifest;
+        const ReleasePreSignInventory &sourceInventory;
         std::filesystem::path sourceRoot;
         std::filesystem::path privateOutputRoot;
     };
@@ -43,8 +43,8 @@ namespace Horo::Release {
     };
 
     /**
-     * @brief Validates exact candidate identity and source bytes, then invokes one matching backend.
-     * @param request Frozen candidate, selected format, and distinct private output root.
+     * @brief Validates exact unsigned Build/Cook inputs, then invokes one matching backend.
+     * @param request Frozen input inventory, selected format, and distinct private output root.
      * @param producers Host-installed package backends; duplicate matches fail closed.
      * @return Produced file evidence or a typed failure. No implicit format fallback occurs.
      */
