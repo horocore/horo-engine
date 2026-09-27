@@ -1,8 +1,12 @@
 #include "Horo/Release/UpdateArchiveIndex.h"
+#include "Horo/Release/UpdateStagedTree.h"
 #include "Horo/Release/UpdateTransfer.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <span>
 #include <utility>
@@ -11,6 +15,28 @@
 using namespace Horo::Release;
 
 namespace {
+    class TemporaryStage final {
+    public:
+        TemporaryStage()
+            : path(std::filesystem::temp_directory_path() /
+                   ("horo-update-stage-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+            std::filesystem::create_directories(path);
+        }
+
+        ~TemporaryStage() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+
+        std::filesystem::path path;
+    };
+
+    void WriteStageFile(const std::filesystem::path &path, const std::string_view bytes) {
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream output(path, std::ios::binary);
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    }
+
     class AcceptingProvider final : public Horo::Security::SignatureProvider {
     public:
         [[nodiscard]] bool Supports(Horo::Security::SignatureAlgorithm) const noexcept override {
@@ -191,4 +217,42 @@ TEST_CASE("Update archive preflight rejects traversal, links, and ambiguous name
     CHECK(ValidateUpdateArchiveIndex(fileParent, limits).HasError());
     CHECK(ValidateUpdateArchiveIndex(fileChild, limits).HasError());
     CHECK(ValidateUpdateArchiveIndex(nonemptyDirectory, limits).HasError());
+}
+
+TEST_CASE("Update staging verifies exact file bytes and rejects undeclared tree entries", "[release][update]") {
+    TemporaryStage stage;
+    constexpr std::string_view executable = "editor bytes";
+    constexpr std::string_view notes = "release notes";
+    WriteStageFile(stage.path / "bin/editor", executable);
+    WriteStageFile(stage.path / "docs/notes.txt", notes);
+    const std::array files{UpdateStagedFile{"bin/editor", executable.size(), Horo::ComputeSha256(std::as_bytes(std::span{executable}))},
+                           UpdateStagedFile{"docs/notes.txt", notes.size(), Horo::ComputeSha256(std::as_bytes(std::span{notes}))}};
+    constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 32U, .maximumExpandedBytes = 64U};
+    REQUIRE(VerifyUpdateStagedTree(stage.path, files, limits).HasValue());
+
+    WriteStageFile(stage.path / "bin/editor", "wrong bytes");
+    CHECK(VerifyUpdateStagedTree(stage.path, files, limits).HasError());
+    WriteStageFile(stage.path / "bin/editor", executable);
+    WriteStageFile(stage.path / "extra.txt", "undeclared");
+    CHECK(VerifyUpdateStagedTree(stage.path, files, limits).HasError());
+    std::filesystem::remove(stage.path / "extra.txt");
+    std::filesystem::create_directories(stage.path / "unused");
+    CHECK(VerifyUpdateStagedTree(stage.path, files, limits).HasError());
+}
+
+TEST_CASE("Update staging rejects missing, linked, and oversized content", "[release][update]") {
+    TemporaryStage stage;
+    constexpr std::string_view bytes = "editor bytes";
+    WriteStageFile(stage.path / "bin/editor", bytes);
+    const std::array files{UpdateStagedFile{"bin/editor", bytes.size(), Horo::ComputeSha256(std::as_bytes(std::span{bytes}))}};
+    constexpr UpdateArchiveLimits limits{.maximumEntries = 2U, .maximumFileBytes = 32U, .maximumExpandedBytes = 32U};
+    REQUIRE(VerifyUpdateStagedTree(stage.path, files, limits).HasValue());
+    CHECK(
+        VerifyUpdateStagedTree(stage.path, files, {.maximumEntries = 2U, .maximumFileBytes = 2U, .maximumExpandedBytes = 32U}).HasError());
+    std::filesystem::remove(stage.path / "bin/editor");
+    CHECK(VerifyUpdateStagedTree(stage.path, files, limits).HasError());
+    std::error_code linkError;
+    std::filesystem::create_symlink(stage.path / "outside", stage.path / "bin/editor", linkError);
+    if (!linkError)
+        CHECK(VerifyUpdateStagedTree(stage.path, files, limits).HasError());
 }

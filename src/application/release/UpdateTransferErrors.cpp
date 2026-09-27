@@ -42,4 +42,10 @@ namespace Horo::Release::UpdateTransferErrors {
                                                    .remediationHint =
                                                        "Choose a compatible update package or increase administrator limits.",
                                                    .userActionable = true};
+    const ErrorCodeDescriptor StageMismatch{.domain = Domain,
+                                            .code = ErrorCode{"release.update_transfer.stage_mismatch"},
+                                            .defaultSeverity = ErrorSeverity::Error,
+                                            .summary = "Extracted update files do not match the authenticated inventory.",
+                                            .remediationHint = "Discard the staged version and retry from a trusted package.",
+                                            .userActionable = true};
 }  // namespace Horo::Release::UpdateTransferErrors

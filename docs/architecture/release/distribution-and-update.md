@@ -264,7 +264,11 @@ preflight uses the release artifact path grammar and rejects links, special
 files, nonportable or colliding paths, file parents, and excess entry or
 expanded-byte counts under host policy limits.
 The reader and staging host remain responsible for proving that extracted bytes
-match the archive and its declared per-file inventory.
+match the archive and its declared per-file inventory. `VerifyUpdateStagedTree`
+streams each private staged file through SHA-256, checks its declared length,
+and rejects missing, undeclared, linked, or special entries before a ready marker
+may be published. The host must keep the private stage quiescent during this
+check; the archive reader must supply the complete authenticated file inventory.
 Partial-file checkpoint evidence uses a bounded canonical schema. Recovery
 parses it as untrusted bytes and rechecks it against the selected signed package
 and the new transport response before appending any downloaded bytes.

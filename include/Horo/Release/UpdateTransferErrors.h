@@ -20,4 +20,6 @@ namespace Horo::Release::UpdateTransferErrors {
     extern const ErrorCodeDescriptor InvalidArchive;
     /** @brief Archive entry count or expanded file size exceeds host policy. */
     extern const ErrorCodeDescriptor ArchiveResourceLimit;
+    /** @brief Extracted private tree differs from the authenticated file inventory. */
+    extern const ErrorCodeDescriptor StageMismatch;
 }  // namespace Horo::Release::UpdateTransferErrors
