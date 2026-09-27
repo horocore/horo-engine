@@ -43,6 +43,13 @@ def canonical_platform(value: str) -> str:
     raise ValueError("unsupported extension CI platform")
 
 
+def canonical_commit(value: str) -> str:
+    if len(value) != 40 or any(character not in "0123456789abcdef" for character in value):
+        raise ValueError("invalid source commit attribution")
+    # Pass a fresh, fixed-width hexadecimal value to the SDK runner, not raw CLI text.
+    return f"{int(value, 16):040x}"
+
+
 def read_lock(project: Path, platform: str) -> tuple[str, str, str]:
     document = json.loads((project / ".horo/extension-ci.lock.json").read_text(encoding="utf-8"))
     if document.get("schemaVersion") != 1 or not isinstance(document.get("sdkVersion"), str):
@@ -146,6 +153,7 @@ def main() -> int:
         if host_platform.system() != operating_system or host_platform.machine() not in machines:
             raise ValueError("CI runner architecture does not match the locked platform")
         project, output = author_paths(args)
+        commit = canonical_commit(args.commit)
         version, url, digest = read_lock(project, platform)
         with tempfile.TemporaryDirectory(prefix="horo-extension-sdk-") as temporary:
             root = Path(temporary)
@@ -158,7 +166,7 @@ def main() -> int:
                 raise ValueError("downloaded SDK does not contain the author CI tool")
             command = [sys.executable, str(runner), "--sdk", str(root), "--project", str(project),
                        "--output", str(output), "--platform", platform,
-                       "--repository", args.repository, "--commit", args.commit,
+                       "--repository", args.repository, "--commit", commit,
                        "--sdk-sha256", digest]
             # The runner came from the SHA-256-pinned archive, arguments are separate
             # argv values, and no user-provided text is interpreted by a shell.

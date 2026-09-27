@@ -61,6 +61,14 @@ def test_bootstrap_passes_only_canonical_platform_literals():
         BOOTSTRAP.canonical_platform("linux-x64 --output /outside")
 
 
+def test_bootstrap_reconstructs_only_fixed_width_lowercase_commit():
+    commit = "0" * 39 + "a"
+    assert BOOTSTRAP.canonical_commit(commit) == commit
+    for malicious in ("--output", "a" * 39 + ";", "A" * 40, "a" * 41, "a" * 39 + "\n"):
+        with pytest.raises(ValueError, match="source commit"):
+            BOOTSTRAP.canonical_commit(malicious)
+
+
 def test_scaffold_carries_versioned_ci_contract_without_source_path(tmp_path):
     output = tmp_path / "author"
     SCAFFOLDER.write_project(output, "com.example.author", "Author", "1.0.0", "backend")
@@ -232,6 +240,7 @@ def test_bootstrap_checks_downloaded_sdk_version_before_runner(monkeypatch, tmp_
     sdk = archive({
         "share/horo/extension-sdk/extension-sdk.json": json.dumps({"sdk": {"version": "1.2.3"}}),
         "bin/horo-extension-author-ci.py": "print('fixture')",
+        "bin/untrusted-alternative.py": "print('not the runner')",
     })
     digest = hashlib.sha256(sdk).hexdigest()
     lock = {"schemaVersion": 1, "sdkVersion": "1.2.3", "platforms": {
@@ -260,9 +269,24 @@ def test_bootstrap_checks_downloaded_sdk_version_before_runner(monkeypatch, tmp_
     assert BOOTSTRAP.main() == 0
     assert len(launched) == 1
     assert launched[0][2] is False
+    assert launched[0][0][0] == sys.executable
+    assert Path(launched[0][0][1]).name == "horo-extension-author-ci.py"
+    sdk_root = Path(launched[0][0][launched[0][0].index("--sdk") + 1])
+    assert Path(launched[0][0][1]) == sdk_root / "bin/horo-extension-author-ci.py"
     assert launched[0][0][launched[0][0].index("--platform") + 1] == "linux-x64"
+    assert launched[0][0][launched[0][0].index("--commit") + 1] == "a" * 40
     assert "--sdk-sha256" in launched[0][0]
     assert digest in launched[0][0]
+
+    sys.argv[sys.argv.index("--commit") + 1] = "a" * 39 + ";"
+    assert BOOTSTRAP.main() == 2
+    assert len(launched) == 1
+    sys.argv[sys.argv.index("--commit") + 1] = "a" * 40
+
+    sys.argv[sys.argv.index("--repository") + 1] = "--output /outside"
+    assert BOOTSTRAP.main() == 2
+    assert len(launched) == 1
+    sys.argv[sys.argv.index("--repository") + 1] = "example/author"
 
     lock["sdkVersion"] = "9.9.9"
     lock_path.write_text(json.dumps(lock), encoding="utf-8")
