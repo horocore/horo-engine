@@ -60,7 +60,7 @@ jobs:
         include:
           - name: Linux / GCC
             runner: ubuntu-24.04
-            timeout_minutes: 25
+            timeout_minutes: 35
             cc: gcc
             cxx: g++
             build_dir: build/ci
@@ -277,7 +277,7 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
           cmake --build build/vfx-windows --target HoroVfxApiTests --parallel
-          ctest --test-dir build/vfx-windows -R '^HoroVfxApiTests::' --output-on-failure
+          ctest --test-dir build/vfx-windows -R '^HoroVfxApiTests::' --output-on-failure --timeout 90
         env:
           CC: cl
           CXX: cl

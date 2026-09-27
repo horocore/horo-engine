@@ -74,8 +74,8 @@ namespace Horo::Runtime {
      * @brief Complete archive admission proof with borrowed or explicitly owned source bytes.
      *
      * The span overload retains a borrow of the caller's immutable bytes. Use the shared-vector
-     * overload when the storage backend owns the archive; the returned value then retains that
-     * ownership until all selected chunk spans and metadata references are destroyed.
+     * overload when the storage backend owns the archive; selected canonical chunks own their
+     * decoded storage independently of this archive's lifetime.
      */
     class ValidatedSaveArchive final {
     public:
@@ -96,9 +96,9 @@ namespace Horo::Runtime {
         /**
          * @brief Selects one already-integrity-verified chunk without invoking module code.
          * @param record Stable record identity.
-         * @return Borrowed chunk bytes or an empty optional for an unknown lookup.
+         * @return Owned canonical chunk bytes or an empty optional for an unknown lookup.
          */
-        [[nodiscard]] Result<std::optional<std::span<const std::byte>>> SelectChunk(SaveRecordId record) const;
+        [[nodiscard]] Result<std::optional<std::vector<std::byte>>> SelectChunk(SaveRecordId record) const;
 
     private:
         struct Contents final {

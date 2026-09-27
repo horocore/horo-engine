@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -94,6 +96,7 @@ namespace Horo::Network {
             void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *descriptor) override {
                 if (record.Kind() != Telemetry::RecordKind::Metric || !descriptor)
                     return;
+                exportEntered.store(true);
                 std::scoped_lock lock{mutex};
                 names.push_back(descriptor->name);
                 bounded = bounded && descriptor->dimensions.empty() && descriptor->maxSeries == 1;
@@ -104,6 +107,7 @@ namespace Horo::Network {
             void Flush() override {}
 
             std::mutex mutex;
+            std::atomic<bool> exportEntered{false};
             std::vector<std::string> names;
             bool bounded{true};
             bool rttMilliseconds{true};
@@ -130,7 +134,6 @@ namespace Horo::Network {
             REQUIRE(snapshot.messages[Sent][Wire] == publication);
             REQUIRE(snapshot.packetsLost == 2 * publication);
             REQUIRE(publisher.Publish(snapshot));
-            REQUIRE(Telemetry::Runtime::Flush());
         }
 
         void RequireMetricSinkCoverage(MetricSink &sink, const std::size_t publications) {
@@ -293,14 +296,28 @@ namespace Horo::Network {
         REQUIRE(static_cast<bool>(handles.totalDrops));
         REQUIRE(static_cast<bool>(handles.lost));
         REQUIRE(Telemetry::Runtime::GetStatistics().invalidInstrumentRegistrations == 0);
+        const auto gateMetric = handles.messages[Received][Wire];
         NetworkMetricPublisher publisher{13, std::move(handles)};
         NetworkMetrics metrics{13, true};
-        // The runtime queue is intentionally best-effort under writer contention. Retry
-        // bounded safe-point samples instead of assuming every single enqueue survives.
-        std::size_t publications{};
-        for (; publications < 16 && !HasRequiredMetricNames(*sink); ++publications)
-            PublishMetricSample(metrics, publisher, publications + 1);
-        RequireMetricSinkCoverage(*sink, publications);
+        // Park the writer in the sink after it dequeues a harmless metric. The
+        // full snapshot can then enter the bounded queue without writer contention.
+        {
+            std::unique_lock hold{sink->mutex};
+            const auto waitDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            const auto acceptedBeforeGate = Telemetry::Runtime::GetStatistics().acceptedRecords;
+            while (Telemetry::Runtime::GetStatistics().acceptedRecords == acceptedBeforeGate &&
+                   std::chrono::steady_clock::now() < waitDeadline)
+                gateMetric.Add(1);
+            REQUIRE(Telemetry::Runtime::GetStatistics().acceptedRecords > acceptedBeforeGate);
+            while (!sink->exportEntered.load() && std::chrono::steady_clock::now() < waitDeadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            REQUIRE(sink->exportEntered.load());
+            const auto droppedBeforeSample = Telemetry::Runtime::GetStatistics().droppedRecords;
+            PublishMetricSample(metrics, publisher, 1);
+            REQUIRE(Telemetry::Runtime::GetStatistics().droppedRecords == droppedBeforeSample);
+        }
+        REQUIRE(Telemetry::Runtime::Flush());
+        RequireMetricSinkCoverage(*sink, 1);
         REQUIRE(metrics.Close());
         REQUIRE(publisher.Publish(metrics.Snapshot()));
         REQUIRE(Telemetry::Runtime::Shutdown());

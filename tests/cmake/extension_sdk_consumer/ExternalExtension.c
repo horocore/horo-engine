@@ -3,7 +3,7 @@
 #include <stddef.h>
 
 _Static_assert(HORO_EXTENSION_ABI_VERSION == 1, "Unexpected extension ABI major");
-_Static_assert(HORO_EXTENSION_ABI_MINOR_VERSION == 2, "Unexpected extension ABI minor");
+_Static_assert(HORO_EXTENSION_ABI_MINOR_VERSION == 3, "Unexpected extension ABI minor");
 _Static_assert(HORO_EXTENSION_SDK_ABI_MAJOR == HORO_EXTENSION_ABI_VERSION, "SDK metadata and ABI header major versions disagree");
 _Static_assert(HORO_EXTENSION_SDK_ABI_MIN_HOST_MINOR == 0, "Unexpected oldest supported host minor");
 _Static_assert(HORO_EXTENSION_SDK_ABI_PUBLISHED_MINOR == HORO_EXTENSION_ABI_MINOR_VERSION,

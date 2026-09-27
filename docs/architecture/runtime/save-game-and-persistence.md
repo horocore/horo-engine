@@ -464,9 +464,20 @@ relative offset, stored/decoded lengths, alignment and decoded SHA-256. Header a
 manifest records are first, followed by manifest-owned chunk records in stable
 record order; their data ranges must be contiguous from the first data byte through
 the exact payload end. v1 rejects extension records and codecs other than raw before
-any decompression or participant decode. The reader verifies the finalized envelope
+any decompression or participant decode. Archive/container v2 retains that exact
+framing and adds codec ID 1 (`Deflate`, zlib-wrapped DEFLATE) for chunk records only;
+header and manifest stay raw. Both version fields must agree. Readers of v1 still
+reject Deflate rather than silently changing old-format interpretation. The built-in
+codec inventory declares supported levels 1–9 and no dictionary capability. Writer
+policy retains metadata and small/ineffective chunks raw, with explicit required
+codec failure rather than silent fallback. Per-chunk stored and decoded lengths,
+expansion ratio and total decode work are checked before output allocation. Unknown
+required codec IDs fail as a typed compatibility error. The reader verifies the finalized envelope
 hash first, then uses the existing metadata and chunk-directory validators and
-returns only an immutable detached view; it owns no filesystem, module callback or
+returns only an immutable detached view. Selected chunks now return owned decoded
+bytes (including v1 raw selections) rather than a borrowed archive span; callers
+must consume or move that owned value, and no selected bytes outlive their own
+result accidentally. The reader owns no filesystem, module callback or
 gameplay activation authority.
 
 | Logical payload entry | Content |

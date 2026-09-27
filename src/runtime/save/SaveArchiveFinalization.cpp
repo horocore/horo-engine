@@ -1,7 +1,9 @@
 #include "Horo/Runtime/Save/SaveArchiveFinalization.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "SaveChunkCompressionInternal.h"
 
+#include <algorithm>
 #include <limits>
 #include <new>
 #include <string>
@@ -55,6 +57,13 @@ namespace Horo::Runtime {
         auto validatedDirectory = ValidateSaveChunkDirectory(std::move(directory), manifest, limits.directory);
         if (validatedDirectory.HasError())
             return Result<SaveArchiveFinalizer>::Failure(validatedDirectory.ErrorValue());
+        if (const std::uint32_t archiveVersion =
+                std::to_integer<std::uint32_t>(preamble[8]) | (std::to_integer<std::uint32_t>(preamble[9]) << 8U) |
+                (std::to_integer<std::uint32_t>(preamble[10]) << 16U) | (std::to_integer<std::uint32_t>(preamble[11]) << 24U);
+            archiveVersion != 2 && std::ranges::any_of(validatedDirectory.Value().Entries(), [](const SaveChunkDirectoryEntry &entry) {
+            return entry.codec != SaveChunkCodec::Raw;
+        }))
+            return Result<SaveArchiveFinalizer>::Failure(MakeError(SaveErrors::ArchiveCodecUnsupported));
         if (validatedDirectory.Value().PayloadByteLength() >
             limits.maximumArchiveBytes - SaveArchivePreambleByteLength - SaveArchiveUnsignedTrailerByteLength)
             return Result<SaveArchiveFinalizer>::Failure(MakeError(SaveErrors::ArchiveFramingLimitExceeded));
@@ -80,7 +89,10 @@ namespace Horo::Runtime {
         const SaveChunkDirectoryEntry &entry = entries[nextEntry_];
         if (bytes.size() != entry.storedByteLength)
             return Result<void>::Failure(MakeError(SaveErrors::ArchivePayloadTruncated));
-        if (entry.codec != SaveChunkCodec::Raw || ComputeSha256(bytes) != entry.decodedHash)
+        auto decoded = SaveChunkCompressionDetail::Decode(entry, bytes, directory_.Limits());
+        if (decoded.HasError())
+            return Result<void>::Failure(decoded.ErrorValue());
+        if (ComputeSha256(decoded.Value()) != entry.decodedHash)
             return Result<void>::Failure(MakeError(SaveErrors::ArchiveChunkHashMismatch));
         if (payload_.size() > std::numeric_limits<std::size_t>::max() - bytes.size())
             return Result<void>::Failure(MakeError(SaveErrors::ArchiveFramingLimitExceeded));

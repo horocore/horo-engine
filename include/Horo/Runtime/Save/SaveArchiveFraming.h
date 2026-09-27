@@ -47,13 +47,56 @@ namespace Horo::Runtime {
     /** @brief Storage codec applied to one independently addressable archive chunk. */
     enum class SaveChunkCodec : std::uint16_t {
         Raw = 0,
+        Deflate = 1,
     };
+
+    /** @brief Immutable capability record for one installed archive storage codec. */
+    struct SaveChunkCodecCapability final {
+        SaveChunkCodec codec{};      /**< Stable wire ID. */
+        std::uint8_t minimumLevel{}; /**< Lowest supported writer level; zero for raw. */
+        std::uint8_t maximumLevel{}; /**< Highest supported writer level; zero for raw. */
+        bool supportsDictionaries{}; /**< False for both current built-ins. */
+    };
+
+    /** @brief Writer preference; metadata and payloads below minimumByteLength remain raw. */
+    struct SaveChunkCompressionPolicy final {
+        SaveChunkCodec preferred{SaveChunkCodec::Raw}; /**< Preferred installed wire codec. */
+        std::uint8_t level{6};                         /**< Encoder level for Deflate, ignored for raw. */
+        std::uint64_t minimumByteLength{256};          /**< Smaller logical chunks remain raw. */
+        bool required{}; /**< Reject an unavailable/ineffective preferred codec instead of falling back to raw. */
+        bool metadata{}; /**< Metadata is always stored raw, regardless of preferred codec. */
+    };
+
+    /** @brief Owned stored bytes plus the digest and length of the unchanged logical input. */
+    struct EncodedSaveChunk final {
+        SaveChunkCodec codec{SaveChunkCodec::Raw}; /**< Selected wire codec. */
+        std::vector<std::byte> stored;             /**< Owned exact stored bytes. */
+        std::uint64_t decodedByteLength{};         /**< Exact pre-compression length. */
+        Sha256Digest decodedHash;                  /**< Digest of canonical pre-compression bytes. */
+    };
+
+    struct SaveChunkDirectoryLimits;
+
+    /** @brief Returns the explicit built-in codec registry; unknown IDs are absent. @return Immutable installed codec capabilities. */
+    [[nodiscard]] std::span<const SaveChunkCodecCapability> InstalledSaveChunkCodecs() noexcept;
+
+    /**
+     * @brief Encodes one canonical chunk under a trusted per-chunk policy without changing its logical digest.
+     * @param decoded Complete nonempty canonical chunk bytes.
+     * @param policy Trusted codec preference, level, and raw-fallback policy; dictionaries are unsupported.
+     * @param limits Trusted per-chunk output and expansion bounds.
+     * @return Owned stored bytes and exact decoded evidence, or a typed policy/resource failure.
+     */
+    [[nodiscard]] Result<EncodedSaveChunk> EncodeSaveChunk(std::span<const std::byte> decoded, const SaveChunkCompressionPolicy &policy,
+                                                           const SaveChunkDirectoryLimits &limits);
 
     /** @brief Explicit admission limits for an untrusted archive chunk directory. */
     struct SaveChunkDirectoryLimits final {
         std::size_t maximumEntries{16'384};                   /**< Maximum directory records. */
         std::uint64_t maximumPayloadBytes{4ULL << 30U};       /**< Maximum aggregate stored payload bytes. */
         std::uint64_t maximumDecodedChunkBytes{64ULL << 20U}; /**< Maximum decoded bytes for one chunk. */
+        std::uint64_t maximumStoredChunkBytes{64ULL << 20U};  /**< Maximum stored bytes for one chunk. */
+        std::uint64_t maximumExpansionRatio{64};              /**< Maximum decoded/stored ratio for a compressed chunk. */
         std::uint32_t maximumAlignment{4'096};                /**< Maximum supported power-of-two alignment. */
     };
 
@@ -91,10 +134,13 @@ namespace Horo::Runtime {
         [[nodiscard]] SaveIntegrityAlgorithmVersion IntegrityAlgorithm() const noexcept;
         /** @brief Returns stable record-ordered validated entries. @return Borrowed immutable directory entries. */
         [[nodiscard]] std::span<const SaveChunkDirectoryEntry> Entries() const noexcept;
+        /** @brief Returns trusted bounds pinned at directory admission. @return Immutable per-chunk limits. */
+        [[nodiscard]] const SaveChunkDirectoryLimits &Limits() const noexcept;
 
     private:
-        explicit ValidatedSaveChunkDirectory(SaveChunkDirectory directory);
+        explicit ValidatedSaveChunkDirectory(SaveChunkDirectory directory, const SaveChunkDirectoryLimits &limits);
         SaveChunkDirectory directory_;
+        SaveChunkDirectoryLimits limits_;
 
         friend Result<ValidatedSaveChunkDirectory> ValidateSaveChunkDirectory(SaveChunkDirectory, const SaveGameManifest &,
                                                                               const SaveChunkDirectoryLimits &);
@@ -178,13 +224,13 @@ namespace Horo::Runtime {
     [[nodiscard]] Result<void> VerifyCanonicalStateHash(const CanonicalStateHash &expected, std::span<const std::byte> canonicalState);
 
     /**
-     * @brief Returns one verified raw chunk without copying or decoding unrelated payloads.
+     * @brief Returns one independently decoded and verified chunk without decoding unrelated payloads.
      * @param payload Exact payload region bytes.
      * @param directory Immutable directory token validated once before any selections.
      * @param record Desired stable chunk identity.
-     * @return Borrowed verified bytes, or an empty optional when the record is unknown and may be skipped.
+     * @return Owned verified canonical bytes, or an empty optional when the record is unknown and may be skipped.
      */
-    [[nodiscard]] Result<std::optional<std::span<const std::byte>>> SelectSaveChunkPayload(std::span<const std::byte> payload,
-                                                                                           const ValidatedSaveChunkDirectory &directory,
-                                                                                           SaveRecordId record);
+    [[nodiscard]] Result<std::optional<std::vector<std::byte>>> SelectSaveChunkPayload(std::span<const std::byte> payload,
+                                                                                       const ValidatedSaveChunkDirectory &directory,
+                                                                                       SaveRecordId record);
 }  // namespace Horo::Runtime

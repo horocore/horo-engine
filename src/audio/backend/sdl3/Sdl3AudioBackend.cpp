@@ -106,6 +106,11 @@ namespace Horo::Audio::Backend {
         return count;
     }
 
+    /** @copydoc AudioBackend::DrainSafetyViolations */
+    AudioCallbackViolationDrain Sdl3AudioBackend::DrainSafetyViolations(const std::span<AudioCallbackViolation> output) noexcept {
+        return impl_->watchdog.Drain(output);
+    }
+
     /** @copydoc CreateSdl3AudioBackend */
     Result<std::unique_ptr<Sdl3AudioBackend>> CreateSdl3AudioBackend(const Sdl3AudioBackendConfig &config) {
         if (!config.owner.IsValid() || config.clockDomain == 0)

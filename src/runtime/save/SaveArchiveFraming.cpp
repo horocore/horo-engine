@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Save/SaveArchiveFraming.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "SaveChunkCompressionInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -72,7 +73,8 @@ namespace Horo::Runtime {
         /** @brief Reports whether directory limits are finite and internally coherent. */
         [[nodiscard]] bool HasValidLimits(const SaveChunkDirectoryLimits &limits) noexcept {
             return limits.maximumEntries != 0 && limits.maximumPayloadBytes != 0 && limits.maximumDecodedChunkBytes != 0 &&
-                   limits.maximumAlignment != 0 && std::has_single_bit(limits.maximumAlignment);
+                   limits.maximumStoredChunkBytes != 0 && limits.maximumExpansionRatio != 0 && limits.maximumAlignment != 0 &&
+                   std::has_single_bit(limits.maximumAlignment);
         }
 
         /** @brief Looks up the manifest owner of one chunk identity. */
@@ -87,14 +89,20 @@ namespace Horo::Runtime {
         /** @brief Validates one entry's identity, codec, and alignment fields. */
         [[nodiscard]] bool HasValidEntryIdentity(const SaveChunkDirectoryEntry &entry, const SaveChunkDirectoryLimits &limits) noexcept {
             return entry.record.IsValid() && entry.owner.IsValid() && entry.alignment != 0 && entry.alignment <= limits.maximumAlignment &&
-                   std::has_single_bit(entry.alignment) && entry.codec == SaveChunkCodec::Raw;
+                   std::has_single_bit(entry.alignment) && SaveChunkCompressionDetail::Supports(entry.codec);
         }
 
         /** @brief Validates one entry's length fields and checked end offset. */
         [[nodiscard]] bool HasValidEntryLengths(const SaveChunkDirectoryEntry &entry, const SaveChunkDirectoryLimits &limits) noexcept {
-            return entry.storedByteLength != 0 && entry.decodedByteLength != 0 &&
-                   entry.decodedByteLength <= limits.maximumDecodedChunkBytes && entry.storedByteLength == entry.decodedByteLength &&
-                   entry.offset <= std::numeric_limits<std::uint64_t>::max() - entry.storedByteLength;
+            if (entry.storedByteLength == 0 || entry.decodedByteLength == 0 || entry.storedByteLength > limits.maximumStoredChunkBytes ||
+                entry.decodedByteLength > limits.maximumDecodedChunkBytes ||
+                entry.offset > std::numeric_limits<std::uint64_t>::max() - entry.storedByteLength)
+                return false;
+            if (entry.codec == SaveChunkCodec::Raw)
+                return entry.storedByteLength == entry.decodedByteLength;
+            return entry.decodedByteLength / entry.storedByteLength < limits.maximumExpansionRatio ||
+                   (entry.decodedByteLength / entry.storedByteLength == limits.maximumExpansionRatio &&
+                    entry.decodedByteLength % entry.storedByteLength == 0);
         }
 
         /** @brief Counts manifest chunks without touching archive payload bytes. */
@@ -134,7 +142,8 @@ namespace Horo::Runtime {
         }
     }  // namespace
 
-    ValidatedSaveChunkDirectory::ValidatedSaveChunkDirectory(SaveChunkDirectory directory) : directory_(std::move(directory)) {}
+    ValidatedSaveChunkDirectory::ValidatedSaveChunkDirectory(SaveChunkDirectory directory, const SaveChunkDirectoryLimits &limits)
+        : directory_(std::move(directory)), limits_(limits) {}
 
     /** @copydoc ValidatedSaveChunkDirectory::PayloadByteLength */
     std::uint64_t ValidatedSaveChunkDirectory::PayloadByteLength() const noexcept {
@@ -151,6 +160,10 @@ namespace Horo::Runtime {
         return directory_.entries;
     }
 
+    const SaveChunkDirectoryLimits &ValidatedSaveChunkDirectory::Limits() const noexcept {
+        return limits_;
+    }
+
     /** @copydoc ValidateSaveChunkDirectory */
     Result<ValidatedSaveChunkDirectory> ValidateSaveChunkDirectory(SaveChunkDirectory directory, const SaveGameManifest &manifest,
                                                                    const SaveChunkDirectoryLimits &limits) {
@@ -164,9 +177,21 @@ namespace Horo::Runtime {
 
         if (directory.entries.size() != CountManifestChunks(manifest))
             return Result<ValidatedSaveChunkDirectory>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
+        if (std::ranges::any_of(directory.entries, [](const SaveChunkDirectoryEntry &entry) {
+            return !SaveChunkCompressionDetail::Supports(entry.codec);
+        }))
+            return Result<ValidatedSaveChunkDirectory>::Failure(MakeError(SaveErrors::ArchiveCodecUnsupported));
+        if (std::ranges::any_of(directory.entries, [&limits](const SaveChunkDirectoryEntry &entry) {
+            return entry.decodedByteLength > limits.maximumDecodedChunkBytes || entry.storedByteLength > limits.maximumStoredChunkBytes ||
+                   (entry.codec != SaveChunkCodec::Raw && entry.storedByteLength != 0 &&
+                    (entry.decodedByteLength / entry.storedByteLength > limits.maximumExpansionRatio ||
+                     (entry.decodedByteLength / entry.storedByteLength == limits.maximumExpansionRatio &&
+                      entry.decodedByteLength % entry.storedByteLength != 0)));
+        }))
+            return Result<ValidatedSaveChunkDirectory>::Failure(MakeError(SaveErrors::ArchiveDecompressionLimitExceeded));
         if (!HasValidEntries(directory, manifest, limits))
             return Result<ValidatedSaveChunkDirectory>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
-        return Result<ValidatedSaveChunkDirectory>::Success(ValidatedSaveChunkDirectory{std::move(directory)});
+        return Result<ValidatedSaveChunkDirectory>::Success(ValidatedSaveChunkDirectory{std::move(directory), limits});
     }
 
     /** @copydoc ComputeCanonicalStateHash */
@@ -244,21 +269,24 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SelectSaveChunkPayload */
-    Result<std::optional<std::span<const std::byte>>> SelectSaveChunkPayload(const std::span<const std::byte> payload,
-                                                                             const ValidatedSaveChunkDirectory &directory,
-                                                                             const SaveRecordId record) {
+    Result<std::optional<std::vector<std::byte>>> SelectSaveChunkPayload(const std::span<const std::byte> payload,
+                                                                         const ValidatedSaveChunkDirectory &directory,
+                                                                         const SaveRecordId record) {
         if (payload.size() != directory.PayloadByteLength())
-            return Result<std::optional<std::span<const std::byte>>>::Failure(MakeError(SaveErrors::ArchivePayloadTruncated));
+            return Result<std::optional<std::vector<std::byte>>>::Failure(MakeError(SaveErrors::ArchivePayloadTruncated));
         const std::span entries = directory.Entries();
         const auto found = std::ranges::lower_bound(entries, record, {}, &SaveChunkDirectoryEntry::record);
         if (found == entries.end() || found->record != record)
-            return Result<std::optional<std::span<const std::byte>>>::Success(std::nullopt);
+            return Result<std::optional<std::vector<std::byte>>>::Success(std::nullopt);
         const auto bytes = payload.subspan(static_cast<std::size_t>(found->offset), static_cast<std::size_t>(found->storedByteLength));
-        if (ComputeSha256(bytes) != found->decodedHash) {
+        auto decoded = SaveChunkCompressionDetail::Decode(*found, bytes, directory.Limits());
+        if (decoded.HasError())
+            return Result<std::optional<std::vector<std::byte>>>::Failure(decoded.ErrorValue());
+        if (ComputeSha256(decoded.Value()) != found->decodedHash) {
             Error error = MakeError(SaveErrors::ArchiveChunkHashMismatch);
             AddEntryDiagnostic(error, *found);
-            return Result<std::optional<std::span<const std::byte>>>::Failure(std::move(error));
+            return Result<std::optional<std::vector<std::byte>>>::Failure(std::move(error));
         }
-        return Result<std::optional<std::span<const std::byte>>>::Success(bytes);
+        return Result<std::optional<std::vector<std::byte>>>::Success(std::move(decoded).Value());
     }
 }  // namespace Horo::Runtime

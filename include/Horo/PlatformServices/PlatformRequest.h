@@ -175,6 +175,7 @@ namespace Horo::PlatformServices {
 
     private:
         friend class PlatformRequestStore;
+        friend class PlatformProviderLifecycleHost;
 
         PlatformRequestHandle(const PlatformRequestId id, const PlatformRequestGeneration generation) noexcept
             : id_(id), generation_(generation) {}
