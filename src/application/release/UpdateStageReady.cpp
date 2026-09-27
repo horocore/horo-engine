@@ -3,8 +3,8 @@
 #include "Horo/Release/UpdateTransferErrors.h"
 
 #include <algorithm>
-#include <fstream>
 #include <format>
+#include <fstream>
 #include <span>
 #include <string>
 #include <system_error>
