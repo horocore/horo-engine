@@ -235,6 +235,23 @@ and OpenXR adapter implementations remain separate follow-up capabilities.
 `XRSessionErrors::Descriptors()` is XRRuntime's distinct `horo.xr` diagnostic
 contribution; XRApi's descriptor list and ownership remain unchanged.
 
+`XRFrameLifecycle.h` is the XRRuntime-owned predicted-frame transaction contract.
+It is additive and has no existing caller migration. A host binds the exact active
+view configuration, accepted capability snapshot and finite view/image/layer limits
+after session readiness. The selected native adapter owns actual wait/begin/locate/
+acquire/release/end calls; Renderer owns GPU submission/completion evidence. The
+single-control-thread coordinator records only successful completed steps as typed
+state transitions and never invokes native code, blocks for an image, waits for GPU
+completion, or chooses frame pacing. Each frame ID captures session, configuration,
+capability revision and a non-reused sequence; the wait result preserves the runtime
+prediction and `shouldRender`. Non-rendering frames still begin/end with zero layers.
+Rendering frames require complete view location, bounded unique image acquisition,
+complete Renderer submission, and exact image release before a positive-layer end.
+An explicit backend-confirmed abort keeps release obligations and permits zero-layer
+end only after they are met. Session replacement/loss requires host-proved native
+quiescence before resetting the logical transaction. This contract does not claim a
+production OpenXR frame loop or a qualified Renderer bridge.
+
 Capabilities are discovered from the selected runtime, platform host, renderer,
 device, permissions, and admitted optional extensions. They are not inferred
 from a headset product name.
