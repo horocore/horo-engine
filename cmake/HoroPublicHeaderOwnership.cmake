@@ -97,6 +97,7 @@ horo_configure_target_header_boundary(HoroPlatformServices PUBLIC_HEADERS
     Horo/PlatformServices/PlatformProviderManifestCook.h
     Horo/PlatformServices/PlatformRequest.h
     Horo/PlatformServices/PlatformRequestErrors.h
+    Horo/PlatformServices/PlatformServiceErrors.h
     Horo/PlatformServices/PlatformServiceInterfaces.h
     Horo/PlatformServices/PlatformServicesBackend.h
     Horo/PlatformServices/PlatformServicesFrontend.h
@@ -120,6 +121,7 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/ReleaseErrors.h
     Horo/Release/ReleaseProfile.h
     Horo/Release/ReleasePreflight.h
+    Horo/Release/ReleaseTargetMatrix.h
     Horo/Release/ReleaseVersion.h
 )
 horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
@@ -346,6 +348,9 @@ horo_configure_target_header_boundary(HoroAudioCommands PUBLIC_HEADERS
     Horo/Audio/AudioLifecycleReconciler.h
     Horo/Audio/ScheduledAudioCommandBatch.h
 )
+horo_configure_target_header_boundary(HoroAudioMetrics PUBLIC_HEADERS
+    Horo/Audio/AudioMetrics.h
+)
 horo_configure_target_header_boundary(HoroInput PUBLIC_HEADERS
     Horo/Runtime/Input.h
 )
@@ -435,6 +440,9 @@ horo_configure_target_header_boundary(HoroPCG PUBLIC_HEADERS
     Horo/PCG/PCGRegistry.h
     Horo/PCG/PCGAsyncOperation.h
 )
+horo_configure_target_header_boundary(HoroPCGTerrainAdapter PUBLIC_HEADERS
+    Horo/PCGTerrain/TerrainInputSnapshot.h
+)
 horo_configure_target_header_boundary(HoroVfxApi PUBLIC_HEADERS
     Horo/Vfx/CpuParticleBuffer.h
     Horo/Vfx/CpuParticleSimulator.h
@@ -510,6 +518,10 @@ horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRSpacePose.h
     Horo/XR/XRTrackingSnapshot.h
     Horo/XR/XRViewRenderPlan.h
+)
+horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
+    Horo/XR/XRSessionErrors.h
+    Horo/XR/XRSessionLifecycle.h
 )
 horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/FoliageDefinition.h

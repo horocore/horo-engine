@@ -20,6 +20,8 @@
 namespace Horo::Release {
     /** @brief Maximum credential handles accepted by one release plan. */
     inline constexpr std::size_t MaximumReleaseCredentialHandles = 64;
+    /** @brief Maximum reviewed notes snapshot captured in one release candidate. */
+    inline constexpr std::size_t MaximumReleaseNotesSnapshotBytes = 32768;
 
     /** @brief Build configuration selected by a release request. */
     enum class ReleaseBuildConfiguration : std::uint8_t {
@@ -73,6 +75,7 @@ namespace Horo::Release {
         Sha256Digest policyDigest;
         std::vector<ReleaseCapabilityId> availableCapabilities;
         std::vector<ReleaseCredentialHandle> availableCredentials;
+        std::string releaseNotesSnapshot; /**< Exact reviewed JSON bytes read by the host, never a runtime source path. */
     };
 
     /** @brief Stable category of one independent preflight failure. */
@@ -89,7 +92,13 @@ namespace Horo::Release {
         InsufficientSpace,
         CredentialUnavailable,
         CapabilityUnavailable,
-        InputChanged
+        InputChanged,
+        NotesMissing,
+        NotesMalformed,
+        NotesOversized,
+        NotesVersionMismatch,
+        NotesProductMismatch,
+        NotesChanged
     };
 
     /** @brief One field-specific failure retained alongside other safe independent failures. */
@@ -106,6 +115,7 @@ namespace Horo::Release {
         Sha256Digest profile;
         Sha256Digest toolchain;
         Sha256Digest policy;
+        Sha256Digest notes;
         bool operator==(const ReleaseFrozenIdentities &) const noexcept = default;
     };
 
@@ -122,6 +132,8 @@ namespace Horo::Release {
         [[nodiscard]] const std::filesystem::path &OutputRoot() const noexcept;
         /** @brief Returns frozen input digests. @return Source, lock, profile, toolchain and policy identities. */
         [[nodiscard]] const ReleaseFrozenIdentities &Identities() const noexcept;
+        /** @brief Returns the exact reviewed candidate notes bytes. @return Immutable snapshot, independent of later source edits. */
+        [[nodiscard]] const std::string &ReleaseNotesSnapshot() const noexcept;
         /** @brief Formats a safe summary without credential identities. @return Human-readable release plan. */
         [[nodiscard]] std::string Summary() const;
         /** @brief Serializes the exact plan with opaque credential handles, never credential values. @return Canonical JSON. */
@@ -132,12 +144,13 @@ namespace Horo::Release {
         friend ReleasePreflightOutcome PreflightRelease(const ReleasePreflightRequest &, const ReleasePreflightFacts &);
         /** @brief Constructs a plan only after complete preflight success. */
         ReleaseExecutionPlan(ReleasePreflightRequest request, std::filesystem::path projectRoot, std::filesystem::path outputRoot,
-                             ReleaseFrozenIdentities identities);
+                             ReleaseFrozenIdentities identities, std::string releaseNotesSnapshot);
 
         ReleasePreflightRequest request_;
         std::filesystem::path projectRoot_;
         std::filesystem::path outputRoot_;
         ReleaseFrozenIdentities identities_;
+        std::string releaseNotesSnapshot_;
     };
 
     /** @brief Aggregated independent failures or one ready-to-execute immutable plan. */

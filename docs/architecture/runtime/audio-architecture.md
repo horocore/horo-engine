@@ -1870,6 +1870,65 @@ Audio exposes:
 
 No ordinary log formatting occurs on the callback thread.
 
+### AUD-010.1 metric bridge
+
+`HoroAudioMetrics` owns the additive `Horo/Audio/AudioMetrics.h` contract. A
+control owner samples the actual `AudioEventQueue::Stats`,
+`AudioCommandStaging::Stats`, and complete set of `AudioMemoryStats`; it classifies
+consumed callback facts and explicit command admission/pump outcomes. The callback
+never registers instruments, formats labels, locks the bridge, or exports data.
+The host registers the fixed `audio.*` catalog once at activation and publishes
+only safe-point snapshot deltas through Foundation Telemetry; editor, headless,
+local sinks and opt-in OTLP consume the same numeric snapshot/descriptor contract.
+One owner generation cannot be reset in place, and a closed owner cannot publish
+new values. Existing audio callers need no migration; hosts adopting this optional
+bridge must retain the source owners through each control safe point.
+Within one owner generation, the host assigns strictly increasing, non-reused
+source generations to event-queue and memory-pool/arena replacements. The bridge
+retains cumulative drop and failure totals after a source retires, rejects stale
+source replay and same-source counter rollback, and bounds simultaneously live
+memory sources to sixteen. Source generations are internal comparison facts,
+never metric labels.
+
+The catalog has no dynamic dimensions or per-device, bus, voice, asset or user
+labels; each named instrument has one series. Counters include callback underruns,
+command-queue admission rejections and retained retries, actual event-queue
+telemetry drops, allocation and backend failures, voice
+rejections, spatial fallbacks and stable-ID lookup failures. Gauges include queue
+depths, voice counts, stream fill, memory, device format, callback budget,
+occlusion staleness and bus levels. Callback/mixer/effect/spatial costs are
+seconds-valued histograms. Sample rate uses the additive `Hertz` telemetry unit,
+exported as OTLP `Hz`; other units are count, bytes, ratio and seconds. A metric
+without a measured source observation is unavailable, not a fabricated zero.
+Callback underruns count consumed facts; separately measured telemetry drops
+explain records lost under event-queue pressure. Critical retries are not called
+drops, because the caller retains the work.
+### Development callback safety watchdog
+
+The build-tree-only `AudioCallbackWatchdog` instruments each SDL3 Horo render-port
+invocation when `NDEBUG` is not defined. Its deadline is the negotiated block
+period (`callbackFrames / sampleRate`); it measures preparation, Horo render work,
+conversion and SDL stream submission, not downstream device/driver latency. The
+callback publishes only fixed
+epoch/sample-frame facts to a 64-slot SPSC ring, plus lock-free sampled-count and
+latest-duration summaries. Per-kind records are limited to
+one per sample-rate worth of frames; overflow and rate-limited counts remain
+observable. `AudioBackend::DrainSafetyViolations` runs only on audio control and
+returns caller-owned values for subsequent OBS formatting/storage. Callback
+detachment must precede watchdog destruction. NullAudio retains deterministic
+simulated time: it participates in explicit forbidden-operation hooks but has
+no physical deadline samples.
+
+Explicit callback-safety hooks run immediately before heap construction in the
+Horo audio memory pool and scratch arena, and before each ingress staging mutex
+attempt. These are control-only operations under the normal ownership contract;
+if a supplied render port invokes one from a callback, the active backend scope
+records the forbidden attempt. The hooks do not globally interpose C++/C
+allocation or third-party/native locks; such operations require separate platform
+or sanitizer qualification. They are inert outside the instrumented callback
+scope and in `NDEBUG` builds. No callback log, exception, heap fallback, blocking
+wait, or unbounded scan is added by the instrumentation itself.
+
 ## Testing
 
 The following is the cumulative contract catalogue. The 1.0 qualification gate

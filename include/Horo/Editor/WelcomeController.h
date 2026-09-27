@@ -37,7 +37,7 @@ namespace Horo::Editor {
     /**
      * @brief A single 'What's New' card entry shown on the Welcome Screen.
      *
-     * Data is populated at build time from CHANGELOG.md via GeneratedBuildInfo.h.
+     * Data is projected at build time from the reviewed release-notes snapshot via GeneratedBuildInfo.h.
      * Defined here (not in the generated header) so public consumers do not need
      * the generated include path.
      */
@@ -54,7 +54,7 @@ namespace Horo::Editor {
         std::string productName;
         std::string statusLabel;
         std::vector<RecentProjectEntry> recentProjects;
-        /// Up to two 'What's New' entries generated from CHANGELOG.md at build time.
+        /// Up to two 'What's New' entries projected from the reviewed release-notes snapshot at build time.
         std::array<WhatsNewEntry, 2> whatsNew{};
     };
 

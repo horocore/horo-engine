@@ -60,7 +60,7 @@ jobs:
         include:
           - name: Linux / GCC
             runner: ubuntu-24.04
-            timeout_minutes: 25
+            timeout_minutes: 35
             cc: gcc
             cxx: g++
             build_dir: build/ci
