@@ -80,17 +80,15 @@ namespace {
     };
 
     std::vector<std::byte> MakePayload(const std::string &header, const std::string &manifest, const std::span<const std::byte> chunk,
-                                       const std::uint32_t version = 1) {
-        constexpr std::size_t entryCount = 3;
+                                       const std::uint32_t version = 1, const std::span<const std::byte> secondChunk = {}) {
+        const std::size_t entryCount = secondChunk.empty() ? 3 : 4;
         std::vector<std::byte> payload(SaveArchiveContainerHeaderByteLength + entryCount * SaveArchiveContainerEntryByteLength);
-        const std::size_t dataOffset = payload.size();
         payload.insert(payload.end(), reinterpret_cast<const std::byte *>(header.data()),
                        reinterpret_cast<const std::byte *>(header.data() + header.size()));
-        const std::uint64_t manifestOffset = payload.size() - dataOffset;
         payload.insert(payload.end(), reinterpret_cast<const std::byte *>(manifest.data()),
                        reinterpret_cast<const std::byte *>(manifest.data() + manifest.size()));
-        const std::uint64_t chunkOffset = payload.size() - dataOffset;
         payload.insert(payload.end(), chunk.begin(), chunk.end());
+        payload.insert(payload.end(), secondChunk.begin(), secondChunk.end());
 
         constexpr std::array<std::byte, 8> containerMagic{std::byte{'H'}, std::byte{'S'}, std::byte{'C'}, std::byte{'T'},
                                                           std::byte{'N'}, std::byte{'R'}, std::byte{'1'}, std::byte{0}};
@@ -184,20 +182,7 @@ namespace {
             unknownEncoding = {.codec = encoded.codec, .decodedLength = encoded.decodedByteLength, .decodedHash = encoded.decodedHash};
         }
         const std::uint32_t version = compressed ? 2 : 1;
-        constexpr std::size_t entryCount = 4;
-        std::vector<std::byte> payload(SaveArchiveContainerHeaderByteLength + entryCount * SaveArchiveContainerEntryByteLength);
-        payload.insert(payload.end(), reinterpret_cast<const std::byte *>(header.data()),
-                       reinterpret_cast<const std::byte *>(header.data() + header.size()));
-        payload.insert(payload.end(), reinterpret_cast<const std::byte *>(manifest.data()),
-                       reinterpret_cast<const std::byte *>(manifest.data() + manifest.size()));
-        payload.insert(payload.end(), known.begin(), known.end());
-        payload.insert(payload.end(), unknown.begin(), unknown.end());
-        constexpr std::array<std::byte, 8> magic{std::byte{'H'}, std::byte{'S'}, std::byte{'C'}, std::byte{'T'},
-                                                 std::byte{'N'}, std::byte{'R'}, std::byte{'1'}, std::byte{0}};
-        std::ranges::copy(magic, payload.begin());
-        PutLittleEndian(payload, 8, version);
-        PutLittleEndian(payload, 16, std::uint64_t{entryCount});
-        PutLittleEndian(payload, 24, std::uint32_t{SaveArchiveContainerEntryByteLength});
+        auto payload = MakePayload(header, manifest, known, version, unknown);
         WriteEntry(payload, 0, SaveArchiveEntryKind::Header, 0, std::as_bytes(std::span{header}), {}, nullptr);
         WriteEntry(payload, 1, SaveArchiveEntryKind::Manifest, header.size(), std::as_bytes(std::span{manifest}), {}, nullptr);
         WriteEntry(payload, 2, SaveArchiveEntryKind::Chunk, header.size() + manifest.size(), known, Id<SaveRecordId>(20),

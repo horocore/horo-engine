@@ -385,6 +385,46 @@ namespace Horo::Runtime {
         return SelectSaveChunkPayload(payload_, directory_, record);
     }
 
+    namespace {
+        /** @brief Verifies one opaque optional owner's chunks and records its explicit disposition. */
+        [[nodiscard]] Result<void> CollectUnknownParticipant(const ValidatedSaveArchive &archive,
+                                                             const SaveManifestParticipant &participant,
+                                                             const SaveCompatibilityPolicy &policy,
+                                                             const std::uint64_t maximumPreservedBytes, std::uint64_t &retainedBytes,
+                                                             SaveUnknownDataReport &report) {
+            if (std::ranges::binary_search(policy.droppableUnknownParticipants, participant.participant)) {
+                for (const SaveRecordId &record : participant.chunks) {
+                    auto verified = archive.SelectChunk(record);
+                    if (verified.HasError())
+                        return Result<void>::Failure(verified.ErrorValue());
+                    if (!verified.Value())
+                        return Result<void>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
+                }
+                report.dropped.push_back(participant.participant);
+                return Result<void>::Success();
+            }
+            for (const SaveRecordId &record : participant.chunks) {
+                const auto entries = archive.Directory().Entries();
+                const auto found = std::ranges::lower_bound(entries, record, {}, &SaveChunkDirectoryEntry::record);
+                if (found == entries.end() || found->record != record || found->owner != participant.participant)
+                    return Result<void>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
+                if (found->storedByteLength > maximumPreservedBytes - retainedBytes)
+                    return Result<void>::Failure(
+                        MakeError(SaveErrors::ArchiveMetadataLimitExceeded, "Unknown optional data exceeds the preservation budget."));
+                auto verified = archive.SelectChunk(record);
+                if (verified.HasError())
+                    return Result<void>::Failure(verified.ErrorValue());
+                if (!verified.Value())
+                    return Result<void>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
+                const auto stored =
+                    archive.Payload().subspan(static_cast<std::size_t>(found->offset), static_cast<std::size_t>(found->storedByteLength));
+                report.preserved.push_back({.entry = *found, .storedBytes = {stored.begin(), stored.end()}});
+                retainedBytes += found->storedByteLength;
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc ValidatedSaveArchive::InspectUnknownData */
     Result<SaveUnknownDataReport> ValidatedSaveArchive::InspectUnknownData(const SaveCompatibilityPolicy &policy,
                                                                            const std::uint64_t maximumPreservedBytes) const {
@@ -422,35 +462,9 @@ namespace Horo::Runtime {
                     return Result<SaveUnknownDataReport>::Failure(
                         MakeError(SaveErrors::MigrationSourceUnsupported,
                                   "Required module or content participant '" + participant.participant.Value() + "' is unavailable."));
-                if (std::ranges::binary_search(policy.droppableUnknownParticipants, participant.participant)) {
-                    for (const SaveRecordId &record : participant.chunks) {
-                        auto verified = SelectChunk(record);
-                        if (verified.HasError())
-                            return Result<SaveUnknownDataReport>::Failure(verified.ErrorValue());
-                        if (!verified.Value())
-                            return Result<SaveUnknownDataReport>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
-                    }
-                    report.dropped.push_back(participant.participant);
-                    continue;
-                }
-                for (const SaveRecordId &record : participant.chunks) {
-                    const auto entries = directory_.Entries();
-                    const auto found = std::ranges::lower_bound(entries, record, {}, &SaveChunkDirectoryEntry::record);
-                    if (found == entries.end() || found->record != record || found->owner != participant.participant)
-                        return Result<SaveUnknownDataReport>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
-                    if (found->storedByteLength > maximumPreservedBytes - retainedBytes)
-                        return Result<SaveUnknownDataReport>::Failure(
-                            MakeError(SaveErrors::ArchiveMetadataLimitExceeded, "Unknown optional data exceeds the preservation budget."));
-                    auto verified = SelectChunk(record);
-                    if (verified.HasError())
-                        return Result<SaveUnknownDataReport>::Failure(verified.ErrorValue());
-                    if (!verified.Value())
-                        return Result<SaveUnknownDataReport>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
-                    const auto stored =
-                        payload_.subspan(static_cast<std::size_t>(found->offset), static_cast<std::size_t>(found->storedByteLength));
-                    report.preserved.push_back({.entry = *found, .storedBytes = {stored.begin(), stored.end()}});
-                    retainedBytes += found->storedByteLength;
-                }
+                if (auto collected = CollectUnknownParticipant(*this, participant, policy, maximumPreservedBytes, retainedBytes, report);
+                    collected.HasError())
+                    return Result<SaveUnknownDataReport>::Failure(collected.ErrorValue());
             }
             std::ranges::sort(report.preserved, {}, [](const PreservedSaveChunk &chunk) {
                 return chunk.entry.record;
