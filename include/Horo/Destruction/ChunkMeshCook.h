@@ -48,6 +48,17 @@ namespace Horo::Destruction {
         double interiorScale{1.0};
     };
 
+    /** @brief Captured imported-source identity, content, tier and finite cook policy. */
+    struct ImportedChunkMeshCookRequest final {
+        Assets::AssetId sourceAsset{};
+        std::uint64_t sourceRevision{};
+        Sha256Digest sourceDigest{};
+        FractureArtifactContentIdentity content{};
+        DestructionFeatureTier tier{};
+        ChunkUvPolicy uv{};
+        DestructionLimits limits{};
+    };
+
     /** @brief One canonical vertex, with face-local basis to preserve sharp cut boundaries. */
     struct ChunkMeshVertex final {
         std::array<float, 3> position{};
@@ -109,10 +120,10 @@ namespace Horo::Destruction {
                                                                                 FractureArtifactContentIdentity,
                                                                                 std::span<const ChunkMaterialBinding>, ChunkUvPolicy,
                                                                                 const DestructionLimits &, const CancellationToken &);
-        friend Result<std::shared_ptr<const ChunkMeshArtifact>> CookPreFracturedChunkMeshes(
-            const PreFracturedCandidate &, Assets::AssetId, std::uint64_t, Sha256Digest, FractureArtifactContentIdentity,
-            DestructionFeatureTier, std::span<const ImportedChunkMaterialBinding>, ChunkUvPolicy, const DestructionLimits &,
-            const CancellationToken &);
+        friend Result<std::shared_ptr<const ChunkMeshArtifact>> CookPreFracturedChunkMeshes(const PreFracturedCandidate &,
+                                                                                            const ImportedChunkMeshCookRequest &,
+                                                                                            std::span<const ImportedChunkMaterialBinding>,
+                                                                                            const CancellationToken &);
     };
 
     /**
@@ -164,21 +175,14 @@ namespace Horo::Destruction {
     /**
      * @brief Cooks validated imported chunks with explicit interior/material attribution.
      * @param source Complete normalized pre-fractured candidate.
-     * @param sourceAsset Stable source asset identity.
-     * @param sourceRevision Exact nonzero source revision.
-     * @param sourceDigest Expected normalized geometry digest.
-     * @param content Exact fracture asset revision bound to all semantic inputs.
-     * @param tier Exact selected DFR product tier; no fallback is attempted.
+     * @param request Captured source identity, exact fracture content, tier, UV policy and finite limits.
      * @param materials Sorted unique source-name mappings, including every used material.
-     * @param uv Explicit planar UV policy.
-     * @param limits Product limits bounding output and work.
      * @param cancellation Cooperative cancellation token.
      * @return Immutable artifact or typed failure with no partial publication.
      */
     [[nodiscard]] Result<std::shared_ptr<const ChunkMeshArtifact>> CookPreFracturedChunkMeshes(
-        const PreFracturedCandidate &source, Assets::AssetId sourceAsset, std::uint64_t sourceRevision, Sha256Digest sourceDigest,
-        FractureArtifactContentIdentity content, DestructionFeatureTier tier, std::span<const ImportedChunkMaterialBinding> materials,
-        ChunkUvPolicy uv, const DestructionLimits &limits, const CancellationToken &cancellation);
+        const PreFracturedCandidate &source, const ImportedChunkMeshCookRequest &request,
+        std::span<const ImportedChunkMaterialBinding> materials, const CancellationToken &cancellation);
 
     /** @brief Single-thread owner for atomic candidate replacement; callers serialize on the owning thread. */
     class ChunkMeshCookOwner final {
@@ -188,14 +192,10 @@ namespace Horo::Destruction {
         ChunkMeshCookOwner &operator=(const ChunkMeshCookOwner &) = delete;
 
         /** @brief Current owner generation. @return Nonzero non-wrapping revision. */
-        [[nodiscard]] std::uint64_t Revision() const noexcept {
-            return revision_;
-        }
+        [[nodiscard]] std::uint64_t Revision() const noexcept;
 
         /** @brief Token for detached work in this generation. @return Current cancellation token. */
-        [[nodiscard]] CancellationToken Token() const noexcept {
-            return cancellation_.Token();
-        }
+        [[nodiscard]] CancellationToken Token() const noexcept;
 
         /** @brief Last complete published value. @return Immutable snapshot or null. */
         [[nodiscard]] std::shared_ptr<const ChunkMeshArtifact> Snapshot() const noexcept {

@@ -964,6 +964,8 @@ target_link_libraries(HoroDestructionApi PUBLIC HoroEngine::Foundation HoroEngin
 
 add_library(HoroDestructionCook STATIC
         runtime/destruction/cook/ChunkMeshCook.cpp
+        runtime/destruction/cook/ChunkMeshVoronoi.cpp
+        runtime/destruction/cook/ChunkMeshImport.cpp
         runtime/destruction/cook/OfflineVoronoi.cpp
         runtime/destruction/cook/OfflineVoronoiChunks.cpp
         runtime/destruction/cook/OfflineVoronoiClipping.cpp

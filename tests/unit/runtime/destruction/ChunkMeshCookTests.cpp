@@ -206,9 +206,14 @@ namespace Horo::Destruction {
         REQUIRE(prepared.HasValue());
         const auto materials = ImportedMaterials();
         const auto digest = ComputePreFracturedMeshSourceDigest(prepared.Value());
-        const auto cooked =
-            CookPreFracturedChunkMeshes(prepared.Value(), Cube().asset, 3, digest, ImportedContent(prepared.Value(), materials),
-                                        DestructionFeatureTier::High, materials, {}, Recipe().limits, {});
+        const ImportedChunkMeshCookRequest request{Cube().asset,
+                                                   3,
+                                                   digest,
+                                                   ImportedContent(prepared.Value(), materials),
+                                                   DestructionFeatureTier::High,
+                                                   {},
+                                                   Recipe().limits};
+        const auto cooked = CookPreFracturedChunkMeshes(prepared.Value(), request, materials, {});
         REQUIRE(cooked.HasValue());
         CHECK(cooked.Value()->sourceDigest == digest);
         CHECK(cooked.Value()->chunks.size() == 2);
@@ -231,23 +236,29 @@ namespace Horo::Destruction {
         auto materials = ImportedMaterials();
         const auto digest = ComputePreFracturedMeshSourceDigest(prepared.Value());
         auto content = ImportedContent(prepared.Value(), materials);
-        auto missing = CookPreFracturedChunkMeshes(prepared.Value(), Cube().asset, 3, digest,
-                                                   ImportedContent(prepared.Value(), std::span{materials}.subspan(1)),
-                                                   DestructionFeatureTier::High, std::span{materials}.subspan(1), {}, Recipe().limits, {});
+        ImportedChunkMeshCookRequest request{Cube().asset,
+                                             3,
+                                             digest,
+                                             ImportedContent(prepared.Value(), std::span{materials}.subspan(1)),
+                                             DestructionFeatureTier::High,
+                                             {},
+                                             Recipe().limits};
+        auto missing = CookPreFracturedChunkMeshes(prepared.Value(), request, std::span{materials}.subspan(1), {});
         REQUIRE(missing.HasError());
         CHECK(missing.ErrorValue().code.Value() == ChunkMeshCookErrors::MissingMaterial.code.Value());
         materials[0].interior = false;
         content = ImportedContent(prepared.Value(), materials);
-        auto invalid = CookPreFracturedChunkMeshes(prepared.Value(), Cube().asset, 3, digest, content, DestructionFeatureTier::High,
-                                                   materials, {}, Recipe().limits, {});
+        request.content = content;
+        auto invalid = CookPreFracturedChunkMeshes(prepared.Value(), request, materials, {});
         REQUIRE(invalid.HasError());
         CHECK(invalid.ErrorValue().code.Value() == ChunkMeshCookErrors::InvalidInterior.code.Value());
         materials = ImportedMaterials();
         content = ImportedContent(prepared.Value(), materials);
         auto staleDigest = digest;
         ++staleDigest.bytes[0];
-        auto stale = CookPreFracturedChunkMeshes(prepared.Value(), Cube().asset, 3, staleDigest, content, DestructionFeatureTier::High,
-                                                 materials, {}, Recipe().limits, {});
+        request.content = content;
+        request.sourceDigest = staleDigest;
+        auto stale = CookPreFracturedChunkMeshes(prepared.Value(), request, materials, {});
         REQUIRE(stale.HasError());
         CHECK(stale.ErrorValue().code.Value() == ChunkMeshCookErrors::Stale.code.Value());
     }
