@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Release/UpdateStagedTree.h"
 
 #include <filesystem>
 
@@ -10,4 +11,7 @@ namespace Horo::Release::Detail {
 
     /** @brief Makes a staged tree's directory entries durable before publishing its marker. */
     [[nodiscard]] Result<void> SyncStageDirectories(const std::filesystem::path &root, NativeDurableFileSystem &files);
+
+    /** @brief Applies an authenticated mode to one new private file and makes it durable. */
+    [[nodiscard]] Result<void> ApplyAuthenticatedFileMode(const std::filesystem::path &path, UpdateFileMode mode);
 }  // namespace Horo::Release::Detail

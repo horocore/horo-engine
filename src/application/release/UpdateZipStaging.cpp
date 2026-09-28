@@ -3,7 +3,6 @@
 #include "UpdateStageFileOperations.h"
 
 #include <algorithm>
-#include <charconv>
 #include <fstream>
 #include <limits>
 #include <map>
@@ -135,24 +134,6 @@ namespace Horo::Release {
 
         using DeclaredFiles = std::map<std::string, UpdateStagedFile, std::less<>>;
 
-        /** @brief Parses one canonical tab-delimited row from the authenticated ZIP inventory. */
-        [[nodiscard]] Result<UpdateStagedFile> ParseInventoryRow(const std::string_view row) {
-            const auto first = row.find('\t');
-            const auto second = first == std::string_view::npos ? first : row.find('\t', first + 1U);
-            if (first == std::string_view::npos || second == std::string_view::npos ||
-                row.find('\t', second + 1U) != std::string_view::npos)
-                return Result<UpdateStagedFile>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
-            const auto sizeText = row.substr(first + 1U, second - first - 1U);
-            std::uint64_t size{};
-            const auto [end, error] = std::from_chars(sizeText.data(), sizeText.data() + sizeText.size(), size);
-            if (error != std::errc{} || end != sizeText.data() + sizeText.size() || std::to_string(size) != sizeText)
-                return Result<UpdateStagedFile>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
-            auto digest = ParseSha256(row.substr(second + 1U));
-            if (digest.HasError() || FormatSha256(digest.Value()) != row.substr(second + 1U))
-                return Result<UpdateStagedFile>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
-            return Result<UpdateStagedFile>::Success({std::string{row.substr(0U, first)}, size, std::move(digest).Value()});
-        }
-
         /** @brief Binds every ZIP file to one separately declared size and digest. */
         [[nodiscard]] Result<DeclaredFiles> ReadDeclaredFiles(mz_zip_archive &zip, const std::span<const UpdateArchiveEntry> index,
                                                               const UpdateArchiveLimits &limits) {
@@ -167,24 +148,14 @@ namespace Horo::Release {
                 return invalid();
             const auto item = static_cast<mz_uint>(std::distance(index.begin(), inventory));
             std::string bytes(static_cast<std::size_t>(inventory->expandedBytes), '\0');
-            if (!mz_zip_reader_extract_to_mem(&zip, item, bytes.data(), bytes.size(), 0U) ||
-                !bytes.starts_with(UpdateFileInventoryHeader) || !bytes.ends_with('\n'))
+            if (!mz_zip_reader_extract_to_mem(&zip, item, bytes.data(), bytes.size(), 0U))
+                return invalid();
+            auto parsed = ParseCanonicalUpdateFileInventory(bytes, limits);
+            if (parsed.HasError())
                 return invalid();
             DeclaredFiles declared;
-            std::string previous;
-            std::size_t position = UpdateFileInventoryHeader.size();
-            while (position < bytes.size()) {
-                const auto end = bytes.find('\n', position);
-                if (end == std::string::npos || end == position)
-                    return invalid();
-                auto row = ParseInventoryRow(std::string_view{bytes}.substr(position, end - position));
-                if (row.HasError() || row.Value().path <= previous || row.Value().path == UpdateFileInventoryPath ||
-                    row.Value().size > limits.maximumFileBytes)
-                    return invalid();
-                previous = row.Value().path;
-                declared.try_emplace(previous, std::move(row).Value());
-                position = end + 1U;
-            }
+            for (auto &file : parsed.Value())
+                declared.try_emplace(file.path, std::move(file));
             if (declared.empty())
                 return invalid();
             std::size_t files = 0U;
@@ -250,7 +221,11 @@ namespace Horo::Release {
                                                                                  extracted.Value().size != expected->second.size ||
                                                                                  extracted.Value().digest != expected->second.digest)
                     return Result<std::vector<UpdateStagedFile>>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
-                inventory.push_back(std::move(extracted).Value());
+                const auto &expected = declared.at(extracted.Value().path);
+                if (auto mode = Detail::ApplyAuthenticatedFileMode(root / std::filesystem::path(expected.path), expected.mode);
+                    mode.HasError())
+                    return Result<std::vector<UpdateStagedFile>>::Failure(mode.ErrorValue());
+                inventory.push_back(expected);
             }
             return Result<std::vector<UpdateStagedFile>>::Success(std::move(inventory));
         }

@@ -9,6 +9,7 @@
 #include <fstream>
 #include <limits>
 #include <miniz.h>
+#include <set>
 #include <system_error>
 #include <vector>
 
@@ -132,10 +133,21 @@ namespace Horo::Release {
             outputStatus.type() != std::filesystem::file_type::not_found || (error && error != std::errc::no_such_file_or_directory))
             return InvalidPackage();
 
+        const std::set<std::string, std::less<>> executables(request.executablePaths.begin(), request.executablePaths.end());
+        if (request.productEntrypoint.empty() || !executables.contains(request.productEntrypoint) ||
+            executables.size() != request.executablePaths.size())
+            return InvalidPackage();
+        std::size_t declaredExecutables = 0U;
         std::vector<UpdateStagedFile> files;
         files.reserve(request.sourceInventory.Artifacts().size());
-        for (const auto &file : request.sourceInventory.Artifacts())
-            files.emplace_back(file.path, file.size, file.digest);
+        for (const auto &file : request.sourceInventory.Artifacts()) {
+            const bool executable = executables.contains(file.path);
+            declaredExecutables += executable ? 1U : 0U;
+            files.emplace_back(file.path, file.size, file.digest, executable ? UpdateFileMode::Executable : UpdateFileMode::Regular,
+                               file.path == request.productEntrypoint ? UpdateFileRole::Entrypoint : UpdateFileRole::Content);
+        }
+        if (declaredExecutables != executables.size())
+            return InvalidPackage();
         auto inventory = BuildCanonicalUpdateFileInventory(files, limits_);
         if (inventory.HasError())
             return Result<ReleasePackageResult>::Failure(inventory.ErrorValue());

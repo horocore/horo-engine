@@ -5,6 +5,11 @@
 #include <algorithm>
 #include <system_error>
 #include <vector>
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace Horo::Release::Detail {
     /** @copydoc ValidStagePaths */
@@ -47,5 +52,39 @@ namespace Horo::Release::Detail {
                 return synced;
         }
         return files.SyncDirectory(root.parent_path());
+    }
+
+    /** @copydoc ApplyAuthenticatedFileMode */
+    Result<void> ApplyAuthenticatedFileMode(const std::filesystem::path &path, const UpdateFileMode mode) {
+        if (mode != UpdateFileMode::Regular && mode != UpdateFileMode::Executable)
+            return Result<void>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
+#if defined(_WIN32)
+        static_cast<void>(path);
+        return Result<void>::Success();
+#else
+        const int descriptor = open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        if (descriptor < 0)
+            return Result<void>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
+
+        struct DescriptorGuard final {
+            int value;
+            DescriptorGuard(const DescriptorGuard &) = delete;
+            DescriptorGuard &operator=(const DescriptorGuard &) = delete;
+            DescriptorGuard(DescriptorGuard &&) = delete;
+            DescriptorGuard &operator=(DescriptorGuard &&) = delete;
+
+            explicit DescriptorGuard(const int descriptorValue) : value(descriptorValue) {}
+
+            ~DescriptorGuard() {
+                close(value);
+            }
+        } guard{descriptor};
+        struct stat metadata{};
+        const mode_t permissions = mode == UpdateFileMode::Executable ? 0755 : 0644;
+        if (fstat(descriptor, &metadata) != 0 || !S_ISREG(metadata.st_mode) || metadata.st_nlink != 1 ||
+            fchmod(descriptor, permissions) != 0 || fsync(descriptor) != 0)
+            return Result<void>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
+        return Result<void>::Success();
+#endif
     }
 }  // namespace Horo::Release::Detail

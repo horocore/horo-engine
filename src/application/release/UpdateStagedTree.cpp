@@ -15,6 +15,26 @@
 
 namespace Horo::Release {
     namespace {
+        constexpr std::string_view LegacyInventoryPath = "horo-update-files-v1.txt";
+
+        /** @brief Serializes the only two admitted executable modes. */
+        [[nodiscard]] std::string_view ModeText(const UpdateFileMode mode) {
+            return mode == UpdateFileMode::Executable ? "0755" : "0644";
+        }
+
+        /** @brief Serializes the explicit product-entrypoint role. */
+        [[nodiscard]] std::string_view RoleText(const UpdateFileRole role) {
+            return role == UpdateFileRole::Entrypoint ? "entrypoint" : "content";
+        }
+
+        /** @brief Rejects unsupported metadata values and unsigned reserved paths. */
+        [[nodiscard]] bool ValidFileMetadata(const UpdateStagedFile &file) {
+            return file.path != UpdateFileInventoryPath && file.path != LegacyInventoryPath &&
+                   (file.mode == UpdateFileMode::Regular || file.mode == UpdateFileMode::Executable) &&
+                   (file.role == UpdateFileRole::Content || file.role == UpdateFileRole::Entrypoint) &&
+                   (file.role != UpdateFileRole::Entrypoint || (file.mode == UpdateFileMode::Executable && file.size != 0U));
+        }
+
         /** @brief Streams a bounded regular file into SHA-256 without loading it into memory. */
         [[nodiscard]] bool MatchesFile(const std::filesystem::path &path, const UpdateStagedFile &expected) {
             std::error_code error;
@@ -22,6 +42,13 @@ namespace Horo::Release {
                 return false;
             if (std::filesystem::file_size(path, error) != expected.size || error)
                 return false;
+#if !defined(_WIN32)
+            const auto permissions = std::filesystem::status(path, error).permissions();
+            const auto expectedPermissions =
+                expected.mode == UpdateFileMode::Executable ? std::filesystem::perms{0755} : std::filesystem::perms{0644};
+            if (error || (permissions & std::filesystem::perms::mask) != expectedPermissions)
+                return false;
+#endif
             std::ifstream input(path, std::ios::binary);
             if (!input)
                 return false;
@@ -73,15 +100,20 @@ namespace Horo::Release {
         std::string bytes{UpdateFileInventoryHeader};
         std::vector<UpdateArchiveEntry> index;
         index.reserve(files.size() + 1U);
+        std::size_t entrypoints = 0U;
         for (const auto *file : ordered) {
-            if (file->path == UpdateFileInventoryPath)
+            if (!ValidFileMetadata(*file))
                 return invalid();
-            const std::string row = std::format("{}\t{}\t{}\n", file->path, file->size, FormatSha256(file->digest));
+            entrypoints += file->role == UpdateFileRole::Entrypoint ? 1U : 0U;
+            const std::string row = std::format("{}\t{}\t{}\t{}\t{}\n", file->path, file->size, FormatSha256(file->digest),
+                                                ModeText(file->mode), RoleText(file->role));
             if (row.size() > MaximumInventoryBytes - bytes.size())
                 return Result<std::string>::Failure(MakeError(UpdateTransferErrors::ArchiveResourceLimit));
             bytes += row;
             index.emplace_back(file->path, UpdateArchiveEntryKind::File, file->size);
         }
+        if (entrypoints != 1U)
+            return invalid();
         index.emplace_back(std::string{UpdateFileInventoryPath}, UpdateArchiveEntryKind::File, bytes.size());
         if (auto validated = ValidateUpdateArchiveIndex(index, limits); validated.HasError())
             return Result<std::string>::Failure(validated.ErrorValue());
@@ -106,16 +138,24 @@ namespace Horo::Release {
             const auto row = bytes.substr(position, end - position);
             const auto first = row.find('\t');
             const auto second = first == std::string_view::npos ? first : row.find('\t', first + 1U);
-            if (first == std::string_view::npos || second == std::string_view::npos ||
-                row.find('\t', second + 1U) != std::string_view::npos)
+            const auto third = second == std::string_view::npos ? second : row.find('\t', second + 1U);
+            const auto fourth = third == std::string_view::npos ? third : row.find('\t', third + 1U);
+            if (first == std::string_view::npos || second == std::string_view::npos || third == std::string_view::npos ||
+                fourth == std::string_view::npos || row.find('\t', fourth + 1U) != std::string_view::npos)
                 return invalid();
             std::uint64_t size{};
             const auto sizeText = row.substr(first + 1U, second - first - 1U);
             const auto [parsed, error] = std::from_chars(sizeText.data(), sizeText.data() + sizeText.size(), size);
-            auto digest = ParseSha256(row.substr(second + 1U));
+            auto digest = ParseSha256(row.substr(second + 1U, third - second - 1U));
             if (error != std::errc{} || parsed != sizeText.data() + sizeText.size() || digest.HasError())
                 return invalid();
-            files.emplace_back(std::string{row.substr(0U, first)}, size, std::move(digest).Value());
+            const auto modeText = row.substr(third + 1U, fourth - third - 1U);
+            const auto roleText = row.substr(fourth + 1U);
+            if ((modeText != "0644" && modeText != "0755") || (roleText != "content" && roleText != "entrypoint"))
+                return invalid();
+            files.emplace_back(std::string{row.substr(0U, first)}, size, std::move(digest).Value(),
+                               modeText == "0755" ? UpdateFileMode::Executable : UpdateFileMode::Regular,
+                               roleText == "entrypoint" ? UpdateFileRole::Entrypoint : UpdateFileRole::Content);
             position = end + 1U;
         }
         auto canonical = BuildCanonicalUpdateFileInventory(files, limits);
@@ -131,8 +171,15 @@ namespace Horo::Release {
         };
         std::vector<UpdateArchiveEntry> index;
         index.reserve(files.size());
-        for (const auto &file : files)
+        std::size_t entrypoints = 0U;
+        for (const auto &file : files) {
+            if (!ValidFileMetadata(file))
+                return invalid();
+            entrypoints += file.role == UpdateFileRole::Entrypoint ? 1U : 0U;
             index.emplace_back(file.path, UpdateArchiveEntryKind::File, file.size);
+        }
+        if (entrypoints != 1U)
+            return invalid();
         if (auto validation = ValidateUpdateArchiveIndex(index, limits); validation.HasError())
             return validation;
 
