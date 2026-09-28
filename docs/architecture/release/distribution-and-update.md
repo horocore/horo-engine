@@ -246,6 +246,86 @@ Downloads use:
 - cancellation without damaging an installed version
 
 Downloaded bytes are untrusted until all expected hashes and signatures pass.
+`PlanUpdateTransfer` admits a fresh body only for the exact signed package URL,
+declared byte count, and a complete response. It permits a range resume only
+when a durable partial-file checkpoint matches the package hash and size,
+original and effective URL, strong ETag, exact start offset, and total length.
+A changed validator, unexpected redirect, or server response that ignores the
+range fails closed; the caller must explicitly discard the old partial file
+before a new transfer. `CheckUpdateTransferSpace` reserves host-requested free
+capacity, and checkpoints advance only after bytes are durably stored. The host
+selects the transport and owns private storage, cancellation, and progress
+dispatch.
+`VerifyCompletedUpdateTransfer` then checks the complete private-file size,
+hash, and publisher signature before any extractor or staging marker consumes
+it. The file-backed path streams the private package through SHA-256 in bounded
+memory; the host keeps that file quiescent through extraction so the verified
+bytes cannot change between the check and use.
+After package authentication, a format-specific reader must expose the complete
+archive index to `ValidateUpdateArchiveIndex` before extracting any entry. The
+preflight uses the release artifact path grammar and rejects links, special
+files, nonportable or colliding paths, file parents, and excess entry or
+expanded-byte counts under host policy limits.
+The reader and staging host remain responsible for proving that extracted bytes
+match the archive and its declared per-file inventory. `VerifyUpdateStagedTree`
+streams each private staged file through SHA-256, checks its declared length,
+and rejects missing, undeclared, linked, or special entries before a ready marker
+may be published. The host must keep the private stage quiescent during this
+check; the archive reader must supply the complete authenticated file inventory.
+For ZIP packages, `StageVerifiedZipUpdate` first authenticates the complete
+private package, preflights every central-directory entry and local header,
+then requires exactly one `horo-update-files-v1.txt` entry. Its canonical UTF-8
+payload starts with `horo-update-files-v1\n` and contains sorted rows of
+`<path>\t<decimal byte count>\t<sha256:64 lowercase hex digits>\n` for every other regular
+file. The inventory entry is not installed. The reader rejects missing, extra,
+duplicate, mismatched, or noncanonical rows before extraction, then compares
+every decompressed file with its declared digest and size. It writes into an
+absent sibling directory durably only after checking that the authenticated
+expanded size fits the available capacity with the host's free-space reserve.
+It checks the completed tree again and removes the new tree on failure before
+any ready marker can survive. ZIP producers must
+write this inventory before package signing; they can use
+`BuildCanonicalUpdateFileInventory` to produce the bounded, sorted bytes.
+`UpdateZipPackageProducer` is the ZIP backend for `ProduceReleasePackage`. It
+streams frozen source files into a private package, verifies the bytes actually
+read against the pre-sign inventory, writes the canonical internal inventory,
+and records the final package digest. Hosts install it explicitly for ZIP
+selections and provide the same archive limits used by staging. Existing
+package backends do not gain ZIP behavior implicitly.
+`PrepareZipUpdateStageHttps` is the blocking host worker operation for ZIP
+updates: it resumes or downloads into the protected private package file, then
+authenticates and extracts that same file before returning a durable ready
+marker. A complete checkpoint reuses its verified bytes without network work.
+The host owns background dispatch, private-path allocation, and quiescence.
+Other package formats require
+readers with the same preflight and durable publication sequence.
+Partial-file checkpoint evidence uses a bounded canonical schema. Recovery
+parses it as untrusted bytes and rechecks it against the selected signed package
+and the new transport response before appending any downloaded bytes. The
+private checkpoint store publishes canonical evidence with a durable prepared
+file and atomic replacement, then recovery requires both the partial file and
+checkpoint to exist as regular files with exactly matching durable byte counts.
+Native private-file writes require an absent file at offset zero or a regular,
+single-link file at the exact checkpoint offset. Each append is flushed before
+its checkpoint advances; an interrupted write without matching checkpoint
+evidence is rejected during recovery.
+The host-composed `UpdateDownloadSession` admits final HTTP headers before any
+body byte, loads the previous checkpoint, checks remaining private storage,
+and publishes progress as durable byte counts. Cancellation, excess body data,
+and short responses cannot finish or mark a package ready. A complete response
+is authenticated against the signed package before it can be used for staging.
+`DownloadUpdatePackageHttps` binds a concrete TLS-verified cURL GET to this
+session. It disables redirects, admits only the signed effective URL, parses
+bounded final headers before the first body callback, and rejects ambiguous
+framing or content encoding. A resumed request sends the durable byte range and
+its strong ETag with `If-Range`; a fresh full response cannot silently replace
+partial bytes. The host calls this blocking adapter on its update job and owns
+progress dispatch to the user interface.
+Once the authenticated archive reader has extracted and supplied its complete
+per-file inventory, `PublishVerifiedUpdateStage` rechecks the complete private
+package and staged tree, clears any stale marker, and atomically publishes a
+durable marker bound to package and inventory digests. The host keeps both
+private inputs quiescent through this publication.
 
 ## Staging
 

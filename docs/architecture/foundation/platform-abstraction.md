@@ -101,6 +101,12 @@ Existing alternative adapters must adopt this behavior before serving those
 clients; the native implementation and fresh-root package-cache regressions are
 the compatibility reference.
 
+Private update-package transfer also uses a native durable append primitive.
+It requires an existing protected parent directory, creates a new file only at
+offset zero, and otherwise appends only to a regular single-link file with the
+exact expected length. The file is flushed before checkpoint publication;
+checkpoint recovery rejects any interrupted length mismatch.
+
 ## User Directories
 
 The platform service resolves logical directories:

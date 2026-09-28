@@ -153,6 +153,20 @@ horo_configure_target_header_boundary(HoroUpdateDiscovery PUBLIC_HEADERS
     Horo/Release/UpdateDiscovery.h
     Horo/Release/UpdateDiscoveryErrors.h
 )
+horo_configure_target_header_boundary(HoroUpdateTransfer PUBLIC_HEADERS
+    Horo/Release/UpdateArchiveIndex.h
+    Horo/Release/UpdateStagedTree.h
+    Horo/Release/UpdateTransferCheckpointStore.h
+    Horo/Release/UpdateTransfer.h
+    Horo/Release/UpdateTransferErrors.h
+)
+horo_configure_target_header_boundary(HoroUpdateDownload PUBLIC_HEADERS
+    Horo/Release/UpdateDownloadSession.h
+    Horo/Release/UpdateHttpDownload.h
+    Horo/Release/UpdateStageReady.h
+    Horo/Release/UpdateZipPackageProducer.h
+    Horo/Release/UpdateZipStagingJob.h
+)
 horo_configure_target_header_boundary(HoroReleaseProcess PUBLIC_HEADERS
     Horo/Release/ReleaseCandidatePublisher.h
     Horo/Release/ReleaseProcess.h
