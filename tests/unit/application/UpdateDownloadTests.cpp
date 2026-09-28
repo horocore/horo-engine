@@ -346,6 +346,32 @@ TEST_CASE("Verified ZIP staging extracts bounded content and publishes ready", "
     std::ifstream input(root / "bin/editor", std::ios::binary);
     const std::string content{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
     CHECK(content == "verified editor");
+    const std::array inventory{UpdateStagedFile{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content}))}};
+    CHECK(VerifyReadyUpdateStage(package, CompleteCheckpoint(package), paths.partialFile, root, inventory, archiveLimits, Verifier())
+              .HasValue());
+}
+
+TEST_CASE("Activation admission rejects a changed ready marker", "[release][update]") {
+    TemporaryStage stage;
+    const std::string content = "verified editor";
+    const auto archive = ZipArchive("bin/editor", content);
+    const auto package = Package(archive);
+    const auto paths = Paths(stage);
+    {
+        std::ofstream output(paths.partialFile, std::ios::binary);
+        output.write(archive.data(), static_cast<std::streamsize>(archive.size()));
+    }
+    Horo::NativeDurableFileSystem files;
+    constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
+    const auto root = stage.path / "candidate";
+    auto published = StageVerifiedZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, root, limits}, files, Verifier(), {});
+    REQUIRE(published.HasValue());
+    const std::array inventory{UpdateStagedFile{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content}))}};
+    {
+        std::ofstream output(published.Value(), std::ios::binary | std::ios::trunc);
+        output << "stale";
+    }
+    CHECK(VerifyReadyUpdateStage(package, CompleteCheckpoint(package), paths.partialFile, root, inventory, limits, Verifier()).HasError());
 }
 
 TEST_CASE("ZIP staging reserves disk space before creating the private tree", "[release][update]") {
