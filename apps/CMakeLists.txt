@@ -111,6 +111,7 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/main.cpp
         HoroEditor/app/HoroEditorApp.cpp
         HoroEditor/app/EditorUserStateMigration.cpp
+        HoroEditor/app/ConfiguredEditorUpdateBackend.cpp
     )
 
     if(APPLE)
@@ -232,6 +233,8 @@ if(HORO_BUILD_EDITOR_GUI)
             HoroEngine::ProjectMigrations
             HoroEngine::UserStateMigration
             HoroEngine::InputSdl
+            HoroEngine::UpdateDiscovery
+            HoroEngine::UpdateDownload
             HoroHostModuleComposition
             HoroThirdParty::ImGui
             nlohmann_json::nlohmann_json

@@ -1638,6 +1638,7 @@ endif ()
 
 add_library(HoroEditorModel STATIC
         editor/data_bus/EditorDataBus.cpp
+        editor/update/UpdateExperienceSession.cpp
         editor/document/NavigationAgentJson.cpp
         editor/document/SceneDocument.cpp
         editor/document/SceneDocumentCommands.cpp
@@ -1891,6 +1892,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/settings/SettingsModalFooter.cpp
             editor/modals/settings/SettingsModalLifecycle.cpp
             editor/modals/settings/SettingsModalNavigation.cpp
+            editor/modals/settings/SettingsModalUpdates.cpp
             editor/modals/settings/SettingsModalPluginDetails.cpp
             editor/modals/settings/SettingsModalPluginList.cpp
             editor/modals/settings/SettingsModalPluginShared.cpp

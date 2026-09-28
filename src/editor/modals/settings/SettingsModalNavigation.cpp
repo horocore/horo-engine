@@ -85,6 +85,7 @@ namespace Horo::Editor::SettingsModalInternal {
         const std::string audio = ctx.localization.Get("editor", "settings.nav.audio");
         const std::string network = ctx.localization.Get("editor", "settings.nav.network");
         const std::string packages = ctx.localization.Get("editor", "settings.nav.packages");
+        const std::string updates = ctx.localization.Get("editor", "settings.nav.updates");
         const std::string tools = ctx.localization.Get("editor", "settings.nav.tools");
         const std::string diagnostics = ctx.localization.Get("editor", "settings.nav.diagnostics");
         const std::string plugins = ctx.localization.Get("editor", "settings.nav.plugins");
@@ -97,6 +98,7 @@ namespace Horo::Editor::SettingsModalInternal {
         DrawNavItem(st, {audio.c_str(), "S", Audio}, ctx);
         DrawNavItem(st, {network.c_str(), "N", Network}, ctx);
         DrawNavItem(st, {packages.c_str(), "K", Packages}, ctx);
+        DrawNavItem(st, {updates.c_str(), "U", Updates}, ctx);
         DrawNavGroup(tools.c_str(), ctx);
         DrawNavItem(st, {diagnostics.c_str(), "D", Diagnostics}, ctx);
         DrawNavItem(st, {plugins.c_str(), "P", Plugins}, ctx);
@@ -382,6 +384,9 @@ namespace Horo::Editor::SettingsModalInternal {
                 break;
             case Packages:
                 DrawPackages(st, ctx);
+                break;
+            case Updates:
+                DrawUpdates(st, ctx);
                 break;
             case Diagnostics:
                 DrawDiagnostics(st, ctx);

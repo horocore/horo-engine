@@ -938,6 +938,20 @@ add_executable(HoroEditorPlaySessionControllerTests
 )
 target_compile_features(HoroEditorPlaySessionControllerTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::EditorServices)
+add_executable(HoroUpdateExperienceSessionTests
+        unit/editor/UpdateExperienceSessionTests.cpp
+)
+target_compile_features(HoroUpdateExperienceSessionTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUpdateExperienceSessionTests PRIVATE HoroEngine::EditorModel)
+add_executable(HoroConfiguredEditorUpdateBackendTests
+        unit/editor/ConfiguredEditorUpdateBackendTests.cpp
+        ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/ConfiguredEditorUpdateBackend.cpp
+)
+target_compile_features(HoroConfiguredEditorUpdateBackendTests PRIVATE cxx_std_20)
+target_include_directories(HoroConfiguredEditorUpdateBackendTests PRIVATE ${PROJECT_SOURCE_DIR}/apps ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(HoroConfiguredEditorUpdateBackendTests PRIVATE HoroEngine::EditorModel HoroEngine::UpdateDiscovery
+        HoroEngine::UpdateDownload HoroEngine::Platform)
+horo_register_catch_test(HoroConfiguredEditorUpdateBackendTests LABELS "editor;update;headless")
 add_executable(HoroProjectGameplayRegistryTests
         unit/editor/ProjectGameplayRegistryTests.cpp
 )
@@ -1791,6 +1805,7 @@ add_library(HoroEditorTestInternals INTERFACE)
 target_include_directories(HoroEditorTestInternals INTERFACE ${PROJECT_SOURCE_DIR}/src)
 set(HORO_EDITOR_WHITE_BOX_TEST_TARGETS
         HoroEditorPlaySessionControllerTests
+        HoroUpdateExperienceSessionTests
         HoroProjectGameplayRegistryTests
         HoroGuiScreenHostLifecycleTests
         HoroProjectCreationControllerTests
@@ -2836,6 +2851,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroGameModuleHostTests
         HoroLuaBehaviorTests
         HoroEditorPlaySessionControllerTests
+        HoroUpdateExperienceSessionTests
         HoroProjectGameplayRegistryTests
         HoroProjectIntegrityValidatorServiceTests
         HoroSceneMathTests

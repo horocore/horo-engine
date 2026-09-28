@@ -217,6 +217,8 @@ security-update classification, and download decisions.
     "expiresAt": 1782043200,
     "minimumUpdaterVersion": 1,
     "minimumRootRevision": 2,
+    "releaseNotes": "Editor stability and accessibility improvements.",
+    "compatibilityImpacts": ["Plugins built for API revision 1 must be updated."],
     "packages": [
       {
         "platform": "macos",
@@ -241,6 +243,23 @@ The installed updater persists the highest accepted sequence and root revision;
 transport responses cannot lower either value. The manifest and package identity
 are verified according to [Release Security](./release-security.md). Transport
 security does not replace artifact signature and hash verification.
+`releaseNotes` and `compatibilityImpacts` are optional plain text inside the
+signed canonical payload. Their absence preserves existing schema-v1 bytes and
+parsing; present notes are capped at 32 KiB, with at most 16 non-empty impact
+summaries of 1 KiB each. Editor presentation wraps these strings as text, never
+interprets them as commands or markup. Older installed clients may reject a
+manifest that adds these optional fields and must retain their current version.
+
+The editor update session is owned by the graphical host, independent of the
+settings view. An installed-product host may inject an update backend only after
+it has authenticated the installation identity, trust-root snapshot, source
+selection, private staging paths, and updater-helper handoff. The manifest
+cannot supply those authorities. The backend binds download to the selected
+verified package, and staging is format-specific: the ZIP stager accepts only
+ZIP packages. A Linux tar.gz stager must be supplied separately; an absent
+stager leaves update actions unavailable. A restart or rollback action requests
+a helper handoff and remains pending until the host reports a verified outcome
+on a later launch. The running editor never switches its own executable files.
 
 ## Update Trust Root And Metadata Freshness
 

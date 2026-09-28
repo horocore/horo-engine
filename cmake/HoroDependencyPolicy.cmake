@@ -168,6 +168,8 @@ horo_allow_target_dependencies(TARGET HoroEditor
         HoroProjectMigrations
         HoroUserStateMigration
         HoroInputSdl
+        HoroUpdateDiscovery
+        HoroUpdateDownload
         HoroOpenTelemetry
         HoroEditorViewportOpenGL
         HoroEditorViewportMetal
