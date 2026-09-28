@@ -113,6 +113,19 @@ namespace Horo::Destruction {
 
         std::uint64_t VoronoiOutputChecksum(const OfflineVoronoiCandidate &candidate) {
             OutputHasher hash;
+            for (const auto byte : candidate.sourceAsset.Bytes())
+                hash.Mix(byte);
+            hash.Mix(candidate.sourceRevision);
+            for (const auto byte : candidate.sourceDigest.bytes)
+                hash.Mix(byte);
+            hash.Mix(candidate.recipeId);
+            hash.Mix(candidate.recipeRevision);
+            for (const auto byte : candidate.semanticFingerprint.bytes)
+                hash.Mix(byte);
+            for (const auto byte : candidate.toolchainDigest.bytes)
+                hash.Mix(byte);
+            hash.Mix(static_cast<std::uint8_t>(candidate.tier));
+            hash.Mix(candidate.schemaVersion);
             hash.Mix(candidate.estimatedBytes);
             hash.Mix(candidate.workItems);
             hash.Mix(candidate.chunks.size());

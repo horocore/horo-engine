@@ -103,6 +103,13 @@ namespace Horo::Network {
         /** @brief Stops admission idempotently; old generations cannot revive this gate. */
         void Shutdown() noexcept;
 
+        /** @brief Checks exact session and negotiated capability evidence without advancing replay state. */
+        [[nodiscard]] bool Matches(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration,
+                                   const TransportSelectionEvidence &selection) const noexcept {
+            return !shuttingDown_ && connection_ == connection && sessionGeneration_ == sessionGeneration && selection_ == selection &&
+                   revision_ == selection.capabilityRevision;
+        }
+
     private:
         MessageDeliveryGate() = default;
 

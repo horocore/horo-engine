@@ -37,8 +37,7 @@ namespace Horo::Release {
         };
 
         /** @brief Writes at miniz's requested offset through a filesystem-path-aware stream. */
-        [[nodiscard]] std::size_t WriteArchive(void *opaque, const mz_uint64 offset,          // NOSONAR: miniz C callback ABI.
-                                               const void *buffer, const std::size_t size) {  // NOSONAR: miniz requires void*.
+        [[nodiscard]] std::size_t WriteArchive(void *opaque, const mz_uint64 offset, const void *buffer, const std::size_t size) {
             auto &output = *static_cast<std::ofstream *>(opaque);
             if (offset > static_cast<mz_uint64>(std::numeric_limits<std::streamoff>::max()) ||
                 size > static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max()))
@@ -49,8 +48,7 @@ namespace Horo::Release {
         }
 
         /** @brief Supplies exact sequential source bytes and hashes the bytes actually archived. */
-        [[nodiscard]] std::size_t ReadSource(void *opaque, const mz_uint64 offset,    // NOSONAR: miniz C callback ABI.
-                                             void *buffer, const std::size_t size) {  // NOSONAR: miniz requires void*.
+        [[nodiscard]] std::size_t ReadSource(void *opaque, const mz_uint64 offset, void *buffer, const std::size_t size) {
             auto &reader = *static_cast<SourceReader *>(opaque);
             if (reader.failed || offset != reader.consumed || offset > reader.expectedSize)
                 return 0U;
