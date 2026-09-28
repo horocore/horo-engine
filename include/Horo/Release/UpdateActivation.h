@@ -64,6 +64,7 @@ namespace Horo::Release {
      * @param verifier Trusted publisher signature verifier for both packages.
      * @param host Process-exit gate and bounded startup-health probe; retained by the caller.
      * @return Activated or recovered prior version; failure leaves a durable recovery journal if rollback is uncertain.
+     * @note A healthy activation atomically pins the verified previous version as last-known-good. Recovery restores the prior pin.
      * @note This blocking operation belongs in a separate updater helper after the product hands off and exits.
      */
     [[nodiscard]] Result<UpdateActivationOutcome> ActivateVerifiedUpdate(const UpdateActivationRequest &request,
