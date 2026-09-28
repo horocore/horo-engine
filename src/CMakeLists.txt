@@ -84,6 +84,11 @@ add_library(HoroEngine::McpRegistry ALIAS HoroMcpRegistry)
 target_compile_features(HoroMcpRegistry PUBLIC cxx_std_20)
 target_link_libraries(HoroMcpRegistry PUBLIC HoroEngine::McpSession)
 
+add_library(HoroMcpController STATIC mcp/McpController.cpp)
+add_library(HoroEngine::McpController ALIAS HoroMcpController)
+target_compile_features(HoroMcpController PUBLIC cxx_std_20)
+target_link_libraries(HoroMcpController PUBLIC HoroEngine::McpRegistry)
+
 add_library(HoroModelProvider STATIC editor/agent/ModelProvider.cpp)
 add_library(HoroEngine::ModelProvider ALIAS HoroModelProvider)
 target_compile_features(HoroModelProvider PUBLIC cxx_std_20)
