@@ -2087,6 +2087,7 @@ target_compile_features(HoroRuntimeSaveArchiveFinalizationTests PRIVATE cxx_std_
 target_link_libraries(HoroRuntimeSaveArchiveFinalizationTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveArchiveReaderTests
         unit/runtime/save/SaveArchiveReaderTests.cpp
+        unit/runtime/save/SaveArchiveRecordStagingTests.cpp
 )
 target_compile_features(HoroRuntimeSaveArchiveReaderTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveArchiveReaderTests PRIVATE HoroEngine::Runtime)
@@ -2097,6 +2098,7 @@ target_compile_features(HoroRuntimeSaveArchiveProtectionTests PRIVATE cxx_std_20
 target_link_libraries(HoroRuntimeSaveArchiveProtectionTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveMigrationTests
         unit/runtime/save/SaveMigrationTests.cpp
+        unit/runtime/save/SaveMigrationRecordTests.cpp
 )
 target_compile_features(HoroRuntimeSaveMigrationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveMigrationTests PRIVATE HoroEngine::Runtime)

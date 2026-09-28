@@ -242,6 +242,45 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
+        /** @brief Advances only the records owned by the participant step; caller still validates the detached candidate. */
+        [[nodiscard]] Result<void> MigrateOwnedRecords(SaveMigrationCandidate &candidate, const StepView &step,
+                                                       const SaveMigrationLimits &limits, const std::uint64_t remainingWorkBytes) {
+            if (!step.migrateRecord || !*step.migrateRecord)
+                return Result<void>::Success();
+            auto found = std::ranges::find(candidate.participants, *step.participant, &SaveMigrationParticipantState::participant);
+            if (found == candidate.participants.end())
+                return Result<void>::Failure(MigrationError(SaveErrors::MigrationPlanInvalid, StepFailureContext(step)));
+            for (SaveMigrationRecordState &record : found->records) {
+                if (record.schemaVersion.Value() != step.from)
+                    return Result<void>::Failure(
+                        MigrationError(SaveErrors::MigrationCandidateInvalid,
+                                       std::format("{} record={} has schema {}, expected {}.", StepFailureContext(step),
+                                                   record.record.ToString(), record.schemaVersion.Value(), step.from)));
+                const SaveMigrationRecordContext recordContext{.step = step.id,
+                                                               .participant = *step.participant,
+                                                               .record = record.record,
+                                                               .from = record.schemaVersion,
+                                                               .to = ParticipantSchemaVersion::Create(step.to).Value(),
+                                                               .maximumOutputBytes =
+                                                                   std::min(limits.maximumParticipantPayloadBytes, remainingWorkBytes)};
+                auto output = (*step.migrateRecord)(std::span<const std::byte>{record.payload}, recordContext);
+                if (output.HasError())
+                    return Result<void>::Failure(
+                        WithCause(MigrationError(SaveErrors::MigrationStepFailed,
+                                                 std::format("{} record={} {}", StepFailureContext(step), record.record.ToString(),
+                                                             output.ErrorValue().message.substr(0, 192))),
+                                  output.ErrorValue()));
+                if (output.Value().size() > recordContext.maximumOutputBytes)
+                    return Result<void>::Failure(MigrationError(SaveErrors::MigrationLimitExceeded,
+                                                                std::format("{} record={} output exceeds its declared byte budget.",
+                                                                            StepFailureContext(step), record.record.ToString())));
+                record.payload = std::move(output).Value();
+                record.schemaVersion = recordContext.to;
+            }
+            found->schemaVersion = ParticipantSchemaVersion::Create(step.to).Value();
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<SaveMigrationCandidate> InvokeMigration(SaveMigrationCandidate candidate, const StepView &step,
                                                                      const SaveMigrationLimits &limits, const std::uint64_t workUsed) {
             const SaveMigrationStepContext context{.id = step.id,
@@ -253,41 +292,8 @@ namespace Horo::Runtime {
                                                    .maximumParticipantPayloadBytes = limits.maximumParticipantPayloadBytes,
                                                    .maximumTotalPayloadBytes = limits.maximumTotalPayloadBytes};
             try {
-                if (step.migrateRecord && *step.migrateRecord) {
-                    auto found = std::ranges::find(candidate.participants, *step.participant, &SaveMigrationParticipantState::participant);
-                    if (found == candidate.participants.end())
-                        return Result<SaveMigrationCandidate>::Failure(
-                            MigrationError(SaveErrors::MigrationPlanInvalid, StepFailureContext(step)));
-                    for (SaveMigrationRecordState &record : found->records) {
-                        if (record.schemaVersion.Value() != step.from)
-                            return Result<SaveMigrationCandidate>::Failure(
-                                MigrationError(SaveErrors::MigrationCandidateInvalid,
-                                               std::format("{} record={} has schema {}, expected {}.", StepFailureContext(step),
-                                                           record.record.ToString(), record.schemaVersion.Value(), step.from)));
-                        const SaveMigrationRecordContext recordContext{.step = step.id,
-                                                                       .participant = *step.participant,
-                                                                       .record = record.record,
-                                                                       .from = record.schemaVersion,
-                                                                       .to = ParticipantSchemaVersion::Create(step.to).Value(),
-                                                                       .maximumOutputBytes = std::min(limits.maximumParticipantPayloadBytes,
-                                                                                                      context.remainingWorkBytes)};
-                        auto output = (*step.migrateRecord)(std::span<const std::byte>{record.payload}, recordContext);
-                        if (output.HasError())
-                            return Result<SaveMigrationCandidate>::Failure(
-                                WithCause(MigrationError(SaveErrors::MigrationStepFailed,
-                                                         std::format("{} record={} {}", StepFailureContext(step), record.record.ToString(),
-                                                                     output.ErrorValue().message.substr(0, 192))),
-                                          output.ErrorValue()));
-                        if (output.Value().size() > recordContext.maximumOutputBytes)
-                            return Result<SaveMigrationCandidate>::Failure(
-                                MigrationError(SaveErrors::MigrationLimitExceeded,
-                                               std::format("{} record={} output exceeds its declared byte budget.",
-                                                           StepFailureContext(step), record.record.ToString())));
-                        record.payload = std::move(output).Value();
-                        record.schemaVersion = recordContext.to;
-                    }
-                    found->schemaVersion = ParticipantSchemaVersion::Create(step.to).Value();
-                }
+                if (auto records = MigrateOwnedRecords(candidate, step, limits, context.remainingWorkBytes); records.HasError())
+                    return Result<SaveMigrationCandidate>::Failure(records.ErrorValue());
                 if (step.migrate && *step.migrate)
                     return (*step.migrate)(std::move(candidate), context);
                 return Result<SaveMigrationCandidate>::Success(std::move(candidate));

@@ -73,21 +73,9 @@ namespace Horo::Runtime::SaveMigrationDetail {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ValidateParticipantState(const SaveMigrationParticipantState &participant, const std::size_t index,
-                                                            const SaveMigrationState &state, const SaveMigrationLimits &limits,
-                                                            std::uint64_t &totalPayloadBytes) {
-            if (!participant.participant.IsValid() || !participant.schemaVersion.IsValid() ||
-                (index != 0 && state.participants[index - 1].participant == participant.participant) ||
-                participant.payload.size() > limits.maximumParticipantPayloadBytes ||
-                participant.records.size() > limits.maximumRecordsPerParticipant ||
-                participant.payload.size() > std::numeric_limits<std::uint64_t>::max() - totalPayloadBytes)
-                return Result<void>::Failure(MigrationError(SaveErrors::MigrationCandidateInvalid,
-                                                            "Detached save migration state contains an invalid or duplicate participant."));
-            totalPayloadBytes += participant.payload.size();
-            if (totalPayloadBytes > limits.maximumTotalPayloadBytes)
-                return Result<void>::Failure(
-                    MigrationError(SaveErrors::MigrationLimitExceeded,
-                                   "Detached save migration state exceeds its aggregate participant payload limit."));
+        /** @brief Accounts for canonical owned records while preserving their source identity. */
+        [[nodiscard]] Result<void> ValidateOwnedRecords(const SaveMigrationParticipantState &participant, const SaveMigrationLimits &limits,
+                                                        std::uint64_t &totalPayloadBytes) {
             SaveRecordId previousOwnedRecord;
             for (const SaveMigrationRecordState &record : participant.records) {
                 if (!record.record.IsValid() || !record.schemaVersion.IsValid() || record.sourceParticipant != participant.participant ||
@@ -103,6 +91,26 @@ namespace Horo::Runtime::SaveMigrationDetail {
                 totalPayloadBytes += record.payload.size();
                 previousOwnedRecord = record.record;
             }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidateParticipantState(const SaveMigrationParticipantState &participant, const std::size_t index,
+                                                            const SaveMigrationState &state, const SaveMigrationLimits &limits,
+                                                            std::uint64_t &totalPayloadBytes) {
+            if (!participant.participant.IsValid() || !participant.schemaVersion.IsValid() ||
+                (index != 0 && state.participants[index - 1].participant == participant.participant) ||
+                participant.payload.size() > limits.maximumParticipantPayloadBytes ||
+                participant.records.size() > limits.maximumRecordsPerParticipant ||
+                participant.payload.size() > std::numeric_limits<std::uint64_t>::max() - totalPayloadBytes)
+                return Result<void>::Failure(MigrationError(SaveErrors::MigrationCandidateInvalid,
+                                                            "Detached save migration state contains an invalid or duplicate participant."));
+            totalPayloadBytes += participant.payload.size();
+            if (totalPayloadBytes > limits.maximumTotalPayloadBytes)
+                return Result<void>::Failure(
+                    MigrationError(SaveErrors::MigrationLimitExceeded,
+                                   "Detached save migration state exceeds its aggregate participant payload limit."));
+            if (auto owned = ValidateOwnedRecords(participant, limits, totalPayloadBytes); owned.HasError())
+                return owned;
             SaveRecordId previousRecord;
             for (const PreservedSaveChunk &chunk : participant.preservedChunks) {
                 if (!chunk.entry.record.IsValid() || chunk.entry.owner != participant.participant ||
