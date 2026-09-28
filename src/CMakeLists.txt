@@ -293,7 +293,8 @@ target_link_libraries(HoroUpdateTransfer PUBLIC HoroEngine::UpdateManifest)
 
 add_library(HoroUpdateDownload STATIC application/release/UpdateDownloadSession.cpp
         application/release/UpdateHttpResponse.cpp application/release/UpdateHttpDownload.cpp
-        application/release/UpdateStageReady.cpp application/release/UpdateZipStaging.cpp
+        application/release/UpdateStageReady.cpp application/release/UpdateStageFileOperations.cpp
+        application/release/UpdateZipStaging.cpp
         application/release/UpdateTarGzipIndex.cpp
         application/release/UpdateTarGzipStaging.cpp
         application/release/UpdateZipPackageProducer.cpp application/release/UpdateZipStagingJob.cpp)
