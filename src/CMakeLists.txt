@@ -314,6 +314,9 @@ add_library(HoroUpdateActivation STATIC application/release/UpdateActivation.cpp
 add_library(HoroEngine::UpdateActivation ALIAS HoroUpdateActivation)
 target_compile_features(HoroUpdateActivation PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateActivation PUBLIC HoroEngine::UpdateDownload HoroEngine::Platform)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(HoroUpdateActivation PRIVATE application/release/LinuxPortableBootstrapHost.cpp)
+endif()
 
 add_library(HoroUserStateMigration STATIC application/release/UserStateMigration.cpp
         application/release/UserStateMigrationErrors.cpp)

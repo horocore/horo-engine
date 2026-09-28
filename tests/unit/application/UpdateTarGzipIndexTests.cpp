@@ -1,4 +1,7 @@
 #include "Horo/Release/UpdateStageReady.h"
+#if defined(__linux__)
+#include "Horo/Release/LinuxPortableBootstrapHost.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -176,6 +179,25 @@ namespace {
     }
 
     constexpr UpdateArchiveLimits Limits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 2048U};
+#if defined(__linux__)
+    class ProcessBridge final : public IUpdateActivationHost {
+    public:
+        [[nodiscard]] Horo::Result<void> EnsureProductsStopped(const std::filesystem::path &) override {
+            ++stops;
+            return Horo::Result<void>::Success();
+        }
+
+        [[nodiscard]] Horo::Result<void> ProbeStartupHealth(const std::filesystem::path &, std::chrono::seconds) override {
+            ++probes;
+            return healthy ? Horo::Result<void>::Success()
+                           : Horo::Result<void>::Failure(Horo::Error{Horo::ErrorCode{"test.health"}, Horo::ErrorDomainId{"test"}});
+        }
+
+        bool healthy{false};
+        unsigned stops{};
+        unsigned probes{};
+    };
+#endif
 }  // namespace
 
 TEST_CASE("Signed Linux tar gzip is indexed before any extraction", "[release][update][tar]") {
@@ -319,3 +341,48 @@ TEST_CASE("Signed Linux tar gzip refuses insufficient free capacity before stagi
     CHECK_FALSE(std::filesystem::exists(stage));
     CHECK_FALSE(std::filesystem::exists(stage.string() + ".ready"));
 }
+
+#if defined(__linux__)
+TEST_CASE("Linux portable bootstrap installs repairs and uninstalls only owned version data", "[release][install][linux]") {
+    TemporaryPackage temporary;
+    auto package = Sign(temporary, Gzip(InventoryTar()));
+    auto verifier = Verifier();
+    Horo::NativeDurableFileSystem files;
+    const auto versions = temporary.path / "versions";
+    std::filesystem::create_directory(versions);
+    const auto packageFile = versions / "editor-linux.tar.gz";
+    std::filesystem::rename(package.file, packageFile);
+    const auto stage = versions / "editor-linux";
+    REQUIRE(StageVerifiedTarGzipUpdate({package.record, package.checkpoint, packageFile, stage, Limits}, files, verifier, {}).HasValue());
+    const std::string content = "editor";
+    std::vector<UpdateStagedFile> inventory{{"bin/editor", 6U, Horo::ComputeSha256(std::as_bytes(std::span{content}))}};
+    UpdateActivationVersion candidate{package.record, package.checkpoint, packageFile, stage, inventory};
+    BootstrapInstallationRequest request{temporary.path, candidate, Limits, std::chrono::seconds{2}};
+    ProcessBridge processes;
+    LinuxPortableBootstrapHost host(files, verifier, processes, {});
+    const auto userProject = temporary.path / "projects" / "game.horo";
+    std::filesystem::create_directory(userProject.parent_path());
+    std::ofstream(userProject) << "project-data";
+    LinuxPortableBootstrapHost noSpace(files, verifier, processes, {.minimumFreeBytes = std::numeric_limits<std::uint64_t>::max()});
+    CHECK(BootstrapVerifiedInstallation(request, files, verifier, noSpace).HasError());
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "active-version"));
+    CHECK(BootstrapVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "active-version"));
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "bootstrap.pending"));
+    processes.healthy = true;
+    REQUIRE(BootstrapVerifiedInstallation(request, files, verifier, host).HasValue());
+    REQUIRE(RepairVerifiedInstallation(request, files, verifier, host).HasValue());
+    std::ofstream(stage / "user-note") << "preserve";
+    CHECK(UninstallVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK(std::filesystem::is_regular_file(stage / "user-note"));
+    CHECK(std::filesystem::is_regular_file(temporary.path / "active-version"));
+    std::filesystem::remove(stage / "user-note");
+    REQUIRE(UninstallVerifiedInstallation(request, files, verifier, host).HasValue());
+    CHECK_FALSE(std::filesystem::exists(stage));
+    CHECK_FALSE(std::filesystem::exists(packageFile));
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "active-version"));
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "bootstrap-uninstall.pending"));
+    CHECK(std::filesystem::is_regular_file(userProject));
+    CHECK(processes.probes == 3U);
+}
+#endif

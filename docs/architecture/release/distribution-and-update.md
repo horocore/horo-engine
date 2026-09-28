@@ -423,8 +423,7 @@ the actual OS and hardware (including emulation), OS version, capacity, and
 permissions before making any changes.
 
 The current authenticated stage readers support portable ZIP and Linux tar.gz
-packages. Native
-Windows, macOS, and Linux installer formats require format-specific stage
+packages. Native Windows, macOS, and Linux installer formats require format-specific stage
 readers and integration hosts with the same verification and rollback
 guarantees. `RepairVerifiedInstallation` reauthenticates the active package and
 tree under the installation lock before restoring idempotent integration and
@@ -435,8 +434,17 @@ integration and remove that version's owned files. A partial removal stays
 inactive and the same package/inventory can resume it. The host's removal
 contract preserves projects, settings, caches, logs, credentials, and shared
 components; a separate explicit data-removal policy would be required to
-remove any of them. These portable transactions do not implement native package
-format readers or operating-system integration hosts. The public bootstrap-host
+remove any of them. `LinuxPortableBootstrapHost` admits only validated tar.gz
+portable selections at exact immutable version paths. It probes the running
+kernel and hardware architecture, write access, and free transaction space.
+Registration is deliberately empty because tar.gz format policy supports no
+desktop or file-association integration. An executable-host process coordinator
+supplies the product-stop and bounded health operations. During uninstall the
+adapter reauthenticates any remaining package and ready marker, rejects altered
+or undeclared stage entries, and unlinks only signed inventory files and their
+empty parent directories. This additive host needs no migration for ZIP callers.
+Windows, macOS, and system-managed Linux native package readers and hosts remain
+outstanding. The public bootstrap-host
 contract now requires an idempotent `RemoveOwnedVersion` operation; existing
 host implementers must add that operation before adopting this interface. No
 production implementation existed when this contract was added.

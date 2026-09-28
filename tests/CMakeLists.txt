@@ -1153,6 +1153,9 @@ horo_register_catch_test(HoroUpdateActivationTests LABELS "release;update;headle
 add_executable(HoroUpdateTarGzipIndexTests unit/application/UpdateTarGzipIndexTests.cpp)
 target_compile_features(HoroUpdateTarGzipIndexTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateTarGzipIndexTests PRIVATE HoroEngine::UpdateDownload miniz)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(HoroUpdateTarGzipIndexTests PRIVATE HoroEngine::UpdateActivation)
+endif()
 horo_register_catch_test(HoroUpdateTarGzipIndexTests LABELS "release;update;headless")
 
 add_executable(HoroUserStateMigrationTests unit/application/UserStateMigrationTests.cpp)
