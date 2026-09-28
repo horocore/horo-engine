@@ -1,9 +1,12 @@
 #include "Horo/Release/BootstrapInstallation.h"
 #include "Horo/Release/UpdateActivation.h"
 #include "Horo/Release/UpdateActivationErrors.h"
+#include "Horo/Release/UpdateRetention.h"
+#include "Horo/Release/UpdateRetentionErrors.h"
 #include "Horo/Release/UpdateRollback.h"
 #include "Horo/Release/UpdateRollbackErrors.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
@@ -233,6 +236,88 @@ TEST_CASE("Failed startup health preserves the existing last-known-good pin", "[
     CHECK(ActivateVerifiedUpdate(request, files, verifier, host).HasError());
     CHECK(Read(install.root / "last-known-good-version") == priorPin.Value());
     CHECK_FALSE(std::filesystem::exists(install.root / "activation.pending"));
+}
+
+TEST_CASE("Retention removes only signed obsolete content and is repeatable", "[release][update][retention]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = Request(install, files, verifier);
+    auto obsolete = Version(install, "obsolete", files, verifier);
+    Host host;
+    REQUIRE(ActivateVerifiedUpdate(request, files, verifier, host).HasValue());
+    std::filesystem::create_directories(install.root / "projects");
+    {
+        std::ofstream userFile(install.root / "projects" / "save.json");
+        userFile << "user data";
+    }
+    const std::array candidates{
+        UpdateRetentionCandidate{{{"new"}, 40U, 10U, UpdateRetentionRole::Active}, request.staged},
+        UpdateRetentionCandidate{{{"old"}, 30U, 9U, UpdateRetentionRole::LastKnownGood}, request.current},
+        UpdateRetentionCandidate{{{"obsolete"}, 20U, 1U, UpdateRetentionRole::Obsolete}, obsolete},
+    };
+    const UpdateRetentionCleanupRequest cleanup{install.root, candidates, request.archiveLimits, 70U};
+    auto first = ApplyUpdateRetention(cleanup, files, verifier, host);
+    REQUIRE(first.HasValue());
+    CHECK(first.Value().remove.size() == 1U);
+    CHECK_FALSE(std::filesystem::exists(obsolete.stageRoot));
+    CHECK_FALSE(std::filesystem::exists(obsolete.packageFile));
+    CHECK(std::filesystem::exists(request.current.stageRoot));
+    CHECK(std::filesystem::exists(request.staged.stageRoot));
+    CHECK(Read(install.root / "projects" / "save.json") == "user data");
+    CHECK(ApplyUpdateRetention(cleanup, files, verifier, host).HasValue());
+}
+
+TEST_CASE("Retention resumes an authenticated interrupted cleanup", "[release][update][retention]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = Request(install, files, verifier);
+    auto obsolete = Version(install, "obsolete", files, verifier);
+    Host host;
+    REQUIRE(ActivateVerifiedUpdate(request, files, verifier, host).HasValue());
+    const std::array candidates{
+        UpdateRetentionCandidate{{{"new"}, 40U, 10U, UpdateRetentionRole::Active}, request.staged},
+        UpdateRetentionCandidate{{{"old"}, 30U, 9U, UpdateRetentionRole::LastKnownGood}, request.current},
+        UpdateRetentionCandidate{{{"obsolete"}, 20U, 1U, UpdateRetentionRole::Obsolete}, obsolete},
+    };
+    const UpdateRetentionCleanupRequest cleanup{install.root, candidates, request.archiveLimits, 70U};
+    const std::string marker = "horo-update-retention-v1\nobsolete\n" + Horo::FormatSha256(obsolete.package.digest) + '\n';
+    REQUIRE(files.AppendPrivateDurable(install.root / "versions" / "obsolete.cleanup-pending", 0U, std::as_bytes(std::span{marker}))
+                .HasValue());
+    REQUIRE(files.RemoveDurable(obsolete.stageRoot / "bin" / "editor").HasValue());
+    auto resumed = ApplyUpdateRetention(cleanup, files, verifier, host);
+    REQUIRE(resumed.HasValue());
+    CHECK_FALSE(std::filesystem::exists(obsolete.stageRoot));
+    CHECK_FALSE(std::filesystem::exists(install.root / "versions" / "obsolete.cleanup-pending"));
+}
+
+TEST_CASE("Retention refuses active deletion, unknown files, and a concurrent lock", "[release][update][retention]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = Request(install, files, verifier);
+    auto obsolete = Version(install, "obsolete", files, verifier);
+    Host host;
+    REQUIRE(ActivateVerifiedUpdate(request, files, verifier, host).HasValue());
+    const std::array candidates{
+        UpdateRetentionCandidate{{{"new"}, 40U, 10U, UpdateRetentionRole::Active}, request.staged},
+        UpdateRetentionCandidate{{{"old"}, 30U, 9U, UpdateRetentionRole::LastKnownGood}, request.current},
+        UpdateRetentionCandidate{{{"obsolete"}, 20U, 1U, UpdateRetentionRole::Obsolete}, obsolete},
+    };
+    const UpdateRetentionCleanupRequest cleanup{install.root, candidates, request.archiveLimits, 70U};
+    {
+        auto held = files.TryAcquireExclusive(install.root / ".activation.lock", "held");
+        REQUIRE(held.HasValue());
+        CHECK(ApplyUpdateRetention(cleanup, files, verifier, host).HasError());
+    }
+    {
+        std::ofstream extra(obsolete.stageRoot / "foreign.txt");
+        extra << "unowned";
+    }
+    CHECK(ApplyUpdateRetention(cleanup, files, verifier, host).HasError());
+    CHECK(std::filesystem::exists(obsolete.stageRoot / "foreign.txt"));
+    CHECK(std::filesystem::exists(obsolete.packageFile));
 }
 
 TEST_CASE("A concurrent installation lock prevents a second activation", "[release][update]") {
