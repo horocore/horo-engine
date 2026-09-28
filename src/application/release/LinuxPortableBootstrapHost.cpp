@@ -8,6 +8,7 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include <span>
 #include <string_view>
 #include <sys/utsname.h>
 #include <system_error>
@@ -26,9 +27,10 @@ namespace Horo::Release {
                 return part == "." || part == "..";
             }))
                 return false;
-            std::error_code error;
-            if (!std::filesystem::is_directory(std::filesystem::symlink_status(request.installationRoot, error)) || error ||
-                !std::filesystem::is_directory(std::filesystem::symlink_status(versions, error)) || error)
+            if (std::error_code error;
+                !std::filesystem::is_directory(std::filesystem::symlink_status(request.installationRoot, error)) || error)
+                return false;
+            if (std::error_code error; !std::filesystem::is_directory(std::filesystem::symlink_status(versions, error)) || error)
                 return false;
             auto validated = ValidateDistributionPackageSelection(selection.artifact, selection.format);
             return validated.HasValue() && validated.Value() == selection && selection.format == DistributionPackageFormat::TarGzip &&
@@ -61,18 +63,19 @@ namespace Horo::Release {
         /** @brief Looks at a path without following a symlink or mistaking an error for absence. */
         [[nodiscard]] Result<bool> Present(const std::filesystem::path &path) {
             std::error_code error;
-            const auto status = std::filesystem::symlink_status(path, error);
-            if (status.type() == std::filesystem::file_type::not_found && (!error || error == std::errc::no_such_file_or_directory))
+            if (const auto status = std::filesystem::symlink_status(path, error);
+                status.type() == std::filesystem::file_type::not_found && (!error || error == std::errc::no_such_file_or_directory))
                 return Result<bool>::Success(false);
             return error ? Result<bool>::Failure(MakeError(BootstrapInstallationErrors::UninstallFailed)) : Result<bool>::Success(true);
         }
 
         /** @brief Validates the exact regular single-link bytes before unlinking a declared file. */
         [[nodiscard]] bool MatchesFile(const std::filesystem::path &path, const UpdateStagedFile &file) {
-            std::error_code error;
-            if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error)) || error ||
-                std::filesystem::hard_link_count(path, error) != 1U || error || std::filesystem::file_size(path, error) != file.size ||
-                error)
+            if (std::error_code error; !std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error)) || error)
+                return false;
+            if (std::error_code error; std::filesystem::hard_link_count(path, error) != 1U || error)
+                return false;
+            if (std::error_code error; std::filesystem::file_size(path, error) != file.size || error)
                 return false;
             std::ifstream input(path, std::ios::binary);
             if (!input)
@@ -96,13 +99,14 @@ namespace Horo::Release {
             const auto invalid = [] {
                 return Result<std::vector<std::filesystem::path>>::Failure(MakeError(BootstrapInstallationErrors::UninstallFailed));
             };
-            std::error_code error;
-            if (!std::filesystem::is_directory(std::filesystem::symlink_status(request.candidate.stageRoot, error)) || error)
+            if (std::error_code error;
+                !std::filesystem::is_directory(std::filesystem::symlink_status(request.candidate.stageRoot, error)) || error)
                 return invalid();
+            std::error_code error;
             std::map<std::string, const UpdateStagedFile *, std::less<>> files;
             std::set<std::string, std::less<>> parents;
             for (const auto &file : request.candidate.inventory) {
-                if (!files.emplace(file.path, &file).second)
+                if (!files.try_emplace(file.path, &file).second)
                     return invalid();
                 std::size_t separator = file.path.find('/');
                 while (separator != std::string::npos) {
@@ -138,10 +142,51 @@ namespace Horo::Release {
 
         /** @brief Removes a now-empty directory and syncs its parent without touching adjacent data. */
         [[nodiscard]] Result<void> RemoveDirectory(const std::filesystem::path &path, NativeDurableFileSystem &files) {
-            std::error_code error;
-            if (!std::filesystem::remove(path, error) || error)
+            if (std::error_code error; !std::filesystem::remove(path, error) || error)
                 return Result<void>::Failure(MakeError(BootstrapInstallationErrors::UninstallFailed));
             return files.SyncDirectory(path.parent_path());
+        }
+
+        /** @brief Rechecks authenticated owned artifacts before any uninstall deletion. */
+        [[nodiscard]] bool VerifiedOwnedArtifacts(const BootstrapInstallationRequest &request, const std::filesystem::path &marker,
+                                                  const Security::ArtifactVerifier &verifier) {
+            if (auto present = Present(marker);
+                present.HasError() ||
+                (present.Value() &&
+                 VerifyReadyUpdateStage(request.candidate.package, request.candidate.checkpoint, request.candidate.packageFile,
+                                        request.candidate.stageRoot, request.candidate.inventory, request.archiveLimits, verifier)
+                     .HasError()))
+                return false;
+            if (auto present = Present(request.candidate.packageFile);
+                present.HasError() ||
+                (present.Value() && VerifyCompletedUpdateTransfer(request.candidate.package, request.candidate.checkpoint,
+                                                                  request.candidate.packageFile, verifier)
+                                        .HasError()))
+                return false;
+            return true;
+        }
+
+        /** @brief Removes only the already checked stage tree and its ready marker. */
+        [[nodiscard]] Result<void> RemoveOwnedStage(const BootstrapInstallationRequest &request, const std::filesystem::path &marker,
+                                                    const bool stagePresent, const std::span<const std::filesystem::path> directories,
+                                                    NativeDurableFileSystem &files) {
+            const auto failed = [] {
+                return Result<void>::Failure(MakeError(BootstrapInstallationErrors::UninstallFailed));
+            };
+            if (auto present = Present(marker); present.HasError() || (present.Value() && files.RemoveDurable(marker).HasError()))
+                return failed();
+            if (!stagePresent)
+                return Result<void>::Success();
+            for (const auto &file : request.candidate.inventory) {
+                const auto path = request.candidate.stageRoot / std::filesystem::path(file.path);
+                if (auto present = Present(path); present.HasError() || (present.Value() && files.RemoveDurable(path).HasError()))
+                    return failed();
+            }
+            for (const auto &directory : directories) {
+                if (auto removed = RemoveDirectory(directory, files); removed.HasError())
+                    return removed;
+            }
+            return RemoveDirectory(request.candidate.stageRoot, files);
         }
     }  // namespace
 
@@ -158,13 +203,13 @@ namespace Horo::Release {
         utsname system{};
         if (uname(&system) != 0 || std::string_view{system.sysname} != "Linux" || !KernelAtLeast(system.release, policy_))
             return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PreflightFailed));
-        const auto expectedMachine =
-            request.candidate.package.selection.artifact.architecture == DistributionArchitecture::X64 ? "x86_64" : "aarch64";
-        if (std::string_view{system.machine} != expectedMachine || access(request.installationRoot.c_str(), W_OK | X_OK) != 0 ||
+        if (const auto expectedMachine =
+                request.candidate.package.selection.artifact.architecture == DistributionArchitecture::X64 ? "x86_64" : "aarch64";
+            std::string_view{system.machine} != expectedMachine || access(request.installationRoot.c_str(), W_OK | X_OK) != 0 ||
             access(request.candidate.stageRoot.parent_path().c_str(), W_OK | X_OK) != 0)
             return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PreflightFailed));
-        auto available = files_.AvailableBytes(request.installationRoot);
-        if (available.HasError() || available.Value() < policy_.minimumFreeBytes)
+        if (auto available = files_.AvailableBytes(request.installationRoot);
+            available.HasError() || available.Value() < policy_.minimumFreeBytes)
             return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PreflightFailed));
         return Result<void>::Success();
     }
@@ -189,19 +234,7 @@ namespace Horo::Release {
             return failed();
         auto marker = request.candidate.stageRoot;
         marker += ".ready";
-        if (auto present = Present(marker); present.HasError())
-            return failed();
-        else if (present.Value()) {
-            if (VerifyReadyUpdateStage(request.candidate.package, request.candidate.checkpoint, request.candidate.packageFile,
-                                       request.candidate.stageRoot, request.candidate.inventory, request.archiveLimits, verifier_)
-                    .HasError())
-                return failed();
-        }
-        if (auto present = Present(request.candidate.packageFile); present.HasError())
-            return failed();
-        else if (present.Value() && VerifyCompletedUpdateTransfer(request.candidate.package, request.candidate.checkpoint,
-                                                                  request.candidate.packageFile, verifier_)
-                                        .HasError())
+        if (!VerifiedOwnedArtifacts(request, marker, verifier_))
             return failed();
         auto stagePresent = Present(request.candidate.stageRoot);
         if (stagePresent.HasError())
@@ -213,25 +246,8 @@ namespace Horo::Release {
                 return failed();
             directories = std::move(remaining).Value();
         }
-        if (auto present = Present(marker); present.HasError())
-            return failed();
-        else if (present.Value() && files_.RemoveDurable(marker).HasError())
-            return failed();
-        if (stagePresent.Value()) {
-            for (const auto &file : request.candidate.inventory) {
-                const auto path = request.candidate.stageRoot / std::filesystem::path(file.path);
-                if (auto present = Present(path); present.HasError())
-                    return failed();
-                else if (present.Value() && files_.RemoveDurable(path).HasError())
-                    return failed();
-            }
-            for (const auto &directory : directories) {
-                if (auto removed = RemoveDirectory(directory, files_); removed.HasError())
-                    return removed;
-            }
-            if (auto removed = RemoveDirectory(request.candidate.stageRoot, files_); removed.HasError())
-                return removed;
-        }
+        if (auto removed = RemoveOwnedStage(request, marker, stagePresent.Value(), directories, files_); removed.HasError())
+            return removed;
         if (auto present = Present(request.candidate.packageFile); present.HasError())
             return failed();
         else if (present.Value() && files_.RemoveDurable(request.candidate.packageFile).HasError())
