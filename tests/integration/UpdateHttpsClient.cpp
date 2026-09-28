@@ -79,7 +79,7 @@ int main(const int argc, const char *const argv[]) {
         return 3;
     std::uint64_t durableProgress{};
     const auto downloaded =
-        Horo::Release::DownloadUpdatePackageHttps(package, paths, limits, files, Verifier(), {}, {.certificateAuthorityBundle = caBundle},
+        Horo::Release::DownloadUpdatePackageHttps({package, paths, limits, {.certificateAuthorityBundle = caBundle}}, files, Verifier(), {},
                                                   [&](const std::uint64_t durable, const std::uint64_t total) {
         if (total == package.size)
             durableProgress = durable;

@@ -13,7 +13,7 @@ namespace Horo::Release {
     class UpdateZipPackageProducer final : public IReleasePackageProducer {
     public:
         /** @brief Stores the host's archive resource limits. @param limits Nonzero archive limits. */
-        explicit UpdateZipPackageProducer(UpdateArchiveLimits limits) noexcept;
+        explicit UpdateZipPackageProducer(const UpdateArchiveLimits &limits) noexcept;
 
         /** @copydoc IReleasePackageProducer::Format */
         [[nodiscard]] DistributionPackageFormat Format() const noexcept override;
