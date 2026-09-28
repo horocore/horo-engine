@@ -3,15 +3,29 @@
 #include "Horo/Release/UpdateRetentionErrors.h"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 
 namespace Horo::Release {
+    namespace {
+        /** @brief Hashes borrowed package IDs for the duration of one retention plan. */
+        struct TransparentStringHash final {
+            using is_transparent = void;
+
+            [[nodiscard]] std::size_t operator()(const std::string_view value) const noexcept {
+                return std::hash<std::string_view>{}(value);
+            }
+        };
+    }  // namespace
+
     /** @copydoc PlanUpdateRetention */
     Result<UpdateRetentionPlan> PlanUpdateRetention(const std::span<const UpdateRetentionVersion> versions,
                                                     const std::uint64_t maximumBytes) {
-        std::unordered_set<std::string> seen;
+        using enum UpdateRetentionRole;
+        std::unordered_set<std::string_view, TransparentStringHash, std::equal_to<>> seen;
         seen.reserve(versions.size());
         std::vector<const UpdateRetentionVersion *> obsolete;
         obsolete.reserve(versions.size());
@@ -25,15 +39,15 @@ namespace Horo::Release {
                 return Result<UpdateRetentionPlan>::Failure(MakeError(UpdateRetentionErrors::InvalidSnapshot));
             occupied += version.occupiedBytes;
             switch (version.role) {
-                case UpdateRetentionRole::Active:
+                case Active:
                     ++activeCount;
                     protectedBytes += version.occupiedBytes;
                     break;
-                case UpdateRetentionRole::LastKnownGood:
+                case LastKnownGood:
                     ++lastKnownGoodCount;
                     protectedBytes += version.occupiedBytes;
                     break;
-                case UpdateRetentionRole::Obsolete:
+                case Obsolete:
                     obsolete.push_back(&version);
                     break;
                 default:

@@ -128,8 +128,7 @@ namespace Horo::Release {
 
         /** @brief Preserves the prior rollback pin in the journal before activation can replace it. */
         [[nodiscard]] Result<std::optional<std::string>> ReadPriorPin(const ActivationPaths &paths) {
-            auto prepared = PendingExists(paths.lastKnownGoodPrepared);
-            if (prepared.HasError() || prepared.Value())
+            if (auto prepared = PendingExists(paths.lastKnownGoodPrepared); prepared.HasError() || prepared.Value())
                 return Result<std::optional<std::string>>::Failure(MakeError(UpdateActivationErrors::PendingMismatch));
             auto present = PendingExists(paths.lastKnownGood);
             if (present.HasError())
@@ -143,7 +142,7 @@ namespace Horo::Release {
         }
 
         /** @brief Rejects a journal that cannot prove its exact previous pin state. */
-        [[nodiscard]] Result<std::optional<std::string>> DecodePriorPin(const std::string &journal, const std::string &previous,
+        [[nodiscard]] Result<std::optional<std::string>> DecodePriorPin(const std::string_view journal, const std::string &previous,
                                                                         const std::string &target) {
             const std::string prefix = std::string{PendingHeader} + previous + target;
             if (!journal.starts_with(prefix))
