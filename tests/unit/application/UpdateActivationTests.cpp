@@ -157,6 +157,9 @@ namespace {
 
         [[nodiscard]] Horo::Result<void> RemoveOwnedVersion(const BootstrapInstallationRequest &request) override {
             ++ownedRemovals;
+            if (lockProbeFiles != nullptr)
+                lockHeldDuringRemoval =
+                    lockProbeFiles->TryAcquireExclusive(request.installationRoot / ".activation.lock", "probe").HasError();
             if (!ownedRemovalSucceeds)
                 return Horo::Result<void>::Failure(Horo::Error{Horo::ErrorCode{"test.remove_owned"}, Horo::ErrorDomainId{"test"}});
             if (removeFiles) {
@@ -190,6 +193,8 @@ namespace {
         bool unregistrationSucceeds{true};
         bool ownedRemovalSucceeds{true};
         bool removeFiles{false};
+        Horo::NativeDurableFileSystem *lockProbeFiles{};
+        bool lockHeldDuringRemoval{};
         unsigned stops{};
         unsigned probes{};
         unsigned preflights{};
@@ -555,6 +560,7 @@ TEST_CASE("Interrupted uninstall remains inactive and retries the same owned pac
     auto verifier = Verifier();
     auto request = BootstrapRequest(install, files, verifier);
     Host host;
+    host.lockProbeFiles = &files;
     REQUIRE(BootstrapVerifiedInstallation(request, files, verifier, host).HasValue());
     host.ownedRemovalSucceeds = false;
     CHECK(UninstallVerifiedInstallation(request, files, verifier, host).HasError());
@@ -567,6 +573,7 @@ TEST_CASE("Interrupted uninstall remains inactive and retries the same owned pac
     CHECK_FALSE(std::filesystem::exists(install.root / "bootstrap-uninstall.pending"));
     CHECK(host.unregistrations == 2U);
     CHECK(host.ownedRemovals == 2U);
+    CHECK(host.lockHeldDuringRemoval);
 }
 
 TEST_CASE("Failed integration removal retains an inactive uninstall journal", "[release][install]") {
