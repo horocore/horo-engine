@@ -102,7 +102,9 @@ namespace Horo::Release {
         if (EqualAsciiIgnoreCase(name, "content-range")) {
             if (rangeSeen_)
                 return false;
-            std::uint64_t start{}, end{}, total{};
+            std::uint64_t start{};
+            std::uint64_t end{};
+            std::uint64_t total{};
             if (!ParseContentRange(value, start, end, total))
                 return false;
             rangeStart_ = start;

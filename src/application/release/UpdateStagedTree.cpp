@@ -24,14 +24,14 @@ namespace Horo::Release {
             if (!input)
                 return false;
             Sha256Builder hash;
-            std::array<std::byte, 64U * 1024U> buffer{};
+            std::array<char, 64U * 1024U> buffer{};
             std::uint64_t total = 0U;
             while (input && total < expected.size) {
                 const auto remaining = expected.size - total;
                 const auto count = static_cast<std::streamsize>(std::min<std::uint64_t>(buffer.size(), remaining));
-                input.read(reinterpret_cast<char *>(buffer.data()), count);
+                input.read(buffer.data(), count);
                 const auto read = input.gcount();
-                if (read <= 0 || !hash.Update(std::span{buffer}.first(static_cast<std::size_t>(read))))
+                if (read <= 0 || !hash.Update(std::as_bytes(std::span{buffer}.first(static_cast<std::size_t>(read)))))
                     return false;
                 total += static_cast<std::uint64_t>(read);
             }

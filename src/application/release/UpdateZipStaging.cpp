@@ -39,7 +39,8 @@ namespace Horo::Release {
         };
 
         /** @brief Reads at an exact offset without exposing native file handles to miniz. */
-        [[nodiscard]] std::size_t ReadArchive(void *opaque, const mz_uint64 offset, void *buffer, const std::size_t size) {
+        [[nodiscard]] std::size_t ReadArchive(void *opaque, const mz_uint64 offset,    // NOSONAR: miniz C callback ABI.
+                                              void *buffer, const std::size_t size) {  // NOSONAR: miniz requires void*.
             auto &input = *static_cast<std::ifstream *>(opaque);
             if (offset > static_cast<mz_uint64>(std::numeric_limits<std::streamoff>::max()) ||
                 size > static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max()))
@@ -290,8 +291,8 @@ namespace Horo::Release {
                 }
             }
             std::error_code error;
-            const auto parent = std::filesystem::symlink_status(stageRoot.parent_path(), error);
-            if (error || !std::filesystem::is_directory(parent))
+            if (const auto parent = std::filesystem::symlink_status(stageRoot.parent_path(), error);
+                error || !std::filesystem::is_directory(parent))
                 return false;
             const bool stageExists = std::filesystem::exists(stageRoot, error);
             return !error && !stageExists;
@@ -299,7 +300,7 @@ namespace Horo::Release {
 
         /** @brief Reserves capacity for the authenticated expanded archive before creating a staged tree. */
         [[nodiscard]] Result<void> CheckStageCapacity(const std::vector<UpdateArchiveEntry> &index, const std::filesystem::path &stageRoot,
-                                                      const UpdateArchiveLimits &limits, NativeDurableFileSystem &files) {
+                                                      const UpdateArchiveLimits &limits, const NativeDurableFileSystem &files) {
             std::uint64_t expandedBytes = 0U;
             for (const auto &entry : index)
                 expandedBytes += entry.expandedBytes;  // ReadIndex already bounded the total.
@@ -333,10 +334,9 @@ namespace Horo::Release {
     }  // namespace
 
     /** @copydoc StageVerifiedZipUpdate */
-    Result<std::filesystem::path> StageVerifiedZipUpdate(const UpdatePackageRecord &package, const UpdateTransferCheckpoint &checkpoint,
-                                                         const std::filesystem::path &packageFile, const std::filesystem::path &stageRoot,
-                                                         const UpdateArchiveLimits &limits, NativeDurableFileSystem &files,
+    Result<std::filesystem::path> StageVerifiedZipUpdate(const VerifiedZipUpdateRequest &request, NativeDurableFileSystem &files,
                                                          const Security::ArtifactVerifier &verifier, CancellationToken cancellation) {
+        const auto &[package, checkpoint, packageFile, stageRoot, limits] = request;
         const auto failed = [](const ErrorCodeDescriptor &code) {
             return Result<std::filesystem::path>::Failure(MakeError(code));
         };
@@ -377,8 +377,8 @@ namespace Horo::Release {
             return Result<std::filesystem::path>::Failure(inventory.ErrorValue());
         if (auto synced = SyncStageDirectories(stageRoot, files); synced.HasError())
             return Result<std::filesystem::path>::Failure(synced.ErrorValue());
-        auto published = PublishVerifiedUpdateStage(package, checkpoint, packageFile, stageRoot, inventory.Value(), limits, files, verifier,
-                                                    cancellation);
+        auto published = PublishVerifiedUpdateStage({package, checkpoint, packageFile, stageRoot, inventory.Value(), limits}, files,
+                                                    verifier, cancellation);
         if (published.HasValue())
             cleanup.active = false;
         return published;

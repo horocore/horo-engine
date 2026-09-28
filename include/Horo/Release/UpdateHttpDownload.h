@@ -22,21 +22,27 @@ namespace Horo::Release {
     /** @brief Reports durable package bytes and the exact signed total on the calling worker thread. */
     using UpdateDownloadProgress = std::function<void(std::uint64_t, std::uint64_t)>;
 
+    /** @brief Immutable inputs for one HTTPS transfer; referenced records must outlive the call. */
+    struct UpdateHttpsDownloadRequest final {
+        const UpdatePackageRecord &package;
+        const UpdateDownloadPaths &paths;
+        const UpdateDownloadLimits &limits;
+        UpdateHttpDownloadPolicy policy{};
+    };
+
     /**
      * @brief Downloads the signed package over HTTPS into private durable storage and verifies complete bytes.
-     * @param package Authenticated update package selected by discovery.
-     * @param paths Private partial and checkpoint files owned by the host.
-     * @param limits Host package-size and free-space-reserve policy.
+     * @param request Authenticated package, private paths, resource limits, and HTTPS policy.
      * @param files Native durable filesystem kept alive for the call.
      * @param verifier Trusted publisher signature verifier.
      * @param cancellation Cooperative cancellation token.
-     * @param policy HTTPS timeouts and optional additional CA trust bundle; TLS verification is always enabled.
      * @param progress Optional callback invoked only after bytes and checkpoint are durable.
      * @return Verified complete-package checkpoint, or typed failure with no staged-ready marker.
      * @note The host runs this blocking adapter on a background job and keeps the private directory quiescent.
      */
-    [[nodiscard]] Result<UpdateTransferCheckpoint> DownloadUpdatePackageHttps(
-        const UpdatePackageRecord &package, UpdateDownloadPaths paths, const UpdateDownloadLimits &limits, NativeDurableFileSystem &files,
-        const Security::ArtifactVerifier &verifier, CancellationToken cancellation, const UpdateHttpDownloadPolicy &policy = {},
-        const UpdateDownloadProgress &progress = {});
+    [[nodiscard]] Result<UpdateTransferCheckpoint> DownloadUpdatePackageHttps(const UpdateHttpsDownloadRequest &request,
+                                                                              NativeDurableFileSystem &files,
+                                                                              const Security::ArtifactVerifier &verifier,
+                                                                              CancellationToken cancellation,
+                                                                              const UpdateDownloadProgress &progress = {});
 }  // namespace Horo::Release
