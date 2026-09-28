@@ -69,11 +69,10 @@ namespace Horo::Release {
                 !VersionPathsMatch(request.staged, paths) || request.current.packageFile == request.staged.stageRoot ||
                 request.staged.packageFile == request.current.stageRoot)
                 return false;
-            const auto isDirectory = [](const std::filesystem::path &path) {
+            if (const auto isDirectory = [](const std::filesystem::path &path) {
                 std::error_code error;
                 return std::filesystem::is_directory(std::filesystem::symlink_status(path, error)) && !error;
-            };
-            if (!isDirectory(paths.root) || !isDirectory(paths.versions))
+            }; !isDirectory(paths.root) || !isDirectory(paths.versions))
                 return false;
             auto currentSelection = ValidateDistributionPackageSelection(current, request.current.package.selection.format);
             auto stagedSelection = ValidateDistributionPackageSelection(staged, request.staged.package.selection.format);
