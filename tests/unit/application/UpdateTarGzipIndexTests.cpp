@@ -1,0 +1,222 @@
+#include "Horo/Release/UpdateStageReady.h"
+
+#include <algorithm>
+#include <array>
+#include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <miniz.h>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+using namespace Horo::Release;
+
+namespace {
+    class TemporaryPackage final {
+    public:
+        TemporaryPackage()
+            : path(std::filesystem::temp_directory_path() /
+                   ("horo-targzip-index-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+            std::filesystem::create_directories(path);
+        }
+
+        ~TemporaryPackage() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+
+        std::filesystem::path path;
+    };
+
+    class AcceptingProvider final : public Horo::Security::SignatureProvider {
+    public:
+        [[nodiscard]] bool Supports(Horo::Security::SignatureAlgorithm) const noexcept override {
+            return true;
+        }
+
+        [[nodiscard]] Horo::Result<void> Verify(Horo::Security::SignatureAlgorithm, std::span<const std::byte>, const Horo::Sha256Digest &,
+                                                std::span<const std::byte>) const override {
+            return Horo::Result<void>::Success();
+        }
+    };
+
+    [[nodiscard]] Horo::Security::ArtifactVerifier Verifier() {
+        auto roots = std::make_shared<Horo::Security::TrustedRootStore>();
+        std::vector<std::byte> key(65U, std::byte{1});
+        key.front() = std::byte{0x04};
+        REQUIRE(roots->Add({.publisherId = "com.horo.updates", .keyId = "key-1", .publicKey = std::move(key)}).HasValue());
+        return {std::make_shared<AcceptingProvider>(), std::move(roots)};
+    }
+
+    void PutOctal(const std::span<unsigned char> field, std::uint64_t value) {
+        std::ranges::fill(field, static_cast<unsigned char>('0'));
+        field.back() = 0U;
+        for (std::size_t position = field.size() - 1U; position != 0U && value != 0U;) {
+            --position;
+            field[position] = static_cast<unsigned char>('0' + value % 8U);
+            value /= 8U;
+        }
+        REQUIRE(value == 0U);
+    }
+
+    void AppendTarFile(std::vector<unsigned char> &tar, const std::string &name, const std::string &content,
+                       const unsigned char type = '0') {
+        REQUIRE(name.size() < 100U);
+        std::array<unsigned char, 512> header{};
+        std::ranges::copy(name, header.begin());
+        PutOctal(std::span{header}.subspan(100, 8), 0644U);
+        PutOctal(std::span{header}.subspan(124, 12), content.size());
+        std::ranges::fill(std::span{header}.subspan(148, 8), static_cast<unsigned char>(' '));
+        header[156] = type;
+        std::ranges::copy(std::string_view{"ustar\0", 6U}, header.begin() + 257);
+        header[263] = '0';
+        header[264] = '0';
+        std::uint64_t checksum = 0U;
+        for (const auto value : header)
+            checksum += value;
+        PutOctal(std::span{header}.subspan(148, 8), checksum);
+        tar.insert(tar.end(), header.begin(), header.end());
+        tar.insert(tar.end(), content.begin(), content.end());
+        tar.resize(tar.size() + (512U - content.size() % 512U) % 512U, 0U);
+    }
+
+    [[nodiscard]] std::vector<unsigned char> Tar(const std::string &name = "bin/editor", const unsigned char type = '0') {
+        std::vector<unsigned char> tar;
+        AppendTarFile(tar, "horo-update-files-v1.txt", "inventory");
+        AppendTarFile(tar, name, "editor", type);
+        tar.resize(tar.size() + 1024U, 0U);
+        return tar;
+    }
+
+    void PutLittle32(std::vector<unsigned char> &bytes, const std::uint32_t value) {
+        for (unsigned shift = 0U; shift < 32U; shift += 8U)
+            bytes.push_back(static_cast<unsigned char>(value >> shift));
+    }
+
+    [[nodiscard]] std::vector<unsigned char> Gzip(const std::vector<unsigned char> &tar) {
+        std::vector<unsigned char> compressed(mz_compressBound(tar.size()));
+        mz_stream stream{};
+        REQUIRE(mz_deflateInit2(&stream, MZ_DEFAULT_LEVEL, MZ_DEFLATED, -MZ_DEFAULT_WINDOW_BITS, 8, MZ_DEFAULT_STRATEGY) == MZ_OK);
+        stream.next_in = tar.data();
+        stream.avail_in = static_cast<mz_uint>(tar.size());
+        stream.next_out = compressed.data();
+        stream.avail_out = static_cast<mz_uint>(compressed.size());
+        REQUIRE(mz_deflate(&stream, MZ_FINISH) == MZ_STREAM_END);
+        compressed.resize(stream.total_out);
+        REQUIRE(mz_deflateEnd(&stream) == MZ_OK);
+        std::vector<unsigned char> gzip{0x1fU, 0x8bU, 8U, 0U, 0U, 0U, 0U, 0U, 0U, 255U};
+        gzip.insert(gzip.end(), compressed.begin(), compressed.end());
+        PutLittle32(gzip, static_cast<std::uint32_t>(mz_crc32(MZ_CRC32_INIT, tar.data(), tar.size())));
+        PutLittle32(gzip, static_cast<std::uint32_t>(tar.size()));
+        return gzip;
+    }
+
+    struct SignedPackage final {
+        UpdatePackageRecord record;
+        UpdateTransferCheckpoint checkpoint;
+        std::filesystem::path file;
+    };
+
+    [[nodiscard]] SignedPackage Sign(const TemporaryPackage &temporary, const std::vector<unsigned char> &bytes) {
+        auto version = ParseReleaseVersion("1.0.0");
+        REQUIRE(version.HasValue());
+        DistributionArtifactIdentity artifact{{DistributionProductKind::Editor, {}},
+                                              EngineProductVersion{std::move(version).Value()},
+                                              DistributionPlatform::Linux,
+                                              DistributionArchitecture::X64,
+                                              {"build-linux"},
+                                              {"editor-linux"},
+                                              DistributionInstallationId{"horo-editor"},
+                                              DistributionArtifactClass::InstallableProduct};
+        auto selection = ValidateDistributionPackageSelection(artifact, DistributionPackageFormat::TarGzip);
+        REQUIRE(selection.HasValue());
+        UpdatePackageRecord record;
+        record.selection = std::move(selection).Value();
+        record.url = "https://updates.example.test/editor.tar.gz";
+        record.size = bytes.size();
+        record.digest = Horo::ComputeSha256(std::as_bytes(std::span{bytes}));
+        record.signature = {.publisherId = "com.horo.updates",
+                            .keyId = "key-1",
+                            .artifactDigest = record.digest,
+                            .signature = std::vector<std::byte>(64U, std::byte{1})};
+        const UpdateTransferResponse response{.status = 200U,
+                                              .requestedUrl = record.url,
+                                              .effectiveUrl = record.url,
+                                              .strongEtag = "\"linux-1\"",
+                                              .contentLength = record.size};
+        auto plan = PlanUpdateTransfer(record, response, std::nullopt);
+        REQUIRE(plan.HasValue());
+        auto checkpoint = AdvanceUpdateTransfer(plan.Value(), record.size);
+        REQUIRE(checkpoint.HasValue());
+        auto file = temporary.path / "editor.tar.gz";
+        std::ofstream output(file, std::ios::binary);
+        output.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        output.close();
+        return {std::move(record), std::move(checkpoint).Value(), std::move(file)};
+    }
+
+    constexpr UpdateArchiveLimits Limits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 2048U};
+}  // namespace
+
+TEST_CASE("Signed Linux tar gzip is indexed before any extraction", "[release][update][tar]") {
+    TemporaryPackage temporary;
+    auto package = Sign(temporary, Gzip(Tar()));
+    auto verifier = Verifier();
+    auto result = IndexVerifiedTarGzipPackage(package.record, package.checkpoint, package.file, Limits, verifier);
+    REQUIRE(result.HasValue());
+    REQUIRE(result.Value().size() == 2U);
+    CHECK(result.Value()[1].path == "bin/editor");
+    CHECK(result.Value()[1].expandedBytes == 6U);
+}
+
+TEST_CASE("Signed tar gzip rejects traversal and links", "[release][update][tar]") {
+    TemporaryPackage temporary;
+    auto verifier = Verifier();
+    auto traversal = Sign(temporary, Gzip(Tar("../escape")));
+    CHECK(IndexVerifiedTarGzipPackage(traversal.record, traversal.checkpoint, traversal.file, Limits, verifier).HasError());
+    auto link = Sign(temporary, Gzip(Tar("bin/editor", '2')));
+    CHECK(IndexVerifiedTarGzipPackage(link.record, link.checkpoint, link.file, Limits, verifier).HasError());
+}
+
+TEST_CASE("Signed tar gzip rejects corrupted trailer and oversized payload", "[release][update][tar]") {
+    TemporaryPackage temporary;
+    auto bytes = Gzip(Tar());
+    bytes[bytes.size() - 8U] ^= 1U;
+    auto package = Sign(temporary, bytes);
+    auto verifier = Verifier();
+    CHECK(IndexVerifiedTarGzipPackage(package.record, package.checkpoint, package.file, Limits, verifier).HasError());
+    package = Sign(temporary, Gzip(Tar()));
+    auto small = Limits;
+    small.maximumExpandedBytes = 4U;
+    CHECK(IndexVerifiedTarGzipPackage(package.record, package.checkpoint, package.file, small, verifier).HasError());
+}
+
+TEST_CASE("Signed tar gzip rejects malformed ustar checksums and incomplete termination", "[release][update][tar]") {
+    TemporaryPackage temporary;
+    auto verifier = Verifier();
+    auto tar = Tar();
+    tar[0] ^= 1U;
+    auto package = Sign(temporary, Gzip(tar));
+    CHECK(IndexVerifiedTarGzipPackage(package.record, package.checkpoint, package.file, Limits, verifier).HasError());
+    tar = Tar();
+    tar.resize(tar.size() - 512U);
+    package = Sign(temporary, Gzip(tar));
+    CHECK(IndexVerifiedTarGzipPackage(package.record, package.checkpoint, package.file, Limits, verifier).HasError());
+}
+
+TEST_CASE("Signed tar gzip refuses bytes changed after signature verification", "[release][update][tar]") {
+    TemporaryPackage temporary;
+    auto package = Sign(temporary, Gzip(Tar()));
+    std::ofstream changed(package.file, std::ios::binary | std::ios::app);
+    changed.put('x');
+    changed.close();
+    auto verifier = Verifier();
+    CHECK(IndexVerifiedTarGzipPackage(package.record, package.checkpoint, package.file, Limits, verifier).HasError());
+}

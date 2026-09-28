@@ -12,6 +12,7 @@
 
 #include <filesystem>
 #include <span>
+#include <vector>
 
 namespace Horo::Release {
     /** @brief Verified package and tree inputs for one durable ready-marker publication. */
@@ -77,4 +78,20 @@ namespace Horo::Release {
                                                                        NativeDurableFileSystem &files,
                                                                        const Security::ArtifactVerifier &verifier,
                                                                        CancellationToken cancellation);
+
+    /**
+     * @brief Authenticates and indexes a canonical gzip-wrapped ustar package without extracting it.
+     * @param package Signed Linux tar.gz package record.
+     * @param checkpoint Complete durable checkpoint for packageFile.
+     * @param packageFile Private, quiescent package file.
+     * @param limits Maximum file count, file size, and expanded payload bytes.
+     * @param verifier Trusted publisher signature verifier.
+     * @return Validated regular-file/directory index or a typed archive failure.
+     * @note This is a preflight reader. A separate staging transaction must verify the internal file inventory and extract bytes.
+     */
+    [[nodiscard]] Result<std::vector<UpdateArchiveEntry>> IndexVerifiedTarGzipPackage(const UpdatePackageRecord &package,
+                                                                                      const UpdateTransferCheckpoint &checkpoint,
+                                                                                      const std::filesystem::path &packageFile,
+                                                                                      const UpdateArchiveLimits &limits,
+                                                                                      const Security::ArtifactVerifier &verifier);
 }  // namespace Horo::Release
