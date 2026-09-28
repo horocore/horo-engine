@@ -55,11 +55,11 @@ namespace Horo::Release {
             if (prior != base.end() && SameFile(*prior->second, target)) {
                 if (patch != delta.end())
                     return mismatch();
-                plan.targetFiles.push_back({target, UpdateDeltaFileSource::VerifiedBase});
+                plan.targetFiles.emplace_back(target, UpdateDeltaFileSource::VerifiedBase);
             } else {
                 if (patch == delta.end() || !SameFile(*patch->second, target))
                     return mismatch();
-                plan.targetFiles.push_back({target, UpdateDeltaFileSource::VerifiedDelta});
+                plan.targetFiles.emplace_back(target, UpdateDeltaFileSource::VerifiedDelta);
                 delta.erase(patch);
             }
         }
@@ -78,8 +78,7 @@ namespace Horo::Release {
         targetFiles.reserve(plan.targetFiles.size());
         for (const auto &file : plan.targetFiles)
             targetFiles.push_back(file.target);
-        auto identity = InventoryIdentity(targetFiles, limits);
-        if (identity.HasError() || identity.Value() != plan.targetInventoryDigest)
+        if (auto identity = InventoryIdentity(targetFiles, limits); identity.HasError() || identity.Value() != plan.targetInventoryDigest)
             return Result<void>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
         return VerifyUpdateStagedTree(stageRoot, targetFiles, limits);
     }
