@@ -545,3 +545,9 @@ namespace {
         CHECK(selected.ErrorValue().code.Value() == SaveErrors::ArchiveChunkHashMismatch.code.Value());
     }
 }  // namespace
+
+namespace Horo::Runtime::Test {
+    std::vector<std::byte> MakeSaveArchiveReaderFixture() {
+        return MakeArchive().bytes;
+    }
+}  // namespace Horo::Runtime::Test
