@@ -835,6 +835,7 @@ target_compile_features(HoroAudioCommands PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioCommands PUBLIC HoroEngine::AudioMemory PRIVATE HoroAudioSafetyHooks)
 
 add_library(HoroAudioMetrics STATIC
+        audio/metrics/AudioMetricExtraction.cpp
         audio/metrics/AudioMetrics.cpp
         audio/metrics/AudioMetricTelemetry.cpp
 )
