@@ -7,13 +7,10 @@
 
 namespace Horo::Release {
     /** @copydoc PrepareZipUpdateStageHttps */
-    Result<std::filesystem::path> PrepareZipUpdateStageHttps(const UpdatePackageRecord &package, UpdateDownloadPaths paths,
-                                                             const std::filesystem::path &stageRoot,
-                                                             const UpdateDownloadLimits &downloadLimits,
-                                                             const UpdateArchiveLimits &archiveLimits, NativeDurableFileSystem &files,
+    Result<std::filesystem::path> PrepareZipUpdateStageHttps(const UpdateZipStagingRequest &request, NativeDurableFileSystem &files,
                                                              const Security::ArtifactVerifier &verifier, CancellationToken cancellation,
-                                                             const UpdateHttpDownloadPolicy &policy,
                                                              const UpdateDownloadProgress &progress) {
+        const auto &[package, paths, stageRoot, downloadLimits, archiveLimits, policy] = request;
         const auto invalid = [] {
             return Result<std::filesystem::path>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
         };
@@ -45,10 +42,10 @@ namespace Horo::Release {
             stageStatus.type() != std::filesystem::file_type::not_found || (error && error != std::errc::no_such_file_or_directory))
             return invalid();
 
-        auto checkpoint = DownloadUpdatePackageHttps(package, paths, downloadLimits, files, verifier, cancellation, policy, progress);
+        auto checkpoint = DownloadUpdatePackageHttps({package, paths, downloadLimits, policy}, files, verifier, cancellation, progress);
         if (checkpoint.HasError())
             return Result<std::filesystem::path>::Failure(checkpoint.ErrorValue());
-        return StageVerifiedZipUpdate(package, checkpoint.Value(), paths.partialFile, stageRoot, archiveLimits, files, verifier,
+        return StageVerifiedZipUpdate({package, checkpoint.Value(), paths.partialFile, stageRoot, archiveLimits}, files, verifier,
                                       cancellation);
     }
 }  // namespace Horo::Release
