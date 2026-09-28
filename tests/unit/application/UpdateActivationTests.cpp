@@ -1,11 +1,10 @@
-#include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Release/BootstrapInstallation.h"
 #include "Horo/Release/UpdateActivation.h"
 #include "Horo/Release/UpdateActivationErrors.h"
 #include "Horo/Release/UpdateRollback.h"
 #include "Horo/Release/UpdateRollbackErrors.h"
+#include "UpdateActivationTestSupport.h"
 
-#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
@@ -92,14 +91,15 @@ namespace {
         return std::move(checkpoint).Value();
     }
 
-    [[nodiscard]] UpdateActivationVersion Version(const TemporaryInstall &install, const std::string &id,
-                                                  Horo::NativeDurableFileSystem &files, const Horo::Security::ArtifactVerifier &verifier) {
+    [[nodiscard]] UpdateActivationVersion VersionAtRoot(const std::filesystem::path &installRoot, const std::string &id,
+                                                        Horo::NativeDurableFileSystem &files,
+                                                        const Horo::Security::ArtifactVerifier &verifier) {
         const std::string payload = "signed package " + id;
         const std::string content = "editor " + id;
         auto package = Package(id, payload);
         auto checkpoint = CompleteCheckpoint(package);
-        const auto packageFile = install.root / "versions" / (id + ".zip");
-        const auto stageRoot = install.root / "versions" / id;
+        const auto packageFile = installRoot / "versions" / (id + ".zip");
+        const auto stageRoot = installRoot / "versions" / id;
         std::filesystem::create_directories(stageRoot / "bin");
         {
             std::ofstream output(packageFile, std::ios::binary);
@@ -122,8 +122,8 @@ namespace {
 
     [[nodiscard]] UpdateActivationRequest Request(const TemporaryInstall &install, Horo::NativeDurableFileSystem &files,
                                                   const Horo::Security::ArtifactVerifier &verifier) {
-        auto current = Version(install, "old", files, verifier);
-        auto staged = Version(install, "new", files, verifier);
+        auto current = VersionAtRoot(install.root, "old", files, verifier);
+        auto staged = VersionAtRoot(install.root, "new", files, verifier);
         auto pointer = EncodeActiveUpdateRecord(current.package);
         REQUIRE(pointer.HasValue());
         REQUIRE(files.WriteDurable(install.root / "active-version", std::as_bytes(std::span{pointer.Value()})).HasValue());
@@ -213,62 +213,23 @@ namespace {
     [[nodiscard]] BootstrapInstallationRequest BootstrapRequest(const TemporaryInstall &install, Horo::NativeDurableFileSystem &files,
                                                                 const Horo::Security::ArtifactVerifier &verifier) {
         return {install.root,
-                Version(install, "new", files, verifier),
+                VersionAtRoot(install.root, "new", files, verifier),
                 {.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U},
                 std::chrono::seconds{2}};
     }
 
-    class CapturingProcess final : public Horo::IExternalProcessRunner {
-    public:
-        [[nodiscard]] Horo::Result<Horo::ExternalProcessResult> Run(const Horo::ExternalProcessRequest &request,
-                                                                    const Horo::CancellationToken &) override {
-            ++runs;
-            executable = request.executable;
-            workingDirectory = request.workingDirectory;
-            arguments = request.arguments;
-            environment = request.environment.base;
-            timeout = request.timeout;
-            return Horo::Result<Horo::ExternalProcessResult>::Success(result);
-        }
-
-        std::size_t runs{};
-        std::string executable;
-        std::filesystem::path workingDirectory;
-        std::vector<std::string> arguments;
-        Horo::ProcessEnvironmentBase environment{Horo::ProcessEnvironmentBase::InheritWithOverrides};
-        std::chrono::milliseconds timeout{};
-        Horo::ExternalProcessResult result{};
-    };
 }  // namespace
 
-TEST_CASE("Authenticated product startup uses the signed entrypoint with a bounded shell-free runner", "[release][update][probe]") {
-    TemporaryInstall install;
-    Horo::NativeDurableFileSystem files;
-    auto verifier = Verifier();
-    auto version = Version(install, "new", files, verifier);
-    CapturingProcess processes;
-    constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
-    const std::array arguments{std::string{"--self-test"}};
-    REQUIRE(ProbeVerifiedUpdateEntrypoint(version, limits, verifier, processes, arguments, std::chrono::seconds{2}).HasValue());
-    CHECK(processes.runs == 1U);
-    CHECK(processes.executable == (version.stageRoot / "bin/editor").string());
-    CHECK(processes.workingDirectory == version.stageRoot);
-    CHECK(processes.arguments == std::vector<std::string>{"--self-test"});
-    CHECK(processes.environment == Horo::ProcessEnvironmentBase::Replace);
-    CHECK(processes.timeout == std::chrono::seconds{2});
+namespace Horo::Release::TestSupport {
+    Security::ArtifactVerifier MakeVerifier() {
+        return Verifier();
+    }
 
-    processes.result.exitCode = 7;
-    CHECK(ProbeVerifiedUpdateEntrypoint(version, limits, verifier, processes, arguments, std::chrono::seconds{2}).HasError());
-#if !defined(_WIN32)
-    processes.result.exitCode = 0;
-    std::filesystem::permissions(version.stageRoot / "bin/editor", std::filesystem::perms{0644});
-    CHECK(ProbeVerifiedUpdateEntrypoint(version, limits, verifier, processes, arguments, std::chrono::seconds{2}).HasError());
-    std::filesystem::permissions(version.stageRoot / "bin/editor", std::filesystem::perms{0755});
-#endif
-    version.inventory.front().path = "bin/other";
-    CHECK(ProbeVerifiedUpdateEntrypoint(version, limits, verifier, processes, arguments, std::chrono::seconds{2}).HasError());
-    CHECK(processes.runs == 2U);
-}
+    UpdateActivationVersion MakeVersion(const std::filesystem::path &root, NativeDurableFileSystem &files,
+                                        const Security::ArtifactVerifier &verifier) {
+        return VersionAtRoot(root, "new", files, verifier);
+    }
+}  // namespace Horo::Release::TestSupport
 
 TEST_CASE("Verified update activation atomically selects the healthy staged version", "[release][update]") {
     TemporaryInstall install;
