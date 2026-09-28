@@ -13,4 +13,8 @@ namespace Horo::Release::UpdateRetentionErrors {
                                                       .code = ErrorCode{"protected_budget_exceeded"},
                                                       .defaultSeverity = ErrorSeverity::Warning,
                                                       .summary = "Active and last-known-good versions exceed the configured disk budget."};
+    const ErrorCodeDescriptor UnsafeCleanup{.domain = Domain,
+                                            .code = ErrorCode{"unsafe_cleanup"},
+                                            .defaultSeverity = ErrorSeverity::Error,
+                                            .summary = "Installed-version cleanup could not prove ownership or protected pins."};
 }  // namespace Horo::Release::UpdateRetentionErrors

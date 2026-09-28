@@ -446,6 +446,12 @@ the plan fails instead of deleting either. Otherwise it selects obsolete
 versions by oldest use generation, with package ID as a stable tie-breaker.
 The deletion host must recheck the active and rollback records under the same
 installation lock immediately before removing only the planned owned files.
+`ApplyUpdateRetention` performs that locked recheck, stops installation users,
+and verifies protected versions and the selected obsolete version against its
+signed package inventory. It writes a durable per-version cleanup marker before
+removing any files. A repeated call may resume a marked partial deletion using
+the authenticated package and remaining-file inventory, and removes the package
+last. Unknown files or links stop cleanup without deleting those entries.
 
 User projects, settings, caches, and credentials are not stored inside the
 versioned installation and are not deleted by rollback.
