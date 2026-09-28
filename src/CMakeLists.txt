@@ -223,6 +223,7 @@ add_library(HoroApplication STATIC
         application/release/ReleaseJobTracker.cpp
         application/release/ReleasePipelineExecutor.cpp
         application/release/ReleasePackageProducer.cpp
+        application/release/ReleasePublication.cpp
         application/release/ReleaseSigningBoundary.cpp
         application/release/ReleaseProfile.cpp
         application/release/ReleasePreflight.cpp
@@ -252,6 +253,20 @@ add_library(HoroReleaseService STATIC application/release/ReleaseService.cpp app
 add_library(HoroEngine::ReleaseService ALIAS HoroReleaseService)
 target_compile_features(HoroReleaseService PUBLIC cxx_std_20)
 target_link_libraries(HoroReleaseService PUBLIC HoroEngine::Application HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
+
+add_library(HoroReleaseGitHub STATIC application/release/GitHubReleasePublication.cpp)
+add_library(HoroEngine::ReleaseGitHub ALIAS HoroReleaseGitHub)
+target_compile_features(HoroReleaseGitHub PUBLIC cxx_std_20)
+target_link_libraries(HoroReleaseGitHub PUBLIC HoroEngine::Application PRIVATE nlohmann_json::nlohmann_json)
+
+add_library(HoroReleaseGitHubCli STATIC application/release/GitHubReleaseCliClient.cpp)
+add_library(HoroEngine::ReleaseGitHubCli ALIAS HoroReleaseGitHubCli)
+target_compile_features(HoroReleaseGitHubCli PUBLIC cxx_std_20)
+target_link_libraries(HoroReleaseGitHubCli PUBLIC HoroEngine::ReleaseGitHub HoroEngine::Platform
+        PRIVATE nlohmann_json::nlohmann_json)
+if(WIN32)
+    target_link_libraries(HoroReleaseGitHubCli PRIVATE advapi32)
+endif()
 
 add_library(HoroUpdateManifest STATIC application/release/UpdateManifest.cpp application/release/UpdateManifestErrors.cpp
         application/release/UpdateSignatureCodec.cpp application/release/UpdateTrustRoot.cpp)
@@ -554,6 +569,7 @@ target_include_directories(HoroRuntimeScene PUBLIC ${PROJECT_SOURCE_DIR}/include
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::Foundation HoroEngine::Runtime HoroEngine::GameplayApi HoroEngine::RuntimeUi)
 
 add_library(HoroNetworkRuntime STATIC
+        runtime/networking/InboundMessageDispatcher.cpp
         runtime/networking/NetworkModeComposition.cpp
         runtime/networking/TransportBackendComposition.cpp
         runtime/networking/TransportTargetComposition.cpp
@@ -996,6 +1012,10 @@ target_compile_features(HoroDestructionApi PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionApi PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
 add_library(HoroDestructionCook STATIC
+        runtime/destruction/cook/StructuralGraphCook.cpp
+        runtime/destruction/cook/ChunkMeshCook.cpp
+        runtime/destruction/cook/ChunkMeshVoronoi.cpp
+        runtime/destruction/cook/ChunkMeshImport.cpp
         runtime/destruction/cook/OfflineVoronoi.cpp
         runtime/destruction/cook/OfflineVoronoiChunks.cpp
         runtime/destruction/cook/OfflineVoronoiClipping.cpp
@@ -1681,6 +1701,7 @@ add_library(HoroEditorServices STATIC
         editor/screens/workspace/ContentBrowserModel.cpp
         editor/screens/workspace/GameplayBehaviorRequestValidation.cpp
         editor/modals/gameplay_behavior/GameplayBehaviorFilenameModalState.cpp
+        editor/modals/build_release/BuildReleaseModalSession.cpp
         editor/project_model/ProjectCreationService.cpp
         editor/project_model/ProjectMutation.cpp
         editor/project_model/ProjectMigrationTransaction.cpp

@@ -41,6 +41,11 @@ namespace Horo::Destruction::OfflineVoronoiErrors {
 }  // namespace Horo::Destruction::OfflineVoronoiErrors
 
 namespace Horo::Destruction {
+    /** @copydoc OfflineVoronoiCandidate::IsIntact */
+    bool OfflineVoronoiCandidate::IsIntact() const {
+        return outputChecksum_ == Detail::VoronoiOutputChecksum(*this);
+    }
+
     namespace {
         using namespace VoronoiDetail;
 
@@ -127,6 +132,18 @@ namespace Horo::Destruction {
             return Result<void>::Success();
         }
 
+        /** @brief Captures the exact source, recipe, toolchain, and tier used to create a detached candidate. */
+        void SetCandidateProvenance(OfflineVoronoiCandidate &candidate, const OfflineVoronoiSource &source,
+                                    const OfflineVoronoiRecipe &recipe, const std::vector<Point> &sites) {
+            candidate.sourceAsset = source.asset;
+            candidate.sourceRevision = source.revision;
+            candidate.sourceDigest = source.digest;
+            candidate.recipeId = recipe.id;
+            candidate.recipeRevision = recipe.revision;
+            candidate.semanticFingerprint = Detail::VoronoiFingerprint(source, recipe, sites);
+            candidate.toolchainDigest = recipe.toolchainDigest;
+            candidate.tier = recipe.tier;
+        }
     }  // namespace
 
     /** @copydoc GenerateOfflineVoronoi */
@@ -159,13 +176,7 @@ namespace Horo::Destruction {
             regions = decomposed.Value();
         }
         OfflineVoronoiCandidate candidate;
-        candidate.sourceAsset = source.asset;
-        candidate.sourceRevision = source.revision;
-        candidate.sourceDigest = source.digest;
-        candidate.recipeId = recipe.id;
-        candidate.recipeRevision = recipe.revision;
-        candidate.semanticFingerprint = Detail::VoronoiFingerprint(source, recipe, sites.Value());
-        candidate.toolchainDigest = recipe.toolchainDigest;
+        SetCandidateProvenance(candidate, source, recipe, sites.Value());
         candidate.chunks.reserve(sites.Value().size());
         for (std::uint32_t index = 0; index < sites.Value().size(); ++index) {
             auto chunk = GenerateSiteChunk(index, sites.Value(), regions, sourceFaces.Value(), recipe, budget, cancellation);
@@ -194,7 +205,8 @@ namespace Horo::Destruction {
         if (expectedOwnerRevision != revision_ || candidate.sourceAsset != currentSource.asset ||
             candidate.sourceRevision != currentSource.revision || candidate.sourceDigest != currentSource.digest ||
             candidate.recipeId != currentRecipe.id || candidate.recipeRevision != currentRecipe.revision ||
-            candidate.toolchainDigest != currentRecipe.toolchainDigest || candidate.schemaVersion != OfflineVoronoiSchemaVersion ||
+            candidate.toolchainDigest != currentRecipe.toolchainDigest || candidate.tier != currentRecipe.tier ||
+            candidate.schemaVersion != OfflineVoronoiSchemaVersion ||
             candidate.sourceDigest != ComputeOfflineVoronoiSourceDigest(currentSource) ||
             candidate.chunks.size() != currentRecipe.siteCount)
             return Result<void>::Failure(MakeError(OfflineVoronoiErrors::Stale));

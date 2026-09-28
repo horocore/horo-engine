@@ -34,7 +34,12 @@ namespace Horo::Runtime::SaveMigrationDetail {
         [[nodiscard]] Result<void> ValidateParticipantPolicyEntry(const SaveParticipantCompatibility &entry, const std::size_t index,
                                                                   const SaveCompatibilityPolicy &policy) {
             if (!entry.participant.IsValid() || !IsValidSupport(entry.versions) ||
-                (index != 0 && policy.participants[index - 1].participant == entry.participant))
+                (index != 0 && policy.participants[index - 1].participant == entry.participant) ||
+                !std::ranges::is_sorted(entry.requiredDependencies) ||
+                std::ranges::adjacent_find(entry.requiredDependencies) != entry.requiredDependencies.end() ||
+                std::ranges::any_of(entry.requiredDependencies, [&entry](const SaveParticipantId &id) {
+                return !id.IsValid() || id == entry.participant;
+            }))
                 return Result<void>::Failure(MigrationError(SaveErrors::MigrationDefinitionInvalid,
                                                             "Save migration participant policy contains an invalid or duplicate entry."));
             return Result<void>::Success();
@@ -82,6 +87,24 @@ namespace Horo::Runtime::SaveMigrationDetail {
                 return Result<void>::Failure(
                     MigrationError(SaveErrors::MigrationLimitExceeded,
                                    "Detached save migration state exceeds its aggregate participant payload limit."));
+            SaveRecordId previousRecord;
+            for (const PreservedSaveChunk &chunk : participant.preservedChunks) {
+                if (!chunk.entry.record.IsValid() || chunk.entry.owner != participant.participant ||
+                    (previousRecord.IsValid() && previousRecord >= chunk.entry.record) ||
+                    chunk.entry.storedByteLength != chunk.storedBytes.size() || chunk.storedBytes.empty() ||
+                    chunk.entry.decodedByteLength == 0 || chunk.entry.codec > SaveChunkCodec::Deflate ||
+                    (chunk.entry.codec == SaveChunkCodec::Raw &&
+                     (chunk.entry.decodedByteLength != chunk.storedBytes.size() ||
+                      ComputeSha256(std::span<const std::byte>{chunk.storedBytes}) != chunk.entry.decodedHash)))
+                    return Result<void>::Failure(
+                        MigrationError(SaveErrors::MigrationCandidateInvalid,
+                                       "Detached unknown save chunk has invalid ownership or integrity metadata."));
+                if (chunk.storedBytes.size() > limits.maximumTotalPayloadBytes - totalPayloadBytes)
+                    return Result<void>::Failure(MigrationError(SaveErrors::MigrationLimitExceeded,
+                                                                "Detached unknown save chunks exceed the migration payload budget."));
+                totalPayloadBytes += chunk.storedBytes.size();
+                previousRecord = chunk.entry.record;
+            }
             return Result<void>::Success();
         }
     }  // namespace
@@ -133,6 +156,19 @@ namespace Horo::Runtime::SaveMigrationDetail {
             support.checkpoints.size() > limits.maximumDefinitions)
             return Result<void>::Failure(
                 MigrationError(SaveErrors::MigrationDefinitionInvalid, "Save migration support ranges or participant policy are invalid."));
+        if (!std::ranges::is_sorted(support.compatibility.droppableUnknownParticipants) ||
+            std::ranges::adjacent_find(support.compatibility.droppableUnknownParticipants) !=
+                support.compatibility.droppableUnknownParticipants.end())
+            return Result<void>::Failure(
+                MigrationError(SaveErrors::MigrationDefinitionInvalid, "Droppable unknown participant policy must be unique and sorted."));
+        for (const SaveParticipantId &id : support.compatibility.droppableUnknownParticipants) {
+            if (!id.IsValid() || FindPolicyParticipant(support.compatibility, id) != nullptr ||
+                std::ranges::any_of(support.compatibility.participants, [&id](const SaveParticipantCompatibility &entry) {
+                return entry.required && std::ranges::binary_search(entry.requiredDependencies, id);
+            }))
+                return Result<void>::Failure(MigrationError(SaveErrors::MigrationDefinitionInvalid,
+                                                            "Droppable unknown participant policy contains a known or invalid owner."));
+        }
         for (std::size_t index = 0; index < support.compatibility.participants.size(); ++index) {
             if (const auto validation =
                     ValidateParticipantPolicyEntry(support.compatibility.participants[index], index, support.compatibility);
