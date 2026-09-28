@@ -198,6 +198,28 @@ Update metadata includes:
 - signing key identity
 
 Expired metadata is rejected unless an offline policy explicitly permits it.
+Mounted local, removable-media, and administrator-synchronized enterprise
+sources use a configured absolute root containing `manifest.json` and
+`packages/<64 lowercase digest hex digits>.zip`. The digest-named package path
+is derived from the authenticated package record; neither manifest URL nor
+media content may choose an arbitrary local path. Source descriptors have
+unique IDs and explicit precedence. A host uses `MayTryNextOfflineSource`
+to try the next source only when media or metadata is unavailable; a present
+but invalid signature, stale policy, unsafe path, or package mismatch stops
+fallback. Source and private stage parents remain quiescent for an import
+operation.
+
+`ImportOfflineZipUpdate` parses the same canonical signed manifest and calls
+the same discovery, package verification, ZIP extraction, and ready-marker
+paths as an HTTPS update. An administrator may configure at most 30 days of
+manifest expiry grace for a particular source. The installed trust root must
+still be unexpired, signatures and package digests remain mandatory, and the
+monotonic sequence floor is unchanged. Downgrade requires both an explicit
+host action and source administrator policy. The default freshness parameter
+on `VerifyUpdateManifest` and `AssessUpdate` is strict, preserving existing
+online callers; hosts migrating to offline source descriptors pass the bounded
+policy only for that selected source.
+
 Returning to an older version is allowed only through explicit rollback policy
 and user or administrator action. Automatic update checks must not downgrade a
 product because an attacker served an older valid manifest.
