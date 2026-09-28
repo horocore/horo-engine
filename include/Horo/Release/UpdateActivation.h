@@ -11,8 +11,13 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
+
+namespace Horo {
+    class IExternalProcessRunner;
+}
 
 namespace Horo::Release {
     /** @brief Complete immutable evidence for one installed version. */
@@ -56,6 +61,21 @@ namespace Horo::Release {
      * @return Bounded canonical record or invalid identity failure.
      */
     [[nodiscard]] Result<std::string> EncodeActiveUpdateRecord(const UpdatePackageRecord &package);
+
+    /**
+     * @brief Reauthenticates a staged version and runs its signed entrypoint as a bounded, shell-free health probe.
+     * @param version Immutable package, stage, and inventory evidence held quiescent by the host for the entire call.
+     * @param limits Archive limits used when the stage was admitted.
+     * @param verifier Trusted publisher signature verifier.
+     * @param processes Native process runner owned by the application composition root.
+     * @param arguments Product-specific health arguments selected by the trusted host, not parsed from the package.
+     * @param timeout Positive maximum child runtime before the process runner starts bounded termination and pipe draining.
+     * @return Success only for a clean zero exit; otherwise authentication, launch, or health failure.
+     * @note The host must independently block new product launches and stop the running product before invoking this probe.
+     */
+    [[nodiscard]] Result<void> ProbeVerifiedUpdateEntrypoint(const UpdateActivationVersion &version, const UpdateArchiveLimits &limits,
+                                                             const Security::ArtifactVerifier &verifier, IExternalProcessRunner &processes,
+                                                             std::span<const std::string> arguments, std::chrono::seconds timeout);
 
     /**
      * @brief Verifies both versions under an installation lock and switches the active pointer atomically.

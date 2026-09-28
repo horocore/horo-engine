@@ -312,6 +312,12 @@ and re-signed by a v2 producer; the staging reader does not infer an entrypoint
 or silently accept v1 metadata. Callers constructing `ReleasePackageRequest`
 must supply both new fields. The bootstrap host must launch only the authenticated
 entrypoint and must not derive a default path or change mode at launch time.
+`ProbeVerifiedUpdateEntrypoint` provides the shell-free process boundary for a
+trusted host-selected health command. It reauthenticates the package, v2 ready
+marker, and complete staged tree before passing the signed entrypoint path to
+`IExternalProcessRunner` with a bounded lifetime and output budget. The host
+keeps the stage quiescent and owns product-stop and launch-admission coordination;
+the probe alone does not establish that gate or install platform integration.
 `PrepareZipUpdateStageHttps` is the blocking host worker operation for ZIP
 updates: it resumes or downloads into the protected private package file, then
 authenticates and extracts that same file before returning a durable ready

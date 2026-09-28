@@ -303,6 +303,7 @@ target_compile_features(HoroUpdateDownload PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateDownload PUBLIC HoroEngine::UpdateTransfer HoroEngine::Platform PRIVATE CURL::libcurl miniz)
 
 add_library(HoroUpdateActivation STATIC application/release/UpdateActivation.cpp application/release/UpdateActivationErrors.cpp
+        application/release/UpdateProductProcess.cpp
         application/release/BootstrapInstallation.cpp application/release/BootstrapInstallationErrors.cpp
         application/release/UpdateRollback.cpp application/release/UpdateRollbackErrors.cpp
         application/release/UpdateRetention.cpp application/release/UpdateRetentionErrors.cpp)
