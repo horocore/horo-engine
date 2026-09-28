@@ -1252,9 +1252,8 @@ namespace Horo::Editor {
         const auto userStateRoot = ResolveEditorSettingsPath().parent_path();
         const auto cacheRoot = ResolveEditorSettingsHomeDirectory() / ".cache" / "horo";
         if (auto migrated = MigrateLegacyEditorUserState(userStateRoot, cacheRoot, userStateFiles); migrated.HasError()) {
-            LOG_ERROR("editor.user_state", "User-state migration needs repair before editor startup: %s",
-                      migrated.ErrorValue().message.c_str());
-            std::fprintf(stderr, "User-state migration needs repair: %s\n", migrated.ErrorValue().message.c_str());
+            LOG_ERROR("editor.user_state", "User-state migration needs repair before editor startup.");
+            std::fprintf(stderr, "User-state migration needs repair before editor startup.\n");
             Log::Logger::Shutdown();
             return 1;
         }

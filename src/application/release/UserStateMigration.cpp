@@ -3,6 +3,7 @@
 #include "Horo/Release/UserStateMigrationErrors.h"
 
 #include <algorithm>
+#include <format>
 #include <fstream>
 #include <limits>
 #include <set>
@@ -68,17 +69,19 @@ namespace Horo::Release {
             const auto size = std::filesystem::file_size(path, error);
             if (error || size > maximumBytes || size > static_cast<std::uint64_t>(std::numeric_limits<std::streamsize>::max()))
                 return Result<std::vector<std::byte>>::Failure(Failure(UserStateMigrationErrors::UnsafePath, path));
-            std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+            std::string contents(static_cast<std::size_t>(size), '\0');
             std::ifstream input(path, std::ios::binary);
-            input.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-            return input ? Result<std::vector<std::byte>>::Success(std::move(bytes))
-                         : Result<std::vector<std::byte>>::Failure(Failure(UserStateMigrationErrors::UnsafePath, path));
+            input.read(contents.data(), static_cast<std::streamsize>(contents.size()));
+            if (!input)
+                return Result<std::vector<std::byte>>::Failure(Failure(UserStateMigrationErrors::UnsafePath, path));
+            const auto bytes = std::as_bytes(std::span{contents});
+            return Result<std::vector<std::byte>>::Success({bytes.begin(), bytes.end()});
         }
 
         /** @brief Derives a stable, per-edge repair copy beside the source. */
         [[nodiscard]] std::filesystem::path BackupPath(const std::filesystem::path &path, const std::uint32_t sourceSchema) {
             auto backup = path;
-            backup += ".horo-backup-v" + std::to_string(sourceSchema);
+            backup += std::format(".horo-backup-v{}", sourceSchema);
             return backup;
         }
 
@@ -178,10 +181,11 @@ namespace Horo::Release {
         /** @brief Executes one authenticated step without consulting project documents. */
         [[nodiscard]] Result<StepOutcome> ApplyMigrationStep(const UserStateMigrationRequest &request, const UserStateMigrationStep &step,
                                                              NativeDurableFileSystem &files, IUserStateMigrationTransformer &transformer) {
+            using enum StepOutcome;
             const auto &root = step.family == UserStateFamily::DisposableCache ? request.cacheRoot : request.userStateRoot;
             const auto path = root / step.relativePath;
             if (step.action == UserStateMigrationAction::DiscardCache && Absent(path))
-                return Result<StepOutcome>::Success(StepOutcome::AlreadyApplied);
+                return Result<StepOutcome>::Success(AlreadyApplied);
             auto source = ReadSource(request, step, root);
             if (source.HasError())
                 return Result<StepOutcome>::Failure(source.ErrorValue());
@@ -189,13 +193,13 @@ namespace Horo::Release {
             if (step.action == UserStateMigrationAction::DiscardCache) {
                 if (auto discarded = DiscardCache(step, path, digest, files); discarded.HasError())
                     return Result<StepOutcome>::Failure(discarded.ErrorValue());
-                return Result<StepOutcome>::Success(StepOutcome::DiscardedCache);
+                return Result<StepOutcome>::Success(DiscardedCache);
             }
             if (AlreadyTransformed(request, step, root, path, digest))
-                return Result<StepOutcome>::Success(StepOutcome::AlreadyApplied);
+                return Result<StepOutcome>::Success(AlreadyApplied);
             if (auto transformed = TransformState(request, step, root, path, source.Value(), files, transformer); transformed.HasError())
                 return Result<StepOutcome>::Failure(transformed.ErrorValue());
-            return Result<StepOutcome>::Success(StepOutcome::Transformed);
+            return Result<StepOutcome>::Success(Transformed);
         }
 
         /** @brief Holds the host lock for every state/cache mutation in the plan. */
@@ -203,19 +207,20 @@ namespace Horo::Release {
                                                                           const UserStateMigrationPlan &plan,
                                                                           NativeDurableFileSystem &files,
                                                                           IUserStateMigrationTransformer &transformer) {
+            using enum StepOutcome;
             UserStateMigrationReport report;
             for (const auto index : plan.orderedSteps) {
                 auto outcome = ApplyMigrationStep(request, request.steps[index], files, transformer);
                 if (outcome.HasError())
                     return Result<UserStateMigrationReport>::Failure(outcome.ErrorValue());
                 switch (outcome.Value()) {
-                    case StepOutcome::AlreadyApplied:
+                    case AlreadyApplied:
                         ++report.alreadyApplied;
                         break;
-                    case StepOutcome::Transformed:
+                    case Transformed:
                         ++report.transformed;
                         break;
-                    case StepOutcome::DiscardedCache:
+                    case DiscardedCache:
                         ++report.discardedCaches;
                         break;
                 }

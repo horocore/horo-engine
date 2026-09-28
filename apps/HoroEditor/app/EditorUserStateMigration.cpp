@@ -76,7 +76,7 @@ namespace Horo::Editor {
                                : Result<void>::Failure(MakeError(Release::UserStateMigrationErrors::InvalidPlan));
                 target = source.Value();
                 const auto opening = target.find('{');
-                target.insert(opening + 1U, document.empty() ? "\"schemaVersion\":1" : "\"schemaVersion\":1,");
+                target.insert(opening + 1U, document.empty() ? R"("schemaVersion":1)" : R"("schemaVersion":1,)");
             } else if (family == Release::UserStateFamily::RecentProjects && document.is_array()) {
                 target = "{\"schemaVersion\":1,\"entries\":" + source.Value() + "}\n";
             } else if (family == Release::UserStateFamily::RecentProjects && document.is_object() && document.contains("schemaVersion") &&
@@ -93,7 +93,7 @@ namespace Horo::Editor {
                              ComputeSha256(std::as_bytes(std::span{source.Value()})),
                              ComputeSha256(std::as_bytes(std::span{target})),
                              {}});
-            targets.emplace(name, std::move(target));
+            targets.try_emplace(std::string{name}, std::move(target));
             return Result<void>::Success();
         }
     }  // namespace
