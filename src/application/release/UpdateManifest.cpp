@@ -312,7 +312,8 @@ namespace Horo::Release {
 
     /** @copydoc VerifyUpdateManifest */
     Result<void> VerifyUpdateManifest(const SignedUpdateManifest &manifest, const UpdateAdmissionContext &context,
-                                      const UpdateTrustRootSnapshot &roots, std::shared_ptr<const Security::SignatureProvider> provider) {
+                                      const UpdateTrustRootSnapshot &roots, std::shared_ptr<const Security::SignatureProvider> provider,
+                                      const UpdateMetadataFreshnessPolicy freshness) {
         const auto &data = manifest.Data();
         if (roots.Product() != context.installedProduct)
             return Result<void>::Failure(MakeError(UpdateManifestErrors::Incompatible));
@@ -320,7 +321,9 @@ namespace Horo::Release {
         if (auto authenticated = verifier.Verify(std::as_bytes(std::span{manifest.CanonicalPayload()}), manifest.Signature());
             authenticated.HasError())
             return Result<void>::Failure(authenticated.ErrorValue());
-        if (context.now < data.publishedAt || context.now > data.expiresAt || context.now > roots.ExpiresAt() ||
+        const bool expiredBeyondPolicy =
+            context.now > data.expiresAt && context.now - data.expiresAt > freshness.maximumExpiredManifestSeconds;
+        if (context.now < data.publishedAt || expiredBeyondPolicy || context.now > roots.ExpiresAt() ||
             data.sequence < std::max(context.minimumAcceptedSequence, roots.MinimumManifestSequence()) ||
             data.minimumRootRevision > roots.Revision())
             return Result<void>::Failure(MakeError(UpdateManifestErrors::Stale));

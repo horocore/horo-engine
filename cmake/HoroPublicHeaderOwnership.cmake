@@ -171,6 +171,10 @@ horo_configure_target_header_boundary(HoroUpdateDownload PUBLIC_HEADERS
     Horo/Release/UpdateZipPackageProducer.h
     Horo/Release/UpdateZipStagingJob.h
 )
+horo_configure_target_header_boundary(HoroUpdateOfflineSource PUBLIC_HEADERS
+    Horo/Release/UpdateOfflineSource.h
+    Horo/Release/UpdateOfflineSourceErrors.h
+)
 horo_configure_target_header_boundary(HoroUpdateActivation PUBLIC_HEADERS
     Horo/Release/BootstrapInstallation.h
     Horo/Release/BootstrapInstallationErrors.h

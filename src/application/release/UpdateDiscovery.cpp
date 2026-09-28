@@ -63,8 +63,8 @@ namespace Horo::Release {
     /** @copydoc AssessUpdate */
     UpdateDiscoveryResult AssessUpdate(const SignedUpdateManifest &manifest, const UpdateAdmissionContext &context,
                                        const UpdateTrustRootSnapshot &roots, std::shared_ptr<const Security::SignatureProvider> provider,
-                                       const UpdatePackagePreferences &preferences) {
-        if (auto verified = VerifyUpdateManifest(manifest, context, roots, std::move(provider)); verified.HasError())
+                                       const UpdatePackagePreferences &preferences, const UpdateMetadataFreshnessPolicy freshness) {
+        if (auto verified = VerifyUpdateManifest(manifest, context, roots, std::move(provider), freshness); verified.HasError())
             return {UpdateDiscoveryStatus::Rejected, std::nullopt, verified.ErrorValue()};
         if (CompareReleaseVersionPrecedence(Version(manifest.Data().version), Version(context.installedVersion)) == 0)
             return {UpdateDiscoveryStatus::UpToDate, std::nullopt, std::nullopt};
