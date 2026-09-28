@@ -87,8 +87,7 @@ namespace Horo::Physics::Detail {
                         MakeError(PhysicsErrors::ShapeArtifactInvalid, "Canonical solver rejected the compound query shape."));
                 return Result<JPH::Ref<JPH::Shape>>::Success(created.Get());
             }
-            return std::visit([](const auto &shape) -> Result<JPH::Ref<JPH::Shape>> {
-                using Shape = std::decay_t<decltype(shape)>;
+            return std::visit([]<typename Shape>(const Shape &shape) {
                 if constexpr (std::is_same_v<Shape, PhysicsCompoundShapeDescriptor>)
                     return Result<JPH::Ref<JPH::Shape>>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
                 else

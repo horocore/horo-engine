@@ -225,14 +225,14 @@ namespace Horo::Physics {
     Result<void> ValidatePhysicsQueryFixtureDescriptor(const PhysicsQueryFixtureDescriptor &fixture, const PhysicsWorldId expectedWorld) {
         if (!expectedWorld.IsValid())
             return Result<void>::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        const auto shape = std::visit([](const auto &geometry) -> Result<void> {
-            using Geometry = std::decay_t<decltype(geometry)>;
+        if (const auto shape = std::visit(
+                []<typename Geometry>(const Geometry &geometry) -> Result<void> {
             if constexpr (!std::is_same_v<Geometry, PhysicsCompoundShapeDescriptor>)
                 return ValidatePhysicsShapeDescriptor(PhysicsShapeDescriptor{geometry});
             else
                 return ValidateCompoundShape(geometry);
         }, fixture.shape);
-        if (shape.HasError())
+            shape.HasError())
             return shape;
         if (const auto pose = ValidatePhysicsPose(fixture.pose); pose.HasError())
             return pose;
