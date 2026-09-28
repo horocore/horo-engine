@@ -1,7 +1,9 @@
 #include "CanonicalPhysicsRuntimeInternal.h"
 
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/EstimateCollisionResponse.h>
 #include <algorithm>
+#include <cmath>
 #include <ranges>
 #include <tuple>
 
@@ -55,18 +57,74 @@ namespace Horo::Physics::Detail {
             return PhysicsEventMaterial{.asset = material->asset, .assetGeneration = material->assetGeneration, .slot = material->slot};
         }
 
-        /** @brief Chooses a deterministic copied point from one native contact manifold. */
-        [[nodiscard]] Math::Vec3 ContactPoint(const JPH::ContactManifold &manifold) noexcept {
-            Math::Vec3 selected = ToScene(manifold.mBaseOffset);
-            bool selectedPoint = false;
-            for (JPH::uint index = 0; index < manifold.mRelativeContactPointsOn1.size(); ++index) {
-                const Math::Vec3 candidate = ToScene(manifold.GetWorldSpaceContactPointOn1(index));
-                if (!selectedPoint || std::tie(candidate.x, candidate.y, candidate.z) < std::tie(selected.x, selected.y, selected.z)) {
-                    selected = candidate;
-                    selectedPoint = true;
-                }
+        /** @brief Orders point identity independently of an optional estimated impulse. */
+        [[nodiscard]] bool PointGeometryLess(const PhysicsContactPoint &left, const PhysicsContactPoint &right) noexcept {
+            return std::tie(left.positionOnFirst, left.positionOnSecond, left.normal, left.penetrationDepthMeters) <
+                   std::tie(right.positionOnFirst, right.positionOnSecond, right.normal, right.penetrationDepthMeters);
+        }
+
+        /** @brief Retains the smallest distinct point evidence in the fixed public manifold. */
+        void RetainPoint(PhysicsContactSummary &summary, const PhysicsContactPoint &point) noexcept {
+            auto end = summary.points.begin() + summary.pointCount;
+            auto position = std::lower_bound(summary.points.begin(), end, point, PointGeometryLess);
+            if (position != end && !PointGeometryLess(point, *position)) {
+                position->normalImpulseEstimateNewtonSeconds =
+                    std::max(position->normalImpulseEstimateNewtonSeconds, point.normalImpulseEstimateNewtonSeconds);
+                return;
             }
-            return selected;
+            if (summary.pointCount == MaximumPhysicsContactPoints) {
+                ++summary.omittedPointCount;
+                if (position == end)
+                    return;
+                --end;
+            } else {
+                ++summary.pointCount;
+            }
+            std::move_backward(position, end, end + 1);
+            *position = point;
+        }
+
+        /** @brief Copies bounded native manifold geometry and clearly labels pre-solve estimates. */
+        [[nodiscard]] PhysicsContactSummary CopyContactSummary(const JPH::Body &first, const JPH::Body &second,
+                                                               const JPH::ContactManifold &manifold,
+                                                               const JPH::ContactSettings &settings) noexcept {
+            PhysicsContactSummary summary;
+            const JPH::uint count = std::min(manifold.mRelativeContactPointsOn1.size(), manifold.mRelativeContactPointsOn2.size());
+            if (count == 0)
+                return summary;
+            const Math::Vec3 normal{manifold.mWorldSpaceNormal.GetX(), manifold.mWorldSpaceNormal.GetY(),
+                                    manifold.mWorldSpaceNormal.GetZ()};
+            if (!Math::IsFinite(normal) || std::abs(normal.x * normal.x + normal.y * normal.y + normal.z * normal.z - 1.0F) > 1.0e-3F) {
+                summary.points[0].normal = normal;
+                summary.pointCount = 1;
+                return summary;
+            }
+            JPH::CollisionEstimationResult estimate;
+            const bool canEstimate =
+                !settings.mIsSensor &&
+                (first.GetMotionType() == JPH::EMotionType::Dynamic || second.GetMotionType() == JPH::EMotionType::Dynamic) &&
+                manifold.mRelativeContactPointsOn1.size() == manifold.mRelativeContactPointsOn2.size();
+            if (canEstimate)
+                JPH::EstimateCollisionResponse(first, second, manifold, estimate, settings.mCombinedFriction, settings.mCombinedRestitution,
+                                               1.0F, 4);
+            for (JPH::uint index = 0; index < count; ++index) {
+                PhysicsContactPoint point{.positionOnFirst = ToScene(manifold.GetWorldSpaceContactPointOn1(index)),
+                                          .positionOnSecond = ToScene(manifold.GetWorldSpaceContactPointOn2(index)),
+                                          .normal = normal,
+                                          .penetrationDepthMeters = manifold.mPenetrationDepth};
+                if (canEstimate && index < estimate.mContactImpulse.size())
+                    point.normalImpulseEstimateNewtonSeconds = estimate.mContactImpulse[index];
+                if (!Math::IsFinite(point.positionOnFirst) || !Math::IsFinite(point.positionOnSecond) || !Math::IsFinite(point.normal) ||
+                    !std::isfinite(point.penetrationDepthMeters) ||
+                    (point.normalImpulseEstimateNewtonSeconds.has_value() &&
+                     (!std::isfinite(*point.normalImpulseEstimateNewtonSeconds) || *point.normalImpulseEstimateNewtonSeconds < 0.0F))) {
+                    summary.points[0] = point;
+                    summary.pointCount = 1;
+                    return summary;
+                }
+                RetainPoint(summary, point);
+            }
+            return summary;
         }
     }  // namespace
 
@@ -101,17 +159,15 @@ namespace Horo::Physics::Detail {
         const auto *fixture2 = FindFixture(world_, body2.GetID());
         if (fixture1 == nullptr || fixture2 == nullptr)
             return;
+        const PhysicsContactSummary contact = CopyContactSummary(body1, body2, manifold, settings);
+        if (contact.pointCount == 0)
+            return;
         const PhysicsContactObservation observation{.simulationTick = route->SimulationTick(),
                                                     .first = ToEventEndpoint(world_, *fixture1),
                                                     .second = ToEventEndpoint(world_, *fixture2),
                                                     .firstMaterial = ToEventMaterial(fixture1->descriptor.material),
                                                     .secondMaterial = ToEventMaterial(fixture2->descriptor.material),
-                                                    .contact = {.position = ContactPoint(manifold),
-                                                                .normal = {manifold.mWorldSpaceNormal.GetX(),
-                                                                           manifold.mWorldSpaceNormal.GetY(),
-                                                                           manifold.mWorldSpaceNormal.GetZ()},
-                                                                .penetrationDepthMeters = manifold.mPenetrationDepth,
-                                                                .normalImpulseNewtonSeconds = 0.0F},
+                                                    .contact = contact,
                                                     .sensor = settings.mIsSensor};
         static_cast<void>(route->Sink().append(route->Sink().context, observation));
     }
@@ -119,8 +175,9 @@ namespace Horo::Physics::Detail {
     /** @copydoc InvokeCanonicalContactCallbackForTesting */
     bool InvokeCanonicalContactCallbackForTesting(const CanonicalWorldHandle world, const PhysicsQueryFixture &first,
                                                   const PhysicsQueryFixture &second, const std::uint64_t simulationTick, const bool sensor,
-                                                  const bool persisted, const CanonicalContactSink contactSink) {
-        if (world.value == nullptr || simulationTick == 0)
+                                                  const bool persisted, const CanonicalContactSink contactSink,
+                                                  const std::uint32_t contactPointCount) {
+        if (world.value == nullptr || simulationTick == 0 || contactPointCount == 0 || contactPointCount > JPH::ContactPoints::Capacity)
             return false;
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
         const auto *firstFixture = FindFixture(canonical, first.body);
@@ -138,8 +195,11 @@ namespace Horo::Physics::Detail {
         manifold.mBaseOffset = JPH::RVec3::sZero();
         manifold.mWorldSpaceNormal = JPH::Vec3::sAxisY();
         manifold.mPenetrationDepth = 0.1F;
-        manifold.mRelativeContactPointsOn1.emplace_back(JPH::Vec3::sZero());
-        manifold.mRelativeContactPointsOn2.emplace_back(JPH::Vec3::sZero());
+        for (std::uint32_t index = 0; index < contactPointCount; ++index) {
+            const JPH::Vec3 position(static_cast<float>(contactPointCount - index - 1), 0.0F, 0.0F);
+            manifold.mRelativeContactPointsOn1.emplace_back(position);
+            manifold.mRelativeContactPointsOn2.emplace_back(position);
+        }
         JPH::ContactSettings settings{};
         settings.mIsSensor = sensor;
         if (persisted)
