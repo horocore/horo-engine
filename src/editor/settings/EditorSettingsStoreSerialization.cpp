@@ -244,6 +244,7 @@ namespace Horo::Editor::SettingsStoreInternal {
     void WriteSettings(std::ostream &out, const EditorSettings &settings) {
         const SanitizedSettings sanitized = SanitizeForWrite(settings);
         out << "{\n";
+        out << "  \"schemaVersion\": 1,\n";
         WriteEditorGroup(out, sanitized);
         WriteAppearanceGroup(out, sanitized);
         WriteInputGroup(out, sanitized);

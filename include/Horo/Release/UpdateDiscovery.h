@@ -108,10 +108,12 @@ namespace Horo::Release {
      * @param roots Installed versioned trust roots.
      * @param provider Signature provider; null fails closed.
      * @param preferences Ordered host-supported package formats.
+     * @param freshness Explicit bounded offline manifest-expiry policy; default requires fresh metadata.
      * @return Availability without any download or installation side effect.
      */
     [[nodiscard]] UpdateDiscoveryResult AssessUpdate(const SignedUpdateManifest &manifest, const UpdateAdmissionContext &context,
                                                      const UpdateTrustRootSnapshot &roots,
                                                      std::shared_ptr<const Security::SignatureProvider> provider,
-                                                     const UpdatePackagePreferences &preferences);
+                                                     const UpdatePackagePreferences &preferences,
+                                                     UpdateMetadataFreshnessPolicy freshness = {});
 }  // namespace Horo::Release

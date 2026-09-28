@@ -45,10 +45,11 @@ namespace Horo::Physics {
             return {.simulationTick = tick,
                     .first = EventEndpoint(first),
                     .second = EventEndpoint(second),
-                    .contact = {.position = {static_cast<float>(first), 0.5F, static_cast<float>(second)},
-                                .normal = {0.0F, 1.0F, 0.0F},
-                                .penetrationDepthMeters = 0.02F,
-                                .normalImpulseNewtonSeconds = 0.0F},
+                    .contact =
+                        {.points = {PhysicsContactPoint{.positionOnFirst = {static_cast<float>(first), 0.5F, static_cast<float>(second)},
+                                                        .positionOnSecond = {static_cast<float>(first), 0.5F, static_cast<float>(second)},
+                                                        .penetrationDepthMeters = 0.02F}},
+                         .pointCount = 1},
                     .sensor = sensor};
         }
 

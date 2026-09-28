@@ -115,7 +115,7 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc InvokeCanonicalContactCallbackForTesting */
     bool InvokeCanonicalContactCallbackForTesting(const CanonicalWorldHandle, const PhysicsQueryFixture &, const PhysicsQueryFixture &,
-                                                  const std::uint64_t, const bool, const bool, const CanonicalContactSink) {
+                                                  const std::uint64_t, const CanonicalContactSink, const CanonicalContactTestOptions) {
         return false;
     }
 

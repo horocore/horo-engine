@@ -1140,6 +1140,11 @@ target_compile_features(HoroUpdateDownloadTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateDownloadTests PRIVATE HoroEngine::UpdateDownload miniz)
 horo_register_catch_test(HoroUpdateDownloadTests LABELS "release;update;headless")
 
+add_executable(HoroUpdateOfflineSourceTests unit/application/UpdateOfflineSourceTests.cpp)
+target_compile_features(HoroUpdateOfflineSourceTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUpdateOfflineSourceTests PRIVATE HoroEngine::UpdateOfflineSource HoroEngine::UpdateActivation miniz)
+horo_register_catch_test(HoroUpdateOfflineSourceTests LABELS "release;update;headless")
+
 add_executable(HoroUpdateActivationTests unit/application/UpdateActivationTests.cpp unit/application/UpdateRetentionTests.cpp)
 target_compile_features(HoroUpdateActivationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateActivationTests PRIVATE HoroEngine::UpdateActivation miniz)
@@ -1149,6 +1154,18 @@ add_executable(HoroUpdateTarGzipIndexTests unit/application/UpdateTarGzipIndexTe
 target_compile_features(HoroUpdateTarGzipIndexTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateTarGzipIndexTests PRIVATE HoroEngine::UpdateDownload miniz)
 horo_register_catch_test(HoroUpdateTarGzipIndexTests LABELS "release;update;headless")
+
+add_executable(HoroUserStateMigrationTests unit/application/UserStateMigrationTests.cpp)
+target_compile_features(HoroUserStateMigrationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUserStateMigrationTests PRIVATE HoroEngine::UserStateMigration)
+horo_register_catch_test(HoroUserStateMigrationTests LABELS "release;update;headless")
+
+add_executable(HoroEditorUserStateMigrationTests unit/application/EditorUserStateMigrationTests.cpp
+        ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorUserStateMigration.cpp)
+target_compile_features(HoroEditorUserStateMigrationTests PRIVATE cxx_std_20)
+target_include_directories(HoroEditorUserStateMigrationTests PRIVATE ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app)
+target_link_libraries(HoroEditorUserStateMigrationTests PRIVATE HoroEngine::UserStateMigration nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroEditorUserStateMigrationTests LABELS "release;update;headless")
 
 add_executable(HoroUpdateZipPackageProducerTests unit/application/UpdateZipPackageProducerTests.cpp)
 target_compile_features(HoroUpdateZipPackageProducerTests PRIVATE cxx_std_20)
@@ -2131,6 +2148,7 @@ target_compile_features(HoroRuntimeSaveArchiveFinalizationTests PRIVATE cxx_std_
 target_link_libraries(HoroRuntimeSaveArchiveFinalizationTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveArchiveReaderTests
         unit/runtime/save/SaveArchiveReaderTests.cpp
+        unit/runtime/save/SaveArchiveRecordStagingTests.cpp
 )
 target_compile_features(HoroRuntimeSaveArchiveReaderTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveArchiveReaderTests PRIVATE HoroEngine::Runtime)
@@ -2141,6 +2159,7 @@ target_compile_features(HoroRuntimeSaveArchiveProtectionTests PRIVATE cxx_std_20
 target_link_libraries(HoroRuntimeSaveArchiveProtectionTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveMigrationTests
         unit/runtime/save/SaveMigrationTests.cpp
+        unit/runtime/save/SaveMigrationRecordTests.cpp
 )
 target_compile_features(HoroRuntimeSaveMigrationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveMigrationTests PRIVATE HoroEngine::Runtime)

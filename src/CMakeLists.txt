@@ -300,6 +300,11 @@ add_library(HoroEngine::UpdateDownload ALIAS HoroUpdateDownload)
 target_compile_features(HoroUpdateDownload PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateDownload PUBLIC HoroEngine::UpdateTransfer HoroEngine::Platform PRIVATE CURL::libcurl miniz)
 
+add_library(HoroUpdateOfflineSource STATIC application/release/UpdateOfflineSource.cpp application/release/UpdateOfflineSourceErrors.cpp)
+add_library(HoroEngine::UpdateOfflineSource ALIAS HoroUpdateOfflineSource)
+target_compile_features(HoroUpdateOfflineSource PUBLIC cxx_std_20)
+target_link_libraries(HoroUpdateOfflineSource PUBLIC HoroEngine::UpdateDiscovery HoroEngine::UpdateDownload HoroEngine::Platform)
+
 add_library(HoroUpdateActivation STATIC application/release/UpdateActivation.cpp application/release/UpdateActivationErrors.cpp
         application/release/BootstrapInstallation.cpp application/release/BootstrapInstallationErrors.cpp
         application/release/UpdateRollback.cpp application/release/UpdateRollbackErrors.cpp
@@ -307,6 +312,12 @@ add_library(HoroUpdateActivation STATIC application/release/UpdateActivation.cpp
 add_library(HoroEngine::UpdateActivation ALIAS HoroUpdateActivation)
 target_compile_features(HoroUpdateActivation PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateActivation PUBLIC HoroEngine::UpdateDownload HoroEngine::Platform)
+
+add_library(HoroUserStateMigration STATIC application/release/UserStateMigration.cpp
+        application/release/UserStateMigrationErrors.cpp)
+add_library(HoroEngine::UserStateMigration ALIAS HoroUserStateMigration)
+target_compile_features(HoroUserStateMigration PUBLIC cxx_std_20)
+target_link_libraries(HoroUserStateMigration PUBLIC HoroEngine::Platform)
 
 add_library(HoroProjectMigrations STATIC
         ${HORO_PROJECT_MIGRATION_CATALOG_CPP}

@@ -110,6 +110,7 @@ if(HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditor
         HoroEditor/main.cpp
         HoroEditor/app/HoroEditorApp.cpp
+        HoroEditor/app/EditorUserStateMigration.cpp
     )
 
     if(APPLE)
@@ -229,9 +230,11 @@ if(HORO_BUILD_EDITOR_GUI)
             HoroEngine::Extensions
             HoroEngine::Platform
             HoroEngine::ProjectMigrations
+            HoroEngine::UserStateMigration
             HoroEngine::InputSdl
             HoroHostModuleComposition
             HoroThirdParty::ImGui
+            nlohmann_json::nlohmann_json
     )
 
     if(HORO_ENABLE_OPENTELEMETRY)
