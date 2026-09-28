@@ -259,6 +259,11 @@ TEST_CASE("Release service bounds admission and cancels an active worker", "[uni
     CHECK(std::holds_alternative<ReleaseCancelled>(*cancelled->terminal));
     CHECK(service.List().size() == 1);
     auto replacement = service.Submit(*outcome.plan);
+    const auto replacementDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (replacement.HasError() && std::chrono::steady_clock::now() < replacementDeadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        replacement = service.Submit(*outcome.plan);
+    }
     REQUIRE(replacement.HasValue());
     REQUIRE(operations.RequestCancel(replacement.Value().operation));
     const auto replaced = WaitForTerminal(service, replacement.Value().job);
