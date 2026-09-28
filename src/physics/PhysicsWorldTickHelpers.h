@@ -219,7 +219,7 @@ namespace Horo::Physics::Detail {
             impl.statistics.droppedEventCount =
                 SaturatingAdd(impl.statistics.droppedEventCount, impl.queryEvents.events.DroppedRecordCount());
             if (impl.queryEvents.events.DroppedRecordCount() != 0)
-                impl.RecordEventOverflowDiagnostic(input.sceneGeneration, input.simulationTick);
+                impl.RecordEventDropDiagnostic(input.sceneGeneration, input.simulationTick, true);
             impl.queryEvents.events.AbortTick();
             return result;
         }
@@ -227,7 +227,7 @@ namespace Horo::Physics::Detail {
         impl.statistics.eventDepth = result.Value().publishedRecordCount;
         impl.statistics.maximumEventDepth = std::max(impl.statistics.maximumEventDepth, impl.statistics.eventDepth);
         if (result.Value().droppedRecordCount != 0)
-            impl.RecordEventOverflowDiagnostic(input.sceneGeneration, input.simulationTick);
+            impl.RecordEventDropDiagnostic(input.sceneGeneration, input.simulationTick, result.Value().overflowed);
         return result;
     }
 
