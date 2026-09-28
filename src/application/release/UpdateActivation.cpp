@@ -64,8 +64,7 @@ namespace Horo::Release {
                 return false;
             const auto isDirectory = [](const std::filesystem::path &path) {
                 std::error_code error;
-                const auto status = std::filesystem::symlink_status(path, error);
-                return !error && std::filesystem::is_directory(status);
+                return std::filesystem::is_directory(std::filesystem::symlink_status(path, error)) && !error;
             };
             if (!isDirectory(paths.root) || !isDirectory(paths.versions))
                 return false;
