@@ -107,12 +107,14 @@ namespace Horo::Release {
         [[nodiscard]] bool ValidRequest(const BootstrapInstallationRequest &request, const InstallPaths &paths) {
             const auto &selection = request.candidate.package.selection;
             const auto &artifact = selection.artifact;
+            const bool zip = selection.format == DistributionPackageFormat::ZipArchive;
+            const bool linuxTar =
+                selection.format == DistributionPackageFormat::TarGzip && artifact.platform == DistributionPlatform::Linux;
             if (const auto &id = artifact.package.value;
                 !CanonicalAbsolute(paths.root) || request.healthTimeout.count() <= 0 || request.healthTimeout > std::chrono::minutes{5} ||
                 !artifact.installation || artifact.artifactClass != DistributionArtifactClass::InstallableProduct ||
-                !IsValidDistributionIdentity(id) || request.candidate.stageRoot != paths.versions / id ||
-                request.candidate.packageFile != paths.versions / (id + ".zip") ||
-                selection.format != DistributionPackageFormat::ZipArchive)
+                !IsValidDistributionIdentity(id) || request.candidate.stageRoot != paths.versions / id || (!zip && !linuxTar) ||
+                request.candidate.packageFile != paths.versions / (id + (zip ? ".zip" : ".tar.gz")))
                 return false;
             if (const auto isDirectory = [](const std::filesystem::path &path) {
                 std::error_code error;
