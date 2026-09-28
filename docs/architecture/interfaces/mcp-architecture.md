@@ -390,7 +390,11 @@ work through `InvokeAsync`, retain its completion callback, and return promptly
 from the owner pump. Progress and the exactly-once terminal callback may arrive
 from an application worker. Short synchronous adapters use the default
 `InvokeAsync` bridge; slow synchronous work belongs on the host's Background or
-Build scheduler. No controller-owned thread or process is created.
+Build scheduler. No controller-owned thread or process is created. An async
+adapter retains its application-owner lease and invokes completion even after
+cancellation; on a drain timeout, host composition must keep that owner alive
+until its jobs/processes have stopped and callbacks have completed. Controller
+destruction cannot forcibly terminate an application-owned job or process.
 
 ## Error Handling
 

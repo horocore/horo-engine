@@ -38,9 +38,9 @@ namespace {
         }
 
         void InvokeAsync(const nlohmann::json &, const McpRequestContext &context,
-                         std::function<void(Result<nlohmann::json>)> complete) override {
+                         const std::function<void(Result<nlohmann::json>)> &complete) override {
             savedContext = context;
-            completion = std::move(complete);
+            completion = complete;
         }
 
         McpRequestContext savedContext;
@@ -76,6 +76,24 @@ namespace {
         std::condition_variable condition_;
         bool entered_{};
         bool released_{};
+    };
+
+    class CompleteBeforeReturnAdapter final : public IMcpToolAdapter {
+    public:
+        explicit CompleteBeforeReturnAdapter(std::shared_ptr<Gate> gate) : gate_(std::move(gate)) {}
+
+        Result<nlohmann::json> Invoke(const nlohmann::json &, const McpRequestContext &) override {
+            return Result<nlohmann::json>::Failure(MakeError(McpErrors::ControllerFailed));
+        }
+
+        void InvokeAsync(const nlohmann::json &, const McpRequestContext &,
+                         const std::function<void(Result<nlohmann::json>)> &complete) override {
+            complete(Result<nlohmann::json>::Success({{"ok", true}}));
+            gate_->Enter();
+        }
+
+    private:
+        std::shared_ptr<Gate> gate_;
     };
 
     McpToolRegistration Tool(const std::shared_ptr<IMcpToolAdapter> &adapter, McpOwnerContext owner = McpOwnerContext::Editor) {
@@ -302,6 +320,46 @@ TEST_CASE("MCP shutdown drains deferred application completion after bounded tim
     CHECK(adapter->savedContext.IsStopRequested());
     adapter->completion(Result<nlohmann::json>::Success({{"ok", true}}));
     CHECK(Get(*controller, context, id)["status"] == "cancelled");
+    CHECK(controller->Shutdown().HasValue());
+}
+
+TEST_CASE("MCP deferred callback remains safe after a timed-out controller destructor", "[mcp][controller]") {
+    auto adapter = std::make_shared<DeferredAdapter>();
+    const std::weak_ptr<DeferredAdapter> weakAdapter = adapter;
+    McpControllerLimits limits;
+    limits.shutdownDrainTimeout = std::chrono::milliseconds{10};
+    auto controller = Controller(adapter, limits);
+    REQUIRE(controller->BindOwner(McpOwnerContext::Editor).HasValue());
+    const auto context = Context();
+    REQUIRE(controller->Dispatch(Call(), context).HasValue());
+    REQUIRE(controller->Pump(McpOwnerContext::Editor).Value() == 1);
+    const auto savedContext = adapter->savedContext;
+    auto complete = std::move(adapter->completion);
+    adapter.reset();
+    controller.reset();
+    CHECK(savedContext.IsStopRequested());
+    CHECK(weakAdapter.expired());
+    CHECK_NOTHROW(complete(Result<nlohmann::json>::Success({{"ok", true}})));
+}
+
+TEST_CASE("MCP shutdown waits for an owner pump after its callback completes", "[mcp][controller]") {
+    auto gate = std::make_shared<Gate>();
+    auto adapter = std::make_shared<CompleteBeforeReturnAdapter>(gate);
+    McpControllerLimits limits;
+    limits.shutdownDrainTimeout = std::chrono::milliseconds{10};
+    auto controller = Controller(adapter, limits, McpOwnerContext::Background);
+    const auto context = Context();
+    REQUIRE(controller->Dispatch(Call(), context).HasValue());
+    std::thread owner([&] {
+        REQUIRE(controller->BindOwner(McpOwnerContext::Background).HasValue());
+        static_cast<void>(controller->Pump(McpOwnerContext::Background));
+    });
+    gate->Wait();
+    const auto draining = controller->Shutdown();
+    REQUIRE(draining.HasError());
+    CHECK(draining.ErrorValue().code.Value() == McpErrors::DrainTimedOut.code.Value());
+    gate->Release();
+    owner.join();
     CHECK(controller->Shutdown().HasValue());
 }
 

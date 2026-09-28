@@ -1,5 +1,6 @@
 #include "Horo/Mcp/McpController.h"
 
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Mcp/McpErrors.h"
 
@@ -9,11 +10,11 @@
 #include <cmath>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
-#include <vector>
 
 namespace Horo::Mcp {
     namespace {
@@ -31,18 +32,19 @@ namespace Horo::Mcp {
         }
 
         [[nodiscard]] std::string_view Name(const OperationState state) noexcept {
+            using enum OperationState;
             switch (state) {
-                case OperationState::Queued:
+                case Queued:
                     return "queued";
-                case OperationState::Running:
+                case Running:
                     return "running";
-                case OperationState::Succeeded:
+                case Succeeded:
                     return "succeeded";
-                case OperationState::Failed:
+                case Failed:
                     return "failed";
-                case OperationState::Cancelled:
+                case Cancelled:
                     return "cancelled";
-                case OperationState::TimedOut:
+                case TimedOut:
                     return "timed_out";
             }
             return "failed";
@@ -75,10 +77,11 @@ namespace Horo::Mcp {
                                     {"operationId", operation.id},
                                     {"tool", operation.tool.value},
                                     {"status", Name(operation.state)},
-                                    {"progress", operation.progress ? nlohmann::json(*operation.progress) : nlohmann::json(nullptr)},
+                                    {"progress",
+                                     operation.progress.has_value() ? nlohmann::json(*operation.progress) : nlohmann::json(nullptr)},
                                     {"phase", operation.phase},
                                     {"result", operation.result.value_or(nullptr)},
-                                    {"error", operation.error ? SafeErrorData(*operation.error) : nlohmann::json{nullptr}}};
+                                    {"error", operation.error.has_value() ? SafeErrorData(*operation.error) : nlohmann::json{nullptr}}};
             return value;
         }
 
@@ -98,7 +101,7 @@ namespace Horo::Mcp {
     }  // namespace
 
     struct McpController::State final : std::enable_shared_from_this<State> {
-        explicit State(std::shared_ptr<McpToolRegistry> registryValue, McpControllerLimits limitsValue)
+        explicit State(std::shared_ptr<McpToolRegistry> registryValue, const McpControllerLimits &limitsValue)
             : registry(std::move(registryValue)), limits(limitsValue) {}
 
         std::mutex mutex;
@@ -116,27 +119,31 @@ namespace Horo::Mcp {
         std::size_t callbacks{};
         bool stopping{};
 
+        void PruneRecent() {
+            while (recent.size() > limits.maximumRecent) {
+                operations.erase(recent.front());
+                recent.pop_front();
+            }
+        }
+
         /** @brief Publishes exactly one terminal state while holding mutex. */
         void Finish(const std::shared_ptr<Operation> &operation, const OperationState terminal, std::optional<Error> error = {},
-                    std::optional<nlohmann::json> result = {}) {
+                    std::optional<nlohmann::json> result = {}, const bool prune = true) {
             if (Terminal(operation->state))
                 return;
             if (operation->state == OperationState::Queued) {
                 auto &queue = queues[Index(operation->owner)];
                 std::erase(queue, operation);
                 --pending;
+                operation->snapshot.reset();
             }
             --active;
             operation->state = terminal;
             operation->error = std::move(error);
             operation->result = std::move(result);
             recent.push_back(operation->id);
-            while (recent.size() > limits.maximumRecent) {
-                operations.erase(recent.front());
-                recent.pop_front();
-            }
-            if (limits.maximumRecent == 0)
-                operations.erase(operation->id);
+            if (prune)
+                PruneRecent();
             drained.notify_all();
         }
 
@@ -197,7 +204,7 @@ namespace Horo::Mcp {
             };
             operation->owner = owner;
             operation->snapshot = std::move(snapshot);
-            operations.emplace(operation->id, operation);
+            operations.try_emplace(operation->id, operation);
             queues[Index(owner)].push_back(operation);
             ++pending;
             ++active;
@@ -206,13 +213,16 @@ namespace Horo::Mcp {
         }
 
         /** @brief Finalizes a deferred callback and releases one shutdown drain lease. */
-        void Complete(const std::shared_ptr<Operation> &operation, Result<nlohmann::json> outcome) {
+        void Complete(const std::shared_ptr<Operation> &operation, Result<nlohmann::json> outcome) noexcept {
             std::lock_guard lock{mutex};
-            if (operation && !StopIfRequested(operation)) {
-                if (outcome.HasValue())
-                    Finish(operation, OperationState::Succeeded, {}, std::move(outcome).Value());
-                else
-                    Finish(operation, OperationState::Failed, outcome.ErrorValue());
+            try {
+                if (operation && !StopIfRequested(operation)) {
+                    if (outcome.HasValue())
+                        Finish(operation, OperationState::Succeeded, {}, std::move(outcome).Value());
+                    else
+                        Finish(operation, OperationState::Failed, outcome.ErrorValue());
+                }
+            } catch (...) {  // Completion bookkeeping must drain even if result publication runs out of memory.
             }
             --callbacks;
             drained.notify_all();
@@ -224,13 +234,19 @@ namespace Horo::Mcp {
         if (registry == nullptr || !ValidLimits(limits))
             return Result<std::shared_ptr<McpController>>::Failure(MakeError(McpErrors::ConfigurationInvalid));
         return Result<std::shared_ptr<McpController>>::Success(
-            std::shared_ptr<McpController>(new McpController(std::make_shared<State>(std::move(registry), limits))));
+            std::make_shared<McpController>(ConstructionKey{}, std::make_shared<State>(std::move(registry), limits)));
     }
 
-    McpController::McpController(std::shared_ptr<State> state) noexcept : state_(std::move(state)) {}
+    McpController::McpController(ConstructionKey, std::shared_ptr<State> state) noexcept : state_(std::move(state)) {}
 
-    McpController::~McpController() {
-        static_cast<void>(Shutdown());
+    McpController::~McpController() noexcept {
+        try {
+            if (Shutdown().HasError())
+                Log::Logger::WriteEmergency("mcp.controller", Log::Level::Error,
+                                            "Controller destroyed before application callbacks drained.");
+        } catch (...) {  // Shutdown is best-effort in a destructor; callback leases remain independently owned.
+            Log::Logger::WriteEmergency("mcp.controller", Log::Level::Error, "Controller shutdown threw during destruction.");
+        }
     }
 
     /** @copydoc McpController::Dispatch */
@@ -243,7 +259,7 @@ namespace Horo::Mcp {
     }
 
     /** @copydoc McpController::DispatchList */
-    Result<nlohmann::json> McpController::DispatchList(const McpRequestContext &context) {
+    Result<nlohmann::json> McpController::DispatchList(const McpRequestContext &context) const {
         std::lock_guard lock{state_->mutex};
         if (state_->stopping)
             return Result<nlohmann::json>::Failure(MakeError(McpErrors::ShuttingDown));
@@ -260,9 +276,9 @@ namespace Horo::Mcp {
     }
 
     /** @copydoc McpController::DispatchOperation */
-    Result<nlohmann::json> McpController::DispatchOperation(const McpRequest &request, const McpRequestContext &context) {
+    Result<nlohmann::json> McpController::DispatchOperation(const McpRequest &request, const McpRequestContext &context) const {
         const auto id = OperationId(request.params);
-        if (!id)
+        if (!id.has_value())
             return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
         std::lock_guard lock{state_->mutex};
         const auto found = state_->operations.find(*id);
@@ -279,7 +295,7 @@ namespace Horo::Mcp {
     }
 
     /** @copydoc McpController::DispatchCall */
-    Result<nlohmann::json> McpController::DispatchCall(const McpRequest &request, const McpRequestContext &context) {
+    Result<nlohmann::json> McpController::DispatchCall(const McpRequest &request, const McpRequestContext &context) const {
         if (request.method != "tools/call" || !request.params.is_object() || !request.params.contains("name") ||
             !request.params["name"].is_string() || !request.params.contains("arguments") || !request.params["arguments"].is_object())
             return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
@@ -287,7 +303,14 @@ namespace Horo::Mcp {
         const McpToolId tool{request.params["name"].get<std::string>()};
         if (tool.value.empty() || tool.value.size() > 128)
             return Result<nlohmann::json>::Failure(MakeError(McpErrors::RequestInvalid));
-        const auto snapshot = state_->registry->Read();
+        std::shared_ptr<McpToolRegistry> registry;
+        {
+            std::lock_guard lock{state_->mutex};
+            if (state_->stopping)
+                return Result<nlohmann::json>::Failure(MakeError(McpErrors::ShuttingDown));
+            registry = state_->registry;
+        }
+        const auto snapshot = registry->Read();
         if (context.registryRevision != 0 && context.registryRevision != snapshot->Generation())
             return Result<nlohmann::json>::Failure(MakeError(McpErrors::RegistryRevisionStale));
         const auto owner = snapshot->Owner(tool, context.capabilities);
@@ -311,21 +334,21 @@ namespace Horo::Mcp {
     }
 
     /** @copydoc McpController::BindOwner */
-    Result<void> McpController::BindOwner(const McpOwnerContext owner) {
+    Result<void> McpController::BindOwner(const McpOwnerContext owner) const {
         if (owner > McpOwnerContext::Build)
             return Result<void>::Failure(MakeError(McpErrors::OwnerUnavailable));
         std::lock_guard lock{state_->mutex};
         if (state_->stopping)
             return Result<void>::Failure(MakeError(McpErrors::ShuttingDown));
         auto &bound = state_->owners[Index(owner)];
-        if (bound && *bound != std::this_thread::get_id())
+        if (bound.has_value() && *bound != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(McpErrors::OwnerUnavailable));
         bound = std::this_thread::get_id();
         return Result<void>::Success();
     }
 
     /** @copydoc McpController::Pump */
-    Result<std::size_t> McpController::Pump(const McpOwnerContext owner) {
+    Result<std::size_t> McpController::Pump(const McpOwnerContext owner) const {
         if (owner > McpOwnerContext::Build)
             return Result<std::size_t>::Failure(MakeError(McpErrors::OwnerUnavailable));
         const auto state = state_;
@@ -340,16 +363,27 @@ namespace Horo::Mcp {
             std::shared_ptr<State> state;
             McpOwnerContext owner;
 
-            ~PumpGuard() {
+            PumpGuard(std::shared_ptr<State> stateValue, const McpOwnerContext ownerValue)
+                : state(std::move(stateValue)), owner(ownerValue) {}
+
+            PumpGuard(const PumpGuard &) = delete;
+            PumpGuard &operator=(const PumpGuard &) = delete;
+            PumpGuard(PumpGuard &&) = delete;
+            PumpGuard &operator=(PumpGuard &&) = delete;
+
+            ~PumpGuard() noexcept {
                 std::lock_guard lock{state->mutex};
                 state->pumping[Index(owner)] = false;
+                state->drained.notify_all();
             }
-        } guard{state, owner};
+        };
+
+        PumpGuard guard{state, owner};
 
         std::size_t executed{};
         for (std::size_t count = 0; count < state->limits.maximumPumpBatch; ++count) {
             const auto step = PumpOne(owner);
-            if (!step)
+            if (!step.has_value())
                 break;
             executed += *step ? 1 : 0;
         }
@@ -357,8 +391,9 @@ namespace Horo::Mcp {
     }
 
     /** @copydoc McpController::PumpOne */
-    std::optional<bool> McpController::PumpOne(const McpOwnerContext owner) {
+    std::optional<bool> McpController::PumpOne(const McpOwnerContext owner) const {
         const auto state = state_;
+        const auto completed = std::make_shared<std::atomic_bool>(false);
         std::shared_ptr<Operation> operation;
         {
             std::lock_guard lock{state->mutex};
@@ -373,13 +408,8 @@ namespace Horo::Mcp {
             operation->state = OperationState::Running;
             ++state->callbacks;
         }
-        const auto completed = std::make_shared<std::atomic_bool>(false);
-        auto complete = [weakState = std::weak_ptr<State>{state}, weakOperation = std::weak_ptr<Operation>{operation},
-                         completed](Result<nlohmann::json> outcome) {
+        auto complete = [state, weakOperation = std::weak_ptr<Operation>{operation}, completed](Result<nlohmann::json> outcome) {
             if (completed->exchange(true))
-                return;
-            const auto state = weakState.lock();
-            if (!state)
                 return;
             state->Complete(weakOperation.lock(), std::move(outcome));
         };
@@ -393,24 +423,23 @@ namespace Horo::Mcp {
     }
 
     /** @copydoc McpController::Shutdown */
-    Result<void> McpController::Shutdown() {
+    Result<void> McpController::Shutdown() const {
         const auto state = state_;
         std::unique_lock lock{state->mutex};
         state->stopping = true;
-        std::vector<std::shared_ptr<Operation>> active;
-        active.reserve(state->operations.size());
+        state->registry.reset();
         for (const auto &[id, operation] : state->operations) {
             static_cast<void>(id);
-            active.push_back(operation);
-        }
-        for (const auto &operation : active) {
             if (!Terminal(operation->state)) {
                 operation->cancellation.RequestCancellation();
-                state->Finish(operation, OperationState::Cancelled, MakeError(McpErrors::RequestCancelled));
+                state->Finish(operation, OperationState::Cancelled, MakeError(McpErrors::RequestCancelled), {}, false);
             }
         }
+        state->PruneRecent();
+        // An adapter may retain the callback, which keeps State alive. Shutdown has
+        // removed the State-to-registry edge, so that lease cannot form a cycle.
         if (!state->drained.wait_for(lock, state->limits.shutdownDrainTimeout, [&state] {
-            return state->callbacks == 0;
+            return state->callbacks == 0 && std::ranges::none_of(state->pumping, std::identity{});
         }))
             return Result<void>::Failure(MakeError(McpErrors::DrainTimedOut));
         return Result<void>::Success();

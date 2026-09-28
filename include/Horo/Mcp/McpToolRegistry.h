@@ -73,9 +73,11 @@ namespace Horo::Mcp {
          * @param arguments Schema-validated input. @param context Operation authority and progress callback.
          * @param complete Exactly-once completion callback, safe to invoke from a host worker.
          * @note Default implementation invokes the synchronous adapter on the owner thread.
-         * Async implementations retain complete and a copy of context until application work finishes. */
+         * Async implementations retain complete, a copy of context, and their application-owner lease until work
+         * finishes. They must request/observe context cancellation and invoke complete exactly once, including after
+         * cancellation. A bounded controller drain timeout does not terminate application-owned jobs or processes. */
         virtual void InvokeAsync(const nlohmann::json &arguments, const McpRequestContext &context,
-                                 std::function<void(Result<nlohmann::json>)> complete);
+                                 const std::function<void(Result<nlohmann::json>)> &complete);
     };
 
     /** @brief Host execution context that owns an adapter's application capability. */

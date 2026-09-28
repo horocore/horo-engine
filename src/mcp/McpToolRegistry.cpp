@@ -14,7 +14,7 @@
 namespace Horo::Mcp {
     /** @copydoc IMcpToolAdapter::InvokeAsync */
     void IMcpToolAdapter::InvokeAsync(const nlohmann::json &arguments, const McpRequestContext &context,
-                                      std::function<void(Result<nlohmann::json>)> complete) {
+                                      const std::function<void(Result<nlohmann::json>)> &complete) {
         complete(Invoke(arguments, context));
     }
 
