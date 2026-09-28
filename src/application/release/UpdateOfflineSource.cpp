@@ -61,9 +61,9 @@ namespace Horo::Release {
             if (error || size == 0U || size > MaximumManifestBytes)
                 return Result<std::string>::Failure(MakeError(UpdateOfflineSourceErrors::UnsafePath));
             std::string bytes(static_cast<std::size_t>(size), '\0');
-            std::ifstream stream(path, std::ios::binary);
-            if (!stream || !stream.read(bytes.data(), static_cast<std::streamsize>(bytes.size())) ||
-                stream.peek() != std::char_traits<char>::eof() || stream.bad())
+            if (std::ifstream stream(path, std::ios::binary); !stream ||
+                                                              !stream.read(bytes.data(), static_cast<std::streamsize>(bytes.size())) ||
+                                                              stream.peek() != std::char_traits<char>::eof() || stream.bad())
                 return Result<std::string>::Failure(MakeError(UpdateOfflineSourceErrors::UnsafePath));
             return Result<std::string>::Success(std::move(bytes));
         }
@@ -76,8 +76,7 @@ namespace Horo::Release {
                 return Result<std::filesystem::path>::Failure(checked.ErrorValue());
             if (auto checked = CheckType(path, std::filesystem::file_type::regular); checked.HasError())
                 return Result<std::filesystem::path>::Failure(checked.ErrorValue());
-            std::error_code error;
-            if (std::filesystem::file_size(path, error) != package.size || error)
+            if (std::error_code error; std::filesystem::file_size(path, error) != package.size || error)
                 return Result<std::filesystem::path>::Failure(MakeError(UpdateOfflineSourceErrors::MirrorMismatch));
             return Result<std::filesystem::path>::Success(path);
         }
@@ -133,9 +132,8 @@ namespace Horo::Release {
 
         /** @brief Managed identities and fields are bounded before any source access. */
         [[nodiscard]] bool ValidSource(const UpdateOfflineSource &source) {
-            const bool validKind = source.kind == UpdateOfflineSourceKind::LocalDirectory ||
-                                   source.kind == UpdateOfflineSourceKind::RemovableMedia ||
-                                   source.kind == UpdateOfflineSourceKind::EnterpriseMirror;
+            using enum UpdateOfflineSourceKind;
+            const bool validKind = source.kind == LocalDirectory || source.kind == RemovableMedia || source.kind == EnterpriseMirror;
             return validKind && IsValidDistributionIdentity(source.sourceId) && IsValidDistributionIdentity(source.channel) &&
                    source.root.is_absolute() && NoTraversal(source.root) && source.maximumExpiredManifestSeconds <= 30U * 24U * 60U * 60U;
         }

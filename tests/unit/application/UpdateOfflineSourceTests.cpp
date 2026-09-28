@@ -170,6 +170,49 @@ namespace {
             return Result<void>::Success();
         }
     };
+
+    void ActivateImportedAgainstInstalledVersion(const Fixture &fixture, const std::filesystem::path &installation,
+                                                 const ImportedOfflineUpdate &imported, NativeDurableFileSystem &files,
+                                                 Security::ArtifactVerifier &verifier) {
+        const auto versions = installation / "versions";
+        const auto oldVersion = ParseReleaseVersion("0.4.1");
+        REQUIRE(oldVersion.HasValue());
+        DistributionArtifactIdentity oldIdentity;
+        oldIdentity.product = {DistributionProductKind::Editor, {}};
+        oldIdentity.version = EngineProductVersion{oldVersion.Value()};
+        oldIdentity.platform = DistributionPlatform::Windows;
+        oldIdentity.architecture = DistributionArchitecture::X64;
+        oldIdentity.build = {"build-old"};
+        oldIdentity.package = {"old"};
+        oldIdentity.installation = DistributionInstallationId{"horo-editor"};
+        oldIdentity.artifactClass = DistributionArtifactClass::InstallableProduct;
+        const auto selection = ValidateDistributionPackageSelection(oldIdentity, DistributionPackageFormat::ZipArchive);
+        REQUIRE(selection.HasValue());
+        const auto digest = ComputeSha256(std::as_bytes(std::span{fixture.archive}));
+        UpdatePackageRecord oldPackage{selection.Value(), "https://updates.example.test/old.zip", fixture.archive.size(), digest,
+                                       Signature(digest)};
+        const UpdateTransferCheckpoint oldCheckpoint{digest,         fixture.archive.size(), fixture.archive.size(),
+                                                     oldPackage.url, oldPackage.url,         {}};
+        const auto oldFile = versions / "old.zip";
+        const auto oldStage = versions / "old";
+        std::ofstream(oldFile, std::ios::binary).write(fixture.archive.data(), static_cast<std::streamsize>(fixture.archive.size()));
+        REQUIRE(
+            StageVerifiedZipUpdate({oldPackage, oldCheckpoint, oldFile, oldStage, fixture.archiveLimits}, files, verifier, {}).HasValue());
+        const auto activeRecord = EncodeActiveUpdateRecord(oldPackage);
+        REQUIRE(activeRecord.HasValue());
+        REQUIRE(files.WriteDurable(installation / "active-version", std::as_bytes(std::span{activeRecord.Value()})).HasValue());
+        constexpr std::string_view content = "verified offline editor";
+        const std::vector<UpdateStagedFile> inventory{{"bin/editor", content.size(), ComputeSha256(std::as_bytes(std::span{content}))}};
+        UpdateActivationRequest activation{installation,
+                                           {oldPackage, oldCheckpoint, oldFile, oldStage, inventory},
+                                           {imported.package, imported.checkpoint, fixture.privatePaths.partialFile, fixture.stageRoot,
+                                            inventory},
+                                           fixture.archiveLimits};
+        ActivationHost host;
+        const auto outcome = ActivateVerifiedUpdate(activation, files, verifier, host);
+        REQUIRE(outcome.HasValue());
+        CHECK(outcome.Value() == UpdateActivationOutcome::Activated);
+    }
 }  // namespace
 
 TEST_CASE("Offline source order is stable and identities are unique", "[release][update][offline]") {
@@ -330,40 +373,5 @@ TEST_CASE("Authenticated offline package activates through the normal version sw
     auto imported = ImportOfflineZipUpdate(Request(fixture), files, provider, {});
     REQUIRE(imported.HasValue());
 
-    const auto oldVersion = ParseReleaseVersion("0.4.1");
-    REQUIRE(oldVersion.HasValue());
-    DistributionArtifactIdentity oldIdentity;
-    oldIdentity.product = {DistributionProductKind::Editor, {}};
-    oldIdentity.version = EngineProductVersion{oldVersion.Value()};
-    oldIdentity.platform = DistributionPlatform::Windows;
-    oldIdentity.architecture = DistributionArchitecture::X64;
-    oldIdentity.build = {"build-old"};
-    oldIdentity.package = {"old"};
-    oldIdentity.installation = DistributionInstallationId{"horo-editor"};
-    oldIdentity.artifactClass = DistributionArtifactClass::InstallableProduct;
-    const auto selection = ValidateDistributionPackageSelection(oldIdentity, DistributionPackageFormat::ZipArchive);
-    REQUIRE(selection.HasValue());
-    const auto digest = ComputeSha256(std::as_bytes(std::span{fixture.archive}));
-    UpdatePackageRecord oldPackage{selection.Value(), "https://updates.example.test/old.zip", fixture.archive.size(), digest,
-                                   Signature(digest)};
-    const UpdateTransferCheckpoint oldCheckpoint{digest,         fixture.archive.size(), fixture.archive.size(),
-                                                 oldPackage.url, oldPackage.url,         {}};
-    const auto oldFile = versions / "old.zip";
-    const auto oldStage = versions / "old";
-    std::ofstream(oldFile, std::ios::binary).write(fixture.archive.data(), static_cast<std::streamsize>(fixture.archive.size()));
-    REQUIRE(StageVerifiedZipUpdate({oldPackage, oldCheckpoint, oldFile, oldStage, fixture.archiveLimits}, files, verifier, {}).HasValue());
-    const auto activeRecord = EncodeActiveUpdateRecord(oldPackage);
-    REQUIRE(activeRecord.HasValue());
-    REQUIRE(files.WriteDurable(installation / "active-version", std::as_bytes(std::span{activeRecord.Value()})).HasValue());
-    constexpr std::string_view content = "verified offline editor";
-    const std::vector<UpdateStagedFile> inventory{{"bin/editor", content.size(), ComputeSha256(std::as_bytes(std::span{content}))}};
-    UpdateActivationRequest activation{installation,
-                                       {oldPackage, oldCheckpoint, oldFile, oldStage, inventory},
-                                       {imported.Value().package, imported.Value().checkpoint, fixture.privatePaths.partialFile,
-                                        fixture.stageRoot, inventory},
-                                       fixture.archiveLimits};
-    ActivationHost host;
-    const auto outcome = ActivateVerifiedUpdate(activation, files, verifier, host);
-    REQUIRE(outcome.HasValue());
-    CHECK(outcome.Value() == UpdateActivationOutcome::Activated);
+    ActivateImportedAgainstInstalledVersion(fixture, installation, imported.Value(), files, verifier);
 }
