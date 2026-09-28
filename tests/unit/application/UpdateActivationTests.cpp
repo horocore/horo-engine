@@ -1,3 +1,4 @@
+#include "Horo/Release/BootstrapInstallation.h"
 #include "Horo/Release/UpdateActivation.h"
 #include "Horo/Release/UpdateActivationErrors.h"
 #include "Horo/Release/UpdateRollback.h"
@@ -132,8 +133,26 @@ namespace {
         return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
     }
 
-    class Host final : public IUpdateActivationHost {
+    class Host final : public IBootstrapInstallationHost {
     public:
+        [[nodiscard]] Horo::Result<void> Preflight(const BootstrapInstallationRequest &) override {
+            ++preflights;
+            return admissible ? Horo::Result<void>::Success()
+                              : Horo::Result<void>::Failure(Horo::Error{Horo::ErrorCode{"test.preflight"}, Horo::ErrorDomainId{"test"}});
+        }
+
+        [[nodiscard]] Horo::Result<void> Register(const BootstrapInstallationRequest &) override {
+            ++registrations;
+            return registrationSucceeds
+                       ? Horo::Result<void>::Success()
+                       : Horo::Result<void>::Failure(Horo::Error{Horo::ErrorCode{"test.register"}, Horo::ErrorDomainId{"test"}});
+        }
+
+        [[nodiscard]] Horo::Result<void> Unregister(const BootstrapInstallationRequest &) override {
+            ++unregistrations;
+            return Horo::Result<void>::Success();
+        }
+
         [[nodiscard]] Horo::Result<void> EnsureProductsStopped(const std::filesystem::path &) override {
             ++stops;
             return Horo::Result<void>::Success();
@@ -147,10 +166,23 @@ namespace {
         }
 
         bool healthy{true};
+        bool admissible{true};
+        bool registrationSucceeds{true};
         unsigned stops{};
         unsigned probes{};
+        unsigned preflights{};
+        unsigned registrations{};
+        unsigned unregistrations{};
         std::chrono::seconds observedTimeout{};
     };
+
+    [[nodiscard]] BootstrapInstallationRequest BootstrapRequest(const TemporaryInstall &install, Horo::NativeDurableFileSystem &files,
+                                                                const Horo::Security::ArtifactVerifier &verifier) {
+        return {install.root,
+                Version(install, "new", files, verifier),
+                {.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U},
+                std::chrono::seconds{2}};
+    }
 }  // namespace
 
 TEST_CASE("Verified update activation atomically selects the healthy staged version", "[release][update]") {
@@ -307,6 +339,135 @@ TEST_CASE("A foreign recovery journal cannot switch an installation", "[release]
     REQUIRE(previous.HasValue());
     CHECK(Read(install.root / "active-version") == previous.Value());
     CHECK(Read(install.root / "activation.pending") == foreign);
+    CHECK(host.probes == 0U);
+}
+
+TEST_CASE("First install activates only an authenticated healthy version", "[release][install]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    Host host;
+    auto result = BootstrapVerifiedInstallation(request, files, verifier, host);
+    REQUIRE(result.HasValue());
+    CHECK(result.Value() == BootstrapInstallationOutcome::Installed);
+    auto expected = EncodeActiveUpdateRecord(request.candidate.package);
+    REQUIRE(expected.HasValue());
+    CHECK(Read(install.root / "active-version") == expected.Value());
+    CHECK_FALSE(std::filesystem::exists(install.root / "bootstrap.pending"));
+    CHECK(host.preflights == 1U);
+    CHECK(host.registrations == 1U);
+    CHECK(host.unregistrations == 0U);
+    CHECK(host.probes == 1U);
+}
+
+TEST_CASE("Failed first launch leaves no active product or operating-system registration", "[release][install]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    Host host;
+    host.healthy = false;
+    CHECK(BootstrapVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK_FALSE(std::filesystem::exists(install.root / "active-version"));
+    CHECK_FALSE(std::filesystem::exists(install.root / "bootstrap.pending"));
+    CHECK(host.registrations == 1U);
+    CHECK(host.unregistrations == 1U);
+}
+
+TEST_CASE("First install refuses an existing active version and a failed preflight", "[release][install]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    Host host;
+    host.admissible = false;
+    CHECK(BootstrapVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK(host.registrations == 0U);
+    host.admissible = true;
+    const std::string existing = "another-installed-product";
+    REQUIRE(files.WriteDurable(install.root / "active-version", std::as_bytes(std::span{existing})).HasValue());
+    CHECK(BootstrapVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK(Read(install.root / "active-version") == existing);
+    CHECK(host.registrations == 0U);
+}
+
+TEST_CASE("Interrupted first install removes only its own active pointer", "[release][install]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    auto record = EncodeActiveUpdateRecord(request.candidate.package);
+    REQUIRE(record.HasValue());
+    const std::string pending = "horo-bootstrap-install-v1\n" + record.Value();
+    REQUIRE(files.WriteDurable(install.root / "bootstrap.pending", std::as_bytes(std::span{pending})).HasValue());
+    REQUIRE(files.WriteDurable(install.root / "active-version", std::as_bytes(std::span{record.Value()})).HasValue());
+    Host host;
+    auto recovered = BootstrapVerifiedInstallation(request, files, verifier, host);
+    REQUIRE(recovered.HasValue());
+    CHECK(recovered.Value() == BootstrapInstallationOutcome::RecoveredIncomplete);
+    CHECK_FALSE(std::filesystem::exists(install.root / "active-version"));
+    CHECK_FALSE(std::filesystem::exists(install.root / "bootstrap.pending"));
+    CHECK(host.unregistrations == 1U);
+    CHECK(host.preflights == 0U);
+    CHECK(host.probes == 0U);
+}
+
+TEST_CASE("First install rejects a changed staged tree before registration", "[release][install]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    {
+        std::ofstream output(request.candidate.stageRoot / "bin/editor", std::ios::binary | std::ios::app);
+        output << "changed";
+    }
+    Host host;
+    CHECK(BootstrapVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK_FALSE(std::filesystem::exists(install.root / "active-version"));
+    CHECK(host.registrations == 0U);
+}
+
+TEST_CASE("Failed operating-system registration is undone before an install can retry", "[release][install]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    Host host;
+    host.registrationSucceeds = false;
+    CHECK(BootstrapVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK_FALSE(std::filesystem::exists(install.root / "active-version"));
+    CHECK_FALSE(std::filesystem::exists(install.root / "bootstrap.pending"));
+    CHECK(host.registrations == 1U);
+    CHECK(host.unregistrations == 1U);
+    CHECK(host.probes == 0U);
+}
+
+TEST_CASE("A foreign first-install journal cannot remove another product", "[release][install]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    const std::string foreign = "horo-bootstrap-install-v1\nforeign\n";
+    REQUIRE(files.WriteDurable(install.root / "bootstrap.pending", std::as_bytes(std::span{foreign})).HasValue());
+    Host host;
+    CHECK(BootstrapVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK(Read(install.root / "bootstrap.pending") == foreign);
+    CHECK(host.unregistrations == 0U);
+    CHECK(host.registrations == 0U);
+}
+
+TEST_CASE("First install respects the shared activation lock", "[release][install]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    auto held = files.TryAcquireExclusive(install.root / ".activation.lock", "existing-installation");
+    REQUIRE(held.HasValue());
+    Host host;
+    CHECK(BootstrapVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK(host.preflights == 0U);
+    CHECK(host.registrations == 0U);
     CHECK(host.probes == 0U);
 }
 
