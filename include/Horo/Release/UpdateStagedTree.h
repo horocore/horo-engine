@@ -14,6 +14,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Horo::Release {
     /** @brief Reserved ZIP entry for the signed package's canonical file inventory. */
@@ -36,6 +37,15 @@ namespace Horo::Release {
      */
     [[nodiscard]] Result<std::string> BuildCanonicalUpdateFileInventory(std::span<const UpdateStagedFile> files,
                                                                         const UpdateArchiveLimits &limits);
+
+    /**
+     * @brief Parses a signed package's canonical inventory with the same bounds as the encoder.
+     * @param bytes Complete internal inventory file, including its version header.
+     * @param limits Host archive limits used to admit the surrounding package.
+     * @return Exact paths, sizes, and digests or a noncanonical/unsafe inventory failure.
+     */
+    [[nodiscard]] Result<std::vector<UpdateStagedFile>> ParseCanonicalUpdateFileInventory(std::string_view bytes,
+                                                                                          const UpdateArchiveLimits &limits);
 
     /**
      * @brief Verifies every staged file and rejects undeclared content, links, or nonportable paths.

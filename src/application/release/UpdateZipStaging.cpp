@@ -1,5 +1,6 @@
 #include "Horo/Release/UpdateStageReady.h"
 #include "Horo/Release/UpdateTransferErrors.h"
+#include "UpdateStageFileOperations.h"
 
 #include <algorithm>
 #include <charconv>
@@ -216,30 +217,6 @@ namespace Horo::Release {
             return Result<UpdateStagedFile>::Success({entry.path, file.size, file.digest.Finalize()});
         }
 
-        /** @brief Persists newly created directory entries before a durable ready marker can name them. */
-        [[nodiscard]] Result<void> SyncStageDirectories(const std::filesystem::path &root, NativeDurableFileSystem &files) {
-            std::error_code error;
-            std::vector<std::filesystem::path> directories{root};
-            std::filesystem::recursive_directory_iterator entry(root, std::filesystem::directory_options::none, error);
-            const std::filesystem::recursive_directory_iterator end;
-            while (entry != end && !error) {
-                if (entry->is_directory(error) && !error)
-                    directories.emplace_back(entry->path());
-                if (!error)
-                    entry.increment(error);
-            }
-            if (error)
-                return Result<void>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
-            std::ranges::sort(directories, [](const auto &left, const auto &right) {
-                return left.native().size() > right.native().size();
-            });
-            for (const auto &directory : directories) {
-                if (auto synced = files.SyncDirectory(directory); synced.HasError())
-                    return synced;
-            }
-            return files.SyncDirectory(root.parent_path());
-        }
-
         /** @brief Opens the already authenticated package through bounded random-access reads. */
         [[nodiscard]] Result<void> OpenReader(ZipReader &reader, const std::filesystem::path &packageFile) {
             std::error_code error;
@@ -276,25 +253,6 @@ namespace Horo::Release {
                 inventory.push_back(std::move(extracted).Value());
             }
             return Result<std::vector<UpdateStagedFile>>::Success(std::move(inventory));
-        }
-
-        /** @brief Requires new stage and authenticated package to share one protected private parent. */
-        [[nodiscard]] bool ValidPaths(const std::filesystem::path &packageFile, const std::filesystem::path &stageRoot) {
-            if (!packageFile.is_absolute() || !stageRoot.is_absolute() || packageFile.parent_path() != stageRoot.parent_path() ||
-                packageFile == stageRoot || packageFile.filename().empty() || stageRoot.filename().empty())
-                return false;
-            for (const auto &path : {packageFile, stageRoot}) {
-                for (const auto &part : path) {
-                    if (part == "." || part == "..")
-                        return false;
-                }
-            }
-            std::error_code error;
-            if (const auto parent = std::filesystem::symlink_status(stageRoot.parent_path(), error);
-                error || !std::filesystem::is_directory(parent))
-                return false;
-            const bool stageExists = std::filesystem::exists(stageRoot, error);
-            return !error && !stageExists;
         }
 
         /** @brief Reserves capacity for the authenticated expanded archive before creating a staged tree. */
@@ -341,7 +299,7 @@ namespace Horo::Release {
         };
         if (package.selection.format != DistributionPackageFormat::ZipArchive)
             return failed(UpdateTransferErrors::InvalidArchive);
-        if (!ValidPaths(packageFile, stageRoot))
+        if (!Detail::ValidStagePaths(packageFile, stageRoot))
             return failed(UpdateTransferErrors::StageMismatch);
         auto ready = stageRoot;
         ready += ".ready";
@@ -374,7 +332,7 @@ namespace Horo::Release {
         auto inventory = ExtractEntries(reader.archive, index.Value(), declared.Value(), stageRoot, files, cancellation);
         if (inventory.HasError())
             return Result<std::filesystem::path>::Failure(inventory.ErrorValue());
-        if (auto synced = SyncStageDirectories(stageRoot, files); synced.HasError())
+        if (auto synced = Detail::SyncStageDirectories(stageRoot, files); synced.HasError())
             return Result<std::filesystem::path>::Failure(synced.ErrorValue());
         auto published = PublishVerifiedUpdateStage({package, checkpoint, packageFile, stageRoot, inventory.Value(), limits}, files,
                                                     verifier, cancellation);

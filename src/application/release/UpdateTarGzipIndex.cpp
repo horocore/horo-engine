@@ -1,3 +1,5 @@
+#include "UpdateTarGzipIndex.h"
+
 #include "Horo/Release/UpdateStageReady.h"
 #include "Horo/Release/UpdateTransferErrors.h"
 
@@ -49,7 +51,8 @@ namespace Horo::Release {
 
         class TarIndex final {
         public:
-            explicit TarIndex(const UpdateArchiveLimits &limits) : limits_(limits) {}
+            TarIndex(const UpdateArchiveLimits &limits, const Detail::TarPayloadCallback &callback)
+                : limits_(limits), callback_(callback) {}
 
             /** @brief Consumes a bounded decompressed chunk in tar-block order. */
             [[nodiscard]] bool Feed(const std::span<const unsigned char> bytes) {
@@ -113,6 +116,9 @@ namespace Horo::Release {
             [[nodiscard]] bool FeedPayload(const std::span<const unsigned char> bytes, std::size_t &offset) {
                 auto &remaining = segment_ == Segment::Body ? bodyRemaining_ : paddingRemaining_;
                 const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, bytes.size() - offset));
+                if (segment_ == Segment::Body && callback_ &&
+                    !callback_(entries_.back(), bytes.subspan(offset, count), entries_.back().expandedBytes - remaining))
+                    return false;
                 if (segment_ == Segment::Padding && std::ranges::any_of(bytes.subspan(offset, count), [](const unsigned char value) {
                     return value != 0U;
                 }))
@@ -171,6 +177,7 @@ namespace Horo::Release {
             }
 
             const UpdateArchiveLimits &limits_;
+            const Detail::TarPayloadCallback &callback_;
             std::vector<UpdateArchiveEntry> entries_;
             std::array<unsigned char, TarBlockBytes> header_{};
             Segment segment_{Segment::Header};
@@ -205,7 +212,8 @@ namespace Horo::Release {
 
         /** @brief Streams raw DEFLATE between strict gzip header and trailer boundaries. */
         [[nodiscard]] Result<std::vector<UpdateArchiveEntry>> ReadIndex(const std::filesystem::path &path,
-                                                                        const UpdateArchiveLimits &limits) {
+                                                                        const UpdateArchiveLimits &limits,
+                                                                        const Detail::TarPayloadCallback &callback) {
             const auto invalid = [] {
                 return Result<std::vector<UpdateArchiveEntry>>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
             };
@@ -232,7 +240,7 @@ namespace Horo::Release {
             std::uint64_t compressedRemaining = size - header.size() - trailer.size();
             std::uint64_t expandedBytes = 0U;
             mz_ulong crc = MZ_CRC32_INIT;
-            TarIndex index(limits);
+            TarIndex index(limits, callback);
             int status = MZ_OK;
             while (status != MZ_STREAM_END) {
                 if (inflater.stream.avail_in == 0U && compressedRemaining != 0U) {
@@ -268,6 +276,12 @@ namespace Horo::Release {
         }
     }  // namespace
 
+    /** @copydoc Detail::ReadTarGzipIndex */
+    Result<std::vector<UpdateArchiveEntry>> Detail::ReadTarGzipIndex(const std::filesystem::path &path, const UpdateArchiveLimits &limits,
+                                                                     const TarPayloadCallback &callback) {
+        return ReadIndex(path, limits, callback);
+    }
+
     /** @copydoc IndexVerifiedTarGzipPackage */
     Result<std::vector<UpdateArchiveEntry>> IndexVerifiedTarGzipPackage(const UpdatePackageRecord &package,
                                                                         const UpdateTransferCheckpoint &checkpoint,
@@ -283,6 +297,6 @@ namespace Horo::Release {
             return Result<std::vector<UpdateArchiveEntry>>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
         if (auto verified = VerifyCompletedUpdateTransfer(package, checkpoint, packageFile, verifier); verified.HasError())
             return Result<std::vector<UpdateArchiveEntry>>::Failure(verified.ErrorValue());
-        return ReadIndex(packageFile, limits);
+        return Detail::ReadTarGzipIndex(packageFile, limits);
     }
 }  // namespace Horo::Release
