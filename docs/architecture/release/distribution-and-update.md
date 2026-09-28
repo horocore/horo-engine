@@ -384,12 +384,28 @@ removed. If registration, activation, or the probe fails, the candidate
 pointer and its integration are undone; an uncertain cleanup retains the
 journal and blocks a new install until recovery proves the state. Recovery
 never treats a marker alone as installation authority.
+`CheckBootstrapBuildTarget` rejects packages targeting a different OS or CPU
+than the running installer binary. Native integration hosts additionally probe
+the actual OS and hardware (including emulation), OS version, capacity, and
+permissions before making any changes.
 
 The current authenticated stage reader supports portable ZIP packages. Native
 Windows, macOS, and Linux installer formats require format-specific stage
 readers and integration hosts with the same verification and rollback
-guarantees. Repair and uninstall use the installation lock and exact owned-file
-inventory; they preserve projects and apply an explicit user-data policy.
+guarantees. `RepairVerifiedInstallation` reauthenticates the active package and
+tree under the installation lock before restoring idempotent integration and
+running a bounded startup probe. `UninstallVerifiedInstallation` first verifies
+the active package and exact inventory, writes a durable removal journal, and
+deactivates the product before asking the platform host to unregister its
+integration and remove that version's owned files. A partial removal stays
+inactive and the same package/inventory can resume it. The host's removal
+contract preserves projects, settings, caches, logs, credentials, and shared
+components; a separate explicit data-removal policy would be required to
+remove any of them. These portable transactions do not implement native package
+format readers or operating-system integration hosts. The public bootstrap-host
+contract now requires an idempotent `RemoveOwnedVersion` operation; existing
+host implementers must add that operation before adopting this interface. No
+production implementation existed when this contract was added.
 
 ## Rollback
 

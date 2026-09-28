@@ -33,4 +33,12 @@ namespace Horo::Release::BootstrapInstallationErrors {
                                              .code = ErrorCode{"recovery_failed"},
                                              .defaultSeverity = ErrorSeverity::Critical,
                                              .summary = "First-install state could not be safely undone."};
+    const ErrorCodeDescriptor RepairFailed{.domain = Domain,
+                                           .code = ErrorCode{"repair_failed"},
+                                           .defaultSeverity = ErrorSeverity::Error,
+                                           .summary = "The installed product could not be repaired or proven healthy."};
+    const ErrorCodeDescriptor UninstallFailed{.domain = Domain,
+                                              .code = ErrorCode{"uninstall_failed"},
+                                              .defaultSeverity = ErrorSeverity::Critical,
+                                              .summary = "Uninstall is incomplete and must be retried with the same package."};
 }  // namespace Horo::Release::BootstrapInstallationErrors
