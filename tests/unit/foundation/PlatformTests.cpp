@@ -186,6 +186,36 @@ namespace {
         REQUIRE((second >= first));
     }
 
+    TEST_CASE("Product launch leases admit concurrent products and exclude maintenance", "[unit][foundation][release]") {
+        const auto root = std::filesystem::temp_directory_path() / "horo-platform-launch-lease-test";
+        std::error_code ignored;
+        std::filesystem::remove_all(root, ignored);
+        std::filesystem::create_directories(root);
+        Horo::NativeDurableFileSystem files;
+        {
+            auto first = files.TryAcquireProductLaunch(root);
+            REQUIRE(first.HasValue());
+            auto second = files.TryAcquireProductLaunch(root);
+            REQUIRE(second.HasValue());
+            CHECK(files.TryAcquireProductMaintenance(root).HasError());
+        }
+        {
+            auto maintenance = files.TryAcquireProductMaintenance(root);
+            REQUIRE(maintenance.HasValue());
+            CHECK(files.TryAcquireProductLaunch(root).HasError());
+        }
+        CHECK(files.TryAcquireProductLaunch(root).HasValue());
+        CHECK(files.TryAcquireProductMaintenance(root / "missing").HasError());
+        std::filesystem::create_symlink(root / ".product-launch.lock", root / "alias.lock", ignored);
+        if (!ignored) {
+            std::filesystem::remove(root / ".product-launch.lock", ignored);
+            std::filesystem::rename(root / "alias.lock", root / ".product-launch.lock", ignored);
+            if (!ignored)
+                CHECK(files.TryAcquireProductLaunch(root).HasError());
+        }
+        std::filesystem::remove_all(root, ignored);
+    }
+
     TEST_CASE("Native Durable Filesystem Serializes Locks And Replaces Files", "[unit][foundation]") {
         const auto root = std::filesystem::temp_directory_path() / "horo-platform-durable-test";
         std::error_code ignored;

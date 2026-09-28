@@ -16,6 +16,7 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -211,6 +212,82 @@ namespace Horo {
 
     ExclusiveFileLock::operator bool() const noexcept {
         return state_ != nullptr;
+    }
+
+    struct ProductLaunchLease::State {
+#if defined(_WIN32)
+        HANDLE handle{INVALID_HANDLE_VALUE};
+#else
+        int descriptor{-1};
+#endif
+
+        ~State() {
+#if defined(_WIN32)
+            if (handle != INVALID_HANDLE_VALUE)
+                CloseHandle(handle);
+#else
+            if (descriptor >= 0) {
+                static_cast<void>(flock(descriptor, LOCK_UN));
+                close(descriptor);
+            }
+#endif
+        }
+    };
+
+    ProductLaunchLease::ProductLaunchLease() noexcept = default;
+
+    ProductLaunchLease::ProductLaunchLease(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
+
+    ProductLaunchLease::~ProductLaunchLease() = default;
+    ProductLaunchLease::ProductLaunchLease(ProductLaunchLease &&) noexcept = default;
+    ProductLaunchLease &ProductLaunchLease::operator=(ProductLaunchLease &&) noexcept = default;
+
+    ProductLaunchLease::operator bool() const noexcept {
+        return state_ != nullptr;
+    }
+
+    /** @copydoc NativeDurableFileSystem::TryAcquireProductLaunch */
+    Result<ProductLaunchLease> NativeDurableFileSystem::TryAcquireProductLaunch(const std::filesystem::path &installationRoot) {
+        return TryAcquireProductLease(installationRoot, false);
+    }
+
+    /** @copydoc NativeDurableFileSystem::TryAcquireProductMaintenance */
+    Result<ProductLaunchLease> NativeDurableFileSystem::TryAcquireProductMaintenance(const std::filesystem::path &installationRoot) {
+        return TryAcquireProductLease(installationRoot, true);
+    }
+
+    /** @brief Acquires one OS-held launch or maintenance lease without changing an existing installation root. */
+    Result<ProductLaunchLease> NativeDurableFileSystem::TryAcquireProductLease(const std::filesystem::path &installationRoot,
+                                                                               const bool maintenance) {
+        const auto path = installationRoot / ".product-launch.lock";
+        if (!installationRoot.is_absolute() || std::ranges::any_of(installationRoot, [](const auto &part) {
+            return part == "." || part == "..";
+        }))
+            return Result<ProductLaunchLease>::Failure(FsError(IoFailed, path));
+        if (std::error_code error; !std::filesystem::is_directory(std::filesystem::symlink_status(installationRoot, error)) || error)
+            return Result<ProductLaunchLease>::Failure(FsError(IoFailed, path));
+        auto state = std::make_unique<ProductLaunchLease::State>();
+#if defined(_WIN32)
+        const DWORD sharing = maintenance ? 0U : FILE_SHARE_READ | FILE_SHARE_WRITE;
+        state->handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, sharing, nullptr, OPEN_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (state->handle == INVALID_HANDLE_VALUE)
+            return Result<ProductLaunchLease>::Failure(FsError(GetLastError() == ERROR_SHARING_VIOLATION ? LockBusy : IoFailed, path));
+        BY_HANDLE_FILE_INFORMATION info{};
+        if (!GetFileInformationByHandle(state->handle, &info) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U ||
+            (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U || info.nNumberOfLinks != 1U)
+            return Result<ProductLaunchLease>::Failure(FsError(IoFailed, path));
+#else
+        state->descriptor = open(path.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+        if (state->descriptor < 0)
+            return Result<ProductLaunchLease>::Failure(FsError(IoFailed, path));
+        struct stat info{};
+        if (fstat(state->descriptor, &info) != 0 || !S_ISREG(info.st_mode) || info.st_nlink != 1)
+            return Result<ProductLaunchLease>::Failure(FsError(IoFailed, path));
+        if (flock(state->descriptor, (maintenance ? LOCK_EX : LOCK_SH) | LOCK_NB) != 0)
+            return Result<ProductLaunchLease>::Failure(FsError(errno == EWOULDBLOCK ? LockBusy : IoFailed, path));
+#endif
+        return Result<ProductLaunchLease>::Success(ProductLaunchLease(std::move(state)));
     }
 
     /** @copydoc DurableFileSystem::TryAcquireExclusive */

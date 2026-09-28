@@ -446,6 +446,35 @@ TEST_CASE("First install activates only an authenticated healthy version", "[rel
     CHECK(host.probes == 1U);
 }
 
+TEST_CASE("A running product lease blocks install activation without publishing an active version", "[release][install][lease]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    auto running = files.TryAcquireProductLaunch(install.root);
+    REQUIRE(running.HasValue());
+    Host host;
+    CHECK(BootstrapVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK_FALSE(std::filesystem::exists(install.root / "active-version"));
+    CHECK_FALSE(std::filesystem::exists(install.root / "bootstrap.pending"));
+    CHECK(host.registrations == 0U);
+}
+
+TEST_CASE("A running product lease blocks update activation before mutation", "[release][update][lease]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = Request(install, files, verifier);
+    const auto oldActive = Read(install.root / "active-version");
+    auto running = files.TryAcquireProductLaunch(install.root);
+    REQUIRE(running.HasValue());
+    Host host;
+    CHECK(ActivateVerifiedUpdate(request, files, verifier, host).HasError());
+    CHECK(Read(install.root / "active-version") == oldActive);
+    CHECK_FALSE(std::filesystem::exists(install.root / "activation.pending"));
+    CHECK(host.probes == 0U);
+}
+
 TEST_CASE("Native bootstrap target rejects a different operating system or architecture", "[release][install]") {
     auto native = DetectBootstrapBuildTarget();
     REQUIRE(native.HasValue());

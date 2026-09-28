@@ -260,6 +260,9 @@ namespace Horo::Release {
             return Result<BootstrapInstallationOutcome>::Failure(lock.ErrorValue());
         if (auto stopped = host.EnsureProductsStopped(paths.root); stopped.HasError())
             return Result<BootstrapInstallationOutcome>::Failure(stopped.ErrorValue());
+        auto admission = files.TryAcquireProductMaintenance(paths.root);
+        if (admission.HasError())
+            return Result<BootstrapInstallationOutcome>::Failure(admission.ErrorValue());
         if (auto verified =
                 VerifyReadyUpdateStage(request.candidate.package, request.candidate.checkpoint, request.candidate.packageFile,
                                        request.candidate.stageRoot, request.candidate.inventory, request.archiveLimits, verifier);
@@ -318,6 +321,9 @@ namespace Horo::Release {
             return Result<void>::Failure(lock.ErrorValue());
         if (auto ready = ReadyForMaintenance(paths, host); ready.HasError())
             return ready;
+        auto admission = files.TryAcquireProductMaintenance(paths.root);
+        if (admission.HasError())
+            return Result<void>::Failure(admission.ErrorValue());
         if (auto uninstallPending = Exists(paths.uninstallPending); uninstallPending.HasError() || uninstallPending.Value())
             return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
         auto encoded = EncodeActiveUpdateRecord(request.candidate.package);
@@ -348,6 +354,9 @@ namespace Horo::Release {
             return Result<void>::Failure(lock.ErrorValue());
         if (auto ready = ReadyForMaintenance(paths, host); ready.HasError())
             return ready;
+        auto admission = files.TryAcquireProductMaintenance(paths.root);
+        if (admission.HasError())
+            return Result<void>::Failure(admission.ErrorValue());
         auto encoded = EncodeActiveUpdateRecord(request.candidate.package);
         if (encoded.HasError())
             return Result<void>::Failure(encoded.ErrorValue());
