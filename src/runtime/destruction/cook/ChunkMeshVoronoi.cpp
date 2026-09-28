@@ -12,7 +12,7 @@ namespace Horo::Destruction {
             explicit VoronoiContext(const DestructionLimits &limits) : budget{sizeof(ChunkMeshArtifact), 0, limits} {}
         };
 
-        [[nodiscard]] Result<void> ValidateSource(const OfflineVoronoiCandidate &source, FractureArtifactContentIdentity content,
+        [[nodiscard]] Result<void> ValidateSource(const OfflineVoronoiCandidate &source, const FractureArtifactContentIdentity &content,
                                                   std::span<const ChunkMaterialBinding> materials, ChunkUvPolicy uv,
                                                   const DestructionLimits &limits, VoronoiContext &context) {
             if (!content.IsValid() || !source.IsIntact() || !source.sourceAsset.IsValid() || source.sourceRevision == 0 ||
@@ -30,7 +30,7 @@ namespace Horo::Destruction {
                     return Result<void>::Failure(MakeError(ChunkMeshCookErrors::MissingMaterial));
             }
             for (const auto &chunk : source.chunks) {
-                if (!chunk.id.IsValid() || !Finite(chunk.site) || !context.sites.emplace(chunk.id, chunk.site).second)
+                if (!chunk.id.IsValid() || !Finite(chunk.site) || !context.sites.try_emplace(chunk.id, chunk.site).second)
                     return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInput));
             }
             if (!context.budget.Charge(materials.size() * sizeof(ChunkMaterialBinding), materials.size()))
@@ -49,7 +49,7 @@ namespace Horo::Destruction {
             if (!std::ranges::is_sorted(chunk.neighbors) || std::ranges::adjacent_find(chunk.neighbors) != chunk.neighbors.end())
                 return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInterior));
             for (const auto neighbor : chunk.neighbors) {
-                if (context.sites.find(neighbor) == context.sites.end() || neighbor == chunk.id)
+                if (!context.sites.contains(neighbor) || neighbor == chunk.id)
                     return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInterior));
                 context.areas.try_emplace(std::minmax(chunk.id, neighbor));
             }
@@ -66,11 +66,10 @@ namespace Horo::Destruction {
             for (const auto &face : chunk.triangles) {
                 if (cancellation.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(ChunkMeshCookErrors::Cancelled));
-                const auto material = std::ranges::lower_bound(materials, face.materialSlot, {}, &ChunkMaterialBinding::slot);
-                if (material == materials.end() || material->slot != face.materialSlot)
+                if (const auto material = std::ranges::lower_bound(materials, face.materialSlot, {}, &ChunkMaterialBinding::slot);
+                    material == materials.end() || material->slot != face.materialSlot)
                     return Result<void>::Failure(MakeError(ChunkMeshCookErrors::MissingMaterial));
-                auto appended = AppendFace(chunk, face, uv, context.sites, context.areas, output);
-                if (appended.HasError())
+                if (auto appended = AppendFace(chunk, face, uv, context.sites, context.areas, output); appended.HasError())
                     return appended;
             }
             if (output.vertices.empty())
@@ -92,7 +91,7 @@ namespace Horo::Destruction {
 
     /** @copydoc CookChunkMeshes */
     Result<std::shared_ptr<const ChunkMeshArtifact>> CookChunkMeshes(const OfflineVoronoiCandidate &source,
-                                                                     FractureArtifactContentIdentity content,
+                                                                     const FractureArtifactContentIdentity &content,
                                                                      std::span<const ChunkMaterialBinding> materials, ChunkUvPolicy uv,
                                                                      const DestructionLimits &limits,
                                                                      const CancellationToken &cancellation) {
@@ -100,10 +99,9 @@ namespace Horo::Destruction {
         if (cancellation.IsCancellationRequested())
             return Output::Failure(MakeError(ChunkMeshCookErrors::Cancelled));
         VoronoiContext context{limits};
-        auto valid = ValidateSource(source, content, materials, uv, limits, context);
-        if (valid.HasError())
+        if (auto valid = ValidateSource(source, content, materials, uv, limits, context); valid.HasError())
             return Output::Failure(valid.ErrorValue());
-        auto artifact = std::shared_ptr<ChunkMeshArtifact>(new ChunkMeshArtifact);
+        auto artifact = std::make_shared<ChunkMeshArtifact>(ChunkMeshArtifact::ConstructionKey());
         artifact->content = content;
         artifact->sourceAsset = source.sourceAsset;
         artifact->sourceRevision = source.sourceRevision;
@@ -116,12 +114,10 @@ namespace Horo::Destruction {
         artifact->producedFeatures.bits = DestructionFeatureBit<DestructionFeature::PreCookedFracture>;
         artifact->materials.assign(materials.begin(), materials.end());
         for (const auto &chunk : source.chunks) {
-            auto appended = AppendChunk(chunk, materials, uv, context, cancellation, *artifact);
-            if (appended.HasError())
+            if (auto appended = AppendChunk(chunk, materials, uv, context, cancellation, *artifact); appended.HasError())
                 return Output::Failure(appended.ErrorValue());
         }
-        auto checked = CheckAreas(context);
-        if (checked.HasError())
+        if (auto checked = CheckAreas(context); checked.HasError())
             return Output::Failure(checked.ErrorValue());
         artifact->estimatedBytes = context.budget.bytes;
         artifact->workItems = context.budget.work;

@@ -15,8 +15,13 @@ namespace Horo::Destruction {
             std::uint32_t count{};
         };
 
+        struct MassAccumulator final {
+            double sixVolume{};
+            Point weightedCenter{};
+        };
+
         struct ImportContext final {
-            std::map<std::string, ImportedChunkMaterialBinding> mappings;
+            std::map<std::string, ImportedChunkMaterialBinding, std::less<>> mappings;
             std::set<std::uint32_t> slots;
             std::map<TriangleKey, CutFace> cuts;
             const std::map<DestructionChunkId, Point> noSites;
@@ -44,7 +49,8 @@ namespace Horo::Destruction {
             std::uint64_t materialBytes = 0;
             for (const auto &binding : materials) {
                 if (binding.sourceName.empty() || !binding.material.asset.IsValid() || !Nonzero(binding.material.revisionDigest) ||
-                    !context.mappings.emplace(binding.sourceName, binding).second || !context.slots.insert(binding.material.slot).second)
+                    !context.mappings.try_emplace(binding.sourceName, binding).second ||
+                    !context.slots.insert(binding.material.slot).second)
                     return Result<void>::Failure(MakeError(ChunkMeshCookErrors::MissingMaterial));
                 materialBytes += sizeof(binding) + binding.sourceName.size();
             }
@@ -57,7 +63,7 @@ namespace Horo::Destruction {
                                              ImportContext &context) {
             TriangleKey key{chunk.positions[face.indices[0]], chunk.positions[face.indices[1]], chunk.positions[face.indices[2]]};
             std::ranges::sort(key);
-            auto [it, inserted] = context.cuts.try_emplace(key, CutFace{chunk.id, normal, face.interior, 1});
+            auto [it, inserted] = context.cuts.try_emplace(key, chunk.id, normal, face.interior, 1U);
             if (!inserted) {
                 if (it->second.count != 1 || it->second.chunk == chunk.id || !it->second.interior || !face.interior ||
                     Dot(it->second.normal, normal) >= 0)
@@ -69,7 +75,7 @@ namespace Horo::Destruction {
 
         [[nodiscard]] Result<void> AppendTriangle(const PreFracturedChunk &chunk, std::size_t triangle, ChunkUvPolicy uv,
                                                   const CancellationToken &cancellation, ImportContext &context, ChunkMesh &output,
-                                                  double &sixVolume, Point &weightedCenter) {
+                                                  MassAccumulator &mass) {
             if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(ChunkMeshCookErrors::Cancelled));
             const auto found = context.mappings.find(chunk.triangleMaterials[triangle]);
@@ -84,20 +90,18 @@ namespace Horo::Destruction {
                 return index >= chunk.positions.size();
             }))
                 return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInput));
-            const Point a = Position(chunk.positions[face.indices[0]]);
-            const Point b = Position(chunk.positions[face.indices[1]]);
-            const Point c = Position(chunk.positions[face.indices[2]]);
-            if (!Finite(a) || !Finite(b) || !Finite(c))
+            const std::array<Point, 3> points{Position(chunk.positions[face.indices[0]]), Position(chunk.positions[face.indices[1]]),
+                                              Position(chunk.positions[face.indices[2]])};
+            if (!Finite(points[0]) || !Finite(points[1]) || !Finite(points[2]))
                 return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInput));
-            const Point normal = Cross(Sub(b, a), Sub(c, a));
-            const double v6 = Dot(a, normal);
+            const Point normal = Cross(Sub(points[1], points[0]), Sub(points[2], points[0]));
+            const double v6 = Dot(points[0], normal);
             if (!std::isfinite(v6))
                 return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInput));
-            sixVolume += v6;
+            mass.sixVolume += v6;
             for (std::size_t axis = 0; axis < 3; ++axis)
-                weightedCenter[axis] += (a[axis] + b[axis] + c[axis]) * v6;
-            auto recorded = RecordCut(chunk, face, normal, context);
-            if (recorded.HasError())
+                mass.weightedCenter[axis] += (points[0][axis] + points[1][axis] + points[2][axis]) * v6;
+            if (auto recorded = RecordCut(chunk, face, normal, context); recorded.HasError())
                 return recorded;
             OfflineVoronoiChunk faceSource;
             faceSource.positions = {chunk.positions[face.indices[0]], chunk.positions[face.indices[1]], chunk.positions[face.indices[2]]};
@@ -122,18 +126,16 @@ namespace Horo::Destruction {
             output.id = chunk.id;
             output.vertices.reserve(triangleCount * 3);
             output.faces.reserve(triangleCount);
-            double sixVolume{};
-            Point weightedCenter{};
+            MassAccumulator mass{};
             for (std::size_t triangle = 0; triangle < triangleCount; ++triangle) {
-                auto appended = AppendTriangle(chunk, triangle, uv, cancellation, context, output, sixVolume, weightedCenter);
-                if (appended.HasError())
+                if (auto appended = AppendTriangle(chunk, triangle, uv, cancellation, context, output, mass); appended.HasError())
                     return appended;
             }
-            output.mass.volume = sixVolume / 6.0;
+            output.mass.volume = mass.sixVolume / 6.0;
             if (!(output.mass.volume > 0.0) || !std::isfinite(output.mass.volume))
                 return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInput));
             for (std::size_t axis = 0; axis < 3; ++axis)
-                output.mass.firstMoment[axis] = weightedCenter[axis] / 24.0;
+                output.mass.firstMoment[axis] = mass.weightedCenter[axis] / 24.0;
             SetMeshBounds(output);
             artifact.chunks.push_back(std::move(output));
             return Result<void>::Success();
@@ -158,10 +160,9 @@ namespace Horo::Destruction {
         if (cancellation.IsCancellationRequested())
             return Output::Failure(MakeError(ChunkMeshCookErrors::Cancelled));
         ImportContext context{request.limits};
-        auto valid = ValidateImport(source, request, materials, context);
-        if (valid.HasError())
+        if (auto valid = ValidateImport(source, request, materials, context); valid.HasError())
             return Output::Failure(valid.ErrorValue());
-        auto artifact = std::shared_ptr<ChunkMeshArtifact>(new ChunkMeshArtifact);
+        auto artifact = std::make_shared<ChunkMeshArtifact>(ChunkMeshArtifact::ConstructionKey());
         artifact->content = request.content;
         artifact->sourceAsset = request.sourceAsset;
         artifact->sourceRevision = request.sourceRevision;
@@ -175,12 +176,10 @@ namespace Horo::Destruction {
         std::ranges::sort(artifact->materials, {}, &ChunkMaterialBinding::slot);
         artifact->materialFingerprint = MaterialDigest(artifact->materials);
         for (const auto &chunk : source.Chunks()) {
-            auto appended = AppendChunk(chunk, request.uv, cancellation, context, *artifact);
-            if (appended.HasError())
+            if (auto appended = AppendChunk(chunk, request.uv, cancellation, context, *artifact); appended.HasError())
                 return Output::Failure(appended.ErrorValue());
         }
-        auto checked = CheckCuts(context);
-        if (checked.HasError())
+        if (auto checked = CheckCuts(context); checked.HasError())
             return Output::Failure(checked.ErrorValue());
         artifact->estimatedBytes = context.budget.bytes;
         artifact->workItems = context.budget.work;

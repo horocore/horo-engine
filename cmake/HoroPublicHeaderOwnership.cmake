@@ -131,11 +131,18 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/ReleaseJobTracker.h
     Horo/Release/ReleasePipelineExecutor.h
     Horo/Release/ReleasePackageProducer.h
+    Horo/Release/ReleasePublication.h
     Horo/Release/ReleaseSigningBoundary.h
     Horo/Release/ReleaseProfile.h
     Horo/Release/ReleasePreflight.h
     Horo/Release/ReleaseTargetMatrix.h
     Horo/Release/ReleaseVersion.h
+)
+horo_configure_target_header_boundary(HoroReleaseGitHub PUBLIC_HEADERS
+    Horo/Release/GitHubReleasePublication.h
+)
+horo_configure_target_header_boundary(HoroReleaseGitHubCli PUBLIC_HEADERS
+    Horo/Release/GitHubReleaseCliClient.h
 )
 horo_configure_target_header_boundary(HoroUpdateManifest PUBLIC_HEADERS
     Horo/Release/UpdateManifest.h
@@ -271,6 +278,7 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/TransportBackendInstance.h
 )
 horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
+    Horo/Network/InboundMessageDispatcher.h
     Horo/Network/NetworkModeComposition.h
     Horo/Network/TransportBackendComposition.h
     Horo/Network/NetworkDiagnostics.h

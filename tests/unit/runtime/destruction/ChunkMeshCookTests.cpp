@@ -6,8 +6,11 @@
 #include <cmath>
 #include <limits>
 #include <utility>
+#include <type_traits>
 
 namespace Horo::Destruction {
+    static_assert(!std::is_default_constructible_v<ChunkMeshArtifact>);
+
     namespace {
         OfflineVoronoiSource Cube() {
             OfflineVoronoiSource source;
