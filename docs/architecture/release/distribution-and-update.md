@@ -484,6 +484,11 @@ the original file or that backup for `RestoreUserStateMigrationBackup`; an
 unresolved backup blocks overwriting it. Disposable cache entries are removed
 only from the dedicated cache root and can be rebuilt. This operation does not
 read or mutate project documents, and installation activation never calls it.
+`HoroEditor` composes this application operation at startup before loading
+editor settings or recent projects. Its host adapter supplies the concrete
+legacy-to-version-1 steps for those two files, while the application operation
+owns backups, atomic replacement, and recovery. Other state families require
+their own explicit host adapters before they can enter a migration plan.
 
 ## Compatibility
 

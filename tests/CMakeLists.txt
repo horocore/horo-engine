@@ -1149,6 +1149,12 @@ add_executable(HoroUserStateMigrationTests unit/application/UserStateMigrationTe
 target_compile_features(HoroUserStateMigrationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUserStateMigrationTests PRIVATE HoroEngine::UserStateMigration)
 horo_register_catch_test(HoroUserStateMigrationTests LABELS "release;update;headless")
+add_executable(HoroEditorUserStateMigrationTests unit/application/EditorUserStateMigrationTests.cpp
+        ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorUserStateMigration.cpp)
+target_compile_features(HoroEditorUserStateMigrationTests PRIVATE cxx_std_20)
+target_include_directories(HoroEditorUserStateMigrationTests PRIVATE ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app)
+target_link_libraries(HoroEditorUserStateMigrationTests PRIVATE HoroEngine::UserStateMigration nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroEditorUserStateMigrationTests LABELS "release;update;headless")
 
 add_executable(HoroUpdateZipPackageProducerTests unit/application/UpdateZipPackageProducerTests.cpp)
 target_compile_features(HoroUpdateZipPackageProducerTests PRIVATE cxx_std_20)

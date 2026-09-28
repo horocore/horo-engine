@@ -163,6 +163,7 @@ horo_allow_target_dependencies(TARGET HoroEditor
         HoroExtensions
         HoroPlatform
         HoroProjectMigrations
+        HoroUserStateMigration
         HoroInputSdl
         HoroOpenTelemetry
         HoroEditorViewportOpenGL
