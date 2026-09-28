@@ -78,7 +78,7 @@ namespace Horo::Editor {
                 const auto opening = target.find('{');
                 target.insert(opening + 1U, document.empty() ? R"("schemaVersion":1)" : R"("schemaVersion":1,)");
             } else if (family == Release::UserStateFamily::RecentProjects && document.is_array()) {
-                target = "{\"schemaVersion\":1,\"entries\":" + source.Value() + "}\n";
+                target = R"({"schemaVersion":1,"entries":)" + source.Value() + "}\n";
             } else if (family == Release::UserStateFamily::RecentProjects && document.is_object() && document.contains("schemaVersion") &&
                        document["schemaVersion"] == 1 && document.contains("entries") && document["entries"].is_array()) {
                 return Result<void>::Success();
