@@ -57,6 +57,17 @@ namespace Horo::Physics {
             REQUIRE(result.HasError());
             REQUIRE(result.ErrorValue().code.Value() == expected.code.Value());
         }
+
+        /** @brief Checks compound admission thread ownership without sharing native state across threads. */
+        [[nodiscard]] bool RejectsFixtureOnForeignThread(PhysicsWorld &world, const PhysicsQueryFixtureDescriptor &fixture) {
+            bool rejected = false;
+            std::thread foreign([&] {
+                const auto result = world.CreateQueryFixture(fixture);
+                rejected = result.HasError() && result.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+            });
+            foreign.join();
+            return rejected;
+        }
     }  // namespace
 
     TEST_CASE("Physics filter IDs preserve canonical UUIDs and remain non-interchangeable", "[physics][query][identity]") {
@@ -334,14 +345,7 @@ namespace Horo::Physics {
         const auto created = world->CreateQueryFixture(fixture);
         REQUIRE(created.HasValue());
         std::get<PhysicsCompoundShapeDescriptor>(fixture.shape).children[0].subshape = PhysicsShapeSubresourceId::FromValue(999);
-        bool foreignThreadRejected = false;
-        std::thread foreign([&] {
-            const auto rejected = world->CreateQueryFixture(fixture);
-            foreignThreadRejected =
-                rejected.HasError() && rejected.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
-        });
-        foreign.join();
-        REQUIRE(foreignThreadRejected);
+        REQUIRE(RejectsFixtureOnForeignThread(*world, fixture));
         AdvanceOneTick(*world);
 
         auto query = QueryDescriptor(identity, PhysicsRayQuery{{0, 0, 0}, {0, 0, -1}, 20}, PhysicsQueryCollection::All, 2);
