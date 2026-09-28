@@ -120,9 +120,11 @@ namespace Horo::Release {
         if (expected.HasError())
             return Result<void>::Failure(expected.ErrorValue());
         std::error_code error;
-        if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(marker, error)) || error ||
-            std::filesystem::hard_link_count(marker, error) != 1U || error ||
-            std::filesystem::file_size(marker, error) != expected.Value().size() || error)
+        if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(marker, error)) || error)
+            return invalid();
+        if (std::filesystem::hard_link_count(marker, error) != 1U || error)
+            return invalid();
+        if (std::filesystem::file_size(marker, error) != expected.Value().size() || error)
             return invalid();
         std::ifstream input(marker, std::ios::binary);
         std::string actual(expected.Value().size(), '\0');
