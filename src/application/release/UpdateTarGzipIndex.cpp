@@ -59,35 +59,10 @@ namespace Horo::Release {
                         if (bytes[offset++] != 0U)
                             return false;
                     } else if (segment_ == Segment::Header) {
-                        const auto count = std::min(TarBlockBytes - headerUsed_, bytes.size() - offset);
-                        std::copy_n(bytes.begin() + static_cast<std::ptrdiff_t>(offset), count,
-                                    header_.begin() + static_cast<std::ptrdiff_t>(headerUsed_));
-                        offset += count;
-                        headerUsed_ += count;
-                        if (headerUsed_ == TarBlockBytes) {
-                            headerUsed_ = 0U;
-                            if (std::ranges::all_of(header_, [](const unsigned char value) {
-                                return value == 0U;
-                            })) {
-                                ++zeroBlocks_;
-                                if (zeroBlocks_ == 2U)
-                                    segment_ = Segment::Finished;
-                            } else if (zeroBlocks_ != 0U || !AcceptHeader()) {
-                                return false;
-                            }
-                        }
-                    } else {
-                        auto &remaining = segment_ == Segment::Body ? bodyRemaining_ : paddingRemaining_;
-                        const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, bytes.size() - offset));
-                        if (segment_ == Segment::Padding &&
-                            std::ranges::any_of(bytes.subspan(offset, count), [](const unsigned char value) {
-                            return value != 0U;
-                        }))
+                        if (!FeedHeader(bytes, offset))
                             return false;
-                        remaining -= count;
-                        offset += count;
-                        if (remaining == 0U)
-                            segment_ = segment_ == Segment::Body && paddingRemaining_ != 0U ? Segment::Padding : Segment::Header;
+                    } else if (!FeedPayload(bytes, offset)) {
+                        return false;
                     }
                 }
                 return true;
@@ -113,6 +88,42 @@ namespace Horo::Release {
                 Finished
             };
 
+            /** @brief Completes one ustar header block without recursing into the stream loop. */
+            [[nodiscard]] bool FeedHeader(const std::span<const unsigned char> bytes, std::size_t &offset) {
+                const auto count = std::min(TarBlockBytes - headerUsed_, bytes.size() - offset);
+                std::copy_n(bytes.begin() + static_cast<std::ptrdiff_t>(offset), count,
+                            header_.begin() + static_cast<std::ptrdiff_t>(headerUsed_));
+                offset += count;
+                headerUsed_ += count;
+                if (headerUsed_ != TarBlockBytes)
+                    return true;
+                headerUsed_ = 0U;
+                if (std::ranges::all_of(header_, [](const unsigned char value) {
+                    return value == 0U;
+                })) {
+                    ++zeroBlocks_;
+                    if (zeroBlocks_ == 2U)
+                        segment_ = Segment::Finished;
+                    return true;
+                }
+                return zeroBlocks_ == 0U && AcceptHeader();
+            }
+
+            /** @brief Advances ordinary payload or validates zero padding. */
+            [[nodiscard]] bool FeedPayload(const std::span<const unsigned char> bytes, std::size_t &offset) {
+                auto &remaining = segment_ == Segment::Body ? bodyRemaining_ : paddingRemaining_;
+                const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, bytes.size() - offset));
+                if (segment_ == Segment::Padding && std::ranges::any_of(bytes.subspan(offset, count), [](const unsigned char value) {
+                    return value != 0U;
+                }))
+                    return false;
+                remaining -= count;
+                offset += count;
+                if (remaining == 0U)
+                    segment_ = segment_ == Segment::Body && paddingRemaining_ != 0U ? Segment::Padding : Segment::Header;
+                return true;
+            }
+
             /** @brief Accepts only ordinary ustar files and directories with valid checksums. */
             [[nodiscard]] bool AcceptHeader() {
                 if (entries_.size() >= limits_.maximumEntries || !std::equal(header_.begin() + 257, header_.begin() + 263, "ustar\0") ||
@@ -123,10 +134,9 @@ namespace Horo::Release {
                     return false;
                 std::uint64_t expectedChecksum{};
                 std::uint64_t size{};
-                std::uint64_t mode{};
-                if (!ParseOctal(std::span{header_}.subspan(148, 8), expectedChecksum) ||
-                    !ParseOctal(std::span{header_}.subspan(124, 12), size) || !ParseOctal(std::span{header_}.subspan(100, 8), mode) ||
-                    (mode & 07000U) != 0U)
+                if (std::uint64_t mode{}; !ParseOctal(std::span{header_}.subspan(148, 8), expectedChecksum) ||
+                                          !ParseOctal(std::span{header_}.subspan(124, 12), size) ||
+                                          !ParseOctal(std::span{header_}.subspan(100, 8), mode) || (mode & 07000U) != 0U)
                     return false;
                 std::uint64_t checksum = 0U;
                 for (std::size_t index = 0U; index < TarBlockBytes; ++index)
@@ -153,7 +163,7 @@ namespace Horo::Release {
                 } else if (name.ends_with('/')) {
                     return false;
                 }
-                entries_.push_back({std::move(name), directory ? UpdateArchiveEntryKind::Directory : UpdateArchiveEntryKind::File, size});
+                entries_.emplace_back(std::move(name), directory ? UpdateArchiveEntryKind::Directory : UpdateArchiveEntryKind::File, size);
                 bodyRemaining_ = size;
                 paddingRemaining_ = (TarBlockBytes - size % TarBlockBytes) % TarBlockBytes;
                 segment_ = bodyRemaining_ != 0U ? Segment::Body : Segment::Header;
@@ -172,6 +182,12 @@ namespace Horo::Release {
 
         struct InflateGuard final {
             mz_stream stream{};
+
+            InflateGuard() = default;
+            InflateGuard(const InflateGuard &) = delete;
+            InflateGuard &operator=(const InflateGuard &) = delete;
+            InflateGuard(InflateGuard &&) = delete;
+            InflateGuard &operator=(InflateGuard &&) = delete;
 
             ~InflateGuard() {
                 mz_inflateEnd(&stream);
@@ -262,8 +278,8 @@ namespace Horo::Release {
             package.selection.artifact.platform != DistributionPlatform::Linux ||
             package.selection.artifact.artifactClass != DistributionArtifactClass::InstallableProduct)
             return Result<std::vector<UpdateArchiveEntry>>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
-        auto selection = ValidateDistributionPackageSelection(package.selection.artifact, package.selection.format);
-        if (selection.HasError() || selection.Value() != package.selection)
+        if (auto selection = ValidateDistributionPackageSelection(package.selection.artifact, package.selection.format);
+            selection.HasError() || selection.Value() != package.selection)
             return Result<std::vector<UpdateArchiveEntry>>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
         if (auto verified = VerifyCompletedUpdateTransfer(package, checkpoint, packageFile, verifier); verified.HasError())
             return Result<std::vector<UpdateArchiveEntry>>::Failure(verified.ErrorValue());
