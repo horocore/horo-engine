@@ -155,11 +155,9 @@ namespace Horo::Security {
     Result<VerifiedArtifactEvidence> ArtifactVerifier::VerifyFile(const std::filesystem::path &path, const std::uint64_t expectedBytes,
                                                                   const DetachedSignatureEnvelope &envelope) const {
         std::error_code error;
-        const auto status = std::filesystem::symlink_status(path, error);
-        if (error || !std::filesystem::is_regular_file(status))
+        if (const auto status = std::filesystem::symlink_status(path, error); error || !std::filesystem::is_regular_file(status))
             return Result<VerifiedArtifactEvidence>::Failure(MakeError(SecurityErrors::MissingEvidence));
-        const auto actualBytes = std::filesystem::file_size(path, error);
-        if (error || actualBytes != expectedBytes)
+        if (const auto actualBytes = std::filesystem::file_size(path, error); error || actualBytes != expectedBytes)
             return Result<VerifiedArtifactEvidence>::Failure(MakeError(SecurityErrors::MissingEvidence));
         std::ifstream input{path, std::ios::binary};
         if (!input)

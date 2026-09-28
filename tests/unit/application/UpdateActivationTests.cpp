@@ -108,7 +108,8 @@ namespace {
         }
         std::vector<UpdateStagedFile> inventory{{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content}))}};
         constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
-        REQUIRE(PublishVerifiedUpdateStage(package, checkpoint, packageFile, stageRoot, inventory, limits, files, verifier, {}).HasValue());
+        REQUIRE(
+            PublishVerifiedUpdateStage({package, checkpoint, packageFile, stageRoot, inventory, limits}, files, verifier, {}).HasValue());
         return {std::move(package), std::move(checkpoint), packageFile, stageRoot, std::move(inventory)};
     }
 

@@ -37,7 +37,8 @@ namespace Horo::Release {
         };
 
         /** @brief Writes at miniz's requested offset through a filesystem-path-aware stream. */
-        [[nodiscard]] std::size_t WriteArchive(void *opaque, const mz_uint64 offset, const void *buffer, const std::size_t size) {
+        [[nodiscard]] std::size_t WriteArchive(void *opaque, const mz_uint64 offset,          // NOSONAR: miniz C callback ABI.
+                                               const void *buffer, const std::size_t size) {  // NOSONAR: miniz requires void*.
             auto &output = *static_cast<std::ofstream *>(opaque);
             if (offset > static_cast<mz_uint64>(std::numeric_limits<std::streamoff>::max()) ||
                 size > static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max()))
@@ -48,7 +49,8 @@ namespace Horo::Release {
         }
 
         /** @brief Supplies exact sequential source bytes and hashes the bytes actually archived. */
-        [[nodiscard]] std::size_t ReadSource(void *opaque, const mz_uint64 offset, void *buffer, const std::size_t size) {
+        [[nodiscard]] std::size_t ReadSource(void *opaque, const mz_uint64 offset,    // NOSONAR: miniz C callback ABI.
+                                             void *buffer, const std::size_t size) {  // NOSONAR: miniz requires void*.
             auto &reader = *static_cast<SourceReader *>(opaque);
             if (reader.failed || offset != reader.consumed || offset > reader.expectedSize)
                 return 0U;
@@ -71,13 +73,13 @@ namespace Horo::Release {
             if (!input)
                 return Result<ReleaseArtifactRecord>::Failure(MakeError(ReleaseErrors::PipelineStagingIoFailed));
             Sha256Builder digest;
-            std::array<std::byte, 64U * 1024U> buffer{};
+            std::array<char, 64U * 1024U> buffer{};
             std::uint64_t size = 0U;
             while (input) {
-                input.read(reinterpret_cast<char *>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+                input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
                 const auto read = input.gcount();
                 if (read > 0) {
-                    if (!digest.Update(std::span{buffer}.first(static_cast<std::size_t>(read))))
+                    if (!digest.Update(std::as_bytes(std::span{buffer}.first(static_cast<std::size_t>(read)))))
                         return Result<ReleaseArtifactRecord>::Failure(MakeError(ReleaseErrors::PipelineStagingIoFailed));
                     size += static_cast<std::uint64_t>(read);
                 }
@@ -113,7 +115,7 @@ namespace Horo::Release {
     }  // namespace
 
     /** @copydoc UpdateZipPackageProducer::UpdateZipPackageProducer */
-    UpdateZipPackageProducer::UpdateZipPackageProducer(const UpdateArchiveLimits limits) noexcept : limits_(limits) {}
+    UpdateZipPackageProducer::UpdateZipPackageProducer(const UpdateArchiveLimits &limits) noexcept : limits_(limits) {}
 
     /** @copydoc UpdateZipPackageProducer::Format */
     DistributionPackageFormat UpdateZipPackageProducer::Format() const noexcept {

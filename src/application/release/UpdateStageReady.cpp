@@ -64,12 +64,9 @@ namespace Horo::Release {
     }  // namespace
 
     /** @copydoc PublishVerifiedUpdateStage */
-    Result<std::filesystem::path> PublishVerifiedUpdateStage(const UpdatePackageRecord &package, const UpdateTransferCheckpoint &checkpoint,
-                                                             const std::filesystem::path &packageFile,
-                                                             const std::filesystem::path &stageRoot,
-                                                             const std::span<const UpdateStagedFile> inventory,
-                                                             const UpdateArchiveLimits &limits, NativeDurableFileSystem &files,
+    Result<std::filesystem::path> PublishVerifiedUpdateStage(const VerifiedUpdateStageRequest &request, NativeDurableFileSystem &files,
                                                              const Security::ArtifactVerifier &verifier, CancellationToken cancellation) {
+        const auto &[package, checkpoint, packageFile, stageRoot, inventory, limits] = request;
         const auto failed = [](const ErrorCodeDescriptor &code) {
             return Result<std::filesystem::path>::Failure(MakeError(code));
         };
