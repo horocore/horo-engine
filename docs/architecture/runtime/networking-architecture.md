@@ -656,6 +656,18 @@ validated event/envelope, call `Apply` at the owner safe point, and shut it down
 before retiring that session. It does not replace the owner-thread routing and
 handler registry work tracked separately by NET-002.7.
 
+`InboundMessageDispatcher` is the NetworkRuntime owner-thread route for NET-002.7.
+A host supplies its transport and immutable codec snapshot, registers only an
+already-Active `PeerSessionLifecycle` issued by its trust/admission authority,
+and transfers a generation-matched delivery gate. `RunNetworkPoll` stages
+transport events first; only after `PollEvents` returns does it decode bounded
+envelopes and call an exact protocol/message handler through the gate. Handler
+ownership is weak, work is rate-bounded and restricted to `NetworkPoll`, and
+absent, revoked, expired, malformed or overloaded work never reaches gameplay.
+Queue overflow closes the entire route rather than silently dropping an ordered
+packet. The minimal headless product still has no credential authority and
+deliberately closes native peers; connectivity alone cannot register gameplay.
+
 ### Backpressure and Overload Policies
 
 All transport queues have bounded capacities:

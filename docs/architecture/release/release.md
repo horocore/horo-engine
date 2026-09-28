@@ -642,6 +642,14 @@ and checked root; downstream publication must recheck the bytes before upload.
 This is an additive dispatch boundary; concrete archive, runtime, install,
 launch, and compatibility probes still need host composition and qualification.
 
+The publication dispatcher accepts only that verified identity and the same
+final manifest under a preflight-authorized destination. It checks local bytes,
+asks the destination adapter to upload only declared files, validates the
+receipt identity, asks the adapter to verify remote bytes and signatures, and
+rechecks local bytes before committing the channel. The adapter must keep
+upload idempotent and channel commit atomic. Concrete destination qualification
+and approval policy still belong to host composition.
+
 Additional required tests cover:
 
 - platform package format selection
@@ -675,6 +683,29 @@ policy checks pass:
 Promotion never rebuilds artifacts. It moves or references an already verified
 release candidate. If a promotion fails, the candidate remains valid but the
 channel state is unchanged.
+
+The GitHub Releases destination lives in `HoroReleaseGitHub`, outside the shared
+release application target. Its host-owned client resolves an existing tagged
+release, uploads only final-manifest files and canonical `manifest.json`, reads
+each remote asset back for size and SHA-256 verification, and binds the channel
+commit to the same remote release ID. The destination requires a canonical Git
+commit SHA in the candidate and peels the existing Git tag to that exact commit.
+A missing release, retargeted tag, or changed release ID fails
+without creating a tag or release. The `GitHubReleaseCliClient` uses the host's
+authenticated `gh` installation through the bounded, shell-free process runner;
+it never passes credentials in arguments or emits GitHub CLI diagnostic text.
+It treats an existing remote asset as an idempotent retry only after downloading
+and hashing its bytes, and changes the stable channel only after verifying the
+remote manifest and confirming the release is GitHub's latest. Other channels
+fail until they have an explicit remote mapping. `Release Binaries` workflow
+composition remains separate host work.
+
+The destination also compares the existing GitHub Release body to the exact
+reviewed Markdown in the frozen notes snapshot before upload and at every later
+identity check. This extends `GitHubReleaseIdentity` with a bounded body field;
+host clients constructing that identity must return the existing release body.
+Callers with an older client implementation must supply it or publication fails
+closed. Tests cover mismatched and changed release bodies before channel commit.
 
 ## Security
 

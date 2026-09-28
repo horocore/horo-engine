@@ -8,6 +8,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Runtime/Save/SaveArchiveMetadata.h"
+#include "Horo/Runtime/Save/SaveArchiveReader.h"
 
 #include <compare>
 #include <cstddef>
@@ -72,6 +73,7 @@ namespace Horo::Runtime {
         ParticipantSchemaVersion schemaVersion;
         bool required{true};
         std::vector<std::byte> payload;
+        std::vector<PreservedSaveChunk> preservedChunks; /**< Exact verified unknown records and integrity evidence. */
 
         [[nodiscard]] auto operator<=>(const SaveMigrationParticipantState &) const noexcept = default;
     };
@@ -97,6 +99,17 @@ namespace Horo::Runtime {
     using SaveMigrationSource = SaveMigrationState;
     /** @brief Owned candidate returned by a migration operation. */
     using SaveMigrationCandidate = SaveMigrationState;
+
+    /**
+     * @brief Attaches integrity-verified unknown optional records to detached migration staging.
+     * @param archive Verified source archive.
+     * @param policy Sealed policy deciding explicit optional drops.
+     * @param source Detached state with matching manifest participant identities and schemas; unchanged on failure.
+     * @param maximumPreservedBytes Finite aggregate opaque-byte budget.
+     * @return Success or a typed compatibility, mismatch, integrity, or limit error.
+     */
+    [[nodiscard]] Result<void> RetainUnknownSaveData(const ValidatedSaveArchive &archive, const SaveCompatibilityPolicy &policy,
+                                                     SaveMigrationSource &source, std::uint64_t maximumPreservedBytes);
 
     /** @brief Context identifying the definition currently transforming detached state. */
     struct SaveMigrationStepContext final {
@@ -169,6 +182,7 @@ namespace Horo::Runtime {
         SaveParticipantId participant;
         ParticipantSchemaVersion schemaVersion;
         bool required{true};
+        bool preserveUnknown{}; /**< Unknown optional source owner must remain byte-for-byte unchanged. */
 
         [[nodiscard]] auto operator<=>(const SaveMigrationParticipantTarget &) const noexcept = default;
     };
