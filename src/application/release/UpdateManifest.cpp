@@ -1,5 +1,6 @@
 #include "Horo/Release/UpdateManifest.h"
 
+#include "Horo/Foundation/Utf8.h"
 #include "Horo/Release/ReleaseVersion.h"
 #include "Horo/Release/UpdateManifestErrors.h"
 #include "Horo/Release/UpdateTrustRoot.h"
@@ -22,6 +23,9 @@ namespace Horo::Release {
         using Json = nlohmann::json;
         constexpr std::size_t MaximumDocumentBytes = 128U * 1024U;
         constexpr std::size_t MaximumPackages = 32U;
+        constexpr std::size_t MaximumReleaseNotesBytes = 32U * 1024U;
+        constexpr std::size_t MaximumCompatibilityImpacts = 16U;
+        constexpr std::size_t MaximumCompatibilityImpactBytes = 1024U;
         constexpr std::uint64_t MaximumLifetimeSeconds = 366U * 24U * 60U * 60U;
         using Detail::ReadEnvelope;
         using Detail::ValidEnvelope;
@@ -134,6 +138,10 @@ namespace Horo::Release {
                          {"packages", std::move(packages)}};
             if (data.minimumAllowedVersion)
                 payload["minimumAllowedVersion"] = VersionText(*data.minimumAllowedVersion);
+            if (!data.releaseNotes.empty())
+                payload["releaseNotes"] = data.releaseNotes;
+            if (!data.compatibilityImpacts.empty())
+                payload["compatibilityImpacts"] = data.compatibilityImpacts;
             return payload;
         }
 
@@ -143,7 +151,13 @@ namespace Horo::Release {
                 data.publishedAt == 0U || data.expiresAt <= data.publishedAt ||
                 data.expiresAt - data.publishedAt > MaximumLifetimeSeconds || data.minimumUpdaterVersion == 0U ||
                 data.minimumRootRevision == 0U || data.packages.empty() || data.packages.size() > MaximumPackages ||
-                (data.minimumAllowedVersion && !ValidVersionKind(data.product.kind, *data.minimumAllowedVersion)))
+                (data.minimumAllowedVersion && !ValidVersionKind(data.product.kind, *data.minimumAllowedVersion)) ||
+                data.releaseNotes.size() > MaximumReleaseNotesBytes || data.releaseNotes.find('\0') != std::string::npos ||
+                !IsValidUtf8ScalarSequence(data.releaseNotes) || data.compatibilityImpacts.size() > MaximumCompatibilityImpacts ||
+                std::ranges::any_of(data.compatibilityImpacts, [](const std::string &impact) {
+                return impact.empty() || impact.size() > MaximumCompatibilityImpactBytes || impact.find('\0') != std::string::npos ||
+                       !IsValidUtf8ScalarSequence(impact);
+            }))
                 return false;
             for (const auto &package : data.packages) {
                 const auto &artifact = package.selection.artifact;
@@ -175,10 +189,31 @@ namespace Horo::Release {
             return true;
         }
 
+        [[nodiscard]] bool ReadPresentation(const Json &json, UpdateManifestData &data) {
+            if (json.contains("releaseNotes")) {
+                if (!json.at("releaseNotes").is_string())
+                    return false;
+                data.releaseNotes = json.at("releaseNotes").get<std::string>();
+            }
+            if (json.contains("compatibilityImpacts")) {
+                if (!json.at("compatibilityImpacts").is_array() || json.at("compatibilityImpacts").size() > MaximumCompatibilityImpacts)
+                    return false;
+                for (const Json &impact : json.at("compatibilityImpacts")) {
+                    if (!impact.is_string())
+                        return false;
+                    data.compatibilityImpacts.push_back(impact.get<std::string>());
+                }
+            }
+            return true;
+        }
+
         [[nodiscard]] bool ReadPayload(const Json &json, UpdateManifestData &data) {
-            if (!json.is_object() || (json.size() != 11U && json.size() != 12U) || json.at("schemaVersion") != 1 ||
-                !json.at("product").is_object() || json.at("product").size() != 2U || !json.at("packages").is_array() ||
-                json.at("packages").size() > MaximumPackages)
+            if (!json.is_object() ||
+                json.size() != 11U + static_cast<std::size_t>(json.contains("minimumAllowedVersion")) +
+                                   static_cast<std::size_t>(json.contains("releaseNotes")) +
+                                   static_cast<std::size_t>(json.contains("compatibilityImpacts")) ||
+                json.at("schemaVersion") != 1 || !json.at("product").is_object() || json.at("product").size() != 2U ||
+                !json.at("packages").is_array() || json.at("packages").size() > MaximumPackages)
                 return false;
             if (!Detail::ParseProductKind(json.at("product").at("kind").get<std::string>(), data.product.kind))
                 return false;
@@ -198,6 +233,8 @@ namespace Horo::Release {
                     return false;
                 data.minimumAllowedVersion = std::move(minimum);
             }
+            if (!ReadPresentation(json, data))
+                return false;
             for (const Json &entry : json.at("packages")) {
                 if (!entry.is_object() || entry.size() != 9U)
                     return false;

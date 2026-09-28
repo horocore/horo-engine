@@ -470,6 +470,9 @@
     "settings.nav.packages": {
       "text": "Paketler"
     },
+    "settings.nav.updates": {
+      "text": "Güncellemeler"
+    },
     "settings.nav.plugins": {
       "text": "Uzantılar"
     },
@@ -478,6 +481,120 @@
     },
     "settings.nav.tools": {
       "text": "Araçlar"
+    },
+    "settings.updates.automatic_download": {
+      "text": "Otomatik indir"
+    },
+    "settings.updates.automatic_download.description": {
+      "text": "Yeni sürümleri arka planda doğrulayarak hazırla."
+    },
+    "settings.updates.cancel": {
+      "text": "İptal"
+    },
+    "settings.updates.channel": {
+      "text": "Güncelleme kanalı"
+    },
+    "settings.updates.channel.description": {
+      "text": "Kanal değişikliğinden sonra yeniden elle kontrol edin."
+    },
+    "settings.updates.channel.enterprise": {
+      "text": "Kurumsal"
+    },
+    "settings.updates.channel.nightly": {
+      "text": "Gecelik"
+    },
+    "settings.updates.channel.offline": {
+      "text": "Çevrimdışı"
+    },
+    "settings.updates.channel.preview": {
+      "text": "Önizleme"
+    },
+    "settings.updates.channel.stable": {
+      "text": "Kararlı"
+    },
+    "settings.updates.check": {
+      "text": "Şimdi kontrol et"
+    },
+    "settings.updates.compatibility": {
+      "text": "Uyumluluk etkisi"
+    },
+    "settings.updates.confirm.restart": {
+      "text": "Doğrulanmış güncellemeyi yüklemek için yeniden başlatılsın mı? Önce çalışmanızı kaydedin."
+    },
+    "settings.updates.confirm.rollback": {
+      "text": "Bu kurulum önceki doğrulanmış sürüme geri alınsın mı?"
+    },
+    "settings.updates.confirm.channel": {
+      "text": "Daha az kararlı güncelleme kanalına geçilsin mi? Yeni sürümler proje ve eklenti uyumluluğunu etkileyebilir."
+    },
+    "settings.updates.confirm.action": {
+      "text": "Onayla"
+    },
+    "settings.updates.diagnostics": {
+      "text": "Tanılama"
+    },
+    "settings.updates.download": {
+      "text": "İndir ve doğrula"
+    },
+    "settings.updates.install_on_exit": {
+      "text": "Çıkışta yükle"
+    },
+    "settings.updates.install_on_exit.description": {
+      "text": "Hazır güncellemeyi düzenleyici kapandıktan sonra yükle."
+    },
+    "settings.updates.no_offer": {
+      "text": "Güncelleme sürüm notları bulunmuyor."
+    },
+    "settings.updates.release_notes": {
+      "text": "Sürüm notları"
+    },
+    "settings.updates.restart": {
+      "text": "Şimdi yeniden başlat"
+    },
+    "settings.updates.rollback": {
+      "text": "Geri al"
+    },
+    "settings.updates.unconfigured": {
+      "text": "Güncellemeler kullanılamıyor: bu kurulum için doğrulanmış kaynak ve desteklenen paket hazırlayıcısı yapılandırılmamış."
+    },
+    "settings.updates.phase.active": {
+      "text": "Etkin"
+    },
+    "settings.updates.phase.available": {
+      "text": "Hazır"
+    },
+    "settings.updates.phase.checking": {
+      "text": "Kontrol ediliyor"
+    },
+    "settings.updates.phase.downloading": {
+      "text": "İndiriliyor"
+    },
+    "settings.updates.phase.failed": {
+      "text": "Başarısız"
+    },
+    "settings.updates.phase.idle": {
+      "text": "Kontrol edilmedi"
+    },
+    "settings.updates.phase.restart_required": {
+      "text": "Yeniden başlatma gerekli"
+    },
+    "settings.updates.phase.rolled_back": {
+      "text": "Geri alındı"
+    },
+    "settings.updates.phase.staged": {
+      "text": "Hazırlandı"
+    },
+    "settings.updates.phase.up_to_date": {
+      "text": "Güncel"
+    },
+    "settings.updates.phase.verifying": {
+      "text": "Doğrulanıyor"
+    },
+    "settings.updates.phase.activating": {
+      "text": "Yeniden başlatma devri istendi"
+    },
+    "settings.updates.phase.rollback_pending": {
+      "text": "Geri alma devri istendi"
     },
     "settings.network.max_preview_clients": {
       "text": "Maksimum Önizleme İstemcisi"
