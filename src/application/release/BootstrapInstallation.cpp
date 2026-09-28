@@ -79,11 +79,10 @@ namespace Horo::Release {
                 request.candidate.packageFile != paths.versions / (id + ".zip") ||
                 selection.format != DistributionPackageFormat::ZipArchive)
                 return false;
-            const auto isDirectory = [](const std::filesystem::path &path) {
+            if (const auto isDirectory = [](const std::filesystem::path &path) {
                 std::error_code error;
                 return std::filesystem::is_directory(std::filesystem::symlink_status(path, error)) && !error;
-            };
-            if (!isDirectory(paths.root) || !isDirectory(paths.versions))
+            }; !isDirectory(paths.root) || !isDirectory(paths.versions))
                 return false;
             auto admitted = ValidateDistributionPackageSelection(artifact, selection.format);
             return admitted.HasValue() && admitted.Value() == selection;
