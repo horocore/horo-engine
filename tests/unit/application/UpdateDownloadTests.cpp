@@ -364,7 +364,7 @@ TEST_CASE("Activation admission rejects a changed ready marker", "[release][upda
     Horo::NativeDurableFileSystem files;
     constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
     const auto root = stage.path / "candidate";
-    auto published = StageVerifiedZipUpdate(package, CompleteCheckpoint(package), paths.partialFile, root, limits, files, Verifier(), {});
+    auto published = StageVerifiedZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, root, limits}, files, Verifier(), {});
     REQUIRE(published.HasValue());
     const std::array inventory{UpdateStagedFile{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content}))}};
     {
