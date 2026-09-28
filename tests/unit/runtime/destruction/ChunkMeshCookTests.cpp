@@ -5,8 +5,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <limits>
-#include <utility>
 #include <type_traits>
+#include <utility>
 
 namespace Horo::Destruction {
     static_assert(!std::is_default_constructible_v<ChunkMeshArtifact>);
