@@ -46,17 +46,22 @@ namespace Horo::Release {
         /** @brief Refuses symlinks and hardlinks throughout one existing user-state path. */
         [[nodiscard]] bool PrivateFile(const std::filesystem::path &root, const std::filesystem::path &relative) {
             std::error_code error;
-            if (!std::filesystem::is_directory(std::filesystem::symlink_status(root, error)) || error)
+            const auto rootStatus = std::filesystem::symlink_status(root, error);
+            if (error || !std::filesystem::is_directory(rootStatus))
                 return false;
             auto parent = root;
             for (const auto &part : relative.parent_path()) {
                 parent /= part;
-                if (!std::filesystem::is_directory(std::filesystem::symlink_status(parent, error)) || error)
+                const auto parentStatus = std::filesystem::symlink_status(parent, error);
+                if (error || !std::filesystem::is_directory(parentStatus))
                     return false;
             }
             const auto path = root / relative;
-            return std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error)) && !error &&
-                   std::filesystem::hard_link_count(path, error) == 1U && !error;
+            const auto status = std::filesystem::symlink_status(path, error);
+            if (error || !std::filesystem::is_regular_file(status))
+                return false;
+            const auto links = std::filesystem::hard_link_count(path, error);
+            return !error && links == 1U;
         }
 
         /** @brief Reads bounded bytes after the private-file check. */
@@ -89,6 +94,166 @@ namespace Horo::Release {
             if (auto written = files.AppendPrivateDurable(prepared, 0U, bytes); written.HasError())
                 return written;
             return files.AtomicReplace(prepared, path);
+        }
+
+        /** @brief Loads one authenticated source after checking each path component. */
+        [[nodiscard]] Result<std::vector<std::byte>> ReadSource(const UserStateMigrationRequest &request,
+                                                                const UserStateMigrationStep &step, const std::filesystem::path &root) {
+            const auto path = root / step.relativePath;
+            if (!PrivateFile(root, step.relativePath))
+                return Result<std::vector<std::byte>>::Failure(Failure(UserStateMigrationErrors::UnsafePath, path));
+            auto source = ReadBounded(path, request.maximumFileBytes);
+            if (source.HasError())
+                return source;
+            if (source.Value().empty() && step.action == UserStateMigrationAction::Transform)
+                return Result<std::vector<std::byte>>::Failure(Failure(UserStateMigrationErrors::SourceChanged, path));
+            return source;
+        }
+
+        /** @brief Discards only a content-matched file under the separate cache root. */
+        [[nodiscard]] Result<void> DiscardCache(const UserStateMigrationStep &step, const std::filesystem::path &path,
+                                                const Sha256Digest &digest, NativeDurableFileSystem &files) {
+            if (digest != step.sourceDigest)
+                return Result<void>::Failure(Failure(UserStateMigrationErrors::SourceChanged, path));
+            return files.RemoveDurable(path);
+        }
+
+        /** @brief Recognizes a completed transform only when its durable prior-version backup matches. */
+        [[nodiscard]] bool AlreadyTransformed(const UserStateMigrationRequest &request, const UserStateMigrationStep &step,
+                                              const std::filesystem::path &root, const std::filesystem::path &path,
+                                              const Sha256Digest &digest) {
+            if (digest != step.targetDigest)
+                return false;
+            const auto backup = BackupPath(path, step.sourceSchema);
+            if (!PrivateFile(root, backup.lexically_relative(root)))
+                return false;
+            auto original = ReadBounded(backup, request.maximumFileBytes);
+            return original.HasValue() && ComputeSha256(original.Value()) == step.sourceDigest;
+        }
+
+        /** @brief Requires a verified adjacent backup before replacing a user-state file. */
+        [[nodiscard]] Result<void> BackUpSource(const UserStateMigrationRequest &request, const UserStateMigrationStep &step,
+                                                const std::filesystem::path &root, const std::filesystem::path &path,
+                                                NativeDurableFileSystem &files) {
+            const auto backup = BackupPath(path, step.sourceSchema);
+            if (!Absent(backup))
+                return Result<void>::Failure(Failure(UserStateMigrationErrors::BackupRequiresRepair, backup));
+            if (auto copied = files.CopyDurable(path, backup); copied.HasError())
+                return copied;
+            if (!PrivateFile(root, backup.lexically_relative(root)))
+                return Result<void>::Failure(Failure(UserStateMigrationErrors::BackupRequiresRepair, backup));
+            auto copiedSource = ReadBounded(backup, request.maximumFileBytes);
+            if (copiedSource.HasError() || ComputeSha256(copiedSource.Value()) != step.sourceDigest)
+                return Result<void>::Failure(Failure(UserStateMigrationErrors::BackupRequiresRepair, backup));
+            return Result<void>::Success();
+        }
+
+        /** @brief Transforms exact source bytes, preserving a verified copy before publication. */
+        [[nodiscard]] Result<void> TransformState(const UserStateMigrationRequest &request, const UserStateMigrationStep &step,
+                                                  const std::filesystem::path &root, const std::filesystem::path &path,
+                                                  const std::span<const std::byte> source, NativeDurableFileSystem &files,
+                                                  IUserStateMigrationTransformer &transformer) {
+            if (ComputeSha256(source) != step.sourceDigest)
+                return Result<void>::Failure(Failure(UserStateMigrationErrors::SourceChanged, path));
+            if (!Absent(BackupPath(path, step.sourceSchema)))
+                return Result<void>::Failure(Failure(UserStateMigrationErrors::BackupRequiresRepair, BackupPath(path, step.sourceSchema)));
+            for (const auto &reference : step.credentialReferences) {
+                if (auto authorized = transformer.ReauthorizeCredentialReference(reference); authorized.HasError())
+                    return authorized;
+            }
+            auto replacement = transformer.Transform(step, source);
+            if (replacement.HasError() || replacement.Value().empty() || replacement.Value().size() > request.maximumFileBytes ||
+                ComputeSha256(replacement.Value()) != step.targetDigest)
+                return Result<void>::Failure(Failure(UserStateMigrationErrors::TransformFailed, path));
+            if (auto copied = BackUpSource(request, step, root, path, files); copied.HasError())
+                return copied;
+            return Publish(path, replacement.Value(), files);
+        }
+
+        /** @brief Records the outcome of one deterministic user-state step. */
+        enum class StepOutcome : std::uint8_t {
+            AlreadyApplied,
+            Transformed,
+            DiscardedCache
+        };
+
+        /** @brief Executes one authenticated step without consulting project documents. */
+        [[nodiscard]] Result<StepOutcome> ApplyMigrationStep(const UserStateMigrationRequest &request, const UserStateMigrationStep &step,
+                                                             NativeDurableFileSystem &files, IUserStateMigrationTransformer &transformer) {
+            const auto &root = step.family == UserStateFamily::DisposableCache ? request.cacheRoot : request.userStateRoot;
+            const auto path = root / step.relativePath;
+            if (step.action == UserStateMigrationAction::DiscardCache && Absent(path))
+                return Result<StepOutcome>::Success(StepOutcome::AlreadyApplied);
+            auto source = ReadSource(request, step, root);
+            if (source.HasError())
+                return Result<StepOutcome>::Failure(source.ErrorValue());
+            const auto digest = ComputeSha256(source.Value());
+            if (step.action == UserStateMigrationAction::DiscardCache) {
+                if (auto discarded = DiscardCache(step, path, digest, files); discarded.HasError())
+                    return Result<StepOutcome>::Failure(discarded.ErrorValue());
+                return Result<StepOutcome>::Success(StepOutcome::DiscardedCache);
+            }
+            if (AlreadyTransformed(request, step, root, path, digest))
+                return Result<StepOutcome>::Success(StepOutcome::AlreadyApplied);
+            if (auto transformed = TransformState(request, step, root, path, source.Value(), files, transformer); transformed.HasError())
+                return Result<StepOutcome>::Failure(transformed.ErrorValue());
+            return Result<StepOutcome>::Success(StepOutcome::Transformed);
+        }
+
+        /** @brief Holds the host lock for every state/cache mutation in the plan. */
+        [[nodiscard]] Result<UserStateMigrationReport> RunLockedMigration(const UserStateMigrationRequest &request,
+                                                                          const UserStateMigrationPlan &plan,
+                                                                          NativeDurableFileSystem &files,
+                                                                          IUserStateMigrationTransformer &transformer) {
+            UserStateMigrationReport report;
+            for (const auto index : plan.orderedSteps) {
+                auto outcome = ApplyMigrationStep(request, request.steps[index], files, transformer);
+                if (outcome.HasError())
+                    return Result<UserStateMigrationReport>::Failure(outcome.ErrorValue());
+                switch (outcome.Value()) {
+                    case StepOutcome::AlreadyApplied:
+                        ++report.alreadyApplied;
+                        break;
+                    case StepOutcome::Transformed:
+                        ++report.transformed;
+                        break;
+                    case StepOutcome::DiscardedCache:
+                        ++report.discardedCaches;
+                        break;
+                }
+            }
+            return Result<UserStateMigrationReport>::Success(report);
+        }
+
+        /** @brief Restores the verified source backup while the host repair lock is held. */
+        [[nodiscard]] Result<void> RestoreLockedBackup(const std::filesystem::path &root, const UserStateMigrationStep &step,
+                                                       NativeDurableFileSystem &files) {
+            const auto path = root / step.relativePath;
+            const auto backup = BackupPath(path, step.sourceSchema);
+            if (!PrivateFile(root, backup.lexically_relative(root)))
+                return Result<void>::Failure(Failure(UserStateMigrationErrors::UnsafePath, backup));
+            auto original = ReadBounded(backup, 8U * 1024U * 1024U);
+            if (original.HasError() || ComputeSha256(original.Value()) != step.sourceDigest)
+                return Result<void>::Failure(Failure(UserStateMigrationErrors::SourceChanged, backup));
+            if (!Absent(path)) {
+                if (!PrivateFile(root, step.relativePath))
+                    return Result<void>::Failure(Failure(UserStateMigrationErrors::UnsafePath, path));
+                auto current = ReadBounded(path, 8U * 1024U * 1024U);
+                if (current.HasError())
+                    return Result<void>::Failure(current.ErrorValue());
+                const auto digest = ComputeSha256(current.Value());
+                if (digest != step.targetDigest && digest != step.sourceDigest)
+                    return Result<void>::Failure(Failure(UserStateMigrationErrors::SourceChanged, path));
+            }
+            auto prepared = path;
+            prepared += ".horo-migration-prepared";
+            if (!Absent(prepared)) {
+                if (!PrivateFile(root, prepared.lexically_relative(root)))
+                    return Result<void>::Failure(Failure(UserStateMigrationErrors::UnsafePath, prepared));
+                if (auto removed = files.RemoveDurable(prepared); removed.HasError())
+                    return removed;
+            }
+            return Publish(path, original.Value(), files);
         }
     }  // namespace
 
@@ -149,66 +314,11 @@ namespace Horo::Release {
         auto plan = PlanUserStateMigration(request);
         if (plan.HasError())
             return Result<UserStateMigrationReport>::Failure(plan.ErrorValue());
-        auto lock = files.TryAcquireExclusive(request.userStateRoot / ".user-state-migration.lock", "horo-user-state-migration");
-        if (lock.HasError())
+        if (auto lock = files.TryAcquireExclusive(request.userStateRoot / ".user-state-migration.lock", "horo-user-state-migration");
+            lock.HasError())
             return Result<UserStateMigrationReport>::Failure(lock.ErrorValue());
-        UserStateMigrationReport report;
-        for (const auto index : plan.Value().orderedSteps) {
-            const auto &step = request.steps[index];
-            const auto &root = step.family == UserStateFamily::DisposableCache ? request.cacheRoot : request.userStateRoot;
-            const auto path = root / step.relativePath;
-            if (step.action == UserStateMigrationAction::DiscardCache && Absent(path)) {
-                ++report.alreadyApplied;
-                continue;
-            }
-            if (!PrivateFile(root, step.relativePath))
-                return Result<UserStateMigrationReport>::Failure(Failure(UserStateMigrationErrors::UnsafePath, path));
-            auto source = ReadBounded(path, request.maximumFileBytes);
-            if (source.HasError())
-                return Result<UserStateMigrationReport>::Failure(source.ErrorValue());
-            if (source.Value().empty() && step.action == UserStateMigrationAction::Transform)
-                return Result<UserStateMigrationReport>::Failure(Failure(UserStateMigrationErrors::SourceChanged, path));
-            const auto digest = ComputeSha256(source.Value());
-            if (step.action == UserStateMigrationAction::DiscardCache) {
-                if (digest != step.sourceDigest)
-                    return Result<UserStateMigrationReport>::Failure(Failure(UserStateMigrationErrors::SourceChanged, path));
-                if (auto removed = files.RemoveDurable(path); removed.HasError())
-                    return Result<UserStateMigrationReport>::Failure(removed.ErrorValue());
-                ++report.discardedCaches;
-                continue;
-            }
-            const auto backup = BackupPath(path, step.sourceSchema);
-            if (digest == step.targetDigest && PrivateFile(root, backup.lexically_relative(root))) {
-                auto original = ReadBounded(backup, request.maximumFileBytes);
-                if (original.HasValue() && ComputeSha256(original.Value()) == step.sourceDigest) {
-                    ++report.alreadyApplied;
-                    continue;
-                }
-            }
-            if (digest != step.sourceDigest)
-                return Result<UserStateMigrationReport>::Failure(Failure(UserStateMigrationErrors::SourceChanged, path));
-            if (!Absent(backup))
-                return Result<UserStateMigrationReport>::Failure(Failure(UserStateMigrationErrors::BackupRequiresRepair, backup));
-            for (const auto &reference : step.credentialReferences) {
-                if (auto authorized = transformer.ReauthorizeCredentialReference(reference); authorized.HasError())
-                    return Result<UserStateMigrationReport>::Failure(authorized.ErrorValue());
-            }
-            auto replacement = transformer.Transform(step, source.Value());
-            if (replacement.HasError() || replacement.Value().empty() || replacement.Value().size() > request.maximumFileBytes ||
-                ComputeSha256(replacement.Value()) != step.targetDigest)
-                return Result<UserStateMigrationReport>::Failure(Failure(UserStateMigrationErrors::TransformFailed, path));
-            if (auto copied = files.CopyDurable(path, backup); copied.HasError())
-                return Result<UserStateMigrationReport>::Failure(copied.ErrorValue());
-            if (!PrivateFile(root, backup.lexically_relative(root)))
-                return Result<UserStateMigrationReport>::Failure(Failure(UserStateMigrationErrors::BackupRequiresRepair, backup));
-            auto copiedSource = ReadBounded(backup, request.maximumFileBytes);
-            if (copiedSource.HasError() || ComputeSha256(copiedSource.Value()) != step.sourceDigest)
-                return Result<UserStateMigrationReport>::Failure(Failure(UserStateMigrationErrors::BackupRequiresRepair, backup));
-            if (auto published = Publish(path, replacement.Value(), files); published.HasError())
-                return Result<UserStateMigrationReport>::Failure(published.ErrorValue());
-            ++report.transformed;
-        }
-        return Result<UserStateMigrationReport>::Success(report);
+        else
+            return RunLockedMigration(request, plan.Value(), files, transformer);
     }
 
     /** @copydoc RestoreUserStateMigrationBackup */
@@ -217,34 +327,9 @@ namespace Horo::Release {
         if (!CanonicalRoot(root) || !CanonicalRelative(step.relativePath) || step.family == UserStateFamily::DisposableCache ||
             step.action != UserStateMigrationAction::Transform)
             return Result<void>::Failure(MakeError(UserStateMigrationErrors::InvalidPlan));
-        auto lock = files.TryAcquireExclusive(root / ".user-state-migration.lock", "horo-user-state-repair");
-        if (lock.HasError())
+        if (auto lock = files.TryAcquireExclusive(root / ".user-state-migration.lock", "horo-user-state-repair"); lock.HasError())
             return Result<void>::Failure(lock.ErrorValue());
-        const auto path = root / step.relativePath;
-        const auto backup = BackupPath(path, step.sourceSchema);
-        if (!PrivateFile(root, backup.lexically_relative(root)))
-            return Result<void>::Failure(Failure(UserStateMigrationErrors::UnsafePath, backup));
-        auto original = ReadBounded(backup, 8U * 1024U * 1024U);
-        if (original.HasError() || ComputeSha256(original.Value()) != step.sourceDigest)
-            return Result<void>::Failure(Failure(UserStateMigrationErrors::SourceChanged, backup));
-        if (!Absent(path)) {
-            if (!PrivateFile(root, step.relativePath))
-                return Result<void>::Failure(Failure(UserStateMigrationErrors::UnsafePath, path));
-            auto current = ReadBounded(path, 8U * 1024U * 1024U);
-            if (current.HasError())
-                return Result<void>::Failure(current.ErrorValue());
-            const auto digest = ComputeSha256(current.Value());
-            if (digest != step.targetDigest && digest != step.sourceDigest)
-                return Result<void>::Failure(Failure(UserStateMigrationErrors::SourceChanged, path));
-        }
-        auto prepared = path;
-        prepared += ".horo-migration-prepared";
-        if (!Absent(prepared)) {
-            if (!PrivateFile(root, prepared.lexically_relative(root)))
-                return Result<void>::Failure(Failure(UserStateMigrationErrors::UnsafePath, prepared));
-            if (auto removed = files.RemoveDurable(prepared); removed.HasError())
-                return removed;
-        }
-        return Publish(path, original.Value(), files);
+        else
+            return RestoreLockedBackup(root, step, files);
     }
 }  // namespace Horo::Release
