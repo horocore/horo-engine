@@ -34,6 +34,15 @@ namespace Horo::Release {
         const UpdateArchiveLimits &limits;
     };
 
+    /** @brief Signed Linux tar.gz and private stage inputs for one extraction transaction. */
+    struct VerifiedTarGzipUpdateRequest final {
+        const UpdatePackageRecord &package;
+        const UpdateTransferCheckpoint &checkpoint;
+        const std::filesystem::path &packageFile;
+        const std::filesystem::path &stageRoot;
+        const UpdateArchiveLimits &limits;
+    };
+
     /**
      * @brief Publishes a version-private ready marker only after package and staged-tree authentication.
      * @param request Signed package, durable checkpoint, private paths, inventory, and limits.
@@ -94,4 +103,18 @@ namespace Horo::Release {
                                                                                       const std::filesystem::path &packageFile,
                                                                                       const UpdateArchiveLimits &limits,
                                                                                       const Security::ArtifactVerifier &verifier);
+
+    /**
+     * @brief Authenticates, indexes, extracts, and publishes a ready Linux tar.gz stage.
+     * @param request Signed package, exact private paths, and expansion limits.
+     * @param files Native durable filesystem kept alive for the transaction.
+     * @param verifier Trusted publisher signature verifier.
+     * @param cancellation Cooperative cancellation before ready publication.
+     * @return Ready-marker path only after every extracted file matches the authenticated internal inventory.
+     * @note The host keeps the package and private parent quiescent throughout this call.
+     */
+    [[nodiscard]] Result<std::filesystem::path> StageVerifiedTarGzipUpdate(const VerifiedTarGzipUpdateRequest &request,
+                                                                           NativeDurableFileSystem &files,
+                                                                           const Security::ArtifactVerifier &verifier,
+                                                                           CancellationToken cancellation);
 }  // namespace Horo::Release

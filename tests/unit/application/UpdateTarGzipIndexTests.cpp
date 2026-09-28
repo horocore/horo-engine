@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <miniz.h>
 #include <optional>
@@ -91,6 +92,18 @@ namespace {
         std::vector<unsigned char> tar;
         AppendTarFile(tar, "horo-update-files-v1.txt", "inventory");
         AppendTarFile(tar, name, "editor", type);
+        tar.resize(tar.size() + 1024U, 0U);
+        return tar;
+    }
+
+    [[nodiscard]] std::vector<unsigned char> InventoryTar(const std::string &content = "editor") {
+        const UpdateStagedFile file{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content}))};
+        constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 2048U};
+        auto encoded = BuildCanonicalUpdateFileInventory(std::span{&file, 1U}, limits);
+        REQUIRE(encoded.HasValue());
+        std::vector<unsigned char> tar;
+        AppendTarFile(tar, "horo-update-files-v1.txt", encoded.Value());
+        AppendTarFile(tar, file.path, content);
         tar.resize(tar.size() + 1024U, 0U);
         return tar;
     }
@@ -219,4 +232,90 @@ TEST_CASE("Signed tar gzip refuses bytes changed after signature verification", 
     changed.close();
     auto verifier = Verifier();
     CHECK(IndexVerifiedTarGzipPackage(package.record, package.checkpoint, package.file, Limits, verifier).HasError());
+}
+
+TEST_CASE("Signed Linux tar gzip stages its authenticated inventory and publishes ready", "[release][update][tar]") {
+    TemporaryPackage temporary;
+    auto package = Sign(temporary, Gzip(InventoryTar()));
+    auto verifier = Verifier();
+    Horo::NativeDurableFileSystem files;
+    const auto stage = temporary.path / "editor-stage";
+    auto published = StageVerifiedTarGzipUpdate({package.record, package.checkpoint, package.file, stage, Limits}, files, verifier, {});
+    REQUIRE(published.HasValue());
+    CHECK(std::filesystem::is_regular_file(published.Value()));
+    const std::string content = "editor";
+    const UpdateStagedFile file{"bin/editor", 6U, Horo::ComputeSha256(std::as_bytes(std::span{content}))};
+    CHECK(
+        VerifyReadyUpdateStage(package.record, package.checkpoint, package.file, stage, std::span{&file, 1U}, Limits, verifier).HasValue());
+}
+
+TEST_CASE("Signed Linux tar gzip rejects an inventory content mismatch without publishing ready", "[release][update][tar]") {
+    TemporaryPackage temporary;
+    const std::string declared = "editor";
+    const UpdateStagedFile file{"bin/editor", declared.size(), Horo::ComputeSha256(std::as_bytes(std::span{declared}))};
+    auto encoded = BuildCanonicalUpdateFileInventory(std::span{&file, 1U}, Limits);
+    REQUIRE(encoded.HasValue());
+    std::vector<unsigned char> tar;
+    AppendTarFile(tar, "horo-update-files-v1.txt", encoded.Value());
+    AppendTarFile(tar, "bin/editor", "broken");
+    tar.resize(tar.size() + 1024U, 0U);
+    auto package = Sign(temporary, Gzip(tar));
+    auto verifier = Verifier();
+    Horo::NativeDurableFileSystem files;
+    const auto stage = temporary.path / "editor-stage";
+    auto staged = StageVerifiedTarGzipUpdate({package.record, package.checkpoint, package.file, stage, Limits}, files, verifier, {});
+    CHECK(staged.HasError());
+    CHECK_FALSE(std::filesystem::exists(stage));
+    CHECK_FALSE(std::filesystem::exists(stage.string() + ".ready"));
+}
+
+TEST_CASE("Signed Linux tar gzip rejects a noncanonical internal inventory", "[release][update][tar]") {
+    TemporaryPackage temporary;
+    auto package = Sign(temporary, Gzip(Tar()));
+    auto verifier = Verifier();
+    Horo::NativeDurableFileSystem files;
+    const auto stage = temporary.path / "editor-stage";
+    CHECK(StageVerifiedTarGzipUpdate({package.record, package.checkpoint, package.file, stage, Limits}, files, verifier, {}).HasError());
+    CHECK_FALSE(std::filesystem::exists(stage));
+    CHECK_FALSE(std::filesystem::exists(stage.string() + ".ready"));
+}
+
+TEST_CASE("Signed Linux tar gzip will not replace an existing stage", "[release][update][tar]") {
+    TemporaryPackage temporary;
+    auto package = Sign(temporary, Gzip(InventoryTar()));
+    auto verifier = Verifier();
+    Horo::NativeDurableFileSystem files;
+    const auto stage = temporary.path / "editor-stage";
+    std::filesystem::create_directory(stage);
+    std::ofstream(stage / "user-data") << "keep";
+    CHECK(StageVerifiedTarGzipUpdate({package.record, package.checkpoint, package.file, stage, Limits}, files, verifier, {}).HasError());
+    CHECK(std::filesystem::is_regular_file(stage / "user-data"));
+}
+
+TEST_CASE("Signed Linux tar gzip preserves a preexisting ready marker", "[release][update][tar]") {
+    TemporaryPackage temporary;
+    auto package = Sign(temporary, Gzip(InventoryTar()));
+    auto verifier = Verifier();
+    Horo::NativeDurableFileSystem files;
+    const auto stage = temporary.path / "editor-stage";
+    std::ofstream(stage.string() + ".ready") << "other-transaction";
+    CHECK(StageVerifiedTarGzipUpdate({package.record, package.checkpoint, package.file, stage, Limits}, files, verifier, {}).HasError());
+    std::ifstream marker(stage.string() + ".ready");
+    std::string content;
+    std::getline(marker, content);
+    CHECK(content == "other-transaction");
+    CHECK_FALSE(std::filesystem::exists(stage));
+}
+
+TEST_CASE("Signed Linux tar gzip refuses insufficient free capacity before staging", "[release][update][tar]") {
+    TemporaryPackage temporary;
+    auto package = Sign(temporary, Gzip(InventoryTar()));
+    auto verifier = Verifier();
+    Horo::NativeDurableFileSystem files;
+    const auto stage = temporary.path / "editor-stage";
+    auto limits = Limits;
+    limits.reserveBytes = std::numeric_limits<std::uint64_t>::max();
+    CHECK(StageVerifiedTarGzipUpdate({package.record, package.checkpoint, package.file, stage, limits}, files, verifier, {}).HasError());
+    CHECK_FALSE(std::filesystem::exists(stage));
+    CHECK_FALSE(std::filesystem::exists(stage.string() + ".ready"));
 }

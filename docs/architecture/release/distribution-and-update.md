@@ -84,9 +84,12 @@ installation path.
 
 The Linux tar.gz preflight reader authenticates the complete signed package,
 checks canonical gzip and ustar framing, rejects links and unsafe paths, and
-returns a bounded entry index without writing files. Indexing alone does not
-create a ready stage: a later extraction transaction must check the package's
-internal file inventory against each extracted file before publication.
+returns a bounded entry index without writing files. `StageVerifiedTarGzipUpdate`
+then compares that index with the package's canonical internal file inventory,
+checks available capacity, extracts into an absent private sibling directory,
+and rechecks every file digest before publishing the durable ready marker.
+Failure removes only the newly created stage; a preexisting stage or marker is
+left untouched.
 The reader accepts one gzip member with no optional gzip header fields and
 ordinary POSIX ustar file/directory entries; other tar extensions fail closed.
 
@@ -397,7 +400,8 @@ than the running installer binary. Native integration hosts additionally probe
 the actual OS and hardware (including emulation), OS version, capacity, and
 permissions before making any changes.
 
-The current authenticated stage reader supports portable ZIP packages. Native
+The current authenticated stage readers support portable ZIP and Linux tar.gz
+packages. Native
 Windows, macOS, and Linux installer formats require format-specific stage
 readers and integration hosts with the same verification and rollback
 guarantees. `RepairVerifiedInstallation` reauthenticates the active package and
