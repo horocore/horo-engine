@@ -73,8 +73,8 @@ namespace Horo::Release {
             if (std::filesystem::file_size(path, error) != expected.size || error)
                 return false;
 #if !defined(_WIN32)
-            const auto permissions = std::filesystem::status(path, error).permissions();
-            if (error || (permissions & std::filesystem::perms::mask) !=
+            if (const auto permissions = std::filesystem::status(path, error).permissions();
+                error || (permissions & std::filesystem::perms::mask) !=
                              (expected.mode == UpdateFileMode::Executable ? std::filesystem::perms{0755} : std::filesystem::perms{0644}))
                 return false;
 #endif
