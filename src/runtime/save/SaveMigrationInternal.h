@@ -78,7 +78,7 @@ namespace Horo::Runtime::SaveMigrationDetail {
     }
 
     [[nodiscard]] inline StepView View(const SaveMigrationDefinition &definition) {
-        return std::visit([](const auto &step) -> StepView {
+        return std::visit([](const auto &step) {
             using Step = std::decay_t<decltype(step)>;
             SaveMigrationAxis axis = SaveMigrationAxis::ParticipantSchema;
             std::optional<SaveParticipantId> participant;

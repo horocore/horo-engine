@@ -224,8 +224,8 @@ namespace Horo::Runtime {
                                    std::format("Migration step '{}' expects save schema {}, current candidate is {}.", step.id.value,
                                                step.from, candidate.saveSchemaVersion.Value())));
             if (step.axis == SaveMigrationAxis::ParticipantSchema) {
-                const auto *participant = FindStateParticipant(candidate, *step.participant);
-                if (participant == nullptr || participant->schemaVersion.Value() != step.from)
+                if (const auto *participant = FindStateParticipant(candidate, *step.participant);
+                    participant == nullptr || participant->schemaVersion.Value() != step.from)
                     return Result<void>::Failure(
                         MigrationError(SaveErrors::MigrationPlanInvalid,
                                        std::format("Migration step '{}' expects participant '{}' schema {}, but the candidate differs.",

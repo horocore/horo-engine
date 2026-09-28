@@ -59,8 +59,8 @@ namespace Horo::Runtime {
                     SaveMigrationDetail::MigrationError(SaveErrors::MigrationSourceUnsupported,
                                                         "Detached participant does not match the verified manifest: " +
                                                             manifest.participant.Value()));
-            const SaveParticipantCompatibility *support = SaveMigrationDetail::FindPolicyParticipant(policy, manifest.participant);
-            if (support == nullptr ||
+            if (const SaveParticipantCompatibility *support = SaveMigrationDetail::FindPolicyParticipant(policy, manifest.participant);
+                support == nullptr ||
                 (!support->versions.direct.Contains(manifest.schemaVersion) &&
                  (!support->versions.migrationSource || !support->versions.migrationSource->Contains(manifest.schemaVersion))))
                 return Result<void>::Success();
