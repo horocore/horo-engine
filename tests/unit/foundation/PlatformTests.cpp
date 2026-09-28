@@ -219,6 +219,44 @@ namespace {
         std::filesystem::remove_all(root, ignored);
     }
 
+    TEST_CASE("Private durable append requires exact offset and rejects file aliases", "[unit][foundation]") {
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto root = std::filesystem::temp_directory_path() / ("horo-private-append-" + std::to_string(stamp));
+        std::filesystem::create_directories(root);
+
+        struct Cleanup final {
+            std::filesystem::path path;
+
+            ~Cleanup() {
+                std::error_code ignored;
+                std::filesystem::remove_all(path, ignored);
+            }
+        } cleanup{root};
+
+        Horo::NativeDurableFileSystem files;
+        const auto partial = root / std::filesystem::path{u8"paket örnek.partial"};
+        const std::string first = "first";
+        const std::string second = "second";
+        REQUIRE(files.AppendPrivateDurable(partial, 0U, std::as_bytes(std::span{first})).HasValue());
+        CHECK(files.AppendPrivateDurable(partial, 0U, std::as_bytes(std::span{second})).HasError());
+        CHECK(files.AppendPrivateDurable(partial, 4U, std::as_bytes(std::span{second})).HasError());
+        REQUIRE(files.AppendPrivateDurable(partial, first.size(), std::as_bytes(std::span{second})).HasValue());
+        {
+            std::ifstream input(partial, std::ios::binary);
+            REQUIRE(std::string(std::istreambuf_iterator<char>(input), {}) == first + second);
+        }
+        std::error_code linkError;
+        std::filesystem::create_hard_link(partial, root / "alias", linkError);
+        if (!linkError)
+            CHECK(files.AppendPrivateDurable(partial, first.size() + second.size(), std::as_bytes(std::span{second})).HasError());
+        std::filesystem::remove(root / "alias", linkError);
+        std::filesystem::remove(partial);
+        linkError.clear();
+        std::filesystem::create_symlink(root / "missing", partial, linkError);
+        if (!linkError)
+            CHECK(files.AppendPrivateDurable(partial, 0U, std::as_bytes(std::span{first})).HasError());
+    }
+
     TEST_CASE("Configuration File Store Publishes Deterministic Versioned Documents", "[unit][foundation][configuration]") {
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
         const std::filesystem::path root = std::filesystem::temp_directory_path() / ("horo-configuration-store-" + std::to_string(stamp));

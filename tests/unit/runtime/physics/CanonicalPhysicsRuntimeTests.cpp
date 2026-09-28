@@ -13,6 +13,7 @@
 #include <Jolt/Core/Memory.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/Shape/CompoundShape.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <array>
@@ -298,6 +299,48 @@ namespace Horo::Physics::Detail {
                                                                CanonicalContactTestOptions{.contactPointCount = 0}));
         REQUIRE_FALSE(InvokeCanonicalContactCallbackForTesting(world.handle, first, second, 2, sink,
                                                                CanonicalContactTestOptions{.contactPointCount = 65}));
+    }
+
+    TEST_CASE("Canonical compound callback copies stable child identity and material", "[physics][native][events][compound]") {
+        const auto created = CreateCanonicalRuntime();
+        REQUIRE(created.HasValue());
+        const RuntimeOwner runtime{created.Value()};
+        const auto prepared = CreateCanonicalWorld(runtime.handle, Test::SmallWorldSettings());
+        REQUIRE(prepared.HasValue());
+        const WorldOwner world{prepared.Value()};
+        const auto identity = PhysicsWorldId::Create(902).Value();
+        auto descriptor = ContactFixture({0, 0, 0});
+        descriptor.subshape.reset();
+        const auto material = PhysicsQueryMaterial{Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value(), 9,
+                                                   PhysicsMaterialSlotId::FromValue(3)};
+        const PhysicsCompoundChild child{.geometry = PhysicsSphereShape{0.5F},
+                                         .subshape = PhysicsShapeSubresourceId::FromValue(77),
+                                         .material = material,
+                                         .layer = descriptor.layer,
+                                         .profile = descriptor.profile,
+                                         .channel = descriptor.channel};
+        descriptor.shape = PhysicsCompoundShapeDescriptor{{child}};
+        const auto first = CreateCanonicalQueryFixture(world.handle, identity, descriptor);
+        const auto second = CreateCanonicalQueryFixture(world.handle, identity, ContactFixture({2, 0, 0}));
+        REQUIRE(first.HasValue());
+        REQUIRE(second.HasValue());
+        auto &nativeWorld = *static_cast<CanonicalWorld *>(world.handle.value);
+        const auto &nativeFixture = nativeWorld.query.fixtures.front();
+        REQUIRE(ResolveCanonicalFixtureChild(nativeFixture, JPH::SubShapeID{}) != nullptr);
+        PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
+        projection.BeginTick(1);
+        const CanonicalContactSink sink{.context = &projection, .append = CaptureProjection};
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, sink,
+                                                         CanonicalContactTestOptions{.contactPointCount = 6}));
+        REQUIRE(projection.CompleteTick(1).Value().publishedRecordCount == 1);
+        const auto &event = projection.PublishedEvents().front();
+        REQUIRE(event.pair.first.subshape == child.subshape);
+        REQUIRE(event.firstMaterial.has_value());
+        REQUIRE(event.firstMaterial->assetGeneration == material.assetGeneration);
+        REQUIRE(event.firstMaterial->slot == material.slot);
+        REQUIRE(event.contact.pointCount == MaximumPhysicsContactPoints);
+        REQUIRE(event.contact.omittedPointCount == 2);
+        REQUIRE(event.contact.points[0].positionOnFirst == Math::Vec3{0.0F, 0.0F, 0.0F});
     }
 
     TEST_CASE("Canonical diagnostic callbacks are restored after runtime shutdown", "[physics][native][diagnostics][shutdown]") {

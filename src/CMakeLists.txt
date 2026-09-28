@@ -84,6 +84,11 @@ add_library(HoroEngine::McpRegistry ALIAS HoroMcpRegistry)
 target_compile_features(HoroMcpRegistry PUBLIC cxx_std_20)
 target_link_libraries(HoroMcpRegistry PUBLIC HoroEngine::McpSession)
 
+add_library(HoroMcpController STATIC mcp/McpController.cpp)
+add_library(HoroEngine::McpController ALIAS HoroMcpController)
+target_compile_features(HoroMcpController PUBLIC cxx_std_20)
+target_link_libraries(HoroMcpController PUBLIC HoroEngine::McpRegistry)
+
 add_library(HoroModelProvider STATIC editor/agent/ModelProvider.cpp)
 add_library(HoroEngine::ModelProvider ALIAS HoroModelProvider)
 target_compile_features(HoroModelProvider PUBLIC cxx_std_20)
@@ -278,6 +283,29 @@ add_library(HoroUpdateDiscovery STATIC application/release/UpdateDiscovery.cpp a
 add_library(HoroEngine::UpdateDiscovery ALIAS HoroUpdateDiscovery)
 target_compile_features(HoroUpdateDiscovery PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateDiscovery PUBLIC HoroEngine::UpdateManifest)
+
+add_library(HoroUpdateTransfer STATIC application/release/UpdateTransfer.cpp application/release/UpdateTransferErrors.cpp
+        application/release/UpdateArchiveIndex.cpp application/release/UpdateStagedTree.cpp
+        application/release/UpdateTransferCheckpointStore.cpp)
+add_library(HoroEngine::UpdateTransfer ALIAS HoroUpdateTransfer)
+target_compile_features(HoroUpdateTransfer PUBLIC cxx_std_20)
+target_link_libraries(HoroUpdateTransfer PUBLIC HoroEngine::UpdateManifest)
+
+add_library(HoroUpdateDownload STATIC application/release/UpdateDownloadSession.cpp
+        application/release/UpdateHttpResponse.cpp application/release/UpdateHttpDownload.cpp
+        application/release/UpdateStageReady.cpp application/release/UpdateZipStaging.cpp
+        application/release/UpdateZipPackageProducer.cpp application/release/UpdateZipStagingJob.cpp)
+add_library(HoroEngine::UpdateDownload ALIAS HoroUpdateDownload)
+target_compile_features(HoroUpdateDownload PUBLIC cxx_std_20)
+target_link_libraries(HoroUpdateDownload PUBLIC HoroEngine::UpdateTransfer HoroEngine::Platform PRIVATE CURL::libcurl miniz)
+
+add_library(HoroUpdateActivation STATIC application/release/UpdateActivation.cpp application/release/UpdateActivationErrors.cpp
+        application/release/BootstrapInstallation.cpp application/release/BootstrapInstallationErrors.cpp
+        application/release/UpdateRollback.cpp application/release/UpdateRollbackErrors.cpp
+        application/release/UpdateRetention.cpp application/release/UpdateRetentionErrors.cpp)
+add_library(HoroEngine::UpdateActivation ALIAS HoroUpdateActivation)
+target_compile_features(HoroUpdateActivation PUBLIC cxx_std_20)
+target_link_libraries(HoroUpdateActivation PUBLIC HoroEngine::UpdateDownload HoroEngine::Platform)
 
 add_library(HoroProjectMigrations STATIC
         ${HORO_PROJECT_MIGRATION_CATALOG_CPP}

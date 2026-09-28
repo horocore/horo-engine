@@ -58,7 +58,8 @@ namespace {
                                                 {"additionalProperties", false}},
                                .effect = McpToolEffect::Query,
                                .requiredCapabilities = std::move(capabilities)},
-                .adapter = adapter};
+                .adapter = adapter,
+                .owner = McpOwnerContext::Editor};
     }
 
     [[nodiscard]] McpRequestContext Context(std::vector<std::string> capabilities = {}) {
@@ -89,6 +90,16 @@ TEST_CASE("MCP registry publishes deterministic capability-filtered discovery", 
     CHECK(visible[1].id.value == "zeta.query");
     CHECK(visible[1].version.major == 1);
     CHECK(visible[1].requiredCapabilities == grants);
+}
+
+TEST_CASE("MCP registry requires an explicit owner context", "[unit][mcp][registry]") {
+    McpToolRegistry registry;
+    auto registration = Tool("build.start", std::make_shared<CountingAdapter>());
+    registration.owner = McpOwnerContext::Unspecified;
+    const auto result = registry.Publish({std::move(registration)});
+    REQUIRE(result.HasError());
+    CHECK(Code(result.ErrorValue()) == McpErrors::ToolDescriptorInvalid.code.Value());
+    CHECK(registry.Read()->Generation() == 0);
 }
 
 TEST_CASE("MCP schema and capability admission precedes every application adapter call", "[unit][mcp][registry]") {

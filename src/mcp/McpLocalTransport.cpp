@@ -16,7 +16,7 @@ namespace Horo::Mcp {
             nlohmann::json payload = {{"code", code}, {"message", message}};
             if (descriptor != nullptr) {
                 const Error error = MakeError(*descriptor);
-                payload["data"] = {{"domain", error.domain.Value()}, {"code", error.code.Value()}};
+                payload["data"] = SafeErrorData(error);
             }
             return {{"jsonrpc", "2.0"}, {"id", id}, {"error", std::move(payload)}};
         }
@@ -178,7 +178,7 @@ namespace Horo::Mcp {
         if (result.HasError()) {
             const Error &error = result.ErrorValue();
             nlohmann::json reply = ErrorReply(*id, -32000, "MCP request failed.");
-            reply["error"]["data"] = {{"domain", error.domain.Value()}, {"code", error.code.Value()}};
+            reply["error"]["data"] = SafeErrorData(error);
             return BoundedLine(reply, limits);
         }
         return BoundedLine({{"jsonrpc", "2.0"}, {"id", *id}, {"result", std::move(result).Value()}}, limits);

@@ -76,6 +76,10 @@ horo_configure_target_header_boundary(HoroMcpRegistry PUBLIC_HEADERS
     Horo/Mcp/McpToolRegistry.h
 )
 
+horo_configure_target_header_boundary(HoroMcpController PUBLIC_HEADERS
+    Horo/Mcp/McpController.h
+)
+
 horo_configure_target_header_boundary(HoroOpenTelemetry PUBLIC_HEADERS
     Horo/Foundation/Telemetry/OpenTelemetrySink.h)
 
@@ -152,6 +156,30 @@ horo_configure_target_header_boundary(HoroUpdateManifest PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroUpdateDiscovery PUBLIC_HEADERS
     Horo/Release/UpdateDiscovery.h
     Horo/Release/UpdateDiscoveryErrors.h
+)
+horo_configure_target_header_boundary(HoroUpdateTransfer PUBLIC_HEADERS
+    Horo/Release/UpdateArchiveIndex.h
+    Horo/Release/UpdateStagedTree.h
+    Horo/Release/UpdateTransferCheckpointStore.h
+    Horo/Release/UpdateTransfer.h
+    Horo/Release/UpdateTransferErrors.h
+)
+horo_configure_target_header_boundary(HoroUpdateDownload PUBLIC_HEADERS
+    Horo/Release/UpdateDownloadSession.h
+    Horo/Release/UpdateHttpDownload.h
+    Horo/Release/UpdateStageReady.h
+    Horo/Release/UpdateZipPackageProducer.h
+    Horo/Release/UpdateZipStagingJob.h
+)
+horo_configure_target_header_boundary(HoroUpdateActivation PUBLIC_HEADERS
+    Horo/Release/BootstrapInstallation.h
+    Horo/Release/BootstrapInstallationErrors.h
+    Horo/Release/UpdateActivation.h
+    Horo/Release/UpdateActivationErrors.h
+    Horo/Release/UpdateRollback.h
+    Horo/Release/UpdateRollbackErrors.h
+    Horo/Release/UpdateRetention.h
+    Horo/Release/UpdateRetentionErrors.h
 )
 horo_configure_target_header_boundary(HoroReleaseProcess PUBLIC_HEADERS
     Horo/Release/ReleaseCandidatePublisher.h

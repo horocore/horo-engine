@@ -354,6 +354,26 @@ stable child/material mappings. Dynamic bodies accept primitives, convex hulls a
 convex compounds; triangle meshes, height fields and static planes remain static.
 Scale is validated and baked before cook rather than applied to runtime shapes.
 
+The owner-thread immediate-query fixture admits an owned analytic compound with at
+most 256 direct children. Each child has a stable fixture-local subshape ID, finite
+body-local pose, material asset generation and slot, and collision layer, profile,
+channel and query response. Native subshape paths are resolved through private
+per-child user data before hits and contact observations are copied. Reordering
+children leaves their Horo IDs unchanged. One-child native compounds may collapse
+to their leaf; the adapter retains that child's metadata in this case. A fixture
+copies its complete descriptor before native publication and releases it on
+destruction, reset, scene unload or shutdown. Mixed sensor and solid children,
+nested compounds, static-plane children and cooked-asset children are unsupported
+by this immediate-query fixture. The authored scene/cooked-asset activation path
+continues to report its existing explicit unsupported cases.
+
+`PhysicsQueryFixtureDescriptor::shape` now selects one of the four analytic
+primitive alternatives or `PhysicsCompoundShapeDescriptor`. Callers that held a
+`PhysicsShapeDescriptor` should pass its concrete alternative with `std::visit`;
+existing direct primitive fixture initializers remain valid. Query collection
+examines a bounded native hit set before selecting `Any`, so per-child filters
+cannot let an ignored child hide an admitted child.
+
 The HeightField V1 tile cook consumes a bounded row-major sample grid with positive
 horizontal spacing and vertical sample scale, plus one explicit hole bit and
 material slot per cell. Hole cells carry no material identity. It publishes an

@@ -68,6 +68,32 @@ current source revision. Format and codec types do not enter TerrainApi or runti
 headers. The generated public-header consumer compiles the header through the new
 target's staged include view.
 
+## REL-002.4 Update Transfer Boundary
+
+`HoroEngine::UpdateTransfer` owns the additive `Horo/Release/UpdateTransfer.h`
+and `UpdateTransferErrors.h` contracts. There are no prior transfer callers to
+migrate. The product host supplies transport-observed response evidence and
+persists checkpoints only after private-file durability. This target depends on
+`HoroEngine::UpdateManifest` and contains no concrete network or filesystem
+backend. Generated standalone public-header consumers verify both headers.
+`HoroEngine::UpdateDownload` separately owns the additive
+`Horo/Release/UpdateDownloadSession.h`, `UpdateHttpDownload.h`, and
+`UpdateStageReady.h` host adapters.
+It depends on UpdateTransfer and Platform, keeps native durable file writes and
+the private cURL HTTPS implementation out of the transfer policy target, and has
+no prior callers to migrate. Generated standalone header consumers check both
+headers and their declared dependencies. cURL is linked privately by the
+download adapter; consumers receive only Horo contracts.
+
+## REL-002.5 Update Activation Boundary
+
+`HoroEngine::UpdateActivation` owns the additive
+`Horo/Release/UpdateActivation.h` and `UpdateActivationErrors.h` contracts.
+It depends on UpdateDownload and Platform, and exposes only Horo-owned paths,
+typed package evidence, and host process coordination. There are no prior
+activation callers to migrate. Generated public-header consumers check this
+boundary and its declared dependencies.
+
 ## DFR-002.2 Import Boundary
 
 `HoroEngine::Assets` owns the additive `Horo/Assets/PreFracturedSource.h` FBX

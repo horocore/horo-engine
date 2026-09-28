@@ -1131,6 +1131,40 @@ target_compile_features(HoroUpdateDiscoveryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateDiscoveryTests PRIVATE HoroEngine::UpdateDiscovery)
 horo_register_catch_test(HoroUpdateDiscoveryTests LABELS "release;update;headless")
 
+add_executable(HoroUpdateTransferTests unit/application/UpdateTransferTests.cpp)
+target_compile_features(HoroUpdateTransferTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUpdateTransferTests PRIVATE HoroEngine::UpdateTransfer HoroEngine::Platform)
+horo_register_catch_test(HoroUpdateTransferTests LABELS "release;update;headless")
+add_executable(HoroUpdateDownloadTests unit/application/UpdateDownloadTests.cpp)
+target_compile_features(HoroUpdateDownloadTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUpdateDownloadTests PRIVATE HoroEngine::UpdateDownload miniz)
+horo_register_catch_test(HoroUpdateDownloadTests LABELS "release;update;headless")
+
+add_executable(HoroUpdateActivationTests unit/application/UpdateActivationTests.cpp unit/application/UpdateRetentionTests.cpp)
+target_compile_features(HoroUpdateActivationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUpdateActivationTests PRIVATE HoroEngine::UpdateActivation miniz)
+horo_register_catch_test(HoroUpdateActivationTests LABELS "release;update;headless")
+
+add_executable(HoroUpdateZipPackageProducerTests unit/application/UpdateZipPackageProducerTests.cpp)
+target_compile_features(HoroUpdateZipPackageProducerTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUpdateZipPackageProducerTests PRIVATE HoroEngine::UpdateDownload miniz)
+horo_register_catch_test(HoroUpdateZipPackageProducerTests LABELS "release;update;package;headless")
+add_executable(HoroUpdateHttpResponseTests unit/application/UpdateHttpResponseTests.cpp
+        ${PROJECT_SOURCE_DIR}/src/application/release/UpdateHttpResponse.cpp)
+target_compile_features(HoroUpdateHttpResponseTests PRIVATE cxx_std_20)
+target_include_directories(HoroUpdateHttpResponseTests PRIVATE ${PROJECT_SOURCE_DIR}/src/application/release)
+target_link_libraries(HoroUpdateHttpResponseTests PRIVATE HoroEngine::UpdateTransfer)
+horo_register_catch_test(HoroUpdateHttpResponseTests LABELS "release;update;headless")
+find_program(HORO_TEST_OPENSSL_EXECUTABLE openssl)
+if(Python3_Interpreter_FOUND AND HORO_TEST_OPENSSL_EXECUTABLE)
+    add_executable(HoroUpdateHttpsClient integration/UpdateHttpsClient.cpp)
+    target_compile_features(HoroUpdateHttpsClient PRIVATE cxx_std_20)
+    target_link_libraries(HoroUpdateHttpsClient PRIVATE HoroEngine::UpdateDownload)
+    add_test(NAME HoroUpdateHttpsIntegration COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/integration/update_https_server.py" "$<TARGET_FILE:HoroUpdateHttpsClient>")
+    set_tests_properties(HoroUpdateHttpsIntegration PROPERTIES LABELS "release;update;integration" TIMEOUT 60)
+endif()
+
 add_executable(HoroReleaseChecksumsTests
         unit/application/ReleaseChecksumsTests.cpp)
 target_compile_features(HoroReleaseChecksumsTests PRIVATE cxx_std_20)
@@ -1526,6 +1560,11 @@ add_executable(HoroMcpRegistryTests unit/mcp/McpToolRegistryTests.cpp)
 target_compile_features(HoroMcpRegistryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroMcpRegistryTests PRIVATE HoroEngine::McpRegistry Threads::Threads)
 horo_register_catch_test(HoroMcpRegistryTests LABELS "unit;mcp;headless")
+
+add_executable(HoroMcpControllerTests unit/mcp/McpControllerTests.cpp)
+target_compile_features(HoroMcpControllerTests PRIVATE cxx_std_20)
+target_link_libraries(HoroMcpControllerTests PRIVATE HoroEngine::McpController Threads::Threads)
+horo_register_catch_test(HoroMcpControllerTests LABELS "unit;mcp;headless")
 
 add_executable(HoroFoundationErrorCodeRegistryTests
         unit/foundation/ErrorCodeRegistryTests.cpp

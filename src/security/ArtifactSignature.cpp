@@ -6,7 +6,9 @@
 #include <array>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <mutex>
+#include <span>
 #include <string_view>
 
 namespace Horo::Security {
@@ -146,9 +148,41 @@ namespace Horo::Security {
     /** @copydoc ArtifactVerifier::Verify */
     Result<VerifiedArtifactEvidence> ArtifactVerifier::Verify(const std::span<const std::byte> artifact,
                                                               const DetachedSignatureEnvelope &envelope) const {
+        return VerifyDigest(ComputeSha256(artifact), envelope);
+    }
+
+    /** @copydoc ArtifactVerifier::VerifyFile */
+    Result<VerifiedArtifactEvidence> ArtifactVerifier::VerifyFile(const std::filesystem::path &path, const std::uint64_t expectedBytes,
+                                                                  const DetachedSignatureEnvelope &envelope) const {
+        std::error_code error;
+        if (const auto status = std::filesystem::symlink_status(path, error); error || !std::filesystem::is_regular_file(status))
+            return Result<VerifiedArtifactEvidence>::Failure(MakeError(SecurityErrors::MissingEvidence));
+        if (const auto actualBytes = std::filesystem::file_size(path, error); error || actualBytes != expectedBytes)
+            return Result<VerifiedArtifactEvidence>::Failure(MakeError(SecurityErrors::MissingEvidence));
+        std::ifstream input{path, std::ios::binary};
+        if (!input)
+            return Result<VerifiedArtifactEvidence>::Failure(MakeError(SecurityErrors::MissingEvidence));
+
+        Sha256Builder hash;
+        std::array<char, 64U * 1024U> buffer{};
+        std::uint64_t remaining = expectedBytes;
+        while (remaining > 0U) {
+            const auto count = static_cast<std::streamsize>(std::min<std::uint64_t>(remaining, buffer.size()));
+            input.read(buffer.data(), count);
+            if (input.gcount() != count || !hash.Update(std::as_bytes(std::span{buffer.data(), static_cast<std::size_t>(count)})))
+                return Result<VerifiedArtifactEvidence>::Failure(MakeError(SecurityErrors::StaleEvidence));
+            remaining -= static_cast<std::uint64_t>(count);
+        }
+        if (input.peek() != std::char_traits<char>::eof() || input.bad())
+            return Result<VerifiedArtifactEvidence>::Failure(MakeError(SecurityErrors::StaleEvidence));
+        return VerifyDigest(hash.Finalize(), envelope);
+    }
+
+    /** @brief Verifies a digest computed from exact artifact bytes against trusted detached-signature evidence. */
+    Result<VerifiedArtifactEvidence> ArtifactVerifier::VerifyDigest(const Sha256Digest &actualDigest,
+                                                                    const DetachedSignatureEnvelope &envelope) const {
         if (auto valid = ValidateEnvelope(envelope); valid.HasError())
             return Result<VerifiedArtifactEvidence>::Failure(valid.ErrorValue());
-        const Sha256Digest actualDigest = ComputeSha256(artifact);
         if (actualDigest != envelope.artifactDigest)
             return Result<VerifiedArtifactEvidence>::Failure(MakeError(SecurityErrors::IntegrityMismatch));
         auto key = ResolveTrustedKey(trustedRoots_.get(), envelope);
