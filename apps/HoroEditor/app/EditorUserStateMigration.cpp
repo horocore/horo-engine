@@ -16,11 +16,9 @@ namespace Horo::Editor {
         /** @brief Bounds legacy input before deriving exact content-addressed steps. */
         [[nodiscard]] Result<std::string> ReadLegacy(const std::filesystem::path &path) {
             std::error_code error;
-            const auto status = std::filesystem::symlink_status(path, error);
-            if (error || !std::filesystem::is_regular_file(status))
+            if (const auto status = std::filesystem::symlink_status(path, error); error || !std::filesystem::is_regular_file(status))
                 return Result<std::string>::Failure(MakeError(Release::UserStateMigrationErrors::UnsafePath));
-            const auto links = std::filesystem::hard_link_count(path, error);
-            if (error || links != 1U)
+            if (const auto links = std::filesystem::hard_link_count(path, error); error || links != 1U)
                 return Result<std::string>::Failure(MakeError(Release::UserStateMigrationErrors::UnsafePath));
             constexpr std::uintmax_t MaximumBytes = 8U * 1024U * 1024U;
             const auto size = std::filesystem::file_size(path, error);

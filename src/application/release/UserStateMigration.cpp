@@ -46,19 +46,17 @@ namespace Horo::Release {
         /** @brief Refuses symlinks and hardlinks throughout one existing user-state path. */
         [[nodiscard]] bool PrivateFile(const std::filesystem::path &root, const std::filesystem::path &relative) {
             std::error_code error;
-            const auto rootStatus = std::filesystem::symlink_status(root, error);
-            if (error || !std::filesystem::is_directory(rootStatus))
+            if (const auto rootStatus = std::filesystem::symlink_status(root, error); error || !std::filesystem::is_directory(rootStatus))
                 return false;
             auto parent = root;
             for (const auto &part : relative.parent_path()) {
                 parent /= part;
-                const auto parentStatus = std::filesystem::symlink_status(parent, error);
-                if (error || !std::filesystem::is_directory(parentStatus))
+                if (const auto parentStatus = std::filesystem::symlink_status(parent, error);
+                    error || !std::filesystem::is_directory(parentStatus))
                     return false;
             }
             const auto path = root / relative;
-            const auto status = std::filesystem::symlink_status(path, error);
-            if (error || !std::filesystem::is_regular_file(status))
+            if (const auto status = std::filesystem::symlink_status(path, error); error || !std::filesystem::is_regular_file(status))
                 return false;
             const auto links = std::filesystem::hard_link_count(path, error);
             return !error && links == 1U;
@@ -142,8 +140,8 @@ namespace Horo::Release {
                 return copied;
             if (!PrivateFile(root, backup.lexically_relative(root)))
                 return Result<void>::Failure(Failure(UserStateMigrationErrors::BackupRequiresRepair, backup));
-            auto copiedSource = ReadBounded(backup, request.maximumFileBytes);
-            if (copiedSource.HasError() || ComputeSha256(copiedSource.Value()) != step.sourceDigest)
+            if (auto copiedSource = ReadBounded(backup, request.maximumFileBytes);
+                copiedSource.HasError() || ComputeSha256(copiedSource.Value()) != step.sourceDigest)
                 return Result<void>::Failure(Failure(UserStateMigrationErrors::BackupRequiresRepair, backup));
             return Result<void>::Success();
         }
@@ -241,8 +239,7 @@ namespace Horo::Release {
                 auto current = ReadBounded(path, 8U * 1024U * 1024U);
                 if (current.HasError())
                     return Result<void>::Failure(current.ErrorValue());
-                const auto digest = ComputeSha256(current.Value());
-                if (digest != step.targetDigest && digest != step.sourceDigest)
+                if (const auto digest = ComputeSha256(current.Value()); digest != step.targetDigest && digest != step.sourceDigest)
                     return Result<void>::Failure(Failure(UserStateMigrationErrors::SourceChanged, path));
             }
             auto prepared = path;
@@ -271,8 +268,8 @@ namespace Horo::Release {
         std::set<std::pair<bool, std::filesystem::path>> destinations;
         for (std::size_t index = 0U; index < request.steps.size(); ++index) {
             const auto &step = request.steps[index];
-            const auto fileName = step.relativePath.filename().string();
-            if (!CanonicalRelative(step.relativePath) || fileName == ".user-state-migration.lock" ||
+            if (const auto fileName = step.relativePath.filename().string();
+                !CanonicalRelative(step.relativePath) || fileName == ".user-state-migration.lock" ||
                 fileName.find(".horo-backup-v") != std::string::npos || fileName.find(".horo-migration-prepared") != std::string::npos ||
                 step.sourceSchema >= step.targetSchema || step.targetSchema != step.sourceSchema + 1U ||
                 step.credentialReferences.size() > 128U ||
