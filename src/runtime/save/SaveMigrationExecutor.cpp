@@ -21,8 +21,11 @@ namespace Horo::Runtime {
 
         [[nodiscard]] std::uint64_t CandidateBytes(const SaveMigrationState &state) {
             std::uint64_t bytes = state.archiveBytes.size();
-            for (const auto &participant : state.participants)
+            for (const auto &participant : state.participants) {
                 bytes += participant.payload.size();
+                for (const PreservedSaveChunk &chunk : participant.preservedChunks)
+                    bytes += chunk.storedBytes.size();
+            }
             return bytes;
         }
 
@@ -242,6 +245,22 @@ namespace Horo::Runtime {
             return ValidateState(candidate, limits);
         }
 
+        /** @brief Forbids migration callbacks from erasing or rewriting an unknown preservable owner. */
+        [[nodiscard]] Result<void> VerifyProtectedUnknown(const SaveMigrationSource &source, const SaveMigrationCandidate &candidate,
+                                                          const SaveMigrationPlan &plan) {
+            for (const SaveMigrationParticipantTarget &target : plan.participantTargets) {
+                if (!target.preserveUnknown)
+                    continue;
+                const auto *before = FindStateParticipant(source, target.participant);
+                const auto *after = FindStateParticipant(candidate, target.participant);
+                if (before == nullptr || after == nullptr || *before != *after)
+                    return Result<void>::Failure(
+                        MigrationError(SaveErrors::MigrationCandidateInvalid,
+                                       "Migration changed preservable unknown participant '" + target.participant.Value() + "'."));
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ValidatePlanBinding(const SaveMigrationSource &source, const SaveMigrationPlan &plan,
                                                        const SaveMigrationLimits &limits) {
             if (!ValidLimits(limits) || plan.registryGeneration == 0 || plan.definitions.size() > limits.maximumPlanSteps ||
@@ -271,6 +290,8 @@ namespace Horo::Runtime {
             ApplyTargetComposition(current, plan);
             if (const auto finalValidation = ValidateFinalCandidate(current, plan, limits); finalValidation.HasError())
                 return Result<SaveMigrationCandidate>::Failure(finalValidation.ErrorValue());
+            if (const auto protectedUnknown = VerifyProtectedUnknown(source, current, plan); protectedUnknown.HasError())
+                return Result<SaveMigrationCandidate>::Failure(protectedUnknown.ErrorValue());
             return Result<SaveMigrationCandidate>::Success(std::move(current));
         } catch (const std::bad_alloc &) {
             return Result<SaveMigrationCandidate>::Failure(MigrationError(SaveErrors::MigrationAllocationFailed));

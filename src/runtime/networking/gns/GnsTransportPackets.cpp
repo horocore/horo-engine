@@ -83,6 +83,7 @@ namespace Horo::Network {
         }
         NetworkTransportEvent event{.kind = NetworkTransportEventKind::PacketReceived,
                                     .connection = slot.handle,
+                                    .channel = ChannelId{},
                                     .delivery = (message->m_nFlags & k_nSteamNetworkingSend_Reliable)
                                                     ? DeliveryPolicy::ReliableOrdered
                                                     : DeliveryPolicy::UnreliableUnordered};

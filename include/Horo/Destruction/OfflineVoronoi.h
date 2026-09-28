@@ -96,10 +96,14 @@ namespace Horo::Destruction {
         std::uint64_t recipeRevision{};
         Sha256Digest semanticFingerprint{};
         Sha256Digest toolchainDigest{};
+        DestructionFeatureTier tier{}; /**< Exact tier selected by the source recipe. */
         std::uint32_t schemaVersion{OfflineVoronoiSchemaVersion};
         std::vector<OfflineVoronoiChunk> chunks;
         std::uint64_t estimatedBytes{};
         std::uint64_t workItems{};
+
+        /** @brief Checks that detached geometry still matches the generator's sealed output. @return True if intact. */
+        [[nodiscard]] bool IsIntact() const;
 
     private:
         friend Result<OfflineVoronoiCandidate> GenerateOfflineVoronoi(const OfflineVoronoiSource &, const OfflineVoronoiRecipe &,

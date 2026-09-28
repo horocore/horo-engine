@@ -77,7 +77,22 @@ namespace Horo::Runtime {
             for (std::size_t index = 0; index < policy.participants.size(); ++index) {
                 const auto &support = policy.participants[index];
                 if (!support.participant.IsValid() || !IsValidSupport(support.versions) ||
-                    (index != 0 && policy.participants[index - 1].participant == support.participant))
+                    (index != 0 && policy.participants[index - 1].participant == support.participant) ||
+                    !std::ranges::is_sorted(support.requiredDependencies) ||
+                    std::ranges::adjacent_find(support.requiredDependencies) != support.requiredDependencies.end() ||
+                    std::ranges::any_of(support.requiredDependencies, [&support](const SaveParticipantId &id) {
+                    return !id.IsValid() || id == support.participant;
+                }))
+                    return false;
+            }
+            if (!std::ranges::is_sorted(policy.droppableUnknownParticipants) ||
+                std::ranges::adjacent_find(policy.droppableUnknownParticipants) != policy.droppableUnknownParticipants.end())
+                return false;
+            for (const SaveParticipantId &id : policy.droppableUnknownParticipants) {
+                if (!id.IsValid() || std::ranges::binary_search(policy.participants, id, {}, &SaveParticipantCompatibility::participant) ||
+                    std::ranges::any_of(policy.participants, [&id](const SaveParticipantCompatibility &support) {
+                    return support.required && std::ranges::binary_search(support.requiredDependencies, id);
+                }))
                     return false;
             }
             return true;
@@ -91,22 +106,39 @@ namespace Horo::Runtime {
                    IsValidSupport(policy.productVersions) && HasValidParticipantPolicy(policy);
         }
 
+        /** @brief Finds the first required dependency missing from a manifest's sorted participant list. */
+        [[nodiscard]] std::optional<SaveParticipantId> MissingRequiredDependency(const SaveGameManifest &manifest,
+                                                                                 const SaveParticipantCompatibility &support) {
+            for (const SaveParticipantId &dependency : support.requiredDependencies) {
+                if (!std::ranges::binary_search(manifest.participants, dependency, {}, &SaveManifestParticipant::participant))
+                    return dependency;
+            }
+            return std::nullopt;
+        }
+
         /** @brief Evaluates declared participant support and required current composition. */
         [[nodiscard]] std::optional<SaveCompatibilityDecision> EvaluateDeclaredParticipants(const SaveGameManifest &manifest,
                                                                                             const SaveCompatibilityPolicy &policy,
                                                                                             bool &migrationRequired) {
+            using enum SaveCompatibilityReason;
+            using enum VersionAdmission;
             for (const auto &support : policy.participants) {
                 const auto found =
                     std::ranges::lower_bound(manifest.participants, support.participant, {}, &SaveManifestParticipant::participant);
                 if (found == manifest.participants.end() || found->participant != support.participant) {
                     if (support.required)
-                        return Reject(SaveCompatibilityReason::MissingRequiredParticipant, support.participant);
+                        return Reject(MissingRequiredParticipant, support.participant);
                     continue;
                 }
+                if (support.required)
+                    if (const auto missing = MissingRequiredDependency(manifest, support))
+                        return Reject(MissingRequiredParticipant, *missing);
                 const VersionAdmission admission = ClassifyVersion(found->schemaVersion, support.versions);
-                if (admission == VersionAdmission::Rejected)
-                    return Reject(SaveCompatibilityReason::UnsupportedParticipantSchema, support.participant);
-                migrationRequired |= admission == VersionAdmission::Migration;
+                if (admission == Rejected && (support.required || found->required))
+                    return Reject(UnsupportedParticipantSchema, support.participant);
+                if (admission == Rejected)
+                    continue;
+                migrationRequired |= admission == Migration;
             }
             return std::nullopt;
         }
@@ -119,6 +151,13 @@ namespace Horo::Runtime {
                     std::ranges::lower_bound(policy.participants, entry.participant, {}, &SaveParticipantCompatibility::participant);
                 if (entry.required && (found == policy.participants.end() || found->participant != entry.participant))
                     return Reject(SaveCompatibilityReason::UnknownRequiredParticipant, entry.participant);
+                for (const SaveParticipantCompatibility &support : policy.participants) {
+                    if (!support.required || !std::ranges::binary_search(support.requiredDependencies, entry.participant))
+                        continue;
+                    if (found == policy.participants.end() || found->participant != entry.participant ||
+                        ClassifyVersion(entry.schemaVersion, found->versions) == VersionAdmission::Rejected)
+                        return Reject(SaveCompatibilityReason::UnknownRequiredParticipant, entry.participant);
+                }
             }
             return std::nullopt;
         }

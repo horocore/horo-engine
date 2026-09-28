@@ -28,7 +28,7 @@ namespace Horo::Release {
             std::optional<UpdateDownloadSession> session;
             std::optional<Error> failure;
             bool transportFailure{};
-            CURL *curl{};  // NOSONAR(cpp:S5008): CURL is libcurl's opaque C handle.
+            CURL *curl{};
         };
 
         /** @brief Admits the final response at the header/body boundary. */
@@ -53,8 +53,7 @@ namespace Horo::Release {
             return true;
         }
 
-        std::size_t ReceiveHeader(char *data, const std::size_t size, const std::size_t count,  // NOSONAR: libcurl requires char*.
-                                  void *userData) noexcept {  // NOSONAR: libcurl requires this exact C callback signature.
+        std::size_t ReceiveHeader(char *data, const std::size_t size, const std::size_t count, void *userData) noexcept {
             auto *state = static_cast<DownloadState *>(userData);
             if (state == nullptr || size == 0U || count > std::numeric_limits<std::size_t>::max() / size)
                 return 0U;
@@ -69,8 +68,7 @@ namespace Horo::Release {
             return bytes;
         }
 
-        std::size_t ReceiveBody(char *data, const std::size_t size, const std::size_t count,
-                                void *userData) noexcept {  // NOSONAR(cpp:S5008): libcurl requires this exact C callback signature.
+        std::size_t ReceiveBody(char *data, const std::size_t size, const std::size_t count, void *userData) noexcept {
             auto *state = static_cast<DownloadState *>(userData);
             if (state == nullptr || size == 0U || count > std::numeric_limits<std::size_t>::max() / size)
                 return 0U;
@@ -94,15 +92,15 @@ namespace Horo::Release {
             return bytes;
         }
 
-        int ReportTransfer(void *userData, curl_off_t, curl_off_t, curl_off_t,  // NOSONAR: libcurl requires void*.
-                           curl_off_t) noexcept {  // NOSONAR(cpp:S5008): libcurl requires this exact C callback signature.
+        int ReportTransfer(void *userData, curl_off_t, curl_off_t, curl_off_t, curl_off_t) noexcept {
             const auto *state = static_cast<const DownloadState *>(userData);
             return state != nullptr && state->cancellation.IsCancellationRequested() ? 1 : 0;
         }
 
         /** @brief Configures a TLS-verified HTTPS GET with strict final-source and bounded callback behavior. */
-        [[nodiscard]] bool Configure(CURL *curl, DownloadState &state,          // NOSONAR: CURL is libcurl's opaque C handle.
-                                     const UpdateHttpDownloadPolicy &policy) {  // NOSONAR(cpp:S5008): Opaque libcurl handle.
+        [[nodiscard]] bool Configure(CURL *curl, DownloadState &state, const UpdateHttpDownloadPolicy &policy) {
+            if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
+                return false;
             return curl_easy_setopt(curl, CURLOPT_URL, state.package.url.c_str()) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_USERAGENT, "horo-update/1") == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https") == CURLE_OK &&
@@ -111,7 +109,6 @@ namespace Horo::Release {
                    curl_easy_setopt(curl, CURLOPT_SUPPRESS_CONNECT_HEADERS, 1L) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "identity") == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, static_cast<long>(policy.connectTimeoutSeconds)) == CURLE_OK &&
@@ -128,9 +125,8 @@ namespace Horo::Release {
         }
 
         /** @brief Applies one exact If-Range request for a durable partial package. */
-        [[nodiscard]] bool ConfigureResume(CURL *curl,  // NOSONAR: CURL is libcurl's opaque C handle.
-                                           const UpdateTransferCheckpoint &checkpoint, curl_slist *&headers,
-                                           std::string &range) {  // NOSONAR(cpp:S5008): Opaque libcurl handle.
+        [[nodiscard]] bool ConfigureResume(CURL *curl, const UpdateTransferCheckpoint &checkpoint, curl_slist *&headers,
+                                           std::string &range) {
             range = std::format("{}-", checkpoint.durableBytes);
             headers = curl_slist_append(nullptr, std::format("If-Range: {}", checkpoint.strongEtag).c_str());
             return headers != nullptr && curl_easy_setopt(curl, CURLOPT_RANGE, range.c_str()) == CURLE_OK &&
@@ -181,7 +177,7 @@ namespace Horo::Release {
 
         if (static const bool CurlReady = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK; !CurlReady)
             return Result<UpdateTransferCheckpoint>::Failure(MakeError(UpdateTransferErrors::TransportFailed));
-        auto *rawCurl = curl_easy_init();  // NOSONAR: Configure requires TLS 1.3 before any request.
+        auto *rawCurl = curl_easy_init();
         std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl{rawCurl, &curl_easy_cleanup};
         if (!curl)
             return Result<UpdateTransferCheckpoint>::Failure(MakeError(UpdateTransferErrors::TransportFailed));
@@ -189,10 +185,9 @@ namespace Horo::Release {
         state.curl = curl.get();
         if (!Configure(curl.get(), state, policy))
             return Result<UpdateTransferCheckpoint>::Failure(MakeError(UpdateTransferErrors::TransportFailed));
-        const std::string caBundle =
-            policy.certificateAuthorityBundle.string();  // NOSONAR(cpp:S6004): libcurl borrows this buffer through perform.
-        if (!caBundle.empty() &&                         // NOSONAR: caBundle must survive curl_easy_perform.
-            curl_easy_setopt(curl.get(), CURLOPT_CAINFO, caBundle.c_str()) != CURLE_OK)
+        // libcurl borrows CAINFO until curl_easy_perform completes.
+        const std::string caBundle = policy.certificateAuthorityBundle.string();
+        if (!caBundle.empty() && curl_easy_setopt(curl.get(), CURLOPT_CAINFO, caBundle.c_str()) != CURLE_OK)
             return Result<UpdateTransferCheckpoint>::Failure(MakeError(UpdateTransferErrors::TransportFailed));
         curl_slist *rawHeaders = nullptr;
         std::unique_ptr<curl_slist, decltype(&curl_slist_free_all)> headers{nullptr, &curl_slist_free_all};
