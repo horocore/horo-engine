@@ -249,8 +249,9 @@ namespace Horo::Physics::Detail {
         PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
         const CanonicalContactSink sink{.context = &projection, .append = CaptureProjection};
         projection.BeginTick(1);
-        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, false, false, sink));
-        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, false, true, sink));
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, sink, {}));
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, sink,
+                                                         CanonicalContactTestOptions{.persisted = true}));
         const auto completed = projection.CompleteTick(1);
         REQUIRE(completed.HasValue());
         REQUIRE(completed.Value().publishedRecordCount == 1);
@@ -282,7 +283,8 @@ namespace Horo::Physics::Detail {
         const CanonicalContactSink sink{.context = &projection, .append = CaptureProjection};
 
         projection.BeginTick(1);
-        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first, second, 1, false, false, sink, 6));
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first, second, 1, sink,
+                                                         CanonicalContactTestOptions{.contactPointCount = 6}));
         REQUIRE(projection.CompleteTick(1).HasValue());
         const auto &contact = projection.PublishedEvents().front().contact;
         REQUIRE(contact.pointCount == MaximumPhysicsContactPoints);
@@ -292,8 +294,10 @@ namespace Horo::Physics::Detail {
             REQUIRE(contact.points[index].positionOnSecond.x == static_cast<float>(index));
             REQUIRE_FALSE(contact.points[index].normalImpulseEstimateNewtonSeconds.has_value());
         }
-        REQUIRE_FALSE(InvokeCanonicalContactCallbackForTesting(world.handle, first, second, 2, false, false, sink, 0));
-        REQUIRE_FALSE(InvokeCanonicalContactCallbackForTesting(world.handle, first, second, 2, false, false, sink, 65));
+        REQUIRE_FALSE(InvokeCanonicalContactCallbackForTesting(world.handle, first, second, 2, sink,
+                                                               CanonicalContactTestOptions{.contactPointCount = 0}));
+        REQUIRE_FALSE(InvokeCanonicalContactCallbackForTesting(world.handle, first, second, 2, sink,
+                                                               CanonicalContactTestOptions{.contactPointCount = 65}));
     }
 
     TEST_CASE("Canonical diagnostic callbacks are restored after runtime shutdown", "[physics][native][diagnostics][shutdown]") {

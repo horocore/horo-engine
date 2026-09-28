@@ -27,9 +27,9 @@ namespace Horo::Physics::Detail {
             if (!Math::IsFinite(point.positionOnFirst) || !Math::IsFinite(point.positionOnSecond) || !Math::IsFinite(point.normal) ||
                 !std::isfinite(point.penetrationDepthMeters))
                 return false;
-            const float normalLengthSquared =
-                point.normal.x * point.normal.x + point.normal.y * point.normal.y + point.normal.z * point.normal.z;
-            if (std::abs(normalLengthSquared - 1.0F) > 1.0e-3F)
+            if (const float normalLengthSquared =
+                    point.normal.x * point.normal.x + point.normal.y * point.normal.y + point.normal.z * point.normal.z;
+                std::abs(normalLengthSquared - 1.0F) > 1.0e-3F)
                 return false;
             if (sensor && point.normalImpulseEstimateNewtonSeconds.has_value())
                 return false;

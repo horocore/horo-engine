@@ -174,10 +174,10 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc InvokeCanonicalContactCallbackForTesting */
     bool InvokeCanonicalContactCallbackForTesting(const CanonicalWorldHandle world, const PhysicsQueryFixture &first,
-                                                  const PhysicsQueryFixture &second, const std::uint64_t simulationTick, const bool sensor,
-                                                  const bool persisted, const CanonicalContactSink contactSink,
-                                                  const std::uint32_t contactPointCount) {
-        if (world.value == nullptr || simulationTick == 0 || contactPointCount == 0 || contactPointCount > JPH::ContactPoints::Capacity)
+                                                  const PhysicsQueryFixture &second, const std::uint64_t simulationTick,
+                                                  const CanonicalContactSink contactSink, const CanonicalContactTestOptions options) {
+        if (world.value == nullptr || simulationTick == 0 || options.contactPointCount == 0 ||
+            options.contactPointCount > JPH::ContactPoints::Capacity)
             return false;
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
         const auto *firstFixture = FindFixture(canonical, first.body);
@@ -195,14 +195,14 @@ namespace Horo::Physics::Detail {
         manifold.mBaseOffset = JPH::RVec3::sZero();
         manifold.mWorldSpaceNormal = JPH::Vec3::sAxisY();
         manifold.mPenetrationDepth = 0.1F;
-        for (std::uint32_t index = 0; index < contactPointCount; ++index) {
-            const JPH::Vec3 position(static_cast<float>(contactPointCount - index - 1), 0.0F, 0.0F);
+        for (std::uint32_t index = 0; index < options.contactPointCount; ++index) {
+            const JPH::Vec3 position(static_cast<float>(options.contactPointCount - index - 1), 0.0F, 0.0F);
             manifold.mRelativeContactPointsOn1.emplace_back(position);
             manifold.mRelativeContactPointsOn2.emplace_back(position);
         }
         JPH::ContactSettings settings{};
-        settings.mIsSensor = sensor;
-        if (persisted)
+        settings.mIsSensor = options.sensor;
+        if (options.persisted)
             canonical.contactListener.OnContactPersisted(firstLock.GetBody(), secondLock.GetBody(), manifold, settings);
         else
             canonical.contactListener.OnContactAdded(firstLock.GetBody(), secondLock.GetBody(), manifold, settings);
