@@ -82,6 +82,14 @@ work. Symbols and diagnostic artifacts have no installation identity and use a
 separate supplemental artifact class rather than entering the ordinary product
 installation path.
 
+The Linux tar.gz preflight reader authenticates the complete signed package,
+checks canonical gzip and ustar framing, rejects links and unsafe paths, and
+returns a bounded entry index without writing files. Indexing alone does not
+create a ready stage: a later extraction transaction must check the package's
+internal file inventory against each extracted file before publication.
+The reader accepts one gzip member with no optional gzip header fields and
+ordinary POSIX ustar file/directory entries; other tar extensions fail closed.
+
 ## Game Content, Patch, And DLC Releases
 
 Game releases may contain multiple content units:

@@ -1145,6 +1145,11 @@ target_compile_features(HoroUpdateActivationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateActivationTests PRIVATE HoroEngine::UpdateActivation miniz)
 horo_register_catch_test(HoroUpdateActivationTests LABELS "release;update;headless")
 
+add_executable(HoroUpdateTarGzipIndexTests unit/application/UpdateTarGzipIndexTests.cpp)
+target_compile_features(HoroUpdateTarGzipIndexTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUpdateTarGzipIndexTests PRIVATE HoroEngine::UpdateDownload miniz)
+horo_register_catch_test(HoroUpdateTarGzipIndexTests LABELS "release;update;headless")
+
 add_executable(HoroUpdateZipPackageProducerTests unit/application/UpdateZipPackageProducerTests.cpp)
 target_compile_features(HoroUpdateZipPackageProducerTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateZipPackageProducerTests PRIVATE HoroEngine::UpdateDownload miniz)
