@@ -19,6 +19,8 @@
 #if defined(_WIN32)
 #include <sddl.h>
 #include <windows.h>
+#else
+#include <stdlib.h>
 #endif
 
 namespace Horo::Release {
@@ -111,7 +113,7 @@ namespace Horo::Release {
                 std::string pattern = (temporary / "horo-release-XXXXXX").string();
                 std::vector<char> buffer(pattern.begin(), pattern.end());
                 buffer.push_back('\0');
-                if (const char *created = mkdtemp(buffer.data()))
+                if (const char *created = ::mkdtemp(buffer.data()))
                     root_ = created;
 #else
                 PSECURITY_DESCRIPTOR rawDescriptor = nullptr;
