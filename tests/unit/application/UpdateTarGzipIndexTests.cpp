@@ -193,7 +193,7 @@ namespace {
                            : Horo::Result<void>::Failure(Horo::Error{Horo::ErrorCode{"test.health"}, Horo::ErrorDomainId{"test"}});
         }
 
-        bool healthy{true};
+        bool healthy{false};
         unsigned stops{};
         unsigned probes{};
     };
@@ -366,7 +366,6 @@ TEST_CASE("Linux portable bootstrap installs repairs and uninstalls only owned v
     LinuxPortableBootstrapHost noSpace(files, verifier, processes, {.minimumFreeBytes = std::numeric_limits<std::uint64_t>::max()});
     CHECK(BootstrapVerifiedInstallation(request, files, verifier, noSpace).HasError());
     CHECK_FALSE(std::filesystem::exists(temporary.path / "active-version"));
-    processes.healthy = false;
     CHECK(BootstrapVerifiedInstallation(request, files, verifier, host).HasError());
     CHECK_FALSE(std::filesystem::exists(temporary.path / "active-version"));
     CHECK_FALSE(std::filesystem::exists(temporary.path / "bootstrap.pending"));
