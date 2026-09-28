@@ -223,6 +223,8 @@ namespace Horo::Mcp {
                         Finish(operation, OperationState::Failed, outcome.ErrorValue());
                 }
             } catch (...) {  // Completion bookkeeping must drain even if result publication runs out of memory.
+                Log::Logger::WriteEmergency("mcp.controller", Log::Level::Error,
+                                            "MCP callback result publication failed; completion lease will still drain.");
             }
             --callbacks;
             drained.notify_all();
