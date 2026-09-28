@@ -156,6 +156,7 @@ jobs:
           xvfb-run -a build/sonar/tests/HoroEditorUiAutomationTests '~[native]'
           xvfb-run -a build/sonar/tests/HoroSourceFileOpenServiceTests
           xvfb-run -a build/sonar/tests/HoroEditorWorkspaceControllerTests
+          xvfb-run -a build/sonar/tests/HoroEditorUserStateMigrationTests
           /tmp/horo-gcovr/bin/coverage run --source=scripts -m pytest tests/python --quiet
           /tmp/horo-gcovr/bin/coverage xml -o build/sonar/python-coverage.xml
           gcovr_started=$SECONDS
@@ -168,6 +169,7 @@ jobs:
             --filter "$GITHUB_WORKSPACE/apps/common" \
             --filter "$GITHUB_WORKSPACE/apps/horo-engine" \
             --filter "$GITHUB_WORKSPACE/apps/horo-package" \
+            --filter "$GITHUB_WORKSPACE/apps/HoroEditor/app/EditorUserStateMigration.cpp" \
             --exclude-throw-branches \
             --exclude-unreachable-branches \
             --exclude-noncode-lines \

@@ -1,5 +1,6 @@
 #include "HoroEditorApp.h"
 
+#include "EditorUserStateMigration.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/HostObservability.h"
 #include "Horo/Application/ProjectCompatibility.h"
@@ -1246,6 +1247,16 @@ namespace Horo::Editor {
         Log::LogContext appCtx("app", "horo-editor", "run_id", "1");
 
         Log::Logger::DumpStartupInfo();
+
+        NativeDurableFileSystem userStateFiles;
+        const auto userStateRoot = ResolveEditorSettingsPath().parent_path();
+        const auto cacheRoot = ResolveEditorSettingsHomeDirectory() / ".cache" / "horo";
+        if (auto migrated = MigrateLegacyEditorUserState(userStateRoot, cacheRoot, userStateFiles); migrated.HasError()) {
+            LOG_ERROR("editor.user_state", "User-state migration needs repair before editor startup.");
+            std::fprintf(stderr, "User-state migration needs repair before editor startup.\n");
+            Log::Logger::Shutdown();
+            return 1;
+        }
 
         auto opts = ParseOptions(std::span{argv, static_cast<std::size_t>(argc)});
         std::vector<RecentProjectEntry> recentProjects = LoadRecentProjectsFromDisk();

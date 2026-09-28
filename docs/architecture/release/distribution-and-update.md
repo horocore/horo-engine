@@ -493,6 +493,25 @@ Caches may be discarded and rebuilt instead of migrated. Credentials are never
 migrated by copying raw secret values; only credential references may be
 validated or re-authorized.
 
+`RunUserStateMigration` is a separate application operation invoked after the
+new product process starts and before user-state writers begin. The host supplies
+explicit user-state and cache roots plus one-step, content-addressed schema
+edges for preferences, recent-project records, toolchain profiles, workspace
+state, update records, and disposable cache files. It orders the plan
+deterministically and refuses lexical project escapes, links, duplicate
+destinations, stale source bytes, and unauthorized credential references.
+State transforms retain a durable adjacent source backup before atomically
+publishing replacement bytes. A failed or interrupted transform leaves either
+the original file or that backup for `RestoreUserStateMigrationBackup`; an
+unresolved backup blocks overwriting it. Disposable cache entries are removed
+only from the dedicated cache root and can be rebuilt. This operation does not
+read or mutate project documents, and installation activation never calls it.
+`HoroEditor` composes this application operation at startup before loading
+editor settings or recent projects. Its host adapter supplies the concrete
+legacy-to-version-1 steps for those two files, while the application operation
+owns backups, atomic replacement, and recovery. Other state families require
+their own explicit host adapters before they can enter a migration plan.
+
 ## Compatibility
 
 Before activation, the editor reports:

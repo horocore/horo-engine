@@ -181,9 +181,17 @@ namespace Horo::Editor {
             return BuildDefaultBootstrapRecentProjects();
         std::vector<RecentProjectEntry> results;
         const Json root = Json::parse(content, nullptr, false);
-        if (root.is_discarded() || !root.is_array() || root.size() > 128)
+        if (root.is_discarded())
             return BuildDefaultBootstrapRecentProjects();
-        for (const Json &value : root) {
+        const Json *entries = &root;
+        if (root.is_object()) {
+            if (!root.contains("schemaVersion") || root["schemaVersion"] != 1 || !root.contains("entries"))
+                return BuildDefaultBootstrapRecentProjects();
+            entries = &root["entries"];
+        }
+        if (!entries->is_array() || entries->size() > 128)
+            return BuildDefaultBootstrapRecentProjects();
+        for (const Json &value : *entries) {
             if (auto entry = ParseRecentProjectEntry(value); entry && IsDisplayableRecentProject(*entry))
                 results.push_back(std::move(*entry));
         }
@@ -207,7 +215,7 @@ namespace Horo::Editor {
             return false;
         }
 
-        Json root = Json::array();
+        Json entries = Json::array();
         for (const RecentProjectEntry &project : projects) {
             Json value{{"name", project.name},
                        {"rootPath", project.rootPath},
@@ -220,8 +228,9 @@ namespace Horo::Editor {
                     compatibility["projectVersion"] = Application::FormatHoroVersion(project.compatibility->projectVersion->value);
                 value["compatibility"] = std::move(compatibility);
             }
-            root.push_back(std::move(value));
+            entries.push_back(std::move(value));
         }
+        Json root{{"schemaVersion", 1}, {"entries", std::move(entries)}};
         const std::string content = root.dump(2) + "\n";
         const std::filesystem::path temporary = path.string() + ".tmp";
         const std::span bytes{reinterpret_cast<const std::byte *>(content.data()), content.size()};
