@@ -10,8 +10,41 @@
 #include <utility>
 
 namespace Horo::Release {
+    /** @copydoc DetectBootstrapBuildTarget */
+    Result<BootstrapBuildTarget> DetectBootstrapBuildTarget() {
+#if (!defined(_WIN32) && !defined(__APPLE__) && !defined(__linux__)) ||                                                                    \
+    (!defined(_M_X64) && !defined(__x86_64__) && !defined(_M_ARM64) && !defined(__aarch64__))
+        return Result<BootstrapBuildTarget>::Failure(MakeError(BootstrapInstallationErrors::InvalidLayout));
+#else
+#if defined(_WIN32)
+        constexpr auto platform = DistributionPlatform::Windows;
+#elif defined(__APPLE__)
+        constexpr auto platform = DistributionPlatform::MacOS;
+#elif defined(__linux__)
+        constexpr auto platform = DistributionPlatform::Linux;
+#endif
+#if defined(_M_X64) || defined(__x86_64__)
+        constexpr auto architecture = DistributionArchitecture::X64;
+#elif defined(_M_ARM64) || defined(__aarch64__)
+        constexpr auto architecture = DistributionArchitecture::Arm64;
+#endif
+        return Result<BootstrapBuildTarget>::Success({platform, architecture});
+#endif
+    }
+
+    /** @copydoc CheckBootstrapBuildTarget */
+    Result<void> CheckBootstrapBuildTarget(const DistributionArtifactIdentity &artifact) {
+        auto native = DetectBootstrapBuildTarget();
+        if (native.HasError())
+            return Result<void>::Failure(native.ErrorValue());
+        if (artifact.platform != native.Value().platform || artifact.architecture != native.Value().architecture)
+            return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PreflightFailed));
+        return Result<void>::Success();
+    }
+
     namespace {
         constexpr std::string_view PendingHeader = "horo-bootstrap-install-v1\n";
+        constexpr std::string_view UninstallHeader = "horo-bootstrap-uninstall-v1\n";
         constexpr std::uintmax_t MaximumRecordBytes = 1024U;
 
         struct InstallPaths final {
@@ -20,6 +53,7 @@ namespace Horo::Release {
             std::filesystem::path active;
             std::filesystem::path prepared;
             std::filesystem::path pending;
+            std::filesystem::path uninstallPending;
             std::filesystem::path lock;
         };
 
@@ -30,6 +64,7 @@ namespace Horo::Release {
                     root / "active-version",
                     root / "active-version.prepared",
                     root / "bootstrap.pending",
+                    root / "bootstrap-uninstall.pending",
                     root / ".activation.lock"};
         }
 
@@ -137,6 +172,77 @@ namespace Horo::Release {
                 return Result<BootstrapInstallationOutcome>::Failure(undone.ErrorValue());
             return Result<BootstrapInstallationOutcome>::Failure(std::move(failure));
         }
+
+        /** @brief Binds a resumable removal to the same authenticated file inventory. */
+        [[nodiscard]] Result<std::string> UninstallRecord(const BootstrapInstallationRequest &request, const std::string &activeRecord) {
+            auto inventory = BuildCanonicalUpdateFileInventory(request.candidate.inventory, request.archiveLimits);
+            if (inventory.HasError())
+                return Result<std::string>::Failure(inventory.ErrorValue());
+            const auto digest = ComputeSha256(std::as_bytes(std::span{inventory.Value()}));
+            return Result<std::string>::Success(std::string{UninstallHeader} + activeRecord + FormatSha256(digest) + "\n");
+        }
+
+        /** @brief Rejects concurrent update or first-install journals before repair or removal. */
+        [[nodiscard]] Result<void> NoOtherTransition(const InstallPaths &paths) {
+            for (const auto &path : {paths.pending, paths.prepared, paths.root / "activation.pending", paths.root / "rollback.pending"}) {
+                auto present = Exists(path);
+                if (present.HasError() || present.Value())
+                    return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Proves that an active pointer still names exactly this package. */
+        [[nodiscard]] Result<void> RequireActive(const InstallPaths &paths, const std::string_view record) {
+            if (auto active = ReadRecord(paths.active); active.HasError() || active.Value() != record)
+                return Result<void>::Failure(MakeError(BootstrapInstallationErrors::AlreadyInstalled));
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks common stopped-product and transaction prerequisites after the caller holds the installation lock. */
+        [[nodiscard]] Result<void> ReadyForMaintenance(const InstallPaths &paths, IBootstrapInstallationHost &host) {
+            if (auto stopped = host.EnsureProductsStopped(paths.root); stopped.HasError())
+                return stopped;
+            if (auto clear = NoOtherTransition(paths); clear.HasError())
+                return clear;
+            return Result<void>::Success();
+        }
+
+        /** @brief Completes a resumed uninstall only after its journal and active pointer match the candidate. */
+        [[nodiscard]] Result<void> ResumeUninstall(const InstallPaths &paths, const std::string_view expected,
+                                                   const std::string_view record, NativeDurableFileSystem &files) {
+            if (auto saved = ReadRecord(paths.uninstallPending); saved.HasError() || saved.Value() != expected)
+                return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
+            auto active = Exists(paths.active);
+            if (active.HasError())
+                return Result<void>::Failure(active.ErrorValue());
+            if (!active.Value())
+                return Result<void>::Success();
+            if (auto match = RequireActive(paths, record); match.HasError())
+                return match;
+            if (auto removed = files.RemoveDurable(paths.active); removed.HasError())
+                return Result<void>::Failure(WrapError(BootstrapInstallationErrors::UninstallFailed, removed.ErrorValue()));
+            return Result<void>::Success();
+        }
+
+        /** @brief Journals and deactivates an authenticated active installation before host cleanup. */
+        [[nodiscard]] Result<void> BeginUninstall(const BootstrapInstallationRequest &request, const InstallPaths &paths,
+                                                  const std::string_view record, const std::string_view expected,
+                                                  NativeDurableFileSystem &files, const Security::ArtifactVerifier &verifier) {
+            if (auto active = RequireActive(paths, record); active.HasError())
+                return active;
+            if (auto verified =
+                    VerifyReadyUpdateStage(request.candidate.package, request.candidate.checkpoint, request.candidate.packageFile,
+                                           request.candidate.stageRoot, request.candidate.inventory, request.archiveLimits, verifier);
+                verified.HasError())
+                return verified;
+            if (auto written = files.AppendPrivateDurable(paths.uninstallPending, 0U, std::as_bytes(std::span{expected}));
+                written.HasError())
+                return written;
+            if (auto removed = files.RemoveDurable(paths.active); removed.HasError())
+                return Result<void>::Failure(WrapError(BootstrapInstallationErrors::UninstallFailed, removed.ErrorValue()));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc BootstrapVerifiedInstallation */
@@ -166,6 +272,8 @@ namespace Horo::Release {
             return Result<BootstrapInstallationOutcome>::Failure(pending.ErrorValue());
         if (pending.Value())
             return RecoverPending(request, paths, record, files, host);
+        if (auto uninstallPending = Exists(paths.uninstallPending); uninstallPending.HasError() || uninstallPending.Value())
+            return Result<BootstrapInstallationOutcome>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
         auto active = Exists(paths.active);
         auto prepared = Exists(paths.prepared);
         if (active.HasError() || prepared.HasError())
@@ -195,5 +303,68 @@ namespace Horo::Release {
         if (auto removed = files.RemoveDurable(paths.pending); removed.HasError())
             return FailAndUndo(request, paths, record, files, host, removed.ErrorValue());
         return Result<BootstrapInstallationOutcome>::Success(BootstrapInstallationOutcome::Installed);
+    }
+
+    /** @copydoc RepairVerifiedInstallation */
+    Result<void> RepairVerifiedInstallation(const BootstrapInstallationRequest &request, NativeDurableFileSystem &files,
+                                            const Security::ArtifactVerifier &verifier, IBootstrapInstallationHost &host) {
+        const auto paths = Paths(request.installationRoot);
+        if (!ValidRequest(request, paths))
+            return Result<void>::Failure(MakeError(BootstrapInstallationErrors::InvalidLayout));
+        auto lock = files.TryAcquireExclusive(paths.lock, "horo-bootstrap-repair");
+        if (lock.HasError())
+            return Result<void>::Failure(lock.ErrorValue());
+        if (auto ready = ReadyForMaintenance(paths, host); ready.HasError())
+            return ready;
+        if (auto uninstallPending = Exists(paths.uninstallPending); uninstallPending.HasError() || uninstallPending.Value())
+            return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
+        auto encoded = EncodeActiveUpdateRecord(request.candidate.package);
+        if (encoded.HasError())
+            return Result<void>::Failure(encoded.ErrorValue());
+        if (auto active = RequireActive(paths, encoded.Value()); active.HasError())
+            return active;
+        if (auto verified =
+                VerifyReadyUpdateStage(request.candidate.package, request.candidate.checkpoint, request.candidate.packageFile,
+                                       request.candidate.stageRoot, request.candidate.inventory, request.archiveLimits, verifier);
+            verified.HasError())
+            return Result<void>::Failure(WrapError(BootstrapInstallationErrors::RepairFailed, verified.ErrorValue()));
+        if (auto registered = host.Register(request); registered.HasError())
+            return Result<void>::Failure(WrapError(BootstrapInstallationErrors::RepairFailed, registered.ErrorValue()));
+        if (auto healthy = host.ProbeStartupHealth(request.candidate.stageRoot, request.healthTimeout); healthy.HasError())
+            return Result<void>::Failure(WrapError(BootstrapInstallationErrors::RepairFailed, healthy.ErrorValue()));
+        return RequireActive(paths, encoded.Value());
+    }
+
+    /** @copydoc UninstallVerifiedInstallation */
+    Result<void> UninstallVerifiedInstallation(const BootstrapInstallationRequest &request, NativeDurableFileSystem &files,
+                                               const Security::ArtifactVerifier &verifier, IBootstrapInstallationHost &host) {
+        const auto paths = Paths(request.installationRoot);
+        if (!ValidRequest(request, paths))
+            return Result<void>::Failure(MakeError(BootstrapInstallationErrors::InvalidLayout));
+        auto lock = files.TryAcquireExclusive(paths.lock, "horo-bootstrap-uninstall");
+        if (lock.HasError())
+            return Result<void>::Failure(lock.ErrorValue());
+        if (auto ready = ReadyForMaintenance(paths, host); ready.HasError())
+            return ready;
+        auto encoded = EncodeActiveUpdateRecord(request.candidate.package);
+        if (encoded.HasError())
+            return Result<void>::Failure(encoded.ErrorValue());
+        auto expected = UninstallRecord(request, encoded.Value());
+        if (expected.HasError())
+            return Result<void>::Failure(expected.ErrorValue());
+        auto pending = Exists(paths.uninstallPending);
+        if (pending.HasError())
+            return Result<void>::Failure(pending.ErrorValue());
+        if (const auto deactivated = pending.Value() ? ResumeUninstall(paths, expected.Value(), encoded.Value(), files)
+                                                     : BeginUninstall(request, paths, encoded.Value(), expected.Value(), files, verifier);
+            deactivated.HasError())
+            return deactivated;
+        if (auto unregistered = host.Unregister(request); unregistered.HasError())
+            return Result<void>::Failure(WrapError(BootstrapInstallationErrors::UninstallFailed, unregistered.ErrorValue()));
+        if (auto removed = host.RemoveOwnedVersion(request); removed.HasError())
+            return Result<void>::Failure(WrapError(BootstrapInstallationErrors::UninstallFailed, removed.ErrorValue()));
+        if (auto removed = files.RemoveDurable(paths.uninstallPending); removed.HasError())
+            return Result<void>::Failure(WrapError(BootstrapInstallationErrors::UninstallFailed, removed.ErrorValue()));
+        return Result<void>::Success();
     }
 }  // namespace Horo::Release
