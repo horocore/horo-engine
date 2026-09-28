@@ -103,14 +103,17 @@ namespace Horo::Audio {
 
     /** @copydoc ClassifyAudioFailure */
     AudioFailureDecision ClassifyAudioFailure(const Error &error, const AudioFailureOrigin origin) noexcept {
+        using enum AudioActiveStatePolicy;
+        using enum AudioFailureOrigin;
+
         for (const Rule &rule : Rules) {
             if (!Matches(error, *rule.descriptor))
                 continue;
-            if (origin == AudioFailureOrigin::CallbackFault)
-                return {rule.decision.area, State::Failed, Action::RequestHostPolicy, Active::RetainUntilDetached, true};
-            if (origin == AudioFailureOrigin::RequestOrCandidate && rule.decision.activeState == Active::QuiesceDevice)
-                return {rule.decision.area, State::Rejected, rule.decision.action, Active::Preserve, true};
-            if (origin != AudioFailureOrigin::RequestOrCandidate && origin != AudioFailureOrigin::ActiveEpoch)
+            if (origin == CallbackFault)
+                return {rule.decision.area, State::Failed, Action::RequestHostPolicy, RetainUntilDetached, true};
+            if (origin == RequestOrCandidate && rule.decision.activeState == QuiesceDevice)
+                return {rule.decision.area, State::Rejected, rule.decision.action, Preserve, true};
+            if (origin != RequestOrCandidate && origin != ActiveEpoch)
                 return {};
             return rule.decision;
         }
