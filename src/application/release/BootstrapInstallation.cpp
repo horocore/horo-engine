@@ -193,10 +193,54 @@ namespace Horo::Release {
         }
 
         /** @brief Proves that an active pointer still names exactly this package. */
-        [[nodiscard]] Result<void> RequireActive(const InstallPaths &paths, const std::string &record) {
-            auto active = ReadRecord(paths.active);
-            if (active.HasError() || active.Value() != record)
+        [[nodiscard]] Result<void> RequireActive(const InstallPaths &paths, const std::string_view record) {
+            if (auto active = ReadRecord(paths.active); active.HasError() || active.Value() != record)
                 return Result<void>::Failure(MakeError(BootstrapInstallationErrors::AlreadyInstalled));
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks common stopped-product and transaction prerequisites after the caller holds the installation lock. */
+        [[nodiscard]] Result<void> ReadyForMaintenance(const InstallPaths &paths, IBootstrapInstallationHost &host) {
+            if (auto stopped = host.EnsureProductsStopped(paths.root); stopped.HasError())
+                return stopped;
+            if (auto clear = NoOtherTransition(paths); clear.HasError())
+                return clear;
+            return Result<void>::Success();
+        }
+
+        /** @brief Completes a resumed uninstall only after its journal and active pointer match the candidate. */
+        [[nodiscard]] Result<void> ResumeUninstall(const InstallPaths &paths, const std::string_view expected,
+                                                   const std::string_view record, NativeDurableFileSystem &files) {
+            if (auto saved = ReadRecord(paths.uninstallPending); saved.HasError() || saved.Value() != expected)
+                return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
+            auto active = Exists(paths.active);
+            if (active.HasError())
+                return Result<void>::Failure(active.ErrorValue());
+            if (!active.Value())
+                return Result<void>::Success();
+            if (auto match = RequireActive(paths, record); match.HasError())
+                return match;
+            if (auto removed = files.RemoveDurable(paths.active); removed.HasError())
+                return Result<void>::Failure(WrapError(BootstrapInstallationErrors::UninstallFailed, removed.ErrorValue()));
+            return Result<void>::Success();
+        }
+
+        /** @brief Journals and deactivates an authenticated active installation before host cleanup. */
+        [[nodiscard]] Result<void> BeginUninstall(const BootstrapInstallationRequest &request, const InstallPaths &paths,
+                                                  const std::string_view record, const std::string_view expected,
+                                                  NativeDurableFileSystem &files, const Security::ArtifactVerifier &verifier) {
+            if (auto active = RequireActive(paths, record); active.HasError())
+                return active;
+            if (auto verified =
+                    VerifyReadyUpdateStage(request.candidate.package, request.candidate.checkpoint, request.candidate.packageFile,
+                                           request.candidate.stageRoot, request.candidate.inventory, request.archiveLimits, verifier);
+                verified.HasError())
+                return verified;
+            if (auto written = files.AppendPrivateDurable(paths.uninstallPending, 0U, std::as_bytes(std::span{expected}));
+                written.HasError())
+                return written;
+            if (auto removed = files.RemoveDurable(paths.active); removed.HasError())
+                return Result<void>::Failure(WrapError(BootstrapInstallationErrors::UninstallFailed, removed.ErrorValue()));
             return Result<void>::Success();
         }
     }  // namespace
@@ -271,12 +315,9 @@ namespace Horo::Release {
         auto lock = files.TryAcquireExclusive(paths.lock, "horo-bootstrap-repair");
         if (lock.HasError())
             return Result<void>::Failure(lock.ErrorValue());
-        if (auto stopped = host.EnsureProductsStopped(paths.root); stopped.HasError())
-            return stopped;
-        if (auto clear = NoOtherTransition(paths); clear.HasError())
-            return clear;
-        auto uninstallPending = Exists(paths.uninstallPending);
-        if (uninstallPending.HasError() || uninstallPending.Value())
+        if (auto ready = ReadyForMaintenance(paths, host); ready.HasError())
+            return ready;
+        if (auto uninstallPending = Exists(paths.uninstallPending); uninstallPending.HasError() || uninstallPending.Value())
             return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
         auto encoded = EncodeActiveUpdateRecord(request.candidate.package);
         if (encoded.HasError())
@@ -304,10 +345,8 @@ namespace Horo::Release {
         auto lock = files.TryAcquireExclusive(paths.lock, "horo-bootstrap-uninstall");
         if (lock.HasError())
             return Result<void>::Failure(lock.ErrorValue());
-        if (auto stopped = host.EnsureProductsStopped(paths.root); stopped.HasError())
-            return stopped;
-        if (auto clear = NoOtherTransition(paths); clear.HasError())
-            return clear;
+        if (auto ready = ReadyForMaintenance(paths, host); ready.HasError())
+            return ready;
         auto encoded = EncodeActiveUpdateRecord(request.candidate.package);
         if (encoded.HasError())
             return Result<void>::Failure(encoded.ErrorValue());
@@ -317,33 +356,10 @@ namespace Horo::Release {
         auto pending = Exists(paths.uninstallPending);
         if (pending.HasError())
             return Result<void>::Failure(pending.ErrorValue());
-        if (pending.Value()) {
-            auto saved = ReadRecord(paths.uninstallPending);
-            if (saved.HasError() || saved.Value() != expected.Value())
-                return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
-            auto active = Exists(paths.active);
-            if (active.HasError())
-                return Result<void>::Failure(active.ErrorValue());
-            if (active.Value()) {
-                if (auto match = RequireActive(paths, encoded.Value()); match.HasError())
-                    return match;
-                if (auto removed = files.RemoveDurable(paths.active); removed.HasError())
-                    return Result<void>::Failure(WrapError(BootstrapInstallationErrors::UninstallFailed, removed.ErrorValue()));
-            }
-        } else {
-            if (auto active = RequireActive(paths, encoded.Value()); active.HasError())
-                return active;
-            if (auto verified =
-                    VerifyReadyUpdateStage(request.candidate.package, request.candidate.checkpoint, request.candidate.packageFile,
-                                           request.candidate.stageRoot, request.candidate.inventory, request.archiveLimits, verifier);
-                verified.HasError())
-                return verified;
-            if (auto written = files.AppendPrivateDurable(paths.uninstallPending, 0U, std::as_bytes(std::span{expected.Value()}));
-                written.HasError())
-                return written;
-            if (auto removed = files.RemoveDurable(paths.active); removed.HasError())
-                return Result<void>::Failure(WrapError(BootstrapInstallationErrors::UninstallFailed, removed.ErrorValue()));
-        }
+        const auto deactivated = pending.Value() ? ResumeUninstall(paths, expected.Value(), encoded.Value(), files)
+                                                 : BeginUninstall(request, paths, encoded.Value(), expected.Value(), files, verifier);
+        if (deactivated.HasError())
+            return deactivated;
         if (auto unregistered = host.Unregister(request); unregistered.HasError())
             return Result<void>::Failure(WrapError(BootstrapInstallationErrors::UninstallFailed, unregistered.ErrorValue()));
         if (auto removed = host.RemoveOwnedVersion(request); removed.HasError())
