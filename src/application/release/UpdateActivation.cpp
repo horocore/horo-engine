@@ -2,6 +2,7 @@
 
 #include "Horo/Release/UpdateActivationErrors.h"
 
+#include <algorithm>
 #include <fstream>
 #include <span>
 #include <string_view>
@@ -37,11 +38,9 @@ namespace Horo::Release {
         [[nodiscard]] bool CanonicalAbsolute(const std::filesystem::path &path) {
             if (!path.is_absolute() || path.filename().empty())
                 return false;
-            for (const auto &part : path) {
-                if (part == "." || part == "..")
-                    return false;
-            }
-            return true;
+            return std::ranges::none_of(path, [](const auto &part) {
+                return part == "." || part == "..";
+            });
         }
 
         /** @brief Checks that one signed package belongs to its exact version directory. */
@@ -63,9 +62,12 @@ namespace Horo::Release {
                 !VersionPathsMatch(request.staged, paths) || request.current.packageFile == request.staged.stageRoot ||
                 request.staged.packageFile == request.current.stageRoot)
                 return false;
-            std::error_code error;
-            if (!std::filesystem::is_directory(std::filesystem::symlink_status(paths.root, error)) || error ||
-                !std::filesystem::is_directory(std::filesystem::symlink_status(paths.versions, error)) || error)
+            const auto isDirectory = [](const std::filesystem::path &path) {
+                std::error_code error;
+                const auto status = std::filesystem::symlink_status(path, error);
+                return !error && std::filesystem::is_directory(status);
+            };
+            if (!isDirectory(paths.root) || !isDirectory(paths.versions))
                 return false;
             auto currentSelection = ValidateDistributionPackageSelection(current, request.current.package.selection.format);
             auto stagedSelection = ValidateDistributionPackageSelection(staged, request.staged.package.selection.format);
@@ -79,8 +81,9 @@ namespace Horo::Release {
         /** @brief Reads only a single-link, bounded, regular transaction record. */
         [[nodiscard]] Result<std::string> ReadRecord(const std::filesystem::path &path, const ErrorCodeDescriptor &invalid) {
             std::error_code error;
-            if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error)) || error ||
-                std::filesystem::hard_link_count(path, error) != 1U || error)
+            if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error)) || error)
+                return Result<std::string>::Failure(MakeError(invalid));
+            if (std::filesystem::hard_link_count(path, error) != 1U || error)
                 return Result<std::string>::Failure(MakeError(invalid));
             const auto size = std::filesystem::file_size(path, error);
             if (error || size == 0U || size > MaximumRecordBytes)
@@ -94,8 +97,8 @@ namespace Horo::Release {
         /** @brief Detects a pending transaction without following a stale symlink. */
         [[nodiscard]] Result<bool> PendingExists(const std::filesystem::path &path) {
             std::error_code error;
-            const auto status = std::filesystem::symlink_status(path, error);
-            if (status.type() == std::filesystem::file_type::not_found && (!error || error == std::errc::no_such_file_or_directory))
+            if (const auto status = std::filesystem::symlink_status(path, error);
+                status.type() == std::filesystem::file_type::not_found && (!error || error == std::errc::no_such_file_or_directory))
                 return Result<bool>::Success(false);
             return error ? Result<bool>::Failure(MakeError(UpdateActivationErrors::PendingMismatch)) : Result<bool>::Success(true);
         }
@@ -148,8 +151,7 @@ namespace Horo::Release {
         [[nodiscard]] Result<UpdateActivationOutcome> FinishActivation(const UpdateActivationRequest &request, const ActivationPaths &paths,
                                                                        const std::string &previous, NativeDurableFileSystem &files,
                                                                        IUpdateActivationHost &host) {
-            auto health = host.ProbeStartupHealth(request.staged.stageRoot, request.healthTimeout);
-            if (health.HasError()) {
+            if (auto health = host.ProbeStartupHealth(request.staged.stageRoot, request.healthTimeout); health.HasError()) {
                 if (auto restored = RestorePrevious(paths, previous, files); restored.HasError())
                     return Result<UpdateActivationOutcome>::Failure(restored.ErrorValue());
                 return Result<UpdateActivationOutcome>::Failure(WrapError(UpdateActivationErrors::HealthFailed, health.ErrorValue()));
@@ -197,8 +199,8 @@ namespace Horo::Release {
             return Result<UpdateActivationOutcome>::Failure(pending.ErrorValue());
         if (pending.Value())
             return RecoverPending(paths, previous.Value(), target.Value(), files);
-        auto active = ReadRecord(paths.active, UpdateActivationErrors::CurrentMismatch);
-        if (active.HasError() || active.Value() != previous.Value())
+        if (auto active = ReadRecord(paths.active, UpdateActivationErrors::CurrentMismatch);
+            active.HasError() || active.Value() != previous.Value())
             return Result<UpdateActivationOutcome>::Failure(MakeError(UpdateActivationErrors::CurrentMismatch));
         if (auto started = StartTransaction(paths, previous.Value(), target.Value(), files); started.HasError())
             return Result<UpdateActivationOutcome>::Failure(started.ErrorValue());
