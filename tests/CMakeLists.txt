@@ -460,7 +460,12 @@ add_executable(HoroAudioCommandTests
 target_compile_features(HoroAudioCommandTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioCommandTests PRIVATE HoroEngine::AudioCommands)
 horo_register_catch_test(HoroAudioCommandTests LABELS "unit;audio;headless")
-add_executable(HoroAudioMetricsTests unit/runtime/audio/AudioMetricsTests.cpp)
+add_executable(HoroAudioMetricsTests
+    support/AllocationProbe.cpp
+    unit/runtime/audio/AudioMetricExtractionTests.cpp
+    unit/runtime/audio/AudioMetricsTests.cpp
+)
+target_include_directories(HoroAudioMetricsTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_features(HoroAudioMetricsTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioMetricsTests PRIVATE HoroEngine::AudioMetrics)
 horo_register_catch_test(HoroAudioMetricsTests LABELS "unit;audio;headless")
