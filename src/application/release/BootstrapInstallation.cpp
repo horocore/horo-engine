@@ -274,8 +274,7 @@ namespace Horo::Release {
             return Result<BootstrapInstallationOutcome>::Failure(pending.ErrorValue());
         if (pending.Value())
             return RecoverPending(request, paths, record, files, host);
-        auto uninstallPending = Exists(paths.uninstallPending);
-        if (uninstallPending.HasError() || uninstallPending.Value())
+        if (auto uninstallPending = Exists(paths.uninstallPending); uninstallPending.HasError() || uninstallPending.Value())
             return Result<BootstrapInstallationOutcome>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
         auto active = Exists(paths.active);
         auto prepared = Exists(paths.prepared);
@@ -358,9 +357,9 @@ namespace Horo::Release {
         auto pending = Exists(paths.uninstallPending);
         if (pending.HasError())
             return Result<void>::Failure(pending.ErrorValue());
-        const auto deactivated = pending.Value() ? ResumeUninstall(paths, expected.Value(), encoded.Value(), files)
-                                                 : BeginUninstall(request, paths, encoded.Value(), expected.Value(), files, verifier);
-        if (deactivated.HasError())
+        if (const auto deactivated = pending.Value() ? ResumeUninstall(paths, expected.Value(), encoded.Value(), files)
+                                                     : BeginUninstall(request, paths, encoded.Value(), expected.Value(), files, verifier);
+            deactivated.HasError())
             return deactivated;
         if (auto unregistered = host.Unregister(request); unregistered.HasError())
             return Result<void>::Failure(WrapError(BootstrapInstallationErrors::UninstallFailed, unregistered.ErrorValue()));
