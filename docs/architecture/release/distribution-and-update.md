@@ -122,6 +122,24 @@ manifest and may produce delta packages. Delta packages are optimization only:
 the updater must be able to fall back to the full package when delta validation
 or application fails.
 
+`PlanUpdateFileDelta` is the file-level preflight boundary for this work. It
+compares the complete base, candidate, and delta file inventories against their
+authenticated canonical digests and requires the delta inventory to contain
+exactly the changed and new files. Deleted files are absent from the candidate
+inventory. No plan publishes a stage: the host must authenticate the base and
+delta artifacts, build a private candidate tree, and verify that tree against
+the complete candidate inventory before activation. If preflight or staging
+fails, the host must select an allowed, independently verified full package;
+it must never publish a partially reconstructed tree. The signed multi-artifact
+selection and staging orchestration remain separate from this preflight API.
+
+`ResolveAssetChunkMountOrder` checks an exact optional/DLC selection against a
+verified base-manifest digest, dependency closure, and dependency-first mount
+priority. `PlanAssetChunkRemoval` rejects removal that would strand an installed
+dependent. Both are admission plans; the package lifecycle owns verified
+archive leases, mount/unmount, and transactional removal under its update
+contract. Neither plan grants package trust or mutates project files.
+
 A DLC or optional content package must never replace base-game files implicitly.
 It is mounted through the runtime asset-provider contract and validated against
 the same manifest, signature, compatibility, and chunk dependency rules as the
