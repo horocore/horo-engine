@@ -2,6 +2,7 @@
 
 #include "Horo/Release/BootstrapInstallationErrors.h"
 
+#include <algorithm>
 #include <fstream>
 #include <span>
 #include <string_view>
@@ -36,18 +37,16 @@ namespace Horo::Release {
         [[nodiscard]] bool CanonicalAbsolute(const std::filesystem::path &path) {
             if (!path.is_absolute() || path.filename().empty())
                 return false;
-            for (const auto &part : path) {
-                if (part == "." || part == "..")
-                    return false;
-            }
-            return true;
+            return std::ranges::none_of(path, [](const auto &part) {
+                return part == "." || part == "..";
+            });
         }
 
         /** @brief Does not follow links while checking for an existing transaction file. */
         [[nodiscard]] Result<bool> Exists(const std::filesystem::path &path) {
             std::error_code error;
-            const auto status = std::filesystem::symlink_status(path, error);
-            if (status.type() == std::filesystem::file_type::not_found && (!error || error == std::errc::no_such_file_or_directory))
+            if (const auto status = std::filesystem::symlink_status(path, error);
+                status.type() == std::filesystem::file_type::not_found && (!error || error == std::errc::no_such_file_or_directory))
                 return Result<bool>::Success(false);
             return error ? Result<bool>::Failure(MakeError(BootstrapInstallationErrors::InvalidLayout)) : Result<bool>::Success(true);
         }
@@ -55,8 +54,9 @@ namespace Horo::Release {
         /** @brief Reads only one bounded, regular, single-link transaction record. */
         [[nodiscard]] Result<std::string> ReadRecord(const std::filesystem::path &path) {
             std::error_code error;
-            if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error)) || error ||
-                std::filesystem::hard_link_count(path, error) != 1U || error)
+            if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error)) || error)
+                return Result<std::string>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
+            if (std::filesystem::hard_link_count(path, error) != 1U || error)
                 return Result<std::string>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
             const auto size = std::filesystem::file_size(path, error);
             if (error || size == 0U || size > MaximumRecordBytes)
@@ -72,31 +72,33 @@ namespace Horo::Release {
         [[nodiscard]] bool ValidRequest(const BootstrapInstallationRequest &request, const InstallPaths &paths) {
             const auto &selection = request.candidate.package.selection;
             const auto &artifact = selection.artifact;
-            const auto &id = artifact.package.value;
-            if (!CanonicalAbsolute(paths.root) || request.healthTimeout.count() <= 0 || request.healthTimeout > std::chrono::minutes{5} ||
+            if (const auto &id = artifact.package.value;
+                !CanonicalAbsolute(paths.root) || request.healthTimeout.count() <= 0 || request.healthTimeout > std::chrono::minutes{5} ||
                 !artifact.installation || artifact.artifactClass != DistributionArtifactClass::InstallableProduct ||
                 !IsValidDistributionIdentity(id) || request.candidate.stageRoot != paths.versions / id ||
                 request.candidate.packageFile != paths.versions / (id + ".zip") ||
                 selection.format != DistributionPackageFormat::ZipArchive)
                 return false;
-            std::error_code error;
-            if (!std::filesystem::is_directory(std::filesystem::symlink_status(paths.root, error)) || error ||
-                !std::filesystem::is_directory(std::filesystem::symlink_status(paths.versions, error)) || error)
+            const auto isDirectory = [](const std::filesystem::path &path) {
+                std::error_code error;
+                const auto status = std::filesystem::symlink_status(path, error);
+                return !error && std::filesystem::is_directory(status);
+            };
+            if (!isDirectory(paths.root) || !isDirectory(paths.versions))
                 return false;
             auto admitted = ValidateDistributionPackageSelection(artifact, selection.format);
             return admitted.HasValue() && admitted.Value() == selection;
         }
 
         /** @brief Removes a new pointer only if it still names this candidate. */
-        [[nodiscard]] Result<void> RemoveCandidatePointer(const InstallPaths &paths, const std::string &record,
+        [[nodiscard]] Result<void> RemoveCandidatePointer(const InstallPaths &paths, const std::string_view record,
                                                           NativeDurableFileSystem &files) {
             auto present = Exists(paths.active);
             if (present.HasError())
                 return Result<void>::Failure(present.ErrorValue());
             if (!present.Value())
                 return Result<void>::Success();
-            auto active = ReadRecord(paths.active);
-            if (active.HasError() || active.Value() != record)
+            if (auto active = ReadRecord(paths.active); active.HasError() || active.Value() != record)
                 return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
             return files.RemoveDurable(paths.active);
         }
@@ -121,8 +123,7 @@ namespace Horo::Release {
                                                                           const InstallPaths &paths, const std::string &record,
                                                                           NativeDurableFileSystem &files,
                                                                           IBootstrapInstallationHost &host) {
-            auto pending = ReadRecord(paths.pending);
-            if (pending.HasError() || pending.Value() != std::string{PendingHeader} + record)
+            if (auto pending = ReadRecord(paths.pending); pending.HasError() || pending.Value() != std::string{PendingHeader} + record)
                 return Result<BootstrapInstallationOutcome>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
             if (auto undone = UndoIncomplete(request, paths, record, files, host); undone.HasError())
                 return Result<BootstrapInstallationOutcome>::Failure(undone.ErrorValue());
@@ -191,8 +192,7 @@ namespace Horo::Release {
         if (auto health = host.ProbeStartupHealth(request.candidate.stageRoot, request.healthTimeout); health.HasError())
             return FailAndUndo(request, paths, record, files, host,
                                WrapError(BootstrapInstallationErrors::HealthFailed, health.ErrorValue()));
-        auto current = ReadRecord(paths.active);
-        if (current.HasError() || current.Value() != record)
+        if (auto current = ReadRecord(paths.active); current.HasError() || current.Value() != record)
             return Result<BootstrapInstallationOutcome>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
         if (auto removed = files.RemoveDurable(paths.pending); removed.HasError())
             return FailAndUndo(request, paths, record, files, host, removed.ErrorValue());
