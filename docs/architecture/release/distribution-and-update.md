@@ -400,6 +400,31 @@ is offered after:
 - startup health-check failure
 - explicit user selection
 
+`RollbackVerifiedUpdate` admits only a prior version of the same product and
+installation. Explicit user downgrades require acknowledgement, and normal
+policy rejects versions below the trusted floor. Administrator recovery is a
+separate host-authorized path. The rollback helper reuses authenticated staged
+version evidence, the installation lock, the durable activation journal, and a
+bounded startup probe; a failed probe leaves the newer verified version active.
+The host must establish authorization and the version floor from trusted state,
+not from package-provided or UI-provided values.
+
+After a healthy activation, the helper atomically publishes the verified
+previous version as `last-known-good-version` before clearing its transaction
+journal. The journal also preserves the prior pin or its absence. A failed
+probe or interrupted activation restores both the previous active pointer and
+the prior pin; uncertain restoration retains the journal for recovery. Cleanup
+must verify that the pin is distinct from the active version and reauthenticate
+its package before treating it as rollback-safe content.
+
+`PlanUpdateRetention` uses a complete host-owned installed-version snapshot and
+measured occupied bytes. It protects exactly one active and one distinct
+last-known-good version. When those pins alone exceed the configured budget,
+the plan fails instead of deleting either. Otherwise it selects obsolete
+versions by oldest use generation, with package ID as a stable tie-breaker.
+The deletion host must recheck the active and rollback records under the same
+installation lock immediately before removing only the planned owned files.
+
 User projects, settings, caches, and credentials are not stored inside the
 versioned installation and are not deleted by rollback.
 
