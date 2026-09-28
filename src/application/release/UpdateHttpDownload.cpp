@@ -99,6 +99,8 @@ namespace Horo::Release {
 
         /** @brief Configures a TLS-verified HTTPS GET with strict final-source and bounded callback behavior. */
         [[nodiscard]] bool Configure(CURL *curl, DownloadState &state, const UpdateHttpDownloadPolicy &policy) {
+            if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
+                return false;
             return curl_easy_setopt(curl, CURLOPT_URL, state.package.url.c_str()) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_USERAGENT, "horo-update/1") == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https") == CURLE_OK &&
@@ -107,7 +109,6 @@ namespace Horo::Release {
                    curl_easy_setopt(curl, CURLOPT_SUPPRESS_CONNECT_HEADERS, 1L) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "identity") == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, static_cast<long>(policy.connectTimeoutSeconds)) == CURLE_OK &&
