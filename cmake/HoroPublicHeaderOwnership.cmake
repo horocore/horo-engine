@@ -181,6 +181,10 @@ horo_configure_target_header_boundary(HoroUpdateActivation PUBLIC_HEADERS
     Horo/Release/UpdateRetention.h
     Horo/Release/UpdateRetentionErrors.h
 )
+horo_configure_target_header_boundary(HoroUserStateMigration PUBLIC_HEADERS
+    Horo/Release/UserStateMigration.h
+    Horo/Release/UserStateMigrationErrors.h
+)
 horo_configure_target_header_boundary(HoroReleaseProcess PUBLIC_HEADERS
     Horo/Release/ReleaseCandidatePublisher.h
     Horo/Release/ReleaseProcess.h

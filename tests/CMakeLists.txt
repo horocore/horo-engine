@@ -1145,6 +1145,11 @@ target_compile_features(HoroUpdateActivationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateActivationTests PRIVATE HoroEngine::UpdateActivation miniz)
 horo_register_catch_test(HoroUpdateActivationTests LABELS "release;update;headless")
 
+add_executable(HoroUserStateMigrationTests unit/application/UserStateMigrationTests.cpp)
+target_compile_features(HoroUserStateMigrationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUserStateMigrationTests PRIVATE HoroEngine::UserStateMigration)
+horo_register_catch_test(HoroUserStateMigrationTests LABELS "release;update;headless")
+
 add_executable(HoroUpdateZipPackageProducerTests unit/application/UpdateZipPackageProducerTests.cpp)
 target_compile_features(HoroUpdateZipPackageProducerTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateZipPackageProducerTests PRIVATE HoroEngine::UpdateDownload miniz)

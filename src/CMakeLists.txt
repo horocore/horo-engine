@@ -307,6 +307,12 @@ add_library(HoroEngine::UpdateActivation ALIAS HoroUpdateActivation)
 target_compile_features(HoroUpdateActivation PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateActivation PUBLIC HoroEngine::UpdateDownload HoroEngine::Platform)
 
+add_library(HoroUserStateMigration STATIC application/release/UserStateMigration.cpp
+        application/release/UserStateMigrationErrors.cpp)
+add_library(HoroEngine::UserStateMigration ALIAS HoroUserStateMigration)
+target_compile_features(HoroUserStateMigration PUBLIC cxx_std_20)
+target_link_libraries(HoroUserStateMigration PUBLIC HoroEngine::Platform)
+
 add_library(HoroProjectMigrations STATIC
         ${HORO_PROJECT_MIGRATION_CATALOG_CPP}
         ${HORO_PROJECT_MIGRATION_SOURCES}
