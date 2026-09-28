@@ -1,6 +1,8 @@
 #include "NetworkProductLaunch.h"
 
 #include "HeadlessNetworkServices.h"
+#include "Horo/Network/InboundMessageDispatcher.h"
+#include "Horo/Network/MessageCodecRegistry.h"
 #include "Horo/Network/NetworkAddress.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/NetworkTransport.h"
@@ -216,23 +218,6 @@ namespace Horo::Application::Internal {
         };
 
 #if HORO_PRODUCT_HAS_GNS
-        class RejectedConnectionCollector final : public Net::INetworkTransportEventConsumer {
-        public:
-            void Consume(Net::NetworkTransportEvent event) noexcept override {  // NOSONAR: owned-event override requires value.
-                if ((event.kind == Net::NetworkTransportEventKind::Accepted || event.kind == Net::NetworkTransportEventKind::Connected) &&
-                    rejectedCount_ < rejected_.size())
-                    rejected_[rejectedCount_++] = event.connection;
-            }
-
-            [[nodiscard]] std::span<const Net::ConnectionHandle> Rejected() const noexcept {
-                return {rejected_.data(), rejectedCount_};
-            }
-
-        private:
-            std::array<Net::ConnectionHandle, 64> rejected_{};
-            std::size_t rejectedCount_{};
-        };
-
         class GnsProductTransport final : public Net::INetworkModeService {
         public:
             GnsProductTransport(const Net::NetworkProjectRole role, const Net::NetworkAddress &bind, const Net::NetworkAddress &connect)
@@ -243,7 +228,24 @@ namespace Horo::Application::Internal {
                 if (created.HasError())
                     return Result<void>::Failure(created.ErrorValue());
                 transport_ = std::move(created).Value();
-                return transport_->Initialize({.maximumConnections = 8, .maximumEventsPerPoll = 64, .maximumMessageBytes = 1200});
+                if (auto initialized =
+                        transport_->Initialize({.maximumConnections = 8, .maximumEventsPerPoll = 64, .maximumMessageBytes = 1200});
+                    initialized.HasError())
+                    return initialized;
+                // This reference product installs no credential authority or gameplay descriptors.
+                // Its real poll path therefore uses the router's fail-closed pre-active behavior.
+                auto identities = Net::ProtocolIdentityRegistry::Create({});
+                if (identities.HasError())
+                    return Result<void>::Failure(identities.ErrorValue());
+                auto codecs = Net::MessageCodecRegistry::Create({}, identities.Value());
+                if (codecs.HasError())
+                    return Result<void>::Failure(codecs.ErrorValue());
+                codecs_.emplace(std::move(codecs).Value());
+                auto router = Net::InboundMessageDispatcher::Create(*transport_, *codecs_);
+                if (router.HasError())
+                    return Result<void>::Failure(router.ErrorValue());
+                router_ = std::move(router).Value();
+                return Result<void>::Success();
             }
 
             Result<void> Activate() override {
@@ -265,15 +267,8 @@ namespace Horo::Application::Internal {
             Result<void> RunPhase(const Runtime::RuntimePhase phase) override {
                 if (phase != Runtime::RuntimePhase::NetworkPoll)
                     return Result<void>::Success();
-                RejectedConnectionCollector collector;
-                if (auto polled = transport_->PollEvents(collector); polled.HasError())
+                if (auto polled = router_->RunNetworkPoll(++pollTick_); polled.HasError())
                     return Result<void>::Failure(polled.ErrorValue());
-                // No credential policy is installed by this minimal headless product; reject explicitly.
-                for (const auto connection : collector.Rejected()) {
-                    auto closed = transport_->Close(connection);
-                    if (closed.HasError())
-                        return closed;
-                }
                 return Result<void>::Success();
             }
 
@@ -282,6 +277,10 @@ namespace Horo::Application::Internal {
             }
 
             void Shutdown() noexcept override {
+                if (router_ != nullptr)
+                    router_->Shutdown();
+                router_.reset();
+                codecs_.reset();
                 if (transport_ != nullptr) {
                     if (listener_.IsValid())
                         static_cast<void>(transport_->CloseListener(listener_));
@@ -295,7 +294,10 @@ namespace Horo::Application::Internal {
             Net::NetworkAddress bind_;
             Net::NetworkAddress connect_;
             std::unique_ptr<Net::INetworkTransport> transport_;
+            std::optional<Net::MessageCodecRegistry> codecs_;
+            std::unique_ptr<Net::InboundMessageDispatcher> router_;
             Net::ListenerHandle listener_{};
+            std::uint64_t pollTick_{};
         };
 #endif
 

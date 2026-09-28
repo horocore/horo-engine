@@ -148,6 +148,14 @@ version outside the declared ranges is rejected with a typed unsupported-newer e
 Readers do not best-effort parse forward data. Unknown optional participants may be
 skipped only when the manifest marks them optional and no required participant
 declares a dependency on them. Missing/unknown required participants always reject.
+Optional unknown data is conservatively preservable for migration and save copies;
+only an explicit stable owner ID in the sealed release's droppable list permits loss.
+Preservation carries exact stored chunk bytes and their codec/length/alignment/digest
+metadata. A repacked candidate may change offsets but must prove the protected
+records survived before publication. Unknown required data reports its stable owner;
+unknown required feature flags report their bit mask before restore activation.
+An unsupported newer schema of a known optional owner follows the same opaque
+preservation policy unless a required participant depends on it.
 
 Migration verifies the source first, operates on detached staging, preserves the
 source unless an explicit replacement policy was captured, and emits current writer
