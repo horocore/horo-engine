@@ -710,6 +710,8 @@ add_library(HoroAudioApi STATIC
         audio/api/MixerAssetSchema.cpp
         audio/api/AudioPlanarBlock.cpp
         audio/api/AudioErrors.cpp
+        audio/api/AudioFailureErrors.cpp
+        audio/api/AudioFailureRecovery.cpp
         audio/api/AudioResamplerPlan.cpp
         audio/api/AudioPlaybackRequest.cpp
         audio/api/AudioSoundReference.cpp
