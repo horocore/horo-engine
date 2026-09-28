@@ -122,12 +122,10 @@ namespace Horo::Assets {
         /** @brief Requires every declared dependency to be selected and mounted no later than its dependent. */
         [[nodiscard]] bool DependenciesCanMount(const AssetChunkPlan &plan, const std::span<const AssetChunkId> selected,
                                                 const AssetChunkDefinition &chunk) {
-            for (const auto &dependency : chunk.dependencies) {
+            return std::ranges::all_of(chunk.dependencies, [&](const auto &dependency) {
                 const auto *required = FindChunk(plan, dependency);
-                if (required == nullptr || !ContainsId(selected, dependency) || required->mountPriority > chunk.mountPriority)
-                    return false;
-            }
-            return true;
+                return required != nullptr && ContainsId(selected, dependency) && required->mountPriority <= chunk.mountPriority;
+            });
         }
     }  // namespace
 
