@@ -94,8 +94,8 @@ namespace Horo::Release {
         const auto invalid = [] {
             return Result<std::vector<UpdateStagedFile>>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
         };
-        constexpr std::size_t MaximumInventoryBytes = 1024U * 1024U;
-        if (bytes.size() > MaximumInventoryBytes || !bytes.starts_with(UpdateFileInventoryHeader) || !bytes.ends_with('\n'))
+        if (constexpr std::size_t MaximumInventoryBytes = 1024U * 1024U;
+            bytes.size() > MaximumInventoryBytes || !bytes.starts_with(UpdateFileInventoryHeader) || !bytes.ends_with('\n'))
             return invalid();
         std::vector<UpdateStagedFile> files;
         std::size_t position = UpdateFileInventoryHeader.size();
@@ -115,7 +115,7 @@ namespace Horo::Release {
             auto digest = ParseSha256(row.substr(second + 1U));
             if (error != std::errc{} || parsed != sizeText.data() + sizeText.size() || digest.HasError())
                 return invalid();
-            files.push_back({std::string{row.substr(0U, first)}, size, std::move(digest).Value()});
+            files.emplace_back(std::string{row.substr(0U, first)}, size, std::move(digest).Value());
             position = end + 1U;
         }
         auto canonical = BuildCanonicalUpdateFileInventory(files, limits);

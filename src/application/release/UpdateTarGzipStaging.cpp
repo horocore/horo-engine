@@ -1,5 +1,6 @@
 #include "Horo/Release/UpdateStageReady.h"
 #include "Horo/Release/UpdateTransferErrors.h"
+#include "UpdateStageFileOperations.h"
 #include "UpdateTarGzipIndex.h"
 
 #include <algorithm>
@@ -19,11 +20,10 @@ namespace Horo::Release {
         };
 
         /** @brief Buffers only the bounded authenticated package-internal inventory. */
-        [[nodiscard]] bool CollectInventory(void *opaque, const UpdateArchiveEntry &entry, const std::span<const unsigned char> bytes,
-                                            const std::uint64_t offset) {
+        [[nodiscard]] bool CollectInventory(InventoryCollector &collector, const UpdateArchiveEntry &entry,
+                                            const std::span<const unsigned char> bytes, const std::uint64_t offset) {
             if (entry.path != UpdateFileInventoryPath)
                 return true;
-            auto &collector = *static_cast<InventoryCollector *>(opaque);
             if (offset != collector.bytes.size() || bytes.size() > MaximumInventoryBytes - collector.bytes.size())
                 return false;
             collector.bytes.append(reinterpret_cast<const char *>(bytes.data()), bytes.size());
@@ -36,7 +36,7 @@ namespace Horo::Release {
             std::map<std::string, std::uint64_t, std::less<>> declared;
             std::set<std::string, std::less<>> parents;
             for (const auto &file : inventory) {
-                declared.emplace(file.path, file.size);
+                declared.try_emplace(file.path, file.size);
                 std::size_t separator = file.path.find('/');
                 while (separator != std::string::npos) {
                     parents.emplace(file.path.substr(0U, separator));
@@ -49,31 +49,12 @@ namespace Horo::Release {
                     if (!parents.contains(entry.path))
                         return false;
                 } else if (entry.path != UpdateFileInventoryPath) {
-                    const auto found = declared.find(entry.path);
-                    if (found == declared.end() || found->second != entry.expandedBytes)
+                    if (const auto found = declared.find(entry.path); found == declared.end() || found->second != entry.expandedBytes)
                         return false;
                     ++files;
                 }
             }
             return files == inventory.size();
-        }
-
-        /** @brief Admits a new private sibling stage and no lexical alias to its package. */
-        [[nodiscard]] bool ValidPaths(const std::filesystem::path &packageFile, const std::filesystem::path &stageRoot) {
-            if (!packageFile.is_absolute() || !stageRoot.is_absolute() || packageFile.parent_path() != stageRoot.parent_path() ||
-                packageFile == stageRoot || packageFile.filename().empty() || stageRoot.filename().empty())
-                return false;
-            for (const auto &path : {packageFile, stageRoot}) {
-                for (const auto &part : path) {
-                    if (part == "." || part == "..")
-                        return false;
-                }
-            }
-            std::error_code error;
-            if (!std::filesystem::is_directory(std::filesystem::symlink_status(stageRoot.parent_path(), error)) || error)
-                return false;
-            const auto stage = std::filesystem::symlink_status(stageRoot, error);
-            return stage.type() == std::filesystem::file_type::not_found && (!error || error == std::errc::no_such_file_or_directory);
         }
 
         /** @brief Refuses to overwrite or delete a sibling marker from another interrupted transaction. */
@@ -101,6 +82,14 @@ namespace Horo::Release {
             std::filesystem::path root;
             NativeDurableFileSystem &files;
             bool active{true};
+
+            StageCleanup(std::filesystem::path stageRoot, NativeDurableFileSystem &fileSystem)
+                : root(std::move(stageRoot)), files(fileSystem) {}
+
+            StageCleanup(const StageCleanup &) = delete;
+            StageCleanup &operator=(const StageCleanup &) = delete;
+            StageCleanup(StageCleanup &&) = delete;
+            StageCleanup &operator=(StageCleanup &&) = delete;
 
             ~StageCleanup() {
                 if (!active)
@@ -140,9 +129,8 @@ namespace Horo::Release {
         };
 
         /** @brief Writes only declared ordinary file bytes at their exact stream offsets. */
-        [[nodiscard]] bool WritePayload(void *opaque, const UpdateArchiveEntry &entry, const std::span<const unsigned char> bytes,
-                                        const std::uint64_t offset) {
-            auto &context = *static_cast<ExtractionContext *>(opaque);
+        [[nodiscard]] bool WritePayload(ExtractionContext &context, const UpdateArchiveEntry &entry,
+                                        const std::span<const unsigned char> bytes, const std::uint64_t offset) {
             if (context.cancellation.IsCancellationRequested())
                 return false;
             if (entry.path == UpdateFileInventoryPath)
@@ -151,29 +139,6 @@ namespace Horo::Release {
                 .HasValue();
         }
 
-        /** @brief Makes every newly created directory durable before the ready marker can name it. */
-        [[nodiscard]] Result<void> SyncDirectories(const std::filesystem::path &root, NativeDurableFileSystem &files) {
-            std::error_code error;
-            std::vector<std::filesystem::path> directories{root};
-            std::filesystem::recursive_directory_iterator entry(root, std::filesystem::directory_options::none, error);
-            const std::filesystem::recursive_directory_iterator end;
-            while (entry != end && !error) {
-                if (entry->is_directory(error) && !error)
-                    directories.emplace_back(entry->path());
-                if (!error)
-                    entry.increment(error);
-            }
-            if (error)
-                return Result<void>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
-            std::ranges::sort(directories, [](const auto &left, const auto &right) {
-                return left.native().size() > right.native().size();
-            });
-            for (const auto &directory : directories) {
-                if (auto synced = files.SyncDirectory(directory); synced.HasError())
-                    return synced;
-            }
-            return files.SyncDirectory(root.parent_path());
-        }
     }  // namespace
 
     /** @copydoc StageVerifiedTarGzipUpdate */
@@ -184,7 +149,7 @@ namespace Horo::Release {
         const auto invalid = [] {
             return Result<std::filesystem::path>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
         };
-        if (!ValidPaths(packageFile, stageRoot))
+        if (!Detail::ValidStagePaths(packageFile, stageRoot))
             return Result<std::filesystem::path>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
         auto ready = stageRoot;
         ready += ".ready";
@@ -200,8 +165,12 @@ namespace Horo::Release {
         if (index.HasError())
             return Result<std::filesystem::path>::Failure(index.ErrorValue());
         InventoryCollector collector;
-        auto collected = Detail::ReadTarGzipIndex(packageFile, limits, CollectInventory, &collector);
-        if (collected.HasError())
+        if (auto collected = Detail::ReadTarGzipIndex(packageFile, limits,
+                                                      [&collector](const UpdateArchiveEntry &entry,
+                                                                   const std::span<const unsigned char> bytes, const std::uint64_t offset) {
+            return CollectInventory(collector, entry, bytes, offset);
+        });
+            collected.HasError())
             return Result<std::filesystem::path>::Failure(collected.ErrorValue());
         auto inventory = ParseCanonicalUpdateFileInventory(collector.bytes, limits);
         if (inventory.HasError() || !MatchesInventory(index.Value(), inventory.Value()))
@@ -216,14 +185,18 @@ namespace Horo::Release {
         if (auto preparedFiles = PrepareFiles(stageRoot, inventory.Value(), files); preparedFiles.HasError())
             return Result<std::filesystem::path>::Failure(preparedFiles.ErrorValue());
         ExtractionContext context{stageRoot, files, cancellation};
-        auto extracted = Detail::ReadTarGzipIndex(packageFile, limits, WritePayload, &context);
+        auto extracted = Detail::ReadTarGzipIndex(packageFile, limits,
+                                                  [&context](const UpdateArchiveEntry &entry, const std::span<const unsigned char> bytes,
+                                                             const std::uint64_t offset) {
+            return WritePayload(context, entry, bytes, offset);
+        });
         if (extracted.HasError())
             return Result<std::filesystem::path>::Failure(extracted.ErrorValue());
         if (!std::ranges::equal(index.Value(), extracted.Value(), [](const UpdateArchiveEntry &left, const UpdateArchiveEntry &right) {
             return left.path == right.path && left.kind == right.kind && left.expandedBytes == right.expandedBytes;
         }))
             return invalid();
-        if (auto synced = SyncDirectories(stageRoot, files); synced.HasError())
+        if (auto synced = Detail::SyncStageDirectories(stageRoot, files); synced.HasError())
             return Result<std::filesystem::path>::Failure(synced.ErrorValue());
         auto published = PublishVerifiedUpdateStage({package, checkpoint, packageFile, stageRoot, inventory.Value(), limits}, files,
                                                     verifier, cancellation);
