@@ -31,6 +31,14 @@ namespace Horo::Audio {
         bool IsDiagnostic(const AudioExtractionKind kind) noexcept {
             return kind >= AudioExtractionKind::DeadlineOverrun && kind < AudioExtractionKind::Count;
         }
+
+        /** @brief Producer-owned cumulative values, published together at each callback boundary. */
+        struct ProducerTotals final {
+            std::uint64_t published{};
+            std::uint64_t coalesced{};
+            std::uint64_t dropped{};
+            std::uint64_t rateLimited{};
+        };
     }  // namespace
 
     /** @brief Each side owns its plain cursor; sequentially consistent shared cursors publish ring-slot handoff. */
@@ -47,10 +55,7 @@ namespace Horo::Audio {
         alignas(64) std::atomic<std::uint32_t> read{};
         std::atomic<bool> closed{};
         bool producerClosed{};
-        std::uint64_t publishedCount{};
-        std::uint64_t coalescedCount{};
-        std::uint64_t droppedCount{};
-        std::uint64_t rateLimitedCount{};
+        ProducerTotals producerTotals;
         std::atomic<std::uint64_t> published{};
         std::atomic<std::uint64_t> coalesced{};
         std::atomic<std::uint64_t> dropped{};
@@ -62,10 +67,10 @@ namespace Horo::Audio {
 
         /** @brief Makes producer-owned totals visible only at a completed callback boundary. */
         void PublishStats() noexcept {
-            published.store(publishedCount);
-            coalesced.store(coalescedCount);
-            dropped.store(droppedCount);
-            rateLimited.store(rateLimitedCount);
+            published.store(producerTotals.published);
+            coalesced.store(producerTotals.coalesced);
+            dropped.store(producerTotals.dropped);
+            rateLimited.store(producerTotals.rateLimited);
         }
     };
 
@@ -115,20 +120,20 @@ namespace Horo::Audio {
             if (record.sampleFrame < state.lastDiagnosticFrame[kind])
                 return Invalid;
             if (record.sampleFrame - state.lastDiagnosticFrame[kind] < state.descriptor.diagnosticFrameInterval) {
-                Increment(state.rateLimitedCount);
+                Increment(state.producerTotals.rateLimited);
                 return RateLimited;
             }
         }
         if (state.hasPending[kind]) {
             auto &pending = state.pending[kind];
             if (pending.samples == std::numeric_limits<std::uint32_t>::max()) {
-                Increment(state.droppedCount);
+                Increment(state.producerTotals.dropped);
                 return Dropped;
             }
             pending.sampleFrame = record.sampleFrame;
             pending.seconds = std::max(pending.seconds, record.seconds);
             ++pending.samples;
-            Increment(state.coalescedCount);
+            Increment(state.producerTotals.coalesced);
             return Coalesced;
         }
         state.pending[kind] = record;
@@ -149,12 +154,12 @@ namespace Horo::Audio {
             const auto consumer = state.read.load();
             const auto &record = state.pending[kind];
             if (producer - consumer >= state.descriptor.slots) {
-                Increment(state.droppedCount, record.samples);
+                Increment(state.producerTotals.dropped, record.samples);
             } else {
                 state.records[producer & (state.descriptor.slots - 1)] = record;
                 state.producerCursor = producer + 1;
                 state.write.store(state.producerCursor);
-                Increment(state.publishedCount);
+                Increment(state.producerTotals.published);
                 if (IsDiagnostic(record.kind)) {
                     state.lastDiagnosticFrame[kind] = record.sampleFrame;
                     state.hasPublishedDiagnostic[kind] = true;
