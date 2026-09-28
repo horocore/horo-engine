@@ -97,7 +97,7 @@ namespace Horo::Audio {
         void Close() noexcept;
         /** @brief Control-owner copy of one record; false leaves output unchanged. */
         [[nodiscard]] bool TryConsume(AudioExtractionRecord &record) noexcept;
-        /** @brief Control-owner cumulative pressure snapshot. */
+        /** @brief Control-owner cumulative pressure snapshot published at callback Flush boundaries. */
         [[nodiscard]] AudioExtractionStats Stats() const noexcept;
         /** @brief True only after close and full control drain. */
         [[nodiscard]] bool IsDrained() const noexcept;

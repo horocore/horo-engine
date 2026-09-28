@@ -140,6 +140,42 @@ namespace Horo::Audio {
         REQUIRE(record.kind == AudioExtractionKind::AllocationAttempt);
     }
 
+    TEST_CASE("audio extraction publishes immutable records across concurrent SPSC handoff", "[audio][metrics][extraction]") {
+        constexpr std::uint64_t Observations = 512;
+        auto queue = Queue(8);
+        bool producerAccepted = true;
+        std::thread callback{[&] {
+            for (std::uint64_t frame = 1; frame <= Observations; ++frame) {
+                producerAccepted &=
+                    queue.TryRecord(Record(AudioExtractionKind::CallbackDuration, frame, 0.001)) == AudioExtractionStatus::Queued;
+                static_cast<void>(queue.Flush());
+            }
+            queue.Close();
+        }};
+        std::uint64_t consumed{};
+        std::uint64_t lastFrame{};
+        bool recordsValid = true;
+        while (!queue.IsDrained()) {
+            AudioExtractionRecord record;
+            if (!queue.TryConsume(record)) {
+                std::this_thread::yield();
+                continue;
+            }
+            recordsValid &= record.epoch == Epoch() && record.kind == AudioExtractionKind::CallbackDuration &&
+                            record.sampleFrame > lastFrame && record.sampleFrame <= Observations && record.seconds == 0.001 &&
+                            record.samples == 1;
+            lastFrame = record.sampleFrame;
+            ++consumed;
+        }
+        callback.join();
+        const auto stats = queue.Stats();
+        REQUIRE(producerAccepted);
+        REQUIRE(recordsValid);
+        REQUIRE(stats.depth == 0);
+        REQUIRE(stats.published == consumed);
+        REQUIRE(stats.published + stats.dropped == Observations);
+    }
+
     TEST_CASE("audio metrics retain extraction pressure across queue generations", "[audio][metrics][extraction]") {
         AudioMetrics metrics{7, true};
         REQUIRE(metrics.ObserveExtractionQueue(1, {.depth = 2, .published = 3, .coalesced = 4, .dropped = 5, .rateLimited = 6}));

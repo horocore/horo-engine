@@ -12,6 +12,7 @@
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace Horo::Audio {
     namespace {
@@ -22,9 +23,8 @@ namespace Horo::Audio {
         static_assert(std::is_trivially_copyable_v<AudioExtractionRecord>);
 
         /** @brief Adds callback-owned totals without wrapping at exhaustion. */
-        void Increment(std::atomic<std::uint64_t> &counter, const std::uint64_t amount = 1) noexcept {
-            const auto current = counter.load(std::memory_order_relaxed);
-            counter.store(current + std::min(amount, std::numeric_limits<std::uint64_t>::max() - current), std::memory_order_relaxed);
+        void Increment(std::uint64_t &counter, const std::uint64_t amount = 1) noexcept {
+            counter += std::min(amount, std::numeric_limits<std::uint64_t>::max() - counter);
         }
 
         /** @brief Separates sparse diagnostic facts from per-buffer cost samples. */
@@ -33,25 +33,40 @@ namespace Horo::Audio {
         }
     }  // namespace
 
-    /** @brief Producer owns pending slots and write cursor; consumer owns read cursor and record copies. */
+    /** @brief Each side owns its plain cursor; sequentially consistent shared cursors publish ring-slot handoff. */
     struct AudioMetricExtractionQueue::State final {
         AudioExtractionDescriptor descriptor;
-        std::unique_ptr<AudioExtractionRecord[]> records;
+        std::vector<AudioExtractionRecord> records;
         std::array<AudioExtractionRecord, KindCount> pending{};
         std::array<bool, KindCount> hasPending{};
         std::array<std::uint64_t, KindCount> lastDiagnosticFrame{};
         std::array<bool, KindCount> hasPublishedDiagnostic{};
+        std::uint32_t producerCursor{};
         alignas(64) std::atomic<std::uint32_t> write{};
+        std::uint32_t consumerCursor{};
         alignas(64) std::atomic<std::uint32_t> read{};
         std::atomic<bool> closed{};
+        bool producerClosed{};
+        std::uint64_t publishedCount{};
+        std::uint64_t coalescedCount{};
+        std::uint64_t droppedCount{};
+        std::uint64_t rateLimitedCount{};
         std::atomic<std::uint64_t> published{};
         std::atomic<std::uint64_t> coalesced{};
         std::atomic<std::uint64_t> dropped{};
         std::atomic<std::uint64_t> rateLimited{};
         const std::thread::id ownerThread{std::this_thread::get_id()};
 
-        State(const AudioExtractionDescriptor &value, std::unique_ptr<AudioExtractionRecord[]> storage) noexcept
+        State(const AudioExtractionDescriptor &value, std::vector<AudioExtractionRecord> storage) noexcept
             : descriptor(value), records(std::move(storage)) {}
+
+        /** @brief Makes producer-owned totals visible only at a completed callback boundary. */
+        void PublishStats() noexcept {
+            published.store(publishedCount);
+            coalesced.store(coalescedCount);
+            dropped.store(droppedCount);
+            rateLimited.store(rateLimitedCount);
+        }
     };
 
     /** @copydoc AudioMetricExtractionQueue::Create */
@@ -62,7 +77,7 @@ namespace Horo::Audio {
         if (descriptor.budgetBytes < static_cast<std::size_t>(descriptor.slots) * sizeof(AudioExtractionRecord))
             return Result<AudioMetricExtractionQueue>::Failure(MakeError(AudioErrors::MemoryBudgetExceeded));
         try {
-            auto records = std::make_unique<AudioExtractionRecord[]>(descriptor.slots);
+            std::vector<AudioExtractionRecord> records(descriptor.slots);
             return Result<AudioMetricExtractionQueue>::Success(
                 AudioMetricExtractionQueue{std::make_unique<State>(descriptor, std::move(records))});
         } catch (const std::bad_alloc &) {
@@ -86,7 +101,7 @@ namespace Horo::Audio {
         if (!state_)
             return Inactive;
         auto &state = *state_;
-        if (state.closed.load(std::memory_order_relaxed))
+        if (state.producerClosed)
             return Closed;
         const auto kind = static_cast<std::size_t>(record.kind);
         if (kind >= KindCount || !MatchesAudioDeviceEpoch(state.descriptor.epoch, record.epoch) || record.samples != 1 ||
@@ -100,20 +115,20 @@ namespace Horo::Audio {
             if (record.sampleFrame < state.lastDiagnosticFrame[kind])
                 return Invalid;
             if (record.sampleFrame - state.lastDiagnosticFrame[kind] < state.descriptor.diagnosticFrameInterval) {
-                Increment(state.rateLimited);
+                Increment(state.rateLimitedCount);
                 return RateLimited;
             }
         }
         if (state.hasPending[kind]) {
             auto &pending = state.pending[kind];
             if (pending.samples == std::numeric_limits<std::uint32_t>::max()) {
-                Increment(state.dropped);
+                Increment(state.droppedCount);
                 return Dropped;
             }
             pending.sampleFrame = record.sampleFrame;
             pending.seconds = std::max(pending.seconds, record.seconds);
             ++pending.samples;
-            Increment(state.coalesced);
+            Increment(state.coalescedCount);
             return Coalesced;
         }
         state.pending[kind] = record;
@@ -123,22 +138,23 @@ namespace Horo::Audio {
 
     /** @copydoc AudioMetricExtractionQueue::Flush */
     std::uint32_t AudioMetricExtractionQueue::Flush() noexcept {
-        if (!state_ || state_->closed.load(std::memory_order_relaxed))
+        if (!state_ || state_->producerClosed)
             return 0;
         auto &state = *state_;
         std::uint32_t count{};
         for (std::size_t kind = 0; kind < KindCount; ++kind) {
             if (!state.hasPending[kind])
                 continue;
-            const auto producer = state.write.load(std::memory_order_relaxed);
-            const auto consumer = state.read.load(std::memory_order_acquire);
+            const auto producer = state.producerCursor;
+            const auto consumer = state.read.load();
             const auto &record = state.pending[kind];
             if (producer - consumer >= state.descriptor.slots) {
-                Increment(state.dropped, record.samples);
+                Increment(state.droppedCount, record.samples);
             } else {
                 state.records[producer & (state.descriptor.slots - 1)] = record;
-                state.write.store(producer + 1, std::memory_order_release);
-                Increment(state.published);
+                state.producerCursor = producer + 1;
+                state.write.store(state.producerCursor);
+                Increment(state.publishedCount);
                 if (IsDiagnostic(record.kind)) {
                     state.lastDiagnosticFrame[kind] = record.sampleFrame;
                     state.hasPublishedDiagnostic[kind] = true;
@@ -147,6 +163,7 @@ namespace Horo::Audio {
             }
             state.hasPending[kind] = false;
         }
+        state.PublishStats();
         return count;
     }
 
@@ -154,7 +171,8 @@ namespace Horo::Audio {
     void AudioMetricExtractionQueue::Close() noexcept {
         if (state_) {
             static_cast<void>(Flush());
-            state_->closed.store(true, std::memory_order_release);
+            state_->producerClosed = true;
+            state_->closed.store(true);
         }
     }
 
@@ -163,11 +181,12 @@ namespace Horo::Audio {
         if (!state_ || std::this_thread::get_id() != state_->ownerThread)
             return false;
         auto &state = *state_;
-        const auto consumer = state.read.load(std::memory_order_relaxed);
-        if (consumer == state.write.load(std::memory_order_acquire))
+        const auto consumer = state.consumerCursor;
+        if (consumer == state.write.load())
             return false;
         record = state.records[consumer & (state.descriptor.slots - 1)];
-        state.read.store(consumer + 1, std::memory_order_release);
+        state.consumerCursor = consumer + 1;
+        state.read.store(state.consumerCursor);
         return true;
     }
 
@@ -175,13 +194,13 @@ namespace Horo::Audio {
     AudioExtractionStats AudioMetricExtractionQueue::Stats() const noexcept {
         if (!state_ || std::this_thread::get_id() != state_->ownerThread)
             return {};
-        const auto consumed = state_->read.load(std::memory_order_relaxed);
-        const auto produced = state_->write.load(std::memory_order_acquire);
+        const auto consumed = state_->read.load();
+        const auto produced = state_->write.load();
         return {.depth = std::min(produced - consumed, state_->descriptor.slots),
-                .published = state_->published.load(std::memory_order_relaxed),
-                .coalesced = state_->coalesced.load(std::memory_order_relaxed),
-                .dropped = state_->dropped.load(std::memory_order_relaxed),
-                .rateLimited = state_->rateLimited.load(std::memory_order_relaxed)};
+                .published = state_->published.load(),
+                .coalesced = state_->coalesced.load(),
+                .dropped = state_->dropped.load(),
+                .rateLimited = state_->rateLimited.load()};
     }
 
     /** @copydoc AudioMetricExtractionQueue::IsDrained */
@@ -190,7 +209,6 @@ namespace Horo::Audio {
             return true;
         if (std::this_thread::get_id() != state_->ownerThread)
             return false;
-        return state_->closed.load(std::memory_order_acquire) &&
-               state_->read.load(std::memory_order_relaxed) == state_->write.load(std::memory_order_acquire);
+        return state_->closed.load() && state_->read.load() == state_->write.load();
     }
 }  // namespace Horo::Audio

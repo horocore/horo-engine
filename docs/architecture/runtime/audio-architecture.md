@@ -1921,6 +1921,13 @@ interval are set before callback activation; the ring cannot grow. Full-ring
 source observations increment a cumulative dropped counter; diagnostic records
 filtered by the rate policy increment a separate rate-limited counter. Neither
 is silently interpreted as a zero measurement. There is no dynamic metric label.
+The producer keeps per-observation counters thread-local, publishing cumulative
+atomic snapshots only at `Flush`. Shared ring cursors and snapshots use
+sequentially consistent atomics: a consumer that sees an advanced write cursor
+also sees the completed fixed record, and a producer that sees an advanced read
+cursor may reuse that slot. This stronger order costs shared atomic operations
+per published record and per callback boundary, not per source observation;
+no throughput or deadline improvement is claimed without measurement.
 
 The creating control thread alone drains fixed records and samples queue stats
 at a safe point. `AudioMetrics` projects records and cumulative pressure into

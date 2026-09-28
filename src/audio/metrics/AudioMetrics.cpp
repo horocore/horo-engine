@@ -103,8 +103,7 @@ namespace Horo::Audio {
             return false;
         if (record.samples == 0 || !std::isfinite(record.seconds) || record.seconds < 0.0)
             return Invalid();
-        const auto value = static_cast<std::size_t>(record.kind);
-        if (value < AudioMetricTimingCount)
+        if (const auto value = static_cast<std::size_t>(record.kind); value < AudioMetricTimingCount)
             return ObserveTiming(static_cast<AudioMetricTiming>(value), record.seconds);
         using enum AudioExtractionKind;
         AudioMetricCounter counter;
