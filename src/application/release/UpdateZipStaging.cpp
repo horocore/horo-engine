@@ -39,8 +39,7 @@ namespace Horo::Release {
         };
 
         /** @brief Reads at an exact offset without exposing native file handles to miniz. */
-        [[nodiscard]] std::size_t ReadArchive(void *opaque, const mz_uint64 offset,    // NOSONAR: miniz C callback ABI.
-                                              void *buffer, const std::size_t size) {  // NOSONAR: miniz requires void*.
+        [[nodiscard]] std::size_t ReadArchive(void *opaque, const mz_uint64 offset, void *buffer, const std::size_t size) {
             auto &input = *static_cast<std::ifstream *>(opaque);
             if (offset > static_cast<mz_uint64>(std::numeric_limits<std::streamoff>::max()) ||
                 size > static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max()))
