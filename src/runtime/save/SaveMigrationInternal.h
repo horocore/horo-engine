@@ -34,6 +34,8 @@ namespace Horo::Runtime::SaveMigrationDetail {
         std::uint32_t to{};
         std::optional<SaveParticipantId> participant;
         const SaveMigrationFn *migrate{};
+        const SaveMigrationRecordFn *migrateRecord{};
+        const std::vector<SaveMigrationTransformContract> *crossParticipantTransforms{};
         const std::vector<SaveMigrationId> *equivalentSequentialSteps{};
         std::uint64_t estimatedWork{};
     };
@@ -87,15 +89,20 @@ namespace Horo::Runtime::SaveMigrationDetail {
             } else {
                 participant = step.participant;
             }
-            return {.id = step.id,
-                    .axis = axis,
-                    .kind = step.kind,
-                    .from = step.from.Value(),
-                    .to = step.to.Value(),
-                    .participant = std::move(participant),
-                    .migrate = &step.migrate,
-                    .equivalentSequentialSteps = &step.equivalentSequentialSteps,
-                    .estimatedWork = step.estimatedWork};
+            StepView view{.id = step.id,
+                          .axis = axis,
+                          .kind = step.kind,
+                          .from = step.from.Value(),
+                          .to = step.to.Value(),
+                          .participant = std::move(participant),
+                          .migrate = &step.migrate,
+                          .equivalentSequentialSteps = &step.equivalentSequentialSteps,
+                          .estimatedWork = step.estimatedWork};
+            if constexpr (std::is_same_v<Step, ParticipantMigrationStep>) {
+                view.migrateRecord = &step.migrateRecord;
+                view.crossParticipantTransforms = &step.crossParticipantTransforms;
+            }
+            return view;
         }, definition);
     }
 
@@ -134,7 +141,8 @@ namespace Horo::Runtime::SaveMigrationDetail {
     [[nodiscard]] inline bool ValidLimits(const SaveMigrationLimits &limits) noexcept {
         return limits.maximumDefinitions != 0 && limits.maximumDefinitions <= MaximumSaveMigrationDefinitions &&
                limits.maximumPlanSteps != 0 && limits.maximumPlanSteps <= MaximumSaveMigrationPlanSteps &&
-               limits.maximumParticipants != 0 && limits.maximumParticipants <= 4'096 && limits.maximumArchiveBytes != 0 &&
+               limits.maximumParticipants != 0 && limits.maximumParticipants <= 4'096 && limits.maximumRecordsPerParticipant != 0 &&
+               limits.maximumRecordsPerParticipant <= 4'096 && limits.maximumArchiveBytes != 0 &&
                limits.maximumParticipantPayloadBytes != 0 && limits.maximumTotalPayloadBytes != 0 &&
                limits.maximumParticipantPayloadBytes <= limits.maximumTotalPayloadBytes && limits.maximumArchiveBytes <= (4ULL << 30U) &&
                limits.maximumTotalPayloadBytes <= (1ULL << 30U) && limits.maximumCumulativeWorkBytes != 0 &&
@@ -222,6 +230,14 @@ namespace Horo::Runtime::SaveMigrationDetail {
         AppendCount(output, step.equivalentSequentialSteps->size());
         for (const SaveMigrationId &identity : *step.equivalentSequentialSteps)
             AppendText(output, identity.value);
+        if (step.crossParticipantTransforms) {
+            AppendCount(output, step.crossParticipantTransforms->size());
+            for (const auto &contract : *step.crossParticipantTransforms) {
+                AppendText(output, contract.target.Value());
+                AppendVersion(output, contract.targetSchemaVersion.Value());
+            }
+            output.push_back(*step.migrateRecord ? '\x01' : '\x00');
+        }
     }
 
     [[nodiscard]] inline std::span<const std::byte> Bytes(const std::string &value) noexcept {

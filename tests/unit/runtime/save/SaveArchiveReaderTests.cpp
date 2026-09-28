@@ -362,6 +362,35 @@ namespace {
         CHECK(RetainUnknownSaveData(archive.Value(), UnknownPolicy(), source, 3).HasError());
     }
 
+    TEST_CASE("Verified owned records stage with bounded bytes and source provenance", "[runtime][save][archive-reader]") {
+        const auto bytes = MakeArchive().bytes;
+        const auto archive = SaveArchiveReader{}.Read(bytes);
+        REQUIRE(archive.HasValue());
+        const auto &manifest = archive.Value().Manifest().participants.front();
+        SaveMigrationSource source{.archiveFormatVersion = archive.Value().Preamble().archiveFormatVersion,
+                                   .saveSchemaVersion = archive.Value().Manifest().saveSchemaVersion,
+                                   .productCompatibility = archive.Value().Header().productCompatibility,
+                                   .participants = {{.participant = manifest.participant,
+                                                     .schemaVersion = manifest.schemaVersion,
+                                                     .required = manifest.required}}};
+        const auto policy = UnknownPolicy();
+        SaveMigrationLimits limits;
+        limits.maximumParticipantPayloadBytes = 3;
+        limits.maximumTotalPayloadBytes = 3;
+        CHECK(RetainVerifiedSaveRecords(archive.Value(), policy, source, limits).HasError());
+        CHECK(source.participants.front().records.empty());
+        limits.maximumParticipantPayloadBytes = 4;
+        limits.maximumTotalPayloadBytes = 4;
+        REQUIRE(RetainVerifiedSaveRecords(archive.Value(), policy, source, limits).HasValue());
+        REQUIRE(source.participants.front().records.size() == 1);
+        const auto &record = source.participants.front().records.front();
+        CHECK(record.record == manifest.chunks.front());
+        CHECK(record.sourceRecord == record.record);
+        CHECK(record.sourceParticipant == manifest.participant);
+        CHECK(record.sourceSchemaVersion == manifest.schemaVersion);
+        CHECK(record.payload.size() == 4);
+    }
+
     TEST_CASE("Archive reader reserves cumulative validation work before hashing", "[runtime][save][archive-reader]") {
         const auto fixture = MakeArchive();
         SaveArchiveReaderLimits limits;
