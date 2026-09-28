@@ -29,10 +29,40 @@ namespace Horo::Release {
 
         /** @brief Rejects unsupported metadata values and unsigned reserved paths. */
         [[nodiscard]] bool ValidFileMetadata(const UpdateStagedFile &file) {
+            using enum UpdateFileMode;
+            using enum UpdateFileRole;
             return file.path != UpdateFileInventoryPath && file.path != LegacyInventoryPath &&
-                   (file.mode == UpdateFileMode::Regular || file.mode == UpdateFileMode::Executable) &&
-                   (file.role == UpdateFileRole::Content || file.role == UpdateFileRole::Entrypoint) &&
-                   (file.role != UpdateFileRole::Entrypoint || (file.mode == UpdateFileMode::Executable && file.size != 0U));
+                   (file.mode == Regular || file.mode == Executable) && (file.role == Content || file.role == Entrypoint) &&
+                   (file.role != Entrypoint || (file.mode == Executable && file.size != 0U));
+        }
+
+        /** @brief Parses one strict v2 row before the complete inventory is re-encoded canonically. */
+        [[nodiscard]] Result<UpdateStagedFile> ParseInventoryRow(const std::string_view row) {
+            using enum UpdateFileMode;
+            using enum UpdateFileRole;
+            const auto invalid = [] {
+                return Result<UpdateStagedFile>::Failure(MakeError(UpdateTransferErrors::InvalidArchive));
+            };
+            const auto first = row.find('\t');
+            const auto second = first == std::string_view::npos ? first : row.find('\t', first + 1U);
+            const auto third = second == std::string_view::npos ? second : row.find('\t', second + 1U);
+            const auto fourth = third == std::string_view::npos ? third : row.find('\t', third + 1U);
+            if (first == std::string_view::npos || second == std::string_view::npos || third == std::string_view::npos ||
+                fourth == std::string_view::npos || row.find('\t', fourth + 1U) != std::string_view::npos)
+                return invalid();
+            const auto sizeText = row.substr(first + 1U, second - first - 1U);
+            std::uint64_t size{};
+            const auto [parsed, error] = std::from_chars(sizeText.data(), sizeText.data() + sizeText.size(), size);
+            auto digest = ParseSha256(row.substr(second + 1U, third - second - 1U));
+            if (error != std::errc{} || parsed != sizeText.data() + sizeText.size() || digest.HasError())
+                return invalid();
+            const auto modeText = row.substr(third + 1U, fourth - third - 1U);
+            const auto roleText = row.substr(fourth + 1U);
+            if ((modeText != "0644" && modeText != "0755") || (roleText != "content" && roleText != "entrypoint"))
+                return invalid();
+            return Result<UpdateStagedFile>::Success({std::string{row.substr(0U, first)}, size, std::move(digest).Value(),
+                                                      modeText == "0755" ? Executable : Regular,
+                                                      roleText == "entrypoint" ? Entrypoint : Content});
         }
 
         /** @brief Streams a bounded regular file into SHA-256 without loading it into memory. */
@@ -44,9 +74,8 @@ namespace Horo::Release {
                 return false;
 #if !defined(_WIN32)
             const auto permissions = std::filesystem::status(path, error).permissions();
-            const auto expectedPermissions =
-                expected.mode == UpdateFileMode::Executable ? std::filesystem::perms{0755} : std::filesystem::perms{0644};
-            if (error || (permissions & std::filesystem::perms::mask) != expectedPermissions)
+            if (error || (permissions & std::filesystem::perms::mask) !=
+                             (expected.mode == UpdateFileMode::Executable ? std::filesystem::perms{0755} : std::filesystem::perms{0644}))
                 return false;
 #endif
             std::ifstream input(path, std::ios::binary);
@@ -136,26 +165,10 @@ namespace Horo::Release {
             if (end == std::string_view::npos || end == position)
                 return invalid();
             const auto row = bytes.substr(position, end - position);
-            const auto first = row.find('\t');
-            const auto second = first == std::string_view::npos ? first : row.find('\t', first + 1U);
-            const auto third = second == std::string_view::npos ? second : row.find('\t', second + 1U);
-            const auto fourth = third == std::string_view::npos ? third : row.find('\t', third + 1U);
-            if (first == std::string_view::npos || second == std::string_view::npos || third == std::string_view::npos ||
-                fourth == std::string_view::npos || row.find('\t', fourth + 1U) != std::string_view::npos)
+            auto file = ParseInventoryRow(row);
+            if (file.HasError())
                 return invalid();
-            std::uint64_t size{};
-            const auto sizeText = row.substr(first + 1U, second - first - 1U);
-            const auto [parsed, error] = std::from_chars(sizeText.data(), sizeText.data() + sizeText.size(), size);
-            auto digest = ParseSha256(row.substr(second + 1U, third - second - 1U));
-            if (error != std::errc{} || parsed != sizeText.data() + sizeText.size() || digest.HasError())
-                return invalid();
-            const auto modeText = row.substr(third + 1U, fourth - third - 1U);
-            const auto roleText = row.substr(fourth + 1U);
-            if ((modeText != "0644" && modeText != "0755") || (roleText != "content" && roleText != "entrypoint"))
-                return invalid();
-            files.emplace_back(std::string{row.substr(0U, first)}, size, std::move(digest).Value(),
-                               modeText == "0755" ? UpdateFileMode::Executable : UpdateFileMode::Regular,
-                               roleText == "entrypoint" ? UpdateFileRole::Entrypoint : UpdateFileRole::Content);
+            files.emplace_back(std::move(file).Value());
             position = end + 1U;
         }
         auto canonical = BuildCanonicalUpdateFileInventory(files, limits);

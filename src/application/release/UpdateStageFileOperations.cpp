@@ -78,11 +78,12 @@ namespace Horo::Release::Detail {
             ~DescriptorGuard() {
                 close(value);
             }
-        } guard{descriptor};
+        };
+
+        DescriptorGuard guard{descriptor};
         struct stat metadata{};
-        const mode_t permissions = mode == UpdateFileMode::Executable ? 0755 : 0644;
         if (fstat(descriptor, &metadata) != 0 || !S_ISREG(metadata.st_mode) || metadata.st_nlink != 1 ||
-            fchmod(descriptor, permissions) != 0 || fsync(descriptor) != 0)
+            fchmod(descriptor, mode == UpdateFileMode::Executable ? 0755 : 0644) != 0 || fsync(descriptor) != 0)
             return Result<void>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
         return Result<void>::Success();
 #endif

@@ -154,8 +154,8 @@ namespace Horo::Release {
             if (parsed.HasError())
                 return invalid();
             DeclaredFiles declared;
-            for (auto &file : parsed.Value())
-                declared.try_emplace(file.path, std::move(file));
+            for (const auto &file : parsed.Value())
+                declared.try_emplace(file.path, file);
             if (declared.empty())
                 return invalid();
             std::size_t files = 0U;
