@@ -306,12 +306,22 @@ namespace Horo::Physics {
         const auto staticPair = authority->InterpolationEndpoints(staticBody).Value();
         REQUIRE_FALSE(staticPair.hasPreviousTick);
         REQUIRE(EvaluatePhysicsInterpolation(staticPair, 0.5F).Value() == Pose(5));
+    }
 
-        REQUIRE(authority->ApplyPreStep(4).HasValue());
-        auto rotated = Snapshot(dynamic, 4, 30);
+    TEST_CASE("Physics presentation uses spherical rotation interpolation", "[physics][transform][interpolation]") {
+        auto authority = Prepared();
+        const auto dynamic = Body();
+        Register(*authority, dynamic, PhysicsMotionType::Dynamic);
+        REQUIRE(authority->Activate().HasValue());
+        REQUIRE(authority->ApplyPreStep(1).HasValue());
+        REQUIRE(authority->PublishDynamicSnapshot(Snapshot(dynamic, 1, 20)).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(1).HasValue());
+
+        REQUIRE(authority->ApplyPreStep(2).HasValue());
+        auto rotated = Snapshot(dynamic, 2, 30);
         rotated.state.pose.rotation = {0, 0, 1, 0};
         REQUIRE(authority->PublishDynamicSnapshot(rotated).HasValue());
-        REQUIRE(authority->CommitInterpolationTick(4).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(2).HasValue());
         const auto midpoint = EvaluatePhysicsInterpolation(authority->InterpolationEndpoints(dynamic).Value(), 0.5F).Value();
         REQUIRE(midpoint.translation.x == 25.0F);
         REQUIRE(std::abs(midpoint.rotation.z - 0.70710678F) < 1.0e-5F);
