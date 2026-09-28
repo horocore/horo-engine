@@ -77,32 +77,36 @@ namespace Horo::Runtime::SaveMigrationDetail {
         return AxisName(step.axis);
     }
 
+    /** @brief Projects one typed migration edge without extending the public definition variant. */
+    template <typename Step> [[nodiscard]] StepView ViewStep(const Step &step) {
+        SaveMigrationAxis axis = SaveMigrationAxis::ParticipantSchema;
+        std::optional<SaveParticipantId> participant;
+        if constexpr (std::is_same_v<Step, ArchiveMigrationStep>) {
+            axis = SaveMigrationAxis::ArchiveFormat;
+        } else if constexpr (std::is_same_v<Step, SaveSchemaMigrationStep>) {
+            axis = SaveMigrationAxis::SaveSchema;
+        } else {
+            participant = step.participant;
+        }
+        StepView view{.id = step.id,
+                      .axis = axis,
+                      .kind = step.kind,
+                      .from = step.from.Value(),
+                      .to = step.to.Value(),
+                      .participant = std::move(participant),
+                      .migrate = &step.migrate,
+                      .equivalentSequentialSteps = &step.equivalentSequentialSteps,
+                      .estimatedWork = step.estimatedWork};
+        if constexpr (std::is_same_v<Step, ParticipantMigrationStep>) {
+            view.migrateRecord = &step.migrateRecord;
+            view.crossParticipantTransforms = &step.crossParticipantTransforms;
+        }
+        return view;
+    }
+
     [[nodiscard]] inline StepView View(const SaveMigrationDefinition &definition) {
-        return std::visit([](const auto &step) {
-            using Step = std::decay_t<decltype(step)>;
-            SaveMigrationAxis axis = SaveMigrationAxis::ParticipantSchema;
-            std::optional<SaveParticipantId> participant;
-            if constexpr (std::is_same_v<Step, ArchiveMigrationStep>) {
-                axis = SaveMigrationAxis::ArchiveFormat;
-            } else if constexpr (std::is_same_v<Step, SaveSchemaMigrationStep>) {
-                axis = SaveMigrationAxis::SaveSchema;
-            } else {
-                participant = step.participant;
-            }
-            StepView view{.id = step.id,
-                          .axis = axis,
-                          .kind = step.kind,
-                          .from = step.from.Value(),
-                          .to = step.to.Value(),
-                          .participant = std::move(participant),
-                          .migrate = &step.migrate,
-                          .equivalentSequentialSteps = &step.equivalentSequentialSteps,
-                          .estimatedWork = step.estimatedWork};
-            if constexpr (std::is_same_v<Step, ParticipantMigrationStep>) {
-                view.migrateRecord = &step.migrateRecord;
-                view.crossParticipantTransforms = &step.crossParticipantTransforms;
-            }
-            return view;
+        return std::visit([]<typename Step>(const Step &step) {
+            return ViewStep(step);
         }, definition);
     }
 
