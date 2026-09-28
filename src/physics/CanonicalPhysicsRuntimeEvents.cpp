@@ -1,6 +1,7 @@
 #include "CanonicalPhysicsRuntimeInternal.h"
 
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/Shape/CompoundShape.h>
 #include <algorithm>
 #include <ranges>
 #include <tuple>
@@ -38,13 +39,13 @@ namespace Horo::Physics::Detail {
         }
 
         /** @brief Copies one query fixture identity and filter generation into event evidence. */
-        [[nodiscard]] PhysicsEventEndpoint ToEventEndpoint(const CanonicalWorld &world,
-                                                           const CanonicalQueryFixtureRecord &fixture) noexcept {
+        [[nodiscard]] PhysicsEventEndpoint ToEventEndpoint(const CanonicalWorld &world, const CanonicalQueryFixtureRecord &fixture,
+                                                           const PhysicsCompoundChild *child) noexcept {
             return {.body = fixture.fixture.body,
                     .shape = fixture.fixture.shape,
-                    .subshape = fixture.descriptor.subshape,
-                    .layer = fixture.descriptor.layer,
-                    .profile = fixture.descriptor.profile,
+                    .subshape = child == nullptr ? fixture.descriptor.subshape : std::optional<PhysicsShapeSubresourceId>{child->subshape},
+                    .layer = child == nullptr ? fixture.descriptor.layer : child->layer,
+                    .profile = child == nullptr ? fixture.descriptor.profile : child->profile,
                     .filterSchemaGeneration = world.query.querySchemaGeneration};
         }
 
@@ -101,18 +102,23 @@ namespace Horo::Physics::Detail {
         const auto *fixture2 = FindFixture(world_, body2.GetID());
         if (fixture1 == nullptr || fixture2 == nullptr)
             return;
-        const PhysicsContactObservation observation{.simulationTick = route->SimulationTick(),
-                                                    .first = ToEventEndpoint(world_, *fixture1),
-                                                    .second = ToEventEndpoint(world_, *fixture2),
-                                                    .firstMaterial = ToEventMaterial(fixture1->descriptor.material),
-                                                    .secondMaterial = ToEventMaterial(fixture2->descriptor.material),
-                                                    .contact = {.position = ContactPoint(manifold),
-                                                                .normal = {manifold.mWorldSpaceNormal.GetX(),
-                                                                           manifold.mWorldSpaceNormal.GetY(),
-                                                                           manifold.mWorldSpaceNormal.GetZ()},
-                                                                .penetrationDepthMeters = manifold.mPenetrationDepth,
-                                                                .normalImpulseNewtonSeconds = 0.0F},
-                                                    .sensor = settings.mIsSensor};
+        const PhysicsCompoundChild *child1 = ResolveCanonicalFixtureChild(*fixture1, manifold.mSubShapeID1);
+        const PhysicsCompoundChild *child2 = ResolveCanonicalFixtureChild(*fixture2, manifold.mSubShapeID2);
+        if ((std::holds_alternative<PhysicsCompoundShapeDescriptor>(fixture1->descriptor.shape) && child1 == nullptr) ||
+            (std::holds_alternative<PhysicsCompoundShapeDescriptor>(fixture2->descriptor.shape) && child2 == nullptr))
+            return;
+        const PhysicsContactObservation
+            observation{.simulationTick = route->SimulationTick(),
+                        .first = ToEventEndpoint(world_, *fixture1, child1),
+                        .second = ToEventEndpoint(world_, *fixture2, child2),
+                        .firstMaterial = ToEventMaterial(child1 == nullptr ? fixture1->descriptor.material : child1->material),
+                        .secondMaterial = ToEventMaterial(child2 == nullptr ? fixture2->descriptor.material : child2->material),
+                        .contact = {.position = ContactPoint(manifold),
+                                    .normal = {manifold.mWorldSpaceNormal.GetX(), manifold.mWorldSpaceNormal.GetY(),
+                                               manifold.mWorldSpaceNormal.GetZ()},
+                                    .penetrationDepthMeters = manifold.mPenetrationDepth,
+                                    .normalImpulseNewtonSeconds = 0.0F},
+                        .sensor = settings.mIsSensor};
         static_cast<void>(route->Sink().append(route->Sink().context, observation));
     }
 
@@ -135,6 +141,14 @@ namespace Horo::Physics::Detail {
             return false;
 
         JPH::ContactManifold manifold;
+        if (firstLock.GetBody().GetShape()->GetType() == JPH::EShapeType::Compound) {
+            const auto &shape = static_cast<const JPH::CompoundShape &>(*firstLock.GetBody().GetShape());
+            manifold.mSubShapeID1 = shape.GetSubShapeIDFromIndex(0, JPH::SubShapeIDCreator{}).GetID();
+        }
+        if (secondLock.GetBody().GetShape()->GetType() == JPH::EShapeType::Compound) {
+            const auto &shape = static_cast<const JPH::CompoundShape &>(*secondLock.GetBody().GetShape());
+            manifold.mSubShapeID2 = shape.GetSubShapeIDFromIndex(0, JPH::SubShapeIDCreator{}).GetID();
+        }
         manifold.mBaseOffset = JPH::RVec3::sZero();
         manifold.mWorldSpaceNormal = JPH::Vec3::sAxisY();
         manifold.mPenetrationDepth = 0.1F;
