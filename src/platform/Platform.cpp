@@ -225,6 +225,7 @@ namespace Horo {
 #else
         int descriptor{-1};
 #endif
+        bool maintenance{};
 
         ~State() {
 #if defined(_WIN32)
@@ -250,6 +251,29 @@ namespace Horo {
         return state_ != nullptr;
     }
 
+    bool ProductLaunchLease::IsMaintenance() const noexcept {
+        return state_ != nullptr && state_->maintenance;
+    }
+
+    std::uintptr_t ProductLaunchLease::NativeHandle() const noexcept {
+#if defined(_WIN32)
+        return state_ == nullptr ? 0U : reinterpret_cast<std::uintptr_t>(state_->handle);
+#else
+        return state_ == nullptr ? 0U : static_cast<std::uintptr_t>(state_->descriptor);
+#endif
+    }
+
+    ProductLaunchLease ProductLaunchLease::AdoptMaintenanceNative(const std::uintptr_t native) {
+        auto state = std::make_unique<State>();
+#if defined(_WIN32)
+        state->handle = reinterpret_cast<HANDLE>(native);
+#else
+        state->descriptor = static_cast<int>(native);
+#endif
+        state->maintenance = true;
+        return ProductLaunchLease(std::move(state));
+    }
+
     /** @copydoc NativeDurableFileSystem::TryAcquireProductLaunch */
     Result<ProductLaunchLease> NativeDurableFileSystem::TryAcquireProductLaunch(const std::filesystem::path &installationRoot) const {
         return TryAcquireProductLease(installationRoot, false);
@@ -271,6 +295,7 @@ namespace Horo {
         if (std::error_code error; !std::filesystem::is_directory(std::filesystem::symlink_status(installationRoot, error)) || error)
             return Result<ProductLaunchLease>::Failure(FsError(IoFailed, path));
         auto state = std::make_unique<ProductLaunchLease::State>();
+        state->maintenance = maintenance;
 #if defined(_WIN32)
         const DWORD sharing = maintenance ? 0U : FILE_SHARE_READ | FILE_SHARE_WRITE;
         state->handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, sharing, nullptr, OPEN_ALWAYS,

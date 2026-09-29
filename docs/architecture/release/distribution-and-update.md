@@ -389,6 +389,12 @@ exclusive maintenance gate on the installation's `.product-launch.lock` file.
 On POSIX, a lease closes its descriptor without an explicit `LOCK_UN`: descriptors
 inherited through `fork` or duplicated for a bounded probe share one lock, and
 closing one reference must not release the remaining process's gate.
+The platform process runner accepts a borrowed exclusive maintenance lease for
+one bounded probe. It transfers only a duplicate of that OS capability, using
+an explicit Windows handle allowlist or one POSIX descriptor action. The child
+may adopt it only after matching the native file identity to the installation
+lock; the environment carries the descriptor number, never authority by itself.
+The ordinary product launch path must still obtain a shared lease.
 An installed product launcher retains a shared lease for its entire process
 lifetime. Bootstrap, repair, uninstall, and update activation retain the
 exclusive gate after requesting product shutdown and before mutating the active

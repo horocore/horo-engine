@@ -1681,6 +1681,7 @@ add_executable(HoroPlatformTests
 
 add_executable(HoroProcessTestChild helpers/platform/ProcessTreeChild.cpp)
 target_compile_features(HoroProcessTestChild PRIVATE cxx_std_20)
+target_link_libraries(HoroProcessTestChild PRIVATE HoroEngine::Platform)
 add_dependencies(HoroPlatformTests HoroProcessTestChild)
 target_compile_definitions(HoroPlatformTests PRIVATE HORO_PROCESS_TEST_CHILD="$<TARGET_FILE:HoroProcessTestChild>")
 
