@@ -131,6 +131,8 @@ record; full-package discovery and installation activation reject it as a
 standalone product. `SelectUpdatePackageCandidates` authenticates the manifest
 and returns the allowed full package together with an optional delta matching
 the verified installed base inventory. An unknown base yields the full package.
+`PlanUpdatePackageAttempt` bounds delivery to an applicable delta attempt followed
+by its signed full-package fallback; a failed full package ends the sequence.
 
 `PlanUpdateFileDelta` compares the complete base, candidate, and delta file
 inventories against their authenticated canonical digests. The patch inventory

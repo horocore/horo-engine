@@ -394,6 +394,15 @@ TEST_CASE("A verified delta ZIP stays private without an activation ready marker
                                  Verifier(), {})
               .HasError());
     CHECK_FALSE(std::filesystem::exists(stage.path / "rejected"));
+    {
+        std::ofstream marker(stage.path / "blocked.ready", std::ios::binary);
+        marker << "foreign marker";
+    }
+    CHECK(StageVerifiedDeltaZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, stage.path / "blocked", limits}, files,
+                                      Verifier(), {})
+              .HasError());
+    CHECK_FALSE(std::filesystem::exists(stage.path / "blocked"));
+    CHECK(std::filesystem::is_regular_file(stage.path / "blocked.ready"));
 }
 
 TEST_CASE("Activation admission rejects a changed ready marker", "[release][update]") {

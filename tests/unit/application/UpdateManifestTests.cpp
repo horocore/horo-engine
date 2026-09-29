@@ -163,10 +163,20 @@ TEST_CASE("Signed update manifest v2 binds delta artifacts to one full package a
     REQUIRE(candidates.HasValue());
     REQUIRE(candidates.Value().delta.has_value());
     CHECK(candidates.Value().delta->package.digest == delta.package.digest);
+    auto firstAttempt = PlanUpdatePackageAttempt(candidates.Value(), UpdatePackageAttempt::Initial);
+    REQUIRE(firstAttempt.has_value());
+    CHECK(firstAttempt->selection.artifact.package == delta.package.selection.artifact.package);
+    auto fallback = PlanUpdatePackageAttempt(candidates.Value(), UpdatePackageAttempt::AfterDeltaFailure);
+    REQUIRE(fallback.has_value());
+    CHECK(fallback->selection.artifact.package == fullId);
+    CHECK_FALSE(PlanUpdatePackageAttempt(candidates.Value(), UpdatePackageAttempt::AfterFullFailure).has_value());
     auto fullOnly =
         SelectUpdatePackageCandidates(parsed.Value(), Context(), roots, provider, fullId, ComputeSha256(Bytes("another installed base")));
     REQUIRE(fullOnly.HasValue());
     CHECK(!fullOnly.Value().delta.has_value());
+    auto fullAttempt = PlanUpdatePackageAttempt(fullOnly.Value(), UpdatePackageAttempt::Initial);
+    REQUIRE(fullAttempt.has_value());
+    CHECK(fullAttempt->selection.artifact.package == fullId);
     CHECK(
         SelectUpdatePackageCandidates(parsed.Value(), Context(), roots, provider, {"unknown-full"}, delta.baseInventoryDigest).HasError());
 }

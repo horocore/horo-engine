@@ -293,8 +293,13 @@ namespace Horo::Release {
                     return Result<ExtractedZipStage>::Failure(cleared.ErrorValue());
                 if (auto cleared = files.RemoveDurable(prepared); cleared.HasError())
                     return Result<ExtractedZipStage>::Failure(cleared.ErrorValue());
-            } else if (std::filesystem::exists(ready) || std::filesystem::exists(prepared)) {
-                return failed(UpdateTransferErrors::StageMismatch);
+            } else {
+                for (const auto &marker : {ready, prepared}) {
+                    std::error_code error;
+                    const auto status = std::filesystem::symlink_status(marker, error);
+                    if (status.type() != std::filesystem::file_type::not_found || (error && error != std::errc::no_such_file_or_directory))
+                        return failed(UpdateTransferErrors::StageMismatch);
+                }
             }
             if (cancellation.IsCancellationRequested())
                 return failed(UpdateTransferErrors::Cancelled);

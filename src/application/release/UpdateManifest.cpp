@@ -455,6 +455,22 @@ namespace Horo::Release {
         return Result<UpdatePackageCandidates>::Success(std::move(candidates));
     }
 
+    /** @copydoc PlanUpdatePackageAttempt */
+    std::optional<UpdatePackageRecord> PlanUpdatePackageAttempt(const UpdatePackageCandidates &candidates,
+                                                                const UpdatePackageAttempt attempt) {
+        switch (attempt) {
+            case UpdatePackageAttempt::Initial:
+                if (candidates.delta)
+                    return candidates.delta->package;
+                return candidates.full;
+            case UpdatePackageAttempt::AfterDeltaFailure:
+                return candidates.full;
+            case UpdatePackageAttempt::AfterFullFailure:
+                return std::nullopt;
+        }
+        return std::nullopt;
+    }
+
     /** @copydoc VerifyUpdatePackage */
     Result<void> VerifyUpdatePackage(const UpdatePackageRecord &package, const std::span<const std::byte> bytes,
                                      const Security::ArtifactVerifier &verifier) {

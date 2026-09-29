@@ -135,6 +135,23 @@ namespace Horo::Release {
         std::optional<UpdateDeltaPackageRecord> delta;
     };
 
+    /** @brief Bounded package-attempt progression after authenticated candidate selection. */
+    enum class UpdatePackageAttempt : std::uint8_t {
+        Initial,
+        AfterDeltaFailure,
+        AfterFullFailure
+    };
+
+    /**
+     * @brief Prefers an applicable delta, then falls back once to its signed allowed full package.
+     * @param candidates Previously authenticated full and optional delta candidates.
+     * @param attempt Initial selection or outcome of the immediately preceding failed attempt.
+     * @return Next package to download or stage; empty after a full-package failure.
+     * @note The host does not call this after cancellation or success. It still owns transfer and staging execution.
+     */
+    [[nodiscard]] std::optional<UpdatePackageRecord> PlanUpdatePackageAttempt(const UpdatePackageCandidates &candidates,
+                                                                              UpdatePackageAttempt attempt);
+
     /**
      * @brief Selects a signed full package and only a delta bound to the verified base inventory.
      * @param manifest Canonical signed update metadata.
