@@ -14,7 +14,10 @@
 #include <thread>
 #include <vector>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -478,6 +481,24 @@ namespace {
             REQUIRE(line.truncated);
         }
     }
+
+#if defined(_WIN32)
+    TEST_CASE("External process does not inherit unrelated Windows handles", "[unit][platform][process]") {
+        SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+        const HANDLE unrelated = CreateEventW(&security, TRUE, TRUE, nullptr);
+        REQUIRE(unrelated != nullptr);
+        Horo::NativeExternalProcessRunner runner;
+        const Horo::ExternalProcessRequest request{
+            .executable = HORO_PROCESS_TEST_CHILD,
+            .arguments = {"handle-unavailable", std::to_string(reinterpret_cast<std::uintptr_t>(unrelated))},
+        };
+        const auto result = runner.Run(request, {});
+        CloseHandle(unrelated);
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value().reason == Horo::ProcessTerminationReason::Exited);
+        REQUIRE(result.Value().exitCode == 0);
+    }
+#endif
 
     TEST_CASE("External process launch failure leaves the runner usable", "[unit][platform][process]") {
         Horo::NativeExternalProcessRunner runner;
