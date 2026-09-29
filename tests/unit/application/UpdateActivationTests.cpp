@@ -289,7 +289,7 @@ TEST_CASE("Retention removes only signed obsolete content and is repeatable", "[
     Horo::NativeDurableFileSystem files;
     auto verifier = Verifier();
     auto request = Request(install, files, verifier);
-    auto obsolete = Version(install, "obsolete", files, verifier);
+    auto obsolete = VersionAtRoot(install.root, "obsolete", files, verifier);
     Host host;
     REQUIRE(ActivateVerifiedUpdate(request, files, verifier, host).HasValue());
     std::filesystem::create_directories(install.root / "projects");
@@ -319,7 +319,7 @@ TEST_CASE("Retention resumes an authenticated interrupted cleanup", "[release][u
     Horo::NativeDurableFileSystem files;
     auto verifier = Verifier();
     auto request = Request(install, files, verifier);
-    auto obsolete = Version(install, "obsolete", files, verifier);
+    auto obsolete = VersionAtRoot(install.root, "obsolete", files, verifier);
     Host host;
     REQUIRE(ActivateVerifiedUpdate(request, files, verifier, host).HasValue());
     const std::array candidates{
@@ -343,7 +343,7 @@ TEST_CASE("Retention refuses active deletion, unknown files, and a concurrent lo
     Horo::NativeDurableFileSystem files;
     auto verifier = Verifier();
     auto request = Request(install, files, verifier);
-    auto obsolete = Version(install, "obsolete", files, verifier);
+    auto obsolete = VersionAtRoot(install.root, "obsolete", files, verifier);
     Host host;
     REQUIRE(ActivateVerifiedUpdate(request, files, verifier, host).HasValue());
     const std::array candidates{
