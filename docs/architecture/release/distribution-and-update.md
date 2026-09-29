@@ -164,7 +164,13 @@ verified base-manifest digest, dependency closure, and dependency-first mount
 priority. `PlanAssetChunkRemoval` rejects removal that would strand an installed
 dependent. Both are admission plans; the package lifecycle owns verified
 archive leases, mount/unmount, and transactional removal under its update
-contract. Neither plan grants package trust or mutates project files.
+contract. `AssetArchiveProvider::OpenSelected` checks that every encoded chunk
+definition matches the authenticated release plan and exposes assets from only
+the selected, dependency-closed chunks. It rejects wrong base identity, missing
+dependencies, modified archive bytes, or plan drift before exposing any asset.
+The host verifies package signatures first and owns provider replacement and
+unmount; none of these admission operations grants package trust or mutates
+project files.
 
 A DLC or optional content package must never replace base-game files implicitly.
 It is mounted through the runtime asset-provider contract and validated against
