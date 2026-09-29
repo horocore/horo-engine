@@ -191,10 +191,25 @@ namespace Horo {
             }
         }
 
-        [[nodiscard]] bool JobHasActiveProcesses(const HANDLE job) noexcept {
-            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
-            return !QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr) ||
-                   accounting.ActiveProcesses != 0;
+        /** @brief Distinguishes a surviving descendant from a lagging accounting reference to the exited direct child. */
+        [[nodiscard]] bool JobHasActiveDescendants(const HANDLE job, const DWORD directProcessId) noexcept {
+            struct ProcessIds final {
+                DWORD assigned{};
+                DWORD count{};
+                std::array<ULONG_PTR, 16> ids{};
+            } processIds;
+
+            if (!QueryInformationJobObject(job, JobObjectBasicProcessIdList, &processIds, sizeof(processIds), nullptr) ||
+                processIds.assigned > processIds.ids.size() || processIds.count > processIds.ids.size())
+                return true;
+            return std::ranges::any_of(std::span{processIds.ids}.first(processIds.count), [directProcessId](const ULONG_PTR id) {
+                if (id == directProcessId)
+                    return false;
+                const Handle descendant{OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(id))};
+                if (descendant.value == nullptr)
+                    return GetLastError() != ERROR_INVALID_PARAMETER;
+                return WaitForSingleObject(descendant.value, 0) != WAIT_OBJECT_0;
+            });
         }
 
         /** @brief Owns capture, child, and Job handles across launch, monitoring, and terminal mapping. */
@@ -286,7 +301,7 @@ namespace Horo {
 
         /** @brief Applies the same cancellation, deadline, graceful, and forced Job escalation in priority order. */
         void UpdateTermination(const ExternalProcessRequest &request, const CancellationToken &cancellation,
-                               const CapturedProcess &captured, const DWORD wait, const bool jobActive,
+                               const CapturedProcess &captured, const DWORD wait, const bool descendantsActive,
                                const std::chrono::steady_clock::time_point now, ProcessMonitorState &state) {
             if (request.forceCancellation.IsCancellationRequested() && !state.forceTerminated) {
                 state.stopCause = state.stopCause == ProcessStopCause::None ? ProcessStopCause::Cancellation : state.stopCause;
@@ -296,7 +311,7 @@ namespace Horo {
                 state.forcedAt = now;
             } else if (const bool cancelled = cancellation.IsCancellationRequested();
                        !state.terminationRequested &&
-                       (cancelled || now - state.started >= request.timeout || (wait == WAIT_OBJECT_0 && jobActive))) {
+                       (cancelled || now - state.started >= request.timeout || (wait == WAIT_OBJECT_0 && descendantsActive))) {
                 state.terminationRequested = true;
                 state.stopCause = cancelled ? ProcessStopCause::Cancellation
                                             : (wait == WAIT_OBJECT_0 ? ProcessStopCause::DescendantCleanup : ProcessStopCause::Timeout);
@@ -321,7 +336,8 @@ namespace Horo {
                 !PeekNamedPipe(captured.stdoutRead.value, nullptr, 0, nullptr, &stdoutAvailable, nullptr) || stdoutAvailable == 0;
             const bool stderrEmpty =
                 !PeekNamedPipe(captured.stderrRead.value, nullptr, 0, nullptr, &stderrAvailable, nullptr) || stderrAvailable == 0;
-            if (!JobHasActiveProcesses(captured.job.value) && ((!stdoutOpen && !stderrOpen) || (stdoutEmpty && stderrEmpty))) {
+            if (!JobHasActiveDescendants(captured.job.value, captured.processId) &&
+                ((!stdoutOpen && !stderrOpen) || (stdoutEmpty && stderrEmpty))) {
                 if (stdoutEmpty && stderrEmpty) {
                     standardOutput.Finish();
                     standardError.Finish();
@@ -346,8 +362,8 @@ namespace Horo {
                 DrainAvailable(captured.stderrRead.value, stderrOpen, standardError);
                 const DWORD wait = WaitForSingleObject(captured.process.value, 10);
                 const auto now = std::chrono::steady_clock::now();
-                const bool jobActive = JobHasActiveProcesses(captured.job.value);
-                UpdateTermination(request, cancellation, captured, wait, jobActive, now, state);
+                const bool descendantsActive = wait == WAIT_OBJECT_0 && JobHasActiveDescendants(captured.job.value, captured.processId);
+                UpdateTermination(request, cancellation, captured, wait, descendantsActive, now, state);
                 if (wait == WAIT_OBJECT_0 && CompletedAndDrained(captured, stdoutOpen, stderrOpen, standardOutput, standardError))
                     break;
                 if (state.forceTerminated && now - state.forcedAt >= request.maximumDrainDuration)
@@ -358,15 +374,15 @@ namespace Horo {
             return state;
         }
 
-        /** @brief Verifies that the Job is empty before reporting one typed terminal process outcome. */
+        /** @brief Verifies that no owned descendant survives before reporting a typed terminal process outcome. */
         [[nodiscard]] Result<ExternalProcessResult> FinalizeProcess(const CapturedProcess &captured, const ProcessMonitorState &state) {
-            if (JobHasActiveProcesses(captured.job.value)) {
+            if (JobHasActiveDescendants(captured.job.value, captured.processId)) {
                 if (!TerminateJobObject(captured.job.value, 1))
                     return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
                 const auto stopWaiting = std::chrono::steady_clock::now() + std::chrono::seconds{1};
-                while (JobHasActiveProcesses(captured.job.value) && std::chrono::steady_clock::now() < stopWaiting)
+                while (JobHasActiveDescendants(captured.job.value, captured.processId) && std::chrono::steady_clock::now() < stopWaiting)
                     std::this_thread::sleep_for(std::chrono::milliseconds{10});
-                if (JobHasActiveProcesses(captured.job.value))
+                if (JobHasActiveDescendants(captured.job.value, captured.processId))
                     return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
             }
             if (WaitForSingleObject(captured.process.value, 0) != WAIT_OBJECT_0)

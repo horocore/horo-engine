@@ -1,5 +1,6 @@
 #include "Horo/Network/AuthenticationSessionAdapter.h"
 
+#include "Horo/Network/AdmissionProtection.h"
 #include "NetworkValidationInternal.h"
 
 namespace Horo::Network {
@@ -62,6 +63,13 @@ namespace Horo::Network {
                    Detail::ValidCanonicalIdentities(principal.roles.values, principal.roles.count) &&
                    Detail::ValidCanonicalIdentities(principal.capabilities.values, principal.capabilities.count);
         }
+
+        /** @brief Requires every host authority before entering the ordered verification chain. */
+        [[nodiscard]] bool AvailableAuthorities(const AuthenticationAuthorities &authorities) noexcept {
+            return authorities.certificates && authorities.peers && authorities.credentials && authorities.privateKeys &&
+                   authorities.certificates->Available() && authorities.peers->Available() && authorities.credentials->Available() &&
+                   authorities.privateKeys->Available();
+        }
     }  // namespace
 
     /** @copydoc NetworkSessionId::IsValid */
@@ -72,17 +80,19 @@ namespace Horo::Network {
     AuthenticationSessionAdapter::AuthenticationSessionAdapter(const NetworkTrustPolicySnapshot &policy,
                                                                const AuthenticationChallenge &challenge,
                                                                const AuthenticationAuthorities &authorities,
-                                                               const std::uint64_t deadlineTick) noexcept
-        : policy_(policy), challenge_(challenge), authorities_(authorities), deadlineTick_(deadlineTick) {}
+                                                               const std::uint64_t deadlineTick, AdmissionProtection *protection) noexcept
+        : policy_(policy), challenge_(challenge), authorities_(authorities), protection_(protection), deadlineTick_(deadlineTick) {}
 
     /** @copydoc AuthenticationSessionAdapter::Create */
     Result<AuthenticationSessionAdapter> AuthenticationSessionAdapter::Create(const NetworkTrustPolicySnapshot &policy,
                                                                               const AuthenticationChallenge &challenge,
                                                                               const AuthenticationAuthorities &authorities,
-                                                                              const std::uint64_t deadlineTick) {
+                                                                              const std::uint64_t deadlineTick,
+                                                                              AdmissionProtection *protection) {
         if (!ValidPolicy(policy) || !ValidChallenge(challenge, policy) || deadlineTick == 0)
             return Result<AuthenticationSessionAdapter>::Failure(MakeError(NetworkErrors::AuthenticationInvalid));
-        return Result<AuthenticationSessionAdapter>::Success(AuthenticationSessionAdapter{policy, challenge, authorities, deadlineTick});
+        return Result<AuthenticationSessionAdapter>::Success(
+            AuthenticationSessionAdapter{policy, challenge, authorities, deadlineTick, protection});
     }
 
     bool AuthenticationSessionAdapter::Owns(const ConnectionHandle connection,
@@ -101,10 +111,16 @@ namespace Horo::Network {
     Result<AuthenticationResult> AuthenticationSessionAdapter::VerifyWithAuthorities(const AuthenticationResponseView &response,
                                                                                      const PeerAuthenticationEvidence &evidence,
                                                                                      const std::uint64_t nowTick) {
-        if (!authorities_.certificates || !authorities_.peers || !authorities_.credentials || !authorities_.privateKeys ||
-            !authorities_.certificates->Available() || !authorities_.peers->Available() || !authorities_.credentials->Available() ||
-            !authorities_.privateKeys->Available())
+        if (!AvailableAuthorities(authorities_))
             return Reject(NetworkErrors::AuthenticationTrustUnavailable, AuthenticationFailureClass::TrustUnavailable);
+
+        const auto chargeVerifier = [this, nowTick]() {
+            return protection_ == nullptr ||
+                   protection_->Charge(challenge_.connection, challenge_.sessionGeneration, AdmissionWork::VerifierCall, 1, nowTick)
+                       .HasValue();
+        };
+        if (!chargeVerifier())
+            return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
 
         const auto certificate = authorities_.certificates->Verify({challenge_, evidence.certificate});
         if (certificate.HasError())
@@ -112,12 +128,16 @@ namespace Horo::Network {
         if (!ValidStamp(certificate.Value().stamp, challenge_) || certificate.Value().binding != policy_.certificate)
             return Reject(NetworkErrors::AuthenticationInvalid, AuthenticationFailureClass::Malformed);
 
+        if (!chargeVerifier())
+            return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
         const auto peer = authorities_.peers->Verify({challenge_, evidence, certificate.Value()});
         if (peer.HasError())
             return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
         if (!ValidStamp(peer.Value().stamp, challenge_) || !ExposureAllowsTrust(policy_.exposure, peer.Value().trustLevel))
             return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
 
+        if (!chargeVerifier())
+            return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
         const auto credential =
             authorities_.credentials->Verify({challenge_, policy_.credential, peer.Value().trustLevel, response.proof, nowTick});
         if (credential.HasError())
@@ -126,6 +146,8 @@ namespace Horo::Network {
             !ValidPrincipal(credential.Value().principal, peer.Value().trustLevel, nowTick))
             return Reject(NetworkErrors::AuthenticationInvalid, AuthenticationFailureClass::Malformed);
 
+        if (!chargeVerifier())
+            return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
         const auto channel = authorities_.privateKeys->Bind(
             {challenge_, policy_.privateKey, evidence.transport, credential.Value().stamp, credential.Value().principal.session});
         if (channel.HasError())
@@ -167,12 +189,25 @@ namespace Horo::Network {
             failure_ = AuthenticationFailureClass::TimedOut;
             return Result<AuthenticationResult>::Failure(MakeError(NetworkErrors::SessionTimedOut));
         }
+        if (protection_ != nullptr &&
+            (protection_->Charge(connection, sessionGeneration, AdmissionWork::AuthenticationAttempt, 1, nowTick).HasError() ||
+             (!response.proof.empty() &&
+              protection_->Charge(connection, sessionGeneration, AdmissionWork::ParsedBytes, response.proof.size(), nowTick).HasError())))
+            return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
         if (response.contractVersion != AuthenticationContractVersion || response.proof.empty() ||
-            response.proof.size() > policy_.maximumProofBytes)
+            response.proof.size() > policy_.maximumProofBytes) {
+            if (protection_ != nullptr &&
+                protection_->Charge(connection, sessionGeneration, AdmissionWork::ParseFailure, 1, nowTick).HasError())
+                return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
             return Reject(NetworkErrors::AuthenticationInvalid, AuthenticationFailureClass::Malformed);
+        }
         if (response.policy != policy_.id || response.policyRevision != policy_.revision ||
-            response.transcriptDigest != challenge_.transcriptDigest)
+            response.transcriptDigest != challenge_.transcriptDigest) {
+            if (protection_ != nullptr &&
+                protection_->Charge(connection, sessionGeneration, AdmissionWork::ParseFailure, 1, nowTick).HasError())
+                return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
             return Reject(NetworkErrors::AuthenticationIncompatible, AuthenticationFailureClass::Incompatible);
+        }
         if (!ValidTransportEvidence(evidence, challenge_, policy_))
             return Reject(NetworkErrors::AuthenticationIncompatible, AuthenticationFailureClass::Incompatible);
         state_ = AuthenticationState::Authenticating;

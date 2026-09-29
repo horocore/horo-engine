@@ -803,6 +803,7 @@ namespace Horo::Editor {
             Input::InputRouter &inputRouter;
             const Log::IStructuredLogQuery &logQuery;
             EditorOperationServices operationServices;
+            bool healthy{false}; /**< Set only after runtime startup and a normal, completed main-loop closure. */
         };
 
         class EditorRuntimeParticipant final : public Runtime::RuntimeLifecycleParticipant {
@@ -1097,6 +1098,7 @@ namespace Horo::Editor {
             bool nativeMenuInstalled_{false};
         };
 
+        /** @brief Runs the actual editor startup and reports failures to the process boundary. */
         std::optional<EditorRendererRestartRequest> RunEditorMainLoop(RunEditorMainLoopParams &p) {
             ThemeContext themeContext{p.fonts};
             EditorSettingsSnapshot settingsSnapshot = p.settings.Snapshot();
@@ -1228,6 +1230,8 @@ namespace Horo::Editor {
                 return std::nullopt;
             }
 
+            bool healthy = true;
+            bool completedFrame = false;
             while (!screenHost.IsApplicationCloseRequested() && (runtime->State() == Runtime::RuntimeLifecycleState::Running ||
                                                                  runtime->State() == Runtime::RuntimeLifecycleState::Suspended)) {
                 const Result<void> frame = runtime->RunFrame();
@@ -1235,11 +1239,16 @@ namespace Horo::Editor {
                     if (frame.ErrorValue().code.Value() != "runtime.host.cancelled") {
                         LOG_ERROR("editor.runtime", "Runtime frame failed: %s", frame.ErrorValue().message.c_str());
                         screenHost.RequestFatalShutdown();
+                        healthy = false;
                     }
                     break;
                 }
+                completedFrame = true;
             }
+            healthy = healthy && screenHost.IsApplicationCloseRequested() &&
+                      ((!p.exitAfterFirstFrame && p.exitAfterFrames == 0) || completedFrame);
             runtime->Shutdown();
+            p.healthy = healthy;
             return rendererRestart;
         }
     }  // namespace
@@ -1493,6 +1502,12 @@ namespace Horo::Editor {
 #endif
         SDL_DestroyWindow(w);
         SDL_Quit();
+
+        if (!loopParams.healthy) {
+            moduleHost->DeactivateAll();
+            Log::Logger::Shutdown();
+            return 1;
+        }
 
         if (rendererRestart.has_value()) {
             LOG_INFO("editor.renderer", "Restarting editor with project renderer '%s' for '%s'.", rendererRestart->backendId.c_str(),
