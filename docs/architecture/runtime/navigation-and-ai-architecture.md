@@ -790,6 +790,21 @@ each have separate queue/work/memory/staging/retired budgets and typed outcomes;
 graphics tiers never choose them. Paths intersecting a changed dependency are
 invalidated and re-requested under ADR-107 consistency policy.
 
+NAV-005.3 exposes the provider-neutral logical blocker overlay as bounded probes
+of an immutable `NavigationDynamicRegistrySnapshot`, not as a mutable copy of
+cooked tiles. Every probe reports the exact Scene binding and dynamic publication
+revision observed, including clear answers. Enabled box and vertical-cylinder
+records constrain movement/path segments only on matching consumer layers;
+Character/Physics remains the final collision authority. The owner can project
+old/new obstacle bounds into complete identity-ordered changed regions before
+invalidating intersecting held paths. Insufficient caller output capacity fails
+without a partial region list. Multiple generation-safe motion updates to one
+active obstacle coalesce latest-wins in one staged command within the declared
+64-update bound; stale or excess input is rejected, and one safe-point commit
+advances the immutable revision once. This adds a NavigationRuntime-owned public
+header and target-private implementation, with no new backend dependency or
+change to the cooked NavMesh artifact format.
+
 ## AI Perception
 
 ### Gameplay Truth vs Presentation Separation

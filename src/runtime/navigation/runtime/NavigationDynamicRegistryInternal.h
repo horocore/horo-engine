@@ -34,6 +34,7 @@ namespace Horo::Navigation::Detail {
         NavigationObstacleHandle handle;
         NavigationDynamicRecordRevision expectedRevision;
         NavigationObstacleDescriptor descriptor;
+        std::uint16_t coalescedUpdates{1};
     };
 
     struct PendingModifierUpdate final {
@@ -277,6 +278,20 @@ namespace Horo::Navigation::Detail {
             return Failure<void>(NavigationErrors::DynamicRegistryStale);
         if (!UpdateIntervalAllowed(current.lastUpdateTick, descriptor.updateTick, state.limits.minimumUpdateIntervalTicks))
             return Failure<void>(NavigationErrors::DynamicRegistryUpdateRateExceeded);
+        if constexpr (std::is_same_v<Update, PendingObstacleUpdate>) {
+            for (auto &command : std::span{state.pending}.first(pendingCount)) {
+                if (auto *staged = std::get_if<PendingObstacleUpdate>(&command); staged && staged->handle == handle) {
+                    if (descriptor.provenance.sourceRevision.Value() <= staged->descriptor.provenance.sourceRevision.Value() ||
+                        descriptor.updateTick < staged->descriptor.updateTick)
+                        return Failure<void>(NavigationErrors::DynamicRegistryConflict);
+                    if (staged->coalescedUpdates >= NavigationDynamicRegistryHardLimits::CoalescedObstacleUpdates)
+                        return Failure<void>(NavigationErrors::DynamicRegistryCapacityExceeded);
+                    staged->descriptor = descriptor;
+                    ++staged->coalescedUpdates;
+                    return Result<void>::Success();
+                }
+            }
+        }
         if (const bool hasPending = HasPendingHandle(pending, handle); hasPending || pendingCount >= state.limits.maximumPendingCommands)
             return Failure<void>(hasPending ? NavigationErrors::DynamicRegistryConflict
                                             : NavigationErrors::DynamicRegistryCapacityExceeded);

@@ -1,9 +1,11 @@
 #include "Horo/Navigation/NavigationDynamicRegistry.h"
 #include "Horo/Navigation/NavigationErrors.h"
+#include "Horo/Navigation/NavigationObstacleOverlay.h"
 #include "Horo/Navigation/NavigationWorldLifecycle.h"
 #include "navigation/NavigationRuntimeTestFixtures.h"
 #include "navigation/NavigationTestAssertions.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <limits>
@@ -159,6 +161,102 @@ namespace Horo::Navigation {
         const auto emptySnapshot = std::move(registry.Snapshot()).Value();
         REQUIRE(emptySnapshot.Obstacles().empty());
         RequireError(registry.StageRemoveObstacle(handle, currentRevision), NavigationErrors::DynamicRegistryStale);
+    }
+
+    TEST_CASE("Dynamic obstacle motion coalesces newest source within a fixed command bound",
+              "[unit][navigation][headless][dynamic-registry][overlay]") {
+        auto registry = MakeRegistry();
+        const auto activation = TestSupport::Activation(11, 12, 7, 9);
+        const auto handle = registry.StageRegisterObstacle(Obstacle(1, Provenance(), 1)).Value();
+        REQUIRE(registry.CommitAtSafePoint(activation, 1).HasValue());
+        const auto retained = registry.Snapshot().Value();
+        const auto revision = retained.Obstacles()[0].revision;
+
+        for (std::uint64_t source = 2; source <= NavigationDynamicRegistryHardLimits::CoalescedObstacleUpdates + 1; ++source) {
+            const auto moved = Obstacle(1, Provenance(7, 11, 12, 21, 1, source), 2, static_cast<float>(source));
+            REQUIRE(registry.StageUpdateObstacle(handle, revision, moved).HasValue());
+            CHECK(registry.PendingCommandCount() == 1);
+        }
+        const auto excess = Obstacle(1, Provenance(7, 11, 12, 21, 1, 66), 2, 66.0F);
+        RequireError(registry.StageUpdateObstacle(handle, revision, excess), NavigationErrors::DynamicRegistryCapacityExceeded);
+        REQUIRE(registry.CommitAtSafePoint(activation, 2).HasValue());
+        const auto current = registry.Snapshot().Value();
+        REQUIRE(current.Obstacles().size() == 1);
+        CHECK(std::get<NavigationDynamicBoxShape>(current.Obstacles()[0].shape).center.x == 65.0F);
+        CHECK(std::get<NavigationDynamicBoxShape>(retained.Obstacles()[0].shape).center.x == 0.0F);
+        CHECK(current.Revision().Value() == retained.Revision().Value() + 1);
+    }
+
+    TEST_CASE("Logical obstacle overlay probes one immutable Scene generation with bounded clearance",
+              "[unit][navigation][headless][overlay]") {
+        auto registry = MakeRegistry();
+        REQUIRE(registry.StageRegisterObstacle(Obstacle(1, Provenance(), 1)).HasValue());
+        REQUIRE(registry.CommitAtSafePoint(TestSupport::Activation(11, 12, 7, 9), 1).HasValue());
+        const auto snapshot = registry.Snapshot().Value();
+        const auto probe = ProbeNavigationObstacleOverlay(snapshot, {-3.0F, 0.0F, 0.0F}, {3.0F, 0.0F, 0.0F}, 0.0F, {1}, 1);
+        REQUIRE(probe.HasValue());
+        CHECK(probe.Value().blocked);
+        CHECK(probe.Value().blockingObstacle == Id<NavigationObstacleId>(1));
+        CHECK(probe.Value().binding == snapshot.Binding());
+        CHECK(probe.Value().revision == snapshot.Revision());
+        const auto otherLayer = ProbeNavigationObstacleOverlay(snapshot, {-3.0F, 0.0F, 0.0F}, {3.0F, 0.0F, 0.0F}, 0.0F, {2}, 1);
+        REQUIRE(otherLayer.HasValue());
+        CHECK_FALSE(otherLayer.Value().blocked);
+        const auto above = ProbeNavigationObstacleOverlay(snapshot, {-3.0F, 4.0F, 0.0F}, {3.0F, 4.0F, 0.0F}, 0.0F, {1}, 1);
+        REQUIRE(above.HasValue());
+        CHECK_FALSE(above.Value().blocked);
+        RequireError(ProbeNavigationObstacleOverlay(snapshot, {}, {}, 0.0F, {1}, 0), NavigationErrors::DynamicRegistryInvalid);
+        RequireError(ProbeNavigationObstacleOverlay(snapshot, {}, {}, -1.0F, {1}, 1), NavigationErrors::DynamicRegistryInvalid);
+    }
+
+    TEST_CASE("Logical obstacle overlay reports swept changed regions without publishing partial output",
+              "[unit][navigation][headless][overlay]") {
+        auto registry = MakeRegistry();
+        const auto activation = TestSupport::Activation(11, 12, 7, 9);
+        const auto handle = registry.StageRegisterObstacle(Obstacle(1, Provenance(), 1)).Value();
+        REQUIRE(registry.CommitAtSafePoint(activation, 1).HasValue());
+        const auto first = registry.Snapshot().Value();
+        std::array<NavigationObstacleOverlayChangedRegion, 1> changed{};
+        REQUIRE(CollectNavigationObstacleOverlayChanges({}, first, changed).Value() == 1);
+        CHECK(changed[0].minimumX == -1.0);
+        CHECK(changed[0].maximumX == 1.0);
+
+        REQUIRE(registry.StageUpdateObstacle(handle, first.Obstacles()[0].revision, Obstacle(1, Provenance(7, 11, 12, 21, 1, 2), 2, 3.0F))
+                    .HasValue());
+        REQUIRE(registry.CommitAtSafePoint(activation, 2).HasValue());
+        const auto second = registry.Snapshot().Value();
+        RequireError(CollectNavigationObstacleOverlayChanges(first, second, {}), NavigationErrors::DynamicRegistryCapacityExceeded);
+        REQUIRE(CollectNavigationObstacleOverlayChanges(first, second, changed).Value() == 1);
+        CHECK(changed[0].minimumX == -1.0);
+        CHECK(changed[0].maximumX == 4.0);
+        CHECK(std::get<NavigationDynamicBoxShape>(first.Obstacles()[0].shape).center.x == 0.0F);
+        CHECK(second.Revision().Value() == first.Revision().Value() + 1);
+
+        REQUIRE(registry.StageRemoveObstacle(handle, second.Obstacles()[0].revision).HasValue());
+        REQUIRE(registry.CommitAtSafePoint(activation, 3).HasValue());
+        const auto third = registry.Snapshot().Value();
+        REQUIRE(CollectNavigationObstacleOverlayChanges(second, third, changed).Value() == 1);
+        CHECK(changed[0].minimumX == 2.0);
+        CHECK(changed[0].maximumX == 4.0);
+    }
+
+    TEST_CASE("Logical overlay bounds cylinder checks and preserves clear-result generation", "[unit][navigation][headless][overlay]") {
+        auto registry = MakeRegistry();
+        auto cylinder = Obstacle(2, Provenance(), 1);
+        cylinder.shape = NavigationDynamicCylinderShape{.center = {3.0F, 0.0F, 0.0F}, .radius = 1.0F, .halfHeight = 1.0F};
+        REQUIRE(registry.StageRegisterObstacle(cylinder).HasValue());
+        REQUIRE(registry.CommitAtSafePoint(TestSupport::Activation(11, 12, 7, 9), 1).HasValue());
+        const auto snapshot = registry.Snapshot().Value();
+        const auto clear = ProbeNavigationObstacleOverlay(snapshot, {}, {1.0F, 0.0F, 0.0F}, 0.0F, {1}, 1);
+        REQUIRE(clear.HasValue());
+        CHECK_FALSE(clear.Value().blocked);
+        CHECK(clear.Value().revision == snapshot.Revision());
+        const auto blocked = ProbeNavigationObstacleOverlay(snapshot, {}, {1.0F, 0.0F, 0.0F}, 1.0F, {1}, 1);
+        REQUIRE(blocked.HasValue());
+        CHECK(blocked.Value().blocked);
+        CHECK(blocked.Value().blockingObstacle == cylinder.id);
+        const auto invalidPoint = Math::Vec3{std::numeric_limits<float>::quiet_NaN(), 0.0F, 0.0F};
+        RequireError(ProbeNavigationObstacleOverlay(snapshot, invalidPoint, {}, 0.0F, {1}, 1), NavigationErrors::DynamicRegistryInvalid);
     }
 
     TEST_CASE("Dynamic registry replacement clears stale commands and advances slot generations",
