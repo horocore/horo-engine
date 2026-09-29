@@ -51,7 +51,7 @@ namespace Horo::Audio::AudioImportDetail {
             std::vector<AudioWaveformLevel> levels;
             std::uint64_t windowFrames = baseWindowFrames;
             while (!points.empty()) {
-                levels.push_back({windowFrames, std::move(points)});
+                levels.emplace_back(windowFrames, std::move(points));
                 const auto &previous = levels.back().points;
                 if (previous.size() == 1)
                     break;
@@ -78,6 +78,7 @@ namespace Horo::Audio::AudioImportDetail {
     }
 
     Result<void> AnalysisAccumulator::Configure(const AudioProcessingFormat &format) {
+        using enum AudioSpeakerRole;
         const auto channels = format.layout.orderedChannels.size();
         meter.reset(
             ebur128_init(static_cast<unsigned>(channels), format.sampleRate, EBUR128_MODE_I | EBUR128_MODE_S | EBUR128_MODE_TRUE_PEAK));
@@ -89,24 +90,24 @@ namespace Horo::Audio::AudioImportDetail {
                 return Result<void>::Failure(MakeImportError(AudioErrors::SourceUnsupported));
             int channel{};
             switch (*role) {
-                case AudioSpeakerRole::FrontLeft:
+                case FrontLeft:
                     channel = EBUR128_LEFT;
                     break;
-                case AudioSpeakerRole::FrontRight:
+                case FrontRight:
                     channel = EBUR128_RIGHT;
                     break;
-                case AudioSpeakerRole::FrontCenter:
+                case FrontCenter:
                     channel = EBUR128_CENTER;
                     break;
-                case AudioSpeakerRole::LowFrequency:
+                case LowFrequency:
                     channel = EBUR128_UNUSED;
                     break;
-                case AudioSpeakerRole::BackLeft:
-                case AudioSpeakerRole::SideLeft:
+                case BackLeft:
+                case SideLeft:
                     channel = EBUR128_LEFT_SURROUND;
                     break;
-                case AudioSpeakerRole::BackRight:
-                case AudioSpeakerRole::SideRight:
+                case BackRight:
+                case SideRight:
                     channel = EBUR128_RIGHT_SURROUND;
                     break;
                 default:

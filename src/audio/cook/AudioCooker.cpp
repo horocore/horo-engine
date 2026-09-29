@@ -36,7 +36,7 @@ namespace Horo::Audio {
 
         void AppendOptionalFloat(std::vector<std::uint8_t> &bytes, const std::optional<float> value) {
             bytes.push_back(value.has_value() ? 1 : 0);
-            if (value)
+            if (value.has_value())
                 AppendFloat(bytes, *value);
         }
 

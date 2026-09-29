@@ -161,15 +161,15 @@ namespace Horo::Audio {
                 levelCount > 32 || result.residentPcmBytes != manifest.payloadByteCount || result.decodeBlockBytes == 0 ||
                 result.decodeBlockBytes > 4'096U * MaximumCoreAudioSourceChannels * sizeof(AudioSample))
                 return false;
-            if (result.loudness.normalizationGainDb && !result.loudness.integratedLufs)
+            if (result.loudness.normalizationGainDb.has_value() && !result.loudness.integratedLufs.has_value())
                 return false;
             result.waveformLevels.reserve(levelCount);
             std::uint64_t pointCountTotal{};
             AudioSample waveformPeak{};
             for (std::uint32_t levelIndex = 0; levelIndex < levelCount; ++levelIndex) {
                 AudioWaveformLevel level;
-                const auto *previous = result.waveformLevels.empty() ? nullptr : &result.waveformLevels.back();
-                if (!ReadWaveformLevel(analysis, level, previous, manifest.frameCount, pointCountTotal, waveformPeak))
+                if (const auto *previous = result.waveformLevels.empty() ? nullptr : &result.waveformLevels.back();
+                    !ReadWaveformLevel(analysis, level, previous, manifest.frameCount, pointCountTotal, waveformPeak))
                     return false;
                 result.waveformLevels.push_back(std::move(level));
             }
