@@ -137,9 +137,13 @@ namespace Horo::Audio {
         CHECK(first.Value().manifest.streamThresholdFrames == profile.defaults.streamThresholdFrames);
         CHECK(first.Value().manifest.chunkCount == 1);
         CHECK(first.Value().manifest.encoderDelayFrames == 0);
+        REQUIRE_FALSE(first.Value().manifest.analysis.waveformLevels.empty());
+        CHECK(first.Value().manifest.analysis.residentPcmBytes == first.Value().manifest.payloadByteCount);
+        CHECK(first.Value().manifest.analysis.waveformLevels.back().points.front().frameCount == first.Value().manifest.frameCount);
         auto inspected = InspectCookedAudio(first.Value().bytes);
         REQUIRE(inspected.HasValue());
         CHECK(inspected.Value() == first.Value().manifest);
+        CHECK(inspected.Value().analysis == first.Value().manifest.analysis);
     }
 
     TEST_CASE("Audio cook target override resolves streamed chunks without changing source identity", "[unit][audio][cook]") {
@@ -241,6 +245,10 @@ namespace Horo::Audio {
         CHECK(HasCode(InspectCookedAudio(bytes), AudioErrors::CookPayloadInvalid));
         bytes = cooked.Value().bytes;
         bytes.pop_back();
+        CHECK(HasCode(InspectCookedAudio(bytes), AudioErrors::CookPayloadInvalid));
+        bytes = cooked.Value().bytes;
+        const auto lastAnalysisByte = bytes.size() - cooked.Value().manifest.payloadByteCount - cooked.Value().manifest.chunkCount * 12 - 1;
+        bytes[lastAnalysisByte] ^= 1;
         CHECK(HasCode(InspectCookedAudio(bytes), AudioErrors::CookPayloadInvalid));
         bytes = cooked.Value().bytes;
         const auto chunkTableOffset = bytes.size() - cooked.Value().manifest.payloadByteCount - 12;

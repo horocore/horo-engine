@@ -745,7 +745,7 @@ add_library(HoroEngine::AudioImport ALIAS HoroAudioImport)
 target_compile_features(HoroAudioImport PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioImport
         PUBLIC HoroEngine::AudioApi
-        PRIVATE HoroThirdParty::Miniaudio
+        PRIVATE HoroThirdParty::Miniaudio HoroThirdParty::Ebur128
 )
 
 add_library(HoroAudioCook STATIC

@@ -30,6 +30,42 @@ namespace Horo::Audio {
             bytes.insert(bytes.end(), digest.bytes.begin(), digest.bytes.end());
         }
 
+        void AppendFloat(std::vector<std::uint8_t> &bytes, const float value) {
+            Append32(bytes, std::bit_cast<std::uint32_t>(value));
+        }
+
+        void AppendOptionalFloat(std::vector<std::uint8_t> &bytes, const std::optional<float> value) {
+            bytes.push_back(value.has_value() ? 1 : 0);
+            if (value)
+                AppendFloat(bytes, *value);
+        }
+
+        std::vector<std::uint8_t> EncodeAnalysis(const AudioAnalysisMetadata &analysis) {
+            std::vector<std::uint8_t> bytes;
+            Append32(bytes, 1);  // Analysis format version, independent of the outer cook schema.
+            Append64(bytes, analysis.residentPcmBytes);
+            Append64(bytes, analysis.decodeBlockBytes);
+            Append64(bytes, analysis.waveformBytes);
+            AppendFloat(bytes, analysis.samplePeak);
+            AppendOptionalFloat(bytes, analysis.loudness.integratedLufs);
+            AppendOptionalFloat(bytes, analysis.loudness.shortTermLufs);
+            AppendOptionalFloat(bytes, analysis.loudness.truePeakDbtp);
+            AppendOptionalFloat(bytes, analysis.loudness.rmsDbfs);
+            AppendOptionalFloat(bytes, analysis.loudness.normalizationGainDb);
+            Append32(bytes, static_cast<std::uint32_t>(analysis.waveformLevels.size()));
+            for (const auto &level : analysis.waveformLevels) {
+                Append64(bytes, level.windowFrames);
+                Append32(bytes, static_cast<std::uint32_t>(level.points.size()));
+                for (const auto &point : level.points) {
+                    Append64(bytes, point.firstFrame);
+                    Append32(bytes, point.frameCount);
+                    AppendFloat(bytes, point.minimum);
+                    AppendFloat(bytes, point.maximum);
+                }
+            }
+            return bytes;
+        }
+
         void AppendLayout(std::vector<std::uint8_t> &bytes, const AudioChannelLayout &layout) {
             bytes.push_back(static_cast<std::uint8_t>(layout.kind));
             bytes.push_back(static_cast<std::uint8_t>(layout.orderedChannels.size()));
@@ -117,6 +153,10 @@ namespace Horo::Audio {
             AppendDigest(bytes, manifest.toolchainDigest);
             AppendDigest(bytes, manifest.payloadDigest);
             Append64(bytes, manifest.payloadByteCount);
+            const auto analysis = EncodeAnalysis(manifest.analysis);
+            Append32(bytes, static_cast<std::uint32_t>(analysis.size()));
+            AppendDigest(bytes, ComputeSha256(std::as_bytes(std::span{analysis})));
+            bytes.insert(bytes.end(), analysis.begin(), analysis.end());
             const auto channels = manifest.format.layout.orderedChannels.size();
             const std::uint64_t bytesPerFrame = channels * sizeof(AudioSample);
             for (std::uint32_t index = 0; index < manifest.chunkCount; ++index) {
@@ -131,7 +171,8 @@ namespace Horo::Audio {
         /** @brief Collects the exact source, policy and toolchain facts serialized into compatibility output. */
         AudioCookManifest MakeManifest(const AudioCookPlan &plan, const AudioCookToolchain &toolchain,
                                        const std::span<const std::uint8_t> source, const std::span<const std::uint8_t> payload,
-                                       const std::uint32_t chunkFrames, const std::uint32_t chunkCount) {
+                                       const std::uint32_t chunkFrames, const std::uint32_t chunkCount,
+                                       const AudioAnalysisMetadata &analysis) {
             return {
                 .target = plan.target,
                 .sourceContainer = plan.sourceContainer,
@@ -155,6 +196,7 @@ namespace Horo::Audio {
                 .configurationDigest = plan.configurationDigest,
                 .toolchainDigest = ComputeSha256(std::as_bytes(std::span{toolchain.identity})),
                 .payloadDigest = ComputeSha256(std::as_bytes(payload)),
+                .analysis = analysis,
             };
         }
 
@@ -227,7 +269,8 @@ namespace Horo::Audio {
         const auto chunks = 1 + (resolved.frameCount - 1) / chunkFrames;
         if (chunks > MaximumChunkCount)
             return Result<AudioCookedOutput>::Failure(MakeError(AudioErrors::CookBudgetExceeded));
-        auto manifest = MakeManifest(resolved, toolchain, source, sink.payload, chunkFrames, static_cast<std::uint32_t>(chunks));
+        auto manifest = MakeManifest(resolved, toolchain, source, sink.payload, chunkFrames, static_cast<std::uint32_t>(chunks),
+                                     imported.Value().analysis);
         auto bytes = EncodeHeader(manifest);
         if (bytes.size() > MaximumCookedAudioPayloadBytes - sink.payload.size())
             return Result<AudioCookedOutput>::Failure(MakeError(AudioErrors::CookBudgetExceeded));

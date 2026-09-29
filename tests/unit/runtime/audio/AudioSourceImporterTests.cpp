@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <numbers>
 #include <span>
 #include <string_view>
 #include <type_traits>
@@ -97,6 +98,30 @@ namespace Horo::Audio {
             return bytes;
         }
 
+        std::vector<std::byte> SineFixture(const double frequency = 997.0, const double phase = 0.0) {
+            constexpr std::uint32_t sampleRate = 48'000;
+            constexpr std::uint32_t frames = sampleRate * 4;
+            std::vector<std::byte> bytes;
+            AppendFour(bytes, "RIFF");
+            AppendLittle<std::uint32_t>(bytes, 36 + frames * sizeof(std::int16_t));
+            AppendFour(bytes, "WAVE");
+            AppendFour(bytes, "fmt ");
+            AppendLittle<std::uint32_t>(bytes, 16);
+            AppendLittle<std::uint16_t>(bytes, 1);
+            AppendLittle<std::uint16_t>(bytes, 1);
+            AppendLittle<std::uint32_t>(bytes, sampleRate);
+            AppendLittle<std::uint32_t>(bytes, sampleRate * sizeof(std::int16_t));
+            AppendLittle<std::uint16_t>(bytes, sizeof(std::int16_t));
+            AppendLittle<std::uint16_t>(bytes, 16);
+            AppendFour(bytes, "data");
+            AppendLittle<std::uint32_t>(bytes, frames * sizeof(std::int16_t));
+            for (std::uint32_t frame = 0; frame < frames; ++frame) {
+                const auto radians = 2.0 * std::numbers::pi * frequency * frame / sampleRate + phase;
+                AppendLittle(bytes, static_cast<std::int16_t>(std::lround(32'700.0 * std::sin(radians))));
+            }
+            return bytes;
+        }
+
         struct MemoryReader final {
             std::span<const std::byte> bytes;
             std::uint32_t calls{};
@@ -165,12 +190,17 @@ namespace Horo::Audio {
         REQUIRE(first.Value().loops.size() == 1);
         CHECK(first.Value().loops.front().startFrame == 1);
         CHECK(first.Value().loops.front().endFrame == 3);
-        REQUIRE(first.Value().waveform.size() == 2);
-        CHECK(first.Value().waveform.front().minimum == Catch::Approx(-1.0F));
-        CHECK(first.Value().waveform.front().maximum == Catch::Approx(32'767.0F / 32'768.0F));
-        CHECK(first.Value().samplePeak == Catch::Approx(1.0F));
-        REQUIRE(first.Value().loudness.rmsDbfs.has_value());
-        CHECK(std::isfinite(*first.Value().loudness.rmsDbfs));
+        REQUIRE(first.Value().analysis.waveformLevels.size() == 2);
+        REQUIRE(first.Value().analysis.waveformLevels.front().points.size() == 2);
+        CHECK(first.Value().analysis.waveformLevels.front().points.front().minimum == Catch::Approx(-1.0F));
+        CHECK(first.Value().analysis.waveformLevels.front().points.front().maximum == Catch::Approx(32'767.0F / 32'768.0F));
+        CHECK(first.Value().analysis.waveformLevels.back().points.front().frameCount == 4);
+        CHECK(first.Value().analysis.samplePeak == Catch::Approx(1.0F));
+        CHECK(first.Value().analysis.residentPcmBytes == 4 * 2 * sizeof(AudioSample));
+        CHECK(first.Value().analysis.decodeBlockBytes == 2 * 2 * sizeof(AudioSample));
+        REQUIRE(first.Value().analysis.loudness.rmsDbfs.has_value());
+        CHECK(std::isfinite(*first.Value().analysis.loudness.rmsDbfs));
+        CHECK_FALSE(first.Value().analysis.loudness.shortTermLufs.has_value());
     }
 
     TEST_CASE("Audio import rejects malformed and hostile sources before publishing samples", "[unit][audio][import]") {
@@ -198,6 +228,33 @@ namespace Horo::Audio {
         CHECK(sink.samples.empty());
     }
 
+    TEST_CASE("Audio import measures gated LUFS short-term loudness and inter-sample true peak", "[unit][audio][import]") {
+        auto bytes = SineFixture();
+        SampleSink sink;
+        const auto result = Import(bytes, sink);
+        REQUIRE(result.HasValue());
+        const auto &analysis = result.Value().analysis;
+        REQUIRE(analysis.loudness.integratedLufs.has_value());
+        REQUIRE(analysis.loudness.shortTermLufs.has_value());
+        REQUIRE(analysis.loudness.truePeakDbtp.has_value());
+        REQUIRE(analysis.loudness.rmsDbfs.has_value());
+        REQUIRE(analysis.loudness.normalizationGainDb.has_value());
+        CHECK(*analysis.loudness.integratedLufs == Catch::Approx(-3.01F).margin(0.25F));
+        CHECK(*analysis.loudness.shortTermLufs == Catch::Approx(-3.01F).margin(0.25F));
+        CHECK(*analysis.loudness.truePeakDbtp == Catch::Approx(0.0F).margin(0.2F));
+        CHECK(*analysis.loudness.rmsDbfs == Catch::Approx(-3.03F).margin(0.2F));
+        CHECK(*analysis.loudness.normalizationGainDb == Catch::Approx(-23.0F - *analysis.loudness.integratedLufs));
+        CHECK(analysis.waveformLevels.back().points.size() == 1);
+        CHECK(analysis.waveformLevels.back().points.front().frameCount == 4 * 48'000);
+
+        auto interSampleBytes = SineFixture(12'000.0, std::numbers::pi / 4.0);
+        SampleSink interSampleSink;
+        const auto interSample = Import(interSampleBytes, interSampleSink);
+        REQUIRE(interSample.HasValue());
+        REQUIRE(interSample.Value().analysis.loudness.truePeakDbtp.has_value());
+        CHECK(*interSample.Value().analysis.loudness.truePeakDbtp > 20.0F * std::log10(interSample.Value().analysis.samplePeak) + 2.0F);
+    }
+
     TEST_CASE("Ogg Vorbis import deterministically decodes a known source", "[unit][audio][import]") {
         auto bytes = DecodeBase64(TestFixtures::OggVorbisSilenceBase64);
         SampleSink firstSink;
@@ -217,7 +274,9 @@ namespace Horo::Audio {
         CHECK(first.Value().frameCount == 44'160);
         CHECK(first.Value().durationNanoseconds == 1'001'360'544);
         CHECK(first.Value().loops.empty());
-        CHECK(first.Value().samplePeak == 0.0F);
-        CHECK(first.Value().waveform.size() == 22);
+        CHECK(first.Value().analysis.samplePeak == 0.0F);
+        CHECK_FALSE(first.Value().analysis.loudness.integratedLufs.has_value());
+        REQUIRE_FALSE(first.Value().analysis.waveformLevels.empty());
+        CHECK(first.Value().analysis.waveformLevels.front().points.size() == 22);
     }
 }  // namespace Horo::Audio
