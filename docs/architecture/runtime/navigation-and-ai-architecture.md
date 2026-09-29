@@ -1855,6 +1855,21 @@ publication still rechecks the captured Scene/world binding, dynamic revision,
 agent generation, and tick. This additive runtime contract does not change
 existing agent-registry callers; hosts opt in at their fixed-tick capture point.
 
+NAV-006.5 adds a distinct avoidance-layer table to that same immutable capture.
+Each project-stable layer identity occupies one fixed bit, and each agent's
+owner-supplied policy declares its own layer, a directed mask of layers it steers
+around, and a finite right-of-way priority in [0, 1]. The table and every enabled
+agent policy are validated together; an empty table means only the built-in
+default layer. Empty or undeclared masks, duplicate identities/bit positions,
+and non-finite or out-of-range priorities reject the entire capture. The mask
+filters local-steering neighbor facts directionally: A may account for B without
+B accounting for A. Priority only biases how strongly the optional sampler
+favors an agent's preferred velocity; it does not remove admitted collision
+checks, grant Gameplay/Network authority, alter registration or scheduling
+priority, or supersede Character/Physics collision authority. The host supplies
+one complete policy set after the owner safe point for a declared fixed tick;
+workers retain the old complete snapshot until a new tick capture succeeds.
+
 ```cpp
 struct CrowdAgentConfig {
     float    neighborRadius;
