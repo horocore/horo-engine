@@ -943,12 +943,14 @@ target_compile_features(HoroUpdateExperienceSessionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateExperienceSessionTests PRIVATE HoroEngine::EditorModel)
 add_executable(HoroConfiguredEditorUpdateBackendTests
         unit/editor/ConfiguredEditorUpdateBackendTests.cpp
+        unit/editor/ConfiguredEditorUpdateManifestSourceTests.cpp
         ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/ConfiguredEditorUpdateBackend.cpp
+        ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp
 )
 target_compile_features(HoroConfiguredEditorUpdateBackendTests PRIVATE cxx_std_20)
 target_include_directories(HoroConfiguredEditorUpdateBackendTests PRIVATE ${PROJECT_SOURCE_DIR}/apps ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(HoroConfiguredEditorUpdateBackendTests PRIVATE HoroEngine::EditorModel HoroEngine::UpdateDiscovery
-        HoroEngine::UpdateDownload HoroEngine::Platform)
+        HoroEngine::UpdateDownload HoroEngine::Platform CURL::libcurl)
 horo_register_catch_test(HoroConfiguredEditorUpdateBackendTests LABELS "editor;update;headless")
 add_executable(HoroProjectGameplayRegistryTests
         unit/editor/ProjectGameplayRegistryTests.cpp
