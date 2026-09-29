@@ -31,6 +31,32 @@ marshals content-free notifications to the registry's owner thread. This does
 not publish an OS process runner or new native authority. The generated
 `HoroExtensionsPublicHeaderConsumer` compiles the header through its owning
 target's staged include view.
+## CHR-007.2 Character Metrics Boundary
+
+`HoroEngine::Physics` owns the additive `Horo/Physics/CharacterMetrics.h` contract.
+Existing Character callers retain their behavior: `CharacterFixedTickInput::metrics`
+defaults to null. An opting-in host retains the capture through one synchronous
+owner-thread tick, then publishes it through an exact-world, revision-scoped
+`CharacterMetricBinding` created with handles registered outside the tick path.
+The host closes the binding before world replacement. No native Physics or
+profiler backend type enters the public contract. The generated Physics
+public-header consumer compiles the new header through its owning target.
+
+## RUI-012.3 Template Dependency Boundary
+
+`HoroEngine::UiTemplateGraph` owns the additive
+`Horo/UiTemplates/UiTemplateDependencyGraph.h` and `UiTemplateErrors.h` contracts.
+This load-time authoring/cook target depends on Foundation, Assets and Packages
+for stable template asset IDs, semantic digests, and pinned package identities/
+versions. `HoroEngine::RuntimeUi` retains its Foundation/Assets-only dependency
+direction and gains no template authority. Existing UI document and runtime
+callers need no migration. Authoring/cook callers explicitly link the new target,
+prepare an immutable, verified catalog and package lock, then resolve exact
+accepted template revisions at load time.
+The resolver neither selects packages nor loads assets; it returns a detached
+dependency closure and rejects missing, stale, cyclic or incompatible inputs.
+The generated `HoroUiTemplateGraphPublicHeaderConsumer` target checks the
+staged public-header boundary independently of repository-wide include paths.
 
 ## NET-002.7 Inbound Dispatch Boundary
 
@@ -79,6 +105,17 @@ the synchronous invocation, then publish a detached candidate against the exact
 current source revision. Format and codec types do not enter TerrainApi or runtime
 headers. The generated public-header consumer compiles the header through the new
 target's staged include view.
+
+## TRF-002.3 Tile Cook Boundary
+
+`HoroEngine::TerrainCook` owns the additive `Horo/Terrain/TerrainTileCook.h` contract
+and depends on `HoroEngine::TerrainImport` for detached canonical source values.
+There are no existing tile-cook callers to migrate. Assets/application hosts supply
+the exact source, dependency artifacts, target/toolchain envelope and finite profile;
+they retain sole authority for scheduling, cache storage and atomic publication.
+The cook produces independently hashed neutral tile payloads and a complete sorted
+manifest, without a cache root, runtime state, native handle or global registry.
+Generated public-header consumer coverage checks the staged target boundary.
 
 ## REL-002.4 Update Transfer Boundary
 
@@ -1197,3 +1234,13 @@ type. Existing callers require no signature migration. Application roots supply
 exact concrete participant factories and retain their code and resources through
 composition shutdown. `HoroNetworkModePublicHeaderConsumer`, the runtime mode
 tests, and the concrete headless host integration consumer cover this boundary.
+
+## AUD-002.7 Runtime Stream Decoder Header Boundary
+
+`HoroEngine::AudioApi` solely owns the additive public
+`Horo/Audio/AudioStreamDecoder.h` and `AudioStreamDecoderErrors.h` contracts.
+Existing import-decoder callers have no signature migration: runtime workers opt
+into the separate session and supply caller-owned output/scratch and an owned
+provider context. No codec-specific or native backend type crosses the public
+boundary. The generated `HoroAudioApiPublicHeaderConsumer` and focused
+`HoroAudioApiTests` cover the new headers and lifecycle contract.

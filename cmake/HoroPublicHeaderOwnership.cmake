@@ -283,6 +283,10 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiPresentationReceipt.h
     Horo/Runtime/Ui/UiTextShaping.h
 )
+horo_configure_target_header_boundary(HoroUiTemplateGraph PUBLIC_HEADERS
+    Horo/UiTemplates/UiTemplateDependencyGraph.h
+    Horo/UiTemplates/UiTemplateErrors.h
+)
 horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/MessageCodecRegistry.h
     Horo/Network/MessageDeliveryGate.h
@@ -402,12 +406,15 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioMediaFormatRegistry.h
     Horo/Audio/AudioPlanarBlock.h
     Horo/Audio/AudioErrors.h
+    Horo/Audio/AudioFailureRecovery.h
     Horo/Audio/AudioIdentity.h
     Horo/Audio/MixerAssetSchema.h
     Horo/Audio/AudioVoiceStateMachine.h
     Horo/Audio/AudioResamplerPlan.h
     Horo/Audio/AudioPlaybackRequest.h
     Horo/Audio/AudioSoundReference.h
+    Horo/Audio/AudioStreamDecoder.h
+    Horo/Audio/AudioStreamDecoderErrors.h
 )
 
 horo_configure_target_header_boundary(HoroAudioImport PUBLIC_HEADERS
@@ -449,6 +456,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/CharacterCommandPipeline.h
     Horo/Physics/CharacterControllerContracts.h
     Horo/Physics/CharacterDiagnostics.h
+    Horo/Physics/CharacterMetrics.h
     Horo/Physics/CharacterErrors.h
     Horo/Physics/CharacterWorld.h
     Horo/Physics/CharacterWorldSettings.h
@@ -636,6 +644,9 @@ horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroTerrainImport PUBLIC_HEADERS
     Horo/Terrain/TerrainSourceImport.h
+)
+horo_configure_target_header_boundary(HoroTerrainCook PUBLIC_HEADERS
+    Horo/Terrain/TerrainTileCook.h
 )
 horo_configure_target_header_boundary(HoroTerrainRuntime PUBLIC_HEADERS
     Horo/Terrain/TerrainAsyncJobs.h

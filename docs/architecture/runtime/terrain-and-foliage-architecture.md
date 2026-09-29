@@ -246,6 +246,33 @@ Paths, timestamps, locale, job order and runtime/provider handles are excluded. 
 GPU resources, solver objects and navigation-provider tiles remain separately keyed and
 owned by Render, Physics and Navigation.
 
+### TRF-002.3 Deterministic Tile Cook Slice
+
+`HoroEngine::TerrainCook` accepts one detached TRF-002.2 canonical source, an exact
+provider-neutral tier/policy, verified dependency artifact digests and host-supplied
+target/toolchain identities. It performs no file I/O, cache lookup, registration,
+runtime activation or atomic publication. Assets owns those operations. Its schema-v1
+little-endian payloads each cover one tile and LOD, including finite meter heights,
+normalized layer weights, binary holes, source/coordinate metadata and complete
+provenance. The sorted manifest binds typed signed world-tile addresses, exact payload
+sizes/digests and four edge signatures. A host checks the requested cook fingerprint,
+manifest digest and every independently readable payload before publication or reuse.
+
+Tile bounds partition the entire source sample grid, retaining the exact final sample
+on partial edges; adjacent tiles share the same boundary samples. LODs subsample at a
+fixed power-of-two stride and retain the final edge sample, so partial edges never
+silently drop data. World-tile coordinates floor-quantize the finite source origin
+against that LOD's physical tile span, preserving negative addresses without paths or
+presentation state. A seam signature binds ordered boundary height/weight/hole samples,
+channel count, axis and LOD stride, but not placement or unrelated interior samples.
+
+Source, dependency and policy inputs are canonically encoded before hashing; dependency
+input order is normalized and duplicates fail. Profile ceilings cannot exceed the
+selected tier's finite limits. Corrupt prior candidates fail closed, cancelled or
+over-budget work returns no output, and old detached results remain valid across a
+replacement attempt. Incremental reuse is an optional optimization over identical
+verified tile bytes, never a second cache/publication authority.
+
 ### Terrain Collision
 
 Terrain collision geometry is derived from the heightfield at asset cook

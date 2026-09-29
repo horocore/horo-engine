@@ -107,6 +107,18 @@ record bound; a retaining layer that reaches it must preserve Character state an
 report aggregate drop telemetry rather than allocating or evicting
 nondeterministically.
 
+`CharacterMetricCapture` is an optional caller-owned output for one synchronous
+fixed-tick attempt. When present, Character counts actual sweep calls, movement
+iterations and resolved contacts, records active controller occupancy and
+cumulative bounded-storage overflow pressure, and times reached tick phases on
+the owner thread. A failed attempt is marked without a publication revision;
+invalid pre-admission input leaves an empty capture. With no capture, the tick
+does no clock reads or metric publication. Host composition prebinds closed
+`subsystem=character` Telemetry series and publishes the detached snapshot only
+after the tick returns, with exact world, scene and host revision validation.
+The binding closes before the world retires; presentation consumers never borrow
+mutable controller records or query adapters.
+
 The public lifecycle surfaces are `Horo/Physics/CharacterWorld.h` and the
 `HoroPhysicsSceneIntegration` adapter owning the
 `Horo/Physics/PhysicsSceneActivation.h` participant. The adapter is the explicit
