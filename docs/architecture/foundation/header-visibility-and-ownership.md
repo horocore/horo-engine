@@ -850,6 +850,14 @@ adapter. Both headers are registered to their actual targets and exercised by th
 generated public-header consumers. This is a new contract with no production caller
 migration; future sense producers and scene activation must compose these APIs
 instead of adding a reverse RuntimeScene dependency to HoroAI.
+`[GAI-002.3]` adds `Horo/AI/PerceptionSpatialBroadphase.h` to the existing
+`HoroAISceneIntegration` public boundary, not Foundation-only `HoroAI`: scene
+generation validation belongs at the integration edge. Its snapshot owns finite
+listener/source values and an immutable spatial index; workers retain it without
+borrowing a RuntimeScene. The header is registered to that one target and checked
+by its generated public-header consumer. No existing production caller migrates
+in this slice; later perception composition must publish after the structural
+safe point and pass the same revision to bounded sensing workers.
 `Horo/AI/EnvironmentQuerySchema.h` is owned by the same Foundation-only AI target.
 It defines bounded, versioned EQS authoring metadata and inert native/script/package
 descriptor snapshots. Stable query, result, item, context, generator, test, stage,
