@@ -810,6 +810,14 @@ stages and missing contributions for degraded editing, while plan admission reje
 every unavailable, incompatible, or unsupported stage before execution. AssetRegistry
 binding, cooking, scheduling, and provider execution remain in their owning later
 composition boundaries; this header adds no backend or scene dependency.
+`[GAI-004.3]` retains admitted context dependencies in that existing Foundation-only
+plan and adds `Horo/AI/EnvironmentQueryContexts.h` to `HoroAISceneIntegration`.
+The new header is the RuntimeScene-facing capture boundary, not a reverse dependency
+from `HoroAI`; it owns no mutable Scene pointer in published values. The generated
+public-header consumer covers its declared AI and RuntimeScene dependencies. Existing
+schema callers need no migration; later EQS executors must submit the plan's
+requirements through this scene integration seam rather than resolving contexts
+independently in each consumer.
 
 ## PCG Identity Boundary
 

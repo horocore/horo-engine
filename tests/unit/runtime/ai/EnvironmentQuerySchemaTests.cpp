@@ -96,6 +96,8 @@ namespace Horo::AI {
             CHECK(firstPlan.Value().Stages()[1] == secondPlan.Value().Stages()[1]);
             CHECK(firstPlan.Value().Stages()[0].kind == QueryStageKind::Generator);
             CHECK(firstPlan.Value().Stages()[1].kind == QueryStageKind::Test);
+            REQUIRE(firstPlan.Value().RequiredContexts().size() == 1);
+            CHECK(firstPlan.Value().RequiredContexts()[0].id == fixture.contexts[0].id);
             CHECK(secondAsset.Value().Stages()[0].id == revised.stages[0].id);
         }
 
