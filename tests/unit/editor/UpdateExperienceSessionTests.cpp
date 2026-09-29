@@ -139,3 +139,17 @@ TEST_CASE("Install-on-exit requests only a staged helper handoff", "[editor][upd
     REQUIRE(session.ActivateOnExit().HasValue());
     CHECK(backend.activationRequests == 1U);
 }
+
+TEST_CASE("Verified host outcome is the only way to restore active or rolled-back state on relaunch", "[editor][update]") {
+    JobSystem jobs({.workerCount = 1U});
+    FakeBackend backend;
+    UpdateExperienceSession active{jobs, backend};
+    CHECK_FALSE(active.ReportVerifiedHostOutcome(EditorUpdatePhase::Available));
+    REQUIRE(active.ReportVerifiedHostOutcome(EditorUpdatePhase::Active));
+    CHECK(active.Snapshot().phase == EditorUpdatePhase::Active);
+    CHECK_FALSE(active.ReportVerifiedHostOutcome(EditorUpdatePhase::RolledBack));
+
+    UpdateExperienceSession rolledBack{jobs, backend};
+    REQUIRE(rolledBack.ReportVerifiedHostOutcome(EditorUpdatePhase::RolledBack));
+    CHECK(rolledBack.Snapshot().phase == EditorUpdatePhase::RolledBack);
+}

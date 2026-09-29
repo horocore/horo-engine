@@ -737,7 +737,7 @@ namespace Horo::Editor {
 
         struct EditorBackgroundServices {
             JobSystem &jobs;
-            IEditorUpdateBackend *updates;
+            const EditorUpdateHostServices *updates;
         };
 
         struct RunEditorMainLoopParams {
@@ -1048,15 +1048,36 @@ namespace Horo::Editor {
             bool nativeMenuInstalled_{false};
         };
 
+        /** @brief Binds an authenticated installed-host update context before the settings view is created. */
+        void ConfigureUpdateExperience(RunEditorMainLoopParams &p, EditorGuiContext &guiContext,
+                                       std::optional<UpdateExperienceSession> &session) {
+            if (!p.background.updates)
+                return;
+            session.emplace(p.background.jobs, p.background.updates->backend);
+            if (const auto outcome = p.background.updates->verifiedOutcome; outcome) {
+                const EditorUpdatePhase phase =
+                    *outcome == EditorVerifiedUpdateOutcome::Active ? EditorUpdatePhase::Active : EditorUpdatePhase::RolledBack;
+                static_cast<void>(session->ReportVerifiedHostOutcome(phase));
+            }
+            guiContext.updates = &*session;
+        }
+
+        /** @brief Requests only a staged helper handoff during an orderly editor exit. */
+        void RequestUpdateActivationOnExit(std::optional<UpdateExperienceSession> &session, const bool closing,
+                                           const bool restartingRenderer) {
+            if (!session || !closing || restartingRenderer)
+                return;
+            const Result<bool> handoff = session->ActivateOnExit();
+            if (handoff.HasError())
+                LOG_ERROR("editor.update", "Install-on-exit handoff failed: %s", handoff.ErrorValue().message.c_str());
+        }
+
         std::optional<EditorRendererRestartRequest> RunEditorMainLoop(RunEditorMainLoopParams &p) {
             ThemeContext themeContext{p.fonts};
             EditorSettingsSnapshot settingsSnapshot = p.settings.Snapshot();
             EditorGuiContext guiContext{p.engineEvents, p.editorEvents, p.localization, themeContext, settingsSnapshot};
             std::optional<UpdateExperienceSession> updateSession;
-            if (p.background.updates) {
-                updateSession.emplace(p.background.jobs, *p.background.updates);
-                guiContext.updates = &*updateSession;
-            }
+            ConfigureUpdateExperience(p, guiContext, updateSession);
 
             // Borrowed screen services must outlive the host that invokes screen OnLeave().
             EditorViewportSceneState viewportSceneState;
@@ -1187,11 +1208,7 @@ namespace Horo::Editor {
                 }
             }
             runtime->Shutdown();
-            if (updateSession && screenHost.IsApplicationCloseRequested() && !rendererRestart) {
-                const Result<bool> handoff = updateSession->ActivateOnExit();
-                if (handoff.HasError())
-                    LOG_ERROR("editor.update", "Install-on-exit handoff failed: %s", handoff.ErrorValue().message.c_str());
-            }
+            RequestUpdateActivationOnExit(updateSession, screenHost.IsApplicationCloseRequested(), rendererRestart.has_value());
             return rendererRestart;
         }
     }  // namespace
@@ -1333,7 +1350,7 @@ namespace Horo::Editor {
         const Log::IStructuredLogQuery &logs;
         BuildOutputStore &buildOutput;
         OperationStore &operations;
-        IEditorUpdateBackend *updateBackend;
+        const EditorUpdateHostServices *updateHost;
     };
 
     /** @brief Owns runtime services and routes for one graphical editor session. */
@@ -1365,7 +1382,7 @@ namespace Horo::Editor {
                                            launch.fonts,
                                            launch.textures,
                                            projectCreationService,
-                                           {jobSystem, launch.updateBackend},
+                                           {jobSystem, launch.updateHost},
                                            settings,
                                            engineEvents,
                                            editorEvents,
@@ -1449,7 +1466,7 @@ namespace Horo::Editor {
     // ── public entry ─────────────────────────────────────────────────────────
 
     /** @copydoc RunEditorGuiApp */
-    int RunEditorGuiApp(const int argc, char **argv, IEditorUpdateBackend *updateBackend) {
+    int RunEditorGuiApp(const int argc, char **argv, const EditorUpdateHostServices *updateHost) {
         // ── Bootstrap logging before any subsystem ───────────────────────
         auto observabilitySession = InitializeEditorObservability();
         EditorTelemetry editorTelemetry = RegisterEditorTelemetry();
@@ -1494,7 +1511,7 @@ namespace Horo::Editor {
 
         const std::optional<EditorRendererRestartRequest> rendererRestart = RunEditorSession(
             {*prepared, *presentation->window, ImGui::GetIO(), presentation->fonts, presentation->textures, presentation->composition,
-             editorTelemetry, *structuredLogStore, buildOutputStore, operationStore, updateBackend});
+             editorTelemetry, *structuredLogStore, buildOutputStore, operationStore, updateHost});
 
         ShutdownEditorPresentation(presentation->window, presentation->composition, presentation->textures);
 
