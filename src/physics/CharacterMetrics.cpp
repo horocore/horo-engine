@@ -80,20 +80,20 @@ namespace Horo::Character {
     }
 
     /** @copydoc CharacterMetricBinding::Create */
-    Result<CharacterMetricBinding> CharacterMetricBinding::Create(
-        const CharacterWorldId world, const std::uint64_t sceneGeneration, const std::uint64_t revision,
-        const std::uint32_t maximumControllers, const std::uint32_t maximumQueriesPerTick, const std::uint32_t maximumMovementIterations,
-        const std::uint32_t maximumContactsPerMovement, const Telemetry::MetricCollectionLevel level, CharacterMetricHandles handles) {
-        if (!world.IsValid() || sceneGeneration == 0 || revision == 0 || maximumControllers == 0 || maximumQueriesPerTick == 0 ||
-            maximumMovementIterations == 0 || maximumContactsPerMovement == 0 || level > Telemetry::MetricCollectionLevel::Detailed)
+    Result<CharacterMetricBinding> CharacterMetricBinding::Create(const CharacterWorldId world, const std::uint64_t sceneGeneration,
+                                                                  const std::uint64_t revision, const CharacterMetricLimits limits,
+                                                                  const Telemetry::MetricCollectionLevel level,
+                                                                  CharacterMetricHandles handles) {
+        if (!world.IsValid() || sceneGeneration == 0 || revision == 0 || limits.maximumControllers == 0 ||
+            limits.maximumQueriesPerTick == 0 || limits.maximumMovementIterations == 0 || limits.maximumContactsPerMovement == 0 ||
+            level > Telemetry::MetricCollectionLevel::Detailed)
             return Result<CharacterMetricBinding>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
         if (level != Telemetry::MetricCollectionLevel::Off &&
             (!AllBound(handles.counts) || !AllBound(handles.events) ||
              (level == Telemetry::MetricCollectionLevel::Detailed && !AllBound(handles.phaseDurations))))
             return Result<CharacterMetricBinding>::Failure(MakeError(CharacterErrors::OperationUnsupported));
-        return Result<CharacterMetricBinding>::Success(CharacterMetricBinding{world, sceneGeneration, revision, maximumControllers,
-                                                                              maximumQueriesPerTick, maximumMovementIterations,
-                                                                              maximumContactsPerMovement, level, std::move(handles)});
+        return Result<CharacterMetricBinding>::Success(
+            CharacterMetricBinding{world, sceneGeneration, revision, limits, level, std::move(handles)});
     }
 
     /** @copydoc CharacterMetricBinding::Publish */
@@ -103,9 +103,10 @@ namespace Horo::Character {
         if (expectedRevision != revision_ || snapshot.world != world_ || snapshot.sceneGeneration != sceneGeneration_ ||
             snapshot.tick == 0 || snapshot.tick <= lastTick_)
             return Result<void>::Failure(MakeError(CharacterErrors::QuerySnapshotStale));
-        const std::uint64_t maximumIterations = static_cast<std::uint64_t>(maximumQueriesPerTick_) * maximumMovementIterations_;
-        const std::uint64_t maximumContacts = static_cast<std::uint64_t>(maximumControllers_) * maximumContactsPerMovement_;
-        if (snapshot.activeControllers > maximumControllers_ || snapshot.queries > maximumQueriesPerTick_ ||
+        const std::uint64_t maximumIterations =
+            static_cast<std::uint64_t>(limits_.maximumQueriesPerTick) * limits_.maximumMovementIterations;
+        const std::uint64_t maximumContacts = static_cast<std::uint64_t>(limits_.maximumControllers) * limits_.maximumContactsPerMovement;
+        if (snapshot.activeControllers > limits_.maximumControllers || snapshot.queries > limits_.maximumQueriesPerTick ||
             snapshot.movementIterations > maximumIterations || snapshot.movementIterations > snapshot.queries ||
             snapshot.contacts > maximumContacts || snapshot.overflows < lastOverflows_ ||
             (snapshot.failed ? snapshot.publicationRevision != 0
@@ -150,12 +151,8 @@ namespace Horo::Character {
 
     /** @copydoc CharacterMetricBinding::CharacterMetricBinding */
     CharacterMetricBinding::CharacterMetricBinding(const CharacterWorldId world, const std::uint64_t sceneGeneration,
-                                                   const std::uint64_t revision, const std::uint32_t maximumControllers,
-                                                   const std::uint32_t maximumQueriesPerTick, const std::uint32_t maximumMovementIterations,
-                                                   const std::uint32_t maximumContactsPerMovement,
+                                                   const std::uint64_t revision, const CharacterMetricLimits limits,
                                                    const Telemetry::MetricCollectionLevel level, CharacterMetricHandles handles) noexcept
-        : world_(world), sceneGeneration_(sceneGeneration), revision_(revision), maximumControllers_(maximumControllers),
-          maximumQueriesPerTick_(maximumQueriesPerTick), maximumMovementIterations_(maximumMovementIterations),
-          maximumContactsPerMovement_(maximumContactsPerMovement), level_(level), handles_(std::move(handles)),
-          ownerThread_(std::this_thread::get_id()) {}
+        : world_(world), sceneGeneration_(sceneGeneration), revision_(revision), limits_(limits), level_(level),
+          handles_(std::move(handles)), ownerThread_(std::this_thread::get_id()) {}
 }  // namespace Horo::Character

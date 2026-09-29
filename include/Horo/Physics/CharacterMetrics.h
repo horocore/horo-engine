@@ -50,6 +50,14 @@ namespace Horo::Character {
         std::array<Telemetry::Histogram, 3> phaseDurations;
     };
 
+    /** @brief Prepared world bounds used to validate one capture before telemetry emission. */
+    struct CharacterMetricLimits final {
+        std::uint32_t maximumControllers{};
+        std::uint32_t maximumQueriesPerTick{};
+        std::uint32_t maximumMovementIterations{};
+        std::uint32_t maximumContactsPerMovement{};
+    };
+
     /**
      * @brief Registers and prebinds Character series at host composition time.
      * @param level Host-selected metric collection level.
@@ -70,19 +78,13 @@ namespace Horo::Character {
          * @param world Exact Character world identity.
          * @param sceneGeneration Exact owning scene generation.
          * @param revision Nonzero host-issued binding revision.
-         * @param maximumControllers Prepared controller capacity.
-         * @param maximumQueriesPerTick Prepared per-tick query budget.
-         * @param maximumMovementIterations Prepared per-movement iteration budget.
-         * @param maximumContactsPerMovement Prepared per-movement contact bound.
+         * @param limits Prepared controller and per-tick work bounds.
          * @param level Selected collection level.
          * @param handles Handles prebound outside the tick path.
          * @return Binding or a typed descriptor/capability error.
          */
         [[nodiscard]] static Result<CharacterMetricBinding> Create(CharacterWorldId world, std::uint64_t sceneGeneration,
-                                                                   std::uint64_t revision, std::uint32_t maximumControllers,
-                                                                   std::uint32_t maximumQueriesPerTick,
-                                                                   std::uint32_t maximumMovementIterations,
-                                                                   std::uint32_t maximumContactsPerMovement,
+                                                                   std::uint64_t revision, CharacterMetricLimits limits,
                                                                    Telemetry::MetricCollectionLevel level, CharacterMetricHandles handles);
 
         /**
@@ -97,9 +99,7 @@ namespace Horo::Character {
         [[nodiscard]] Result<void> Close();
 
     private:
-        CharacterMetricBinding(CharacterWorldId world, std::uint64_t sceneGeneration, std::uint64_t revision,
-                               std::uint32_t maximumControllers, std::uint32_t maximumQueriesPerTick,
-                               std::uint32_t maximumMovementIterations, std::uint32_t maximumContactsPerMovement,
+        CharacterMetricBinding(CharacterWorldId world, std::uint64_t sceneGeneration, std::uint64_t revision, CharacterMetricLimits limits,
                                Telemetry::MetricCollectionLevel level, CharacterMetricHandles handles) noexcept;
 
         CharacterWorldId world_;
@@ -108,10 +108,7 @@ namespace Horo::Character {
         std::uint64_t lastTick_{};
         std::uint64_t lastPublicationRevision_{};
         std::uint64_t lastOverflows_{};
-        std::uint32_t maximumControllers_{};
-        std::uint32_t maximumQueriesPerTick_{};
-        std::uint32_t maximumMovementIterations_{};
-        std::uint32_t maximumContactsPerMovement_{};
+        CharacterMetricLimits limits_;
         Telemetry::MetricCollectionLevel level_{Telemetry::MetricCollectionLevel::Off};
         CharacterMetricHandles handles_;
         std::thread::id ownerThread_;

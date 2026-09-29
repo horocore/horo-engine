@@ -41,8 +41,10 @@ namespace Horo::Character {
         [[nodiscard]] Result<CharacterMetricBinding> OffBinding(const CharacterWorld &world) {
             const auto &settings = world.Settings().Values();
             return CharacterMetricBinding::Create(world.Descriptor().identity, world.Descriptor().sceneGeneration, 7,
-                                                  settings.capacities.maximumControllers, settings.work.maximumQueriesPerTick,
-                                                  settings.work.maximumMovementIterations, settings.work.maximumContactsPerMovement,
+                                                  {.maximumControllers = settings.capacities.maximumControllers,
+                                                   .maximumQueriesPerTick = settings.work.maximumQueriesPerTick,
+                                                   .maximumMovementIterations = settings.work.maximumMovementIterations,
+                                                   .maximumContactsPerMovement = settings.work.maximumContactsPerMovement},
                                                   Telemetry::MetricCollectionLevel::Off, {});
         }
 
@@ -148,8 +150,10 @@ namespace Horo::Character {
         const auto &world = *active.world;
         const auto &settings = world.Settings().Values();
         auto created = CharacterMetricBinding::Create(world.Descriptor().identity, world.Descriptor().sceneGeneration, 9,
-                                                      settings.capacities.maximumControllers, settings.work.maximumQueriesPerTick,
-                                                      settings.work.maximumMovementIterations, settings.work.maximumContactsPerMovement,
+                                                      {.maximumControllers = settings.capacities.maximumControllers,
+                                                       .maximumQueriesPerTick = settings.work.maximumQueriesPerTick,
+                                                       .maximumMovementIterations = settings.work.maximumMovementIterations,
+                                                       .maximumContactsPerMovement = settings.work.maximumContactsPerMovement},
                                                       Telemetry::MetricCollectionLevel::Detailed,
                                                       RegisterCharacterMetricHandles(Telemetry::MetricCollectionLevel::Detailed));
         REQUIRE(created.HasValue());
