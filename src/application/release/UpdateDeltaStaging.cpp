@@ -10,13 +10,15 @@
 
 namespace Horo::Release {
     namespace {
+        /** @brief Requires a stable absolute spelling for a host-owned staging root. */
+        [[nodiscard]] bool NormalizedRoot(const std::filesystem::path &path) {
+            return path.is_absolute() && !path.filename().empty() && path.lexically_normal() == path;
+        }
+
         /** @brief Requires absolute normalized roots and prevents a stage from aliasing either source. */
         [[nodiscard]] bool ValidRoots(const std::filesystem::path &base, const std::filesystem::path &delta,
                                       const std::filesystem::path &stage) {
-            const auto normalized = [](const std::filesystem::path &path) {
-                return path.is_absolute() && !path.filename().empty() && path.lexically_normal() == path;
-            };
-            if (!normalized(base) || !normalized(delta) || !normalized(stage))
+            if (!NormalizedRoot(base) || !NormalizedRoot(delta) || !NormalizedRoot(stage))
                 return false;
             std::error_code error;
             const auto realBase = std::filesystem::canonical(base, error);
@@ -28,13 +30,11 @@ namespace Horo::Release {
             const auto realStageParent = std::filesystem::canonical(stage.parent_path(), error);
             if (error)
                 return false;
-            const bool sameSources = std::filesystem::equivalent(realBase, realDelta, error);
-            if (error || sameSources)
+            if (const bool sameSources = std::filesystem::equivalent(realBase, realDelta, error); error || sameSources)
                 return false;
             const auto aliasesStageParent = [&](const std::filesystem::path &source) {
                 for (auto parent = realStageParent;; parent = parent.parent_path()) {
-                    const bool aliases = std::filesystem::equivalent(source, parent, error);
-                    if (error || aliases)
+                    if (const bool aliases = std::filesystem::equivalent(source, parent, error); error || aliases)
                         return true;
                     if (parent == parent.root_path())
                         return false;
@@ -45,6 +45,13 @@ namespace Horo::Release {
 
         /** @brief Removes only the previously absent destination created by this operation. */
         struct StageCleanup final {
+            explicit StageCleanup(std::filesystem::path stageRoot) : root(std::move(stageRoot)) {}
+
+            StageCleanup(const StageCleanup &) = delete;
+            StageCleanup &operator=(const StageCleanup &) = delete;
+            StageCleanup(StageCleanup &&) = delete;
+            StageCleanup &operator=(StageCleanup &&) = delete;
+
             std::filesystem::path root;
             bool active{true};
 
@@ -97,9 +104,9 @@ namespace Horo::Release {
             return verified;
         if (auto capacity = CheckCapacity(canonical.Value(), stageRoot.parent_path(), limits, files); capacity.HasError())
             return capacity;
-        std::error_code error;
-        if (!std::filesystem::is_directory(std::filesystem::symlink_status(stageRoot.parent_path(), error)) || error ||
-            !std::filesystem::create_directory(stageRoot, error) || error)
+        if (std::error_code error; !std::filesystem::is_directory(std::filesystem::symlink_status(stageRoot.parent_path(), error)) || error)
+            return failed(UpdateTransferErrors::StageMismatch);
+        if (std::error_code error; !std::filesystem::create_directory(stageRoot, error) || error)
             return failed(UpdateTransferErrors::StageMismatch);
         StageCleanup cleanup{stageRoot};
         if (auto synced = files.SyncDirectory(stageRoot.parent_path()); synced.HasError())

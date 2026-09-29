@@ -269,6 +269,34 @@ namespace Horo::Release {
             std::filesystem::path readyMarker;
         };
 
+        /** @brief Clears stale full-stage evidence or rejects any marker beside a private delta. */
+        [[nodiscard]] Result<void> PrepareStageMarkers(const std::filesystem::path &packageFile, const std::filesystem::path &stageRoot,
+                                                       NativeDurableFileSystem &files, const bool publishReady) {
+            auto ready = stageRoot;
+            ready += ".ready";
+            auto prepared = ready;
+            prepared += ".prepared";
+            const auto mismatch = [] {
+                return Result<void>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
+            };
+            if (packageFile == ready || packageFile == prepared)
+                return mismatch();
+            if (publishReady) {
+                if (auto cleared = files.RemoveDurable(ready); cleared.HasError())
+                    return cleared;
+                if (auto cleared = files.RemoveDurable(prepared); cleared.HasError())
+                    return cleared;
+            } else {
+                for (const auto &marker : {ready, prepared}) {
+                    std::error_code error;
+                    const auto status = std::filesystem::symlink_status(marker, error);
+                    if (status.type() != std::filesystem::file_type::not_found || (error && error != std::errc::no_such_file_or_directory))
+                        return mismatch();
+                }
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Authenticates and extracts a ZIP, publishing ready only for a complete package. */
         [[nodiscard]] Result<ExtractedZipStage> StageZipArchive(const VerifiedZipUpdateRequest &request, NativeDurableFileSystem &files,
                                                                 const Security::ArtifactVerifier &verifier,
@@ -277,30 +305,14 @@ namespace Horo::Release {
             const auto failed = [](const ErrorCodeDescriptor &code) {
                 return Result<ExtractedZipStage>::Failure(MakeError(code));
             };
-            const auto expectedFormat = publishReady ? DistributionPackageFormat::ZipArchive : DistributionPackageFormat::DeltaZipArchive;
-            if (package.selection.format != expectedFormat)
+            if (const auto expectedFormat =
+                    publishReady ? DistributionPackageFormat::ZipArchive : DistributionPackageFormat::DeltaZipArchive;
+                package.selection.format != expectedFormat)
                 return failed(UpdateTransferErrors::InvalidArchive);
             if (!Detail::ValidStagePaths(packageFile, stageRoot))
                 return failed(UpdateTransferErrors::StageMismatch);
-            auto ready = stageRoot;
-            ready += ".ready";
-            auto prepared = ready;
-            prepared += ".prepared";
-            if (packageFile == ready || packageFile == prepared)
-                return failed(UpdateTransferErrors::StageMismatch);
-            if (publishReady) {
-                if (auto cleared = files.RemoveDurable(ready); cleared.HasError())
-                    return Result<ExtractedZipStage>::Failure(cleared.ErrorValue());
-                if (auto cleared = files.RemoveDurable(prepared); cleared.HasError())
-                    return Result<ExtractedZipStage>::Failure(cleared.ErrorValue());
-            } else {
-                for (const auto &marker : {ready, prepared}) {
-                    std::error_code error;
-                    const auto status = std::filesystem::symlink_status(marker, error);
-                    if (status.type() != std::filesystem::file_type::not_found || (error && error != std::errc::no_such_file_or_directory))
-                        return failed(UpdateTransferErrors::StageMismatch);
-                }
-            }
+            if (auto marker = PrepareStageMarkers(packageFile, stageRoot, files, publishReady); marker.HasError())
+                return Result<ExtractedZipStage>::Failure(marker.ErrorValue());
             if (cancellation.IsCancellationRequested())
                 return failed(UpdateTransferErrors::Cancelled);
             if (auto verified = VerifyCompletedUpdateTransfer(package, checkpoint, packageFile, verifier); verified.HasError())
@@ -324,17 +336,16 @@ namespace Horo::Release {
                 return Result<ExtractedZipStage>::Failure(inventory.ErrorValue());
             if (auto synced = Detail::SyncStageDirectories(stageRoot, files); synced.HasError())
                 return Result<ExtractedZipStage>::Failure(synced.ErrorValue());
+            std::filesystem::path readyMarker;
             if (publishReady) {
                 auto published = PublishVerifiedUpdateStage({package, checkpoint, packageFile, stageRoot, inventory.Value(), limits}, files,
                                                             verifier, cancellation);
                 if (published.HasError())
                     return Result<ExtractedZipStage>::Failure(published.ErrorValue());
-                ready = std::move(published).Value();
-            } else {
-                ready.clear();
+                readyMarker = std::move(published).Value();
             }
             cleanup.active = false;
-            return Result<ExtractedZipStage>::Success({std::move(inventory).Value(), std::move(ready)});
+            return Result<ExtractedZipStage>::Success({std::move(inventory).Value(), std::move(readyMarker)});
         }
     }  // namespace
 

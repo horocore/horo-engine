@@ -171,10 +171,11 @@ namespace Horo::Release {
             for (std::size_t index = 0U; index < data.deltas.size(); ++index) {
                 const auto &delta = data.deltas[index];
                 const auto &artifact = delta.package.selection.artifact;
-                const auto full = std::ranges::find_if(data.packages, [&](const UpdatePackageRecord &package) {
+                if (const auto full = std::ranges::find_if(data.packages,
+                                                           [&](const UpdatePackageRecord &package) {
                     return package.selection.artifact.package == delta.fullPackage;
                 });
-                if (!ValidPackage(delta.package, data) || delta.package.selection.format != DistributionPackageFormat::DeltaZipArchive ||
+                    !ValidPackage(delta.package, data) || delta.package.selection.format != DistributionPackageFormat::DeltaZipArchive ||
                     full == data.packages.end() || artifact.platform != full->selection.artifact.platform ||
                     artifact.architecture != full->selection.artifact.architecture ||
                     artifact.installation != full->selection.artifact.installation || ZeroDigest(delta.baseInventoryDigest) ||
@@ -256,16 +257,56 @@ namespace Horo::Release {
             return ReadEnvelope(entry.at("signature"), package.digest, package.signature);
         }
 
-        [[nodiscard]] bool ReadPayload(const Json &json, UpdateManifestData &data) {
+        /** @brief Enforces the exact canonical shape and bounded collection sizes for one schema version. */
+        [[nodiscard]] bool ValidPayloadShape(const Json &json) {
             if (!json.is_object() || !json.at("schemaVersion").is_number_integer() ||
                 ((json.at("schemaVersion") == 1 && (json.size() != 11U && json.size() != 12U)) ||
                  (json.at("schemaVersion") == 2 && (json.size() != 12U && json.size() != 13U))) ||
                 (json.at("schemaVersion") != 1 && json.at("schemaVersion") != 2) || !json.at("product").is_object() ||
                 json.at("product").size() != 2U || !json.at("packages").is_array() || json.at("packages").size() > MaximumPackages)
                 return false;
-            if ((json.at("schemaVersion") == 1 && json.contains("deltas")) ||
-                (json.at("schemaVersion") == 2 && (!json.contains("deltas") || !json.at("deltas").is_array() || json.at("deltas").empty() ||
-                                                   json.at("deltas").size() > MaximumPackages)))
+            return !((json.at("schemaVersion") == 1 && json.contains("deltas")) ||
+                     (json.at("schemaVersion") == 2 && (!json.contains("deltas") || !json.at("deltas").is_array() ||
+                                                        json.at("deltas").empty() || json.at("deltas").size() > MaximumPackages)));
+        }
+
+        /** @brief Parses full package records before dependent delta records. */
+        [[nodiscard]] bool ReadFullPackages(const Json &json, UpdateManifestData &data) {
+            for (const Json &entry : json.at("packages")) {
+                UpdatePackageRecord package;
+                if (!ReadPackage(entry, data, package))
+                    return false;
+                data.packages.push_back(std::move(package));
+            }
+            return true;
+        }
+
+        /** @brief Parses signed delta records with all three canonical inventory digests. */
+        [[nodiscard]] bool ReadDeltaPackages(const Json &json, UpdateManifestData &data) {
+            if (!json.contains("deltas"))
+                return true;
+            for (const Json &entry : json.at("deltas")) {
+                if (!entry.is_object() || entry.size() != 5U)
+                    return false;
+                UpdateDeltaPackageRecord delta;
+                if (!ReadPackage(entry.at("package"), data, delta.package))
+                    return false;
+                delta.fullPackage = {entry.at("fullPackageId").get<std::string>()};
+                auto base = ParseSha256(entry.at("baseInventorySha256").get<std::string>());
+                auto patch = ParseSha256(entry.at("deltaInventorySha256").get<std::string>());
+                auto target = ParseSha256(entry.at("targetInventorySha256").get<std::string>());
+                if (base.HasError() || patch.HasError() || target.HasError())
+                    return false;
+                delta.baseInventoryDigest = base.Value();
+                delta.deltaInventoryDigest = patch.Value();
+                delta.targetInventoryDigest = target.Value();
+                data.deltas.push_back(std::move(delta));
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool ReadPayload(const Json &json, UpdateManifestData &data) {
+            if (!ValidPayloadShape(json))
                 return false;
             if (!Detail::ParseProductKind(json.at("product").at("kind").get<std::string>(), data.product.kind))
                 return false;
@@ -285,32 +326,7 @@ namespace Horo::Release {
                     return false;
                 data.minimumAllowedVersion = std::move(minimum);
             }
-            for (const Json &entry : json.at("packages")) {
-                UpdatePackageRecord package;
-                if (!ReadPackage(entry, data, package))
-                    return false;
-                data.packages.push_back(std::move(package));
-            }
-            if (json.contains("deltas")) {
-                for (const Json &entry : json.at("deltas")) {
-                    if (!entry.is_object() || entry.size() != 5U)
-                        return false;
-                    UpdateDeltaPackageRecord delta;
-                    if (!ReadPackage(entry.at("package"), data, delta.package))
-                        return false;
-                    delta.fullPackage = {entry.at("fullPackageId").get<std::string>()};
-                    auto base = ParseSha256(entry.at("baseInventorySha256").get<std::string>());
-                    auto patch = ParseSha256(entry.at("deltaInventorySha256").get<std::string>());
-                    auto target = ParseSha256(entry.at("targetInventorySha256").get<std::string>());
-                    if (base.HasError() || patch.HasError() || target.HasError())
-                        return false;
-                    delta.baseInventoryDigest = base.Value();
-                    delta.deltaInventoryDigest = patch.Value();
-                    delta.targetInventoryDigest = target.Value();
-                    data.deltas.push_back(std::move(delta));
-                }
-            }
-            return ValidData(data);
+            return ReadFullPackages(json, data) && ReadDeltaPackages(json, data) && ValidData(data);
         }
 
         [[nodiscard]] Result<SignedUpdateManifest> InvalidManifest() {
@@ -447,10 +463,11 @@ namespace Horo::Release {
         if (full == data.packages.end())
             return Result<UpdatePackageCandidates>::Failure(MakeError(UpdateManifestErrors::Incompatible));
         UpdatePackageCandidates candidates{*full, std::nullopt};
-        const auto delta = std::ranges::find_if(data.deltas, [&](const UpdateDeltaPackageRecord &record) {
+        if (const auto delta = std::ranges::find_if(data.deltas,
+                                                    [&](const UpdateDeltaPackageRecord &record) {
             return record.fullPackage == fullPackage && record.baseInventoryDigest == baseInventoryDigest;
         });
-        if (delta != data.deltas.end())
+            delta != data.deltas.end())
             candidates.delta = *delta;
         return Result<UpdatePackageCandidates>::Success(std::move(candidates));
     }
@@ -458,14 +475,15 @@ namespace Horo::Release {
     /** @copydoc PlanUpdatePackageAttempt */
     std::optional<UpdatePackageRecord> PlanUpdatePackageAttempt(const UpdatePackageCandidates &candidates,
                                                                 const UpdatePackageAttempt attempt) {
+        using enum UpdatePackageAttempt;
         switch (attempt) {
-            case UpdatePackageAttempt::Initial:
+            case Initial:
                 if (candidates.delta)
                     return candidates.delta->package;
                 return candidates.full;
-            case UpdatePackageAttempt::AfterDeltaFailure:
+            case AfterDeltaFailure:
                 return candidates.delta ? std::optional<UpdatePackageRecord>{candidates.full} : std::nullopt;
-            case UpdatePackageAttempt::AfterFullFailure:
+            case AfterFullFailure:
                 return std::nullopt;
         }
         return std::nullopt;
