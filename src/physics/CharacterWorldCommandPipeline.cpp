@@ -25,6 +25,11 @@ namespace Horo::Character {
                 phaseStart_ = Clock::now();
             }
 
+            MetricAttempt(const MetricAttempt &) = delete;
+            MetricAttempt &operator=(const MetricAttempt &) = delete;
+            MetricAttempt(MetricAttempt &&) = delete;
+            MetricAttempt &operator=(MetricAttempt &&) = delete;
+
             ~MetricAttempt() {
                 if (capture_ == nullptr)
                     return;

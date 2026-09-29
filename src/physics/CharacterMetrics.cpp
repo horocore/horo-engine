@@ -1,6 +1,7 @@
 #include "Horo/Physics/CharacterMetrics.h"
 
 #include "Horo/Physics/CharacterErrors.h"
+#include "MetricDescriptorInternal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -18,15 +19,8 @@ namespace Horo::Character {
                                                                  const Telemetry::MetricUnit unit, std::string description,
                                                                  const Telemetry::MetricCollectionLevel level,
                                                                  std::vector<Telemetry::DimensionDescriptor> dimensions = {}) {
-            const auto maximumSeries = dimensions.empty() ? 1U : static_cast<std::uint32_t>(dimensions.front().allowedValues.size());
-            return {.kind = kind,
-                    .name = std::move(name),
-                    .subsystem = "character",
-                    .unit = unit,
-                    .description = std::move(description),
-                    .dimensions = std::move(dimensions),
-                    .maxSeries = maximumSeries,
-                    .minimumCollectionLevel = level};
+            return PhysicsMetricDetail::MakeDescriptor("character", kind, std::move(name), unit, std::move(description), level,
+                                                       std::move(dimensions));
         }
 
         template <std::size_t Size>
@@ -57,23 +51,22 @@ namespace Horo::Character {
 
     /** @copydoc RegisterCharacterMetricHandles */
     CharacterMetricHandles RegisterCharacterMetricHandles(const Telemetry::MetricCollectionLevel level) {
+        using enum Telemetry::MetricCollectionLevel;
         CharacterMetricHandles handles;
-        if (level == Telemetry::MetricCollectionLevel::Off || level > Telemetry::MetricCollectionLevel::Detailed)
+        if (level == Off || level > Detailed)
             return handles;
-        auto counts = Telemetry::Runtime::RegisterGauge(
-            Descriptor(Telemetry::InstrumentKind::Gauge, "horo.character.count", Telemetry::MetricUnit::Count,
-                       "Character fixed-tick item counts.", Telemetry::MetricCollectionLevel::Core, {Dimension("kind", kCountValues)}));
+        auto counts = Telemetry::Runtime::RegisterGauge(Descriptor(Telemetry::InstrumentKind::Gauge, "horo.character.count",
+                                                                   Telemetry::MetricUnit::Count, "Character fixed-tick item counts.", Core,
+                                                                   {Dimension("kind", kCountValues)}));
         Bind(handles.counts, counts, "kind", kCountValues);
-        auto events =
-            Telemetry::Runtime::RegisterCounter(Descriptor(Telemetry::InstrumentKind::Counter, "horo.character.event",
-                                                           Telemetry::MetricUnit::Count, "Character overflow and failure attempts.",
-                                                           Telemetry::MetricCollectionLevel::Core, {Dimension("kind", kEventValues)}));
+        auto events = Telemetry::Runtime::RegisterCounter(
+            Descriptor(Telemetry::InstrumentKind::Counter, "horo.character.event", Telemetry::MetricUnit::Count,
+                       "Character overflow and failure attempts.", Core, {Dimension("kind", kEventValues)}));
         Bind(handles.events, events, "kind", kEventValues);
-        if (level == Telemetry::MetricCollectionLevel::Detailed) {
+        if (level == Detailed) {
             auto phases = Telemetry::Runtime::RegisterHistogram(
                 Descriptor(Telemetry::InstrumentKind::Histogram, "horo.character.phase.duration", Telemetry::MetricUnit::Seconds,
-                           "Character fixed-tick phase duration.", Telemetry::MetricCollectionLevel::Detailed,
-                           {Dimension("phase", kPhaseValues)}));
+                           "Character fixed-tick phase duration.", Detailed, {Dimension("phase", kPhaseValues)}));
             Bind(handles.phaseDurations, phases, "phase", kPhaseValues);
         }
         return handles;
@@ -84,13 +77,13 @@ namespace Horo::Character {
                                                                   const std::uint64_t revision, const CharacterMetricLimits limits,
                                                                   const Telemetry::MetricCollectionLevel level,
                                                                   CharacterMetricHandles handles) {
+        using enum Telemetry::MetricCollectionLevel;
         if (!world.IsValid() || sceneGeneration == 0 || revision == 0 || limits.maximumControllers == 0 ||
             limits.maximumQueriesPerTick == 0 || limits.maximumMovementIterations == 0 || limits.maximumContactsPerMovement == 0 ||
-            level > Telemetry::MetricCollectionLevel::Detailed)
+            level > Detailed)
             return Result<CharacterMetricBinding>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
-        if (level != Telemetry::MetricCollectionLevel::Off &&
-            (!AllBound(handles.counts) || !AllBound(handles.events) ||
-             (level == Telemetry::MetricCollectionLevel::Detailed && !AllBound(handles.phaseDurations))))
+        if (level != Off &&
+            (!AllBound(handles.counts) || !AllBound(handles.events) || (level == Detailed && !AllBound(handles.phaseDurations))))
             return Result<CharacterMetricBinding>::Failure(MakeError(CharacterErrors::OperationUnsupported));
         return Result<CharacterMetricBinding>::Success(
             CharacterMetricBinding{world, sceneGeneration, revision, limits, level, std::move(handles)});
@@ -103,12 +96,11 @@ namespace Horo::Character {
         if (expectedRevision != revision_ || snapshot.world != world_ || snapshot.sceneGeneration != sceneGeneration_ ||
             snapshot.tick == 0 || snapshot.tick <= lastTick_)
             return Result<void>::Failure(MakeError(CharacterErrors::QuerySnapshotStale));
-        const std::uint64_t maximumIterations =
-            static_cast<std::uint64_t>(limits_.maximumQueriesPerTick) * limits_.maximumMovementIterations;
-        const std::uint64_t maximumContacts = static_cast<std::uint64_t>(limits_.maximumControllers) * limits_.maximumContactsPerMovement;
         if (snapshot.activeControllers > limits_.maximumControllers || snapshot.queries > limits_.maximumQueriesPerTick ||
-            snapshot.movementIterations > maximumIterations || snapshot.movementIterations > snapshot.queries ||
-            snapshot.contacts > maximumContacts || snapshot.overflows < lastOverflows_ ||
+            snapshot.movementIterations > static_cast<std::uint64_t>(limits_.maximumQueriesPerTick) * limits_.maximumMovementIterations ||
+            snapshot.movementIterations > snapshot.queries ||
+            snapshot.contacts > static_cast<std::uint64_t>(limits_.maximumControllers) * limits_.maximumContactsPerMovement ||
+            snapshot.overflows < lastOverflows_ ||
             (snapshot.failed ? snapshot.publicationRevision != 0
                              : snapshot.publicationRevision <= lastPublicationRevision_ || !std::ranges::all_of(snapshot.phaseCompleted,
                                                                                                                 [](const bool complete) {
