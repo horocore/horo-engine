@@ -179,6 +179,7 @@ horo_configure_target_header_boundary(HoroUpdateActivation PUBLIC_HEADERS
     Horo/Release/BootstrapInstallation.h
     Horo/Release/BootstrapInstallationErrors.h
     Horo/Release/LinuxPortableBootstrapHost.h
+    Horo/Release/ZipPortableBootstrapHost.h
     Horo/Release/UpdateActivation.h
     Horo/Release/UpdateActivationErrors.h
     Horo/Release/UpdateRollback.h
