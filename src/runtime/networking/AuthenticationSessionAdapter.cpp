@@ -63,6 +63,13 @@ namespace Horo::Network {
                    Detail::ValidCanonicalIdentities(principal.roles.values, principal.roles.count) &&
                    Detail::ValidCanonicalIdentities(principal.capabilities.values, principal.capabilities.count);
         }
+
+        /** @brief Requires every host authority before entering the ordered verification chain. */
+        [[nodiscard]] bool AvailableAuthorities(const AuthenticationAuthorities &authorities) noexcept {
+            return authorities.certificates && authorities.peers && authorities.credentials && authorities.privateKeys &&
+                   authorities.certificates->Available() && authorities.peers->Available() && authorities.credentials->Available() &&
+                   authorities.privateKeys->Available();
+        }
     }  // namespace
 
     /** @copydoc NetworkSessionId::IsValid */
@@ -104,9 +111,7 @@ namespace Horo::Network {
     Result<AuthenticationResult> AuthenticationSessionAdapter::VerifyWithAuthorities(const AuthenticationResponseView &response,
                                                                                      const PeerAuthenticationEvidence &evidence,
                                                                                      const std::uint64_t nowTick) {
-        if (!authorities_.certificates || !authorities_.peers || !authorities_.credentials || !authorities_.privateKeys ||
-            !authorities_.certificates->Available() || !authorities_.peers->Available() || !authorities_.credentials->Available() ||
-            !authorities_.privateKeys->Available())
+        if (!AvailableAuthorities(authorities_))
             return Reject(NetworkErrors::AuthenticationTrustUnavailable, AuthenticationFailureClass::TrustUnavailable);
 
         const auto chargeVerifier = [this, nowTick]() {
