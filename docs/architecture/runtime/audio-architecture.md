@@ -537,6 +537,30 @@ The mixer may use this data to auto-level sources or to report loudness to
 platform certification tooling. Loudness values are computed during import/cook,
 not on the real-time path.
 
+The Audio import worker derives a bounded multiresolution min/max waveform,
+unweighted RMS, sample peak, and EBU R128/ITU-R BS.1770 gated integrated and
+terminal-three-second loudness and true peak from the decoded source blocks.
+Unavailable measurements (for example, integrated loudness of silence or a
+short-term window on a clip under three seconds) stay absent; they are not
+manufactured from RMS or sample peak. Normalization gain targets -23 LUFS only
+when integrated loudness is available. The pinned analysis implementation is a
+private AudioImport dependency, never a public or callback dependency.
+
+Cook schema v2 embeds the analysis result alongside the PCM payload in one AST
+artifact. The analysis has its own version and digest; cooked inspection validates
+the bounded waveform pyramid and finite measurements before exposing it to editor
+or runtime callers. Inspection receives only cooked bytes and never opens or
+re-decodes the source. Resident PCM, import decode-block, and waveform storage
+estimates are derived from admitted counts, not observed allocator usage. Existing
+schema v1 artifacts require an ordinary AST recook; there is no parallel Audio
+metadata cache or source-of-truth sidecar.
+
+The importer result now groups its former flat `waveform`, `loudness`, and
+`samplePeak` members under `analysis`, including the waveform pyramid and byte
+estimates. The only in-tree consumer of that result is the Audio cooker; it was
+migrated with the schema change. Downstream source import clients must read the
+new grouped value rather than maintain parallel flat metadata fields.
+
 ### Decoder Plugin Interface
 
 Codec support is extensible through the asset cooking pipeline, not by adding
@@ -1359,6 +1383,19 @@ an optional Post-1.0 extension.
 Streaming uses worker or I/O jobs to fill preallocated ring buffers. The audio
 callback consumes available frames without waiting.
 
+`Horo/Audio/AudioStreamDecoder.h` is the worker-side runtime decode session
+contract, distinct from source import decoding. A host first validates the cooked
+media generation and prepares an exact codec, ADR-063 format, frame count, block
+limit, and scratch budget. It then supplies a provider whose context is owned by
+the accepted session. One worker serializes bounded `Decode` and `Seek` calls into
+caller-owned interleaved output and scratch spans; control may request cooperative
+cancellation concurrently. Provider failure or inconsistent progress discards the
+candidate block and closes admission. The host joins worker work before releasing
+the provider, and only the Audio control owner publishes prepared blocks or ring
+generations at the ADR-062 boundary. This contract neither performs file I/O nor
+invokes a codec from the callback; concrete codec providers and stream-ring
+publication are separate integration work.
+
 Underrun behavior:
 
 - output silence for missing frames
@@ -1870,6 +1907,31 @@ validated device epoch without resuming automatically. This boundary is
 backend-neutral and does not move native pause/resume authority into editor,
 scene, or callback code. Concrete host composition supplies the ordered callback
 work and acknowledgement when the parent Audio Runtime is assembled.
+
+## Typed Failure And Recovery Boundary
+
+`HoroAudioApi` publishes an additive `AudioFailureRecovery` control-side contract.
+It classifies exact declared `horo.audio` codes from assets, codecs, streams,
+queues, voices, mixer candidates, devices, providers, middleware and memory into
+an affected-operation state, a proposed control/host action, and an active-epoch
+disposition. Existing `Result` callers do not change; adapters that need recovery
+policy can adopt the classifier without parsing messages. Foreign or undeclared
+codes fail closed to host policy with retained callback-visible ownership.
+
+Classification is a pure value operation, never an executor. The control caller
+must identify whether a request/candidate or the active epoch failed; even a
+candidate device/backend failure preserves the active epoch. Request and candidate
+failures preserve the active mixer and voice state. Stream underrun may
+render only admitted silence while control refills; ordinary queue saturation
+retains the producer's request and cannot consume the critical reserve. Device
+loss closes device-dependent admission and enters ADR-062 recovery through a
+quiescence barrier. A callback fault always enters the fatal retained-epoch path,
+regardless of the enclosed code. Control reconciles operations and proves native
+detachment before releasing state; the process host alone chooses product-level
+fallback or termination. Optional provider policy is never inferred from an error
+code, and no middleware fallback is automatic. Codes reserved for not-yet-built
+stream, graph, provider and middleware producers define stable output identities,
+not evidence that those producers or recovery executors are implemented.
 
 ## Metrics
 

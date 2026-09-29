@@ -865,6 +865,20 @@ only const spans, so a sensing job may borrow one frozen snapshot for its full
 bounded execution window. Descriptor capture is inert: it does not install
 services, select a backend, or touch ambient runtime state.
 
+`Horo/AI/PerceptionSpatialBroadphase.h` provides the Scene-integrated candidate
+slice. After a structural commit, the owner projects only declared listener and
+source entities into canonical global positions, layer bits, affiliation keys,
+and typed sense sets. It validates exact scene/entity generations and bounded
+population, builds a spatial hierarchy privately, then atomically publishes a
+shared immutable revision. Failed capture leaves the previous publication intact.
+Workers borrow that value snapshot without a Scene pointer, callback, allocation,
+rendering dependency, or live entity traversal. Bounded radius queries prune
+spatial nodes, apply sense/layer/affiliation filters, and return candidates in
+stable entity-identity order with explicit truncation. A retained old snapshot is
+historical data only; new dispatch after spawn/despawn must use the next
+post-commit publication. Detailed sight/occlusion and sense scheduling remain
+separate Perception/Physics responsibilities.
+
 Every built-in sense has an explicit authority, timing owner, and underlying
 query seam:
 
@@ -933,9 +947,12 @@ struct StimulusEvent {
    - LOS queries are read-only and operate against physics spatial acceleration
      structures without mutating collision state.
 2. **Scene Spatial Seam**:
-   - Candidate emitter gathering queries `SceneRuntime` spatial acceleration
-     structures (octree / BVH) to discover potential emitters within sensory
-     range before issuing detailed LOS physics traces, eliminating $O(N^2)$ scaling.
+   - Candidate emitter gathering queries a scene-scoped spatial acceleration
+     snapshot (BVH) projected from `SceneRuntime`'s declared perception participants
+     after its structural safe point. The integration index is a derived cache, not
+     a second Scene entity authority. It discovers potential emitters within
+     sensory range before detailed LOS physics traces, avoiding all-entity scans
+     per listener; a future shared Scene spatial index may supply the same seam.
 3. **Team Dispatch Split**:
    - Membership, faction, direct distress, and explicit target-spot events wake or
      invalidate affected agents immediately.
@@ -1099,6 +1116,16 @@ executable plan fails with typed errors if any required contribution, version, o
 stage kind is unavailable; it never skips a stage. This is schema admission, not the
 AssetRegistry mapping, cooker artifact, provider implementation, or runtime executor
 described below. Host composition supplies descriptor contributions explicitly.
+
+The admitted plan now retains each stage's context requirements and their
+deduplicated compatible union. `Horo/AI/EnvironmentQueryContexts.h`, owned by
+`HoroAISceneIntegration`, provides the separate owner-thread submission capture
+seam. The host explicitly composes custom callbacks, and the seam validates current
+RuntimeScene/entity generations and declared capabilities before publishing one
+owned read-only value set per execution revision. A present empty group is distinct
+from an absent required group. Neither the captured snapshot nor the Foundation-only
+schema contains a mutable Scene pointer; the full EQS scheduler/executor remains
+future work.
 
 EnvironmentQueryTemplate is an authoring asset with stable AssetId metadata in
 AssetRegistry. Its immutable cooked EnvironmentQueryPlan contains stable StageIds,
@@ -1854,6 +1881,21 @@ quality-cap truncation; capture never silently truncates global storage. Result
 publication still rechecks the captured Scene/world binding, dynamic revision,
 agent generation, and tick. This additive runtime contract does not change
 existing agent-registry callers; hosts opt in at their fixed-tick capture point.
+
+NAV-006.5 adds a distinct avoidance-layer table to that same immutable capture.
+Each project-stable layer identity occupies one fixed bit, and each agent's
+owner-supplied policy declares its own layer, a directed mask of layers it steers
+around, and a finite right-of-way priority in [0, 1]. The table and every enabled
+agent policy are validated together; an empty table means only the built-in
+default layer. Empty or undeclared masks, duplicate identities/bit positions,
+and non-finite or out-of-range priorities reject the entire capture. The mask
+filters local-steering neighbor facts directionally: A may account for B without
+B accounting for A. Priority only biases how strongly the optional sampler
+favors an agent's preferred velocity; it does not remove admitted collision
+checks, grant Gameplay/Network authority, alter registration or scheduling
+priority, or supersede Character/Physics collision authority. The host supplies
+one complete policy set after the owner safe point for a declared fixed tick;
+workers retain the old complete snapshot until a new tick capture succeeds.
 
 ```cpp
 struct CrowdAgentConfig {

@@ -563,6 +563,33 @@ solver boundary and leaves the authored seed unchanged. A missing or stale
 snapshot remains a typed read failure; no caller can infer a partially stepped
 body as an authoritative transform.
 
+`PhysicsBodyTransformAuthority` also owns a bounded presentation history in its
+pre-reserved body records. After applying a fixed tick and publishing one copied
+solver snapshot for every dynamic body, its owner commits that tick's complete
+pose set with `CommitInterpolationTick`. The commit validates the entire set
+before changing any previous/current endpoint. Static and kinematic poses join
+the same completed-tick set; no renderer call advances or mutates simulation.
+An owner-thread `InterpolationEndpoints` read returns an independent Horo value
+that remains usable after later ticks or world retirement. Presentation may
+evaluate that copy on any thread with finite `alpha` in `[0, 1]`; translation
+uses linear interpolation, rotation uses shortest-path spherical interpolation,
+and unbounded extrapolation is rejected. The first tick or a gap/discontinuity
+returns the current completed pose for every render rate.
+
+An explicit dynamic teleport/reset or static rebuild/update breaks history
+continuity. Restore and reload invalidate the published pair immediately, so
+presentation cannot consume a pre-restore pose while awaiting new solver evidence.
+The next successful completed tick starts with equal previous/current endpoints,
+never interpolating across the jump. A host-coordinated
+origin shift at a completed-tick safe point translates both retained endpoints
+and the detached runtime pose by the same finite delta and advances the origin
+generation; queued transform commands must first be drained or translated by
+their owner. This value operation does not itself rebase the native solver,
+which remains unsupported by the current canonical world capability. Reloads
+that construct a new authority candidate begin with empty history. Authored
+poses remain separate from presentation and are not rewritten by solver
+publication or origin rebasing.
+
 ## Dynamic Body Inputs
 
 `PhysicsBodyDynamicsCommand` is the backend-neutral fixed-tick contract for dynamic

@@ -31,6 +31,45 @@ Editor, scene, platform and native backend types do not enter the header. The
 generated `HoroAudioCommands` public-header consumer verifies its staged include
 boundary; no concrete host adapter is implicitly installed.
 
+## EXT-002.8 Process Observer Boundary
+
+`HoroEngine::Extensions` owns the additive public
+`Horo/Extensions/ProcessObserverRegistry.h` contract. Existing process runners,
+data-bus consumers, and extension callers require no migration. Opt-in host
+composition creates the registry with an explicit event allowlist, supplies
+admitted `horo.process.observe` handles and executable module leases, and
+marshals content-free notifications to the registry's owner thread. This does
+not publish an OS process runner or new native authority. The generated
+`HoroExtensionsPublicHeaderConsumer` compiles the header through its owning
+target's staged include view.
+
+## CHR-007.2 Character Metrics Boundary
+
+`HoroEngine::Physics` owns the additive `Horo/Physics/CharacterMetrics.h` contract.
+Existing Character callers retain their behavior: `CharacterFixedTickInput::metrics`
+defaults to null. An opting-in host retains the capture through one synchronous
+owner-thread tick, then publishes it through an exact-world, revision-scoped
+`CharacterMetricBinding` created with handles registered outside the tick path.
+The host closes the binding before world replacement. No native Physics or
+profiler backend type enters the public contract. The generated Physics
+public-header consumer compiles the new header through its owning target.
+
+## RUI-012.3 Template Dependency Boundary
+
+`HoroEngine::UiTemplateGraph` owns the additive
+`Horo/UiTemplates/UiTemplateDependencyGraph.h` and `UiTemplateErrors.h` contracts.
+This load-time authoring/cook target depends on Foundation, Assets and Packages
+for stable template asset IDs, semantic digests, and pinned package identities/
+versions. `HoroEngine::RuntimeUi` retains its Foundation/Assets-only dependency
+direction and gains no template authority. Existing UI document and runtime
+callers need no migration. Authoring/cook callers explicitly link the new target,
+prepare an immutable, verified catalog and package lock, then resolve exact
+accepted template revisions at load time.
+The resolver neither selects packages nor loads assets; it returns a detached
+dependency closure and rejects missing, stale, cyclic or incompatible inputs.
+The generated `HoroUiTemplateGraphPublicHeaderConsumer` target checks the
+staged public-header boundary independently of repository-wide include paths.
+
 ## NET-002.7 Inbound Dispatch Boundary
 
 `HoroEngine::NetworkRuntime` owns the additive
@@ -78,6 +117,17 @@ the synchronous invocation, then publish a detached candidate against the exact
 current source revision. Format and codec types do not enter TerrainApi or runtime
 headers. The generated public-header consumer compiles the header through the new
 target's staged include view.
+
+## TRF-002.3 Tile Cook Boundary
+
+`HoroEngine::TerrainCook` owns the additive `Horo/Terrain/TerrainTileCook.h` contract
+and depends on `HoroEngine::TerrainImport` for detached canonical source values.
+There are no existing tile-cook callers to migrate. Assets/application hosts supply
+the exact source, dependency artifacts, target/toolchain envelope and finite profile;
+they retain sole authority for scheduling, cache storage and atomic publication.
+The cook produces independently hashed neutral tile payloads and a complete sorted
+manifest, without a cache root, runtime state, native handle or global registry.
+Generated public-header consumer coverage checks the staged target boundary.
 
 ## REL-002.4 Update Transfer Boundary
 
@@ -812,6 +862,14 @@ adapter. Both headers are registered to their actual targets and exercised by th
 generated public-header consumers. This is a new contract with no production caller
 migration; future sense producers and scene activation must compose these APIs
 instead of adding a reverse RuntimeScene dependency to HoroAI.
+`[GAI-002.3]` adds `Horo/AI/PerceptionSpatialBroadphase.h` to the existing
+`HoroAISceneIntegration` public boundary, not Foundation-only `HoroAI`: scene
+generation validation belongs at the integration edge. Its snapshot owns finite
+listener/source values and an immutable spatial index; workers retain it without
+borrowing a RuntimeScene. The header is registered to that one target and checked
+by its generated public-header consumer. No existing production caller migrates
+in this slice; later perception composition must publish after the structural
+safe point and pass the same revision to bounded sensing workers.
 `Horo/AI/EnvironmentQuerySchema.h` is owned by the same Foundation-only AI target.
 It defines bounded, versioned EQS authoring metadata and inert native/script/package
 descriptor snapshots. Stable query, result, item, context, generator, test, stage,
@@ -821,6 +879,14 @@ stages and missing contributions for degraded editing, while plan admission reje
 every unavailable, incompatible, or unsupported stage before execution. AssetRegistry
 binding, cooking, scheduling, and provider execution remain in their owning later
 composition boundaries; this header adds no backend or scene dependency.
+`[GAI-004.3]` retains admitted context dependencies in that existing Foundation-only
+plan and adds `Horo/AI/EnvironmentQueryContexts.h` to `HoroAISceneIntegration`.
+The new header is the RuntimeScene-facing capture boundary, not a reverse dependency
+from `HoroAI`; it owns no mutable Scene pointer in published values. The generated
+public-header consumer covers its declared AI and RuntimeScene dependencies. Existing
+schema callers need no migration; later EQS executors must submit the plan's
+requirements through this scene integration seam rather than resolving contexts
+independently in each consumer.
 
 ## PCG Identity Boundary
 
@@ -1196,3 +1262,13 @@ type. Existing callers require no signature migration. Application roots supply
 exact concrete participant factories and retain their code and resources through
 composition shutdown. `HoroNetworkModePublicHeaderConsumer`, the runtime mode
 tests, and the concrete headless host integration consumer cover this boundary.
+
+## AUD-002.7 Runtime Stream Decoder Header Boundary
+
+`HoroEngine::AudioApi` solely owns the additive public
+`Horo/Audio/AudioStreamDecoder.h` and `AudioStreamDecoderErrors.h` contracts.
+Existing import-decoder callers have no signature migration: runtime workers opt
+into the separate session and supply caller-owned output/scratch and an owned
+provider context. No codec-specific or native backend type crosses the public
+boundary. The generated `HoroAudioApiPublicHeaderConsumer` and focused
+`HoroAudioApiTests` cover the new headers and lifecycle contract.

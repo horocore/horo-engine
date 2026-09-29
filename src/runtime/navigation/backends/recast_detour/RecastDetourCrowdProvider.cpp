@@ -151,7 +151,8 @@ namespace Horo::Navigation {
                 std::array<float, 3> sampled{};
                 dtObstacleAvoidanceParams params{};
                 params.velBias = 0.4F;
-                params.weightDesVel = 2.0F;
+                // Right-of-way biases steering effort, never admission, collision validation, or movement authority.
+                params.weightDesVel = 1.0F + 2.0F * agent.avoidance.priority;
                 params.weightCurVel = 0.75F;
                 params.weightSide = 0.75F;
                 params.weightToi = 2.5F;

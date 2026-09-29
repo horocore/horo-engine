@@ -5,8 +5,11 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <limits>
+#include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <variant>
 
 namespace Horo::Audio {
@@ -51,6 +54,14 @@ namespace Horo::Audio {
                 return true;
             }
 
+            [[nodiscard]] bool Float(float &out) noexcept {
+                std::uint32_t bits{};
+                if (!U32(bits))
+                    return false;
+                out = std::bit_cast<float>(bits);
+                return std::isfinite(out);
+            }
+
             [[nodiscard]] bool Digest(Sha256Digest &out) noexcept {
                 std::span<const std::uint8_t> bytes;
                 if (!Take(out.bytes.size(), bytes))
@@ -67,6 +78,104 @@ namespace Horo::Audio {
             std::span<const std::uint8_t> bytes_;
             std::size_t cursor_{};
         };
+
+        [[nodiscard]] bool ReadOptionalFloat(Reader &reader, std::optional<float> &out) noexcept {
+            std::uint8_t present{};
+            if (!reader.U8(present) || present > 1)
+                return false;
+            if (present) {
+                float value{};
+                if (!reader.Float(value))
+                    return false;
+                out = value;
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool ReadWaveformPoint(Reader &reader, AudioWaveformPoint &point, const std::uint64_t nextFrame,
+                                             const std::uint64_t frameCount, const std::uint64_t windowFrames, const bool finalPoint) {
+            if (!reader.U64(point.firstFrame) || !reader.U32(point.frameCount) || !reader.Float(point.minimum) ||
+                !reader.Float(point.maximum) || point.firstFrame != nextFrame || nextFrame > frameCount || point.frameCount == 0 ||
+                point.frameCount > windowFrames || point.frameCount > frameCount - nextFrame || point.minimum > point.maximum)
+                return false;
+            return finalPoint || point.frameCount == windowFrames;
+        }
+
+        [[nodiscard]] bool ReadWaveformLevel(Reader &reader, AudioWaveformLevel &level, const AudioWaveformLevel *previous,
+                                             const std::uint64_t frameCount, std::uint64_t &pointCountTotal, AudioSample &waveformPeak) {
+            std::uint32_t pointCount{};
+            if (!reader.U64(level.windowFrames) || level.windowFrames == 0 || !reader.U32(pointCount) || pointCount == 0 ||
+                pointCount > 524'288 || pointCountTotal + pointCount > 1'048'576 || pointCount > reader.Remaining() / 20U)
+                return false;
+            pointCountTotal += pointCount;
+            if (!previous &&
+                (level.windowFrames > std::numeric_limits<std::uint32_t>::max() || pointCount != 1 + (frameCount - 1) / level.windowFrames))
+                return false;
+            if (previous && (previous->windowFrames > std::numeric_limits<std::uint64_t>::max() / 2 ||
+                             level.windowFrames != previous->windowFrames * 2 || pointCount != (previous->points.size() + 1) / 2))
+                return false;
+            level.points.reserve(pointCount);
+            std::uint64_t nextFrame{};
+            for (std::uint32_t pointIndex = 0; pointIndex < pointCount; ++pointIndex) {
+                AudioWaveformPoint point;
+                if (!ReadWaveformPoint(reader, point, nextFrame, frameCount, level.windowFrames, pointIndex + 1 == pointCount))
+                    return false;
+                nextFrame += point.frameCount;
+                if (!previous) {
+                    waveformPeak = std::max({waveformPeak, std::abs(point.minimum), std::abs(point.maximum)});
+                } else {
+                    const auto &first = previous->points[static_cast<std::size_t>(pointIndex) * 2];
+                    const auto &second =
+                        previous->points[std::min<std::size_t>(static_cast<std::size_t>(pointIndex) * 2 + 1, previous->points.size() - 1)];
+                    const auto expectedFrames = first.frameCount + (pointIndex * 2 + 1 < previous->points.size() ? second.frameCount : 0);
+                    if (point.firstFrame != first.firstFrame || point.frameCount != expectedFrames ||
+                        point.minimum != std::min(first.minimum, second.minimum) ||
+                        point.maximum != std::max(first.maximum, second.maximum))
+                        return false;
+                }
+                level.points.push_back(point);
+            }
+            return nextFrame == frameCount;
+        }
+
+        [[nodiscard]] bool ReadAnalysis(Reader &reader, AudioCookManifest &manifest) {
+            if (manifest.frameCount == 0 || manifest.payloadByteCount == 0)
+                return false;
+            std::uint32_t byteCount{};
+            Sha256Digest digest;
+            if (!reader.U32(byteCount) || byteCount > MaximumCookedAudioPayloadBytes || !reader.Digest(digest))
+                return false;
+            std::span<const std::uint8_t> encoded;
+            if (!reader.Take(byteCount, encoded) || ComputeSha256(std::as_bytes(encoded)) != digest)
+                return false;
+            Reader analysis{encoded};
+            auto &result = manifest.analysis;
+            std::uint32_t version{};
+            std::uint32_t levelCount{};
+            if (!analysis.U32(version) || version != 1 || !analysis.U64(result.residentPcmBytes) ||
+                !analysis.U64(result.decodeBlockBytes) || !analysis.U64(result.waveformBytes) || !analysis.Float(result.samplePeak) ||
+                result.samplePeak < 0.0F || !ReadOptionalFloat(analysis, result.loudness.integratedLufs) ||
+                !ReadOptionalFloat(analysis, result.loudness.shortTermLufs) || !ReadOptionalFloat(analysis, result.loudness.truePeakDbtp) ||
+                !ReadOptionalFloat(analysis, result.loudness.rmsDbfs) ||
+                !ReadOptionalFloat(analysis, result.loudness.normalizationGainDb) || !analysis.U32(levelCount) || levelCount == 0 ||
+                levelCount > 32 || result.residentPcmBytes != manifest.payloadByteCount || result.decodeBlockBytes == 0 ||
+                result.decodeBlockBytes > 4'096U * MaximumCoreAudioSourceChannels * sizeof(AudioSample))
+                return false;
+            if (result.loudness.normalizationGainDb.has_value() && !result.loudness.integratedLufs.has_value())
+                return false;
+            result.waveformLevels.reserve(levelCount);
+            std::uint64_t pointCountTotal{};
+            AudioSample waveformPeak{};
+            for (std::uint32_t levelIndex = 0; levelIndex < levelCount; ++levelIndex) {
+                AudioWaveformLevel level;
+                if (const auto *previous = result.waveformLevels.empty() ? nullptr : &result.waveformLevels.back();
+                    !ReadWaveformLevel(analysis, level, previous, manifest.frameCount, pointCountTotal, waveformPeak))
+                    return false;
+                result.waveformLevels.push_back(std::move(level));
+            }
+            return analysis.Remaining() == 0 && result.waveformLevels.back().points.size() == 1 &&
+                   result.waveformBytes == pointCountTotal * 20U && waveformPeak == result.samplePeak;
+        }
 
         [[nodiscard]] bool ReadLayout(Reader &reader, AudioChannelLayout &layout) {
             std::uint8_t kind{};
@@ -197,7 +306,8 @@ namespace Horo::Audio {
             !reader.Take(4, magic) || !std::ranges::equal(magic, std::array<std::uint8_t, 4>{'H', 'A', 'C', '1'}))
             return Result<AudioCookManifest>::Failure(MakeError(AudioErrors::CookPayloadInvalid));
         AudioCookManifest manifest;
-        if (!ReadManifestFields(reader, manifest) || !ValidateChunks(reader, manifest) || reader.Remaining() != manifest.payloadByteCount)
+        if (!ReadManifestFields(reader, manifest) || !ReadAnalysis(reader, manifest) || !ValidateChunks(reader, manifest) ||
+            reader.Remaining() != manifest.payloadByteCount)
             return Result<AudioCookManifest>::Failure(MakeError(AudioErrors::CookPayloadInvalid));
         if (std::span<const std::uint8_t> payload; !reader.Take(static_cast<std::size_t>(manifest.payloadByteCount), payload) ||
                                                    ComputeSha256(std::as_bytes(payload)) != manifest.payloadDigest ||

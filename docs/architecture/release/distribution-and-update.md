@@ -307,12 +307,14 @@ may be published. The host must keep the private stage quiescent during this
 check; the archive reader must supply the complete authenticated file inventory.
 For ZIP packages, `StageVerifiedZipUpdate` first authenticates the complete
 private package, preflights every central-directory entry and local header,
-then requires exactly one `horo-update-files-v1.txt` entry. Its canonical UTF-8
-payload starts with `horo-update-files-v1\n` and contains sorted rows of
-`<path>\t<decimal byte count>\t<sha256:64 lowercase hex digits>\n` for every other regular
-file. The inventory entry is not installed. The reader rejects missing, extra,
+then requires exactly one `horo-update-files-v2.txt` entry. Its canonical UTF-8
+payload starts with `horo-update-files-v2\n` and contains sorted rows of
+`<path>\t<decimal byte count>\t<sha256:64 lowercase hex digits>\t<0644|0755>\t<content|entrypoint>\n`
+for every other regular file. Exactly one nonempty entrypoint is required and it
+must be executable. The inventory entry is not installed. The reader rejects missing, extra,
 duplicate, mismatched, or noncanonical rows before extraction, then compares
-every decompressed file with its declared digest and size. It writes into an
+every decompressed file with its declared digest and size, applies the signed
+permission mode to the staged file, and verifies that mode before publication. It writes into an
 absent sibling directory durably only after checking that the authenticated
 expanded size fits the available capacity with the host's free-space reserve.
 It checks the completed tree again and removes the new tree on failure before
@@ -325,6 +327,28 @@ read against the pre-sign inventory, writes the canonical internal inventory,
 and records the final package digest. Hosts install it explicitly for ZIP
 selections and provide the same archive limits used by staging. Existing
 package backends do not gain ZIP behavior implicitly.
+The v2 inventory and v2 ready marker replace the v1 contract. Producers must
+declare the product entrypoint and executable file paths from the frozen source
+inventory before signing. Existing v1 ZIP and tar.gz packages must be rebuilt
+and re-signed by a v2 producer; the staging reader does not infer an entrypoint
+or silently accept v1 metadata. Callers constructing `ReleasePackageRequest`
+must supply both new fields. The bootstrap host must launch only the authenticated
+entrypoint and must not derive a default path or change mode at launch time.
+`ProbeVerifiedUpdateEntrypoint` provides the shell-free process boundary for a
+trusted host-selected health command. It reauthenticates the package, v2 ready
+marker, and complete staged tree before passing the signed entrypoint path to
+`IExternalProcessRunner` with a bounded lifetime and output budget. The host
+keeps the stage quiescent and owns product-stop and launch-admission coordination;
+the probe alone does not establish that gate or install platform integration.
+The native filesystem exposes OS-held shared product-launch leases and an
+exclusive maintenance gate on the installation's `.product-launch.lock` file.
+An installed product launcher retains a shared lease for its entire process
+lifetime. Bootstrap, repair, uninstall, and update activation retain the
+exclusive gate after requesting product shutdown and before mutating the active
+state. If any launch remains active or races with maintenance, the operation
+fails before publication. This gate is additive to the transaction lock and
+does not terminate processes; launcher integration and a cooperative stop
+channel are required before production composition is complete.
 `PrepareZipUpdateStageHttps` is the blocking host worker operation for ZIP
 updates: it resumes or downloads into the protected private package file, then
 authenticates and extracts that same file before returning a durable ready
