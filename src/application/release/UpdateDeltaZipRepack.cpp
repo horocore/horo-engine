@@ -79,6 +79,24 @@ namespace Horo::Release {
                 target.push_back(file.target);
             return target;
         }
+
+        /** @brief Preserves signed executable and entrypoint intent when reproducing the full ZIP. */
+        struct LaunchFiles final {
+            std::string entrypoint;
+            std::vector<std::string> executablePaths;
+        };
+
+        /** @brief Extracts the validated target inventory's product launch metadata. */
+        [[nodiscard]] LaunchFiles TargetLaunchFiles(const UpdateFileDeltaPlan &plan) {
+            LaunchFiles launch;
+            for (const auto &file : plan.targetFiles) {
+                if (file.target.mode == UpdateFileMode::Executable)
+                    launch.executablePaths.push_back(file.target.path);
+                if (file.target.role == UpdateFileRole::Entrypoint)
+                    launch.entrypoint = file.target.path;
+            }
+            return launch;
+        }
     }  // namespace
 
     /** @copydoc RepackVerifiedDeltaAsFullZip */
@@ -117,7 +135,9 @@ namespace Horo::Release {
             return Result<RepackedDeltaZipResult>::Failure(reason);
         };
         UpdateZipPackageProducer producer{limits};
-        auto produced = producer.Produce({full.selection, inventory.Value(), stageRoot, temporary});
+        auto launch = TargetLaunchFiles(plan);
+        auto produced = producer.Produce(
+            {full.selection, inventory.Value(), stageRoot, temporary, std::move(launch.entrypoint), std::move(launch.executablePaths)});
         if (produced.HasError())
             return fail(produced.ErrorValue());
         if (produced.Value().files.size() != 1U || produced.Value().files.front().size != full.size ||

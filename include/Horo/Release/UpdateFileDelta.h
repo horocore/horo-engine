@@ -37,12 +37,12 @@ namespace Horo::Release {
      * @brief Compares exact base, delta, and target inventories before any staging mutation.
      * @param baseFiles Complete file inventory from an authenticated base package.
      * @param targetFiles Complete file inventory authorized for the candidate release.
-     * @param deltaFiles Exact changed/new files from an authenticated delta package.
+     * @param deltaFiles Exact changed/new files plus the required product entrypoint from an authenticated delta ZIP.
      * @param expectedBaseDigest Authenticated digest of the canonical base inventory.
      * @param expectedTargetDigest Authenticated digest of the canonical full target inventory.
      * @param expectedDeltaDigest Authenticated digest of the canonical delta package inventory.
      * @param limits Host archive limits applied to every inventory.
-     * @return Plan only when every changed file is supplied exactly once and both full-manifest identities match.
+     * @return Plan only when every changed file and the entrypoint are supplied exactly once and both full-manifest identities match.
      * @note The caller authenticates package signatures and source metadata before supplying these inventories.
      *       The final stage must be verified with VerifyUpdateStagedTree against targetFiles before publication.
      */

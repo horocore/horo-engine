@@ -136,8 +136,10 @@ by its signed full-package fallback; a failed full package ends the sequence.
 
 `PlanUpdateFileDelta` compares the complete base, candidate, and delta file
 inventories against their authenticated canonical digests. The patch inventory
-must contain exactly the changed and new files; deleted files are absent from
-the candidate inventory. `StageVerifiedDeltaZipUpdate` verifies the signed
+contains exactly the changed and new files plus the required executable
+entrypoint when its bytes are unchanged; deleted files are absent from the
+candidate inventory. Executable mode and entrypoint role are part of file
+identity. `StageVerifiedDeltaZipUpdate` verifies the signed
 download and extracts the patch into a private tree without publishing a ready
 marker. `ReconstructUpdateFileDeltaStage` revalidates the
 plan, verifies both quiescent source trees, copies into a new private directory,

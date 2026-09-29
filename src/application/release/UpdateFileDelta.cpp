@@ -18,7 +18,7 @@ namespace Horo::Release {
 
         /** @brief Checks whether a base file can be reused without copying altered bytes. */
         [[nodiscard]] bool SameFile(const UpdateStagedFile &left, const UpdateStagedFile &right) {
-            return left.size == right.size && left.digest == right.digest;
+            return left.size == right.size && left.digest == right.digest && left.mode == right.mode && left.role == right.role;
         }
     }  // namespace
 
@@ -57,12 +57,11 @@ namespace Horo::Release {
         for (const auto &target : targetFiles) {
             const auto prior = base.find(target.path);
             const auto patch = delta.find(target.path);
-            if (prior != base.end() && SameFile(*prior->second, target)) {
-                if (patch != delta.end())
-                    return mismatch();
+            if (prior != base.end() && SameFile(*prior->second, target) && patch == delta.end()) {
                 plan.targetFiles.emplace_back(target, UpdateDeltaFileSource::VerifiedBase);
             } else {
-                if (patch == delta.end() || !SameFile(*patch->second, target))
+                if (patch == delta.end() || !SameFile(*patch->second, target) ||
+                    (prior != base.end() && SameFile(*prior->second, target) && target.role != UpdateFileRole::Entrypoint))
                     return mismatch();
                 plan.targetFiles.emplace_back(target, UpdateDeltaFileSource::VerifiedDelta);
                 delta.erase(patch);

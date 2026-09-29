@@ -49,6 +49,8 @@ namespace {
     void WriteFile(const std::filesystem::path &path, const std::string_view bytes) {
         std::ofstream output(path, std::ios::binary);
         output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        output.close();
+        std::filesystem::permissions(path, path.filename() == "game" ? std::filesystem::perms{0755} : std::filesystem::perms{0644});
     }
 
     [[nodiscard]] DistributionPackageSelection Selection() {
@@ -141,6 +143,20 @@ namespace {
         return full;
     }
 
+    [[nodiscard]] std::string ProduceSignedFullZip(const TemporaryDirectory &directory, const std::span<const UpdateStagedFile> target,
+                                                   const UpdateArchiveLimits &limits) {
+        std::vector<ReleaseArtifactRecord> artifacts;
+        for (const auto &file : target)
+            artifacts.emplace_back(file.path, ReleaseArtifactRole::Binary, file.size, file.digest);
+        auto inventory = ReleasePreSignInventory::Create(ReleaseCandidateId{42U}, std::move(artifacts));
+        REQUIRE(inventory.HasValue());
+        UpdateZipPackageProducer producer{limits};
+        auto produced = producer.Produce(
+            {Selection(), inventory.Value(), directory.root / "source", directory.root / "first", "bin/game", {"bin/game"}});
+        REQUIRE(produced.HasValue());
+        return ReadFile(directory.root / "first/update.zip");
+    }
+
     [[nodiscard]] UpdateDeltaPackageRecord DeltaFor(const UpdatePackageRecord &full, const std::string &bytes,
                                                     const Sha256Digest &baseDigest, const Sha256Digest &targetDigest) {
         auto delta = full;
@@ -195,12 +211,11 @@ TEST_CASE("Selected ZIP delivery uses verified delta then signed full fallback",
         TemporaryDirectory directory;
         NativeDurableFileSystem files;
         PopulateSingleDeltaTree(directory);
-        const std::array base{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"old!", 4U}))}};
-        const std::array target{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"game", 4U}))}};
-        UpdateZipPackageProducer producer{limits};
-        auto produced = producer.Produce({Selection(), Inventory(), directory.root / "source", directory.root / "first"});
-        REQUIRE(produced.HasValue());
-        const auto deltaBytes = ReadFile(directory.root / "first/update.zip");
+        const std::array base{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"old!", 4U})),
+                                               UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
+        const std::array target{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"game", 4U})),
+                                                 UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
+        const auto deltaBytes = ProduceSignedFullZip(directory, target, limits);
         const auto signedBytes = byteMismatch ? AlternateSignedZip(target, limits) : deltaBytes;
         if (byteMismatch)
             REQUIRE(signedBytes != deltaBytes);
@@ -242,10 +257,12 @@ TEST_CASE("Delta reconstruction reproduces the exact signed full ZIP before publ
     TemporaryDirectory directory;
     constexpr UpdateArchiveLimits limits{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
     PopulateDeltaTree(directory);
-    const std::array base{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"old!", 4U}))},
+    const std::array base{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"old!", 4U})), UpdateFileMode::Executable,
+                                           UpdateFileRole::Entrypoint},
                           UpdateStagedFile{"assets/keep", 4U, ComputeSha256(std::as_bytes(std::span{"same", 4U}))},
                           UpdateStagedFile{"assets/removed", 4U, ComputeSha256(std::as_bytes(std::span{"gone", 4U}))}};
-    const std::array target{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"game", 4U}))},
+    const std::array target{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"game", 4U})),
+                                             UpdateFileMode::Executable, UpdateFileRole::Entrypoint},
                             UpdateStagedFile{"assets/keep", 4U, ComputeSha256(std::as_bytes(std::span{"same", 4U}))},
                             UpdateStagedFile{"assets/added", 4U, ComputeSha256(std::as_bytes(std::span{"new!", 4U}))}};
     const std::array patch{target[0], target[2]};
@@ -254,19 +271,12 @@ TEST_CASE("Delta reconstruction reproduces the exact signed full ZIP before publ
     REQUIRE(plan.HasValue());
     NativeDurableFileSystem files;
     const auto stage = directory.root / "versions/package_42";
+    CHECK(VerifyUpdateStagedTree(directory.root / "base", base, limits).HasValue());
+    CHECK(VerifyUpdateStagedTree(directory.root / "patch", patch, limits).HasValue());
     REQUIRE(ReconstructUpdateFileDeltaStage(plan.Value(), directory.root / "base", directory.root / "patch", stage, limits, files, {})
                 .HasValue());
 
-    UpdateZipPackageProducer producer{limits};
-    auto releaseInventory =
-        ReleasePreSignInventory::Create(ReleaseCandidateId{42U},
-                                        {{target[0].path, ReleaseArtifactRole::Binary, target[0].size, target[0].digest},
-                                         {target[1].path, ReleaseArtifactRole::Binary, target[1].size, target[1].digest},
-                                         {target[2].path, ReleaseArtifactRole::Binary, target[2].size, target[2].digest}});
-    REQUIRE(releaseInventory.HasValue());
-    auto produced = producer.Produce({Selection(), releaseInventory.Value(), directory.root / "source", directory.root / "first"});
-    REQUIRE(produced.HasValue());
-    const auto signedBytes = ReadFile(directory.root / "first/update.zip");
+    const auto signedBytes = ProduceSignedFullZip(directory, target, limits);
     auto full = SignedFullPackage(signedBytes);
     const auto packageFile = directory.root / "versions/package_42.zip";
     const auto checkpointFile = directory.root / "versions/package_42.checkpoint";

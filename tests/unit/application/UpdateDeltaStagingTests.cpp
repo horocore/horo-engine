@@ -32,7 +32,10 @@ namespace {
     };
 
     [[nodiscard]] UpdateStagedFile File(const std::string_view path, const std::string_view contents) {
-        return {std::string{path}, contents.size(), Horo::ComputeSha256(std::as_bytes(std::span{contents}))};
+        const bool entrypoint = path == "bin/game";
+        return {std::string{path}, contents.size(), Horo::ComputeSha256(std::as_bytes(std::span{contents})),
+                entrypoint ? UpdateFileMode::Executable : UpdateFileMode::Regular,
+                entrypoint ? UpdateFileRole::Entrypoint : UpdateFileRole::Content};
     }
 
     [[nodiscard]] Horo::Sha256Digest InventoryDigest(const std::span<const UpdateStagedFile> files) {
@@ -48,6 +51,8 @@ namespace {
         REQUIRE(output.good());
         output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
         REQUIRE(output.good());
+        output.close();
+        std::filesystem::permissions(path, relative == "bin/game" ? std::filesystem::perms{0755} : std::filesystem::perms{0644});
     }
 }  // namespace
 
@@ -69,6 +74,8 @@ TEST_CASE("Private delta reconstruction produces the exact full target without r
     auto plan = PlanUpdateFileDelta(base, target, delta, InventoryDigest(base), InventoryDigest(target), InventoryDigest(delta), Limits);
     REQUIRE(plan.HasValue());
     Horo::NativeDurableFileSystem files;
+    CHECK(VerifyUpdateStagedTree(baseRoot, base, Limits).HasValue());
+    CHECK(VerifyUpdateStagedTree(deltaRoot, delta, Limits).HasValue());
     CHECK(ReconstructUpdateFileDeltaStage(plan.Value(), baseRoot, deltaRoot, stageRoot, Limits, files, {}).HasValue());
     CHECK(VerifyUpdateFileDeltaStage(stageRoot, plan.Value(), Limits).HasValue());
     CHECK(!std::filesystem::exists(stageRoot / "assets/removed"));
