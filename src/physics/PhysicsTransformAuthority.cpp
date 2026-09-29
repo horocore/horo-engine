@@ -444,13 +444,13 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsBodyTransformAuthority::ResetInterpolationHistory */
     Result<void> PhysicsBodyTransformAuthority::ResetInterpolationHistory(const PhysicsInterpolationResetReason reason) {
+        using enum PhysicsInterpolationResetReason;
         if (const auto active = RequireActive(*impl_); active.HasError())
             return active;
         if (impl_->lastAppliedTick != impl_->lastInterpolationTick)
             return Result<void>::Failure(
                 MakeError(PhysicsErrors::InvalidState, "Interpolation reset requires a completed-tick safe point."));
-        if (reason != PhysicsInterpolationResetReason::Teleport && reason != PhysicsInterpolationResetReason::Restore &&
-            reason != PhysicsInterpolationResetReason::Reload)
+        if (reason != Teleport && reason != Restore && reason != Reload)
             return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Unknown interpolation reset reason."));
         for (auto &body : impl_->bodies) {
             body.previousPose = body.currentPose;
