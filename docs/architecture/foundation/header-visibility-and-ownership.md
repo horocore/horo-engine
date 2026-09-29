@@ -20,6 +20,17 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## AUD-007.9 Focus Policy Boundary
+
+`HoroEngine::AudioCommands` solely owns the additive
+`Horo/Audio/AudioFocusPolicy.h` contract. No existing Audio command or backend
+caller changes signature. Hosts that opt into focus/suspend behavior resolve a
+typed profile, prepare transitions on the Audio control owner, stage them in
+FIFO lifecycle capacity, and commit only exact callback/device acknowledgement.
+Editor, scene, platform and native backend types do not enter the header. The
+generated `HoroAudioCommands` public-header consumer verifies its staged include
+boundary; no concrete host adapter is implicitly installed.
+
 ## NET-002.7 Inbound Dispatch Boundary
 
 `HoroEngine::NetworkRuntime` owns the additive

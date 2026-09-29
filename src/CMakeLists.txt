@@ -827,6 +827,7 @@ add_library(HoroAudioCommands STATIC
         audio/commands/AudioCommandBuffer.cpp
         audio/commands/AudioCommandStaging.cpp
         audio/commands/AudioEventQueue.cpp
+        audio/commands/AudioFocusPolicy.cpp
         audio/commands/AudioLifecycleReconciler.cpp
         audio/commands/ScheduledAudioCommandBatch.cpp
 )
