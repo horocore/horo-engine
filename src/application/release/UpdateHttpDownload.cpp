@@ -55,7 +55,7 @@ namespace Horo::Release {
 
         std::size_t ReceiveHeader(char *data, const std::size_t size, const std::size_t count, void *userData) noexcept {
             auto *state = static_cast<DownloadState *>(userData);
-            if (state == nullptr || size == 0U || count > std::numeric_limits<std::size_t>::max() / size)
+            if (state == nullptr || size == 0U || count > (std::numeric_limits<std::size_t>::max)() / size)
                 return 0U;
             const std::size_t bytes = size * count;
             try {
@@ -70,7 +70,7 @@ namespace Horo::Release {
 
         std::size_t ReceiveBody(char *data, const std::size_t size, const std::size_t count, void *userData) noexcept {
             auto *state = static_cast<DownloadState *>(userData);
-            if (state == nullptr || size == 0U || count > std::numeric_limits<std::size_t>::max() / size)
+            if (state == nullptr || size == 0U || count > (std::numeric_limits<std::size_t>::max)() / size)
                 return 0U;
             const std::size_t bytes = size * count;
             try {
@@ -162,7 +162,7 @@ namespace Horo::Release {
         const auto &[package, paths, limits, policy] = request;
         if (!package.url.starts_with("https://") || package.size == 0U || package.size > limits.maximumPackageBytes ||
             policy.connectTimeoutSeconds == 0U || policy.requestTimeoutSeconds < policy.connectTimeoutSeconds ||
-            policy.requestTimeoutSeconds > static_cast<std::uint64_t>(std::numeric_limits<long>::max()))
+            policy.requestTimeoutSeconds > static_cast<std::uint64_t>((std::numeric_limits<long>::max)()))
             return Result<UpdateTransferCheckpoint>::Failure(MakeError(UpdateTransferErrors::InvalidResponse));
         if (cancellation.IsCancellationRequested())
             return Result<UpdateTransferCheckpoint>::Failure(MakeError(UpdateTransferErrors::Cancelled));

@@ -121,6 +121,7 @@ endif ()
 
 add_library(HoroPlatform STATIC
         platform/Platform.cpp
+        platform/ProductProbeLease.cpp
         platform/PlatformErrors.cpp
         platform/ConfigurationFileStore.cpp
         platform/android/AndroidLifecycle.cpp

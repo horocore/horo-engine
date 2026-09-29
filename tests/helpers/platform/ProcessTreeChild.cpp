@@ -1,6 +1,9 @@
+#include "Horo/Foundation/Platform.h"
+
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -54,6 +57,18 @@ int main(const int argc, char **argv) {
     const std::string mode{argv[1]};
     if (mode == "exit-failure")
         return 17;
+    if (mode == "adopt-probe-lease" && argc == 3) {
+        Horo::NativeDurableFileSystem files;
+        auto inherited = files.AdoptInheritedProductMaintenance(argv[2]);
+        return inherited.HasValue() ? 0 : 4;
+    }
+    if (mode == "probe-lease-env-absent") {
+#if defined(_WIN32)
+        return GetEnvironmentVariableA("HORO_PRODUCT_PROBE_LEASE", nullptr, 0) == 0 ? 0 : 4;
+#else
+        return std::getenv("HORO_PRODUCT_PROBE_LEASE") == nullptr ? 0 : 4;
+#endif
+    }
 #if defined(_WIN32)
     if (mode == "handle-unavailable" && argc == 3) {
         const auto value = static_cast<std::uintptr_t>(std::stoull(argv[2]));
