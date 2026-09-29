@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string_view>
 #include <vector>
 
@@ -172,5 +173,18 @@ namespace Horo::Terrain {
         CHECK(cooked.Value().tiles[0].payload[151] == 0);
         CHECK(cooked.Value().tiles[0].payload[152] == 0);
         CHECK(VerifyCookedTerrainTiles(cooked.Value()).HasValue());
+    }
+
+    TEST_CASE("World tile addresses admit the last signed tile and reject overflow", "[terrain][cook]") {
+        auto source = Source();
+        source.coordinates.originX = static_cast<double>(std::numeric_limits<std::int32_t>::max()) - 1.0;
+        const auto lastValid = CookTerrainTiles(source, Profile(), {}, {});
+        REQUIRE(lastValid.HasValue());
+        CHECK(lastValid.Value().tiles[0].id.tile.x == std::numeric_limits<std::int32_t>::max() - 1);
+        CHECK(lastValid.Value().tiles[1].id.tile.x == std::numeric_limits<std::int32_t>::max());
+        CHECK(VerifyCookedTerrainTiles(lastValid.Value()).HasValue());
+
+        source.coordinates.originX = static_cast<double>(std::numeric_limits<std::int32_t>::max());
+        RequireError(CookTerrainTiles(source, Profile(), {}, {}), TerrainTileCookErrors::InvalidSource);
     }
 }  // namespace Horo::Terrain

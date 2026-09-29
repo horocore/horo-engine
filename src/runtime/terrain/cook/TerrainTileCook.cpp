@@ -53,13 +53,13 @@ namespace Horo::Terrain {
 
         bool PayloadMatchesProvenance(const TerrainCookedTile &tile, const CookedTerrainTileSet &cooked) {
             // Fixed v1 prefix: sized magic, schema, tile ID, source asset/revision and source/cook digests.
-            constexpr std::size_t PrefixBytes = 123;
-            if (tile.payload.size() < PrefixBytes || tile.payload[0] != 4 || tile.payload[1] != 0 ||
+            if (constexpr std::size_t PrefixBytes = 123;
+                tile.payload.size() < PrefixBytes || tile.payload[0] != 4 || tile.payload[1] != 0 ||
                 !std::equal(TileMagic.begin(), TileMagic.end(), tile.payload.begin() + 2) ||
                 tile.payload[6] != CurrentTerrainTileCookSchema || tile.payload[7] != 0 || tile.payload[8] != 0 || tile.payload[9] != 0)
                 return false;
-            const auto tileId = SerializeTerrainTileId(tile.id);
-            if (!std::equal(tileId.begin(), tileId.end(), tile.payload.begin() + 10) ||
+            if (const auto tileId = SerializeTerrainTileId(tile.id);
+                !std::equal(tileId.begin(), tileId.end(), tile.payload.begin() + 10) ||
                 !std::equal(cooked.sourceAsset.Bytes().begin(), cooked.sourceAsset.Bytes().end(), tile.payload.begin() + 35) ||
                 !std::equal(cooked.sourceDigest.bytes.begin(), cooked.sourceDigest.bytes.end(), tile.payload.begin() + 59) ||
                 !std::equal(cooked.fingerprint.bytes.begin(), cooked.fingerprint.bytes.end(), tile.payload.begin() + 91))
@@ -116,8 +116,12 @@ namespace Horo::Terrain {
             writer.Unsigned(alongZ ? tile.samplesZ : tile.samplesX, 4);
             const auto edgeSamples = alongZ ? tile.samplesZ : tile.samplesX;
             for (std::uint32_t sample = 0; sample < edgeSamples; ++sample) {
-                const auto x = alongZ ? (highEdge ? tile.samplesX - 1 : 0) : sample;
-                const auto z = alongZ ? sample : (highEdge ? tile.samplesZ - 1 : 0);
+                auto x = sample;
+                auto z = highEdge ? tile.samplesZ - 1 : 0;
+                if (alongZ) {
+                    x = highEdge ? tile.samplesX - 1 : 0;
+                    z = sample;
+                }
                 const auto offset = start + (static_cast<std::size_t>(z) * tile.samplesX + x) * sampleBytes;
                 for (std::uint32_t byte = 0; byte < sampleBytes; ++byte)
                     writer.Byte(tile.payload[offset + byte]);
@@ -140,9 +144,9 @@ namespace Horo::Terrain {
             std::vector<std::uint8_t> encodedCoordinates;
             CanonicalWriter writer{&encodedCoordinates};
             WriteCoordinates(writer, cooked.coordinates);
-            const auto expectedBytes =
-                153ULL + encodedCoordinates.size() + static_cast<std::uint64_t>(nx) * nz * (5ULL + 2ULL * cooked.layerCount);
-            if (tile.samplesX != nx || tile.samplesZ != nz || tile.payload.size() != expectedBytes)
+            if (const auto expectedBytes =
+                    153ULL + encodedCoordinates.size() + static_cast<std::uint64_t>(nx) * nz * (5ULL + 2ULL * cooked.layerCount);
+                tile.samplesX != nx || tile.samplesZ != nz || tile.payload.size() != expectedBytes)
                 return false;
             return ReadU32(tile.payload, 123) == beginX && ReadU32(tile.payload, 127) == endX && ReadU32(tile.payload, 131) == beginZ &&
                    ReadU32(tile.payload, 135) == endZ && ReadU32(tile.payload, 139) == stride && ReadU32(tile.payload, 143) == nx &&
@@ -174,8 +178,8 @@ namespace Horo::Terrain {
             const auto beginX = x * level.tileQuads;
             const auto beginZ = z * level.tileQuads;
             const auto endX = std::min(beginX + level.tileQuads, cooked.sourceWidth - 1);
-            const auto endZ = std::min(beginZ + level.tileQuads, cooked.sourceHeight - 1);
-            if (tile.id.dataset != cooked.dataset || tile.id.tile != address ||
+            if (const auto endZ = std::min(beginZ + level.tileQuads, cooked.sourceHeight - 1);
+                tile.id.dataset != cooked.dataset || tile.id.tile != address ||
                 !TileMatchesLayout(tile, cooked, beginX, endX, beginZ, endZ, level.stride) ||
                 (x != 0 && cooked.tiles[scan.cursor - 1].seams[1] != tile.seams[0]) ||
                 (z != 0 && cooked.tiles[scan.cursor - level.countX].seams[3] != tile.seams[2]))
@@ -190,13 +194,24 @@ namespace Horo::Terrain {
             return true;
         }
 
+        bool ValidManifestLevel(const CookedTerrainTileSet &cooked, ManifestScan &scan, const ManifestLevel &level,
+                                const std::uint64_t countZ) {
+            for (std::uint32_t z = 0; z < countZ; ++z) {
+                for (std::uint32_t x = 0; x < level.countX; ++x) {
+                    if (!ValidManifestTile(cooked, scan, level, x, z))
+                        return false;
+                }
+            }
+            return true;
+        }
+
         bool ManifestLayoutValid(const CookedTerrainTileSet &cooked) {
             if (!ValidProfile(cooked.profile) || !ValidCoordinates(cooked.coordinates) || cooked.sourceWidth < 2 || cooked.sourceHeight < 2)
                 return false;
             const auto tier = GetTerrainTierProfile(cooked.profile.tier);
-            const auto &limits = tier.Value().limits;
-            if (cooked.sourceWidth > limits.maximumSamplesPerAxis || cooked.sourceHeight > limits.maximumSamplesPerAxis ||
-                cooked.layerCount > limits.maximumLayersPerTile)
+            if (const auto &limits = tier.Value().limits; cooked.sourceWidth > limits.maximumSamplesPerAxis ||
+                                                          cooked.sourceHeight > limits.maximumSamplesPerAxis ||
+                                                          cooked.layerCount > limits.maximumLayersPerTile)
                 return false;
             ManifestScan scan;
             for (std::uint8_t lod = 0; lod < cooked.profile.lodLevels; ++lod) {
@@ -208,15 +223,11 @@ namespace Horo::Terrain {
                     return false;
                 const auto originX = WorldTileOrigin(cooked.coordinates.originX, cooked.coordinates.spacingX, tileQuads, countX);
                 const auto originZ = WorldTileOrigin(cooked.coordinates.originZ, cooked.coordinates.spacingZ, tileQuads, countZ);
-                if (!originX || !originZ)
+                if (!originX.has_value() || !originZ.has_value())
                     return false;
                 const ManifestLevel level{lod, stride, tileQuads, countX, *originX, *originZ};
-                for (std::uint32_t z = 0; z < countZ; ++z) {
-                    for (std::uint32_t x = 0; x < countX; ++x) {
-                        if (!ValidManifestTile(cooked, scan, level, x, z))
-                            return false;
-                    }
-                }
+                if (!ValidManifestLevel(cooked, scan, level, countZ))
+                    return false;
             }
             return scan.cursor == cooked.tiles.size() && scan.cursor <= cooked.profile.maximumTiles;
         }
@@ -288,7 +299,7 @@ namespace Horo::Terrain {
             budget.work += visits;
             budget.bytes += tile.payload.size();
             if (previous && previous->fingerprint == cooked.fingerprint) {
-                const auto old = std::find_if(previous->tiles.begin(), previous->tiles.end(), [&](const auto &candidate) {
+                const auto old = std::ranges::find_if(previous->tiles, [&](const auto &candidate) {
                     return candidate.id == tile.id;
                 });
                 if (old != previous->tiles.end() && old->digest == tile.digest && old->payload == tile.payload && old->seams == tile.seams)
@@ -308,7 +319,7 @@ namespace Horo::Terrain {
                 return Result<void>::Failure(MakeError(TerrainTileCookErrors::LimitExceeded));
             const auto originX = WorldTileOrigin(source.coordinates.originX, source.coordinates.spacingX, tileQuads, countX);
             const auto originZ = WorldTileOrigin(source.coordinates.originZ, source.coordinates.spacingZ, tileQuads, countZ);
-            if (!originX || !originZ)
+            if (!originX.has_value() || !originZ.has_value())
                 return Result<void>::Failure(MakeError(TerrainTileCookErrors::InvalidSource));
             for (std::uint32_t z = 0; z < countZ; ++z) {
                 for (std::uint32_t x = 0; x < countX; ++x) {
@@ -373,12 +384,12 @@ namespace Horo::Terrain {
         if (!ValidProfile(profile) || dependencies.size() > TerrainDescriptorHardLimits::WorkItems)
             return Result<CookedTerrainTileSet>::Failure(MakeError(TerrainTileCookErrors::InvalidProfile));
         const auto tier = GetTerrainTierProfile(profile.tier);
-        const auto &tierLimits = tier.Value().limits;
-        if (source.width > tierLimits.maximumSamplesPerAxis || source.height > tierLimits.maximumSamplesPerAxis ||
-            source.layerCount > tierLimits.maximumLayersPerTile)
+        if (const auto &tierLimits = tier.Value().limits; source.width > tierLimits.maximumSamplesPerAxis ||
+                                                          source.height > tierLimits.maximumSamplesPerAxis ||
+                                                          source.layerCount > tierLimits.maximumLayersPerTile)
             return Result<CookedTerrainTileSet>::Failure(MakeError(TerrainTileCookErrors::LimitExceeded));
         std::vector<TerrainTileCookDependency> sortedDependencies{dependencies.begin(), dependencies.end()};
-        std::sort(sortedDependencies.begin(), sortedDependencies.end(), [](const auto &left, const auto &right) {
+        std::ranges::sort(sortedDependencies, [](const auto &left, const auto &right) {
             return left.asset < right.asset;
         });
         for (std::size_t index = 0; index < sortedDependencies.size(); ++index) {

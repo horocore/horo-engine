@@ -6,7 +6,7 @@
 
 namespace Horo::Terrain::Detail {
     bool Nonzero(const Sha256Digest &digest) {
-        return std::any_of(digest.bytes.begin(), digest.bytes.end(), [](const auto byte) {
+        return std::ranges::any_of(digest.bytes, [](const auto byte) {
             return byte != 0;
         });
     }
@@ -52,9 +52,13 @@ namespace Horo::Terrain::Detail {
                                                 const std::uint64_t tileCount) {
         const auto quantized = std::floor(origin / (spacing * tileQuads));
         if (!std::isfinite(quantized) || quantized < std::numeric_limits<std::int32_t>::min() ||
-            quantized > static_cast<double>(std::numeric_limits<std::int32_t>::max()) - tileCount)
+            quantized > std::numeric_limits<std::int32_t>::max())
             return std::nullopt;
-        return static_cast<std::int32_t>(quantized);
+        const auto firstTile = static_cast<std::int32_t>(quantized);
+        const auto remaining = static_cast<std::uint64_t>(static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) - firstTile);
+        if (tileCount == 0 || tileCount - 1 > remaining)
+            return std::nullopt;
+        return firstTile;
     }
 
     Sha256Digest EdgeDigest(const TerrainCanonicalSource &source, const std::vector<std::uint32_t> &xs,
