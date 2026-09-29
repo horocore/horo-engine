@@ -102,4 +102,14 @@ TEST_CASE("Private delta reconstruction leaves no partial destination after inva
     CHECK(ReconstructUpdateFileDeltaStage(plan.Value(), baseRoot, deltaRoot, stageRoot, Limits, files, {}).HasError());
     CHECK(std::filesystem::exists(stageRoot / "sentinel"));
     CHECK(ReconstructUpdateFileDeltaStage(plan.Value(), baseRoot, deltaRoot, baseRoot / "nested", Limits, files, {}).HasError());
+
+    const auto alias = privateTree.root / "base-alias";
+    std::error_code linkError;
+    std::filesystem::create_directory_symlink(baseRoot, alias, linkError);
+    if (!linkError) {
+        CHECK(
+            ReconstructUpdateFileDeltaStage(plan.Value(), baseRoot, deltaRoot, alias / "bin" / "candidate", Limits, files, {}).HasError());
+        CHECK_FALSE(std::filesystem::exists(baseRoot / "bin/candidate"));
+        CHECK(VerifyUpdateStagedTree(baseRoot, base, Limits).HasValue());
+    }
 }

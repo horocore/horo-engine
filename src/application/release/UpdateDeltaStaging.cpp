@@ -1,8 +1,8 @@
 #include "Horo/Release/UpdateDeltaStaging.h"
 
 #include "Horo/Release/UpdateTransferErrors.h"
+#include "UpdateStageFileOperations.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <system_error>
 #include <utility>
@@ -16,11 +16,31 @@ namespace Horo::Release {
             const auto normalized = [](const std::filesystem::path &path) {
                 return path.is_absolute() && !path.filename().empty() && path.lexically_normal() == path;
             };
-            const auto contains = [](const std::filesystem::path &root, const std::filesystem::path &other) {
-                return std::mismatch(root.begin(), root.end(), other.begin(), other.end()).first == root.end();
+            if (!normalized(base) || !normalized(delta) || !normalized(stage))
+                return false;
+            std::error_code error;
+            const auto realBase = std::filesystem::canonical(base, error);
+            if (error)
+                return false;
+            const auto realDelta = std::filesystem::canonical(delta, error);
+            if (error)
+                return false;
+            const auto realStageParent = std::filesystem::canonical(stage.parent_path(), error);
+            if (error)
+                return false;
+            const bool sameSources = std::filesystem::equivalent(realBase, realDelta, error);
+            if (error || sameSources)
+                return false;
+            const auto aliasesStageParent = [&](const std::filesystem::path &source) {
+                for (auto parent = realStageParent;; parent = parent.parent_path()) {
+                    const bool aliases = std::filesystem::equivalent(source, parent, error);
+                    if (error || aliases)
+                        return true;
+                    if (parent == parent.root_path())
+                        return false;
+                }
             };
-            return normalized(base) && normalized(delta) && normalized(stage) && !contains(base, stage) && !contains(stage, base) &&
-                   !contains(delta, stage) && !contains(stage, delta) && base != delta;
+            return !aliasesStageParent(realBase) && !aliasesStageParent(realDelta);
         }
 
         /** @brief Removes only the previously absent destination created by this operation. */
@@ -95,7 +115,7 @@ namespace Horo::Release {
             return failed(UpdateTransferErrors::Cancelled);
         if (auto verified = VerifyUpdateFileDeltaStage(stageRoot, canonical.Value(), limits); verified.HasError())
             return verified;
-        if (auto synced = files.SyncDirectory(stageRoot); synced.HasError())
+        if (auto synced = Detail::SyncStageDirectories(stageRoot, files); synced.HasError())
             return synced;
         cleanup.active = false;
         return Result<void>::Success();
