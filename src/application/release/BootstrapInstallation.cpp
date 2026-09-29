@@ -211,6 +211,27 @@ namespace Horo::Release {
             return files.TryAcquireProductMaintenance(paths.root);
         }
 
+        struct MaintenanceGuards final {
+            ExclusiveFileLock transaction;
+            ProductLaunchLease admission;
+        };
+
+        /** @brief Keeps both OS locks alive across one complete repair or uninstall transaction. */
+        [[nodiscard]] Result<MaintenanceGuards> BeginMaintenance(const BootstrapInstallationRequest &request,
+                                                                 NativeDurableFileSystem &files, IBootstrapInstallationHost &host,
+                                                                 const std::string_view owner) {
+            const auto paths = Paths(request.installationRoot);
+            if (!ValidRequest(request, paths))
+                return Result<MaintenanceGuards>::Failure(MakeError(BootstrapInstallationErrors::InvalidLayout));
+            auto lock = files.TryAcquireExclusive(paths.lock, owner);
+            if (lock.HasError())
+                return Result<MaintenanceGuards>::Failure(lock.ErrorValue());
+            auto admission = ReadyForMaintenance(paths, host, files);
+            if (admission.HasError())
+                return Result<MaintenanceGuards>::Failure(admission.ErrorValue());
+            return Result<MaintenanceGuards>::Success({std::move(lock).Value(), std::move(admission).Value()});
+        }
+
         /** @brief Completes a resumed uninstall only after its journal and active pointer match the candidate. */
         [[nodiscard]] Result<void> ResumeUninstall(const InstallPaths &paths, const std::string_view expected,
                                                    const std::string_view record, NativeDurableFileSystem &files) {
@@ -315,16 +336,11 @@ namespace Horo::Release {
     /** @copydoc RepairVerifiedInstallation */
     Result<void> RepairVerifiedInstallation(const BootstrapInstallationRequest &request, NativeDurableFileSystem &files,
                                             const Security::ArtifactVerifier &verifier, IBootstrapInstallationHost &host) {
+        auto guards = BeginMaintenance(request, files, host, "horo-bootstrap-repair");
+        if (guards.HasError())
+            return Result<void>::Failure(guards.ErrorValue());
+        [[maybe_unused]] MaintenanceGuards maintenance = std::move(guards).Value();
         const auto paths = Paths(request.installationRoot);
-        if (!ValidRequest(request, paths))
-            return Result<void>::Failure(MakeError(BootstrapInstallationErrors::InvalidLayout));
-        auto lock = files.TryAcquireExclusive(paths.lock, "horo-bootstrap-repair");
-        if (lock.HasError())
-            return Result<void>::Failure(lock.ErrorValue());
-        auto admission = ReadyForMaintenance(paths, host, files);
-        if (admission.HasError())
-            return Result<void>::Failure(admission.ErrorValue());
-        [[maybe_unused]] ProductLaunchLease maintenance = std::move(admission).Value();
         if (auto uninstallPending = Exists(paths.uninstallPending); uninstallPending.HasError() || uninstallPending.Value())
             return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
         auto encoded = EncodeActiveUpdateRecord(request.candidate.package);
@@ -347,16 +363,11 @@ namespace Horo::Release {
     /** @copydoc UninstallVerifiedInstallation */
     Result<void> UninstallVerifiedInstallation(const BootstrapInstallationRequest &request, NativeDurableFileSystem &files,
                                                const Security::ArtifactVerifier &verifier, IBootstrapInstallationHost &host) {
+        auto guards = BeginMaintenance(request, files, host, "horo-bootstrap-uninstall");
+        if (guards.HasError())
+            return Result<void>::Failure(guards.ErrorValue());
+        [[maybe_unused]] MaintenanceGuards maintenance = std::move(guards).Value();
         const auto paths = Paths(request.installationRoot);
-        if (!ValidRequest(request, paths))
-            return Result<void>::Failure(MakeError(BootstrapInstallationErrors::InvalidLayout));
-        auto lock = files.TryAcquireExclusive(paths.lock, "horo-bootstrap-uninstall");
-        if (lock.HasError())
-            return Result<void>::Failure(lock.ErrorValue());
-        auto admission = ReadyForMaintenance(paths, host, files);
-        if (admission.HasError())
-            return Result<void>::Failure(admission.ErrorValue());
-        [[maybe_unused]] ProductLaunchLease maintenance = std::move(admission).Value();
         auto encoded = EncodeActiveUpdateRecord(request.candidate.package);
         if (encoded.HasError())
             return Result<void>::Failure(encoded.ErrorValue());

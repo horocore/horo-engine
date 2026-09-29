@@ -113,9 +113,9 @@ namespace Horo {
         [[nodiscard]] Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path,
                                                                     std::string_view ownerMetadata) override;
         /** @brief Holds a shared launch lease until the product process exits; fails while maintenance is active. */
-        [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductLaunch(const std::filesystem::path &installationRoot);
+        [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductLaunch(const std::filesystem::path &installationRoot) const;
         /** @brief Holds an exclusive maintenance gate; fails while any product launch lease is active. */
-        [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductMaintenance(const std::filesystem::path &installationRoot);
+        [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductMaintenance(const std::filesystem::path &installationRoot) const;
         [[nodiscard]] Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override;
         [[nodiscard]] Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override;
         /**

@@ -252,12 +252,12 @@ namespace Horo {
     }
 
     /** @copydoc NativeDurableFileSystem::TryAcquireProductLaunch */
-    Result<ProductLaunchLease> NativeDurableFileSystem::TryAcquireProductLaunch(const std::filesystem::path &installationRoot) {
+    Result<ProductLaunchLease> NativeDurableFileSystem::TryAcquireProductLaunch(const std::filesystem::path &installationRoot) const {
         return TryAcquireProductLease(installationRoot, false);
     }
 
     /** @copydoc NativeDurableFileSystem::TryAcquireProductMaintenance */
-    Result<ProductLaunchLease> NativeDurableFileSystem::TryAcquireProductMaintenance(const std::filesystem::path &installationRoot) {
+    Result<ProductLaunchLease> NativeDurableFileSystem::TryAcquireProductMaintenance(const std::filesystem::path &installationRoot) const {
         return TryAcquireProductLease(installationRoot, true);
     }
 
