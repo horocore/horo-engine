@@ -73,6 +73,14 @@ int main(const int argc, char **argv) {
             return 3;
         std::cout << "ready\n" << std::flush;
     }
+    if (mode == "exiting-tree" && argc == 3) {
+        if (!SpawnDescendant(argv[0], argv[2]))
+            return 3;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{1};
+        while (!std::filesystem::exists(argv[2]) && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        return std::filesystem::exists(argv[2]) ? 0 : 4;
+    }
     if (mode == "stubborn") {
 #if defined(_WIN32)
         SetConsoleCtrlHandler([](const DWORD) -> BOOL {
