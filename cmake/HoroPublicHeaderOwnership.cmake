@@ -645,6 +645,9 @@ horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroTerrainImport PUBLIC_HEADERS
     Horo/Terrain/TerrainSourceImport.h
 )
+horo_configure_target_header_boundary(HoroTerrainCook PUBLIC_HEADERS
+    Horo/Terrain/TerrainTileCook.h
+)
 horo_configure_target_header_boundary(HoroTerrainRuntime PUBLIC_HEADERS
     Horo/Terrain/TerrainAsyncJobs.h
 )

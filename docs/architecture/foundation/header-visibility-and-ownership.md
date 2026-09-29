@@ -95,6 +95,17 @@ current source revision. Format and codec types do not enter TerrainApi or runti
 headers. The generated public-header consumer compiles the header through the new
 target's staged include view.
 
+## TRF-002.3 Tile Cook Boundary
+
+`HoroEngine::TerrainCook` owns the additive `Horo/Terrain/TerrainTileCook.h` contract
+and depends on `HoroEngine::TerrainImport` for detached canonical source values.
+There are no existing tile-cook callers to migrate. Assets/application hosts supply
+the exact source, dependency artifacts, target/toolchain envelope and finite profile;
+they retain sole authority for scheduling, cache storage and atomic publication.
+The cook produces independently hashed neutral tile payloads and a complete sorted
+manifest, without a cache root, runtime state, native handle or global registry.
+Generated public-header consumer coverage checks the staged target boundary.
+
 ## REL-002.4 Update Transfer Boundary
 
 `HoroEngine::UpdateTransfer` owns the additive `Horo/Release/UpdateTransfer.h`
