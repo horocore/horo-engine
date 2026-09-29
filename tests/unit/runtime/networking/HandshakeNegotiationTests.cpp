@@ -6,6 +6,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
+#include <cstdint>
 
 namespace Horo::Network {
     using TestSupport::Connection;
@@ -198,5 +199,29 @@ namespace Horo::Network {
         REQUIRE(rejected.Reject(Connection(), Session()).HasValue());
         RequireError(rejected.Reject(Connection(), Session()), NetworkErrors::HandshakeStateInvalid);
         REQUIRE_FALSE(rejected.Shutdown());
+    }
+
+    TEST_CASE("Handshake qualifies the complete supported minor-version window without downgrade",
+              "[unit][network][handshake][qualification]") {
+        const Fixture fixture;
+        for (std::uint16_t minimum = 0; minimum <= 8; ++minimum) {
+            for (std::uint16_t maximum = minimum; maximum <= 8; ++maximum) {
+                auto offer = fixture.Offer();
+                offer.compatibility.versions = {{2, minimum}, {2, maximum}};
+                auto negotiator = fixture.Negotiator();
+                const auto result = negotiator.Accept(Connection(), Session(), offer, 1);
+                const bool compatible = maximum >= 1 && minimum <= 6;
+                if (compatible) {
+                    REQUIRE(result.HasValue());
+                    REQUIRE(result.Value().version == ProtocolVersion{2, std::min<std::uint16_t>(maximum, 6)});
+                    REQUIRE(negotiator.State() == HandshakeState::Accepted);
+                } else {
+                    RequireError(result, NetworkErrors::HandshakeIncompatible);
+                    REQUIRE(negotiator.State() == HandshakeState::Rejected);
+                    REQUIRE(negotiator.Selection() == nullptr);
+                    RequireError(negotiator.Accept(Connection(), Session(), fixture.Offer(), 2), NetworkErrors::HandshakeStateInvalid);
+                }
+            }
+        }
     }
 }  // namespace Horo::Network
