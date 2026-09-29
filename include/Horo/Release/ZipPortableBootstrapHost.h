@@ -29,6 +29,11 @@ namespace Horo::Release {
         ZipPortableBootstrapHost(NativeDurableFileSystem &files, const Security::ArtifactVerifier &verifier,
                                  IUpdateActivationHost &processes, ZipPortableBootstrapPolicy policy) noexcept;
 
+        /** @copydoc IUpdateActivationHost::EnsureProductsStopped */
+        [[nodiscard]] Result<void> EnsureProductsStopped(const std::filesystem::path &installationRoot) override;
+        /** @copydoc IUpdateActivationHost::ProbeStartupHealth */
+        [[nodiscard]] Result<void> ProbeStartupHealth(const std::filesystem::path &versionRoot, std::chrono::seconds timeout) override;
+
         /** @copydoc IBootstrapInstallationHost::Preflight */
         [[nodiscard]] Result<void> Preflight(const BootstrapInstallationRequest &request) override;
         /** @copydoc IBootstrapInstallationHost::Register */
@@ -37,10 +42,6 @@ namespace Horo::Release {
         [[nodiscard]] Result<void> Unregister(const BootstrapInstallationRequest &request) override;
         /** @copydoc IBootstrapInstallationHost::RemoveOwnedVersion */
         [[nodiscard]] Result<void> RemoveOwnedVersion(const BootstrapInstallationRequest &request) override;
-        /** @copydoc IUpdateActivationHost::EnsureProductsStopped */
-        [[nodiscard]] Result<void> EnsureProductsStopped(const std::filesystem::path &installationRoot) override;
-        /** @copydoc IUpdateActivationHost::ProbeStartupHealth */
-        [[nodiscard]] Result<void> ProbeStartupHealth(const std::filesystem::path &versionRoot, std::chrono::seconds timeout) override;
 
     private:
         NativeDurableFileSystem &files_;

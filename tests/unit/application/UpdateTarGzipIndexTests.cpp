@@ -383,6 +383,7 @@ TEST_CASE("Linux portable bootstrap installs repairs and uninstalls only owned v
     CHECK(std::filesystem::is_regular_file(temporary.path / "active-version"));
     std::filesystem::remove(stage / "user-note");
     REQUIRE(UninstallVerifiedInstallation(request, files, verifier, host).HasValue());
+    REQUIRE(host.RemoveOwnedVersion(request).HasValue());
     CHECK_FALSE(std::filesystem::exists(stage));
     CHECK_FALSE(std::filesystem::exists(packageFile));
     CHECK_FALSE(std::filesystem::exists(temporary.path / "active-version"));
