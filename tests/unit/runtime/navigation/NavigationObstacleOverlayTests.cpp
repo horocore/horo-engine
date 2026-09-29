@@ -171,11 +171,20 @@ namespace Horo::Navigation {
         CHECK(changed[0].surface == right.id);
         CHECK(changed[0].minimumX == 4.0);
         CHECK(changed[0].maximumX == 6.0);
+        const auto crossed = OverlaySurface(25, {2.5F, 0.0F, -2.0F}, {3.5F, 0.0F, 2.0F});
+        const auto crossedChange = CollectNavigationObstacleOverlaySurfaceChanges(before, after, crossed, changed);
+        REQUIRE(crossedChange.HasValue());
+        CHECK(crossedChange.Value().count == 1);
+        CHECK(changed[0].surface == crossed.id);
+        CHECK(changed[0].minimumX == 2.5);
+        CHECK(changed[0].maximumX == 3.5);
         const auto untouched = OverlaySurface(30, {10.0F, 0.0F, -2.0F}, {12.0F, 0.0F, 2.0F});
         const auto untouchedChange = CollectNavigationObstacleOverlaySurfaceChanges(before, after, untouched, {});
         REQUIRE(untouchedChange.HasValue());
         CHECK(untouchedChange.Value().count == 0);
         CHECK(untouchedChange.Value().revision == after.Revision());
+        const auto verticallySeparate = OverlaySurface(31, {2.5F, 3.0F, -2.0F}, {3.5F, 3.0F, 2.0F});
+        CHECK(CollectNavigationObstacleOverlaySurfaceChanges(before, after, verticallySeparate, {}).Value().count == 0);
         RequireError(CollectNavigationObstacleOverlaySurfaceChanges(before, after, left, {}),
                      NavigationErrors::DynamicRegistryCapacityExceeded);
         CHECK(std::get<NavigationDynamicBoxShape>(before.Obstacles()[0].shape).center.x == 0.0F);

@@ -128,7 +128,7 @@ footprints to that surface, and reports exact Scene binding and logical overlay
 revision even for an empty projection. Bounded, layer-filtered surface segment probes
 require topology-owner-split cross-surface paths and carry surface identity and that
 same revision even when clear. Surface-keyed changed-region projection unions old/new
-blocker bounds for moves, clips to the surface, and is all-or-error under the
+blocker bounds for moves, including crossed intermediate surfaces, clips to the surface, and is all-or-error under the
 caller's output bound. The owner uses these regions and revision as affected-path
 invalidation input; any held path whose exact coverage cannot prove independence
 still fails currentness on the global obstacle revision under ADR-107.

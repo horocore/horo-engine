@@ -801,7 +801,9 @@ exact Scene binding and dynamic publication revision even when empty. Bounded
 surface-constrained segment probes report surface identity and revision even when
 clear; cross-surface paths must be split by topology ownership. Character/Physics remains
 the final collision authority. The owner can project old/new obstacle bounds
-into complete surface-keyed, identity-ordered changed regions before invalidating
+into complete surface-keyed, identity-ordered changed regions, including surfaces
+crossed by a conservative swept move even when neither endpoint shape occupies
+them, before invalidating
 intersecting held paths. A held path without exact evidence of independence is
 still invalidated by `NavigationPathPolicy` when the obstacle revision advances.
 Insufficient caller output capacity fails without a partial region list or surface

@@ -5,9 +5,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <ranges>
 #include <type_traits>
+#include <utility>
 #include <variant>
 
 namespace Horo::Navigation {
@@ -50,21 +52,41 @@ namespace Horo::Navigation {
             return region;
         }
 
-        [[nodiscard]] bool OnSurface(const Record &record, const NavigationObstacleOverlaySurface &surface) noexcept {
-            const auto footprint = Bounds(record);
-            if (footprint.maximumX < surface.bounds.minimum.x || footprint.minimumX > surface.bounds.maximum.x ||
-                footprint.maximumZ < surface.bounds.minimum.z || footprint.minimumZ > surface.bounds.maximum.z)
-                return false;
-            return std::visit([&](const auto &shape) {
+        [[nodiscard]] std::pair<double, double> VerticalBounds(const Record &record) noexcept {
+            return std::visit([](const auto &shape) {
                 const double halfHeight = [&] {
                     if constexpr (std::is_same_v<std::remove_cvref_t<decltype(shape)>, NavigationDynamicBoxShape>)
                         return static_cast<double>(shape.halfExtents.y);
                     else
                         return static_cast<double>(shape.halfHeight);
                 }();
-                return static_cast<double>(shape.center.y) + halfHeight >= surface.bounds.minimum.y &&
-                       static_cast<double>(shape.center.y) - halfHeight <= surface.bounds.maximum.y;
+                return std::pair{static_cast<double>(shape.center.y) - halfHeight, static_cast<double>(shape.center.y) + halfHeight};
             }, record.shape);
+        }
+
+        [[nodiscard]] bool OnSurface(const Record &record, const NavigationObstacleOverlaySurface &surface) noexcept {
+            const auto footprint = Bounds(record);
+            if (footprint.maximumX < surface.bounds.minimum.x || footprint.minimumX > surface.bounds.maximum.x ||
+                footprint.maximumZ < surface.bounds.minimum.z || footprint.minimumZ > surface.bounds.maximum.z)
+                return false;
+            const auto [minimumY, maximumY] = VerticalBounds(record);
+            return maximumY >= surface.bounds.minimum.y && minimumY <= surface.bounds.maximum.y;
+        }
+
+        [[nodiscard]] bool SweptHeightIntersectsSurface(const Record *previous, const Record *current,
+                                                        const NavigationObstacleOverlaySurface &surface) noexcept {
+            double minimum = std::numeric_limits<double>::infinity();
+            double maximum = -std::numeric_limits<double>::infinity();
+            const auto include = [&](const Record *record) {
+                if (!record || !record->enabled)
+                    return;
+                const auto [from, to] = VerticalBounds(*record);
+                minimum = std::min(minimum, from);
+                maximum = std::max(maximum, to);
+            };
+            include(previous);
+            include(current);
+            return maximum >= surface.bounds.minimum.y && minimum <= surface.bounds.maximum.y;
         }
 
         [[nodiscard]] bool ValidSurface(const NavigationDynamicRegistrySnapshot &snapshot,
@@ -89,8 +111,7 @@ namespace Horo::Navigation {
 
         [[nodiscard]] std::optional<Region> SurfaceChange(const Region &region, const Record *previous, const Record *current,
                                                           const NavigationObstacleOverlaySurface &surface) noexcept {
-            if ((!previous || !previous->enabled || !OnSurface(*previous, surface)) &&
-                (!current || !current->enabled || !OnSurface(*current, surface)))
+            if (!SweptHeightIntersectsSurface(previous, current, surface))
                 return std::nullopt;
             const auto clipped = OnSurfaceBounds(region, surface);
             if (clipped.minimumX > clipped.maximumX || clipped.minimumZ > clipped.maximumZ)
