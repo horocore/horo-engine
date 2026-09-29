@@ -117,6 +117,8 @@ namespace Horo::AI {
             REQUIRE(first.HasValue());
             REQUIRE(first.Value()->Values().size() == 6);
             CHECK(first.Value()->Scene() == view.RuntimeId());
+            for (std::size_t index = 0; index < plan.RequiredContexts().size(); ++index)
+                CHECK(first.Value()->Values()[index].id == plan.RequiredContexts()[index].id);
             CHECK(std::get<Runtime::EntityRef>(first.Value()->Find(BuiltinQueryContextId(BuiltinQueryContext::Querier))->value) ==
                   source.querier);
             CHECK(std::get<Math::WorldCoordinate64>(first.Value()->Find(BuiltinQueryContextId(BuiltinQueryContext::WorldOrigin))->value) ==
@@ -167,6 +169,25 @@ namespace Horo::AI {
             source.group.reset();
             source.executionRevision = 2;
             ExpectError(capture.Capture(plan, registry, providers.Value(), view, source), AIErrors::EnvironmentQueryContextMissing);
+            source.group = std::span<const Runtime::EntityRef>{};
+            const auto retried = capture.Capture(plan, registry, providers.Value(), view, source);
+            REQUIRE(retried.HasValue());
+            CHECK(retried.Value()->Revision() == 2);
+            CHECK(emptyGroup.Value()->Revision() == 1);
+        }
+
+        TEST_CASE("EQS reserved built-in context IDs reject foreign descriptors", "[unit][ai][eqs][context]") {
+            QueryFixture fixture;
+            fixture.generator.contexts = {{BuiltinQueryContextId(BuiltinQueryContext::Querier), {1, 1}}};
+            fixture.contexts[0].origin = {QueryDescriptorSourceKind::Package, MakeIdentity<QueryProviderId>(99), 1};
+            const auto registry = fixture.Registry();
+            const auto plan = fixture.Plan(registry);
+            const auto providers = QueryContextProviderRegistry::Capture({}, registry);
+            REQUIRE(providers.HasValue());
+            auto scene = MakeScene();
+            const auto view = scene->View();
+            QueryContextCapture capture;
+            ExpectError(capture.Capture(plan, registry, providers.Value(), view, Source(view)), AIErrors::EnvironmentQueryContextInvalid);
         }
 
         TEST_CASE("EQS required target and scene generations fail closed", "[unit][ai][eqs][context]") {
@@ -230,6 +251,12 @@ namespace Horo::AI {
             ExpectError(capture.Capture(plan, registry, providers.Value(), view, source), AIErrors::EnvironmentQueryContextInvalid);
             CHECK(captured.Value()->Revision() == 1);
             CHECK(state.calls == 2);
+            canonical.size = 4;
+            state.value = canonical;
+            const auto retried = capture.Capture(plan, registry, providers.Value(), view, source);
+            REQUIRE(retried.HasValue());
+            CHECK(retried.Value()->Revision() == 2);
+            CHECK(state.calls == 3);
         }
     }  // namespace
 }  // namespace Horo::AI

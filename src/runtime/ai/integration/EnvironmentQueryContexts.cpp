@@ -37,29 +37,30 @@ namespace Horo::AI {
 
         /** @brief Creates one built-in owned value after required-presence checks. */
         [[nodiscard]] Result<QueryContextValue> CaptureBuiltin(const BuiltinQueryContext kind, const QueryContextCaptureSource &source) {
+            using enum BuiltinQueryContext;
             switch (kind) {
-                case BuiltinQueryContext::Querier:
+                case Querier:
                     return Result<QueryContextValue>::Success(source.querier);
-                case BuiltinQueryContext::Target:
+                case Target:
                     if (source.target)
                         return Result<QueryContextValue>::Success(*source.target);
                     break;
-                case BuiltinQueryContext::QuerierLocation:
+                case QuerierLocation:
                     return Result<QueryContextValue>::Success(source.querierLocation);
-                case BuiltinQueryContext::TargetLocation:
+                case TargetLocation:
                     if (source.target && source.targetLocation)
                         return Result<QueryContextValue>::Success(*source.targetLocation);
                     break;
-                case BuiltinQueryContext::WorldOrigin:
+                case WorldOrigin:
                     return Result<QueryContextValue>::Success(Math::WorldCoordinate64{});
-                case BuiltinQueryContext::Group:
+                case Group:
                     if (source.group && source.group->size() <= MaximumContextGroup)
                         return Result<QueryContextValue>::Success(
                             std::vector<Runtime::EntityRef>{source.group->begin(), source.group->end()});
                     if (source.group && source.group->size() > MaximumContextGroup)
                         return Result<QueryContextValue>::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
                     break;
-                case BuiltinQueryContext::Count:
+                case Count:
                     break;
             }
             return Result<QueryContextValue>::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
@@ -73,6 +74,54 @@ namespace Horo::AI {
                     return kind;
             }
             return std::nullopt;
+        }
+
+        /** @brief Resolves a required built-in against the submitted scene generation. */
+        [[nodiscard]] Result<QueryContextValue> ResolveBuiltin(const BuiltinQueryContext kind, const Runtime::RuntimeSceneView &scene,
+                                                               const QueryContextCaptureSource &source) {
+            if ((kind == BuiltinQueryContext::Target || kind == BuiltinQueryContext::TargetLocation) && source.target) {
+                if (const auto valid = ValidateEntity(scene, *source.target); valid.HasError())
+                    return Result<QueryContextValue>::Failure(valid.ErrorValue());
+            }
+            return CaptureBuiltin(kind, source);
+        }
+
+        /** @brief Invokes only a registered custom provider whose capabilities are available. */
+        [[nodiscard]] Result<QueryContextValue> ResolveCustom(const QueryContextId id, const QueryContextProviderRegistry &providers,
+                                                              const Runtime::RuntimeSceneView &scene,
+                                                              const QueryContextCaptureSource &source) {
+            const auto *provider = providers.Find(id);
+            if (provider == nullptr)
+                return Result<QueryContextValue>::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
+            if ((provider->requiredCapabilities.bits & source.availableCapabilities.bits) != provider->requiredCapabilities.bits)
+                return Result<QueryContextValue>::Failure(MakeError(AIErrors::EnvironmentQueryContextCapabilityUnavailable));
+            return provider->capture(provider->state, scene);
+        }
+
+        /** @brief Resolves and validates one admitted requirement before transaction publication. */
+        [[nodiscard]] Result<QueryCapturedContext> ResolveRequiredContext(const QueryContextRequirement &requirement,
+                                                                          const QuerySchemaRegistry &schema,
+                                                                          const QueryContextProviderRegistry &providers,
+                                                                          const Runtime::RuntimeSceneView &scene,
+                                                                          const QueryContextCaptureSource &source) {
+            const auto *descriptor = schema.Find(requirement.id);
+            if (descriptor == nullptr)
+                return Result<QueryCapturedContext>::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
+            if (!requirement.version.Contains(descriptor->origin.version))
+                return Result<QueryCapturedContext>::Failure(MakeError(AIErrors::EnvironmentQueryVersionIncompatible));
+
+            const auto kind = BuiltinKind(requirement.id);
+            if (kind && descriptor->origin != QueryDescriptorOrigin{.kind = QueryDescriptorSourceKind::Native,
+                                                                    .provider = QueryProviderId::Create(BuiltinBase).Value(),
+                                                                    .version = 1})
+                return Result<QueryCapturedContext>::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
+
+            auto value = kind ? ResolveBuiltin(*kind, scene, source) : ResolveCustom(requirement.id, providers, scene, source);
+            if (value.HasError())
+                return Result<QueryCapturedContext>::Failure(value.ErrorValue());
+            if (const auto valid = ValidateValue(scene, value.Value(), descriptor->maximumPayloadBytes); valid.HasError())
+                return Result<QueryCapturedContext>::Failure(valid.ErrorValue());
+            return Result<QueryCapturedContext>::Success({.id = requirement.id, .value = std::move(value).Value()});
         }
     }  // namespace
 
@@ -116,7 +165,7 @@ namespace Horo::AI {
         const auto found = std::ranges::find_if(values_, [id](const auto &entry) {
             return entry.id == id;
         });
-        return found == values_.end() ? nullptr : &*found;
+        return found == values_.end() ? nullptr : std::to_address(found);
     }
 
     /** @copydoc QueryContextProviderRegistry::Capture */
@@ -147,7 +196,7 @@ namespace Horo::AI {
         const auto found = std::ranges::find_if(providers_, [id](const auto &entry) {
             return entry.id == id;
         });
-        return found == providers_.end() ? nullptr : &*found;
+        return found == providers_.end() ? nullptr : std::to_address(found);
     }
 
     /** @copydoc QueryContextCapture::Capture */
@@ -169,33 +218,15 @@ namespace Horo::AI {
         if (const auto valid = ValidateEntity(scene, source.querier); valid.HasError())
             return SnapshotResult::Failure(valid.ErrorValue());
 
-        std::shared_ptr<QueryContextSnapshot> captured{new QueryContextSnapshot};
+        auto captured = std::make_shared<QueryContextSnapshot>();
         captured->scene_ = scene.RuntimeId();
         captured->revision_ = source.executionRevision;
         captured->values_.reserve(plan.RequiredContexts().size());
         for (const auto &requirement : plan.RequiredContexts()) {
-            const auto *descriptor = schema.Find(requirement.id);
-            if (descriptor == nullptr)
-                return SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
-            if (!requirement.version.Contains(descriptor->origin.version))
-                return SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryVersionIncompatible));
-            Result<QueryContextValue> value = Result<QueryContextValue>::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
-            if (const auto kind = BuiltinKind(requirement.id)) {
-                if ((*kind == BuiltinQueryContext::Target || *kind == BuiltinQueryContext::TargetLocation) && source.target) {
-                    if (const auto valid = ValidateEntity(scene, *source.target); valid.HasError())
-                        return SnapshotResult::Failure(valid.ErrorValue());
-                }
-                value = CaptureBuiltin(*kind, source);
-            } else if (const auto *provider = providers.Find(requirement.id)) {
-                if ((provider->requiredCapabilities.bits & source.availableCapabilities.bits) != provider->requiredCapabilities.bits)
-                    return SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryContextCapabilityUnavailable));
-                value = provider->capture(provider->state, scene);
-            }
-            if (value.HasError())
-                return SnapshotResult::Failure(value.ErrorValue());
-            if (const auto valid = ValidateValue(scene, value.Value(), descriptor->maximumPayloadBytes); valid.HasError())
-                return SnapshotResult::Failure(valid.ErrorValue());
-            captured->values_.push_back({.id = requirement.id, .value = std::move(value).Value()});
+            auto resolved = ResolveRequiredContext(requirement, schema, providers, scene, source);
+            if (resolved.HasError())
+                return SnapshotResult::Failure(resolved.ErrorValue());
+            captured->values_.push_back(std::move(resolved).Value());
         }
         plan_ = plan.Id();
         latestRevision_ = source.executionRevision;
