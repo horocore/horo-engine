@@ -166,6 +166,7 @@ horo_configure_target_header_boundary(HoroUpdateTransfer PUBLIC_HEADERS
     Horo/Release/UpdateTransferErrors.h
 )
 horo_configure_target_header_boundary(HoroUpdateDownload PUBLIC_HEADERS
+    Horo/Release/UpdateDeltaStaging.h
     Horo/Release/UpdateDownloadSession.h
     Horo/Release/UpdateHttpDownload.h
     Horo/Release/UpdateStageReady.h

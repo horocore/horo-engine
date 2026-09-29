@@ -28,6 +28,8 @@ namespace Horo::Release {
         Sha256Digest baseInventoryDigest;
         Sha256Digest targetInventoryDigest;
         Sha256Digest deltaInventoryDigest;
+        std::vector<UpdateStagedFile> baseFiles;
+        std::vector<UpdateStagedFile> deltaFiles;
         std::vector<UpdateDeltaFile> targetFiles;
     };
 

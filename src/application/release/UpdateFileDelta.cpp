@@ -47,7 +47,12 @@ namespace Horo::Release {
         for (const auto &file : deltaFiles)
             delta.try_emplace(file.path, &file);
 
-        UpdateFileDeltaPlan plan{expectedBaseDigest, expectedTargetDigest, expectedDeltaDigest, {}};
+        UpdateFileDeltaPlan plan{expectedBaseDigest,
+                                 expectedTargetDigest,
+                                 expectedDeltaDigest,
+                                 {baseFiles.begin(), baseFiles.end()},
+                                 {deltaFiles.begin(), deltaFiles.end()},
+                                 {}};
         plan.targetFiles.reserve(targetFiles.size());
         for (const auto &target : targetFiles) {
             const auto prior = base.find(target.path);

@@ -122,16 +122,30 @@ manifest and may produce delta packages. Delta packages are optimization only:
 the updater must be able to fall back to the full package when delta validation
 or application fails.
 
-`PlanUpdateFileDelta` is the file-level preflight boundary for this work. It
-compares the complete base, candidate, and delta file inventories against their
-authenticated canonical digests and requires the delta inventory to contain
-exactly the changed and new files. Deleted files are absent from the candidate
-inventory. No plan publishes a stage: the host must authenticate the base and
-delta artifacts, build a private candidate tree, and verify that tree against
-the complete candidate inventory before activation. If preflight or staging
-fails, the host must select an allowed, independently verified full package;
-it must never publish a partially reconstructed tree. The signed multi-artifact
-selection and staging orchestration remain separate from this preflight API.
+Signed update manifest schema v2 adds delta ZIP records separately from the
+standalone full packages. Each delta record identifies its allowed full package
+and binds the exact base, patch, and full target file inventories by digest.
+Schema v1 remains the canonical encoding when no deltas are present. The
+`DeltaZipArchive` format is admitted on supported update hosts only as a delta
+record; full-package discovery and installation activation reject it as a
+standalone product. `SelectUpdatePackageCandidates` authenticates the manifest
+and returns the allowed full package together with an optional delta matching
+the verified installed base inventory. An unknown base yields the full package.
+
+`PlanUpdateFileDelta` compares the complete base, candidate, and delta file
+inventories against their authenticated canonical digests. The patch inventory
+must contain exactly the changed and new files; deleted files are absent from
+the candidate inventory. `StageVerifiedDeltaZipUpdate` verifies the signed
+download and extracts the patch into a private tree without publishing a ready
+marker. `ReconstructUpdateFileDeltaStage` revalidates the
+plan, verifies both quiescent source trees, copies into a new private directory,
+and verifies its exact full target inventory. Failure or cancellation removes
+only that newly created directory. It does not publish a ready marker or grant
+activation authority. The current ready marker binds one complete package
+file, so a composite delta stage still needs a signed composite ready identity
+and activation support. Until that contract exists, hosts must use the allowed,
+independently verified full package for activation; no partial delta ZIP may
+be activated. Schema-v1 readers must not reinterpret v2 delta metadata as v1.
 
 `ResolveAssetChunkMountOrder` checks an exact optional/DLC selection against a
 verified base-manifest digest, dependency closure, and dependency-first mount
