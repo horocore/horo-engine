@@ -1151,7 +1151,8 @@ target_compile_features(HoroUpdateOfflineSourceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateOfflineSourceTests PRIVATE HoroEngine::UpdateOfflineSource HoroEngine::UpdateActivation miniz)
 horo_register_catch_test(HoroUpdateOfflineSourceTests LABELS "release;update;headless")
 
-add_executable(HoroUpdateActivationTests unit/application/UpdateActivationTests.cpp unit/application/UpdateRetentionTests.cpp)
+add_executable(HoroUpdateActivationTests unit/application/UpdateActivationTests.cpp unit/application/UpdateRetentionTests.cpp
+        unit/application/UpdateProductProcessTests.cpp)
 target_compile_features(HoroUpdateActivationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateActivationTests PRIVATE HoroEngine::UpdateActivation miniz)
 horo_register_catch_test(HoroUpdateActivationTests LABELS "release;update;headless")
