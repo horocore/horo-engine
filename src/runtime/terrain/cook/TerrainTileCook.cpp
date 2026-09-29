@@ -1,5 +1,7 @@
 #include "Horo/Terrain/TerrainTileCook.h"
 
+#include "TerrainTileCookCodec.h"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -8,179 +10,21 @@
 #include <string_view>
 
 namespace Horo::Terrain {
+    using Detail::CanonicalWriter;
+    using Detail::EdgeDigest;
+    using Detail::Fingerprint;
+    using Detail::ManifestDigest;
+    using Detail::Nonzero;
+    using Detail::SamplePositions;
+    using Detail::SourceDigest;
+    using Detail::ValidCoordinates;
+    using Detail::ValidProfile;
+    using Detail::WorldTileOrigin;
+    using Detail::WriteCoordinates;
+    using Detail::WriteSample;
+
     namespace {
         constexpr std::string_view TileMagic = "HTIL";
-        constexpr std::string_view ManifestMagic = "HTMF";
-
-        bool Nonzero(const Sha256Digest &digest) {
-            return std::any_of(digest.bytes.begin(), digest.bytes.end(), [](const auto byte) {
-                return byte != 0;
-            });
-        }
-
-        class CanonicalWriter final {
-        public:
-            explicit CanonicalWriter(std::vector<std::uint8_t> *bytes, Sha256Builder *hash = nullptr) : bytes_(bytes), hash_(hash) {}
-
-            void Byte(const std::uint8_t value) {
-                if (bytes_)
-                    bytes_->push_back(value);
-                if (hash_) {
-                    pending_[pendingSize_++] = static_cast<std::byte>(value);
-                    if (pendingSize_ == pending_.size())
-                        Flush();
-                }
-            }
-
-            void Flush() {
-                if (pendingSize_ == 0)
-                    return;
-                valid_ = hash_->Update(std::span{pending_.data(), pendingSize_}) && valid_;
-                pendingSize_ = 0;
-            }
-
-            void Unsigned(std::uint64_t value, const std::uint8_t count) {
-                for (std::uint8_t index = 0; index < count; ++index) {
-                    Byte(static_cast<std::uint8_t>(value));
-                    value >>= 8U;
-                }
-            }
-
-            template <std::size_t N> void Bytes(const std::array<std::uint8_t, N> &value) {
-                for (const auto byte : value)
-                    Byte(byte);
-            }
-
-            void Text(const std::string_view value) {
-                Unsigned(value.size(), 2);
-                for (const char byte : value)
-                    Byte(static_cast<std::uint8_t>(byte));
-            }
-
-            void Float(const float value) {
-                Unsigned(std::bit_cast<std::uint32_t>(value == 0.0F ? 0.0F : value), 4);
-            }
-
-            void Double(const double value) {
-                Unsigned(std::bit_cast<std::uint64_t>(value == 0.0 ? 0.0 : value), 8);
-            }
-
-            [[nodiscard]] bool Valid() const noexcept {
-                return valid_;
-            }
-
-        private:
-            std::vector<std::uint8_t> *bytes_{};
-            Sha256Builder *hash_{};
-            std::array<std::byte, 4096> pending_{};
-            std::size_t pendingSize_{};
-            bool valid_{true};
-        };
-
-        void WriteCoordinates(CanonicalWriter &writer, const TerrainSourceCoordinates &coordinates) {
-            writer.Byte(static_cast<std::uint8_t>(coordinates.space));
-            writer.Text(coordinates.projectedCrs);
-            writer.Double(coordinates.originX);
-            writer.Double(coordinates.originZ);
-            writer.Double(coordinates.spacingX);
-            writer.Double(coordinates.spacingZ);
-            writer.Double(coordinates.heightScale);
-            writer.Double(coordinates.heightOffset);
-            writer.Double(coordinates.maximumPrecisionError);
-        }
-
-        void WriteProfile(CanonicalWriter &writer, const TerrainTileCookProfile &profile) {
-            writer.Unsigned(profile.interiorQuads, 4);
-            writer.Byte(profile.lodLevels);
-            writer.Byte(static_cast<std::uint8_t>(profile.tier));
-            writer.Bytes(profile.targetDigest.bytes);
-            writer.Bytes(profile.toolchainDigest.bytes);
-            writer.Unsigned(profile.maximumTiles, 4);
-            writer.Unsigned(profile.maximumPayloadBytes, 8);
-            writer.Unsigned(profile.maximumWorkItems, 8);
-        }
-
-        void WriteSample(CanonicalWriter &writer, const TerrainCanonicalSource &source, const std::size_t x, const std::size_t z) {
-            const auto index = z * source.width + x;
-            writer.Float(source.heightsMeters[index]);
-            for (std::uint8_t layer = 0; layer < source.layerCount; ++layer)
-                writer.Unsigned(source.weights[index * source.layerCount + layer], 2);
-            writer.Byte(source.holes.empty() ? 0 : source.holes[index]);
-        }
-
-        Sha256Digest SourceDigest(const TerrainCanonicalSource &source) {
-            Sha256Builder hash;
-            CanonicalWriter writer{nullptr, &hash};
-            writer.Text("horo.terrain.source.v1");
-            writer.Bytes(source.dataset.Bytes());
-            writer.Bytes(source.sourceAsset.Bytes());
-            writer.Unsigned(source.revision.Value(), 8);
-            writer.Unsigned(source.capability.Value(), 8);
-            writer.Unsigned(source.width, 4);
-            writer.Unsigned(source.height, 4);
-            writer.Byte(source.layerCount);
-            writer.Byte(source.HasHoles() ? 1 : 0);
-            WriteCoordinates(writer, source.coordinates);
-            for (std::size_t z = 0; z < source.height; ++z) {
-                for (std::size_t x = 0; x < source.width; ++x)
-                    WriteSample(writer, source, x, z);
-            }
-            writer.Flush();
-            return hash.Finalize();
-        }
-
-        std::vector<std::uint32_t> SamplePositions(const std::uint32_t begin, const std::uint32_t end, const std::uint32_t stride) {
-            std::vector<std::uint32_t> positions;
-            for (std::uint32_t value = begin; value < end; value += stride)
-                positions.push_back(value);
-            positions.push_back(end);
-            return positions;
-        }
-
-        std::optional<std::int32_t> WorldTileOrigin(const double origin, const double spacing, const std::uint32_t tileQuads,
-                                                    const std::uint64_t tileCount) {
-            const auto quantized = std::floor(origin / (spacing * tileQuads));
-            if (!std::isfinite(quantized) || quantized < std::numeric_limits<std::int32_t>::min() ||
-                quantized > static_cast<double>(std::numeric_limits<std::int32_t>::max()) - tileCount)
-                return std::nullopt;
-            return static_cast<std::int32_t>(quantized);
-        }
-
-        Sha256Digest EdgeDigest(const TerrainCanonicalSource &source, const std::vector<std::uint32_t> &xs,
-                                const std::vector<std::uint32_t> &zs, const std::uint32_t stride, const bool alongZ, const bool highEdge) {
-            Sha256Builder hash;
-            CanonicalWriter writer{nullptr, &hash};
-            writer.Text("horo.terrain.seam.v1");
-            writer.Unsigned(stride, 4);
-            writer.Byte(source.layerCount);
-            writer.Byte(alongZ ? 1 : 0);
-            writer.Unsigned(alongZ ? zs.size() : xs.size(), 4);
-            if (alongZ) {
-                for (const auto z : zs)
-                    WriteSample(writer, source, highEdge ? xs.back() : xs.front(), z);
-            } else {
-                for (const auto x : xs)
-                    WriteSample(writer, source, x, highEdge ? zs.back() : zs.front());
-            }
-            writer.Flush();
-            return hash.Finalize();
-        }
-
-        bool ValidCoordinates(const TerrainSourceCoordinates &coordinates) {
-            if (coordinates.space >= TerrainCoordinateSpace::GeographicDegrees || !std::isfinite(coordinates.originX) ||
-                !std::isfinite(coordinates.originZ) || !std::isfinite(coordinates.spacingX) || !std::isfinite(coordinates.spacingZ) ||
-                !std::isfinite(coordinates.heightScale) || !std::isfinite(coordinates.heightOffset) ||
-                !std::isfinite(coordinates.maximumPrecisionError) || coordinates.spacingX <= 0 || coordinates.spacingZ <= 0 ||
-                coordinates.heightScale <= 0 || coordinates.maximumPrecisionError < 0 ||
-                coordinates.projectedCrs.size() > std::numeric_limits<std::uint16_t>::max())
-                return false;
-            if (coordinates.space == TerrainCoordinateSpace::LocalMeters)
-                return coordinates.projectedCrs.empty();
-            const auto &crs = coordinates.projectedCrs;
-            return crs.size() > 5 && crs.starts_with("EPSG:") && std::all_of(crs.begin() + 5, crs.end(), [](const char c) {
-                return c >= '0' && c <= '9';
-            });
-        }
 
         bool ValidSource(const TerrainCanonicalSource &source) {
             if (!source.dataset.IsValid() || !source.sourceAsset.IsValid() || !source.revision.IsValid() || !source.capability.IsValid() ||
@@ -205,69 +49,6 @@ namespace Horo::Terrain {
             }
             return std::isfinite(source.coordinates.originX + static_cast<double>(source.width - 1) * source.coordinates.spacingX) &&
                    std::isfinite(source.coordinates.originZ + static_cast<double>(source.height - 1) * source.coordinates.spacingZ);
-        }
-
-        bool ValidProfile(const TerrainTileCookProfile &profile) {
-            const auto tier = GetTerrainTierProfile(profile.tier);
-            if (tier.HasError())
-                return false;
-            const auto &limits = tier.Value().limits;
-            return std::has_single_bit(profile.interiorQuads) && profile.interiorQuads <= limits.maximumTileInteriorQuads &&
-                   profile.lodLevels != 0 && profile.lodLevels <= limits.maximumLodLevels && Nonzero(profile.targetDigest) &&
-                   Nonzero(profile.toolchainDigest) && profile.maximumTiles != 0 &&
-                   profile.maximumTiles <= limits.maximumActiveTerrainTiles && profile.maximumPayloadBytes != 0 &&
-                   profile.maximumPayloadBytes <= limits.maximumStagingBytes && profile.maximumWorkItems != 0 &&
-                   profile.maximumWorkItems <= limits.maximumWorkItems;
-        }
-
-        Sha256Digest Fingerprint(const TerrainCanonicalSource &source, const Sha256Digest &sourceDigest,
-                                 const TerrainTileCookProfile &profile, const std::vector<TerrainTileCookDependency> &dependencies) {
-            Sha256Builder hash;
-            CanonicalWriter writer{nullptr, &hash};
-            writer.Text("horo.terrain.tile-cook.v1");
-            writer.Unsigned(CurrentTerrainTileCookSchema, 4);
-            writer.Bytes(source.dataset.Bytes());
-            writer.Bytes(source.sourceAsset.Bytes());
-            writer.Unsigned(source.revision.Value(), 8);
-            writer.Bytes(sourceDigest.bytes);
-            WriteProfile(writer, profile);
-            writer.Unsigned(dependencies.size(), 4);
-            for (const auto &dependency : dependencies) {
-                writer.Bytes(dependency.asset.Bytes());
-                writer.Bytes(dependency.artifactDigest.bytes);
-            }
-            writer.Flush();
-            return hash.Finalize();
-        }
-
-        Sha256Digest ManifestDigest(const CookedTerrainTileSet &cooked) {
-            Sha256Builder hash;
-            CanonicalWriter writer{nullptr, &hash};
-            writer.Text(ManifestMagic);
-            writer.Unsigned(CurrentTerrainTileCookSchema, 4);
-            writer.Bytes(cooked.dataset.Bytes());
-            writer.Bytes(cooked.sourceAsset.Bytes());
-            writer.Unsigned(cooked.sourceRevision.Value(), 8);
-            writer.Unsigned(cooked.sourceWidth, 4);
-            writer.Unsigned(cooked.sourceHeight, 4);
-            writer.Byte(cooked.layerCount);
-            writer.Byte(cooked.hasHoles ? 1 : 0);
-            WriteCoordinates(writer, cooked.coordinates);
-            WriteProfile(writer, cooked.profile);
-            writer.Bytes(cooked.sourceDigest.bytes);
-            writer.Bytes(cooked.fingerprint.bytes);
-            writer.Unsigned(cooked.tiles.size(), 4);
-            for (const auto &tile : cooked.tiles) {
-                writer.Bytes(SerializeTerrainTileId(tile.id));
-                writer.Unsigned(tile.samplesX, 4);
-                writer.Unsigned(tile.samplesZ, 4);
-                writer.Unsigned(tile.payload.size(), 8);
-                for (const auto &seam : tile.seams)
-                    writer.Bytes(seam.bytes);
-                writer.Bytes(tile.digest.bytes);
-            }
-            writer.Flush();
-            return hash.Finalize();
         }
 
         bool PayloadMatchesProvenance(const TerrainCookedTile &tile, const CookedTerrainTileSet &cooked) {
@@ -370,6 +151,45 @@ namespace Horo::Terrain {
                    std::equal(encodedCoordinates.begin(), encodedCoordinates.end(), tile.payload.begin() + 153);
         }
 
+        struct ManifestLevel final {
+            std::uint8_t lod{};
+            std::uint32_t stride{};
+            std::uint32_t tileQuads{};
+            std::uint64_t countX{};
+            std::int32_t originX{};
+            std::int32_t originZ{};
+        };
+
+        struct ManifestScan final {
+            std::size_t cursor{};
+            std::uint64_t totalBytes{};
+            std::uint64_t totalWork{};
+        };
+
+        bool ValidManifestTile(const CookedTerrainTileSet &cooked, ManifestScan &scan, const ManifestLevel &level, const std::uint32_t x,
+                               const std::uint32_t z) {
+            const auto &tile = cooked.tiles[scan.cursor];
+            const auto address = TerrainTileCoordinate{static_cast<std::int32_t>(static_cast<std::int64_t>(level.originX) + x),
+                                                       static_cast<std::int32_t>(static_cast<std::int64_t>(level.originZ) + z), level.lod};
+            const auto beginX = x * level.tileQuads;
+            const auto beginZ = z * level.tileQuads;
+            const auto endX = std::min(beginX + level.tileQuads, cooked.sourceWidth - 1);
+            const auto endZ = std::min(beginZ + level.tileQuads, cooked.sourceHeight - 1);
+            if (tile.id.dataset != cooked.dataset || tile.id.tile != address ||
+                !TileMatchesLayout(tile, cooked, beginX, endX, beginZ, endZ, level.stride) ||
+                (x != 0 && cooked.tiles[scan.cursor - 1].seams[1] != tile.seams[0]) ||
+                (z != 0 && cooked.tiles[scan.cursor - level.countX].seams[3] != tile.seams[2]))
+                return false;
+            const auto visits = static_cast<std::uint64_t>(tile.samplesX) * tile.samplesZ;
+            if (tile.payload.size() > cooked.profile.maximumPayloadBytes - scan.totalBytes ||
+                visits > cooked.profile.maximumWorkItems - scan.totalWork)
+                return false;
+            scan.totalBytes += tile.payload.size();
+            scan.totalWork += visits;
+            ++scan.cursor;
+            return true;
+        }
+
         bool ManifestLayoutValid(const CookedTerrainTileSet &cooked) {
             if (!ValidProfile(cooked.profile) || !ValidCoordinates(cooked.coordinates) || cooked.sourceWidth < 2 || cooked.sourceHeight < 2)
                 return false;
@@ -378,65 +198,49 @@ namespace Horo::Terrain {
             if (cooked.sourceWidth > limits.maximumSamplesPerAxis || cooked.sourceHeight > limits.maximumSamplesPerAxis ||
                 cooked.layerCount > limits.maximumLayersPerTile)
                 return false;
-            std::size_t cursor{};
-            std::uint64_t totalBytes{};
-            std::uint64_t totalWork{};
+            ManifestScan scan;
             for (std::uint8_t lod = 0; lod < cooked.profile.lodLevels; ++lod) {
                 const auto stride = std::uint32_t{1} << lod;
                 const auto tileQuads = cooked.profile.interiorQuads * stride;
                 const auto countX = (static_cast<std::uint64_t>(cooked.sourceWidth - 2) / tileQuads) + 1;
                 const auto countZ = (static_cast<std::uint64_t>(cooked.sourceHeight - 2) / tileQuads) + 1;
-                if (countX * countZ > cooked.tiles.size() - cursor)
+                if (countX * countZ > cooked.tiles.size() - scan.cursor)
                     return false;
                 const auto originX = WorldTileOrigin(cooked.coordinates.originX, cooked.coordinates.spacingX, tileQuads, countX);
                 const auto originZ = WorldTileOrigin(cooked.coordinates.originZ, cooked.coordinates.spacingZ, tileQuads, countZ);
                 if (!originX || !originZ)
                     return false;
-                const auto lodStart = cursor;
+                const ManifestLevel level{lod, stride, tileQuads, countX, *originX, *originZ};
                 for (std::uint32_t z = 0; z < countZ; ++z) {
                     for (std::uint32_t x = 0; x < countX; ++x) {
-                        const auto &tile = cooked.tiles[cursor];
-                        const auto address = TerrainTileCoordinate{static_cast<std::int32_t>(static_cast<std::int64_t>(*originX) + x),
-                                                                   static_cast<std::int32_t>(static_cast<std::int64_t>(*originZ) + z), lod};
-                        const auto beginX = x * tileQuads;
-                        const auto beginZ = z * tileQuads;
-                        const auto endX = std::min(beginX + tileQuads, cooked.sourceWidth - 1);
-                        const auto endZ = std::min(beginZ + tileQuads, cooked.sourceHeight - 1);
-                        if (tile.id.dataset != cooked.dataset || tile.id.tile != address ||
-                            !TileMatchesLayout(tile, cooked, beginX, endX, beginZ, endZ, stride))
+                        if (!ValidManifestTile(cooked, scan, level, x, z))
                             return false;
-                        if (x != 0 && cooked.tiles[cursor - 1].seams[1] != tile.seams[0])
-                            return false;
-                        if (z != 0 && cooked.tiles[cursor - countX].seams[3] != tile.seams[2])
-                            return false;
-                        if (tile.payload.size() > cooked.profile.maximumPayloadBytes - totalBytes)
-                            return false;
-                        totalBytes += tile.payload.size();
-                        const auto visits = static_cast<std::uint64_t>(tile.samplesX) * tile.samplesZ;
-                        if (visits > cooked.profile.maximumWorkItems - totalWork)
-                            return false;
-                        totalWork += visits;
-                        ++cursor;
                     }
                 }
-                if (cursor - lodStart != countX * countZ)
-                    return false;
             }
-            return cursor == cooked.tiles.size() && cursor <= cooked.profile.maximumTiles;
+            return scan.cursor == cooked.tiles.size() && scan.cursor <= cooked.profile.maximumTiles;
         }
 
+        struct TileBuildAddress final {
+            TerrainTileCoordinate tile{};
+            std::uint32_t stride{};
+            std::uint32_t beginX{};
+            std::uint32_t endX{};
+            std::uint32_t beginZ{};
+            std::uint32_t endZ{};
+        };
+
         TerrainCookedTile BuildTile(const TerrainCanonicalSource &source, const Sha256Digest &sourceDigest, const Sha256Digest &fingerprint,
-                                    const std::uint32_t stride, const std::uint32_t beginX, const std::uint32_t endX,
-                                    const std::uint32_t beginZ, const std::uint32_t endZ, const std::int32_t tileX,
-                                    const std::int32_t tileZ, const std::uint8_t lod) {
+                                    const TileBuildAddress &address) {
             TerrainCookedTile tile;
-            tile.id = {.dataset = source.dataset, .tile = {.x = tileX, .z = tileZ, .lod = lod}};
-            const auto xs = SamplePositions(beginX, endX, stride);
-            const auto zs = SamplePositions(beginZ, endZ, stride);
+            tile.id = {.dataset = source.dataset, .tile = address.tile};
+            const auto xs = SamplePositions(address.beginX, address.endX, address.stride);
+            const auto zs = SamplePositions(address.beginZ, address.endZ, address.stride);
             tile.samplesX = static_cast<std::uint32_t>(xs.size());
             tile.samplesZ = static_cast<std::uint32_t>(zs.size());
-            tile.seams = {EdgeDigest(source, xs, zs, stride, true, false), EdgeDigest(source, xs, zs, stride, true, true),
-                          EdgeDigest(source, xs, zs, stride, false, false), EdgeDigest(source, xs, zs, stride, false, true)};
+            tile.seams = {EdgeDigest(source, xs, zs, address.stride, true, false), EdgeDigest(source, xs, zs, address.stride, true, true),
+                          EdgeDigest(source, xs, zs, address.stride, false, false),
+                          EdgeDigest(source, xs, zs, address.stride, false, true)};
             CanonicalWriter writer{&tile.payload};
             writer.Text(TileMagic);
             writer.Unsigned(CurrentTerrainTileCookSchema, 4);
@@ -445,11 +249,11 @@ namespace Horo::Terrain {
             writer.Unsigned(source.revision.Value(), 8);
             writer.Bytes(sourceDigest.bytes);
             writer.Bytes(fingerprint.bytes);
-            writer.Unsigned(beginX, 4);
-            writer.Unsigned(endX, 4);
-            writer.Unsigned(beginZ, 4);
-            writer.Unsigned(endZ, 4);
-            writer.Unsigned(stride, 4);
+            writer.Unsigned(address.beginX, 4);
+            writer.Unsigned(address.endX, 4);
+            writer.Unsigned(address.beginZ, 4);
+            writer.Unsigned(address.endZ, 4);
+            writer.Unsigned(address.stride, 4);
             writer.Unsigned(tile.samplesX, 4);
             writer.Unsigned(tile.samplesZ, 4);
             writer.Byte(source.layerCount);
@@ -461,6 +265,70 @@ namespace Horo::Terrain {
             }
             tile.digest = ComputeSha256(std::as_bytes(std::span{tile.payload}));
             return tile;
+        }
+
+        struct CookBudget final {
+            std::uint64_t bytes{};
+            std::uint64_t work{};
+        };
+
+        Result<void> CookOneTile(const TerrainCanonicalSource &source, CookedTerrainTileSet &cooked, const CookedTerrainTileSet *previous,
+                                 const TileBuildAddress &address, CookBudget &budget) {
+            const auto nx = (address.endX - address.beginX + address.stride - 1) / address.stride + 1;
+            const auto nz = (address.endZ - address.beginZ + address.stride - 1) / address.stride + 1;
+            const auto visits = static_cast<std::uint64_t>(nx) * nz;
+            if (visits > cooked.profile.maximumWorkItems - budget.work)
+                return Result<void>::Failure(MakeError(TerrainTileCookErrors::LimitExceeded));
+            const auto expectedBytes = 212ULL + source.coordinates.projectedCrs.size() + visits * (5ULL + 2ULL * source.layerCount);
+            if (expectedBytes > cooked.profile.maximumPayloadBytes - budget.bytes)
+                return Result<void>::Failure(MakeError(TerrainTileCookErrors::LimitExceeded));
+            auto tile = BuildTile(source, cooked.sourceDigest, cooked.fingerprint, address);
+            if (tile.payload.size() != expectedBytes)
+                return Result<void>::Failure(MakeError(TerrainTileCookErrors::InvalidSource));
+            budget.work += visits;
+            budget.bytes += tile.payload.size();
+            if (previous && previous->fingerprint == cooked.fingerprint) {
+                const auto old = std::find_if(previous->tiles.begin(), previous->tiles.end(), [&](const auto &candidate) {
+                    return candidate.id == tile.id;
+                });
+                if (old != previous->tiles.end() && old->digest == tile.digest && old->payload == tile.payload && old->seams == tile.seams)
+                    tile = *old;
+            }
+            cooked.tiles.push_back(std::move(tile));
+            return Result<void>::Success();
+        }
+
+        Result<void> CookLevel(const TerrainCanonicalSource &source, CookedTerrainTileSet &cooked, const CookedTerrainTileSet *previous,
+                               const CancellationToken &cancellation, const std::uint8_t lod, CookBudget &budget) {
+            const auto stride = std::uint32_t{1} << lod;
+            const auto tileQuads = cooked.profile.interiorQuads * stride;
+            const auto countX = (static_cast<std::uint64_t>(source.width - 2) / tileQuads) + 1;
+            const auto countZ = (static_cast<std::uint64_t>(source.height - 2) / tileQuads) + 1;
+            if (countX * countZ > cooked.profile.maximumTiles - cooked.tiles.size())
+                return Result<void>::Failure(MakeError(TerrainTileCookErrors::LimitExceeded));
+            const auto originX = WorldTileOrigin(source.coordinates.originX, source.coordinates.spacingX, tileQuads, countX);
+            const auto originZ = WorldTileOrigin(source.coordinates.originZ, source.coordinates.spacingZ, tileQuads, countZ);
+            if (!originX || !originZ)
+                return Result<void>::Failure(MakeError(TerrainTileCookErrors::InvalidSource));
+            for (std::uint32_t z = 0; z < countZ; ++z) {
+                for (std::uint32_t x = 0; x < countX; ++x) {
+                    if (cancellation.IsCancellationRequested())
+                        return Result<void>::Failure(MakeError(TerrainTileCookErrors::Cancelled));
+                    const auto beginX = x * tileQuads;
+                    const auto beginZ = z * tileQuads;
+                    const TileBuildAddress address{.tile = {static_cast<std::int32_t>(static_cast<std::int64_t>(*originX) + x),
+                                                            static_cast<std::int32_t>(static_cast<std::int64_t>(*originZ) + z), lod},
+                                                   .stride = stride,
+                                                   .beginX = beginX,
+                                                   .endX = std::min(beginX + tileQuads, source.width - 1),
+                                                   .beginZ = beginZ,
+                                                   .endZ = std::min(beginZ + tileQuads, source.height - 1)};
+                    const auto result = CookOneTile(source, cooked, previous, address, budget);
+                    if (result.HasError())
+                        return result;
+                }
+            }
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -534,53 +402,11 @@ namespace Horo::Terrain {
         cooked.profile = profile;
         cooked.sourceDigest = SourceDigest(source);
         cooked.fingerprint = Fingerprint(source, cooked.sourceDigest, profile, sortedDependencies);
-        std::uint64_t cumulativeBytes{};
-        std::uint64_t cumulativeWork{};
+        CookBudget budget;
         for (std::uint8_t lod = 0; lod < profile.lodLevels; ++lod) {
-            const auto stride = std::uint32_t{1} << lod;
-            const auto tileQuads = profile.interiorQuads * stride;
-            const auto tileCountX = (static_cast<std::uint64_t>(source.width - 2) / tileQuads) + 1;
-            const auto tileCountZ = (static_cast<std::uint64_t>(source.height - 2) / tileQuads) + 1;
-            if (tileCountX * tileCountZ > profile.maximumTiles - cooked.tiles.size())
-                return Result<CookedTerrainTileSet>::Failure(MakeError(TerrainTileCookErrors::LimitExceeded));
-            const auto originX = WorldTileOrigin(source.coordinates.originX, source.coordinates.spacingX, tileQuads, tileCountX);
-            const auto originZ = WorldTileOrigin(source.coordinates.originZ, source.coordinates.spacingZ, tileQuads, tileCountZ);
-            if (!originX || !originZ)
-                return Result<CookedTerrainTileSet>::Failure(MakeError(TerrainTileCookErrors::InvalidSource));
-            for (std::uint32_t z = 0; z < tileCountZ; ++z) {
-                for (std::uint32_t x = 0; x < tileCountX; ++x) {
-                    if (cancellation.IsCancellationRequested())
-                        return Result<CookedTerrainTileSet>::Failure(MakeError(TerrainTileCookErrors::Cancelled));
-                    const auto beginX = x * tileQuads;
-                    const auto beginZ = z * tileQuads;
-                    const auto endX = std::min(beginX + tileQuads, source.width - 1);
-                    const auto endZ = std::min(beginZ + tileQuads, source.height - 1);
-                    const auto nx = (endX - beginX + stride - 1) / stride + 1;
-                    const auto nz = (endZ - beginZ + stride - 1) / stride + 1;
-                    const auto visits = static_cast<std::uint64_t>(nx) * nz;
-                    if (visits > profile.maximumWorkItems - cumulativeWork)
-                        return Result<CookedTerrainTileSet>::Failure(MakeError(TerrainTileCookErrors::LimitExceeded));
-                    cumulativeWork += visits;
-                    const auto expectedBytes = 212ULL + source.coordinates.projectedCrs.size() + visits * (5ULL + 2ULL * source.layerCount);
-                    if (expectedBytes > profile.maximumPayloadBytes - cumulativeBytes)
-                        return Result<CookedTerrainTileSet>::Failure(MakeError(TerrainTileCookErrors::LimitExceeded));
-                    auto tile = BuildTile(source, cooked.sourceDigest, cooked.fingerprint, stride, beginX, endX, beginZ, endZ,
-                                          static_cast<std::int32_t>(static_cast<std::int64_t>(*originX) + x),
-                                          static_cast<std::int32_t>(static_cast<std::int64_t>(*originZ) + z), lod);
-                    if (tile.payload.size() != expectedBytes)
-                        return Result<CookedTerrainTileSet>::Failure(MakeError(TerrainTileCookErrors::InvalidSource));
-                    cumulativeBytes += tile.payload.size();
-                    if (previous && previous->fingerprint == cooked.fingerprint) {
-                        const auto old = std::find_if(previous->tiles.begin(), previous->tiles.end(), [&](const auto &candidate) {
-                            return candidate.id == tile.id;
-                        });
-                        if (old != previous->tiles.end() && old->digest == tile.digest && old->payload == tile.payload &&
-                            old->seams == tile.seams)
-                            tile = *old;
-                    }
-                    cooked.tiles.push_back(std::move(tile));
-                }
-            }
+            const auto result = CookLevel(source, cooked, previous, cancellation, lod, budget);
+            if (result.HasError())
+                return Result<CookedTerrainTileSet>::Failure(result.ErrorValue());
         }
         if (cancellation.IsCancellationRequested())
             return Result<CookedTerrainTileSet>::Failure(MakeError(TerrainTileCookErrors::Cancelled));
