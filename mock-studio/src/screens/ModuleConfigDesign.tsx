@@ -46,15 +46,15 @@ export function ModuleConfigDesign() {
   return <div className="module-config-design">
     <header className="mcd-header"><div><h1>Gameplay Integration Configuration</h1><p>Game libraries · package contributions · services · script runtime · verification</p></div></header>
     <nav className="mcd-tabs" aria-label="Gameplay integration views">
-      {sections.map(section => <button key={section.id} type="button" className={activeId === section.id ? 'active' : ''} aria-current={activeId === section.id ? 'page' : undefined} onClick={() => setActiveId(section.id)}>{section.id[0].toUpperCase() + section.id.slice(1)}</button>)}
+      {sections.map(section => <button key={section.id} type="button" className={activeId === section.id ? 'active' : ''} aria-current={activeId === section.id ? 'page' : undefined} onClick={() => { setActiveId(section.id); }}>{section.id[0].toUpperCase() + section.id.slice(1)}</button>)}
     </nav>
     <div className="mcd-layout">
       <aside className="mcd-libraries" aria-label="Game libraries"><h2>Game Libraries</h2>
-        {libraries.map(library => <button key={library.name} type="button" className={selectedLibrary === library.name ? 'selected' : ''} onClick={() => setSelectedLibrary(library.name)}><span>{library.name}</span><small>{library.role}</small></button>)}
+        {libraries.map(library => <button key={library.name} type="button" className={selectedLibrary === library.name ? 'selected' : ''} onClick={() => { setSelectedLibrary(library.name); }}><span>{library.name}</span><small>{library.role}</small></button>)}
       </aside>
       <main className="mcd-main"><section aria-labelledby="mcd-section-heading"><h2 id="mcd-section-heading">{active.title}</h2>
-        <dl>{active.rows.map(row => <div key={row.label}><dt>{row.label}</dt><dd className={row.tone || ''}>{row.value}</dd></div>)}</dl>
-      </section><div className="mcd-actions"><button type="button" className="primary" onClick={() => { setActiveId('verification'); setNotice('Symbol verification completed'); }}>Verify All</button><button type="button" onClick={() => setNotice(`Reload requested for ${selectedLibrary}`)}>Reload Modules</button><button type="button" onClick={() => setNotice(`Stub generation requested for ${selectedLibrary}`)}>Generate Stubs</button></div></main>
+        <dl>{active.rows.map(row => <div key={row.label}><dt>{row.label}</dt><dd className={row.tone ?? ''}>{row.value}</dd></div>)}</dl>
+      </section><div className="mcd-actions"><button type="button" className="primary" onClick={() => { setActiveId('verification'); setNotice('Symbol verification completed'); }}>Verify All</button><button type="button" onClick={() => { setNotice(`Reload requested for ${selectedLibrary}`); }}>Reload Modules</button><button type="button" onClick={() => { setNotice(`Stub generation requested for ${selectedLibrary}`); }}>Generate Stubs</button></div></main>
     </div>
     <footer className="mcd-status"><span>{notice || '2 game libs · 2 package contributions'}</span><span>Script: Lua 5.4</span><span>Verification: passed</span></footer>
   </div>;

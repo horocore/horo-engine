@@ -533,6 +533,44 @@ namespace Horo::Editor {
                 }
             }
         }
+
+        void DrawPlayControls(const float availableRight, const EditorWorkspaceViewModel &viewModel,
+                              EditorWorkspaceViewCommandData &outCommand, const EditorGuiContext &context) {
+            const bool idle = viewModel.playState == EditorPlayState::Idle || viewModel.playState == EditorPlayState::Failed;
+            const bool paused = viewModel.playState == EditorPlayState::Paused;
+            const float controlWidth = idle ? 64.0F : paused ? 196.0F : 130.0F;
+            const float controlX = availableRight - controlWidth;
+            if (controlX < ImGui::GetCursorPosX() + 8.0F)
+                return;
+
+            ImGui::SetCursorPosX(controlX);
+            const auto drawButton = [&](const char *labelKey, const char *stableId, const bool enabled,
+                                        const EditorWorkspaceViewCommand command) {
+                const std::string label = context.localization.Get("editor", labelKey) + "###" + stableId;
+                if (Ui::Button({.label = label.c_str(),
+                                .size = {64.0F, 26.0F},
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .enabled = enabled,
+                                .font = context.theme.fonts.sans,
+                                .componentSize = Ui::ComponentSize::Small})) {
+                    outCommand.command = command;
+                }
+            };
+            const bool transition = viewModel.playState == EditorPlayState::Starting || viewModel.playState == EditorPlayState::Stopping;
+            if (idle) {
+                drawButton("web_workspace.toolbar.play", "workspace_play_play", !transition, EditorWorkspaceViewCommand::StartPlay);
+            } else if (paused) {
+                drawButton("workspace.play.resume", "workspace_play_resume", true, EditorWorkspaceViewCommand::ResumePlay);
+                ImGui::SameLine(0.0F, 2.0F);
+                drawButton("workspace.play.step", "workspace_play_step", true, EditorWorkspaceViewCommand::StepPlay);
+                ImGui::SameLine(0.0F, 2.0F);
+                drawButton("workspace.play.stop", "workspace_play_stop", true, EditorWorkspaceViewCommand::StopPlay);
+            } else {
+                drawButton("workspace.play.pause", "workspace_play_pause", !transition, EditorWorkspaceViewCommand::PausePlay);
+                ImGui::SameLine(0.0F, 2.0F);
+                drawButton("workspace.play.stop", "workspace_play_stop", !transition, EditorWorkspaceViewCommand::StopPlay);
+            }
+        }
     }  // namespace
 
     void EditorWorkspaceView::DrawMenuBar(const ImVec2 &display, const EditorWorkspaceViewModel &viewModel,
@@ -575,7 +613,9 @@ namespace Horo::Editor {
 
             const std::string version = std::format("Horo Engine {}", HORO_ENGINE_VERSION_STRING);
             const float versionWidth = ImGui::CalcTextSize(version.c_str()).x;
-            if (const float versionX = display.x - versionWidth - 12.0F; ImGui::GetCursorPosX() + 12.0F < versionX) {
+            const float versionX = display.x - versionWidth - 12.0F;
+            DrawPlayControls(versionX - 12.0F, viewModel, outCommand, m_context);
+            if (ImGui::GetCursorPosX() + 12.0F < versionX) {
                 ImGui::SetCursorPosX(versionX);
                 ImGui::PushStyleColor(ImGuiCol_Text, Theme::Dim());
                 ImGui::TextUnformatted(version.c_str());

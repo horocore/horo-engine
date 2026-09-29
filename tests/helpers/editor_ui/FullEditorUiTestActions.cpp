@@ -86,7 +86,7 @@ namespace Horo::Tests::FullEditorActions {
 
     void SelectOrthographicProjection(UiScenarioPipe &pipeline, FullEditorUiTestHost &editor) {
         pipeline.Step("Choose Orthographic projection", [](ImGuiTestContext &ui) {
-            ui.ItemClick("//**/Combo###viewport_projection");
+            ui.ItemClick("//**/Combo#####Projection");
             ui.ItemClick("//**/###combo_option_1");
         });
         pipeline.Step("Observe projection through the shared viewport handoff", [&editor](ImGuiTestContext &) {
@@ -248,7 +248,7 @@ namespace Horo::Tests::FullEditorActions {
 
     void ExerciseAssetImport(UiScenarioPipe &pipeline, FullEditorUiTestHost &editor) {
         pipeline.Step("Import a mesh through the asset-import modal", [&editor](ImGuiTestContext &ui) {
-            const std::filesystem::path source = editor.Screens().CurrentProjectRoot() / "assets" / "coverage_triangle.obj";
+            const std::filesystem::path source = editor.Screens().CurrentProjectRoot() / "Assets" / "coverage_triangle.obj";
             std::ofstream fixture{source, std::ios::binary};
             fixture << "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
             fixture.close();
@@ -259,14 +259,10 @@ namespace Horo::Tests::FullEditorActions {
             ui.Yield();
             IM_CHECK(editor.BeginAssetImport(source));
             ui.Yield();
-            for (int frame = 0; frame < 30 && !ui.ItemExists("//**/##ImportTab0"); ++frame)
+            for (int frame = 0; frame < 30 && !ui.ItemExists("//**/##ImportFile0"); ++frame)
                 ui.Yield();
-            IM_CHECK(ui.ItemExists("//**/##ImportTab0"));
-            IM_CHECK(ui.ItemExists("//**/##QueueItem0"));
-            for (int tab = 1; tab < 4; ++tab) {
-                ui.ItemClick(("//**/##ImportTab" + std::to_string(tab)).c_str());
-                ui.Yield();
-            }
+            IM_CHECK(ui.ItemExists("//**/##ImportFile0"));
+            ui.ItemClick("//**/##ImportFile0");
             IM_CHECK(editor.ImportFirstPendingAsset());
             ui.Yield();
             IM_CHECK(ui.ItemExists("//**/Done"));

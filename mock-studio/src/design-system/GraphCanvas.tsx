@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars -- TypeScript callback parameter names are checked by @typescript-eslint/no-unused-vars. */
 import './graphCanvas.css';
 
 export type GraphNode = { title: string; summary: string; x: number; y: number };

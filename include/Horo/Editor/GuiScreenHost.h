@@ -162,6 +162,9 @@ namespace Horo::Editor {
         /** @brief Updates the active screen and checks pending leave dialogs. */
         void OnUpdate(float dt);
 
+        /** @brief Offers the committed routed snapshot to the active screen before fixed simulation. */
+        void OnInputSnapshot();
+
         /**
          * @brief Routes one host fixed tick to the active screen.
          * @param simulationTick Monotonic simulation tick identity.

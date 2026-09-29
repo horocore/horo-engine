@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars -- TypeScript callback parameter names are checked by @typescript-eslint/no-unused-vars. */
 import { useState } from 'react';
 import { SelectField, TextField } from '../design-system/Controls';
 import type { ReleaseJob } from '../releaseJob';
@@ -33,9 +34,9 @@ export function PublishDesign({ candidates, job, onStart, onBackground, onCancel
         <h2>Candidate and destination</h2>
         <SelectField label="Verified local candidate" value={candidate.id} onChange={event => { setSelectedCandidate(Number(event.target.value)); setReview(false); }}>{candidates.map(item => <option key={item.id} value={item.id}>{item.name} · {item.target} · {item.path}</option>)}</SelectField>
         <div className="release-review release-form-gap"><div><span>Product</span><strong>{candidate.name}</strong></div><div><span>Target</span><strong>{candidate.target}</strong></div><div><span>Verification</span><strong>Final verification and packaged smoke passed</strong></div></div>
-        <div className="release-row release-form-gap"><SelectField label="Channel" value={channel} onChange={event => setChannel(event.target.value)}><option>Preview</option><option>Stable</option><option>Nightly</option></SelectField><SelectField label="Destination" value={destination} onChange={event => setDestination(event.target.value)}><option>Project CDN</option><option>Steam</option><option>itch.io</option><option>Custom storage</option></SelectField></div>
-        <div className="release-row"><SelectField label="Visibility" value={visibility} onChange={event => setVisibility(event.target.value)}><option>Private</option><option>Public</option></SelectField><SelectField label="Publishing credentials" hint="A configured profile reference; no secret is stored in this mock." value={credential} onChange={event => setCredential(event.target.value)}><option>Project publishing profile</option><option>CI publishing profile</option></SelectField></div>
-        <TextField label="Release notes" value={notes} onChange={event => setNotes(event.target.value)} />
+        <div className="release-row release-form-gap"><SelectField label="Channel" value={channel} onChange={event => { setChannel(event.target.value); }}><option>Preview</option><option>Stable</option><option>Nightly</option></SelectField><SelectField label="Destination" value={destination} onChange={event => { setDestination(event.target.value); }}><option>Project CDN</option><option>Steam</option><option>itch.io</option><option>Custom storage</option></SelectField></div>
+        <div className="release-row"><SelectField label="Visibility" value={visibility} onChange={event => { setVisibility(event.target.value); }}><option>Private</option><option>Public</option></SelectField><SelectField label="Publishing credentials" hint="A configured profile reference; no secret is stored in this mock." value={credential} onChange={event => { setCredential(event.target.value); }}><option>Project publishing profile</option><option>CI publishing profile</option></SelectField></div>
+        <TextField label="Release notes" value={notes} onChange={event => { setNotes(event.target.value); }} />
         <p className="release-notice">Publication is a separate action. This screen will not rebuild or change candidate bytes.</p>
       </> : <>
         <h2>Confirm publication</h2>
@@ -43,6 +44,6 @@ export function PublishDesign({ candidates, job, onStart, onBackground, onCancel
         <p className="release-notice release-form-gap">Publish sends this exact verified candidate to the selected destination. This interactive mock will only show a sample result; it will not upload files.</p>
       </>}
     </div></main>
-    <footer className="release-footer"><div className="release-actions">{eligible && (review ? <><button type="button" onClick={() => setReview(false)}>Back</button><button type="button" className="primary" onClick={publish}>Publish candidate</button></> : <button type="button" className="primary" onClick={() => setReview(true)}>Review publication</button>)}</div></footer>
+    <footer className="release-footer"><div className="release-actions">{eligible && (review ? <><button type="button" onClick={() => { setReview(false); }}>Back</button><button type="button" className="primary" onClick={publish}>Publish candidate</button></> : <button type="button" className="primary" onClick={() => { setReview(true); }}>Review publication</button>)}</div></footer>
   </div>;
 }

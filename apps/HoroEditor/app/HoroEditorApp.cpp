@@ -831,6 +831,7 @@ namespace Horo::Editor {
                         return PollPlatformEvents();
                     case Runtime::RuntimePhase::BuildInputSnapshot:
                         p_->inputRouter.BeginFrame(p_->inputBackend.Commit());
+                        screenHost_->OnInputSnapshot();
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::ApplyQueuedOwnerThreadCommands:
                         return Result<void>::Success();

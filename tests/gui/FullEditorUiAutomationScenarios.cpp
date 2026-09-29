@@ -8,6 +8,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -39,7 +40,7 @@ namespace {
         const std::filesystem::path fixture =
             fixtureRoot / (runtime == GameplayRuntimeKind::Lua ? "SemanticInputMovement.horo_script" : "SemanticInputMovement.cpp");
         const std::filesystem::path destination = runtime == GameplayRuntimeKind::Lua
-                                                      ? projectRoot / "assets/scripts/NewBehavior.horo_script"
+                                                      ? projectRoot / "Assets/Scripts/NewBehavior.horo_script"
                                                       : projectRoot / "source/gameplay/NewBehavior.cpp";
         std::ifstream input{fixture, std::ios::binary};
         std::string contents{std::istreambuf_iterator{input}, std::istreambuf_iterator<char>{}};
@@ -115,7 +116,7 @@ namespace {
             });
             pipeline.Step("Install the versioned semantic-input fixture", [projectRoot, runtime, &editor](ImGuiTestContext &ui) {
                 const std::filesystem::path generated = runtime == GameplayRuntimeKind::Lua
-                                                            ? projectRoot / "assets/scripts/NewBehavior.horo_script"
+                                                            ? projectRoot / "Assets/Scripts/NewBehavior.horo_script"
                                                             : projectRoot / "source/gameplay/NewBehavior.cpp";
                 for (int frame = 0; frame < 30 && !std::filesystem::is_regular_file(generated); ++frame)
                     ui.Yield();
@@ -125,14 +126,15 @@ namespace {
                 }
                 IM_CHECK(std::filesystem::is_regular_file(generated));
                 InstallMovementFixture(projectRoot, runtime);
-                for (int frame = 0; frame < 3000; ++frame) {
+                for (int frame = 0; frame < 1500; ++frame) {
                     const bool ready = runtime == GameplayRuntimeKind::Lua
-                                           ? std::filesystem::is_regular_file(projectRoot / "assets/scripts/NewBehavior.horo_script.meta")
+                                           ? std::filesystem::is_regular_file(projectRoot / "Assets/Scripts/NewBehavior.horo_script.meta")
                                            : std::filesystem::is_regular_file(projectRoot / ".horo/local/gameplay_build_state.json");
                     if (ready && frame >= 40)
                         break;
                     ui.Yield();
-                    std::this_thread::yield();
+                    if (runtime == GameplayRuntimeKind::Native)
+                        std::this_thread::sleep_for(std::chrono::milliseconds{20});
                 }
                 if (runtime == GameplayRuntimeKind::Native) {
                     if (!std::filesystem::is_regular_file(projectRoot / ".horo/local/gameplay_build_state.json"))
@@ -267,7 +269,7 @@ namespace {
         REQUIRE_FALSE(result.cancelled);
         REQUIRE(result.exception == nullptr);
         REQUIRE(result.Succeeded());
-        REQUIRE(result.steps.size() == 18);
+        REQUIRE(result.steps.size() == 17);
         REQUIRE(std::all_of(result.steps.begin(), result.steps.begin() + 4, [](const Tests::UiScenarioStepResult &step) {
             return step.kind == Tests::UiScenarioStepKind::Setup && step.status == Tests::UiScenarioStepStatus::Passed;
         }));
@@ -299,7 +301,7 @@ namespace {
         REQUIRE(result.exception == nullptr);
         REQUIRE(result.Succeeded());
         REQUIRE(editor.ActiveRoute() == Editor::GuiRouteKind::EditorWorkspace);
-        REQUIRE(std::filesystem::is_empty(projectRoot / "assets/scenes"));
+        REQUIRE(std::filesystem::is_empty(projectRoot / "Assets/Scenes"));
         std::ifstream metadataInput{projectRoot / ".horo/project.json", std::ios::binary};
         const std::string metadata{std::istreambuf_iterator<char>{metadataInput}, std::istreambuf_iterator<char>{}};
         REQUIRE((metadata.find("\"defaultScene\": \"\"") != std::string::npos));

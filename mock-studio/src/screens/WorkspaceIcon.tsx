@@ -1,8 +1,6 @@
 type IconName = 'panel' | 'scene' | 'search' | 'settings' | 'terminal' | 'plus' | 'filter' | 'sort' | 'more' | 'box' | 'eye' | 'lock' | 'grid' | 'select' | 'move' | 'rotate' | 'scale' | 'frame' | 'chevron' | 'folder';
 
-export function WorkspaceIcon({ name, size = 18 }: { name: IconName; size?: number }) {
-  const common = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
-  const shapes: Record<IconName, React.ReactNode> = {
+const shapes = new Map<IconName, React.ReactNode>(Object.entries({
     panel: <><rect x="4" y="4" width="16" height="16" rx="1" /><path d="M9 4v16" /></>,
     scene: <><rect x="4" y="4" width="16" height="16" rx="1" /><path d="M7 7h10v10H7z" /></>,
     search: <><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4.5 4.5" /></>,
@@ -23,6 +21,9 @@ export function WorkspaceIcon({ name, size = 18 }: { name: IconName; size?: numb
     frame: <path d="M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5M9 9h6v6H9z" />,
     chevron: <path d="m6 9 6 6 6-6" />,
     folder: <path d="M3 6.5a2 2 0 0 1 2-2h5l2 2.5h7a2 2 0 0 1 2 2v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
-  };
-  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" {...common}>{shapes[name]}</svg>;
+  } as Record<IconName, React.ReactNode>) as [IconName, React.ReactNode][]);
+
+export function WorkspaceIcon({ name, size = 18 }: { name: IconName; size?: number }) {
+  const common = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" {...common}>{shapes.get(name)}</svg>;
 }

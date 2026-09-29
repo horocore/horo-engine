@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars -- TypeScript callback parameter names are checked by @typescript-eslint/no-unused-vars. */
 import { useState } from 'react';
 import fixtures from '../fixtures/threeColumnPanels.json';
 import './threeColumnPanel.css';
@@ -10,6 +11,7 @@ type ColumnItem = { type: 'heading'; text: string } | { type: 'row'; label: stri
 type Panel = { title: string; subtitle: string; context: string; actions: string[]; tabs: { title: string; blocks: Block[] }[]; sidebar: ColumnItem[]; details: ColumnItem[]; footer: string[] };
 const panels = fixtures as Record<string, Panel>;
 
+const panelLookup = new Map(Object.entries(panels));
 export const threeColumnIds = Object.keys(panels).map(name => `architecture/runtime/${name}.html`);
 
 function Value({ value, tone }: { value: string; tone: Tone }) {
@@ -41,25 +43,29 @@ function Column({ items, selectable, selected, onSelect }: { items: ColumnItem[]
 }
 
 export function ThreeColumnPanel({ designId }: { designId: string }) {
-  const key = designId.split('/').at(-1)?.replace(/\.html$/, '') || '';
-  const panel = panels[key];
+  const key = designId.split('/').at(-1)?.replace(/\.html$/, '') ?? '';
+  const panel = panelLookup.get(key);
   const [tabIndex, setTabIndex] = useState(0);
   const firstItem = panel?.sidebar.find(item => item.type === 'item');
   const [selected, setSelected] = useState(firstItem?.type === 'item' ? firstItem.title : '');
   const [message, setMessage] = useState('');
   const [frozen, setFrozen] = useState(false);
   if (!panel) return <div className="tp-missing">Unknown panel: {designId}</div>;
+  const active = panel.tabs.at(tabIndex);
+  if (!active) return null;
+
+  const panelTitle = panel.title;
 
   function act(label: string) {
     if (label === 'Reset') { setTabIndex(0); setSelected(firstItem?.type === 'item' ? firstItem.title : ''); setMessage('Selection reset'); return; }
     if (label === 'Freeze') { setFrozen(!frozen); setMessage(frozen ? 'Live updates resumed' : 'View frozen'); return; }
-    setMessage(`${label} preview requested for ${selected || panel.title}`);
+    setMessage(`${label} preview requested for ${selected || panelTitle}`);
   }
 
   return <div className="three-column-panel">
-    <header className="tp-header"><div><h1>{panel.title}</h1><div className="tp-meta"><span>{panel.subtitle}</span>{panel.context && <small>{panel.context}</small>}</div></div><div className="tp-actions">{panel.actions.map((label, index) => <button key={label} type="button" className={index === panel.actions.length - 1 ? 'primary' : ''} onClick={() => act(label)}>{label === 'Freeze' && frozen ? 'Resume' : label}</button>)}</div></header>
-    <nav className="tp-tabs" aria-label={`${panel.title} views`}>{panel.tabs.map((tab, index) => <button key={tab.title} type="button" aria-current={tabIndex === index ? 'page' : undefined} className={tabIndex === index ? 'active' : ''} onClick={() => setTabIndex(index)}>{tab.title}</button>)}</nav>
-    <div className="tp-layout"><aside className="tp-side"><Column items={panel.sidebar} selectable selected={selected} onSelect={setSelected} /></aside><main className="tp-main">{panel.tabs[tabIndex].blocks.map((block, index) => block.type === 'grid' ? <div className="tp-grid" key={index}>{block.cards.map(card => <CardView key={card.title} card={card} />)}</div> : block.type === 'card' ? <CardView key={index} card={block.card} /> : <Preview key={index} kind={block.kind} />)}</main><aside className="tp-detail"><Column items={panel.details} /></aside></div>
+    <header className="tp-header"><div><h1>{panel.title}</h1><div className="tp-meta"><span>{panel.subtitle}</span>{panel.context && <small>{panel.context}</small>}</div></div><div className="tp-actions">{panel.actions.map((label, index) => <button key={label} type="button" className={index === panel.actions.length - 1 ? 'primary' : ''} onClick={() => { act(label); }}>{label === 'Freeze' && frozen ? 'Resume' : label}</button>)}</div></header>
+    <nav className="tp-tabs" aria-label={`${panel.title} views`}>{panel.tabs.map((tab, index) => <button key={tab.title} type="button" aria-current={tabIndex === index ? 'page' : undefined} className={tabIndex === index ? 'active' : ''} onClick={() => { setTabIndex(index); }}>{tab.title}</button>)}</nav>
+    <div className="tp-layout"><aside className="tp-side"><Column items={panel.sidebar} selectable selected={selected} onSelect={setSelected} /></aside><main className="tp-main">{active.blocks.map((block, index) => block.type === 'grid' ? <div className="tp-grid" key={index}>{block.cards.map(card => <CardView key={card.title} card={card} />)}</div> : block.type === 'card' ? <CardView key={index} card={block.card} /> : <Preview key={index} kind={block.kind} />)}</main><aside className="tp-detail"><Column items={panel.details} /></aside></div>
     <footer className="tp-status">{message ? <span className="tp-message">{message}</span> : panel.footer.map((part, index) => <span key={index}>{part}</span>)}</footer>
   </div>;
 }

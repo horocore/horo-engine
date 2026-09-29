@@ -453,6 +453,16 @@ namespace Horo::Editor {
         FlushPendingNavigation();
     }
 
+    /** @copydoc GuiScreenHost::OnInputSnapshot */
+    void GuiScreenHost::OnInputSnapshot() {
+        if (activeScreen_) {
+            isScreenCallbackActive_ = true;
+            activeScreen_->OnInputSnapshot();
+            isScreenCallbackActive_ = false;
+        }
+        FlushPendingNavigation();
+    }
+
     /** @copydoc GuiScreenHost::OnFixedUpdate */
     void GuiScreenHost::OnFixedUpdate(const std::uint64_t simulationTick, const double fixedDeltaSeconds) {
         if (activeScreen_) {
