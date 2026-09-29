@@ -192,6 +192,17 @@ TEST_CASE("ZIP editor stager rejects a package of another format before touching
     CHECK(result.HasError());
 }
 
+TEST_CASE("Linux tar gzip editor stager rejects wrong formats and invalid private paths", "[editor][update]") {
+    NativeDurableFileSystem files;
+    TarGzipEditorUpdatePackageStager stager{{}, files};
+    UpdatePackageRecord package;
+    package.selection.format = DistributionPackageFormat::ZipArchive;
+    const Security::ArtifactVerifier verifier{std::make_shared<AcceptTestSignature>(), {}};
+    CHECK(stager.Prepare(package, verifier, {}, {}).HasError());
+    package.selection.format = DistributionPackageFormat::TarGzip;
+    CHECK(stager.Prepare(package, verifier, {}, {}).HasError());
+}
+
 TEST_CASE("Configured editor update backend rejects untrusted metadata before offering a package", "[editor][update]") {
     const auto checkRejected = [](std::string document, std::string expectedChannel, const bool fetchFails) {
         MemorySource source{std::move(document), std::move(expectedChannel), fetchFails};

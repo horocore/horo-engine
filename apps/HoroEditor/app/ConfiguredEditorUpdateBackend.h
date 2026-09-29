@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Release/UpdateDiscovery.h"
+#include "Horo/Release/UpdateTarGzipStagingJob.h"
 #include "Horo/Release/UpdateZipStagingJob.h"
 #include "editor/update/UpdateExperienceSession.h"
 
@@ -41,8 +42,8 @@ namespace Horo::Editor {
                                                                     const Release::UpdateDownloadProgress &progress) = 0;
     };
 
-    /** @brief Private ZIP staging paths and limits selected by the installed-product host. */
-    struct ZipEditorUpdateStagerPolicy final {
+    /** @brief Private archive staging paths and limits selected by the installed-product host. */
+    struct EditorUpdateStagerPolicy final {
         Release::UpdateDownloadPaths downloadPaths;
         std::filesystem::path stageRoot;
         Release::UpdateDownloadLimits downloadLimits;
@@ -53,13 +54,26 @@ namespace Horo::Editor {
     /** @brief Windows/macOS portable ZIP implementation of the format-specific staging boundary. */
     class ZipEditorUpdatePackageStager final : public IEditorUpdatePackageStager {
     public:
-        ZipEditorUpdatePackageStager(ZipEditorUpdateStagerPolicy policy, NativeDurableFileSystem &files);
+        ZipEditorUpdatePackageStager(EditorUpdateStagerPolicy policy, NativeDurableFileSystem &files);
         [[nodiscard]] Result<std::filesystem::path> Prepare(const Release::UpdatePackageRecord &package,
                                                             const Security::ArtifactVerifier &verifier, CancellationToken cancellation,
                                                             const Release::UpdateDownloadProgress &progress) override;
 
     private:
-        ZipEditorUpdateStagerPolicy policy_;
+        EditorUpdateStagerPolicy policy_;
+        NativeDurableFileSystem &files_;
+    };
+
+    /** @brief Linux portable tar.gz implementation of the format-specific staging boundary. */
+    class TarGzipEditorUpdatePackageStager final : public IEditorUpdatePackageStager {
+    public:
+        TarGzipEditorUpdatePackageStager(EditorUpdateStagerPolicy policy, NativeDurableFileSystem &files);
+        [[nodiscard]] Result<std::filesystem::path> Prepare(const Release::UpdatePackageRecord &package,
+                                                            const Security::ArtifactVerifier &verifier, CancellationToken cancellation,
+                                                            const Release::UpdateDownloadProgress &progress) override;
+
+    private:
+        EditorUpdateStagerPolicy policy_;
         NativeDurableFileSystem &files_;
     };
 

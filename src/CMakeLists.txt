@@ -297,7 +297,8 @@ add_library(HoroUpdateDownload STATIC application/release/UpdateDownloadSession.
         application/release/UpdateZipStaging.cpp
         application/release/UpdateTarGzipIndex.cpp
         application/release/UpdateTarGzipStaging.cpp
-        application/release/UpdateZipPackageProducer.cpp application/release/UpdateZipStagingJob.cpp)
+        application/release/UpdateZipPackageProducer.cpp application/release/UpdateZipStagingJob.cpp
+        application/release/UpdateTarGzipStagingJob.cpp)
 add_library(HoroEngine::UpdateDownload ALIAS HoroUpdateDownload)
 target_compile_features(HoroUpdateDownload PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateDownload PUBLIC HoroEngine::UpdateTransfer HoroEngine::Platform PRIVATE CURL::libcurl miniz)

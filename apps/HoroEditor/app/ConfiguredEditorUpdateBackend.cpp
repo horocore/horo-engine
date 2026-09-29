@@ -19,7 +19,7 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    ZipEditorUpdatePackageStager::ZipEditorUpdatePackageStager(ZipEditorUpdateStagerPolicy policy, NativeDurableFileSystem &files)
+    ZipEditorUpdatePackageStager::ZipEditorUpdatePackageStager(EditorUpdateStagerPolicy policy, NativeDurableFileSystem &files)
         : policy_(std::move(policy)), files_(files) {}
 
     Result<std::filesystem::path> ZipEditorUpdatePackageStager::Prepare(const Release::UpdatePackageRecord &package,
@@ -31,6 +31,20 @@ namespace Horo::Editor {
         return Release::PrepareZipUpdateStageHttps({package, policy_.downloadPaths, policy_.stageRoot, policy_.downloadLimits,
                                                     policy_.archiveLimits, policy_.httpPolicy},
                                                    files_, verifier, cancellation, progress);
+    }
+
+    TarGzipEditorUpdatePackageStager::TarGzipEditorUpdatePackageStager(EditorUpdateStagerPolicy policy, NativeDurableFileSystem &files)
+        : policy_(std::move(policy)), files_(files) {}
+
+    Result<std::filesystem::path> TarGzipEditorUpdatePackageStager::Prepare(const Release::UpdatePackageRecord &package,
+                                                                            const Security::ArtifactVerifier &verifier,
+                                                                            const CancellationToken cancellation,
+                                                                            const Release::UpdateDownloadProgress &progress) {
+        if (package.selection.format != Release::DistributionPackageFormat::TarGzip)
+            return Result<std::filesystem::path>::Failure(MakeError(Release::UpdateTransferErrors::StageMismatch));
+        return Release::PrepareTarGzipUpdateStageHttps({package, policy_.downloadPaths, policy_.stageRoot, policy_.downloadLimits,
+                                                        policy_.archiveLimits, policy_.httpPolicy},
+                                                       files_, verifier, cancellation, progress);
     }
 
     ConfiguredEditorUpdateBackend::ConfiguredEditorUpdateBackend(ConfiguredEditorUpdatePolicy policy, IEditorUpdateManifestSource &source,
