@@ -20,6 +20,17 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## EXT-002.8 Process Observer Boundary
+
+`HoroEngine::Extensions` owns the additive public
+`Horo/Extensions/ProcessObserverRegistry.h` contract. Existing process runners,
+data-bus consumers, and extension callers require no migration. Opt-in host
+composition creates the registry with an explicit event allowlist, supplies
+admitted `horo.process.observe` handles and executable module leases, and
+marshals content-free notifications to the registry's owner thread. This does
+not publish an OS process runner or new native authority. The generated
+`HoroExtensionsPublicHeaderConsumer` compiles the header through its owning
+target's staged include view.
 ## CHR-007.2 Character Metrics Boundary
 
 `HoroEngine::Physics` owns the additive `Horo/Physics/CharacterMetrics.h` contract.

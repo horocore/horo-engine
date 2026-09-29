@@ -2006,6 +2006,7 @@ add_library(HoroExtensions STATIC
         extensions/host/ExtensionAbiValidation.cpp
         extensions/host/ExtensionAbiConformance.cpp
         extensions/registry/ApplicationCapabilityRegistry.cpp
+        extensions/registry/ProcessObserverRegistry.cpp
         extensions/registry/BackendServiceRegistry.cpp
         extensions/registry/BackendOperationRegistry.cpp
         extensions/registry/BackendOperationRegistryInternal.h

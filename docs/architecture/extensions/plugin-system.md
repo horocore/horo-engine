@@ -302,6 +302,21 @@ Initial editor and tool extension points:
 | `project.browser_action` | Add project-browser actions. | Host owns selected project context and confirmation UI. |
 | `mcp.tool` | Add MCP tools subject to permission policy. | MCP host owns transport, schema, and authorization. |
 
+`ProcessObserverRegistry` is the headless, composition-owned implementation of
+`process.observer`. A manifest-derived `horo.process.observe` request must declare
+the separately approved `process.observe` permission; `process.execute` does not
+grant observation. The host supplies an event-kind allowlist and an exact
+activation-scoped capability handle. Each observer chooses a subset. The event
+shape is closed: host/operation lifecycle and diagnostic categories contain only
+an opaque operation ID, sequence, outcome, and enum diagnostic. Paths, arguments,
+environment, credentials, process handles, output, and provider error text cannot
+be represented. Host producers marshal notifications to the registry's owner
+thread. Dispatch is synchronous and non-reentrant, isolates failing callbacks,
+and never owns or controls an OS process. Unregistration and shutdown close new
+callback admission; an in-flight callback retains a host-supplied executable
+module lease until it returns. The host must supply a real module-load lease for
+external code and must not infer unload safety from registration removal alone.
+
 The host-owned `EditorSurfaceRegistry` now borrows registry limits and provider
 status keys during construction and status updates, then copies the values it
 retains. Existing source callers use the same call form; consumers holding exact
@@ -569,6 +584,7 @@ project.read
 project.write
 project.write.generated
 process.execute
+process.observe
 process.thread
 network.client
 network.server

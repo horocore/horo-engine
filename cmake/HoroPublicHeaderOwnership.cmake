@@ -896,6 +896,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ExtensionMarketplace.h
     Horo/Extensions/HeadlessExtensionHost.h
     Horo/Extensions/PipelineStepRegistry.h
+    Horo/Extensions/ProcessObserverRegistry.h
     Horo/Extensions/ProjectValidatorRegistry.h
     Horo/Extensions/ScriptExportDescriptor.h
     Horo/Extensions/ScriptInvocation.h
