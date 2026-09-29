@@ -24,6 +24,8 @@ namespace Horo::Navigation::Detail {
         AvoidanceExecutionMode mode{AvoidanceExecutionMode::Disabled};
         std::vector<NavigationCrowdAgentFact> agents;
         std::vector<NavigationCrowdProfileFacts> profiles;
+        std::vector<NavigationAvoidanceLayerDescriptor> avoidanceLayers;
+        std::uint64_t avoidanceLayerBits{};
         std::vector<std::uint32_t> neighborIndices;
         std::vector<std::uint32_t> boundaryIndices;
         std::vector<NavigationCrowdBoundarySegment> segments;

@@ -22,4 +22,8 @@ namespace Horo::Release::BootstrapInstallationErrors {
     extern const ErrorCodeDescriptor HealthFailed;
     /** @brief The active pointer or integration could not be safely undone. */
     extern const ErrorCodeDescriptor RecoveryFailed;
+    /** @brief Repair cannot prove that the current active version is healthy. */
+    extern const ErrorCodeDescriptor RepairFailed;
+    /** @brief Uninstall cannot prove that integration or owned files were removed. */
+    extern const ErrorCodeDescriptor UninstallFailed;
 }  // namespace Horo::Release::BootstrapInstallationErrors

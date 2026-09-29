@@ -1,9 +1,13 @@
 #include "Horo/Release/BootstrapInstallation.h"
 #include "Horo/Release/UpdateActivation.h"
 #include "Horo/Release/UpdateActivationErrors.h"
+#include "Horo/Release/UpdateRetention.h"
+#include "Horo/Release/UpdateRetentionErrors.h"
 #include "Horo/Release/UpdateRollback.h"
 #include "Horo/Release/UpdateRollbackErrors.h"
+#include "UpdateActivationTestSupport.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
@@ -90,14 +94,15 @@ namespace {
         return std::move(checkpoint).Value();
     }
 
-    [[nodiscard]] UpdateActivationVersion Version(const TemporaryInstall &install, const std::string &id,
-                                                  Horo::NativeDurableFileSystem &files, const Horo::Security::ArtifactVerifier &verifier) {
+    [[nodiscard]] UpdateActivationVersion VersionAtRoot(const std::filesystem::path &installRoot, const std::string &id,
+                                                        Horo::NativeDurableFileSystem &files,
+                                                        const Horo::Security::ArtifactVerifier &verifier) {
         const std::string payload = "signed package " + id;
         const std::string content = "editor " + id;
         auto package = Package(id, payload);
         auto checkpoint = CompleteCheckpoint(package);
-        const auto packageFile = install.root / "versions" / (id + ".zip");
-        const auto stageRoot = install.root / "versions" / id;
+        const auto packageFile = installRoot / "versions" / (id + ".zip");
+        const auto stageRoot = installRoot / "versions" / id;
         std::filesystem::create_directories(stageRoot / "bin");
         {
             std::ofstream output(packageFile, std::ios::binary);
@@ -107,7 +112,11 @@ namespace {
             std::ofstream output(stageRoot / "bin/editor", std::ios::binary);
             output << content;
         }
-        std::vector<UpdateStagedFile> inventory{{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content}))}};
+#if !defined(_WIN32)
+        std::filesystem::permissions(stageRoot / "bin/editor", std::filesystem::perms{0755});
+#endif
+        std::vector<UpdateStagedFile> inventory{{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content})),
+                                                 UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
         constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
         REQUIRE(
             PublishVerifiedUpdateStage({package, checkpoint, packageFile, stageRoot, inventory, limits}, files, verifier, {}).HasValue());
@@ -116,8 +125,8 @@ namespace {
 
     [[nodiscard]] UpdateActivationRequest Request(const TemporaryInstall &install, Horo::NativeDurableFileSystem &files,
                                                   const Horo::Security::ArtifactVerifier &verifier) {
-        auto current = Version(install, "old", files, verifier);
-        auto staged = Version(install, "new", files, verifier);
+        auto current = VersionAtRoot(install.root, "old", files, verifier);
+        auto staged = VersionAtRoot(install.root, "new", files, verifier);
         auto pointer = EncodeActiveUpdateRecord(current.package);
         REQUIRE(pointer.HasValue());
         REQUIRE(files.WriteDurable(install.root / "active-version", std::as_bytes(std::span{pointer.Value()})).HasValue());
@@ -150,6 +159,28 @@ namespace {
 
         [[nodiscard]] Horo::Result<void> Unregister(const BootstrapInstallationRequest &) override {
             ++unregistrations;
+            return unregistrationSucceeds
+                       ? Horo::Result<void>::Success()
+                       : Horo::Result<void>::Failure(Horo::Error{Horo::ErrorCode{"test.unregister"}, Horo::ErrorDomainId{"test"}});
+        }
+
+        [[nodiscard]] Horo::Result<void> RemoveOwnedVersion(const BootstrapInstallationRequest &request) override {
+            ++ownedRemovals;
+            if (lockProbeFiles != nullptr)
+                lockHeldDuringRemoval =
+                    lockProbeFiles->TryAcquireExclusive(request.installationRoot / ".activation.lock", "probe").HasError();
+            if (!ownedRemovalSucceeds)
+                return Horo::Result<void>::Failure(Horo::Error{Horo::ErrorCode{"test.remove_owned"}, Horo::ErrorDomainId{"test"}});
+            if (removeFiles) {
+                std::error_code error;
+                std::filesystem::remove_all(request.candidate.stageRoot, error);
+                if (error)
+                    return Horo::Result<void>::Failure(Horo::Error{Horo::ErrorCode{"test.remove_owned"}, Horo::ErrorDomainId{"test"}});
+                std::filesystem::remove(request.candidate.packageFile, error);
+                auto marker = request.candidate.stageRoot;
+                marker += ".ready";
+                std::filesystem::remove(marker, error);
+            }
             return Horo::Result<void>::Success();
         }
 
@@ -168,22 +199,40 @@ namespace {
         bool healthy{true};
         bool admissible{true};
         bool registrationSucceeds{true};
+        bool unregistrationSucceeds{true};
+        bool ownedRemovalSucceeds{true};
+        bool removeFiles{false};
+        Horo::NativeDurableFileSystem *lockProbeFiles{};
+        bool lockHeldDuringRemoval{};
         unsigned stops{};
         unsigned probes{};
         unsigned preflights{};
         unsigned registrations{};
         unsigned unregistrations{};
+        unsigned ownedRemovals{};
         std::chrono::seconds observedTimeout{};
     };
 
     [[nodiscard]] BootstrapInstallationRequest BootstrapRequest(const TemporaryInstall &install, Horo::NativeDurableFileSystem &files,
                                                                 const Horo::Security::ArtifactVerifier &verifier) {
         return {install.root,
-                Version(install, "new", files, verifier),
+                VersionAtRoot(install.root, "new", files, verifier),
                 {.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U},
                 std::chrono::seconds{2}};
     }
+
 }  // namespace
+
+namespace Horo::Release::TestSupport {
+    Security::ArtifactVerifier MakeVerifier() {
+        return Verifier();
+    }
+
+    UpdateActivationVersion MakeVersion(const std::filesystem::path &root, NativeDurableFileSystem &files,
+                                        const Security::ArtifactVerifier &verifier) {
+        return VersionAtRoot(root, "new", files, verifier);
+    }
+}  // namespace Horo::Release::TestSupport
 
 TEST_CASE("Verified update activation atomically selects the healthy staged version", "[release][update]") {
     TemporaryInstall install;
@@ -233,6 +282,88 @@ TEST_CASE("Failed startup health preserves the existing last-known-good pin", "[
     CHECK(ActivateVerifiedUpdate(request, files, verifier, host).HasError());
     CHECK(Read(install.root / "last-known-good-version") == priorPin.Value());
     CHECK_FALSE(std::filesystem::exists(install.root / "activation.pending"));
+}
+
+TEST_CASE("Retention removes only signed obsolete content and is repeatable", "[release][update][retention]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = Request(install, files, verifier);
+    auto obsolete = VersionAtRoot(install.root, "obsolete", files, verifier);
+    Host host;
+    REQUIRE(ActivateVerifiedUpdate(request, files, verifier, host).HasValue());
+    std::filesystem::create_directories(install.root / "projects");
+    {
+        std::ofstream userFile(install.root / "projects" / "save.json");
+        userFile << "user data";
+    }
+    const std::array candidates{
+        UpdateRetentionCandidate{{{"new"}, 40U, 10U, UpdateRetentionRole::Active}, request.staged},
+        UpdateRetentionCandidate{{{"old"}, 30U, 9U, UpdateRetentionRole::LastKnownGood}, request.current},
+        UpdateRetentionCandidate{{{"obsolete"}, 20U, 1U, UpdateRetentionRole::Obsolete}, obsolete},
+    };
+    const UpdateRetentionCleanupRequest cleanup{install.root, candidates, request.archiveLimits, 70U};
+    auto first = ApplyUpdateRetention(cleanup, files, verifier, host);
+    REQUIRE(first.HasValue());
+    CHECK(first.Value().remove.size() == 1U);
+    CHECK_FALSE(std::filesystem::exists(obsolete.stageRoot));
+    CHECK_FALSE(std::filesystem::exists(obsolete.packageFile));
+    CHECK(std::filesystem::exists(request.current.stageRoot));
+    CHECK(std::filesystem::exists(request.staged.stageRoot));
+    CHECK(Read(install.root / "projects" / "save.json") == "user data");
+    CHECK(ApplyUpdateRetention(cleanup, files, verifier, host).HasValue());
+}
+
+TEST_CASE("Retention resumes an authenticated interrupted cleanup", "[release][update][retention]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = Request(install, files, verifier);
+    auto obsolete = VersionAtRoot(install.root, "obsolete", files, verifier);
+    Host host;
+    REQUIRE(ActivateVerifiedUpdate(request, files, verifier, host).HasValue());
+    const std::array candidates{
+        UpdateRetentionCandidate{{{"new"}, 40U, 10U, UpdateRetentionRole::Active}, request.staged},
+        UpdateRetentionCandidate{{{"old"}, 30U, 9U, UpdateRetentionRole::LastKnownGood}, request.current},
+        UpdateRetentionCandidate{{{"obsolete"}, 20U, 1U, UpdateRetentionRole::Obsolete}, obsolete},
+    };
+    const UpdateRetentionCleanupRequest cleanup{install.root, candidates, request.archiveLimits, 70U};
+    const std::string marker = "horo-update-retention-v1\nobsolete\n" + Horo::FormatSha256(obsolete.package.digest) + '\n';
+    REQUIRE(files.AppendPrivateDurable(install.root / "versions" / "obsolete.cleanup-pending", 0U, std::as_bytes(std::span{marker}))
+                .HasValue());
+    REQUIRE(files.RemoveDurable(obsolete.stageRoot / "bin" / "editor").HasValue());
+    auto resumed = ApplyUpdateRetention(cleanup, files, verifier, host);
+    REQUIRE(resumed.HasValue());
+    CHECK_FALSE(std::filesystem::exists(obsolete.stageRoot));
+    CHECK_FALSE(std::filesystem::exists(install.root / "versions" / "obsolete.cleanup-pending"));
+}
+
+TEST_CASE("Retention refuses active deletion, unknown files, and a concurrent lock", "[release][update][retention]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = Request(install, files, verifier);
+    auto obsolete = VersionAtRoot(install.root, "obsolete", files, verifier);
+    Host host;
+    REQUIRE(ActivateVerifiedUpdate(request, files, verifier, host).HasValue());
+    const std::array candidates{
+        UpdateRetentionCandidate{{{"new"}, 40U, 10U, UpdateRetentionRole::Active}, request.staged},
+        UpdateRetentionCandidate{{{"old"}, 30U, 9U, UpdateRetentionRole::LastKnownGood}, request.current},
+        UpdateRetentionCandidate{{{"obsolete"}, 20U, 1U, UpdateRetentionRole::Obsolete}, obsolete},
+    };
+    const UpdateRetentionCleanupRequest cleanup{install.root, candidates, request.archiveLimits, 70U};
+    {
+        auto held = files.TryAcquireExclusive(install.root / ".activation.lock", "held");
+        REQUIRE(held.HasValue());
+        CHECK(ApplyUpdateRetention(cleanup, files, verifier, host).HasError());
+    }
+    {
+        std::ofstream extra(obsolete.stageRoot / "foreign.txt");
+        extra << "unowned";
+    }
+    CHECK(ApplyUpdateRetention(cleanup, files, verifier, host).HasError());
+    CHECK(std::filesystem::exists(obsolete.stageRoot / "foreign.txt"));
+    CHECK(std::filesystem::exists(obsolete.packageFile));
 }
 
 TEST_CASE("A concurrent installation lock prevents a second activation", "[release][update]") {
@@ -361,6 +492,51 @@ TEST_CASE("First install activates only an authenticated healthy version", "[rel
     CHECK(host.probes == 1U);
 }
 
+TEST_CASE("A running product lease blocks install activation without publishing an active version", "[release][install][lease]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    auto running = files.TryAcquireProductLaunch(install.root);
+    REQUIRE(running.HasValue());
+    Host host;
+    CHECK(BootstrapVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK_FALSE(std::filesystem::exists(install.root / "active-version"));
+    CHECK_FALSE(std::filesystem::exists(install.root / "bootstrap.pending"));
+    CHECK(host.registrations == 0U);
+}
+
+TEST_CASE("A running product lease blocks update activation before mutation", "[release][update][lease]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = Request(install, files, verifier);
+    const auto oldActive = Read(install.root / "active-version");
+    auto running = files.TryAcquireProductLaunch(install.root);
+    REQUIRE(running.HasValue());
+    Host host;
+    CHECK(ActivateVerifiedUpdate(request, files, verifier, host).HasError());
+    CHECK(Read(install.root / "active-version") == oldActive);
+    CHECK_FALSE(std::filesystem::exists(install.root / "activation.pending"));
+    CHECK(host.probes == 0U);
+}
+
+TEST_CASE("Native bootstrap target rejects a different operating system or architecture", "[release][install]") {
+    auto native = DetectBootstrapBuildTarget();
+    REQUIRE(native.HasValue());
+    auto artifact = Package("new", "signed package new").selection.artifact;
+    artifact.platform = native.Value().platform;
+    artifact.architecture = native.Value().architecture;
+    CHECK(CheckBootstrapBuildTarget(artifact).HasValue());
+    artifact.architecture =
+        native.Value().architecture == DistributionArchitecture::X64 ? DistributionArchitecture::Arm64 : DistributionArchitecture::X64;
+    CHECK(CheckBootstrapBuildTarget(artifact).HasError());
+    artifact.architecture = native.Value().architecture;
+    artifact.platform =
+        native.Value().platform == DistributionPlatform::Linux ? DistributionPlatform::Windows : DistributionPlatform::Linux;
+    CHECK(CheckBootstrapBuildTarget(artifact).HasError());
+}
+
 TEST_CASE("Failed first launch leaves no active product or operating-system registration", "[release][install]") {
     TemporaryInstall install;
     Horo::NativeDurableFileSystem files;
@@ -469,6 +645,99 @@ TEST_CASE("First install respects the shared activation lock", "[release][instal
     CHECK(host.preflights == 0U);
     CHECK(host.registrations == 0U);
     CHECK(host.probes == 0U);
+}
+
+TEST_CASE("Repair reauthenticates the active package before restoring integration", "[release][install]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    Host host;
+    REQUIRE(BootstrapVerifiedInstallation(request, files, verifier, host).HasValue());
+    REQUIRE(RepairVerifiedInstallation(request, files, verifier, host).HasValue());
+    CHECK(host.registrations == 2U);
+    CHECK(host.probes == 2U);
+    {
+        std::ofstream output(request.candidate.stageRoot / "bin/editor", std::ios::binary | std::ios::app);
+        output << "corrupt";
+    }
+    CHECK(RepairVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK(host.registrations == 2U);
+    CHECK(host.probes == 2U);
+}
+
+TEST_CASE("Uninstall deactivates before removing only the authenticated version", "[release][install]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    Host host;
+    REQUIRE(BootstrapVerifiedInstallation(request, files, verifier, host).HasValue());
+    std::filesystem::create_directories(install.root / "projects");
+    const std::string project = "keep my project";
+    REQUIRE(files.WriteDurable(install.root / "projects" / "game.horo", std::as_bytes(std::span{project})).HasValue());
+    host.removeFiles = true;
+    REQUIRE(UninstallVerifiedInstallation(request, files, verifier, host).HasValue());
+    CHECK_FALSE(std::filesystem::exists(install.root / "active-version"));
+    CHECK_FALSE(std::filesystem::exists(install.root / "bootstrap-uninstall.pending"));
+    CHECK_FALSE(std::filesystem::exists(request.candidate.stageRoot));
+    CHECK(Read(install.root / "projects" / "game.horo") == project);
+    CHECK(host.unregistrations == 1U);
+    CHECK(host.ownedRemovals == 1U);
+}
+
+TEST_CASE("Interrupted uninstall remains inactive and retries the same owned package", "[release][install]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    Host host;
+    host.lockProbeFiles = &files;
+    REQUIRE(BootstrapVerifiedInstallation(request, files, verifier, host).HasValue());
+    host.ownedRemovalSucceeds = false;
+    CHECK(UninstallVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK_FALSE(std::filesystem::exists(install.root / "active-version"));
+    CHECK(std::filesystem::exists(install.root / "bootstrap-uninstall.pending"));
+    CHECK(RepairVerifiedInstallation(request, files, verifier, host).HasError());
+    host.ownedRemovalSucceeds = true;
+    host.removeFiles = true;
+    REQUIRE(UninstallVerifiedInstallation(request, files, verifier, host).HasValue());
+    CHECK_FALSE(std::filesystem::exists(install.root / "bootstrap-uninstall.pending"));
+    CHECK(host.unregistrations == 2U);
+    CHECK(host.ownedRemovals == 2U);
+    CHECK(host.lockHeldDuringRemoval);
+}
+
+TEST_CASE("Failed integration removal retains an inactive uninstall journal", "[release][install]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    Host host;
+    REQUIRE(BootstrapVerifiedInstallation(request, files, verifier, host).HasValue());
+    host.unregistrationSucceeds = false;
+    CHECK(UninstallVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK_FALSE(std::filesystem::exists(install.root / "active-version"));
+    CHECK(std::filesystem::exists(install.root / "bootstrap-uninstall.pending"));
+    CHECK(host.ownedRemovals == 0U);
+    host.unregistrationSucceeds = true;
+    REQUIRE(UninstallVerifiedInstallation(request, files, verifier, host).HasValue());
+    CHECK_FALSE(std::filesystem::exists(install.root / "bootstrap-uninstall.pending"));
+    CHECK(host.ownedRemovals == 1U);
+}
+
+TEST_CASE("Uninstall refuses a different active product without removing its files", "[release][install]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = BootstrapRequest(install, files, verifier);
+    Host host;
+    const std::string foreign = "another-installed-product";
+    REQUIRE(files.WriteDurable(install.root / "active-version", std::as_bytes(std::span{foreign})).HasValue());
+    CHECK(UninstallVerifiedInstallation(request, files, verifier, host).HasError());
+    CHECK(Read(install.root / "active-version") == foreign);
+    CHECK(host.unregistrations == 0U);
+    CHECK(host.ownedRemovals == 0U);
 }
 
 TEST_CASE("An acknowledged rollback selects the verified retained version", "[release][update][rollback]") {

@@ -563,6 +563,33 @@ solver boundary and leaves the authored seed unchanged. A missing or stale
 snapshot remains a typed read failure; no caller can infer a partially stepped
 body as an authoritative transform.
 
+`PhysicsBodyTransformAuthority` also owns a bounded presentation history in its
+pre-reserved body records. After applying a fixed tick and publishing one copied
+solver snapshot for every dynamic body, its owner commits that tick's complete
+pose set with `CommitInterpolationTick`. The commit validates the entire set
+before changing any previous/current endpoint. Static and kinematic poses join
+the same completed-tick set; no renderer call advances or mutates simulation.
+An owner-thread `InterpolationEndpoints` read returns an independent Horo value
+that remains usable after later ticks or world retirement. Presentation may
+evaluate that copy on any thread with finite `alpha` in `[0, 1]`; translation
+uses linear interpolation, rotation uses shortest-path spherical interpolation,
+and unbounded extrapolation is rejected. The first tick or a gap/discontinuity
+returns the current completed pose for every render rate.
+
+An explicit dynamic teleport/reset or static rebuild/update breaks history
+continuity. Restore and reload invalidate the published pair immediately, so
+presentation cannot consume a pre-restore pose while awaiting new solver evidence.
+The next successful completed tick starts with equal previous/current endpoints,
+never interpolating across the jump. A host-coordinated
+origin shift at a completed-tick safe point translates both retained endpoints
+and the detached runtime pose by the same finite delta and advances the origin
+generation; queued transform commands must first be drained or translated by
+their owner. This value operation does not itself rebase the native solver,
+which remains unsupported by the current canonical world capability. Reloads
+that construct a new authority candidate begin with empty history. Authored
+poses remain separate from presentation and are not rewritten by solver
+publication or origin rebasing.
+
 ## Dynamic Body Inputs
 
 `PhysicsBodyDynamicsCommand` is the backend-neutral fixed-tick contract for dynamic
@@ -609,8 +636,18 @@ Tick events include:
 - trigger exited
 
 The native adapter copies body/shape handles, authored subshape and material
-evidence, filter-schema generation, contact position/normal/penetration and
-sensor state while the solver callback owns a locked manifold. No native body,
+evidence, filter-schema generation, contact positions on both shapes, normals,
+penetration and sensor state while the solver callback owns a locked manifold.
+Each pair retains at most four distinct points in canonical Horo-value order;
+additional native or multi-manifold evidence contributes to a saturating
+omitted-point count without growing callback storage; repeated omitted evidence
+may be counted again across callbacks. Negative penetration remains
+valid speculative-contact evidence. Solid points may carry an explicitly named
+pre-solve normal-impulse estimate; absent evidence (including sensors) is not a
+zero applied impulse. The pinned solver's contact listener runs before its solver,
+so actual applied post-step impulses are deliberately unavailable through this
+callback. The bounded estimate uses the pinned solver's fixed four-iteration
+two-body estimator and is not exact under multi-body interaction. No native body,
 manifold pointer, callback-order token or consumer call crosses that boundary.
 After the solver joins, Physics canonically orders each pair by its typed Horo
 endpoint identity, coalesces duplicate manifold callbacks, and reconciles the
@@ -640,6 +677,12 @@ evidence. `FailTick` suppresses that tick's event publication and fails the
 world while preserving the prior coherent publication. Neither policy grows a
 callback buffer, invokes a consumer from the solver, or leaves solver-owned
 manifold storage in the event result.
+
+The public `PhysicsContactSummary` migrated from one representative
+`position/normal/penetrationDepthMeters/normalImpulseNewtonSeconds` tuple to
+`pointCount`, `points[0..pointCount)` and `omittedPointCount`. Callers must read
+the bounded array and distinguish absent `normalImpulseEstimateNewtonSeconds`
+from an estimated zero; the old zero placeholder was not a measured impulse.
 
 ## Queries
 

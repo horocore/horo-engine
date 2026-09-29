@@ -20,21 +20,6 @@ namespace Horo::Physics {
             }, command);
         }
 
-        /** @brief Checks one closed static-update policy. */
-        [[nodiscard]] bool IsKnownStaticPolicy(const PhysicsStaticTransformUpdatePolicy policy) noexcept {
-            return policy == PhysicsStaticTransformUpdatePolicy::UpdateBroadphase || policy == PhysicsStaticTransformUpdatePolicy::Rebuild;
-        }
-
-        /** @brief Checks one closed dynamic operation. */
-        [[nodiscard]] bool IsKnownDynamicOperation(const PhysicsDynamicTransformOperation operation) noexcept {
-            return operation == PhysicsDynamicTransformOperation::Teleport || operation == PhysicsDynamicTransformOperation::Reset;
-        }
-
-        /** @brief Checks one closed teleport velocity policy. */
-        [[nodiscard]] bool IsKnownVelocityPolicy(const PhysicsTeleportVelocityPolicy policy) noexcept {
-            return policy == PhysicsTeleportVelocityPolicy::Preserve || policy == PhysicsTeleportVelocityPolicy::Reset;
-        }
-
         /** @brief Compares only target identity and consuming tick for conflict detection. */
         [[nodiscard]] bool SameBodyTick(const PhysicsTransformCommand &left, const PhysicsTransformCommand &right) noexcept {
             const auto &leftIdentity = CommandIdentity(left);
@@ -72,9 +57,16 @@ namespace Horo::Physics {
             PhysicsBodyTransformRegistration registration;
             PhysicsPose runtimePose;
             PhysicsBodyState dynamicState;
+            PhysicsPose previousPose;
+            PhysicsPose currentPose;
+            std::uint64_t previousTick{};
+            std::uint64_t currentTick{};
             std::uint64_t lastAppliedTick{};
             std::uint64_t lastPublishedTick{};
             bool hasDynamicSnapshot{};
+            bool hasCommittedPose{};
+            bool hasPreviousTick{};
+            bool discontinuous{};
         };
 
         explicit Impl(const PhysicsTransformAuthorityDescriptor &authorityDescriptor) : descriptor(authorityDescriptor) {
@@ -88,6 +80,8 @@ namespace Horo::Physics {
         std::vector<BodyRecord> bodies;
         std::vector<PhysicsTransformCommand> commands;
         std::uint64_t lastAppliedTick{};
+        std::uint64_t lastInterpolationTick{};
+        std::uint64_t originGeneration{1};
         bool applying{};
     };
 
@@ -99,6 +93,7 @@ namespace Horo::Physics {
                 if constexpr (std::is_same_v<Type, PhysicsStaticTransformCommand>) {
                     record.registration.authoredPose = value.authoredPose;
                     record.runtimePose = value.authoredPose;
+                    record.discontinuous = true;
                     if (value.updatePolicy == PhysicsStaticTransformUpdatePolicy::Rebuild)
                         ++result.staticRebuilds;
                     else
@@ -116,27 +111,11 @@ namespace Horo::Physics {
                     record.dynamicState.activity = PhysicsBodyActivity::Awake;
                     record.hasDynamicSnapshot = false;
                     record.lastPublishedTick = 0;
+                    record.discontinuous = true;
                     ++result.dynamicControls;
                 }
             }, command);
             ++result.appliedCommands;
-        }
-
-        /** @brief Confirms a typed command's shared identity and exact consuming frame. */
-        Result<void> ValidateCommandIdentity(const PhysicsTransformCommandIdentity &identity, const PhysicsWorldId expectedWorld,
-                                             const std::uint64_t expectedSceneGeneration, const std::uint64_t expectedSimulationTick) {
-            if (expectedSceneGeneration == 0 || expectedSimulationTick == 0)
-                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Transform admission frame is invalid."));
-            if (identity.protocolVersion != PhysicsTransformAuthorityProtocolVersion || identity.simulationTick == 0 ||
-                identity.sceneGeneration == 0 || identity.sourceSequence == 0 || !identity.source.IsValid())
-                return Result<void>::Failure(
-                    MakeError(PhysicsErrors::CommandOrderInvalid, "Transform command identity or ordering evidence is incomplete."));
-            if (const Result<void> owner = ValidatePhysicsHandleOwner(identity.body, expectedWorld); owner.HasError())
-                return owner;
-            if (identity.sceneGeneration != expectedSceneGeneration || identity.simulationTick != expectedSimulationTick)
-                return Result<void>::Failure(
-                    MakeError(PhysicsErrors::CommandOrderInvalid, "Transform command targets another fixed-tick admission frame."));
-            return Result<void>::Success();
         }
 
         /** @brief Validates detached authority capacity and owner generations before allocation. */
@@ -192,42 +171,6 @@ namespace Horo::Physics {
                 command);
         }
 
-        /** @brief Validates the shared admission frame before checking one command payload. */
-        template <typename Command, typename PayloadValidator>
-        Result<void> ValidateTransformCommand(const Command &command, const PhysicsWorldId expectedWorld,
-                                              const std::uint64_t expectedSceneGeneration, const std::uint64_t expectedSimulationTick,
-                                              PayloadValidator &&validatePayload) {
-            if (const Result<void> identity =
-                    ValidateCommandIdentity(command.identity, expectedWorld, expectedSceneGeneration, expectedSimulationTick);
-                identity.HasError())
-                return identity;
-            return std::forward<PayloadValidator>(validatePayload)(command);
-        }
-
-        /** @brief Validates a static pose and its explicit broadphase/rebuild policy. */
-        Result<void> ValidateStaticTransformPayload(const PhysicsStaticTransformCommand &command) {
-            if (const Result<void> pose = ValidatePhysicsPose(command.authoredPose); pose.HasError())
-                return pose;
-            if (!IsKnownStaticPolicy(command.updatePolicy))
-                return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Unknown static transform update policy."));
-            return Result<void>::Success();
-        }
-
-        /** @brief Validates a kinematic target pose. */
-        Result<void> ValidateKinematicTransformPayload(const PhysicsKinematicTargetCommand &command) {
-            return ValidatePhysicsPose(command.targetPose);
-        }
-
-        /** @brief Validates a dynamic target pose and its explicit operation policies. */
-        Result<void> ValidateDynamicTransformPayload(const PhysicsDynamicTransformCommand &command) {
-            if (const Result<void> pose = ValidatePhysicsPose(command.targetPose); pose.HasError())
-                return pose;
-            if (!IsKnownDynamicOperation(command.operation) || !IsKnownVelocityPolicy(command.velocityPolicy))
-                return Result<void>::Failure(
-                    MakeError(PhysicsErrors::OperationUnsupported, "Unknown dynamic transform operation or velocity policy."));
-            return Result<void>::Success();
-        }
-
         /** @brief Requires the owner thread and the pre-activation lifecycle state. */
         [[nodiscard]] Result<void> RequirePrepared(auto &impl) {
             if (const Result<void> owner = RequireOwner(impl.ownerThread); owner.HasError())
@@ -246,82 +189,6 @@ namespace Horo::Physics {
             return Result<void>::Success();
         }
     }  // namespace
-
-    /** @copydoc ResolvePhysicsTransformAuthority */
-    Result<PhysicsTransformAuthority> ResolvePhysicsTransformAuthority(const PhysicsMotionType motion) {
-        using enum PhysicsMotionType;
-        using enum PhysicsTransformAuthority;
-        switch (motion) {
-            case Static:
-                return Result<PhysicsTransformAuthority>::Success(StaticScene);
-            case Kinematic:
-                return Result<PhysicsTransformAuthority>::Success(KinematicTarget);
-            case Dynamic:
-                return Result<PhysicsTransformAuthority>::Success(DynamicSolver);
-        }
-        return Result<PhysicsTransformAuthority>::Failure(
-            MakeError(PhysicsErrors::OperationUnsupported, "Unknown body motion mode has no transform authority."));
-    }
-
-    /** @copydoc ValidatePhysicsTransformCommandIdentity */
-    Result<void> ValidatePhysicsTransformCommandIdentity(const PhysicsTransformCommandIdentity &identity,
-                                                         const PhysicsWorldId expectedWorld, const std::uint64_t expectedSceneGeneration,
-                                                         const std::uint64_t expectedSimulationTick) {
-        return ValidateCommandIdentity(identity, expectedWorld, expectedSceneGeneration, expectedSimulationTick);
-    }
-
-    /** @copydoc ValidatePhysicsStaticTransformCommand */
-    Result<void> ValidatePhysicsStaticTransformCommand(const PhysicsStaticTransformCommand &command, const PhysicsWorldId expectedWorld,
-                                                       const std::uint64_t expectedSceneGeneration,
-                                                       const std::uint64_t expectedSimulationTick) {
-        return ValidateTransformCommand(command, expectedWorld, expectedSceneGeneration, expectedSimulationTick,
-                                        ValidateStaticTransformPayload);
-    }
-
-    /** @copydoc ValidatePhysicsKinematicTargetCommand */
-    Result<void> ValidatePhysicsKinematicTargetCommand(const PhysicsKinematicTargetCommand &command, const PhysicsWorldId expectedWorld,
-                                                       const std::uint64_t expectedSceneGeneration,
-                                                       const std::uint64_t expectedSimulationTick) {
-        return ValidateTransformCommand(command, expectedWorld, expectedSceneGeneration, expectedSimulationTick,
-                                        ValidateKinematicTransformPayload);
-    }
-
-    /** @copydoc ValidatePhysicsDynamicTransformCommand */
-    Result<void> ValidatePhysicsDynamicTransformCommand(const PhysicsDynamicTransformCommand &command, const PhysicsWorldId expectedWorld,
-                                                        const std::uint64_t expectedSceneGeneration,
-                                                        const std::uint64_t expectedSimulationTick) {
-        return ValidateTransformCommand(command, expectedWorld, expectedSceneGeneration, expectedSimulationTick,
-                                        ValidateDynamicTransformPayload);
-    }
-
-    /** @copydoc ValidatePhysicsDynamicTransformSnapshot */
-    Result<void> ValidatePhysicsDynamicTransformSnapshot(const PhysicsDynamicTransformSnapshot &snapshot,
-                                                         const PhysicsWorldId expectedWorld, const std::uint64_t expectedSceneGeneration,
-                                                         const std::uint64_t expectedCompletedTick) {
-        if (expectedSceneGeneration == 0 || expectedCompletedTick == 0 ||
-            snapshot.protocolVersion != PhysicsTransformAuthorityProtocolVersion || snapshot.completedTick == 0 ||
-            snapshot.sceneGeneration == 0)
-            return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Dynamic transform snapshot metadata is invalid."));
-        if (const Result<void> owner = ValidatePhysicsHandleOwner(snapshot.state.body, expectedWorld); owner.HasError())
-            return owner;
-        if (snapshot.completedTick != expectedCompletedTick || snapshot.sceneGeneration != expectedSceneGeneration)
-            return Result<void>::Failure(
-                MakeError(PhysicsErrors::QuerySnapshotStale, "Dynamic transform snapshot is not from the completed admission tick."));
-        return ValidatePhysicsBodyState(snapshot.state, expectedWorld);
-    }
-
-    /** @copydoc ValidatePhysicsDirectTransformWrite */
-    Result<void> ValidatePhysicsDirectTransformWrite(const PhysicsDirectTransformWrite &write, const PhysicsWorldId expectedWorld,
-                                                     const std::uint64_t expectedSceneGeneration) {
-        if (expectedSceneGeneration == 0 || write.protocolVersion != PhysicsTransformAuthorityProtocolVersion || write.sceneGeneration == 0)
-            return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Direct transform write metadata is invalid."));
-        if (const Result<void> owner = ValidatePhysicsHandleOwner(write.body, expectedWorld); owner.HasError())
-            return owner;
-        if (write.sceneGeneration != expectedSceneGeneration)
-            return Result<void>::Failure(
-                MakeError(PhysicsErrors::CommandOrderInvalid, "Direct transform write targets another scene generation."));
-        return ValidatePhysicsPose(write.pose);
-    }
 
     /** @copydoc PhysicsTransformCommandLess */
     bool PhysicsTransformCommandLess(const PhysicsTransformCommand &left, const PhysicsTransformCommand &right) noexcept {
@@ -504,6 +371,8 @@ namespace Horo::Physics {
     Result<void> PhysicsBodyTransformAuthority::PublishDynamicSnapshot(const PhysicsDynamicTransformSnapshot &snapshot) {
         if (const Result<void> active = RequireActive(*impl_); active.HasError())
             return active;
+        if (snapshot.completedTick <= impl_->lastInterpolationTick)
+            return Result<void>::Failure(MakeError(PhysicsErrors::CommandOrderInvalid, "Completed interpolation ticks are immutable."));
         if (const Result<void> valid = ValidatePhysicsDynamicTransformSnapshot(snapshot, impl_->descriptor.world,
                                                                                impl_->descriptor.sceneGeneration, impl_->lastAppliedTick);
             valid.HasError())
@@ -521,6 +390,104 @@ namespace Horo::Physics {
         body->dynamicState = snapshot.state;
         body->lastPublishedTick = snapshot.completedTick;
         body->hasDynamicSnapshot = true;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PhysicsBodyTransformAuthority::CommitInterpolationTick */
+    Result<void> PhysicsBodyTransformAuthority::CommitInterpolationTick(const std::uint64_t completedTick) {
+        if (const auto active = RequireActive(*impl_); active.HasError())
+            return active;
+        if (completedTick == 0 || completedTick != impl_->lastAppliedTick || completedTick <= impl_->lastInterpolationTick)
+            return Result<void>::Failure(
+                MakeError(PhysicsErrors::CommandOrderInvalid, "Interpolation requires the latest uncommitted applied tick."));
+        for (const auto &body : impl_->bodies) {
+            if (body.registration.motion == PhysicsMotionType::Dynamic &&
+                (!body.hasDynamicSnapshot || body.lastPublishedTick != completedTick))
+                return Result<void>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale,
+                                                       "Every dynamic body requires completed solver evidence before pose publication."));
+            if (const auto pose = ValidatePhysicsPose(body.runtimePose); pose.HasError())
+                return pose;
+        }
+        for (auto &body : impl_->bodies) {
+            body.hasPreviousTick = body.hasCommittedPose && !body.discontinuous && body.currentTick + 1 == completedTick;
+            body.previousPose = body.hasPreviousTick ? body.currentPose : body.runtimePose;
+            body.previousTick = body.hasPreviousTick ? body.currentTick : completedTick;
+            body.currentPose = body.runtimePose;
+            body.currentTick = completedTick;
+            body.hasCommittedPose = true;
+            body.discontinuous = false;
+        }
+        impl_->lastInterpolationTick = completedTick;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PhysicsBodyTransformAuthority::InterpolationEndpoints */
+    Result<PhysicsInterpolationEndpoints> PhysicsBodyTransformAuthority::InterpolationEndpoints(const BodyHandle &body) const {
+        if (const auto active = RequireActive(*impl_); active.HasError())
+            return Result<PhysicsInterpolationEndpoints>::Failure(active.ErrorValue());
+        if (const auto handle = ValidatePhysicsHandleOwner(body, impl_->descriptor.world); handle.HasError())
+            return Result<PhysicsInterpolationEndpoints>::Failure(handle.ErrorValue());
+        const auto found = FindBody(impl_->bodies, body);
+        if (found == impl_->bodies.end())
+            return Result<PhysicsInterpolationEndpoints>::Failure(MakeError(PhysicsErrors::HandleStale));
+        if (!found->hasCommittedPose)
+            return Result<PhysicsInterpolationEndpoints>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
+        return Result<PhysicsInterpolationEndpoints>::Success({.body = body,
+                                                               .sceneGeneration = impl_->descriptor.sceneGeneration,
+                                                               .originGeneration = impl_->originGeneration,
+                                                               .previousPose = found->previousPose,
+                                                               .currentPose = found->currentPose,
+                                                               .previousTick = found->previousTick,
+                                                               .currentTick = found->currentTick,
+                                                               .hasPreviousTick = found->hasPreviousTick});
+    }
+
+    /** @copydoc PhysicsBodyTransformAuthority::ResetInterpolationHistory */
+    Result<void> PhysicsBodyTransformAuthority::ResetInterpolationHistory(const PhysicsInterpolationResetReason reason) {
+        using enum PhysicsInterpolationResetReason;
+        if (const auto active = RequireActive(*impl_); active.HasError())
+            return active;
+        if (impl_->lastAppliedTick != impl_->lastInterpolationTick)
+            return Result<void>::Failure(
+                MakeError(PhysicsErrors::InvalidState, "Interpolation reset requires a completed-tick safe point."));
+        if (reason != Teleport && reason != Restore && reason != Reload)
+            return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Unknown interpolation reset reason."));
+        for (auto &body : impl_->bodies) {
+            body.previousPose = body.currentPose;
+            body.previousTick = body.currentTick;
+            body.hasPreviousTick = false;
+            body.hasCommittedPose = false;
+            body.discontinuous = true;
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PhysicsBodyTransformAuthority::RebaseInterpolationHistory */
+    Result<void> PhysicsBodyTransformAuthority::RebaseInterpolationHistory(const Math::Vec3 delta,
+                                                                           const std::uint64_t newOriginGeneration) {
+        if (const auto active = RequireActive(*impl_); active.HasError())
+            return active;
+        if (impl_->lastAppliedTick != impl_->lastInterpolationTick || !impl_->commands.empty())
+            return Result<void>::Failure(
+                MakeError(PhysicsErrors::InvalidState, "Origin rebase requires a completed tick and no queued transform commands."));
+        if (!Math::IsFinite(delta) || newOriginGeneration <= impl_->originGeneration)
+            return Result<void>::Failure(
+                MakeError(PhysicsErrors::DescriptorInvalid, "Origin rebase requires finite delta and a new generation."));
+        for (const auto &body : impl_->bodies) {
+            if (!Math::IsFinite(body.runtimePose.translation - delta) || !Math::IsFinite(body.dynamicState.pose.translation - delta) ||
+                (body.hasCommittedPose &&
+                 (!Math::IsFinite(body.previousPose.translation - delta) || !Math::IsFinite(body.currentPose.translation - delta))))
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Origin rebase would produce a non-finite pose."));
+        }
+        for (auto &body : impl_->bodies) {
+            body.runtimePose.translation = body.runtimePose.translation - delta;
+            body.dynamicState.pose.translation = body.dynamicState.pose.translation - delta;
+            if (body.hasCommittedPose) {
+                body.previousPose.translation = body.previousPose.translation - delta;
+                body.currentPose.translation = body.currentPose.translation - delta;
+            }
+        }
+        impl_->originGeneration = newOriginGeneration;
         return Result<void>::Success();
     }
 

@@ -973,6 +973,35 @@ callbacks can reject expansion before allocating. The executor charges source
 staging, each step's input and declared work, and each bounded output against one
 operation budget.
 
+Participant steps may also register a record callback. A detached participant's
+records are sorted by `SaveRecordId`; each carries its own schema version and the
+verified source participant, record ID, and schema provenance. The executor passes
+only borrowed bytes for one owned record to that callback, checks its output byte
+limit, advances its schema, and retains its identity and provenance. Record callbacks
+may return a field-specific error through `SaveMigrationRecordContext::Fail`, which
+adds step, source/target schema, participant, record, and field context while
+preserving the typed cause. A participant step cannot change another owner's
+payload or records unless its registered definition names that owner in a sorted,
+unique `crossParticipantTransforms` contract bound to the target schema. The contract permits data transforms
+only; target identity, schema, requiredness, record identities and provenance stay
+fixed. An absent optional target is harmless when the callback skips it; a missing
+required target is rejected by compatibility planning. Save-schema steps remain the whole-save composition boundary. Existing
+participant callbacks without record callbacks must advance any populated record
+schemas themselves. Existing payload-only callers need no migration. Failure at any
+record or later validation stage discards the detached candidate and leaves the
+verified source unchanged.
+`RetainVerifiedSaveRecords` stages recognized manifest chunks through the bounded
+archive reader and supplies their initial provenance; it commits to the detached
+source only after every selected chunk succeeds. Callers still use
+`RetainUnknownSaveData` for unsupported optional owners and must finalize and
+verify any durable replacement before the slot commit transaction.
+The catalog and route identity domains advance to v2 because participant step
+identity now includes record-transform presence and exact cross-owner grants. Release
+composition must regenerate its migration-catalog identity; archive wire versions
+and existing source files do not change. Existing payload-only definitions may be
+registered unchanged, while record-aware definitions supply the new callback and
+cross-owner descriptors explicitly.
+
 Compatibility preflight proceeds through framing/limits, archive version, outer
 integrity/signature, save schema, required participant set/schema, then semantic
 dependency identities and decoded hashes. Direct load is allowed only when every

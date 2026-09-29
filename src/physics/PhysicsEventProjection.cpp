@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 #include <utility>
 
 namespace Horo::Physics::Detail {
@@ -12,12 +13,55 @@ namespace Horo::Physics::Detail {
         /** @brief Checks one copied endpoint without resolving any live registry or native object. */
         [[nodiscard]] bool ValidEndpoint(const PhysicsEventEndpoint &endpoint) noexcept {
             return endpoint.body.IsValid() && endpoint.shape.IsValid() && endpoint.layer.IsValid() && endpoint.profile.IsValid() &&
-                   endpoint.filterSchemaGeneration != 0;
+                   endpoint.filterSchemaGeneration != 0 && endpoint.body.world == endpoint.shape.world &&
+                   (!endpoint.subshape.has_value() || endpoint.subshape->IsValid());
         }
 
         /** @brief Checks optional material evidence copied from the callback. */
         [[nodiscard]] bool ValidMaterial(const std::optional<PhysicsEventMaterial> &material) noexcept {
             return !material.has_value() || (material->asset.IsValid() && material->assetGeneration != 0 && material->slot.IsValid());
+        }
+
+        /** @brief Rejects malformed copied point geometry and nonphysical impulse estimates. */
+        [[nodiscard]] bool ValidPoint(const PhysicsContactPoint &point, const bool sensor) noexcept {
+            if (!Math::IsFinite(point.positionOnFirst) || !Math::IsFinite(point.positionOnSecond) || !Math::IsFinite(point.normal) ||
+                !std::isfinite(point.penetrationDepthMeters))
+                return false;
+            if (const float normalLengthSquared =
+                    point.normal.x * point.normal.x + point.normal.y * point.normal.y + point.normal.z * point.normal.z;
+                std::abs(normalLengthSquared - 1.0F) > 1.0e-3F)
+                return false;
+            if (sensor && point.normalImpulseEstimateNewtonSeconds.has_value())
+                return false;
+            return !point.normalImpulseEstimateNewtonSeconds.has_value() ||
+                   (std::isfinite(*point.normalImpulseEstimateNewtonSeconds) && *point.normalImpulseEstimateNewtonSeconds >= 0.0F);
+        }
+
+        /** @brief Orders physical point identity without treating two impulse estimates as two positions. */
+        [[nodiscard]] bool PointGeometryLess(const PhysicsContactPoint &left, const PhysicsContactPoint &right) noexcept {
+            return std::tie(left.positionOnFirst, left.positionOnSecond, left.normal, left.penetrationDepthMeters) <
+                   std::tie(right.positionOnFirst, right.positionOnSecond, right.normal, right.penetrationDepthMeters);
+        }
+
+        /** @brief Retains the smallest unique point evidence and accounts for bounded omissions. */
+        void MergePoint(PhysicsContactSummary &summary, const PhysicsContactPoint &point) noexcept {
+            auto end = summary.points.begin() + summary.pointCount;
+            auto position = std::lower_bound(summary.points.begin(), end, point, PointGeometryLess);
+            if (position != end && !PointGeometryLess(point, *position)) {
+                position->normalImpulseEstimateNewtonSeconds =
+                    std::max(position->normalImpulseEstimateNewtonSeconds, point.normalImpulseEstimateNewtonSeconds);
+                return;
+            }
+            if (summary.pointCount == MaximumPhysicsContactPoints) {
+                summary.omittedPointCount = SaturatingAdd(summary.omittedPointCount, 1);
+                if (position == end)
+                    return;
+                --end;
+            } else {
+                ++summary.pointCount;
+            }
+            std::move_backward(position, end, end + 1);
+            *position = point;
         }
 
     }  // namespace
@@ -77,8 +121,13 @@ namespace Horo::Physics::Detail {
         for (std::uint32_t index = 0; index < retained; ++index) {
             const PhysicsContactObservation &observation = observations_[index];
             const PhysicsEventPairKey pair{.first = observation.first, .second = observation.second};
-            if (!currentPairs_.empty() && currentPairs_.back().pair == pair)
+            if (!currentPairs_.empty() && currentPairs_.back().pair == pair) {
+                auto &summary = currentPairs_.back().contact;
+                summary.omittedPointCount = SaturatingAdd(summary.omittedPointCount, observation.contact.omittedPointCount);
+                for (std::uint32_t point = 0; point < observation.contact.pointCount; ++point)
+                    MergePoint(summary, observation.contact.points[point]);
                 continue;
+            }
             currentPairs_.push_back({.pair = pair,
                                      .firstMaterial = observation.firstMaterial,
                                      .secondMaterial = observation.secondMaterial,
@@ -206,19 +255,32 @@ namespace Horo::Physics::Detail {
     /** @copydoc PhysicsEventProjection::ValidObservation */
     bool PhysicsEventProjection::ValidObservation(const PhysicsContactObservation &observation) noexcept {
         return observation.simulationTick != 0 && ValidEndpoint(observation.first) && ValidEndpoint(observation.second) &&
-               observation.first != observation.second && ValidMaterial(observation.firstMaterial) &&
-               ValidMaterial(observation.secondMaterial) && Math::IsFinite(observation.contact.position) &&
-               Math::IsFinite(observation.contact.normal) && std::isfinite(observation.contact.penetrationDepthMeters) &&
-               std::isfinite(observation.contact.normalImpulseNewtonSeconds);
+               observation.first != observation.second && observation.first.body.world == observation.second.body.world &&
+               observation.first.filterSchemaGeneration == observation.second.filterSchemaGeneration &&
+               ValidMaterial(observation.firstMaterial) && ValidMaterial(observation.secondMaterial) &&
+               observation.contact.pointCount > 0 && observation.contact.pointCount <= MaximumPhysicsContactPoints &&
+               std::all_of(observation.contact.points.begin(), observation.contact.points.begin() + observation.contact.pointCount,
+                           [&observation](const PhysicsContactPoint &point) {
+            return ValidPoint(point, observation.sensor);
+        });
     }
 
     /** @copydoc PhysicsEventProjection::Canonicalize */
     void PhysicsEventProjection::Canonicalize(PhysicsContactObservation &observation) noexcept {
-        if (!(observation.second < observation.first))
-            return;
-        std::swap(observation.first, observation.second);
-        std::swap(observation.firstMaterial, observation.secondMaterial);
-        observation.contact.normal = -observation.contact.normal;
+        if (observation.second < observation.first) {
+            std::swap(observation.first, observation.second);
+            std::swap(observation.firstMaterial, observation.secondMaterial);
+            for (std::uint32_t index = 0; index < observation.contact.pointCount; ++index) {
+                auto &point = observation.contact.points[index];
+                std::swap(point.positionOnFirst, point.positionOnSecond);
+                point.normal = -point.normal;
+            }
+        }
+        PhysicsContactSummary normalized;
+        normalized.omittedPointCount = observation.contact.omittedPointCount;
+        for (std::uint32_t index = 0; index < observation.contact.pointCount; ++index)
+            MergePoint(normalized, observation.contact.points[index]);
+        observation.contact = normalized;
     }
 
     /** @copydoc PhysicsEventProjection::Append */

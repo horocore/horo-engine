@@ -828,6 +828,14 @@ linked-instance overrides are not supported. Nested templates form a finite
 acyclic dependency graph and expand deterministically under complete identity,
 schema, dependency and budget validation.
 
+Before expansion, the load-time `HoroEngine::UiTemplateGraph` authoring/cook
+domain resolves an owned snapshot of exact template semantic revisions and
+host-pinned package versions. The bounded graph
+walk produces dependency-first template IDs and a canonical package closure;
+it rejects cycles by template asset ID, absent revisions, incompatible interface
+versions, missing or incompatible locked packages, and exhausted budgets. This
+load-time step performs no package selection, provider I/O, or runtime mutation.
+
 Insert expands into fresh ordinary document-owned elements and retains no update
 relationship. Linked instance serializes the asset, accepted semantic revision,
 public arguments and slot content while its subtree remains a derived projection.

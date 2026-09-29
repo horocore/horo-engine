@@ -12,6 +12,7 @@
 
 #include <filesystem>
 #include <span>
+#include <vector>
 
 namespace Horo::Release {
     /** @brief Verified package and tree inputs for one durable ready-marker publication. */
@@ -26,6 +27,15 @@ namespace Horo::Release {
 
     /** @brief Signed ZIP and private destination inputs for one extraction transaction. */
     struct VerifiedZipUpdateRequest final {
+        const UpdatePackageRecord &package;
+        const UpdateTransferCheckpoint &checkpoint;
+        const std::filesystem::path &packageFile;
+        const std::filesystem::path &stageRoot;
+        const UpdateArchiveLimits &limits;
+    };
+
+    /** @brief Signed Linux tar.gz and private stage inputs for one extraction transaction. */
+    struct VerifiedTarGzipUpdateRequest final {
         const UpdatePackageRecord &package;
         const UpdateTransferCheckpoint &checkpoint;
         const std::filesystem::path &packageFile;
@@ -77,4 +87,34 @@ namespace Horo::Release {
                                                                        NativeDurableFileSystem &files,
                                                                        const Security::ArtifactVerifier &verifier,
                                                                        CancellationToken cancellation);
+
+    /**
+     * @brief Authenticates and indexes a canonical gzip-wrapped ustar package without extracting it.
+     * @param package Signed Linux tar.gz package record.
+     * @param checkpoint Complete durable checkpoint for packageFile.
+     * @param packageFile Private, quiescent package file.
+     * @param limits Maximum file count, file size, and expanded payload bytes.
+     * @param verifier Trusted publisher signature verifier.
+     * @return Validated regular-file/directory index or a typed archive failure.
+     * @note This is a preflight reader. A separate staging transaction must verify the internal file inventory and extract bytes.
+     */
+    [[nodiscard]] Result<std::vector<UpdateArchiveEntry>> IndexVerifiedTarGzipPackage(const UpdatePackageRecord &package,
+                                                                                      const UpdateTransferCheckpoint &checkpoint,
+                                                                                      const std::filesystem::path &packageFile,
+                                                                                      const UpdateArchiveLimits &limits,
+                                                                                      const Security::ArtifactVerifier &verifier);
+
+    /**
+     * @brief Authenticates, indexes, extracts, and publishes a ready Linux tar.gz stage.
+     * @param request Signed package, exact private paths, and expansion limits.
+     * @param files Native durable filesystem kept alive for the transaction.
+     * @param verifier Trusted publisher signature verifier.
+     * @param cancellation Cooperative cancellation before ready publication.
+     * @return Ready-marker path only after every extracted file matches the authenticated internal inventory.
+     * @note The host keeps the package and private parent quiescent throughout this call.
+     */
+    [[nodiscard]] Result<std::filesystem::path> StageVerifiedTarGzipUpdate(const VerifiedTarGzipUpdateRequest &request,
+                                                                           NativeDurableFileSystem &files,
+                                                                           const Security::ArtifactVerifier &verifier,
+                                                                           CancellationToken cancellation);
 }  // namespace Horo::Release

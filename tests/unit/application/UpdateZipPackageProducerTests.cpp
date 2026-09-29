@@ -98,7 +98,19 @@ TEST_CASE("ZIP producer emits deterministic exact bytes and the staging inventor
     auto inventory = Inventory();
     UpdateZipPackageProducer producer{{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U}};
     IReleasePackageProducer *producers[]{&producer};
-    ReleasePackageRequest first{Selection(), inventory, directory.root / "source", directory.root / "first"};
+    ReleasePackageRequest first{Selection(), inventory, directory.root / "source", directory.root / "first", "bin/game", {"bin/game"}};
+    auto unbound = first;
+    unbound.productEntrypoint.clear();
+    CHECK(ProduceReleasePackage(unbound, producers).HasError());
+    ReleasePackageRequest noExecutable{Selection(), inventory, directory.root / "source", directory.root / "first", "bin/game", {}};
+    CHECK(ProduceReleasePackage(noExecutable, producers).HasError());
+    ReleasePackageRequest duplicateExecutable{Selection(),
+                                              inventory,
+                                              directory.root / "source",
+                                              directory.root / "first",
+                                              "bin/game",
+                                              {"bin/game", "bin/game"}};
+    CHECK(ProduceReleasePackage(duplicateExecutable, producers).HasError());
     auto result = ProduceReleasePackage(first, producers);
     REQUIRE(result.HasValue());
     REQUIRE(result.Value().files.size() == 1U);
@@ -110,7 +122,8 @@ TEST_CASE("ZIP producer emits deterministic exact bytes and the staging inventor
     mz_zip_archive archive{};
     REQUIRE(mz_zip_reader_init_file(&archive, (directory.root / "first/update.zip").string().c_str(), 0U));
     REQUIRE(mz_zip_reader_get_num_files(&archive) == 2U);
-    auto declared = BuildCanonicalUpdateFileInventory(std::array{UpdateStagedFile{"bin/game", 4U, inventory.Artifacts().front().digest}},
+    auto declared = BuildCanonicalUpdateFileInventory(std::array{UpdateStagedFile{"bin/game", 4U, inventory.Artifacts().front().digest,
+                                                                                  UpdateFileMode::Executable, UpdateFileRole::Entrypoint}},
                                                       {.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U});
     REQUIRE(declared.HasValue());
     std::string inventoryBytes(declared.Value().size(), '\0');
@@ -121,7 +134,7 @@ TEST_CASE("ZIP producer emits deterministic exact bytes and the staging inventor
     CHECK(game == "game");
     mz_zip_reader_end(&archive);
 
-    ReleasePackageRequest second{Selection(), inventory, directory.root / "source", directory.root / "second"};
+    ReleasePackageRequest second{Selection(), inventory, directory.root / "source", directory.root / "second", "bin/game", {"bin/game"}};
     REQUIRE(ProduceReleasePackage(second, producers).HasValue());
     CHECK(ReadFile(directory.root / "second/update.zip") == firstBytes);
     CHECK(ProduceReleasePackage(first, producers).HasError());
@@ -136,7 +149,7 @@ TEST_CASE("ZIP package producer output stages from a complete durable checkpoint
     auto inventory = Inventory();
     UpdateZipPackageProducer producer{{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U}};
     IReleasePackageProducer *producers[]{&producer};
-    ReleasePackageRequest request{Selection(), inventory, directory.root / "source", directory.root / "first"};
+    ReleasePackageRequest request{Selection(), inventory, directory.root / "source", directory.root / "first", "bin/game", {"bin/game"}};
     auto result = ProduceReleasePackage(request, producers);
     REQUIRE(result.HasValue());
 
@@ -173,12 +186,16 @@ TEST_CASE("ZIP package producer output stages from a complete durable checkpoint
 TEST_CASE("ZIP producer preserves empty declared files", "[release][update][package]") {
     TemporaryDirectory directory;
     WriteFile(directory.root / "source/bin/empty", "");
+    WriteFile(directory.root / "source/bin/game", "game");
     auto inventory =
-        ReleasePreSignInventory::Create(ReleaseCandidateId{42U}, {{"bin/empty", ReleaseArtifactRole::Binary, 0U, ComputeSha256({})}});
+        ReleasePreSignInventory::Create(ReleaseCandidateId{42U}, {{"bin/empty", ReleaseArtifactRole::Binary, 0U, ComputeSha256({})},
+                                                                  {"bin/game", ReleaseArtifactRole::Binary, 4U,
+                                                                   ComputeSha256(std::as_bytes(std::span{"game", 4U}))}});
     REQUIRE(inventory.HasValue());
     UpdateZipPackageProducer producer{{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U}};
     IReleasePackageProducer *producers[]{&producer};
-    ReleasePackageRequest request{Selection(), inventory.Value(), directory.root / "source", directory.root / "first"};
+    ReleasePackageRequest request{Selection(), inventory.Value(), directory.root / "source", directory.root / "first",
+                                  "bin/game",  {"bin/game"}};
     REQUIRE(ProduceReleasePackage(request, producers).HasValue());
 
     mz_zip_archive archive{};
@@ -201,7 +218,7 @@ TEST_CASE("ZIP producer refuses an existing output symlink", "[release][update][
     auto inventory = Inventory();
     UpdateZipPackageProducer producer{{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U}};
     IReleasePackageProducer *producers[]{&producer};
-    ReleasePackageRequest request{Selection(), inventory, directory.root / "source", directory.root / "first"};
+    ReleasePackageRequest request{Selection(), inventory, directory.root / "source", directory.root / "first", "bin/game", {"bin/game"}};
     CHECK(ProduceReleasePackage(request, producers).HasError());
     CHECK(std::filesystem::is_symlink(std::filesystem::symlink_status(directory.root / "first/update.zip")));
 }

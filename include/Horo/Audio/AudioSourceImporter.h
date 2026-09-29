@@ -62,6 +62,24 @@ namespace Horo::Audio {
         bool operator==(const AudioWaveformPoint &) const = default;
     };
 
+    /** @brief One resolution of a deterministic min/max waveform pyramid. */
+    struct AudioWaveformLevel final {
+        std::uint64_t windowFrames{};
+        std::vector<AudioWaveformPoint> points;
+        bool operator==(const AudioWaveformLevel &) const = default;
+    };
+
+    /** @brief Bounded analysis result reusable by cook and editor inspection without source decoding. */
+    struct AudioAnalysisMetadata final {
+        std::vector<AudioWaveformLevel> waveformLevels;
+        AudioLoudnessMetadata loudness;
+        AudioSample samplePeak{};
+        std::uint64_t residentPcmBytes{}; /**< Exact decoded binary32 storage estimate. */
+        std::uint64_t decodeBlockBytes{}; /**< Maximum importer decode-block storage. */
+        std::uint64_t waveformBytes{};    /**< Serialized waveform storage estimate. */
+        bool operator==(const AudioAnalysisMetadata &) const = default;
+    };
+
     /** @brief Owned semantic result of a successful built-in source extraction. */
     struct AudioSourceImportCandidate final {
         AudioContainerId container;
@@ -71,9 +89,7 @@ namespace Horo::Audio {
         std::uint64_t frameCount{};
         std::uint64_t durationNanoseconds{};
         std::vector<AudioLoopRegion> loops;
-        std::vector<AudioWaveformPoint> waveform;
-        AudioLoudnessMetadata loudness;
-        AudioSample samplePeak{};
+        AudioAnalysisMetadata analysis;
         std::string decoderIdentity;
         bool operator==(const AudioSourceImportCandidate &) const = default;
     };

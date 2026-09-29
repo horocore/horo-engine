@@ -98,7 +98,8 @@ namespace {
     [[nodiscard]] std::string ZipArchive(const std::string_view name, const std::string_view content,
                                          const std::optional<std::string_view> declaredContent = std::nullopt,
                                          const std::optional<std::pair<std::string_view, std::string_view>> extraFile = std::nullopt,
-                                         const bool includeInventory = true, const bool uppercaseDigest = false) {
+                                         const bool includeInventory = true, const bool uppercaseDigest = false,
+                                         const bool declareExtra = false) {
         mz_zip_archive writer{};
         REQUIRE(mz_zip_writer_init_heap(&writer, 0U, 0U));
         const auto digest = Horo::ComputeSha256(std::as_bytes(std::span{declaredContent.value_or(content)}));
@@ -109,10 +110,16 @@ namespace {
                     character = static_cast<char>(character - 'a' + 'A');
             }
         }
-        const std::string inventory =
-            "horo-update-files-v1\n" + std::string{name} + '\t' + std::to_string(content.size()) + '\t' + digestText + '\n';
+        std::string inventory = std::string{UpdateFileInventoryHeader} + std::string{name} + '\t' + std::to_string(content.size()) + '\t' +
+                                digestText + "\t0755\tentrypoint\n";
+        if (extraFile && declareExtra) {
+            const auto extraDigest = Horo::ComputeSha256(std::as_bytes(std::span{extraFile->second}));
+            inventory += std::string{extraFile->first} + '\t' + std::to_string(extraFile->second.size()) + '\t' +
+                         Horo::FormatSha256(extraDigest) + "\t0644\tcontent\n";
+        }
         if (includeInventory)
-            REQUIRE(mz_zip_writer_add_mem(&writer, "horo-update-files-v1.txt", inventory.data(), inventory.size(), MZ_DEFAULT_COMPRESSION));
+            REQUIRE(
+                mz_zip_writer_add_mem(&writer, UpdateFileInventoryPath.data(), inventory.data(), inventory.size(), MZ_DEFAULT_COMPRESSION));
         REQUIRE(mz_zip_writer_add_mem(&writer, std::string{name}.c_str(), content.data(), content.size(), MZ_DEFAULT_COMPRESSION));
         if (extraFile)
             REQUIRE(mz_zip_writer_add_mem(&writer, std::string{extraFile->first}.c_str(), extraFile->second.data(),
@@ -282,8 +289,11 @@ TEST_CASE("Verified stage publishes a durable marker only for the exact private 
         std::ofstream output(root / "bin/editor", std::ios::binary);
         output << executable;
     }
-    const std::array inventory{
-        UpdateStagedFile{"bin/editor", executable.size(), Horo::ComputeSha256(std::as_bytes(std::span{executable}))}};
+#if !defined(_WIN32)
+    std::filesystem::permissions(root / "bin/editor", std::filesystem::perms{0755});
+#endif
+    const std::array inventory{UpdateStagedFile{"bin/editor", executable.size(), Horo::ComputeSha256(std::as_bytes(std::span{executable})),
+                                                UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
     constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
     auto published = PublishVerifiedUpdateStage({package, checkpoint.Value(), Paths(stage).partialFile, root, inventory, archiveLimits},
                                                 files, Verifier(), {});
@@ -307,7 +317,8 @@ TEST_CASE("Cancelled or invalid stage never publishes ready", "[release][update]
     Horo::NativeDurableFileSystem files;
     const auto root = stage.path / "candidate";
     std::filesystem::create_directory(root);
-    const std::array inventory{UpdateStagedFile{"bin/editor", 1U, Horo::ComputeSha256(std::as_bytes(std::span{payload}))}};
+    const std::array inventory{UpdateStagedFile{"bin/editor", 1U, Horo::ComputeSha256(std::as_bytes(std::span{payload})),
+                                                UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
     constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
     Horo::CancellationSource cancellation;
     cancellation.RequestCancellation();
@@ -346,9 +357,16 @@ TEST_CASE("Verified ZIP staging extracts bounded content and publishes ready", "
     std::ifstream input(root / "bin/editor", std::ios::binary);
     const std::string content{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
     CHECK(content == "verified editor");
-    const std::array inventory{UpdateStagedFile{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content}))}};
+    const std::array inventory{UpdateStagedFile{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content})),
+                                                UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
     CHECK(VerifyReadyUpdateStage(package, CompleteCheckpoint(package), paths.partialFile, root, inventory, archiveLimits, Verifier())
               .HasValue());
+#if !defined(_WIN32)
+    CHECK((std::filesystem::status(root / "bin/editor").permissions() & std::filesystem::perms::mask) == std::filesystem::perms{0755});
+    std::filesystem::permissions(root / "bin/editor", std::filesystem::perms{0644});
+    CHECK(VerifyReadyUpdateStage(package, CompleteCheckpoint(package), paths.partialFile, root, inventory, archiveLimits, Verifier())
+              .HasError());
+#endif
 }
 
 TEST_CASE("Activation admission rejects a changed ready marker", "[release][update]") {
@@ -366,7 +384,8 @@ TEST_CASE("Activation admission rejects a changed ready marker", "[release][upda
     const auto root = stage.path / "candidate";
     auto published = StageVerifiedZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, root, limits}, files, Verifier(), {});
     REQUIRE(published.HasValue());
-    const std::array inventory{UpdateStagedFile{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content}))}};
+    const std::array inventory{UpdateStagedFile{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content})),
+                                                UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
     {
         std::ofstream output(published.Value(), std::ios::binary | std::ios::trunc);
         output << "stale";
@@ -418,7 +437,8 @@ TEST_CASE("ZIP staging rejects escaped and oversized entries before creating a t
 
 TEST_CASE("ZIP staging persists empty files and cancellation clears stale ready evidence", "[release][update]") {
     TemporaryStage stage;
-    const auto archive = ZipArchive("empty.txt", "");
+    const auto archive =
+        ZipArchive("bin/editor", "run", std::nullopt, std::pair<std::string_view, std::string_view>{"empty.txt", ""}, true, false, true);
     const auto package = Package(archive);
     const auto paths = Paths(stage);
     {
@@ -426,7 +446,7 @@ TEST_CASE("ZIP staging persists empty files and cancellation clears stale ready 
         output.write(archive.data(), static_cast<std::streamsize>(archive.size()));
     }
     Horo::NativeDurableFileSystem files;
-    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 2U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
+    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 3U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
     const auto root = stage.path / "candidate";
     const auto marker = std::filesystem::path{root.string() + ".ready"};
     {

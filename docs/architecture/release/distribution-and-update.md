@@ -82,6 +82,17 @@ work. Symbols and diagnostic artifacts have no installation identity and use a
 separate supplemental artifact class rather than entering the ordinary product
 installation path.
 
+The Linux tar.gz preflight reader authenticates the complete signed package,
+checks canonical gzip and ustar framing, rejects links and unsafe paths, and
+returns a bounded entry index without writing files. `StageVerifiedTarGzipUpdate`
+then compares that index with the package's canonical internal file inventory,
+checks available capacity, extracts into an absent private sibling directory,
+and rechecks every file digest before publishing the durable ready marker.
+Failure removes only the newly created stage; a preexisting stage or marker is
+left untouched.
+The reader accepts one gzip member with no optional gzip header fields and
+ordinary POSIX ustar file/directory entries; other tar extensions fail closed.
+
 ## Game Content, Patch, And DLC Releases
 
 Game releases may contain multiple content units:
@@ -198,6 +209,28 @@ Update metadata includes:
 - signing key identity
 
 Expired metadata is rejected unless an offline policy explicitly permits it.
+Mounted local, removable-media, and administrator-synchronized enterprise
+sources use a configured absolute root containing `manifest.json` and
+`packages/<64 lowercase digest hex digits>.zip`. The digest-named package path
+is derived from the authenticated package record; neither manifest URL nor
+media content may choose an arbitrary local path. Source descriptors have
+unique IDs and explicit precedence. A host uses `MayTryNextOfflineSource`
+to try the next source only when media or metadata is unavailable; a present
+but invalid signature, stale policy, unsafe path, or package mismatch stops
+fallback. Source and private stage parents remain quiescent for an import
+operation.
+
+`ImportOfflineZipUpdate` parses the same canonical signed manifest and calls
+the same discovery, package verification, ZIP extraction, and ready-marker
+paths as an HTTPS update. An administrator may configure at most 30 days of
+manifest expiry grace for a particular source. The installed trust root must
+still be unexpired, signatures and package digests remain mandatory, and the
+monotonic sequence floor is unchanged. Downgrade requires both an explicit
+host action and source administrator policy. The default freshness parameter
+on `VerifyUpdateManifest` and `AssessUpdate` is strict, preserving existing
+online callers; hosts migrating to offline source descriptors pass the bounded
+policy only for that selected source.
+
 Returning to an older version is allowed only through explicit rollback policy
 and user or administrator action. Automatic update checks must not downgrade a
 product because an attacker served an older valid manifest.
@@ -274,12 +307,14 @@ may be published. The host must keep the private stage quiescent during this
 check; the archive reader must supply the complete authenticated file inventory.
 For ZIP packages, `StageVerifiedZipUpdate` first authenticates the complete
 private package, preflights every central-directory entry and local header,
-then requires exactly one `horo-update-files-v1.txt` entry. Its canonical UTF-8
-payload starts with `horo-update-files-v1\n` and contains sorted rows of
-`<path>\t<decimal byte count>\t<sha256:64 lowercase hex digits>\n` for every other regular
-file. The inventory entry is not installed. The reader rejects missing, extra,
+then requires exactly one `horo-update-files-v2.txt` entry. Its canonical UTF-8
+payload starts with `horo-update-files-v2\n` and contains sorted rows of
+`<path>\t<decimal byte count>\t<sha256:64 lowercase hex digits>\t<0644|0755>\t<content|entrypoint>\n`
+for every other regular file. Exactly one nonempty entrypoint is required and it
+must be executable. The inventory entry is not installed. The reader rejects missing, extra,
 duplicate, mismatched, or noncanonical rows before extraction, then compares
-every decompressed file with its declared digest and size. It writes into an
+every decompressed file with its declared digest and size, applies the signed
+permission mode to the staged file, and verifies that mode before publication. It writes into an
 absent sibling directory durably only after checking that the authenticated
 expanded size fits the available capacity with the host's free-space reserve.
 It checks the completed tree again and removes the new tree on failure before
@@ -292,6 +327,28 @@ read against the pre-sign inventory, writes the canonical internal inventory,
 and records the final package digest. Hosts install it explicitly for ZIP
 selections and provide the same archive limits used by staging. Existing
 package backends do not gain ZIP behavior implicitly.
+The v2 inventory and v2 ready marker replace the v1 contract. Producers must
+declare the product entrypoint and executable file paths from the frozen source
+inventory before signing. Existing v1 ZIP and tar.gz packages must be rebuilt
+and re-signed by a v2 producer; the staging reader does not infer an entrypoint
+or silently accept v1 metadata. Callers constructing `ReleasePackageRequest`
+must supply both new fields. The bootstrap host must launch only the authenticated
+entrypoint and must not derive a default path or change mode at launch time.
+`ProbeVerifiedUpdateEntrypoint` provides the shell-free process boundary for a
+trusted host-selected health command. It reauthenticates the package, v2 ready
+marker, and complete staged tree before passing the signed entrypoint path to
+`IExternalProcessRunner` with a bounded lifetime and output budget. The host
+keeps the stage quiescent and owns product-stop and launch-admission coordination;
+the probe alone does not establish that gate or install platform integration.
+The native filesystem exposes OS-held shared product-launch leases and an
+exclusive maintenance gate on the installation's `.product-launch.lock` file.
+An installed product launcher retains a shared lease for its entire process
+lifetime. Bootstrap, repair, uninstall, and update activation retain the
+exclusive gate after requesting product shutdown and before mutating the active
+state. If any launch remains active or races with maintenance, the operation
+fails before publication. This gate is additive to the transaction lock and
+does not terminate processes; launcher integration and a cooperative stop
+channel are required before production composition is complete.
 `PrepareZipUpdateStageHttps` is the blocking host worker operation for ZIP
 updates: it resumes or downloads into the protected private package file, then
 authenticates and extracts that same file before returning a durable ready
@@ -384,12 +441,37 @@ removed. If registration, activation, or the probe fails, the candidate
 pointer and its integration are undone; an uncertain cleanup retains the
 journal and blocks a new install until recovery proves the state. Recovery
 never treats a marker alone as installation authority.
+`CheckBootstrapBuildTarget` rejects packages targeting a different OS or CPU
+than the running installer binary. Native integration hosts additionally probe
+the actual OS and hardware (including emulation), OS version, capacity, and
+permissions before making any changes.
 
-The current authenticated stage reader supports portable ZIP packages. Native
-Windows, macOS, and Linux installer formats require format-specific stage
+The current authenticated stage readers support portable ZIP and Linux tar.gz
+packages. Native Windows, macOS, and Linux installer formats require format-specific stage
 readers and integration hosts with the same verification and rollback
-guarantees. Repair and uninstall use the installation lock and exact owned-file
-inventory; they preserve projects and apply an explicit user-data policy.
+guarantees. `RepairVerifiedInstallation` reauthenticates the active package and
+tree under the installation lock before restoring idempotent integration and
+running a bounded startup probe. `UninstallVerifiedInstallation` first verifies
+the active package and exact inventory, writes a durable removal journal, and
+deactivates the product before asking the platform host to unregister its
+integration and remove that version's owned files. A partial removal stays
+inactive and the same package/inventory can resume it. The host's removal
+contract preserves projects, settings, caches, logs, credentials, and shared
+components; a separate explicit data-removal policy would be required to
+remove any of them. `LinuxPortableBootstrapHost` admits only validated tar.gz
+portable selections at exact immutable version paths. It probes the running
+kernel and hardware architecture, write access, and free transaction space.
+Registration is deliberately empty because tar.gz format policy supports no
+desktop or file-association integration. An executable-host process coordinator
+supplies the product-stop and bounded health operations. During uninstall the
+adapter reauthenticates any remaining package and ready marker, rejects altered
+or undeclared stage entries, and unlinks only signed inventory files and their
+empty parent directories. This additive host needs no migration for ZIP callers.
+Windows, macOS, and system-managed Linux native package readers and hosts remain
+outstanding. The public bootstrap-host
+contract now requires an idempotent `RemoveOwnedVersion` operation; existing
+host implementers must add that operation before adopting this interface. No
+production implementation existed when this contract was added.
 
 ## Rollback
 
@@ -424,6 +506,12 @@ the plan fails instead of deleting either. Otherwise it selects obsolete
 versions by oldest use generation, with package ID as a stable tie-breaker.
 The deletion host must recheck the active and rollback records under the same
 installation lock immediately before removing only the planned owned files.
+`ApplyUpdateRetention` performs that locked recheck, stops installation users,
+and verifies protected versions and the selected obsolete version against its
+signed package inventory. It writes a durable per-version cleanup marker before
+removing any files. A repeated call may resume a marked partial deletion using
+the authenticated package and remaining-file inventory, and removes the package
+last. Unknown files or links stop cleanup without deleting those entries.
 
 User projects, settings, caches, and credentials are not stored inside the
 versioned installation and are not deleted by rollback.
@@ -464,6 +552,25 @@ Migrations are:
 Caches may be discarded and rebuilt instead of migrated. Credentials are never
 migrated by copying raw secret values; only credential references may be
 validated or re-authorized.
+
+`RunUserStateMigration` is a separate application operation invoked after the
+new product process starts and before user-state writers begin. The host supplies
+explicit user-state and cache roots plus one-step, content-addressed schema
+edges for preferences, recent-project records, toolchain profiles, workspace
+state, update records, and disposable cache files. It orders the plan
+deterministically and refuses lexical project escapes, links, duplicate
+destinations, stale source bytes, and unauthorized credential references.
+State transforms retain a durable adjacent source backup before atomically
+publishing replacement bytes. A failed or interrupted transform leaves either
+the original file or that backup for `RestoreUserStateMigrationBackup`; an
+unresolved backup blocks overwriting it. Disposable cache entries are removed
+only from the dedicated cache root and can be rebuilt. This operation does not
+read or mutate project documents, and installation activation never calls it.
+`HoroEditor` composes this application operation at startup before loading
+editor settings or recent projects. Its host adapter supplies the concrete
+legacy-to-version-1 steps for those two files, while the application operation
+owns backups, atomic replacement, and recovery. Other state families require
+their own explicit host adapters before they can enter a migration plan.
 
 ## Compatibility
 

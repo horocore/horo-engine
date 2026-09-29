@@ -258,6 +258,10 @@ namespace Horo::Release {
             return Result<UpdateActivationOutcome>::Failure(lock.ErrorValue());
         if (auto stopped = host.EnsureProductsStopped(paths.root); stopped.HasError())
             return Result<UpdateActivationOutcome>::Failure(stopped.ErrorValue());
+        auto admission = files.TryAcquireProductMaintenance(paths.root);
+        if (admission.HasError())
+            return Result<UpdateActivationOutcome>::Failure(admission.ErrorValue());
+        [[maybe_unused]] ProductLaunchLease maintenance = std::move(admission).Value();
         for (const auto *version : {&request.current, &request.staged}) {
             if (auto verified = VerifyReadyUpdateStage(version->package, version->checkpoint, version->packageFile, version->stageRoot,
                                                        version->inventory, request.archiveLimits, verifier);
