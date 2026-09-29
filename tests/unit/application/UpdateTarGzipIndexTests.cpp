@@ -438,12 +438,12 @@ TEST_CASE("Linux portable install, failed update, rollback, repair, and uninstal
     REQUIRE(oldPointer.HasValue());
     REQUIRE(newPointer.HasValue());
     const UpdateActivationRequest update{temporary.path, oldVersion, newVersion, Limits, std::chrono::seconds{2}};
-    processes.healthy = false;
-    CHECK(ActivateVerifiedUpdate(update, files, verifier, host).HasError());
+    ProcessBridge failingProcesses;
+    LinuxPortableBootstrapHost failingHost(files, verifier, failingProcesses, {});
+    CHECK(ActivateVerifiedUpdate(update, files, verifier, failingHost).HasError());
     CHECK(ReadFile(temporary.path / "active-version") == oldPointer.Value());
     CHECK_FALSE(std::filesystem::exists(temporary.path / "activation.pending"));
 
-    processes.healthy = true;
     REQUIRE(ActivateVerifiedUpdate(update, files, verifier, host).HasValue());
     CHECK(ReadFile(temporary.path / "active-version") == newPointer.Value());
     CHECK(ReadFile(temporary.path / "last-known-good-version") == oldPointer.Value());
