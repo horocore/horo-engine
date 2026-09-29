@@ -1858,6 +1858,31 @@ per-platform profiles for editor preview and packaged games. The same page
 defaults mute-on-minimize on most desktop hosts, pause-gameplay-buses for
 mobile focus loss, and continue-everything for dedicated audio preview windows.
 
+## Typed Failure And Recovery Boundary
+
+`HoroAudioApi` publishes an additive `AudioFailureRecovery` control-side contract.
+It classifies exact declared `horo.audio` codes from assets, codecs, streams,
+queues, voices, mixer candidates, devices, providers, middleware and memory into
+an affected-operation state, a proposed control/host action, and an active-epoch
+disposition. Existing `Result` callers do not change; adapters that need recovery
+policy can adopt the classifier without parsing messages. Foreign or undeclared
+codes fail closed to host policy with retained callback-visible ownership.
+
+Classification is a pure value operation, never an executor. The control caller
+must identify whether a request/candidate or the active epoch failed; even a
+candidate device/backend failure preserves the active epoch. Request and candidate
+failures preserve the active mixer and voice state. Stream underrun may
+render only admitted silence while control refills; ordinary queue saturation
+retains the producer's request and cannot consume the critical reserve. Device
+loss closes device-dependent admission and enters ADR-062 recovery through a
+quiescence barrier. A callback fault always enters the fatal retained-epoch path,
+regardless of the enclosed code. Control reconciles operations and proves native
+detachment before releasing state; the process host alone chooses product-level
+fallback or termination. Optional provider policy is never inferred from an error
+code, and no middleware fallback is automatic. Codes reserved for not-yet-built
+stream, graph, provider and middleware producers define stable output identities,
+not evidence that those producers or recovery executors are implemented.
+
 ## Metrics
 
 [AUD-010](https://github.com/HoroCore/horo-engine/issues/626) delivers the
