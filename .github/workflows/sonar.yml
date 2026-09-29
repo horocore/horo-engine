@@ -170,6 +170,7 @@ jobs:
             --filter "$GITHUB_WORKSPACE/apps/common" \
             --filter "$GITHUB_WORKSPACE/apps/horo-engine" \
             --filter "$GITHUB_WORKSPACE/apps/horo-package" \
+            --filter "$GITHUB_WORKSPACE/apps/HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp" \
             --filter "$GITHUB_WORKSPACE/apps/HoroEditor/app/EditorUserStateMigration.cpp" \
             --filter "$GITHUB_WORKSPACE/apps/HoroEditor/app/ConfiguredEditorUpdateBackend.cpp" \
             --exclude-throw-branches \

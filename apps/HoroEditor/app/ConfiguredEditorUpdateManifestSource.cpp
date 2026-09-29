@@ -7,6 +7,7 @@
 #include <curl/curl.h>
 #include <limits>
 #include <memory>
+#include <string_view>
 #include <utility>
 
 namespace Horo::Editor {
@@ -16,9 +17,9 @@ namespace Horo::Editor {
         constexpr std::size_t MaximumEndpoints = 16U;
 
         /** @brief An endpoint is a literal HTTPS URL with no userinfo, fragment, or bearer query. */
-        [[nodiscard]] bool ValidEndpoint(const std::string &url) {
+        [[nodiscard]] bool ValidEndpoint(const std::string_view url) {
             return url.starts_with("https://") && url.size() <= MaximumEndpointBytes && url.size() > 8U &&
-                   std::none_of(url.begin(), url.end(), [](const unsigned char value) {
+                   std::ranges::none_of(url, [](const unsigned char value) {
                 return value <= 0x20U || value == 0x7fU || value == '@' || value == '#' || value == '?';
             });
         }
@@ -27,16 +28,17 @@ namespace Horo::Editor {
         [[nodiscard]] bool ValidSelection(const EditorUpdateManifestEndpoint &endpoint) {
             if (!Release::IsValidDistributionIdentity(endpoint.signedChannel) || !ValidEndpoint(endpoint.url))
                 return false;
+            using enum EditorUpdateChannelKind;
             switch (endpoint.selection.kind) {
-                case EditorUpdateChannelKind::Stable:
+                case Stable:
                     return endpoint.selection.sourceId.empty() && endpoint.signedChannel == "stable";
-                case EditorUpdateChannelKind::Preview:
+                case Preview:
                     return endpoint.selection.sourceId.empty() && endpoint.signedChannel == "preview";
-                case EditorUpdateChannelKind::Nightly:
+                case Nightly:
                     return endpoint.selection.sourceId.empty() && endpoint.signedChannel == "nightly";
-                case EditorUpdateChannelKind::Enterprise:
+                case Enterprise:
                     return Release::IsValidDistributionIdentity(endpoint.selection.sourceId);
-                case EditorUpdateChannelKind::Offline:
+                case Offline:
                     return false;
             }
             return false;
@@ -49,33 +51,44 @@ namespace Horo::Editor {
             bool oversized{};
         };
 
-        std::size_t ReceiveBody(char *data, const std::size_t size, const std::size_t count, void *userData) noexcept {
-            auto *response = static_cast<ManifestResponse *>(userData);
-            if (response == nullptr || size == 0U || count > std::numeric_limits<std::size_t>::max() / size)
+        std::size_t ReceiveBody(const char *data, const std::size_t size, const std::size_t count, ManifestResponse &response) noexcept {
+            if (size == 0U || count > std::numeric_limits<std::size_t>::max() / size)
                 return 0U;
             const std::size_t bytes = size * count;
-            if (bytes > MaximumManifestBytes - response->body.size()) {
-                response->oversized = true;
+            if (bytes > MaximumManifestBytes - response.body.size()) {
+                response.oversized = true;
                 return 0U;
             }
             try {
-                response->body.append(data, bytes);
+                response.body.append(data, bytes);
             } catch (...) {
                 return 0U;
             }
             return bytes;
         }
 
-        int ReportTransfer(void *userData, curl_off_t, curl_off_t, curl_off_t, curl_off_t) noexcept {
-            const auto *response = static_cast<const ManifestResponse *>(userData);
-            return response != nullptr && response->cancellation.IsCancellationRequested() ? 1 : 0;
+        int ReportTransfer(const ManifestResponse &response) noexcept {
+            return response.cancellation.IsCancellationRequested() ? 1 : 0;
         }
+
+        // The C callbacks have libcurl's fixed signature; keep the request logic typed.
+        constexpr curl_write_callback ReceiveBodyCallback = [](auto *data, const std::size_t size, const std::size_t count,
+                                                               auto *context) noexcept -> std::size_t {
+            auto *response = static_cast<ManifestResponse *>(context);
+            return response == nullptr ? 0U : ReceiveBody(data, size, count, *response);
+        };
+        constexpr curl_xferinfo_callback ReportTransferCallback = [](auto *context, curl_off_t, curl_off_t, curl_off_t,
+                                                                     curl_off_t) noexcept -> int {
+            const auto *response = static_cast<const ManifestResponse *>(context);
+            return response == nullptr ? 0 : ReportTransfer(*response);
+        };
 
         /** @brief Configures the exact endpoint with verified TLS and no redirect or ambient credentials. */
         [[nodiscard]] bool Configure(CURL *curl, const std::string &url, const EditorUpdateManifestHttpPolicy &policy,
                                      ManifestResponse &response) {
-            return curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) == CURLE_OK &&
+            if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
+                return false;
+            return curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_USERAGENT, "horo-update/1") == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https") == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https") == CURLE_OK &&
@@ -87,10 +100,10 @@ namespace Horo::Editor {
                    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, static_cast<long>(policy.connectTimeoutSeconds)) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(policy.requestTimeoutSeconds)) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, ReceiveBody) == CURLE_OK &&
+                   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, ReceiveBodyCallback) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ReportTransfer) == CURLE_OK &&
+                   curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ReportTransferCallback) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &response) == CURLE_OK;
         }
     }  // namespace
@@ -111,9 +124,9 @@ namespace Horo::Editor {
         ManifestResponse response{{}, cancellation};
         if (!Configure(curl.get(), url, policy, response))
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
-        // libcurl borrows CAINFO until curl_easy_perform completes.
-        const std::string caBundle = policy.certificateAuthorityBundle.string();
-        if (!caBundle.empty() && curl_easy_setopt(curl.get(), CURLOPT_CAINFO, caBundle.c_str()) != CURLE_OK)
+        // libcurl copies CAINFO when the option is set.
+        if (const std::string caBundle = policy.certificateAuthorityBundle.string();
+            !caBundle.empty() && curl_easy_setopt(curl.get(), CURLOPT_CAINFO, caBundle.c_str()) != CURLE_OK)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         const CURLcode outcome = curl_easy_perform(curl.get());
         if (response.oversized)
@@ -147,7 +160,7 @@ namespace Horo::Editor {
         for (const auto &endpoint : endpoints_) {
             if (!ValidSelection(endpoint))
                 return Result<EditorUpdateMetadata>::Failure(MakeError(Release::UpdateDiscoveryErrors::InvalidPolicy));
-            if (std::count_if(endpoints_.begin(), endpoints_.end(), [&](const auto &other) {
+            if (std::ranges::count_if(endpoints_, [&](const auto &other) {
                 return other.selection == endpoint.selection;
             }) != 1)
                 return Result<EditorUpdateMetadata>::Failure(MakeError(Release::UpdateDiscoveryErrors::InvalidPolicy));
