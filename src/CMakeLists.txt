@@ -739,6 +739,8 @@ target_link_libraries(HoroAudioApi PUBLIC HoroEngine::Foundation HoroEngine::Ass
 
 add_library(HoroAudioImport STATIC
         audio/import/AudioSourceImporter.cpp
+        audio/import/AudioSourceAnalysis.cpp
+        audio/import/AudioSourceAnalysis.h
         audio/import/AudioSourceProbeDetail.inl
 )
 add_library(HoroEngine::AudioImport ALIAS HoroAudioImport)

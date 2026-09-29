@@ -92,6 +92,52 @@ namespace Horo::Audio {
             return true;
         }
 
+        [[nodiscard]] bool ReadWaveformPoint(Reader &reader, AudioWaveformPoint &point, const std::uint64_t nextFrame,
+                                             const std::uint64_t frameCount, const std::uint64_t windowFrames, const bool finalPoint) {
+            if (!reader.U64(point.firstFrame) || !reader.U32(point.frameCount) || !reader.Float(point.minimum) ||
+                !reader.Float(point.maximum) || point.firstFrame != nextFrame || nextFrame > frameCount || point.frameCount == 0 ||
+                point.frameCount > windowFrames || point.frameCount > frameCount - nextFrame || point.minimum > point.maximum)
+                return false;
+            return finalPoint || point.frameCount == windowFrames;
+        }
+
+        [[nodiscard]] bool ReadWaveformLevel(Reader &reader, AudioWaveformLevel &level, const AudioWaveformLevel *previous,
+                                             const std::uint64_t frameCount, std::uint64_t &pointCountTotal, AudioSample &waveformPeak) {
+            std::uint32_t pointCount{};
+            if (!reader.U64(level.windowFrames) || level.windowFrames == 0 || !reader.U32(pointCount) || pointCount == 0 ||
+                pointCount > 524'288 || pointCountTotal + pointCount > 1'048'576 || pointCount > reader.Remaining() / 20U)
+                return false;
+            pointCountTotal += pointCount;
+            if (!previous &&
+                (level.windowFrames > std::numeric_limits<std::uint32_t>::max() || pointCount != 1 + (frameCount - 1) / level.windowFrames))
+                return false;
+            if (previous && (previous->windowFrames > std::numeric_limits<std::uint64_t>::max() / 2 ||
+                             level.windowFrames != previous->windowFrames * 2 || pointCount != (previous->points.size() + 1) / 2))
+                return false;
+            level.points.reserve(pointCount);
+            std::uint64_t nextFrame{};
+            for (std::uint32_t pointIndex = 0; pointIndex < pointCount; ++pointIndex) {
+                AudioWaveformPoint point;
+                if (!ReadWaveformPoint(reader, point, nextFrame, frameCount, level.windowFrames, pointIndex + 1 == pointCount))
+                    return false;
+                nextFrame += point.frameCount;
+                if (!previous) {
+                    waveformPeak = std::max({waveformPeak, std::abs(point.minimum), std::abs(point.maximum)});
+                } else {
+                    const auto &first = previous->points[static_cast<std::size_t>(pointIndex) * 2];
+                    const auto &second =
+                        previous->points[std::min<std::size_t>(static_cast<std::size_t>(pointIndex) * 2 + 1, previous->points.size() - 1)];
+                    const auto expectedFrames = first.frameCount + (pointIndex * 2 + 1 < previous->points.size() ? second.frameCount : 0);
+                    if (point.firstFrame != first.firstFrame || point.frameCount != expectedFrames ||
+                        point.minimum != std::min(first.minimum, second.minimum) ||
+                        point.maximum != std::max(first.maximum, second.maximum))
+                        return false;
+                }
+                level.points.push_back(point);
+            }
+            return nextFrame == frameCount;
+        }
+
         [[nodiscard]] bool ReadAnalysis(Reader &reader, AudioCookManifest &manifest) {
             if (manifest.frameCount == 0 || manifest.payloadByteCount == 0)
                 return false;
@@ -122,48 +168,8 @@ namespace Horo::Audio {
             AudioSample waveformPeak{};
             for (std::uint32_t levelIndex = 0; levelIndex < levelCount; ++levelIndex) {
                 AudioWaveformLevel level;
-                std::uint32_t pointCount{};
-                if (!analysis.U64(level.windowFrames) || level.windowFrames == 0 || !analysis.U32(pointCount) || pointCount == 0 ||
-                    pointCount > 524'288 || pointCountTotal + pointCount > 1'048'576 || pointCount > analysis.Remaining() / 20U)
-                    return false;
-                pointCountTotal += pointCount;
-                if (levelIndex == 0 && (level.windowFrames > std::numeric_limits<std::uint32_t>::max() ||
-                                        pointCount != 1 + (manifest.frameCount - 1) / level.windowFrames))
-                    return false;
-                if (levelIndex != 0) {
-                    const auto &previous = result.waveformLevels.back();
-                    if (previous.windowFrames > std::numeric_limits<std::uint64_t>::max() / 2 ||
-                        level.windowFrames != previous.windowFrames * 2 || pointCount != (previous.points.size() + 1) / 2)
-                        return false;
-                }
-                level.points.reserve(pointCount);
-                std::uint64_t nextFrame{};
-                for (std::uint32_t pointIndex = 0; pointIndex < pointCount; ++pointIndex) {
-                    AudioWaveformPoint point;
-                    if (!analysis.U64(point.firstFrame) || !analysis.U32(point.frameCount) || !analysis.Float(point.minimum) ||
-                        !analysis.Float(point.maximum) || point.firstFrame != nextFrame || nextFrame > manifest.frameCount ||
-                        point.frameCount == 0 || point.frameCount > level.windowFrames ||
-                        point.frameCount > manifest.frameCount - nextFrame || point.minimum > point.maximum)
-                        return false;
-                    if (pointIndex + 1 < pointCount && point.frameCount != level.windowFrames)
-                        return false;
-                    nextFrame += point.frameCount;
-                    if (levelIndex == 0) {
-                        waveformPeak = std::max({waveformPeak, std::abs(point.minimum), std::abs(point.maximum)});
-                    } else {
-                        const auto &previous = result.waveformLevels.back().points;
-                        const auto &first = previous[static_cast<std::size_t>(pointIndex) * 2];
-                        const auto &second =
-                            previous[std::min<std::size_t>(static_cast<std::size_t>(pointIndex) * 2 + 1, previous.size() - 1)];
-                        const auto expectedFrames = first.frameCount + (pointIndex * 2 + 1 < previous.size() ? second.frameCount : 0);
-                        if (point.firstFrame != first.firstFrame || point.frameCount != expectedFrames ||
-                            point.minimum != std::min(first.minimum, second.minimum) ||
-                            point.maximum != std::max(first.maximum, second.maximum))
-                            return false;
-                    }
-                    level.points.push_back(point);
-                }
-                if (nextFrame != manifest.frameCount)
+                const auto *previous = result.waveformLevels.empty() ? nullptr : &result.waveformLevels.back();
+                if (!ReadWaveformLevel(analysis, level, previous, manifest.frameCount, pointCountTotal, waveformPeak))
                     return false;
                 result.waveformLevels.push_back(std::move(level));
             }
