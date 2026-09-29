@@ -231,10 +231,9 @@ namespace Horo {
             if (handle != INVALID_HANDLE_VALUE)
                 CloseHandle(handle);
 #else
-            if (descriptor >= 0) {
-                static_cast<void>(flock(descriptor, LOCK_UN));
+            // A forked or duplicated descriptor shares this flock; only the last close may release it.
+            if (descriptor >= 0)
                 close(descriptor);
-            }
 #endif
         }
     };
