@@ -900,6 +900,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsShapeDescriptor.cpp
         physics/PhysicsStepPolicy.cpp
         physics/PhysicsTransformAuthority.cpp
+        physics/PhysicsTransformContracts.cpp
         physics/PhysicsWorld.cpp
         physics/PhysicsQueryEventCapability.cpp
         physics/PhysicsWorldInternal.h
