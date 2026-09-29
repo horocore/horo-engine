@@ -89,7 +89,8 @@ namespace Horo::Release {
         [[nodiscard]] bool NativeOsAtLeast(const ZipPortableBootstrapPolicy policy) {
             char version[64]{};
             std::size_t size = sizeof(version);
-            if (sysctlbyname("kern.osproductversion", version, &size, nullptr, 0) != 0 || size == 0U || size > sizeof(version))
+            if (sysctlbyname("kern.osproductversion", version, &size, nullptr, 0) != 0 || size == 0U || size > sizeof(version) ||
+                version[size - 1U] != '\0')
                 return false;
             const std::string_view text{version, size - 1U};
             const auto majorEnd = text.find('.');
@@ -98,8 +99,8 @@ namespace Horo::Release {
             const auto minorEnd = text.find('.', majorEnd + 1U);
             unsigned major{};
             unsigned minor{};
-            if (!ParseVersionComponent(text.substr(0U, majorEnd), major) ||
-                !ParseVersionComponent(text.substr(majorEnd + 1U, minorEnd - majorEnd - 1U), minor))
+            const auto minorText = text.substr(majorEnd + 1U, minorEnd == std::string_view::npos ? minorEnd : minorEnd - majorEnd - 1U);
+            if (!ParseVersionComponent(text.substr(0U, majorEnd), major) || !ParseVersionComponent(minorText, minor))
                 return false;
             return major > policy.minimumOsMajor || (major == policy.minimumOsMajor && minor >= policy.minimumOsMinor);
         }
