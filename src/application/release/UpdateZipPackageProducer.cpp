@@ -9,6 +9,7 @@
 #include <fstream>
 #include <limits>
 #include <miniz.h>
+#include <set>
 #include <system_error>
 #include <vector>
 
@@ -93,6 +94,27 @@ namespace Horo::Release {
             return Result<ReleasePackageResult>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
         }
 
+        /** @brief Binds explicit executable intent to the frozen source inventory before signing. */
+        [[nodiscard]] Result<std::string> ProductInventory(const ReleasePackageRequest &request, const UpdateArchiveLimits &limits) {
+            const auto invalid = [] {
+                return Result<std::string>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+            };
+            const std::set<std::string, std::less<>> executables(request.executablePaths.begin(), request.executablePaths.end());
+            if (request.productEntrypoint.empty() || !executables.contains(request.productEntrypoint) ||
+                executables.size() != request.executablePaths.size())
+                return invalid();
+            std::size_t declaredExecutables = 0U;
+            std::vector<UpdateStagedFile> files;
+            files.reserve(request.sourceInventory.Artifacts().size());
+            for (const auto &file : request.sourceInventory.Artifacts()) {
+                const bool executable = executables.contains(file.path);
+                declaredExecutables += executable ? 1U : 0U;
+                files.emplace_back(file.path, file.size, file.digest, executable ? UpdateFileMode::Executable : UpdateFileMode::Regular,
+                                   file.path == request.productEntrypoint ? UpdateFileRole::Entrypoint : UpdateFileRole::Content);
+            }
+            return declaredExecutables == executables.size() ? BuildCanonicalUpdateFileInventory(files, limits) : invalid();
+        }
+
         /** @brief Adds one verified file with stable ZIP metadata. */
         [[nodiscard]] bool AddSourceFile(mz_zip_archive &archive, const ReleasePackageRequest &request, const ReleaseArtifactRecord &file) {
             SourceReader reader{.input = std::ifstream(request.sourceRoot / file.path, std::ios::binary), .expectedSize = file.size};
@@ -132,11 +154,7 @@ namespace Horo::Release {
             outputStatus.type() != std::filesystem::file_type::not_found || (error && error != std::errc::no_such_file_or_directory))
             return InvalidPackage();
 
-        std::vector<UpdateStagedFile> files;
-        files.reserve(request.sourceInventory.Artifacts().size());
-        for (const auto &file : request.sourceInventory.Artifacts())
-            files.emplace_back(file.path, file.size, file.digest);
-        auto inventory = BuildCanonicalUpdateFileInventory(files, limits_);
+        auto inventory = ProductInventory(request, limits_);
         if (inventory.HasError())
             return Result<ReleasePackageResult>::Failure(inventory.ErrorValue());
 

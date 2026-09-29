@@ -9,6 +9,7 @@
 
 #include <filesystem>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace Horo::Release {
@@ -18,6 +19,8 @@ namespace Horo::Release {
         const ReleasePreSignInventory &sourceInventory;
         std::filesystem::path sourceRoot;
         std::filesystem::path privateOutputRoot;
+        std::string productEntrypoint;            /**< Signed relative path launched by the bootstrap host. */
+        std::vector<std::string> executablePaths; /**< Signed relative paths installed with executable permission. */
     };
 
     /** @brief Produced file evidence, in canonical relative-path order. */

@@ -31,6 +31,22 @@ The host closes the binding before world replacement. No native Physics or
 profiler backend type enters the public contract. The generated Physics
 public-header consumer compiles the new header through its owning target.
 
+## RUI-012.3 Template Dependency Boundary
+
+`HoroEngine::UiTemplateGraph` owns the additive
+`Horo/UiTemplates/UiTemplateDependencyGraph.h` and `UiTemplateErrors.h` contracts.
+This load-time authoring/cook target depends on Foundation, Assets and Packages
+for stable template asset IDs, semantic digests, and pinned package identities/
+versions. `HoroEngine::RuntimeUi` retains its Foundation/Assets-only dependency
+direction and gains no template authority. Existing UI document and runtime
+callers need no migration. Authoring/cook callers explicitly link the new target,
+prepare an immutable, verified catalog and package lock, then resolve exact
+accepted template revisions at load time.
+The resolver neither selects packages nor loads assets; it returns a detached
+dependency closure and rejects missing, stale, cyclic or incompatible inputs.
+The generated `HoroUiTemplateGraphPublicHeaderConsumer` target checks the
+staged public-header boundary independently of repository-wide include paths.
+
 ## NET-002.7 Inbound Dispatch Boundary
 
 `HoroEngine::NetworkRuntime` owns the additive
@@ -1196,3 +1212,13 @@ type. Existing callers require no signature migration. Application roots supply
 exact concrete participant factories and retain their code and resources through
 composition shutdown. `HoroNetworkModePublicHeaderConsumer`, the runtime mode
 tests, and the concrete headless host integration consumer cover this boundary.
+
+## AUD-002.7 Runtime Stream Decoder Header Boundary
+
+`HoroEngine::AudioApi` solely owns the additive public
+`Horo/Audio/AudioStreamDecoder.h` and `AudioStreamDecoderErrors.h` contracts.
+Existing import-decoder callers have no signature migration: runtime workers opt
+into the separate session and supply caller-owned output/scratch and an owned
+provider context. No codec-specific or native backend type crosses the public
+boundary. The generated `HoroAudioApiPublicHeaderConsumer` and focused
+`HoroAudioApiTests` cover the new headers and lifecycle contract.

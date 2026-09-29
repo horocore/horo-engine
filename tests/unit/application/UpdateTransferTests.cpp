@@ -32,10 +32,14 @@ namespace {
         std::filesystem::path path;
     };
 
-    void WriteStageFile(const std::filesystem::path &path, const std::string_view bytes) {
+    void WriteStageFile(const std::filesystem::path &path, const std::string_view bytes, const bool executable = false) {
         std::filesystem::create_directories(path.parent_path());
         std::ofstream output(path, std::ios::binary);
         output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        output.close();
+#if !defined(_WIN32)
+        std::filesystem::permissions(path, executable ? std::filesystem::perms{0755} : std::filesystem::perms{0644});
+#endif
     }
 
     class AcceptingProvider final : public Horo::Security::SignatureProvider {
@@ -263,16 +267,22 @@ TEST_CASE("Update staging verifies exact file bytes and rejects undeclared tree 
     TemporaryStage stage;
     constexpr std::string_view executable = "editor bytes";
     constexpr std::string_view notes = "release notes";
-    WriteStageFile(stage.path / "bin/editor", executable);
+    WriteStageFile(stage.path / "bin/editor", executable, true);
     WriteStageFile(stage.path / "docs/notes.txt", notes);
-    const std::array files{UpdateStagedFile{"bin/editor", executable.size(), Horo::ComputeSha256(std::as_bytes(std::span{executable}))},
+    const std::array files{UpdateStagedFile{"bin/editor", executable.size(), Horo::ComputeSha256(std::as_bytes(std::span{executable})),
+                                            UpdateFileMode::Executable, UpdateFileRole::Entrypoint},
                            UpdateStagedFile{"docs/notes.txt", notes.size(), Horo::ComputeSha256(std::as_bytes(std::span{notes}))}};
     constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 32U, .maximumExpandedBytes = 64U};
     REQUIRE(VerifyUpdateStagedTree(stage.path, files, limits).HasValue());
+#if !defined(_WIN32)
+    std::filesystem::permissions(stage.path / "bin/editor", std::filesystem::perms{0644});
+    CHECK(VerifyUpdateStagedTree(stage.path, files, limits).HasError());
+    std::filesystem::permissions(stage.path / "bin/editor", std::filesystem::perms{0755});
+#endif
 
     WriteStageFile(stage.path / "bin/editor", "wrong bytes");
     CHECK(VerifyUpdateStagedTree(stage.path, files, limits).HasError());
-    WriteStageFile(stage.path / "bin/editor", executable);
+    WriteStageFile(stage.path / "bin/editor", executable, true);
     WriteStageFile(stage.path / "extra.txt", "undeclared");
     CHECK(VerifyUpdateStagedTree(stage.path, files, limits).HasError());
     std::filesystem::remove(stage.path / "extra.txt");
@@ -283,8 +293,9 @@ TEST_CASE("Update staging verifies exact file bytes and rejects undeclared tree 
 TEST_CASE("Update staging rejects missing, linked, and oversized content", "[release][update]") {
     TemporaryStage stage;
     constexpr std::string_view bytes = "editor bytes";
-    WriteStageFile(stage.path / "bin/editor", bytes);
-    const std::array files{UpdateStagedFile{"bin/editor", bytes.size(), Horo::ComputeSha256(std::as_bytes(std::span{bytes}))}};
+    WriteStageFile(stage.path / "bin/editor", bytes, true);
+    const std::array files{UpdateStagedFile{"bin/editor", bytes.size(), Horo::ComputeSha256(std::as_bytes(std::span{bytes})),
+                                            UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
     constexpr UpdateArchiveLimits limits{.maximumEntries = 2U, .maximumFileBytes = 32U, .maximumExpandedBytes = 32U};
     REQUIRE(VerifyUpdateStagedTree(stage.path, files, limits).HasValue());
     CHECK(
@@ -306,7 +317,8 @@ TEST_CASE("Update staging rejects hard links to files outside the private tree",
     std::error_code linkError;
     std::filesystem::create_hard_link(outside, stage.path / "bin/editor", linkError);
     if (!linkError) {
-        const std::array files{UpdateStagedFile{"bin/editor", bytes.size(), Horo::ComputeSha256(std::as_bytes(std::span{bytes}))}};
+        const std::array files{UpdateStagedFile{"bin/editor", bytes.size(), Horo::ComputeSha256(std::as_bytes(std::span{bytes})),
+                                                UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
         constexpr UpdateArchiveLimits limits{.maximumEntries = 2U, .maximumFileBytes = 32U, .maximumExpandedBytes = 32U};
         CHECK(VerifyUpdateStagedTree(stage.path, files, limits).HasError());
     }
@@ -318,12 +330,25 @@ TEST_CASE("Update file inventory builder sorts paths and reserves its own archiv
     constexpr std::string_view second = "bb";
     const auto firstDigest = Horo::ComputeSha256(std::as_bytes(std::span{first}));
     const auto secondDigest = Horo::ComputeSha256(std::as_bytes(std::span{second}));
-    const std::array files{UpdateStagedFile{"bin/b", second.size(), secondDigest}, UpdateStagedFile{"bin/a", first.size(), firstDigest}};
+    const std::array files{UpdateStagedFile{"bin/b", second.size(), secondDigest},
+                           UpdateStagedFile{"bin/a", first.size(), firstDigest, UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
     constexpr UpdateArchiveLimits limits{.maximumEntries = 3U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
     auto built = BuildCanonicalUpdateFileInventory(files, limits);
     REQUIRE(built.HasValue());
-    CHECK(built.Value() == std::string{UpdateFileInventoryHeader} + "bin/a\t1\t" + Horo::FormatSha256(firstDigest) + '\n' + "bin/b\t2\t" +
-                               Horo::FormatSha256(secondDigest) + '\n');
+    CHECK(built.Value() == std::string{UpdateFileInventoryHeader} + "bin/a\t1\t" + Horo::FormatSha256(firstDigest) +
+                               "\t0755\tentrypoint\n" + "bin/b\t2\t" + Horo::FormatSha256(secondDigest) + "\t0644\tcontent\n");
+    auto parsed = ParseCanonicalUpdateFileInventory(built.Value(), limits);
+    REQUIRE(parsed.HasValue());
+    REQUIRE(parsed.Value().size() == 2U);
+    CHECK(parsed.Value().front().role == UpdateFileRole::Entrypoint);
+    CHECK(parsed.Value().front().mode == UpdateFileMode::Executable);
+    CHECK(ParseCanonicalUpdateFileInventory("horo-update-files-v1\n", limits).HasError());
+    auto altered = built.Value();
+    altered.replace(altered.find("\t0755\tentrypoint"), std::string{"\t0755\tentrypoint"}.size(), "\t0644\tentrypoint");
+    CHECK(ParseCanonicalUpdateFileInventory(altered, limits).HasError());
+    altered = built.Value();
+    altered.replace(altered.find("\t0644\tcontent"), std::string{"\t0644\tcontent"}.size(), "\t0755\tentrypoint");
+    CHECK(ParseCanonicalUpdateFileInventory(altered, limits).HasError());
     CHECK(BuildCanonicalUpdateFileInventory(files, {.maximumEntries = 2U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U})
               .HasError());
     const std::array reserved{UpdateStagedFile{std::string{UpdateFileInventoryPath}, 1U, firstDigest}};

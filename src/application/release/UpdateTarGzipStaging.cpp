@@ -196,6 +196,10 @@ namespace Horo::Release {
             return left.path == right.path && left.kind == right.kind && left.expandedBytes == right.expandedBytes;
         }))
             return invalid();
+        for (const auto &file : inventory.Value()) {
+            if (auto mode = Detail::ApplyAuthenticatedFileMode(stageRoot / std::filesystem::path(file.path), file.mode); mode.HasError())
+                return Result<std::filesystem::path>::Failure(mode.ErrorValue());
+        }
         if (auto synced = Detail::SyncStageDirectories(stageRoot, files); synced.HasError())
             return Result<std::filesystem::path>::Failure(synced.ErrorValue());
         auto published = PublishVerifiedUpdateStage({package, checkpoint, packageFile, stageRoot, inventory.Value(), limits}, files,

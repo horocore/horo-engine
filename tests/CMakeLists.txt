@@ -361,12 +361,14 @@ add_executable(HoroAudioApiTests
         unit/runtime/audio/AudioAssetSchemaTests.cpp
         unit/runtime/audio/MixerAssetSchemaTests.cpp
         unit/runtime/audio/AudioSoundReferenceTests.cpp
+        unit/runtime/audio/AudioStreamDecoderTests.cpp
         unit/runtime/audio/AudioBackendCapabilitiesTests.cpp
         unit/runtime/audio/AudioCallbackEventsTests.cpp
         unit/runtime/audio/AudioDeviceDiscoveryTests.cpp
         unit/runtime/audio/AudioDeviceNegotiationTests.cpp
         unit/runtime/audio/AudioDeviceTimingTests.cpp
         unit/runtime/audio/AudioFormatTests.cpp
+        unit/runtime/audio/AudioFailureRecoveryTests.cpp
         unit/runtime/audio/AudioMediaFormatRegistryTests.cpp
         unit/runtime/audio/AudioIdentityTests.cpp
         unit/runtime/audio/AudioResamplerPlanTests.cpp
@@ -1151,7 +1153,8 @@ target_compile_features(HoroUpdateOfflineSourceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateOfflineSourceTests PRIVATE HoroEngine::UpdateOfflineSource HoroEngine::UpdateActivation miniz)
 horo_register_catch_test(HoroUpdateOfflineSourceTests LABELS "release;update;headless")
 
-add_executable(HoroUpdateActivationTests unit/application/UpdateActivationTests.cpp unit/application/UpdateRetentionTests.cpp)
+add_executable(HoroUpdateActivationTests unit/application/UpdateActivationTests.cpp unit/application/UpdateRetentionTests.cpp
+        unit/application/UpdateProductProcessTests.cpp)
 target_compile_features(HoroUpdateActivationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateActivationTests PRIVATE HoroEngine::UpdateActivation miniz)
 horo_register_catch_test(HoroUpdateActivationTests LABELS "release;update;headless")
@@ -2010,6 +2013,10 @@ add_executable(HoroRuntimeUiDocumentTests
 )
 target_compile_features(HoroRuntimeUiDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiDocumentTests PRIVATE HoroEngine::RuntimeUi nlohmann_json::nlohmann_json)
+add_executable(HoroUiTemplateGraphTests unit/ui_templates/UiTemplateDependencyGraphTests.cpp)
+target_compile_features(HoroUiTemplateGraphTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUiTemplateGraphTests PRIVATE HoroEngine::UiTemplateGraph)
+horo_register_catch_test(HoroUiTemplateGraphTests LABELS "unit;runtime_ui;template;headless")
 add_executable(HoroRuntimeUiLocalizationTests
         unit/runtime/ui/UiLocalizationTests.cpp
 )
