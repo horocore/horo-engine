@@ -202,12 +202,13 @@ namespace Horo::Release {
         }
 
         /** @brief Checks common stopped-product and transaction prerequisites after the caller holds the installation lock. */
-        [[nodiscard]] Result<void> ReadyForMaintenance(const InstallPaths &paths, IBootstrapInstallationHost &host) {
+        [[nodiscard]] Result<ProductLaunchLease> ReadyForMaintenance(const InstallPaths &paths, IBootstrapInstallationHost &host,
+                                                                     NativeDurableFileSystem &files) {
             if (auto stopped = host.EnsureProductsStopped(paths.root); stopped.HasError())
-                return stopped;
+                return Result<ProductLaunchLease>::Failure(stopped.ErrorValue());
             if (auto clear = NoOtherTransition(paths); clear.HasError())
-                return clear;
-            return Result<void>::Success();
+                return Result<ProductLaunchLease>::Failure(clear.ErrorValue());
+            return files.TryAcquireProductMaintenance(paths.root);
         }
 
         /** @brief Completes a resumed uninstall only after its journal and active pointer match the candidate. */
@@ -263,6 +264,7 @@ namespace Horo::Release {
         auto admission = files.TryAcquireProductMaintenance(paths.root);
         if (admission.HasError())
             return Result<BootstrapInstallationOutcome>::Failure(admission.ErrorValue());
+        [[maybe_unused]] ProductLaunchLease maintenance = std::move(admission).Value();
         if (auto verified =
                 VerifyReadyUpdateStage(request.candidate.package, request.candidate.checkpoint, request.candidate.packageFile,
                                        request.candidate.stageRoot, request.candidate.inventory, request.archiveLimits, verifier);
@@ -319,11 +321,10 @@ namespace Horo::Release {
         auto lock = files.TryAcquireExclusive(paths.lock, "horo-bootstrap-repair");
         if (lock.HasError())
             return Result<void>::Failure(lock.ErrorValue());
-        if (auto ready = ReadyForMaintenance(paths, host); ready.HasError())
-            return ready;
-        auto admission = files.TryAcquireProductMaintenance(paths.root);
+        auto admission = ReadyForMaintenance(paths, host, files);
         if (admission.HasError())
             return Result<void>::Failure(admission.ErrorValue());
+        [[maybe_unused]] ProductLaunchLease maintenance = std::move(admission).Value();
         if (auto uninstallPending = Exists(paths.uninstallPending); uninstallPending.HasError() || uninstallPending.Value())
             return Result<void>::Failure(MakeError(BootstrapInstallationErrors::PendingMismatch));
         auto encoded = EncodeActiveUpdateRecord(request.candidate.package);
@@ -352,11 +353,10 @@ namespace Horo::Release {
         auto lock = files.TryAcquireExclusive(paths.lock, "horo-bootstrap-uninstall");
         if (lock.HasError())
             return Result<void>::Failure(lock.ErrorValue());
-        if (auto ready = ReadyForMaintenance(paths, host); ready.HasError())
-            return ready;
-        auto admission = files.TryAcquireProductMaintenance(paths.root);
+        auto admission = ReadyForMaintenance(paths, host, files);
         if (admission.HasError())
             return Result<void>::Failure(admission.ErrorValue());
+        [[maybe_unused]] ProductLaunchLease maintenance = std::move(admission).Value();
         auto encoded = EncodeActiveUpdateRecord(request.candidate.package);
         if (encoded.HasError())
             return Result<void>::Failure(encoded.ErrorValue());

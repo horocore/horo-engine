@@ -215,6 +215,11 @@ namespace Horo {
     }
 
     struct ProductLaunchLease::State {
+        State() = default;
+        State(const State &) = delete;
+        State &operator=(const State &) = delete;
+        State(State &&) = delete;
+        State &operator=(State &&) = delete;
 #if defined(_WIN32)
         HANDLE handle{INVALID_HANDLE_VALUE};
 #else
@@ -258,7 +263,7 @@ namespace Horo {
 
     /** @brief Acquires one OS-held launch or maintenance lease without changing an existing installation root. */
     Result<ProductLaunchLease> NativeDurableFileSystem::TryAcquireProductLease(const std::filesystem::path &installationRoot,
-                                                                               const bool maintenance) {
+                                                                               const bool maintenance) const {
         const auto path = installationRoot / ".product-launch.lock";
         if (!installationRoot.is_absolute() || std::ranges::any_of(installationRoot, [](const auto &part) {
             return part == "." || part == "..";
@@ -281,8 +286,7 @@ namespace Horo {
         state->descriptor = open(path.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
         if (state->descriptor < 0)
             return Result<ProductLaunchLease>::Failure(FsError(IoFailed, path));
-        struct stat info{};
-        if (fstat(state->descriptor, &info) != 0 || !S_ISREG(info.st_mode) || info.st_nlink != 1)
+        if (struct stat info{}; fstat(state->descriptor, &info) != 0 || !S_ISREG(info.st_mode) || info.st_nlink != 1)
             return Result<ProductLaunchLease>::Failure(FsError(IoFailed, path));
         if (flock(state->descriptor, (maintenance ? LOCK_EX : LOCK_SH) | LOCK_NB) != 0)
             return Result<ProductLaunchLease>::Failure(FsError(errno == EWOULDBLOCK ? LockBusy : IoFailed, path));

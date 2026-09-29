@@ -133,7 +133,8 @@ namespace Horo {
         [[nodiscard]] Result<void> SyncDirectory(const std::filesystem::path &path) override;
 
     private:
-        [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductLease(const std::filesystem::path &installationRoot, bool maintenance);
+        [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductLease(const std::filesystem::path &installationRoot,
+                                                                        bool maintenance) const;
     };
 
     /** @brief Provides monotonic time for scheduling without exposing wall-clock time. */

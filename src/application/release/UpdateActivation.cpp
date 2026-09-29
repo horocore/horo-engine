@@ -261,6 +261,7 @@ namespace Horo::Release {
         auto admission = files.TryAcquireProductMaintenance(paths.root);
         if (admission.HasError())
             return Result<UpdateActivationOutcome>::Failure(admission.ErrorValue());
+        [[maybe_unused]] ProductLaunchLease maintenance = std::move(admission).Value();
         for (const auto *version : {&request.current, &request.staged}) {
             if (auto verified = VerifyReadyUpdateStage(version->package, version->checkpoint, version->packageFile, version->stageRoot,
                                                        version->inventory, request.archiveLimits, verifier);
