@@ -86,4 +86,49 @@ namespace Horo::AI::AIErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor PerceptionSpatialInvalid{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.perception.spatial_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A perception spatial record or query has invalid identity, sense, layer, range, or filter data.",
+        .remediationHint = "Capture finite typed participants at the scene safe point and submit a bounded query.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor PerceptionSpatialLimitExceeded{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.perception.spatial_limit_exceeded"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The declared perception spatial population exceeds a hard scene capacity.",
+        .remediationHint = "Reduce or partition declared listeners and sources before publication.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor PerceptionSpatialConflict{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.perception.spatial_conflict"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A perception spatial publication repeats an exact listener or source entity identity.",
+        .remediationHint = "Publish each declared participant once per scene safe point.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor PerceptionSpatialStale{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.perception.spatial_stale"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The perception spatial scene view or publication revision is stale.",
+        .remediationHint = "Acquire a fresh post-commit scene view and publish an increasing revision.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor PerceptionSpatialListenerMissing{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.perception.spatial_listener_missing"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The requested listener is absent from the immutable perception spatial snapshot.",
+        .remediationHint = "Use a listener declared in the same published scene revision.",
+        .retryable = false,
+        .userActionable = true,
+    };
 }  // namespace Horo::AI::AIErrors

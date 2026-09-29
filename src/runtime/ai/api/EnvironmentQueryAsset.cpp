@@ -92,6 +92,7 @@ namespace Horo::AI {
                                                           const QueryResultSchema &result) {
             if (stage.kind == QueryStageKind::Unknown)
                 return Result<QueryPlanStage>::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
+            const std::vector<QueryContextRequirement> *contexts{};
             if (stage.kind == QueryStageKind::Generator) {
                 const auto *descriptor = registry.Find(stage.generator);
                 if (descriptor == nullptr)
@@ -102,6 +103,7 @@ namespace Horo::AI {
                     return Result<QueryPlanStage>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
                 if (const auto properties = ResolveProperties(stage, descriptor->properties); properties.HasError())
                     return Result<QueryPlanStage>::Failure(properties.ErrorValue());
+                contexts = &descriptor->contexts;
             } else {
                 const auto *descriptor = registry.Find(stage.test);
                 if (descriptor == nullptr)
@@ -112,12 +114,14 @@ namespace Horo::AI {
                     return Result<QueryPlanStage>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
                 if (const auto properties = ResolveProperties(stage, descriptor->properties); properties.HasError())
                     return Result<QueryPlanStage>::Failure(properties.ErrorValue());
+                contexts = &descriptor->contexts;
             }
             return Result<QueryPlanStage>::Success({.id = stage.id,
                                                     .kind = stage.kind,
                                                     .executionOrder = stage.executionOrder,
                                                     .generator = stage.generator,
                                                     .test = stage.test,
+                                                    .contexts = *contexts,
                                                     .properties = stage.properties});
         }
     }  // namespace
@@ -166,9 +170,24 @@ namespace Horo::AI {
         return source_.displayName;
     }
 
-    EnvironmentQueryPlan::EnvironmentQueryPlan(const QueryId id, const QueryResultSchema &result,
-                                               std::vector<QueryPlanStage> stages) noexcept
-        : id_(id), result_(result), stages_(std::move(stages)) {}
+    EnvironmentQueryPlan::EnvironmentQueryPlan(const QueryId id, const QueryResultSchema &result, std::vector<QueryPlanStage> stages)
+        : id_(id), result_(result), stages_(std::move(stages)) {
+        for (const auto &stage : stages_)
+            for (const auto &requirement : stage.contexts) {
+                const auto found = std::ranges::find_if(requiredContexts_, [&requirement](const auto &entry) {
+                    return entry.id == requirement.id;
+                });
+                if (found == requiredContexts_.end())
+                    requiredContexts_.push_back(requirement);
+                else {
+                    found->version.minimum = std::max(found->version.minimum, requirement.version.minimum);
+                    found->version.maximum = std::min(found->version.maximum, requirement.version.maximum);
+                }
+            }
+        std::ranges::sort(requiredContexts_, {}, [](const auto &entry) {
+            return entry.id.Value();
+        });
+    }
 
     /** @copydoc EnvironmentQueryPlan::Compile */
     Result<EnvironmentQueryPlan> EnvironmentQueryPlan::Compile(const EnvironmentQueryAsset &asset, const QuerySchemaRegistry &registry) {
@@ -205,5 +224,10 @@ namespace Horo::AI {
     /** @copydoc EnvironmentQueryPlan::Stages */
     std::span<const QueryPlanStage> EnvironmentQueryPlan::Stages() const noexcept {
         return stages_;
+    }
+
+    /** @copydoc EnvironmentQueryPlan::RequiredContexts */
+    std::span<const QueryContextRequirement> EnvironmentQueryPlan::RequiredContexts() const noexcept {
+        return requiredContexts_;
     }
 }  // namespace Horo::AI

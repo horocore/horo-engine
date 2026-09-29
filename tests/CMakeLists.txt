@@ -361,6 +361,7 @@ add_executable(HoroAudioApiTests
         unit/runtime/audio/AudioAssetSchemaTests.cpp
         unit/runtime/audio/MixerAssetSchemaTests.cpp
         unit/runtime/audio/AudioSoundReferenceTests.cpp
+        unit/runtime/audio/AudioStreamDecoderTests.cpp
         unit/runtime/audio/AudioBackendCapabilitiesTests.cpp
         unit/runtime/audio/AudioCallbackEventsTests.cpp
         unit/runtime/audio/AudioDeviceDiscoveryTests.cpp
@@ -477,6 +478,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/CharacterDiagnosticsTests.cpp
         unit/runtime/physics/CharacterFastPathStorageTests.cpp
         unit/runtime/physics/CharacterGroundingTests.cpp
+        unit/runtime/physics/CharacterMetricsTests.cpp
         unit/runtime/physics/CharacterWorldSettingsTests.cpp
         unit/runtime/physics/CharacterWorldTests.cpp
         unit/runtime/physics/CharacterWorldCommandTests.cpp
@@ -533,9 +535,11 @@ add_executable(HoroAITests
         unit/runtime/ai/BlackboardSchemaTests.cpp
         unit/runtime/ai/DecisionAssetValidationTests.cpp
         unit/runtime/ai/EnvironmentQuerySchemaTests.cpp
+        unit/runtime/ai/EnvironmentQueryContextTests.cpp
         unit/runtime/ai/NullAIRuntimeTests.cpp
         unit/runtime/ai/PerceptionDescriptorRegistryTests.cpp
         unit/runtime/ai/PerceptionMemoryTests.cpp
+        unit/runtime/ai/PerceptionSpatialBroadphaseTests.cpp
 )
 target_compile_features(HoroAITests PRIVATE cxx_std_20)
 target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneIntegration)
@@ -789,6 +793,12 @@ add_executable(HoroTerrainImportTests
 target_compile_features(HoroTerrainImportTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainImportTests PRIVATE HoroEngine::TerrainImport)
 horo_register_catch_test(HoroTerrainImportTests LABELS "unit;terrain;assets;headless")
+add_executable(HoroTerrainTileCookTests
+        unit/runtime/terrain/TerrainTileCookTests.cpp
+)
+target_compile_features(HoroTerrainTileCookTests PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainTileCookTests PRIVATE HoroEngine::TerrainCook)
+horo_register_catch_test(HoroTerrainTileCookTests LABELS "unit;terrain;assets;headless")
 add_executable(HoroTerrainAsyncJobsTests
         unit/runtime/terrain/TerrainAsyncJobsTests.cpp
 )
@@ -2542,6 +2552,12 @@ if(TARGET HoroAssetImporterBasicExample)
     )
 endif()
 add_test(NAME HoroExtensionManagerTests COMMAND HoroExtensionManagerTests)
+
+add_executable(HoroProcessObserverTests unit/extensions/ProcessObserverRegistryTests.cpp)
+target_compile_features(HoroProcessObserverTests PRIVATE cxx_std_20)
+target_link_libraries(HoroProcessObserverTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+add_test(NAME HoroProcessObserverTests COMMAND HoroProcessObserverTests)
+set_tests_properties(HoroProcessObserverTests PROPERTIES LABELS "unit;extensions;headless")
 
 add_executable(HoroEditorThemeTokenTests
         unit/extensions/EditorThemeTokenTests.cpp
