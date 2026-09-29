@@ -93,19 +93,20 @@ namespace {
 
     [[nodiscard]] std::vector<unsigned char> Tar(const std::string &name = "bin/editor", const unsigned char type = '0') {
         std::vector<unsigned char> tar;
-        AppendTarFile(tar, "horo-update-files-v1.txt", "inventory");
+        AppendTarFile(tar, std::string{UpdateFileInventoryPath}, "inventory");
         AppendTarFile(tar, name, "editor", type);
         tar.resize(tar.size() + 1024U, 0U);
         return tar;
     }
 
     [[nodiscard]] std::vector<unsigned char> InventoryTar(const std::string &content = "editor") {
-        const UpdateStagedFile file{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content}))};
+        const UpdateStagedFile file{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content})),
+                                    UpdateFileMode::Executable, UpdateFileRole::Entrypoint};
         constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 2048U};
         auto encoded = BuildCanonicalUpdateFileInventory(std::span{&file, 1U}, limits);
         REQUIRE(encoded.HasValue());
         std::vector<unsigned char> tar;
-        AppendTarFile(tar, "horo-update-files-v1.txt", encoded.Value());
+        AppendTarFile(tar, std::string{UpdateFileInventoryPath}, encoded.Value());
         AppendTarFile(tar, file.path, content);
         tar.resize(tar.size() + 1024U, 0U);
         return tar;
@@ -266,7 +267,8 @@ TEST_CASE("Signed Linux tar gzip stages its authenticated inventory and publishe
     REQUIRE(published.HasValue());
     CHECK(std::filesystem::is_regular_file(published.Value()));
     const std::string content = "editor";
-    const UpdateStagedFile file{"bin/editor", 6U, Horo::ComputeSha256(std::as_bytes(std::span{content}))};
+    const UpdateStagedFile file{"bin/editor", 6U, Horo::ComputeSha256(std::as_bytes(std::span{content})), UpdateFileMode::Executable,
+                                UpdateFileRole::Entrypoint};
     CHECK(
         VerifyReadyUpdateStage(package.record, package.checkpoint, package.file, stage, std::span{&file, 1U}, Limits, verifier).HasValue());
 }
@@ -274,11 +276,12 @@ TEST_CASE("Signed Linux tar gzip stages its authenticated inventory and publishe
 TEST_CASE("Signed Linux tar gzip rejects an inventory content mismatch without publishing ready", "[release][update][tar]") {
     TemporaryPackage temporary;
     const std::string declared = "editor";
-    const UpdateStagedFile file{"bin/editor", declared.size(), Horo::ComputeSha256(std::as_bytes(std::span{declared}))};
+    const UpdateStagedFile file{"bin/editor", declared.size(), Horo::ComputeSha256(std::as_bytes(std::span{declared})),
+                                UpdateFileMode::Executable, UpdateFileRole::Entrypoint};
     auto encoded = BuildCanonicalUpdateFileInventory(std::span{&file, 1U}, Limits);
     REQUIRE(encoded.HasValue());
     std::vector<unsigned char> tar;
-    AppendTarFile(tar, "horo-update-files-v1.txt", encoded.Value());
+    AppendTarFile(tar, std::string{UpdateFileInventoryPath}, encoded.Value());
     AppendTarFile(tar, "bin/editor", "broken");
     tar.resize(tar.size() + 1024U, 0U);
     auto package = Sign(temporary, Gzip(tar));
@@ -354,8 +357,10 @@ TEST_CASE("Linux portable bootstrap installs repairs and uninstalls only owned v
     std::filesystem::rename(package.file, packageFile);
     const auto stage = versions / "editor-linux";
     REQUIRE(StageVerifiedTarGzipUpdate({package.record, package.checkpoint, packageFile, stage, Limits}, files, verifier, {}).HasValue());
+    CHECK((std::filesystem::status(stage / "bin/editor").permissions() & std::filesystem::perms::mask) == std::filesystem::perms{0755});
     const std::string content = "editor";
-    std::vector<UpdateStagedFile> inventory{{"bin/editor", 6U, Horo::ComputeSha256(std::as_bytes(std::span{content}))}};
+    std::vector<UpdateStagedFile> inventory{
+        {"bin/editor", 6U, Horo::ComputeSha256(std::as_bytes(std::span{content})), UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
     UpdateActivationVersion candidate{package.record, package.checkpoint, packageFile, stage, inventory};
     BootstrapInstallationRequest request{temporary.path, candidate, Limits, std::chrono::seconds{2}};
     ProcessBridge processes;

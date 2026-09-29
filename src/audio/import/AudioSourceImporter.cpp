@@ -1,5 +1,6 @@
 #include "Horo/Audio/AudioSourceImporter.h"
 
+#include "AudioSourceAnalysis.h"
 #include "Horo/Audio/AudioErrors.h"
 
 #if defined(_WIN32) && !defined(NOMINMAX)
@@ -22,7 +23,6 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <cmath>
 #include <cstring>
 #include <limits>
 // miniaudio consumes the header-only declarations above; this include emits the single decoder implementation.
@@ -36,7 +36,6 @@ namespace Horo::Audio {
         constexpr std::size_t ChunkHeaderBytes = 8;
         constexpr std::size_t WaveFormatMinimumBytes = 16;
         constexpr std::size_t OggPageHeaderBytes = 27;
-        constexpr float SilenceDb = -200.0F;
 
         struct ReaderState final {
             const AudioSourceReader &source;
@@ -234,60 +233,6 @@ namespace Horo::Audio {
             bool initialized_{};
         };
 
-        struct AnalysisAccumulator final {
-            std::vector<AudioWaveformPoint> waveform;
-            long double squaredSum{};
-            std::uint64_t sampleCount{};
-            AudioSample peak{};
-            AudioSample windowMinimum{std::numeric_limits<AudioSample>::max()};
-            AudioSample windowMaximum{std::numeric_limits<AudioSample>::lowest()};
-            std::uint32_t windowFrames{};
-            std::uint64_t windowStart{};
-
-            void Consume(const std::span<const AudioSample> samples, const std::uint32_t channels,
-                         const std::uint32_t maximumWindowFrames) {
-                const auto frames = static_cast<std::uint32_t>(samples.size() / channels);
-                for (std::uint32_t frame = 0; frame < frames; ++frame) {
-                    for (std::uint32_t channel = 0; channel < channels; ++channel) {
-                        const AudioSample sample = samples[static_cast<std::size_t>(frame) * channels + channel];
-                        const AudioSample magnitude = std::abs(sample);
-                        peak = std::max(peak, magnitude);
-                        windowMinimum = std::min(windowMinimum, sample);
-                        windowMaximum = std::max(windowMaximum, sample);
-                        squaredSum += static_cast<long double>(sample) * sample;
-                        ++sampleCount;
-                    }
-                    ++windowFrames;
-                    if (windowFrames == maximumWindowFrames)
-                        FlushWindow();
-                }
-            }
-
-            void FlushWindow() {
-                if (windowFrames == 0)
-                    return;
-                waveform.emplace_back(windowStart, windowFrames, windowMinimum, windowMaximum);
-                windowStart += windowFrames;
-                windowFrames = 0;
-                windowMinimum = std::numeric_limits<AudioSample>::max();
-                windowMaximum = std::numeric_limits<AudioSample>::lowest();
-            }
-        };
-
-        [[nodiscard]] float Decibels(const long double amplitude) noexcept {
-            return amplitude > 0 ? static_cast<float>(20.0L * std::log10(amplitude)) : SilenceDb;
-        }
-
-        [[nodiscard]] AudioLoudnessMetadata Loudness(const AnalysisAccumulator &analysis) noexcept {
-            const long double meanSquare = analysis.sampleCount == 0 ? 0 : analysis.squaredSum / analysis.sampleCount;
-            const float integrated = meanSquare > 0 ? static_cast<float>(-0.691L + 10.0L * std::log10(meanSquare)) : SilenceDb;
-            return {.integratedLufs = integrated,
-                    .shortTermLufs = std::nullopt,
-                    .truePeakDbtp = Decibels(analysis.peak),
-                    .rmsDbfs = Decibels(std::sqrt(meanSquare)),
-                    .normalizationGainDb = -23.0F - integrated};
-        }
-
         [[nodiscard]] bool ValidSourceLimits(const AudioSourceImportLimits &limits) noexcept {
             return limits.maximumSourceBytes > 0 && limits.maximumCumulativeReadBytes >= limits.maximumSourceBytes &&
                    limits.maximumReadOperations > 0;
@@ -413,7 +358,8 @@ namespace Horo::Audio {
 
         [[nodiscard]] Result<void> ConsumeDecodedBlock(AnalysisAccumulator &analysis, const std::span<const AudioSample> block,
                                                        const std::uint32_t channels, const AudioSourceImportLimits &limits) {
-            analysis.Consume(block, channels, limits.waveformWindowFrames);
+            if (const auto consumed = analysis.Consume(block, channels, limits.waveformWindowFrames); consumed.HasError())
+                return consumed;
             return analysis.waveform.size() <= limits.maximumWaveformPoints
                        ? Result<void>::Success()
                        : Result<void>::Failure(MakeImportError(AudioErrors::SourceLimitExceeded));
@@ -429,6 +375,8 @@ namespace Horo::Audio {
             const auto bytesPerFrame = channels * sizeof(AudioSample);
             std::vector<AudioSample> samples(static_cast<std::size_t>(plan.blockFrames * channels));
             AnalysisAccumulator analysis;
+            if (const auto configured = analysis.Configure(plan.format); configured.HasError())
+                return Result<DecodedAnalysis>::Failure(configured.ErrorValue());
             if (plan.hasDeclaredFrames)
                 analysis.waveform.reserve(static_cast<std::size_t>(plan.waveformPoints));
             std::uint64_t decodedFrames{};
@@ -445,11 +393,11 @@ namespace Horo::Audio {
                 if (nextFrame.HasError())
                     return Result<DecodedAnalysis>::Failure(nextFrame.ErrorValue());
                 const auto block = std::span<const AudioSample>{samples}.first(static_cast<std::size_t>(framesRead * channels));
-                if (const auto written = output.write(output.context, decodedFrames, plan.format, block); written.HasError())
-                    return Result<DecodedAnalysis>::Failure(written.ErrorValue());
                 if (const auto consumed = ConsumeDecodedBlock(analysis, block, static_cast<std::uint32_t>(channels), limits);
                     consumed.HasError())
                     return Result<DecodedAnalysis>::Failure(consumed.ErrorValue());
+                if (const auto written = output.write(output.context, decodedFrames, plan.format, block); written.HasError())
+                    return Result<DecodedAnalysis>::Failure(written.ErrorValue());
                 decodedFrames = nextFrame.Value();
             }
             analysis.FlushWindow();
@@ -515,6 +463,10 @@ namespace Horo::Audio {
         if (!CheckedMultiply(decodedValue.frames, 1'000'000'000ULL, durationNumerator))
             return Result<AudioSourceImportCandidate>::Failure(MakeImportError(AudioErrors::SourceLimitExceeded));
         const auto duration = durationNumerator / planValue.format.sampleRate;
+        auto analysis = FinishAnalysis(decodedValue.analysis, planValue.format.sampleRate, decodedValue.frames, planValue.blockFrames,
+                                       limits.waveformWindowFrames, planValue.format.layout.orderedChannels.size());
+        if (analysis.HasError())
+            return Result<AudioSourceImportCandidate>::Failure(analysis.ErrorValue());
         return Result<AudioSourceImportCandidate>::Success({.container = sourceProbe.container,
                                                             .codec = sourceProbe.codec,
                                                             .sourcePcm = sourceProbe.pcm,
@@ -522,9 +474,7 @@ namespace Horo::Audio {
                                                             .frameCount = decodedValue.frames,
                                                             .durationNanoseconds = duration,
                                                             .loops = std::move(sourceProbe.loops),
-                                                            .waveform = std::move(decodedValue.analysis.waveform),
-                                                            .loudness = Loudness(decodedValue.analysis),
-                                                            .samplePeak = decodedValue.analysis.peak,
+                                                            .analysis = std::move(analysis).Value(),
                                                             .decoderIdentity = "miniaudio/0.11.25"});
     }
 }  // namespace Horo::Audio

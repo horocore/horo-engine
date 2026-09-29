@@ -308,6 +308,7 @@ target_compile_features(HoroUpdateOfflineSource PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateOfflineSource PUBLIC HoroEngine::UpdateDiscovery HoroEngine::UpdateDownload HoroEngine::Platform)
 
 add_library(HoroUpdateActivation STATIC application/release/UpdateActivation.cpp application/release/UpdateActivationErrors.cpp
+        application/release/UpdateProductProcess.cpp
         application/release/BootstrapInstallation.cpp application/release/BootstrapInstallationErrors.cpp
         application/release/UpdateRollback.cpp application/release/UpdateRollbackErrors.cpp
         application/release/UpdateRetention.cpp application/release/UpdateRetentionErrors.cpp)
@@ -545,6 +546,14 @@ target_include_directories(HoroRuntimeUi PRIVATE ${PROJECT_SOURCE_DIR}/src/found
 target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::Foundation HoroEngine::Assets
         PRIVATE nlohmann_json::nlohmann_json utf8proc harfbuzz)
 
+add_library(HoroUiTemplateGraph STATIC
+        ui_templates/UiTemplateDependencyGraph.cpp
+        ui_templates/UiTemplateErrors.cpp
+)
+add_library(HoroEngine::UiTemplateGraph ALIAS HoroUiTemplateGraph)
+target_compile_features(HoroUiTemplateGraph PUBLIC cxx_std_20)
+target_link_libraries(HoroUiTemplateGraph PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::Packages)
+
 add_library(HoroGameplayApi STATIC
         gameplay/api/BehaviorTypes.cpp
         gameplay/api/GameAsset.cpp
@@ -727,9 +736,13 @@ add_library(HoroAudioApi STATIC
         audio/api/MixerAssetSchema.cpp
         audio/api/AudioPlanarBlock.cpp
         audio/api/AudioErrors.cpp
+        audio/api/AudioFailureErrors.cpp
+        audio/api/AudioFailureRecovery.cpp
         audio/api/AudioResamplerPlan.cpp
         audio/api/AudioPlaybackRequest.cpp
         audio/api/AudioSoundReference.cpp
+        audio/api/AudioStreamDecoder.cpp
+        audio/api/AudioStreamDecoderErrors.cpp
         audio/api/AudioVoiceStateMachine.cpp
         audio/api/AudioHandleRegistry.h
 )
@@ -739,13 +752,15 @@ target_link_libraries(HoroAudioApi PUBLIC HoroEngine::Foundation HoroEngine::Ass
 
 add_library(HoroAudioImport STATIC
         audio/import/AudioSourceImporter.cpp
+        audio/import/AudioSourceAnalysis.cpp
+        audio/import/AudioSourceAnalysis.h
         audio/import/AudioSourceProbeDetail.inl
 )
 add_library(HoroEngine::AudioImport ALIAS HoroAudioImport)
 target_compile_features(HoroAudioImport PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioImport
         PUBLIC HoroEngine::AudioApi
-        PRIVATE HoroThirdParty::Miniaudio
+        PRIVATE HoroThirdParty::Miniaudio HoroThirdParty::Ebur128
 )
 
 add_library(HoroAudioCook STATIC
@@ -847,6 +862,7 @@ add_library(HoroPhysics STATIC
         physics/CharacterControllerContracts.cpp
         physics/CharacterDiagnostics.cpp
         physics/CharacterErrors.cpp
+        physics/CharacterMetrics.cpp
         physics/CharacterControllerRegistry.h
         physics/CharacterFastPathStorage.h
         physics/CharacterWorld.cpp
@@ -886,6 +902,7 @@ add_library(HoroPhysics STATIC
         physics/PhysicsShapeDescriptor.cpp
         physics/PhysicsStepPolicy.cpp
         physics/PhysicsTransformAuthority.cpp
+        physics/PhysicsTransformContracts.cpp
         physics/PhysicsWorld.cpp
         physics/PhysicsQueryEventCapability.cpp
         physics/PhysicsWorldInternal.h
@@ -966,6 +983,7 @@ add_library(HoroAISceneIntegration STATIC
         runtime/ai/integration/AISceneActivation.cpp
         runtime/ai/integration/AIScenePerceptionSource.cpp
         runtime/ai/integration/PerceptionSpatialBroadphase.cpp)
+        runtime/ai/integration/EnvironmentQueryContexts.cpp)
 add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
 target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroAISceneIntegration PUBLIC HoroEngine::AI HoroEngine::RuntimeScene)
@@ -1202,6 +1220,14 @@ add_library(HoroEngine::TerrainImport ALIAS HoroTerrainImport)
 target_compile_features(HoroTerrainImport PUBLIC cxx_std_20)
 target_include_directories(HoroTerrainImport PRIVATE ${PROJECT_SOURCE_DIR}/vendor/stb)
 target_link_libraries(HoroTerrainImport PUBLIC HoroEngine::TerrainApi HoroEngine::Assets)
+add_library(HoroTerrainCook STATIC
+        runtime/terrain/cook/TerrainTileCook.cpp
+        runtime/terrain/cook/TerrainTileCookCodec.cpp
+        runtime/terrain/cook/TerrainTileCookErrors.cpp
+)
+add_library(HoroEngine::TerrainCook ALIAS HoroTerrainCook)
+target_compile_features(HoroTerrainCook PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainCook PUBLIC HoroEngine::TerrainImport)
 add_library(HoroTerrainRuntime STATIC
         runtime/terrain/runtime/TerrainAsyncJobs.cpp
 )
@@ -1984,6 +2010,7 @@ add_library(HoroExtensions STATIC
         extensions/host/ExtensionAbiValidation.cpp
         extensions/host/ExtensionAbiConformance.cpp
         extensions/registry/ApplicationCapabilityRegistry.cpp
+        extensions/registry/ProcessObserverRegistry.cpp
         extensions/registry/BackendServiceRegistry.cpp
         extensions/registry/BackendOperationRegistry.cpp
         extensions/registry/BackendOperationRegistryInternal.h

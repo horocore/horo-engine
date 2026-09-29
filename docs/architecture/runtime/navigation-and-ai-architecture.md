@@ -1117,6 +1117,16 @@ stage kind is unavailable; it never skips a stage. This is schema admission, not
 AssetRegistry mapping, cooker artifact, provider implementation, or runtime executor
 described below. Host composition supplies descriptor contributions explicitly.
 
+The admitted plan now retains each stage's context requirements and their
+deduplicated compatible union. `Horo/AI/EnvironmentQueryContexts.h`, owned by
+`HoroAISceneIntegration`, provides the separate owner-thread submission capture
+seam. The host explicitly composes custom callbacks, and the seam validates current
+RuntimeScene/entity generations and declared capabilities before publishing one
+owned read-only value set per execution revision. A present empty group is distinct
+from an absent required group. Neither the captured snapshot nor the Foundation-only
+schema contains a mutable Scene pointer; the full EQS scheduler/executor remains
+future work.
+
 EnvironmentQueryTemplate is an authoring asset with stable AssetId metadata in
 AssetRegistry. Its immutable cooked EnvironmentQueryPlan contains stable StageIds,
 ordered stages, typed context/parameter schemas, provider dependencies, scoring and

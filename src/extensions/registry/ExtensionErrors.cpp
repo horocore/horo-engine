@@ -243,6 +243,56 @@ namespace Horo::Extensions::ExtensionErrors {
         .userActionable = false,
     };
 
+    const ErrorCodeDescriptor ProcessObserverInvalid{Domain,
+                                                     ErrorCode{"process_observer_invalid"},
+                                                     ErrorSeverity::Error,
+                                                     "The process observer descriptor, policy, or event is invalid.",
+                                                     "Use canonical identities and only approved content-free event kinds.",
+                                                     false,
+                                                     false};
+    const ErrorCodeDescriptor ProcessObserverDuplicate{Domain,
+                                                       ErrorCode{"process_observer_duplicate"},
+                                                       ErrorSeverity::Error,
+                                                       "The process observer identity is already published.",
+                                                       "Use one unique observer identity per host composition.",
+                                                       false,
+                                                       false};
+    const ErrorCodeDescriptor ProcessObserverCapacityExceeded{Domain,
+                                                              ErrorCode{"process_observer_capacity_exceeded"},
+                                                              ErrorSeverity::Error,
+                                                              "The process observer registry is full.",
+                                                              "Reduce the registered observer set.",
+                                                              false,
+                                                              false};
+    const ErrorCodeDescriptor ProcessObserverShutdown{Domain,
+                                                      ErrorCode{"process_observer_shutdown"},
+                                                      ErrorSeverity::Error,
+                                                      "The process observer registry is shutting down.",
+                                                      "Do not register or dispatch after shutdown begins.",
+                                                      false,
+                                                      false};
+    const ErrorCodeDescriptor ProcessObserverThreadViolation{Domain,
+                                                             ErrorCode{"process_observer_thread_violation"},
+                                                             ErrorSeverity::Error,
+                                                             "Process observer dispatch used the wrong thread.",
+                                                             "Marshal host notifications to the registry owner thread.",
+                                                             false,
+                                                             false};
+    const ErrorCodeDescriptor ProcessObserverReentrant{Domain,
+                                                       ErrorCode{"process_observer_reentrant"},
+                                                       ErrorSeverity::Error,
+                                                       "Process observer dispatch entered recursively.",
+                                                       "Queue nested host notifications for a later owner-thread dispatch.",
+                                                       false,
+                                                       false};
+    const ErrorCodeDescriptor ProcessObserverCallbackFailed{Domain,
+                                                            ErrorCode{"process_observer_callback_failed"},
+                                                            ErrorSeverity::Error,
+                                                            "A process observer callback failed.",
+                                                            "Inspect the attributed observer diagnostic and disable its contribution.",
+                                                            false,
+                                                            false};
+
     const ErrorCodeDescriptor BackendServiceInvalid{Domain,
                                                     ErrorCode{"backend_service_invalid"},
                                                     ErrorSeverity::Error,

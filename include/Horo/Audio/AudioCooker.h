@@ -42,6 +42,7 @@ namespace Horo::Audio {
         Sha256Digest configurationDigest;
         Sha256Digest toolchainDigest;
         Sha256Digest payloadDigest;
+        AudioAnalysisMetadata analysis; /**< Cook-published analysis; inspection never re-decodes the source. */
         bool operator==(const AudioCookManifest &) const = default;
     };
 

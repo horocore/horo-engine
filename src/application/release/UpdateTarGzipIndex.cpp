@@ -114,19 +114,20 @@ namespace Horo::Release {
 
             /** @brief Advances ordinary payload or validates zero padding. */
             [[nodiscard]] bool FeedPayload(const std::span<const unsigned char> bytes, std::size_t &offset) {
-                auto &remaining = segment_ == Segment::Body ? bodyRemaining_ : paddingRemaining_;
+                using enum Segment;
+                auto &remaining = segment_ == Body ? bodyRemaining_ : paddingRemaining_;
                 const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, bytes.size() - offset));
-                if (segment_ == Segment::Body && callback_ &&
+                if (segment_ == Body && callback_ &&
                     !callback_(entries_.back(), bytes.subspan(offset, count), entries_.back().expandedBytes - remaining))
                     return false;
-                if (segment_ == Segment::Padding && std::ranges::any_of(bytes.subspan(offset, count), [](const unsigned char value) {
+                if (segment_ == Padding && std::ranges::any_of(bytes.subspan(offset, count), [](const unsigned char value) {
                     return value != 0U;
                 }))
                     return false;
                 remaining -= count;
                 offset += count;
                 if (remaining == 0U)
-                    segment_ = segment_ == Segment::Body && paddingRemaining_ != 0U ? Segment::Padding : Segment::Header;
+                    segment_ = segment_ == Body && paddingRemaining_ != 0U ? Padding : Header;
                 return true;
             }
 

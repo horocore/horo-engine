@@ -260,6 +260,8 @@ namespace Horo::Character::Detail {
                 if (resolved.HasError())
                     return Result<std::uint32_t>::Failure(resolved.ErrorValue());
                 CharacterMovementResult movement = std::move(resolved).Value();
+                if (input.metrics != nullptr)
+                    input.metrics->snapshot.contacts += movement.contactCount;
                 for (std::uint32_t contactIndex{}; contactIndex < movement.contactCount; ++contactIndex)
                     static_cast<void>(impl.fastPath.TryAppendContact(movement.contacts[contactIndex]));
                 movementResults.push_back(std::move(movement));
