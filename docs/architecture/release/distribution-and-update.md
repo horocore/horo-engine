@@ -211,7 +211,8 @@ Update metadata includes:
 Expired metadata is rejected unless an offline policy explicitly permits it.
 Mounted local, removable-media, and administrator-synchronized enterprise
 sources use a configured absolute root containing `manifest.json` and
-`packages/<64 lowercase digest hex digits>.zip`. The digest-named package path
+`packages/<64 lowercase digest hex digits>.zip` or, for Linux portable packages,
+`packages/<64 lowercase digest hex digits>.tar.gz`. The digest-named package path
 is derived from the authenticated package record; neither manifest URL nor
 media content may choose an arbitrary local path. Source descriptors have
 unique IDs and explicit precedence. A host uses `MayTryNextOfflineSource`
@@ -220,9 +221,10 @@ but invalid signature, stale policy, unsafe path, or package mismatch stops
 fallback. Source and private stage parents remain quiescent for an import
 operation.
 
-`ImportOfflineZipUpdate` parses the same canonical signed manifest and calls
-the same discovery, package verification, ZIP extraction, and ready-marker
-paths as an HTTPS update. An administrator may configure at most 30 days of
+`ImportOfflineZipUpdate` and `ImportOfflineTarGzipUpdate` parse the same canonical
+signed manifest and call the same discovery, package verification, format-specific
+extraction, and ready-marker paths as an HTTPS update. The caller selects the
+supported package format explicitly. An administrator may configure at most 30 days of
 manifest expiry grace for a particular source. The installed trust root must
 still be unexpired, signatures and package digests remain mandatory, and the
 monotonic sequence floor is unchanged. Downgrade requires both an explicit
