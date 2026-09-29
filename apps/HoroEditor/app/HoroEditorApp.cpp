@@ -1370,9 +1370,7 @@ namespace Horo::Editor {
     /** @brief Installs editor input actions and a saved profile on the active SDL window. */
     static void ConfigureEditorInput(SDL_Window &window, Input::SdlInputBackend &backend, Input::InputRouter &router) {
         backend.BindWindow(SDL_GetWindowID(&window));
-        if (const Result<void> installed = router.SetActionMap(BuildEditorInputActions()); installed.HasError())
-            LOG_CRITICAL("editor.input", "Built-in input action map is invalid: %s", installed.ErrorValue().message.c_str());
-        LoadEditorInputProfile(router);
+        ConfigureEditorInput(router);
     }
 
     /** @brief Chooses the initial persistent route from validated startup options. */

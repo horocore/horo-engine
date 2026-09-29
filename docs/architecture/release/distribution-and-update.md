@@ -256,8 +256,9 @@ it has authenticated the installation identity, trust-root snapshot, source
 selection, private staging paths, and updater-helper handoff. The manifest
 cannot supply those authorities. The backend binds download to the selected
 verified package, and staging is format-specific: the ZIP stager accepts only
-ZIP packages. A Linux tar.gz stager must be supplied separately; an absent
-stager leaves update actions unavailable. A restart or rollback action requests
+ZIP packages and the Linux tar.gz stager accepts only tar.gz packages. The
+installed-product host selects one for its admitted format; an absent stager
+leaves update actions unavailable. A restart or rollback action requests
 a helper handoff and remains pending until the host reports a verified outcome
 on a later launch. The running editor never switches its own executable files.
 
@@ -431,6 +432,10 @@ channel are required before production composition is complete.
 updates: it resumes or downloads into the protected private package file, then
 authenticates and extracts that same file before returning a durable ready
 marker. A complete checkpoint reuses its verified bytes without network work.
+`PrepareTarGzipUpdateStageHttps` applies the same protected download and
+checkpoint boundary to a Linux tar.gz package before its format-specific
+inventory verification and extraction. The two operations share the private
+path validation; existing ZIP callers need no migration.
 The host owns background dispatch, private-path allocation, and quiescence.
 Other package formats require
 readers with the same preflight and durable publication sequence.
