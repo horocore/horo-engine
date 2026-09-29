@@ -1,6 +1,6 @@
+#include "AllocationProbe.h"
 #include "Horo/Audio/AudioStreamDecoder.h"
 #include "Horo/Audio/AudioStreamDecoderErrors.h"
-#include "AllocationProbe.h"
 
 #include <algorithm>
 #include <array>
