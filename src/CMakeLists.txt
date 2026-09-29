@@ -285,7 +285,7 @@ target_compile_features(HoroUpdateDiscovery PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateDiscovery PUBLIC HoroEngine::UpdateManifest)
 
 add_library(HoroUpdateTransfer STATIC application/release/UpdateTransfer.cpp application/release/UpdateTransferErrors.cpp
-        application/release/UpdateArchiveIndex.cpp application/release/UpdateStagedTree.cpp
+        application/release/UpdateArchiveIndex.cpp application/release/UpdateStagedTree.cpp application/release/UpdateFileDelta.cpp
         application/release/UpdateTransferCheckpointStore.cpp)
 add_library(HoroEngine::UpdateTransfer ALIAS HoroUpdateTransfer)
 target_compile_features(HoroUpdateTransfer PUBLIC cxx_std_20)
@@ -297,6 +297,9 @@ add_library(HoroUpdateDownload STATIC application/release/UpdateDownloadSession.
         application/release/UpdateZipStaging.cpp
         application/release/UpdateTarGzipIndex.cpp
         application/release/UpdateTarGzipStaging.cpp
+        application/release/UpdateDeltaStaging.cpp
+        application/release/UpdateDeltaZipRepack.cpp
+        application/release/UpdateSelectedZipStaging.cpp
         application/release/UpdateZipPackageProducer.cpp application/release/UpdateZipStagingJob.cpp)
 add_library(HoroEngine::UpdateDownload ALIAS HoroUpdateDownload)
 target_compile_features(HoroUpdateDownload PUBLIC cxx_std_20)
