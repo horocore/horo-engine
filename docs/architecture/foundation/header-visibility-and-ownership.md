@@ -20,6 +20,17 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## CHR-007.2 Character Metrics Boundary
+
+`HoroEngine::Physics` owns the additive `Horo/Physics/CharacterMetrics.h` contract.
+Existing Character callers retain their behavior: `CharacterFixedTickInput::metrics`
+defaults to null. An opting-in host retains the capture through one synchronous
+owner-thread tick, then publishes it through an exact-world, revision-scoped
+`CharacterMetricBinding` created with handles registered outside the tick path.
+The host closes the binding before world replacement. No native Physics or
+profiler backend type enters the public contract. The generated Physics
+public-header consumer compiles the new header through its owning target.
+
 ## RUI-012.3 Template Dependency Boundary
 
 `HoroEngine::UiTemplateGraph` owns the additive

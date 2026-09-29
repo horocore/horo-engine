@@ -860,6 +860,7 @@ add_library(HoroPhysics STATIC
         physics/CharacterControllerContracts.cpp
         physics/CharacterDiagnostics.cpp
         physics/CharacterErrors.cpp
+        physics/CharacterMetrics.cpp
         physics/CharacterControllerRegistry.h
         physics/CharacterFastPathStorage.h
         physics/CharacterWorld.cpp
