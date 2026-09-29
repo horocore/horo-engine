@@ -29,6 +29,44 @@ namespace Horo::UiTemplates {
         [[nodiscard]] bool Compatible(const UiTemplateInterfaceVersion available, const UiTemplateInterfaceVersion minimum) noexcept {
             return available.major == minimum.major && available.minor >= minimum.minor;
         }
+
+        /** @brief Finds the exact accepted descriptor and checks its public interface. */
+        [[nodiscard]] Result<const UiTemplateDependencyDescriptor *> FindCompatibleDescriptor(
+            const std::span<const UiTemplateDependencyDescriptor> descriptors, const UiTemplateReference &reference) {
+            const auto found = std::ranges::find(descriptors, reference.asset, &UiTemplateDependencyDescriptor::asset);
+            if (found == descriptors.end())
+                return Result<const UiTemplateDependencyDescriptor *>::Failure(
+                    MakeError(UiErrors::TemplateMissing, reference.asset.asset.ToString()));
+            if (found->revision != reference.revision)
+                return Result<const UiTemplateDependencyDescriptor *>::Failure(
+                    MakeError(UiErrors::TemplateRevisionUnavailable, reference.asset.asset.ToString()));
+            if (!Compatible(found->interfaceVersion, reference.minimumInterface))
+                return Result<const UiTemplateDependencyDescriptor *>::Failure(
+                    MakeError(UiErrors::TemplateVersionIncompatible, reference.asset.asset.ToString()));
+            return Result<const UiTemplateDependencyDescriptor *>::Success(&*found);
+        }
+
+        /** @brief Adds required pinned packages once, rejecting missing or incompatible locks. */
+        [[nodiscard]] Result<void> AppendPackages(const std::span<const UiTemplatePackageRequirement> requirements,
+                                                  const std::span<const Packages::LockedPackageReference> locks,
+                                                  const std::size_t maximumPackages,
+                                                  std::vector<Packages::LockedPackageReference> &resolved) {
+            for (const auto &requirement : requirements) {
+                const auto locked = std::ranges::find_if(locks, [&](const auto &package) {
+                    return package.package == requirement.package;
+                });
+                if (locked == locks.end() || !requirement.versions.Allows(locked->version))
+                    return Result<void>::Failure(MakeError(UiErrors::TemplatePackageUnavailable, requirement.package.Value()));
+                if (std::ranges::find_if(resolved, [&](const auto &package) {
+                    return package.package == requirement.package;
+                }) == resolved.end()) {
+                    if (resolved.size() >= maximumPackages)
+                        return Failure(UiErrors::TemplateGraphBudgetExceeded);
+                    resolved.push_back(*locked);
+                }
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc UiTemplateGraphLimits::IsValid */
@@ -112,13 +150,9 @@ namespace Horo::UiTemplates {
                 return Result<void>::Failure(MakeError(UiErrors::TemplateDependencyCycle, reference.asset.asset.ToString()));
             if (depth > limits_.maximumDepth)
                 return Failure(UiErrors::TemplateGraphBudgetExceeded);
-            const auto found = std::ranges::find(descriptors_, reference.asset, &UiTemplateDependencyDescriptor::asset);
-            if (found == descriptors_.end())
-                return Result<void>::Failure(MakeError(UiErrors::TemplateMissing, reference.asset.asset.ToString()));
-            if (found->revision != reference.revision)
-                return Result<void>::Failure(MakeError(UiErrors::TemplateRevisionUnavailable, reference.asset.asset.ToString()));
-            if (!Compatible(found->interfaceVersion, reference.minimumInterface))
-                return Result<void>::Failure(MakeError(UiErrors::TemplateVersionIncompatible, reference.asset.asset.ToString()));
+            const auto descriptor = FindCompatibleDescriptor(descriptors_, reference);
+            if (descriptor.HasError())
+                return Result<void>::Failure(descriptor.ErrorValue());
             const auto resolvedTemplate = std::ranges::find(resolved.templates, reference.asset);
             if (resolvedTemplate != resolved.templates.end()) {
                 const auto index = static_cast<std::size_t>(std::distance(resolved.templates.begin(), resolvedTemplate));
@@ -128,7 +162,7 @@ namespace Horo::UiTemplates {
             }
             active.push_back(reference.asset);
             std::size_t subtreeHeight{1};
-            for (const auto &nested : found->nested) {
+            for (const auto &nested : descriptor.Value()->nested) {
                 if (traversedEdges >= limits_.maximumEdges)
                     return Failure(UiErrors::TemplateGraphBudgetExceeded);
                 ++traversedEdges;
@@ -138,20 +172,9 @@ namespace Horo::UiTemplates {
                 const auto childIndex = static_cast<std::size_t>(std::distance(resolved.templates.begin(), resolvedChild));
                 subtreeHeight = std::max(subtreeHeight, subtreeHeights[childIndex] + 1);
             }
-            for (const auto &requirement : found->packages) {
-                const auto locked = std::ranges::find_if(packages_, [&](const auto &package) {
-                    return package.package == requirement.package;
-                });
-                if (locked == packages_.end() || !requirement.versions.Allows(locked->version))
-                    return Result<void>::Failure(MakeError(UiErrors::TemplatePackageUnavailable, requirement.package.Value()));
-                if (std::ranges::find_if(resolved.packages, [&](const auto &package) {
-                    return package.package == requirement.package;
-                }) == resolved.packages.end()) {
-                    if (resolved.packages.size() >= limits_.maximumPackages)
-                        return Failure(UiErrors::TemplateGraphBudgetExceeded);
-                    resolved.packages.push_back(*locked);
-                }
-            }
+            if (const auto packages = AppendPackages(descriptor.Value()->packages, packages_, limits_.maximumPackages, resolved.packages);
+                packages.HasError())
+                return packages;
             active.pop_back();
             if (resolved.templates.size() >= limits_.maximumTemplates)
                 return Failure(UiErrors::TemplateGraphBudgetExceeded);
@@ -161,9 +184,7 @@ namespace Horo::UiTemplates {
         };
         if (const auto result = visit(visit, root, 1); result.HasError())
             return Result<UiTemplateResolvedDependencies>::Failure(result.ErrorValue());
-        std::ranges::sort(resolved.packages, {}, [](const auto &package) {
-            return package.package.Value();
-        });
+        std::ranges::sort(resolved.packages, {}, &Packages::LockedPackageReference::package);
         return Result<UiTemplateResolvedDependencies>::Success(std::move(resolved));
     }
 
