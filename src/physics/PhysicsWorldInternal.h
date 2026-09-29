@@ -252,12 +252,12 @@ namespace Horo::Physics {
                 lastDiagnostic = record.Value();
         }
 
-        void RecordEventOverflowDiagnostic(const std::uint64_t sceneGeneration, const std::uint64_t simulationTick) {
+        void RecordEventDropDiagnostic(const std::uint64_t sceneGeneration, const std::uint64_t simulationTick, const bool overflowed) {
             const auto context = Detail::DiagnosticContext(identity, sceneGeneration, simulationTick);
-            const auto record =
-                MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Event,
-                                            MakeError(PhysicsErrors::CapacityExceeded, "Physics event projection dropped bounded records."),
-                                            context);
+            const auto error =
+                overflowed ? MakeError(PhysicsErrors::CapacityExceeded, "Physics event projection dropped bounded records.")
+                           : MakeError(PhysicsErrors::DescriptorInvalid, "Physics event projection dropped invalid contact evidence.");
+            const auto record = MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Event, error, context);
             if (record.HasValue())
                 lastDiagnostic = record.Value();
         }

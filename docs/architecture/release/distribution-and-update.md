@@ -209,6 +209,28 @@ Update metadata includes:
 - signing key identity
 
 Expired metadata is rejected unless an offline policy explicitly permits it.
+Mounted local, removable-media, and administrator-synchronized enterprise
+sources use a configured absolute root containing `manifest.json` and
+`packages/<64 lowercase digest hex digits>.zip`. The digest-named package path
+is derived from the authenticated package record; neither manifest URL nor
+media content may choose an arbitrary local path. Source descriptors have
+unique IDs and explicit precedence. A host uses `MayTryNextOfflineSource`
+to try the next source only when media or metadata is unavailable; a present
+but invalid signature, stale policy, unsafe path, or package mismatch stops
+fallback. Source and private stage parents remain quiescent for an import
+operation.
+
+`ImportOfflineZipUpdate` parses the same canonical signed manifest and calls
+the same discovery, package verification, ZIP extraction, and ready-marker
+paths as an HTTPS update. An administrator may configure at most 30 days of
+manifest expiry grace for a particular source. The installed trust root must
+still be unexpired, signatures and package digests remain mandatory, and the
+monotonic sequence floor is unchanged. Downgrade requires both an explicit
+host action and source administrator policy. The default freshness parameter
+on `VerifyUpdateManifest` and `AssessUpdate` is strict, preserving existing
+online callers; hosts migrating to offline source descriptors pass the bounded
+policy only for that selected source.
+
 Returning to an older version is allowed only through explicit rollback policy
 and user or administrator action. Automatic update checks must not downgrade a
 product because an attacker served an older valid manifest.
@@ -475,6 +497,12 @@ the plan fails instead of deleting either. Otherwise it selects obsolete
 versions by oldest use generation, with package ID as a stable tie-breaker.
 The deletion host must recheck the active and rollback records under the same
 installation lock immediately before removing only the planned owned files.
+`ApplyUpdateRetention` performs that locked recheck, stops installation users,
+and verifies protected versions and the selected obsolete version against its
+signed package inventory. It writes a durable per-version cleanup marker before
+removing any files. A repeated call may resume a marked partial deletion using
+the authenticated package and remaining-file inventory, and removes the package
+last. Unknown files or links stop cleanup without deleting those entries.
 
 User projects, settings, caches, and credentials are not stored inside the
 versioned installation and are not deleted by rollback.
@@ -515,6 +543,25 @@ Migrations are:
 Caches may be discarded and rebuilt instead of migrated. Credentials are never
 migrated by copying raw secret values; only credential references may be
 validated or re-authorized.
+
+`RunUserStateMigration` is a separate application operation invoked after the
+new product process starts and before user-state writers begin. The host supplies
+explicit user-state and cache roots plus one-step, content-addressed schema
+edges for preferences, recent-project records, toolchain profiles, workspace
+state, update records, and disposable cache files. It orders the plan
+deterministically and refuses lexical project escapes, links, duplicate
+destinations, stale source bytes, and unauthorized credential references.
+State transforms retain a durable adjacent source backup before atomically
+publishing replacement bytes. A failed or interrupted transform leaves either
+the original file or that backup for `RestoreUserStateMigrationBackup`; an
+unresolved backup blocks overwriting it. Disposable cache entries are removed
+only from the dedicated cache root and can be rebuilt. This operation does not
+read or mutate project documents, and installation activation never calls it.
+`HoroEditor` composes this application operation at startup before loading
+editor settings or recent projects. Its host adapter supplies the concrete
+legacy-to-version-1 steps for those two files, while the application operation
+owns backups, atomic replacement, and recovery. Other state families require
+their own explicit host adapters before they can enter a migration plan.
 
 ## Compatibility
 
