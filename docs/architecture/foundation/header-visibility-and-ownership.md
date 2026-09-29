@@ -20,6 +20,22 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## RUI-012.3 Template Dependency Boundary
+
+`HoroEngine::UiTemplateGraph` owns the additive
+`Horo/UiTemplates/UiTemplateDependencyGraph.h` and `UiTemplateErrors.h` contracts.
+This load-time authoring/cook target depends on Foundation, Assets and Packages
+for stable template asset IDs, semantic digests, and pinned package identities/
+versions. `HoroEngine::RuntimeUi` retains its Foundation/Assets-only dependency
+direction and gains no template authority. Existing UI document and runtime
+callers need no migration. Authoring/cook callers explicitly link the new target,
+prepare an immutable, verified catalog and package lock, then resolve exact
+accepted template revisions at load time.
+The resolver neither selects packages nor loads assets; it returns a detached
+dependency closure and rejects missing, stale, cyclic or incompatible inputs.
+The generated `HoroUiTemplateGraphPublicHeaderConsumer` target checks the
+staged public-header boundary independently of repository-wide include paths.
+
 ## NET-002.7 Inbound Dispatch Boundary
 
 `HoroEngine::NetworkRuntime` owns the additive

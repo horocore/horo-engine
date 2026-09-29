@@ -545,6 +545,14 @@ target_include_directories(HoroRuntimeUi PRIVATE ${PROJECT_SOURCE_DIR}/src/found
 target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::Foundation HoroEngine::Assets
         PRIVATE nlohmann_json::nlohmann_json utf8proc harfbuzz)
 
+add_library(HoroUiTemplateGraph STATIC
+        ui_templates/UiTemplateDependencyGraph.cpp
+        ui_templates/UiTemplateErrors.cpp
+)
+add_library(HoroEngine::UiTemplateGraph ALIAS HoroUiTemplateGraph)
+target_compile_features(HoroUiTemplateGraph PUBLIC cxx_std_20)
+target_link_libraries(HoroUiTemplateGraph PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::Packages)
+
 add_library(HoroGameplayApi STATIC
         gameplay/api/BehaviorTypes.cpp
         gameplay/api/GameAsset.cpp
