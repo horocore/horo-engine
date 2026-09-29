@@ -752,13 +752,15 @@ target_link_libraries(HoroAudioApi PUBLIC HoroEngine::Foundation HoroEngine::Ass
 
 add_library(HoroAudioImport STATIC
         audio/import/AudioSourceImporter.cpp
+        audio/import/AudioSourceAnalysis.cpp
+        audio/import/AudioSourceAnalysis.h
         audio/import/AudioSourceProbeDetail.inl
 )
 add_library(HoroEngine::AudioImport ALIAS HoroAudioImport)
 target_compile_features(HoroAudioImport PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioImport
         PUBLIC HoroEngine::AudioApi
-        PRIVATE HoroThirdParty::Miniaudio
+        PRIVATE HoroThirdParty::Miniaudio HoroThirdParty::Ebur128
 )
 
 add_library(HoroAudioCook STATIC
