@@ -408,6 +408,8 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioResamplerPlan.h
     Horo/Audio/AudioPlaybackRequest.h
     Horo/Audio/AudioSoundReference.h
+    Horo/Audio/AudioStreamDecoder.h
+    Horo/Audio/AudioStreamDecoderErrors.h
 )
 
 horo_configure_target_header_boundary(HoroAudioImport PUBLIC_HEADERS

@@ -730,6 +730,8 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioResamplerPlan.cpp
         audio/api/AudioPlaybackRequest.cpp
         audio/api/AudioSoundReference.cpp
+        audio/api/AudioStreamDecoder.cpp
+        audio/api/AudioStreamDecoderErrors.cpp
         audio/api/AudioVoiceStateMachine.cpp
         audio/api/AudioHandleRegistry.h
 )
