@@ -207,6 +207,41 @@ namespace Horo {
             DWORD processId{};
         };
 
+        /** @brief Limits inherited handles to the three streams owned by this launch. */
+        class ChildHandleAllowlist final {
+        public:
+            explicit ChildHandleAllowlist(const std::array<HANDLE, 3> &handles) : handles_(handles) {
+                SIZE_T bytes = 0;
+                static_cast<void>(InitializeProcThreadAttributeList(nullptr, 1, 0, &bytes));
+                storage_.resize(bytes);
+                list_ = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage_.data());
+                if (!InitializeProcThreadAttributeList(list_, 1, 0, &bytes)) {
+                    list_ = nullptr;
+                    return;
+                }
+                valid_ = UpdateProcThreadAttribute(list_, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles_.data(), sizeof(handles_), nullptr,
+                                                   nullptr) != 0;
+            }
+
+            ChildHandleAllowlist(const ChildHandleAllowlist &) = delete;
+            ChildHandleAllowlist &operator=(const ChildHandleAllowlist &) = delete;
+
+            ~ChildHandleAllowlist() {
+                if (list_ != nullptr)
+                    DeleteProcThreadAttributeList(list_);
+            }
+
+            [[nodiscard]] LPPROC_THREAD_ATTRIBUTE_LIST Get() const noexcept {
+                return valid_ ? list_ : nullptr;
+            }
+
+        private:
+            std::array<HANDLE, 3> handles_;
+            std::vector<std::byte> storage_;
+            LPPROC_THREAD_ATTRIBUTE_LIST list_{};
+            bool valid_{};
+        };
+
         /** @brief Preserves Windows quoting and UTF-8 validation before any child is created. */
         [[nodiscard]] Result<std::wstring> BuildCommandLine(const ExternalProcessRequest &request) {
             Result<std::wstring> executable = ToWide(request.executable);
@@ -229,6 +264,10 @@ namespace Horo {
             Handle stdoutWrite;
             Handle stderrWrite;
             SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+            Handle stdinRead{CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING,
+                                         FILE_ATTRIBUTE_NORMAL, nullptr)};
+            if (stdinRead.value == INVALID_HANDLE_VALUE)
+                return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
             if (!CreatePipe(&captured.stdoutRead.value, &stdoutWrite.value, &security, 0) ||
                 !CreatePipe(&captured.stderrRead.value, &stderrWrite.value, &security, 0) ||
                 !SetHandleInformation(captured.stdoutRead.value, HANDLE_FLAG_INHERIT, 0) ||
@@ -244,16 +283,21 @@ namespace Horo {
                 return Result<CapturedProcess>::Failure(environment.ErrorValue());
             std::vector<wchar_t> environmentBlock = std::move(environment).Value();
             const std::wstring workingDirectory = request.workingDirectory.native();
-            STARTUPINFOW startup{};
-            startup.cb = sizeof(startup);
-            startup.dwFlags = STARTF_USESTDHANDLES;
-            startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-            startup.hStdOutput = stdoutWrite.value;
-            startup.hStdError = stderrWrite.value;
+            const std::array<HANDLE, 3> inherited{stdinRead.value, stdoutWrite.value, stderrWrite.value};
+            ChildHandleAllowlist allowlist{inherited};
+            if (allowlist.Get() == nullptr)
+                return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
+            STARTUPINFOEXW startup{};
+            startup.StartupInfo.cb = sizeof(startup);
+            startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+            startup.StartupInfo.hStdInput = stdinRead.value;
+            startup.StartupInfo.hStdOutput = stdoutWrite.value;
+            startup.StartupInfo.hStdError = stderrWrite.value;
+            startup.lpAttributeList = allowlist.Get();
             PROCESS_INFORMATION process{};
-            const DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED;
+            const DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT;
             if (!CreateProcessW(nullptr, commandLineBuffer.data(), nullptr, nullptr, TRUE, flags, environmentBlock.data(),
-                                workingDirectory.empty() ? nullptr : workingDirectory.c_str(), &startup, &process))
+                                workingDirectory.empty() ? nullptr : workingDirectory.c_str(), &startup.StartupInfo, &process))
                 return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed));
             captured.process = Handle{process.hProcess};
             captured.thread = Handle{process.hThread};

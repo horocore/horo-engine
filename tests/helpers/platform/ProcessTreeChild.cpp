@@ -1,5 +1,6 @@
 #include <chrono>
 #include <csignal>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -53,6 +54,12 @@ int main(const int argc, char **argv) {
     const std::string mode{argv[1]};
     if (mode == "exit-failure")
         return 17;
+#if defined(_WIN32)
+    if (mode == "handle-unavailable" && argc == 3) {
+        const auto value = static_cast<std::uintptr_t>(std::stoull(argv[2]));
+        return WaitForSingleObject(reinterpret_cast<HANDLE>(value), 0) == WAIT_OBJECT_0 ? 4 : 0;
+    }
+#endif
 #if !defined(_WIN32)
     if (mode == "signalled") {
         std::raise(SIGTERM);
