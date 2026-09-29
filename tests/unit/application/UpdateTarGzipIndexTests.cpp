@@ -1,6 +1,7 @@
 #include "Horo/Release/UpdateStageReady.h"
 #if defined(__linux__)
 #include "Horo/Release/LinuxPortableBootstrapHost.h"
+#include "Horo/Release/UpdateRollback.h"
 #endif
 
 #include <algorithm>
@@ -141,15 +142,17 @@ namespace {
         std::filesystem::path file;
     };
 
-    [[nodiscard]] SignedPackage Sign(const TemporaryPackage &temporary, const std::vector<unsigned char> &bytes) {
-        auto version = ParseReleaseVersion("1.0.0");
+    [[nodiscard]] SignedPackage Sign(const TemporaryPackage &temporary, const std::vector<unsigned char> &bytes,
+                                     const std::string &releaseVersion = "1.0.0", const std::string &packageId = "editor-linux",
+                                     const std::string &fileName = "editor.tar.gz") {
+        auto version = ParseReleaseVersion(releaseVersion);
         REQUIRE(version.HasValue());
         DistributionArtifactIdentity artifact{{DistributionProductKind::Editor, {}},
                                               EngineProductVersion{std::move(version).Value()},
                                               DistributionPlatform::Linux,
                                               DistributionArchitecture::X64,
                                               {"build-linux"},
-                                              {"editor-linux"},
+                                              {packageId},
                                               DistributionInstallationId{"horo-editor"},
                                               DistributionArtifactClass::InstallableProduct};
         auto selection = ValidateDistributionPackageSelection(artifact, DistributionPackageFormat::TarGzip);
@@ -172,7 +175,7 @@ namespace {
         REQUIRE(plan.HasValue());
         auto checkpoint = AdvanceUpdateTransfer(plan.Value(), record.size);
         REQUIRE(checkpoint.HasValue());
-        auto file = temporary.path / "editor.tar.gz";
+        auto file = temporary.path / fileName;
         std::ofstream output(file, std::ios::binary);
         output.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
         output.close();
@@ -198,6 +201,29 @@ namespace {
         unsigned stops{};
         unsigned probes{};
     };
+
+    [[nodiscard]] UpdateActivationVersion StagePortableVersion(const TemporaryPackage &temporary, Horo::NativeDurableFileSystem &files,
+                                                               const Horo::Security::ArtifactVerifier &verifier,
+                                                               const std::string &releaseVersion, const std::string &packageId,
+                                                               const std::string &content) {
+        auto signedPackage = Sign(temporary, Gzip(InventoryTar(content)), releaseVersion, packageId, packageId + ".tar.gz");
+        const auto versions = temporary.path / "versions";
+        std::filesystem::create_directories(versions);
+        const auto packageFile = versions / (packageId + ".tar.gz");
+        std::filesystem::rename(signedPackage.file, packageFile);
+        const auto stage = versions / packageId;
+        REQUIRE(
+            StageVerifiedTarGzipUpdate({signedPackage.record, signedPackage.checkpoint, packageFile, stage, Limits}, files, verifier, {})
+                .HasValue());
+        std::vector<UpdateStagedFile> inventory{{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content})),
+                                                 UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
+        return {std::move(signedPackage.record), std::move(signedPackage.checkpoint), packageFile, stage, std::move(inventory)};
+    }
+
+    [[nodiscard]] std::string ReadFile(const std::filesystem::path &path) {
+        std::ifstream input(path, std::ios::binary);
+        return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    }
 #endif
 }  // namespace
 
@@ -389,5 +415,50 @@ TEST_CASE("Linux portable bootstrap installs repairs and uninstalls only owned v
     CHECK_FALSE(std::filesystem::exists(temporary.path / "bootstrap-uninstall.pending"));
     CHECK(std::filesystem::is_regular_file(userProject));
     CHECK(processes.probes == 3U);
+}
+
+TEST_CASE("Linux portable install, failed update, rollback, repair, and uninstall preserve user data",
+          "[release][install][update][rollback][linux]") {
+    TemporaryPackage temporary;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    const auto oldVersion = StagePortableVersion(temporary, files, verifier, "1.0.0", "editor-linux-v1", "editor-v1");
+    const auto newVersion = StagePortableVersion(temporary, files, verifier, "2.0.0", "editor-linux-v2", "editor-v2");
+    const BootstrapInstallationRequest initial{temporary.path, oldVersion, Limits, std::chrono::seconds{2}};
+    const auto userProject = temporary.path / "projects" / "game.horo";
+    std::filesystem::create_directories(userProject.parent_path());
+    std::ofstream(userProject) << "preserved project";
+    ProcessBridge processes;
+    processes.healthy = true;
+    LinuxPortableBootstrapHost host(files, verifier, processes, {});
+    REQUIRE(BootstrapVerifiedInstallation(initial, files, verifier, host).HasValue());
+
+    const auto oldPointer = EncodeActiveUpdateRecord(oldVersion.package);
+    const auto newPointer = EncodeActiveUpdateRecord(newVersion.package);
+    REQUIRE(oldPointer.HasValue());
+    REQUIRE(newPointer.HasValue());
+    const UpdateActivationRequest update{temporary.path, oldVersion, newVersion, Limits, std::chrono::seconds{2}};
+    processes.healthy = false;
+    CHECK(ActivateVerifiedUpdate(update, files, verifier, host).HasError());
+    CHECK(ReadFile(temporary.path / "active-version") == oldPointer.Value());
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "activation.pending"));
+
+    processes.healthy = true;
+    REQUIRE(ActivateVerifiedUpdate(update, files, verifier, host).HasValue());
+    CHECK(ReadFile(temporary.path / "active-version") == newPointer.Value());
+    CHECK(ReadFile(temporary.path / "last-known-good-version") == oldPointer.Value());
+    REQUIRE(RepairVerifiedInstallation({temporary.path, newVersion, Limits, std::chrono::seconds{2}}, files, verifier, host).HasValue());
+
+    const UpdateRollbackRequest rollback{{temporary.path, newVersion, oldVersion, Limits, std::chrono::seconds{2}},
+                                         UpdateRollbackReason::ExplicitUserRequest,
+                                         UpdateRollbackAuthority::NormalPolicy,
+                                         oldVersion.package.selection.artifact.version,
+                                         true};
+    REQUIRE(RollbackVerifiedUpdate(rollback, files, verifier, host).HasValue());
+    CHECK(ReadFile(temporary.path / "active-version") == oldPointer.Value());
+    REQUIRE(UninstallVerifiedInstallation(initial, files, verifier, host).HasValue());
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "active-version"));
+    CHECK_FALSE(std::filesystem::exists(oldVersion.stageRoot));
+    CHECK(ReadFile(userProject) == "preserved project");
 }
 #endif
