@@ -17,7 +17,7 @@
 
 namespace Horo::Audio {
     /** @brief Current audio-domain cook schema; changing encoded semantics changes this version. */
-    inline constexpr std::uint32_t AudioCookSchemaVersion = 1;
+    inline constexpr std::uint32_t AudioCookSchemaVersion = 2;
 
     /** @brief Maximum streamed chunk size admitted by both profile planning and artifact inspection. */
     inline constexpr std::uint32_t MaximumAudioStreamChunkFrames = 65'536;

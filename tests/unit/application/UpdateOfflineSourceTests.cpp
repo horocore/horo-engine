@@ -58,10 +58,10 @@ namespace {
         constexpr std::string_view content = "verified offline editor";
         const auto digest = ComputeSha256(std::as_bytes(std::span{content}));
         const std::string inventory =
-            "horo-update-files-v1\nbin/editor\t" + std::to_string(content.size()) + "\t" + FormatSha256(digest) + "\n";
+            "horo-update-files-v2\nbin/editor\t" + std::to_string(content.size()) + "\t" + FormatSha256(digest) + "\t0755\tentrypoint\n";
         mz_zip_archive writer{};
         REQUIRE(mz_zip_writer_init_heap(&writer, 0U, 0U));
-        REQUIRE(mz_zip_writer_add_mem(&writer, "horo-update-files-v1.txt", inventory.data(), inventory.size(), MZ_DEFAULT_COMPRESSION));
+        REQUIRE(mz_zip_writer_add_mem(&writer, "horo-update-files-v2.txt", inventory.data(), inventory.size(), MZ_DEFAULT_COMPRESSION));
         REQUIRE(mz_zip_writer_add_mem(&writer, "bin/editor", content.data(), content.size(), MZ_DEFAULT_COMPRESSION));
         void *bytes = nullptr;
         std::size_t size = 0U;
@@ -202,7 +202,8 @@ namespace {
         REQUIRE(activeRecord.HasValue());
         REQUIRE(files.WriteDurable(installation / "active-version", std::as_bytes(std::span{activeRecord.Value()})).HasValue());
         constexpr std::string_view content = "verified offline editor";
-        const std::vector<UpdateStagedFile> inventory{{"bin/editor", content.size(), ComputeSha256(std::as_bytes(std::span{content}))}};
+        const std::vector<UpdateStagedFile> inventory{{"bin/editor", content.size(), ComputeSha256(std::as_bytes(std::span{content})),
+                                                       UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
         UpdateActivationRequest activation{installation,
                                            {oldPackage, oldCheckpoint, oldFile, oldStage, inventory},
                                            {imported.package, imported.checkpoint, fixture.privatePaths.partialFile, fixture.stageRoot,

@@ -57,6 +57,27 @@ namespace Horo {
         std::unique_ptr<State> state_;
     };
 
+    /** @brief Move-only shared product-launch or exclusive maintenance lease for one installation. */
+    class ProductLaunchLease {
+    public:
+        struct State;
+
+        ProductLaunchLease() noexcept;
+        ProductLaunchLease(const ProductLaunchLease &) = delete;
+        ProductLaunchLease &operator=(const ProductLaunchLease &) = delete;
+        ProductLaunchLease(ProductLaunchLease &&) noexcept;
+        ProductLaunchLease &operator=(ProductLaunchLease &&) noexcept;
+        ~ProductLaunchLease();
+
+        /** @brief Reports whether this object currently holds the native lease. */
+        [[nodiscard]] explicit operator bool() const noexcept;
+
+    private:
+        friend class NativeDurableFileSystem;
+        explicit ProductLaunchLease(std::unique_ptr<State> state) noexcept;
+        std::unique_ptr<State> state_;
+    };
+
     /** @brief Cross-platform durable filesystem primitives for user-data transactions. */
     class DurableFileSystem {
     public:
@@ -91,6 +112,10 @@ namespace Horo {
     public:
         [[nodiscard]] Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path,
                                                                     std::string_view ownerMetadata) override;
+        /** @brief Holds a shared launch lease until the product process exits; fails while maintenance is active. */
+        [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductLaunch(const std::filesystem::path &installationRoot) const;
+        /** @brief Holds an exclusive maintenance gate; fails while any product launch lease is active. */
+        [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductMaintenance(const std::filesystem::path &installationRoot) const;
         [[nodiscard]] Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override;
         [[nodiscard]] Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override;
         /**
@@ -106,6 +131,10 @@ namespace Horo {
         [[nodiscard]] Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override;
         [[nodiscard]] Result<void> RemoveDurable(const std::filesystem::path &path) override;
         [[nodiscard]] Result<void> SyncDirectory(const std::filesystem::path &path) override;
+
+    private:
+        [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductLease(const std::filesystem::path &installationRoot,
+                                                                        bool maintenance) const;
     };
 
     /** @brief Provides monotonic time for scheduling without exposing wall-clock time. */
