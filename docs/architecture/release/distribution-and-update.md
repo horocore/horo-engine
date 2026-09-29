@@ -340,6 +340,15 @@ marker, and complete staged tree before passing the signed entrypoint path to
 `IExternalProcessRunner` with a bounded lifetime and output budget. The host
 keeps the stage quiescent and owns product-stop and launch-admission coordination;
 the probe alone does not establish that gate or install platform integration.
+The native filesystem exposes OS-held shared product-launch leases and an
+exclusive maintenance gate on the installation's `.product-launch.lock` file.
+An installed product launcher retains a shared lease for its entire process
+lifetime. Bootstrap, repair, uninstall, and update activation retain the
+exclusive gate after requesting product shutdown and before mutating the active
+state. If any launch remains active or races with maintenance, the operation
+fails before publication. This gate is additive to the transaction lock and
+does not terminate processes; launcher integration and a cooperative stop
+channel are required before production composition is complete.
 `PrepareZipUpdateStageHttps` is the blocking host worker operation for ZIP
 updates: it resumes or downloads into the protected private package file, then
 authenticates and extracts that same file before returning a durable ready
