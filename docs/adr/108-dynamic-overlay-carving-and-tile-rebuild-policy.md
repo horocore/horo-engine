@@ -119,6 +119,23 @@ Physics pointer. Transform updates are coalesced latest-wins per obstacle; creat
 remove ordering is deterministic. Queue overflow, invalid shape/world, stale handle
 or unsupported policy rejects the command without partially changing the overlay.
 
+The NAV-005.3 runtime contract projects immutable Scene dynamic-registry snapshots
+onto topology-owner-supplied authored surface identities, exact world/topology
+generations, and finite extents in the
+same canonical Scene-local metre frame as grounded bake partitions. It keeps the
+supported box/cylinder shape and layer facts per surface, clips conservative
+footprints to that surface, and reports exact Scene binding and logical overlay
+revision even for an empty projection. Bounded, layer-filtered surface segment probes
+require topology-owner-split cross-surface paths and carry surface identity and that
+same revision even when clear. Surface-keyed changed-region projection unions old/new
+blocker bounds for moves, including crossed intermediate surfaces, clips to the surface, and is all-or-error under the
+caller's output bound. The owner uses these regions and revision as affected-path
+invalidation input; any held path whose exact coverage cannot prove independence
+still fails currentness on the global obstacle revision under ADR-107.
+The registry coalesces at most 64 newer source revisions for an active obstacle
+into one staged update before the safe-point commit; it never writes to cooked
+topology or to a retained older snapshot.
+
 ### 5. Door and modifier state use semantic gates
 
 A normal door owns an authored stable `NavigationLinkId` or portal/gate descriptor
