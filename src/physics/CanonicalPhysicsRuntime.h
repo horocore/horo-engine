@@ -107,10 +107,18 @@ namespace Horo::Physics::Detail {
      */
     [[nodiscard]] Result<CanonicalStepOutcome> StepCanonicalWorld(CanonicalWorldHandle world, float fixedDeltaSeconds,
                                                                   std::uint64_t simulationTick = 0, CanonicalContactSink contactSink = {});
+
+    /** @brief Synthetic contact conditions retained only for native boundary regression coverage. */
+    struct CanonicalContactTestOptions final {
+        bool sensor{};
+        bool persisted{};
+        std::uint32_t contactPointCount{1};
+    };
+
     /** @brief Invokes the installed contact listener with copied native evidence for boundary regression coverage. */
     [[nodiscard]] bool InvokeCanonicalContactCallbackForTesting(CanonicalWorldHandle world, const PhysicsQueryFixture &first,
                                                                 const PhysicsQueryFixture &second, std::uint64_t simulationTick,
-                                                                bool sensor, bool persisted, CanonicalContactSink contactSink);
+                                                                CanonicalContactSink contactSink, CanonicalContactTestOptions options);
     /** @brief Admits one analytic scene shape into an unpublished owner-thread world. */
     [[nodiscard]] Result<ShapeHandle> CreateCanonicalSceneShape(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                                 const PhysicsShapeDescriptor &descriptor);
