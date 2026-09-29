@@ -1359,6 +1359,19 @@ an optional Post-1.0 extension.
 Streaming uses worker or I/O jobs to fill preallocated ring buffers. The audio
 callback consumes available frames without waiting.
 
+`Horo/Audio/AudioStreamDecoder.h` is the worker-side runtime decode session
+contract, distinct from source import decoding. A host first validates the cooked
+media generation and prepares an exact codec, ADR-063 format, frame count, block
+limit, and scratch budget. It then supplies a provider whose context is owned by
+the accepted session. One worker serializes bounded `Decode` and `Seek` calls into
+caller-owned interleaved output and scratch spans; control may request cooperative
+cancellation concurrently. Provider failure or inconsistent progress discards the
+candidate block and closes admission. The host joins worker work before releasing
+the provider, and only the Audio control owner publishes prepared blocks or ring
+generations at the ADR-062 boundary. This contract neither performs file I/O nor
+invokes a codec from the callback; concrete codec providers and stream-ring
+publication are separate integration work.
+
 Underrun behavior:
 
 - output silence for missing frames

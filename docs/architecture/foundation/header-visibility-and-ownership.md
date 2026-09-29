@@ -1201,3 +1201,13 @@ type. Existing callers require no signature migration. Application roots supply
 exact concrete participant factories and retain their code and resources through
 composition shutdown. `HoroNetworkModePublicHeaderConsumer`, the runtime mode
 tests, and the concrete headless host integration consumer cover this boundary.
+
+## AUD-002.7 Runtime Stream Decoder Header Boundary
+
+`HoroEngine::AudioApi` solely owns the additive public
+`Horo/Audio/AudioStreamDecoder.h` and `AudioStreamDecoderErrors.h` contracts.
+Existing import-decoder callers have no signature migration: runtime workers opt
+into the separate session and supply caller-owned output/scratch and an owned
+provider context. No codec-specific or native backend type crosses the public
+boundary. The generated `HoroAudioApiPublicHeaderConsumer` and focused
+`HoroAudioApiTests` cover the new headers and lifecycle contract.
