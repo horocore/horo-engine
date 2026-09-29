@@ -455,10 +455,10 @@ namespace Horo::Editor {
     }
 
     /** @copydoc GuiScreenHost::OnFixedUpdate */
-    void GuiScreenHost::OnFixedUpdate(const double fixedDeltaSeconds) {
+    void GuiScreenHost::OnFixedUpdate(const std::uint64_t simulationTick, const double fixedDeltaSeconds) {
         if (activeScreen_) {
             isScreenCallbackActive_ = true;
-            activeScreen_->OnFixedUpdate(fixedDeltaSeconds);
+            activeScreen_->OnFixedUpdate(simulationTick, fixedDeltaSeconds);
             isScreenCallbackActive_ = false;
         }
         FlushPendingNavigation();

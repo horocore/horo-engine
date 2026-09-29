@@ -12,6 +12,7 @@
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Result.h"
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -161,8 +162,12 @@ namespace Horo::Editor {
         /** @brief Updates the active screen and checks pending leave dialogs. */
         void OnUpdate(float dt);
 
-        /** @brief Routes one host fixed tick to the active screen. */
-        void OnFixedUpdate(double fixedDeltaSeconds);
+        /**
+         * @brief Routes one host fixed tick to the active screen.
+         * @param simulationTick Monotonic simulation tick identity.
+         * @param fixedDeltaSeconds Duration of the fixed tick in seconds.
+         */
+        void OnFixedUpdate(std::uint64_t simulationTick, double fixedDeltaSeconds);
 
         /** @brief Renders the active screen and any active leave-resolution modals. */
         void Draw();
@@ -209,6 +214,7 @@ namespace Horo::Editor {
 
         const EditorGuiContext *context_;
         EditorModalHost *modalHost_;
+        Input::InputRouter *inputRouter_;
         EditorSettingsService *settingsService_;
         LocalizationService *localization_;
         EngineDataBus *engineEvents_;

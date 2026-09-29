@@ -447,13 +447,13 @@ namespace Horo::Editor {
         [[nodiscard]] EditorTelemetry RegisterEditorTelemetry() {
             return {
                 .frameNumber = Telemetry::Runtime::RegisterGauge(
-                    {.name = "horo.editor.frame.number", .subsystem = "Editor.Runtime", .unit = "frames"}),
+                    {.name = "horo.editor.frame.number", .subsystem = "Editor.Runtime", .unit = Telemetry::MetricUnit::Count}),
                 .frameDuration = Telemetry::Runtime::RegisterGauge(
-                    {.name = "horo.editor.frame.duration", .subsystem = "Editor.Runtime", .unit = "seconds"}),
+                    {.name = "horo.editor.frame.duration", .subsystem = "Editor.Runtime", .unit = Telemetry::MetricUnit::Seconds}),
                 .droppedRecords = Telemetry::Runtime::RegisterGauge(
-                    {.name = "horo.observability.records.dropped", .subsystem = "Foundation.Observability", .unit = "records"}),
+                    {.name = "horo.observability.records.dropped", .subsystem = "Foundation.Observability", .unit = Telemetry::MetricUnit::Count}),
                 .sinkFailures = Telemetry::Runtime::RegisterGauge(
-                    {.name = "horo.observability.sink.failures", .subsystem = "Foundation.Observability", .unit = "failures"}),
+                    {.name = "horo.observability.sink.failures", .subsystem = "Foundation.Observability", .unit = Telemetry::MetricUnit::Count}),
             };
         }
 
@@ -864,7 +864,8 @@ namespace Horo::Editor {
             }
 
             Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
-                screenHost_->OnFixedUpdate(static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0);
+                screenHost_->OnFixedUpdate(context.simulationTick,
+                                           static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0);
                 return Result<void>::Success();
             }
 
@@ -1278,25 +1279,19 @@ namespace Horo::Editor {
         return std::nullopt;
     }
 
-    [[nodiscard]] std::unique_ptr<ModuleHost> ComposeEditorModules(const std::string &rendererBackend) {
-        auto selectedRenderer = Application::Internal::HostRendererFromBackendId(rendererBackend);
-        if (selectedRenderer.HasError()) {
-            LOG_CRITICAL("editor.renderer", "%s", selectedRenderer.ErrorValue().message.c_str());
-            return nullptr;
-        }
-        auto composedModules = Application::Internal::ComposeHostModules({.host = Application::Internal::HostKind::Editor,
-                                                                          .renderer = selectedRenderer.Value(),
+    /** @brief Composes editor modules with the settings loaded for this startup. */
+    [[nodiscard]] static Result<std::unique_ptr<ModuleHost>> ComposeEditorModules(const Application::Internal::HostRenderer renderer,
+                                                                                  const EditorSettings &initialSettings) {
+        const std::vector settingsContributions{MakeEditorSettingsContribution(initialSettings)};
+        return Application::Internal::ComposeHostModules({.host = Application::Internal::HostKind::Editor,
+                                                          .renderer = renderer,
 #if defined(HORO_HAS_OPENTELEMETRY)
-                                                                          .includeOpenTelemetry = true
+                                                          .includeOpenTelemetry = true
 #else
-                                                                          .includeOpenTelemetry = false
+                                                          .includeOpenTelemetry = false
 #endif
-        });
-        if (composedModules.HasError()) {
-            LOG_CRITICAL("editor.startup", "Module composition failed: %s", composedModules.ErrorValue().message.c_str());
-            return nullptr;
-        }
-        return std::move(composedModules).Value();
+                                                         },
+                                                         settingsContributions);
     }
 
     void ConfigureEditorInput(Input::InputRouter &inputRouter) {
@@ -1391,6 +1386,20 @@ namespace Horo::Editor {
             Log::Logger::Shutdown();
             return 1;
         }
+        const EditorSettings initialSettings = LoadEditorSettingsDocument().settings;
+        auto composedModules = ComposeEditorModules(selectedRenderer.Value(), initialSettings);
+        if (composedModules.HasError()) {
+            LOG_CRITICAL("editor.startup", "Module composition failed: %s", composedModules.ErrorValue().message.c_str());
+            Log::Logger::Shutdown();
+            return 1;
+        }
+        std::unique_ptr<ModuleHost> moduleHost = std::move(composedModules).Value();
+        Result<ConfigurationSchema> moduleSchema = moduleHost->BuildConfigurationSchema();
+        if (moduleSchema.HasError()) {
+            LOG_CRITICAL("editor.startup", "Module configuration failed: %s", moduleSchema.ErrorValue().message.c_str());
+            Log::Logger::Shutdown();
+            return 1;
+        }
 
         SDL_Window *w = nullptr;
         if (!InitializeSdlAndCreateWindow(w, moduleInfo->windowRequirements, !opts.uiPreview.empty()))
@@ -1423,14 +1432,14 @@ namespace Horo::Editor {
         JobSystem jobSystem{JobSystemConfig{.workerCount = 2, .maxQueuedJobs = 256}};
         ProjectCreationService projectCreationService{jobSystem, engineEvents};
         EditorDataBus editorEvents;
-        const EditorSettings initialSettings = LoadEditorSettingsDocument().settings;
         LOG_INFO("editor.startup", "Loaded language tag from disk: '%s'", initialSettings.languageTag.c_str());
         LocalizationService localization{LocaleTag{"en-US"}};
         const bool loadedCatalogs = LoadEditorCatalogResources(localization);
         LOG_INFO("editor.startup", "Catalog resources loaded: %s", loadedCatalogs ? "true" : "false");
         ActivateInitialLocale(initialSettings, localization);
 
-        ConfigurationService configuration = CreateEditorConfigurationService(initialSettings, &engineEvents);
+        ConfigurationService configuration =
+            CreateEditorConfigurationService(initialSettings, &engineEvents, std::move(moduleSchema).Value());
         EditorSettingsService settings{initialSettings, configuration, editorEvents, localization};
 
         const Subscription settingsSub = SubscribeToEditorSettings(editorEvents, settings, localization);

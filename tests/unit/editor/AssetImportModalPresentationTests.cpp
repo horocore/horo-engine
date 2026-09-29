@@ -1,3 +1,4 @@
+#include "../support/AssetImportTestSupport.h"
 #include "Horo/Assets/AssetImporter.h"
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/EditorDataBus.h"
@@ -14,10 +15,51 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <imgui_internal.h>
 #include <memory>
 
 namespace {
+    std::vector<Horo::Assets::ImportSettingDescriptor> MakeCatalogSettings() {
+        using namespace Horo::Assets;
+        return {
+            {.id = "optimize",
+             .labelKey = "Optimize",
+             .descriptionKey = "Optimize mesh data",
+             .kind = ImportSettingKind::Boolean,
+             .defaultValue = true},
+            {.id = "importMaterials",
+             .labelKey = "Generate Materials",
+             .descriptionKey = "Generate material assets",
+             .kind = ImportSettingKind::Boolean,
+             .defaultValue = true},
+            {.id = "importAnimations",
+             .labelKey = "Animation Import",
+             .descriptionKey = "Import animation tracks",
+             .kind = ImportSettingKind::Boolean,
+             .defaultValue = false},
+            {.id = "lod-count",
+             .labelKey = "LOD count",
+             .descriptionKey = "Generated detail levels",
+             .kind = ImportSettingKind::Integer,
+             .defaultValue = std::int64_t{3}},
+            {.id = "scale", .labelKey = "Scale", .descriptionKey = "Import scale", .kind = ImportSettingKind::Float, .defaultValue = 1.0},
+            {.id = "tag",
+             .labelKey = "Tag",
+             .descriptionKey = "Source tag",
+             .kind = ImportSettingKind::Text,
+             .defaultValue = std::string{"environment"}},
+            {.id = "normals",
+             .labelKey = "Normals",
+             .descriptionKey = "Normal generation policy",
+             .kind = ImportSettingKind::Choice,
+             .defaultValue = std::size_t{0},
+             .choices = {{.id = "source", .labelKey = "Source", .value = std::size_t{0}},
+                         {.id = "generate", .labelKey = "Generate", .value = std::size_t{1}}}},
+        };
+    }
+
     std::shared_ptr<const Horo::Assets::AssetImporterCatalogSnapshot> MakeCatalog() {
         using namespace Horo::Assets;
 
@@ -27,38 +69,9 @@ namespace {
             .moduleId = "horo.assets.obj",
             .moduleVersion = "1.0.0",
             .version = "1.0.0",
-            .fileExtensions = {"obj"},
+            .fileExtensions = {"obj", "fbx", "png", "wav"},
             .assetTypes = {AssetTypeId::Parse("core.mesh").Value()},
-            .settings =
-                {
-                    {.id = "optimize",
-                     .labelKey = "Optimize",
-                     .descriptionKey = "Optimize mesh data",
-                     .kind = ImportSettingKind::Boolean,
-                     .defaultValue = true},
-                    {.id = "lod-count",
-                     .labelKey = "LOD count",
-                     .descriptionKey = "Generated detail levels",
-                     .kind = ImportSettingKind::Integer,
-                     .defaultValue = std::int64_t{3}},
-                    {.id = "scale",
-                     .labelKey = "Scale",
-                     .descriptionKey = "Import scale",
-                     .kind = ImportSettingKind::Float,
-                     .defaultValue = 1.0},
-                    {.id = "tag",
-                     .labelKey = "Tag",
-                     .descriptionKey = "Source tag",
-                     .kind = ImportSettingKind::Text,
-                     .defaultValue = std::string{"environment"}},
-                    {.id = "normals",
-                     .labelKey = "Normals",
-                     .descriptionKey = "Normal generation policy",
-                     .kind = ImportSettingKind::Choice,
-                     .defaultValue = std::size_t{0},
-                     .choices = {{.id = "source", .labelKey = "Source", .value = std::size_t{0}},
-                                 {.id = "generate", .labelKey = "Generate", .value = std::size_t{1}}}},
-                },
+            .settings = MakeCatalogSettings(),
             .builtIn = true,
         };
         return std::make_shared<const AssetImporterCatalogSnapshot>(std::vector<AssetImporterContribution>{std::move(contribution)});
@@ -180,13 +193,31 @@ TEST_CASE("Asset import presentation handles empty and unresolved importer selec
     REQUIRE(fixture.modal.Snapshot().items.front().importerContributionId.empty());
 }
 
+TEST_CASE("Asset import presentation formats captured kilobyte source sizes", "[unit][editor][gui][asset-import]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+
+    ::Horo::Tests::ScopedAssetImportTempDirectory project{"horo-presentation-size"};
+    const auto source = project.Path() / "scene.obj";
+    {
+        std::ofstream output{source};
+        output << std::string(2048, 'x');
+    }
+
+    AssetImportPresentationFixture fixture;
+    CancellationToken cancellation;
+    REQUIRE((fixture.modal.BeginImport({source}, project.Path(), cancellation).HasValue()));
+    DrawFrame(fixture.imgui, fixture.modal);
+    REQUIRE(fixture.modal.SourceFileSize(0).value() == 2048);
+}
+
 TEST_CASE("Asset import presentation renders retained history status variants", "[unit][editor][gui][asset-import]") {
     using namespace Horo;
     using namespace Horo::Assets;
     using namespace Horo::Editor;
 
-    Tests::HeadlessEditorGuiFixture imgui;
-    Tests::ScopedJobSystem jobs;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::ScopedJobSystem jobs;
     EditorDataBus events;
     Input::InputRouter inputRouter;
     EditorModalHost modalHost{events, inputRouter};
@@ -221,8 +252,8 @@ TEST_CASE("Asset import preview fixtures render populated and empty workflow sta
     using namespace Horo;
     using namespace Horo::Editor;
 
-    Tests::HeadlessEditorGuiFixture imgui;
-    Tests::ScopedJobSystem jobs;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::ScopedJobSystem jobs;
     EditorDataBus events;
     Input::InputRouter inputRouter;
     EditorModalHost modalHost{events, inputRouter};
@@ -236,7 +267,6 @@ TEST_CASE("Asset import preview fixtures render populated and empty workflow sta
     REQUIRE(modalPtr->IsReadOnlyPresentation());
     REQUIRE(modalPtr->Snapshot().items.size() == 4);
     REQUIRE(modalPtr->SourceFileSize(0).value() == 12'400'000);
-    ImGui::SetNextItemOpen(true, ImGuiCond_Always);
     DrawFrame(imgui, *modalPtr);
 
     for (std::size_t index = 0; index < modalPtr->Snapshot().items.size(); ++index) {
@@ -255,8 +285,8 @@ TEST_CASE("Asset import preview fixture renders an empty queue", "[unit][editor]
     using namespace Horo;
     using namespace Horo::Editor;
 
-    Tests::HeadlessEditorGuiFixture imgui;
-    Tests::ScopedJobSystem jobs;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::ScopedJobSystem jobs;
     EditorDataBus events;
     Input::InputRouter inputRouter;
     EditorModalHost modalHost{events, inputRouter};
@@ -276,7 +306,7 @@ TEST_CASE("Editor UI preview gallery renders both interaction states", "[unit][e
     using namespace Horo;
     using namespace Horo::Editor;
 
-    Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
     LocalizationService localization{LocaleTag{"en-US"}};
 
     imgui.BeginFrame();
@@ -314,8 +344,8 @@ TEST_CASE("Asset import preview fixtures expose deterministic populated and empt
     using namespace Horo::Editor;
 
     {
-        Tests::HeadlessEditorGuiFixture imgui;
-        Tests::ScopedJobSystem jobs;
+        Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
+        Horo::Editor::Tests::ScopedJobSystem jobs;
         EditorDataBus events;
         Input::InputRouter inputRouter;
         EditorModalHost modalHost{events, inputRouter};
@@ -332,8 +362,8 @@ TEST_CASE("Asset import preview fixtures expose deterministic populated and empt
         DrawFrame(imgui, *modalPtr);
     }
 
-    Tests::HeadlessEditorGuiFixture imgui;
-    Tests::ScopedJobSystem jobs;
+    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
+    Horo::Editor::Tests::ScopedJobSystem jobs;
     EditorDataBus events;
     Input::InputRouter inputRouter;
     EditorModalHost modalHost{events, inputRouter};
