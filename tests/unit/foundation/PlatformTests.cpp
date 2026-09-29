@@ -14,6 +14,11 @@
 #include <thread>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 namespace {
     const Horo::ErrorCodeDescriptor kInjectedStoreFailure{
         .domain = Horo::ErrorDomainId{"test.configuration-store"},
@@ -215,6 +220,36 @@ namespace {
         }
         std::filesystem::remove_all(root, ignored);
     }
+
+#if !defined(_WIN32)
+    TEST_CASE("A child closing an inherited product lease cannot unlock parent maintenance", "[unit][foundation][release]") {
+        const auto root =
+            std::filesystem::temp_directory_path() / ("horo-platform-inherited-lease-" + std::to_string(static_cast<long long>(getpid())));
+        std::error_code ignored;
+        std::filesystem::remove_all(root, ignored);
+        REQUIRE(std::filesystem::create_directories(root));
+        Horo::NativeDurableFileSystem files;
+        {
+            auto maintenance = files.TryAcquireProductMaintenance(root);
+            REQUIRE(maintenance.HasValue());
+            const pid_t child = fork();
+            REQUIRE(child >= 0);
+            if (child == 0) {
+                {
+                    Horo::ProductLaunchLease inherited = std::move(maintenance).Value();
+                }
+                _exit(0);
+            }
+            int status = 0;
+            REQUIRE(waitpid(child, &status, 0) == child);
+            REQUIRE(WIFEXITED(status));
+            REQUIRE(WEXITSTATUS(status) == 0);
+            CHECK(files.TryAcquireProductLaunch(root).HasError());
+        }
+        CHECK(files.TryAcquireProductLaunch(root).HasValue());
+        std::filesystem::remove_all(root, ignored);
+    }
+#endif
 
     TEST_CASE("Native Durable Filesystem Serializes Locks And Replaces Files", "[unit][foundation]") {
         const auto root = std::filesystem::temp_directory_path() / "horo-platform-durable-test";
