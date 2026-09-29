@@ -302,17 +302,11 @@ TEST_CASE("Selected ZIP delivery uses verified delta then signed full fallback",
             PreloadCompleted(full, fullPaths, signedBytes, files);
         const std::span<const UpdateStagedFile> requestedTarget =
             scenario == 1U ? std::span<const UpdateStagedFile>{base} : std::span<const UpdateStagedFile>{target};
-        auto staged = PrepareSelectedZipUpdateStageHttps({candidates,
-                                                          directory.root / "base",
-                                                          base,
-                                                          requestedTarget,
-                                                          deltaPaths,
-                                                          deltaStage,
-                                                          fullPaths,
-                                                          stage,
-                                                          {.maximumPackageBytes = 4096U},
-                                                          limits},
-                                                         files, Verifier(), {});
+        const auto baseRoot = directory.root / "base";
+        const UpdateDownloadLimits downloadLimits{.maximumPackageBytes = 4096U};
+        const SelectedZipStagingRequest request{candidates, baseRoot,  base,  requestedTarget, deltaPaths,
+                                                deltaStage, fullPaths, stage, downloadLimits,  limits};
+        auto staged = PrepareSelectedZipUpdateStageHttps(request, files, Verifier(), {});
         REQUIRE(staged.HasValue());
         CHECK(staged.Value().usedDelta == !forceFallback);
         CHECK(ReadFile(fullPaths.partialFile) == signedBytes);
