@@ -7,6 +7,7 @@ horo_allow_target_dependencies(TARGET HoroSecurity DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroCliHost DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroMcpSession DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroMcpRegistry DEPENDENCIES HoroMcpSession)
+horo_allow_target_dependencies(TARGET HoroMcpController DEPENDENCIES HoroMcpRegistry)
 horo_allow_target_dependencies(TARGET HoroModelProvider)
 horo_allow_target_dependencies(TARGET HoroModelProviderAdapters DEPENDENCIES HoroModelProvider)
 horo_allow_target_dependencies(TARGET HoroOpenTelemetry DEPENDENCIES HoroFoundation)
@@ -18,9 +19,19 @@ horo_allow_target_dependencies(TARGET HoroPackageSecurity DEPENDENCIES HoroFound
 horo_allow_target_dependencies(TARGET HoroApplication DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroReleaseProcess DEPENDENCIES HoroApplication HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroReleaseService DEPENDENCIES HoroApplication HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroReleaseGitHub DEPENDENCIES HoroApplication)
+horo_allow_target_dependencies(TARGET HoroReleaseGitHubCli DEPENDENCIES HoroReleaseGitHub HoroPlatform)
+horo_allow_target_dependencies(TARGET HoroUpdateManifest DEPENDENCIES HoroApplication HoroSecurity)
+horo_allow_target_dependencies(TARGET HoroUpdateDiscovery DEPENDENCIES HoroUpdateManifest)
+horo_allow_target_dependencies(TARGET HoroUpdateTransfer DEPENDENCIES HoroUpdateManifest)
+horo_allow_target_dependencies(TARGET HoroUpdateDownload DEPENDENCIES HoroUpdateTransfer HoroPlatform)
+horo_allow_target_dependencies(TARGET HoroUpdateOfflineSource DEPENDENCIES HoroUpdateDiscovery HoroUpdateDownload HoroPlatform)
+horo_allow_target_dependencies(TARGET HoroUpdateActivation DEPENDENCIES HoroUpdateDownload HoroPlatform)
+horo_allow_target_dependencies(TARGET HoroUserStateMigration DEPENDENCIES HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroProjectMigrations DEPENDENCIES HoroApplication)
 horo_allow_target_dependencies(TARGET HoroRuntime DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroRuntimeUi DEPENDENCIES HoroFoundation HoroAssets)
+horo_allow_target_dependencies(TARGET HoroUiTemplateGraph DEPENDENCIES HoroFoundation HoroAssets HoroPackages)
 horo_allow_target_dependencies(TARGET HoroRuntimeUiInput DEPENDENCIES HoroInput HoroRuntimeUi)
 horo_allow_target_dependencies(TARGET HoroAssets DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroNetworkApi DEPENDENCIES HoroFoundation)
@@ -56,6 +67,7 @@ horo_allow_target_dependencies(TARGET HoroVfxApi DEPENDENCIES HoroFoundation Hor
 horo_allow_target_dependencies(TARGET HoroDestructionApi DEPENDENCIES HoroFoundation HoroAssets)
 horo_allow_target_dependencies(TARGET HoroDestructionCook DEPENDENCIES HoroDestructionApi HoroAssets)
 horo_allow_target_dependencies(TARGET HoroDestructionRuntime DEPENDENCIES HoroDestructionApi)
+horo_allow_target_dependencies(TARGET HoroDestructionApplication DEPENDENCIES HoroDestructionRuntime)
 horo_allow_target_dependencies(TARGET HoroDestructionReplication DEPENDENCIES HoroDestructionApi HoroNetworkApi)
 horo_allow_target_dependencies(TARGET HoroCinematicModel DEPENDENCIES HoroFoundation HoroRuntime HoroAssets HoroSceneModel)
 horo_allow_target_dependencies(TARGET HoroCinematicRuntime DEPENDENCIES HoroCinematicModel)
@@ -65,6 +77,8 @@ horo_allow_target_dependencies(TARGET HoroNavigationSceneIntegration DEPENDENCIE
 horo_allow_target_dependencies(TARGET HoroXRApi DEPENDENCIES HoroFoundation HoroRenderApi)
 horo_allow_target_dependencies(TARGET HoroXRRuntime DEPENDENCIES HoroXRApi)
 horo_allow_target_dependencies(TARGET HoroTerrainApi DEPENDENCIES HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroTerrainImport DEPENDENCIES HoroTerrainApi HoroAssets)
+horo_allow_target_dependencies(TARGET HoroTerrainCook DEPENDENCIES HoroTerrainImport)
 horo_allow_target_dependencies(TARGET HoroTerrainRuntime DEPENDENCIES HoroTerrainApi HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroNavigationNull DEPENDENCIES HoroNavigationApi)
 horo_allow_target_dependencies(TARGET HoroNavigationRecastDetour DEPENDENCIES HoroNavigationApi)
@@ -152,6 +166,7 @@ horo_allow_target_dependencies(TARGET HoroEditor
         HoroExtensions
         HoroPlatform
         HoroProjectMigrations
+        HoroUserStateMigration
         HoroInputSdl
         HoroOpenTelemetry
         HoroEditorViewportOpenGL

@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Save/SaveArchiveReader.h"
+#include "Horo/Runtime/Save/SaveMigration.h"
 #include "SaveTestUtils.h"
 
 #include <algorithm>
@@ -79,17 +80,15 @@ namespace {
     };
 
     std::vector<std::byte> MakePayload(const std::string &header, const std::string &manifest, const std::span<const std::byte> chunk,
-                                       const std::uint32_t version = 1) {
-        constexpr std::size_t entryCount = 3;
+                                       const std::uint32_t version = 1, const std::span<const std::byte> secondChunk = {}) {
+        const std::size_t entryCount = secondChunk.empty() ? 3 : 4;
         std::vector<std::byte> payload(SaveArchiveContainerHeaderByteLength + entryCount * SaveArchiveContainerEntryByteLength);
-        const std::size_t dataOffset = payload.size();
         payload.insert(payload.end(), reinterpret_cast<const std::byte *>(header.data()),
                        reinterpret_cast<const std::byte *>(header.data() + header.size()));
-        const std::uint64_t manifestOffset = payload.size() - dataOffset;
         payload.insert(payload.end(), reinterpret_cast<const std::byte *>(manifest.data()),
                        reinterpret_cast<const std::byte *>(manifest.data() + manifest.size()));
-        const std::uint64_t chunkOffset = payload.size() - dataOffset;
         payload.insert(payload.end(), chunk.begin(), chunk.end());
+        payload.insert(payload.end(), secondChunk.begin(), secondChunk.end());
 
         constexpr std::array<std::byte, 8> containerMagic{std::byte{'H'}, std::byte{'S'}, std::byte{'C'}, std::byte{'T'},
                                                           std::byte{'N'}, std::byte{'R'}, std::byte{'1'}, std::byte{0}};
@@ -162,6 +161,50 @@ namespace {
         return FinalizeArchive(std::move(payload));
     }
 
+    ArchiveFixture MakeArchiveWithUnknown(const bool required = false, const std::byte opaqueByte = std::byte{0xa5},
+                                          std::string engineVersion = "1.2.3-preview.4", const bool compressed = false) {
+        auto manifestValue = Manifest();
+        const auto unknownOwner = SaveParticipantId::Parse("project.future.dlc.v1").Value();
+        manifestValue.participants.push_back({.participant = unknownOwner,
+                                              .schemaVersion = V<ParticipantSchemaVersion>(9),
+                                              .required = required,
+                                              .chunks = {Id<SaveRecordId>(21)}});
+        const auto header = EncodeSaveArchiveHeader(Header(std::move(engineVersion))).Value();
+        const auto manifest = EncodeSaveGameManifest(manifestValue).Value();
+        const std::array known{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
+        const std::array rawUnknown{opaqueByte, std::byte{0x00}, std::byte{0xff}};
+        std::vector<std::byte> unknown(rawUnknown.begin(), rawUnknown.end());
+        EntryEncoding unknownEncoding;
+        if (compressed) {
+            const std::vector<std::byte> canonical(1'024, opaqueByte);
+            const auto encoded = EncodeSaveChunk(canonical, {.preferred = SaveChunkCodec::Deflate, .required = true}, {}).Value();
+            unknown = encoded.stored;
+            unknownEncoding = {.codec = encoded.codec, .decodedLength = encoded.decodedByteLength, .decodedHash = encoded.decodedHash};
+        }
+        const std::uint32_t version = compressed ? 2 : 1;
+        auto payload = MakePayload(header, manifest, known, version, unknown);
+        WriteEntry(payload, 0, SaveArchiveEntryKind::Header, 0, std::as_bytes(std::span{header}), {}, nullptr);
+        WriteEntry(payload, 1, SaveArchiveEntryKind::Manifest, header.size(), std::as_bytes(std::span{manifest}), {}, nullptr);
+        WriteEntry(payload, 2, SaveArchiveEntryKind::Chunk, header.size() + manifest.size(), known, Id<SaveRecordId>(20),
+                   &manifestValue.participants[0].participant);
+        WriteEntry(payload, 3, SaveArchiveEntryKind::Chunk, header.size() + manifest.size() + known.size(), unknown, Id<SaveRecordId>(21),
+                   &manifestValue.participants[1].participant, unknownEncoding);
+        return FinalizeArchive(std::move(payload), version);
+    }
+
+    SaveCompatibilityPolicy UnknownPolicy() {
+        const auto oneArchive = V<ArchiveFormatVersion>(1);
+        const auto oneSchema = V<SaveSchemaVersion>(1);
+        const auto oneProduct = V<ProductSaveCompatibilityVersion>(1);
+        const auto oneParticipant = V<ParticipantSchemaVersion>(1);
+        return {.archiveVersions = {.direct = {.minimum = oneArchive, .maximum = oneArchive}},
+                .saveSchemaVersions = {.direct = {.minimum = oneSchema, .maximum = oneSchema}},
+                .productVersions = {.direct = {.minimum = oneProduct, .maximum = oneProduct}},
+                .participants = {{.participant = Manifest().participants.front().participant,
+                                  .versions = {.direct = {.minimum = oneParticipant, .maximum = oneParticipant}},
+                                  .required = true}}};
+    }
+
     ArchiveFixture MakeCompressedArchive(const std::span<const std::byte> canonical) {
         const auto encoded = EncodeSaveChunk(canonical, {.preferred = SaveChunkCodec::Deflate, .required = true}, {}).Value();
         const auto header = EncodeSaveArchiveHeader(Header()).Value();
@@ -197,6 +240,126 @@ namespace {
         REQUIRE(selected.Value());
         CHECK(selected.Value()->size() == 4);
         CHECK(result.Value().Signature().algorithm == SaveArchiveSignatureAlgorithm::None);
+    }
+
+    TEST_CASE("Unknown required content rejects before restore with its stable owner identity", "[runtime][save][archive-reader]") {
+        const auto bytes = MakeArchiveWithUnknown(true).bytes;
+        const auto archive = SaveArchiveReader{}.Read(bytes);
+        REQUIRE(archive.HasValue());
+        const auto report = archive.Value().InspectUnknownData(UnknownPolicy(), 1024);
+        REQUIRE(report.HasError());
+        CHECK(report.ErrorValue().message ==
+              "Save cannot be restored: required module or content participant 'project.future.dlc.v1' is unavailable.");
+    }
+
+    TEST_CASE("Unknown optional bytes and integrity metadata survive a changed archive envelope", "[runtime][save][archive-reader]") {
+        const auto sourceBytes = MakeArchiveWithUnknown().bytes;
+        const auto destinationBytes = MakeArchiveWithUnknown(false, std::byte{0xa5}, "next-build").bytes;
+        auto source = SaveArchiveReader{}.Read(sourceBytes);
+        auto destination = SaveArchiveReader{}.Read(destinationBytes);
+        REQUIRE(source.HasValue());
+        REQUIRE(destination.HasValue());
+        const auto policy = UnknownPolicy();
+        auto report = source.Value().InspectUnknownData(policy, 3);
+        REQUIRE(report.HasValue());
+        REQUIRE(report.Value().preserved.size() == 1);
+        CHECK(report.Value().preserved[0].storedBytes == std::vector<std::byte>{std::byte{0xa5}, std::byte{0}, std::byte{0xff}});
+        CHECK(report.Value().preserved[0].entry.decodedHash == ComputeSha256(report.Value().preserved[0].storedBytes));
+        CHECK(VerifyUnknownDataRoundTrip(source.Value(), destination.Value(), policy, 3).HasValue());
+
+        const auto missingBytes = MakeArchive().bytes;
+        const auto missing = SaveArchiveReader{}.Read(missingBytes);
+        REQUIRE(missing.HasValue());
+        CHECK(VerifyUnknownDataRoundTrip(source.Value(), missing.Value(), policy, 3).HasError());
+
+        const auto changedBytes = MakeArchiveWithUnknown(false, std::byte{0xa6}).bytes;
+        auto changed = SaveArchiveReader{}.Read(changedBytes);
+        REQUIRE(changed.HasValue());
+        const auto rejected = VerifyUnknownDataRoundTrip(source.Value(), changed.Value(), policy, 3);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().message.find("project.future.dlc.v1") != std::string::npos);
+        CHECK(source.Value().InspectUnknownData(policy, 2).HasError());
+    }
+
+    TEST_CASE("Compressed unknown optional storage retains exact codec bytes and digest", "[runtime][save][archive-reader]") {
+        const auto sourceBytes = MakeArchiveWithUnknown(false, std::byte{0xa5}, "build-one", true).bytes;
+        const auto destinationBytes = MakeArchiveWithUnknown(false, std::byte{0xa5}, "build-two", true).bytes;
+        const auto source = SaveArchiveReader{}.Read(sourceBytes);
+        const auto destination = SaveArchiveReader{}.Read(destinationBytes);
+        REQUIRE(source.HasValue());
+        REQUIRE(destination.HasValue());
+        auto policy = UnknownPolicy();
+        policy.archiveVersions.direct.maximum = V<ArchiveFormatVersion>(2);
+        const auto report = source.Value().InspectUnknownData(policy, 1024);
+        REQUIRE(report.HasValue());
+        REQUIRE(report.Value().preserved.size() == 1);
+        CHECK(report.Value().preserved.front().entry.codec == SaveChunkCodec::Deflate);
+        CHECK(report.Value().preserved.front().entry.decodedByteLength == 1'024);
+        CHECK(report.Value().preserved.front().storedBytes.size() < 1'024);
+        CHECK(VerifyUnknownDataRoundTrip(source.Value(), destination.Value(), policy, 1024).HasValue());
+    }
+
+    TEST_CASE("Unknown optional drops require an explicit valid release policy", "[runtime][save][archive-reader]") {
+        const auto bytes = MakeArchiveWithUnknown().bytes;
+        auto archive = SaveArchiveReader{}.Read(bytes);
+        REQUIRE(archive.HasValue());
+        auto policy = UnknownPolicy();
+        policy.droppableUnknownParticipants = {SaveParticipantId::Parse("project.future.dlc.v1").Value()};
+        const auto report = archive.Value().InspectUnknownData(policy, 0);
+        REQUIRE(report.HasValue());
+        CHECK(report.Value().preserved.empty());
+        CHECK(report.Value().dropped == policy.droppableUnknownParticipants);
+        policy.droppableUnknownParticipants.push_back(policy.droppableUnknownParticipants.front());
+        CHECK(archive.Value().InspectUnknownData(policy, 3).HasError());
+
+        policy.droppableUnknownParticipants.pop_back();
+        auto malformed = MakeArchiveWithUnknown();
+        const auto relative = GetLittleEndian<std::uint64_t>(malformed.bytes, SaveArchivePreambleByteLength + EntryOffset(3) + 124);
+        const auto storedOffset = SaveArchivePreambleByteLength + SaveArchiveContainerHeaderByteLength +
+                                  4 * SaveArchiveContainerEntryByteLength + static_cast<std::size_t>(relative);
+        malformed.bytes[storedOffset] = std::byte{0xa6};
+        Rehash(malformed);
+        const auto admitted = SaveArchiveReader{}.Read(malformed.bytes);
+        REQUIRE(admitted.HasValue());
+        CHECK(admitted.Value().InspectUnknownData(policy, 0).HasError());
+    }
+
+    TEST_CASE("Newer optional module schema is treated as opaque unless required by another owner", "[runtime][save][archive-reader]") {
+        const auto bytes = MakeArchiveWithUnknown().bytes;
+        const auto archive = SaveArchiveReader{}.Read(bytes);
+        REQUIRE(archive.HasValue());
+        auto policy = UnknownPolicy();
+        const auto future = SaveParticipantId::Parse("project.future.dlc.v1").Value();
+        const auto v1 = V<ParticipantSchemaVersion>(1);
+        policy.participants.push_back({.participant = future, .versions = {.direct = {.minimum = v1, .maximum = v1}}, .required = false});
+        const auto retained = archive.Value().InspectUnknownData(policy, 3);
+        REQUIRE(retained.HasValue());
+        CHECK(retained.Value().preserved.size() == 1);
+        policy.participants.front().requiredDependencies = {future};
+        const auto blocked = archive.Value().InspectUnknownData(policy, 3);
+        REQUIRE(blocked.HasError());
+        CHECK(blocked.ErrorValue().message.find("project.future.dlc.v1") != std::string::npos);
+    }
+
+    TEST_CASE("Verified unknown records attach to detached migration state atomically", "[runtime][save][archive-reader]") {
+        const auto bytes = MakeArchiveWithUnknown().bytes;
+        auto archive = SaveArchiveReader{}.Read(bytes);
+        REQUIRE(archive.HasValue());
+        SaveMigrationSource source{.archiveFormatVersion = archive.Value().Preamble().archiveFormatVersion,
+                                   .saveSchemaVersion = archive.Value().Manifest().saveSchemaVersion,
+                                   .productCompatibility = archive.Value().Header().productCompatibility,
+                                   .archiveBytes = bytes};
+        for (const auto &entry : archive.Value().Manifest().participants)
+            source.participants.push_back(
+                {.participant = entry.participant, .schemaVersion = entry.schemaVersion, .required = entry.required});
+        CHECK(RetainUnknownSaveData(archive.Value(), UnknownPolicy(), source, 2).HasError());
+        CHECK(source.participants.back().preservedChunks.empty());
+        REQUIRE(RetainUnknownSaveData(archive.Value(), UnknownPolicy(), source, 3).HasValue());
+        REQUIRE(source.participants.back().preservedChunks.size() == 1);
+        CHECK(source.participants.back().preservedChunks.front().storedBytes ==
+              std::vector<std::byte>{std::byte{0xa5}, std::byte{0}, std::byte{0xff}});
+        source.saveSchemaVersion = V<SaveSchemaVersion>(2);
+        CHECK(RetainUnknownSaveData(archive.Value(), UnknownPolicy(), source, 3).HasError());
     }
 
     TEST_CASE("Archive reader reserves cumulative validation work before hashing", "[runtime][save][archive-reader]") {
@@ -382,3 +545,9 @@ namespace {
         CHECK(selected.ErrorValue().code.Value() == SaveErrors::ArchiveChunkHashMismatch.code.Value());
     }
 }  // namespace
+
+namespace Horo::Runtime::Test {
+    std::vector<std::byte> MakeSaveArchiveReaderFixture() {
+        return MakeArchive().bytes;
+    }
+}  // namespace Horo::Runtime::Test

@@ -427,6 +427,20 @@ charged owner and explicit leases; a cell may reference them without charging th
 same allocation twice. Configuration uses checked byte arithmetic (MiB conversion
 is explicit); reservation sums cannot underflow the general pool.
 
+`SharedAssetResidencyLedger` is the authority-side accounting seam for cache-owned
+shared allocations. The exact `AssetId` plus immutable content revision names one
+multidimensional charge; each cell/provider consumer holds its own partition-, epoch- and
+generation-fenced lease. A second consumer neither creates another charge nor
+acquires cache ownership. The Asset Pipeline/cache still owns bytes, lookup,
+eviction and actual destruction. Releasing the final consumer does not return
+budget credit while the cache retains the allocation: the owner first closes
+new leases, then acknowledges actual retirement with a non-reused charge-incarnation
+ticket before the authority removes the charge. A delayed old acknowledgement cannot
+release a successor allocation with the same logical asset revision. Cancellation,
+partition replacement and shutdown close admission while
+old exact leases and retirement acknowledgements remain routable to their original
+ledger. Host composition must drain that ledger before destroying its cache owner.
+
 GPU reservation realization follows
 [ADR-034](../../adr/034-gpu-memory-and-residency-ownership.md): the host-composed
 provider adapter obtains a renderer claim against the host GPU envelope before

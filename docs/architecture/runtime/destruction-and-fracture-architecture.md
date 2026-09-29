@@ -218,6 +218,21 @@ submesh or native shape ID. DFR owns canonical interior classification, winding,
 material slots and UV policy. Render cannot reclassify faces, and Physics cannot change
 chunk membership while realizing collision.
 
+`Horo/Destruction/StructuralGraphCook.h` defines the DFR-002.6 companion graph cook
+over an exact immutable chunk mesh. The request binds fracture content, mesh integrity
+digest, owner revision and nonzero structural-policy revision. Its chunk intent is
+aligned to the stable-ID-ordered mesh table; contacts use checked canonical table
+indices and finite
+positive weights. Unsorted or duplicate contacts, invalid indices, parent cycles,
+unsupported feature requirements and required chunks disconnected from every anchor
+fail with typed, contextual diagnostics. Undirected contact cycles are valid. The
+detached result contains stable-order adjacency, summed contact support weights,
+anchor/required/initial-support flags, deterministic island numbers and finite
+validation counts. It carries no native handle or runtime mutation authority.
+The single-thread owner accepts a complete graph only for the exact current owner,
+content, mesh and policy revisions; cancellation, invalidation, replacement and
+shutdown preserve the last published immutable snapshot.
+
 The DFR cook fingerprint includes normalized source/recipe/dependency digests,
 algorithm/version/seed, coordinate/tolerance/repair policy, interior/material/UV and
 connectivity rules, selected tier/limits and artifact/toolchain schemas. Physics and
@@ -234,6 +249,28 @@ mass inputs and site-neighbor connectivity. If the finite region, work or output
 cannot hold the complete result, generation fails before publication. The detached
 candidate is for later Assets publication and separate Physics/Render derived cooking;
 runtime composition has no call into this cook entry point.
+
+`Horo/Destruction/ChunkMeshCook.h` defines the DFR-002.4 portable surface product.
+The cook consumes a sealed offline Voronoi candidate or a validated pre-fractured
+import candidate and exact fracture-content identity. The content digest binds
+the prior semantic fingerprint or normalized imported geometry, source identity
+and revision, logical material IDs and revision digests, explicit interior
+classification, the two finite planar UV scales and this mesh schema. Every
+referenced exterior and interior slot must have a binding. Imported cut faces
+must have an exact opposite-wound triangle in another chunk; differing cut
+triangulations require explicit source normalization before cook. Missing
+material, altered candidate geometry, invalid cut-plane pairing, non-finite
+face basis/UV or over-limit output fails without publication. Each face retains its
+interior flag and material slot; face-local vertices carry Horo-space normals,
+handed tangents and UVs. Each chunk records stable ID, finite bounds, volume and
+first moment for later density-aware Physics mass realization. The artifact
+records the exact admitted feature tier and produced pre-cooked capability,
+with no tier substitution. The output owns no
+native handles or mutable runtime state. A single-thread owner accepts only an
+immutable, integrity-checked candidate from the captured revision; invalidation
+cancels prior work, and replacement or shutdown leaves the last published snapshot
+available to existing readers. Mesh/Render may lower this product but cannot change
+its DFR face classification or material attribution.
 
 ## Runtime Pre-Cooked Fracture
 

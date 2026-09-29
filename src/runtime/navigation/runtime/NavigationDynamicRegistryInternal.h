@@ -34,6 +34,7 @@ namespace Horo::Navigation::Detail {
         NavigationObstacleHandle handle;
         NavigationDynamicRecordRevision expectedRevision;
         NavigationObstacleDescriptor descriptor;
+        std::uint16_t coalescedUpdates{1};
     };
 
     struct PendingModifierUpdate final {
@@ -256,6 +257,17 @@ namespace Horo::Navigation::Detail {
         return Result<Handle>::Success(handle);
     }
 
+    [[nodiscard]] inline PendingObstacleUpdate *FindPendingObstacleUpdate(NavigationDynamicRegistryState &state,
+                                                                          const std::size_t pendingCount,
+                                                                          const NavigationObstacleHandle handle) noexcept {
+        for (auto &command : std::span{state.pending}.first(pendingCount)) {
+            auto *staged = std::get_if<PendingObstacleUpdate>(&command);
+            if (staged && staged->handle == handle)
+                return staged;
+        }
+        return nullptr;
+    }
+
     template <typename Handle, typename Update, typename Descriptor>
     [[nodiscard]] Result<void> StageUpdate(NavigationDynamicRegistryState &state, std::size_t &pendingCount, const bool shutdown,
                                            const Handle handle, const NavigationDynamicRecordRevision expectedRevision,
@@ -277,6 +289,18 @@ namespace Horo::Navigation::Detail {
             return Failure<void>(NavigationErrors::DynamicRegistryStale);
         if (!UpdateIntervalAllowed(current.lastUpdateTick, descriptor.updateTick, state.limits.minimumUpdateIntervalTicks))
             return Failure<void>(NavigationErrors::DynamicRegistryUpdateRateExceeded);
+        if constexpr (std::is_same_v<Update, PendingObstacleUpdate>) {
+            if (auto *staged = FindPendingObstacleUpdate(state, pendingCount, handle)) {
+                if (descriptor.provenance.sourceRevision.Value() <= staged->descriptor.provenance.sourceRevision.Value() ||
+                    descriptor.updateTick < staged->descriptor.updateTick)
+                    return Failure<void>(NavigationErrors::DynamicRegistryConflict);
+                if (staged->coalescedUpdates >= NavigationDynamicRegistryHardLimits::CoalescedObstacleUpdates)
+                    return Failure<void>(NavigationErrors::DynamicRegistryCapacityExceeded);
+                staged->descriptor = descriptor;
+                ++staged->coalescedUpdates;
+                return Result<void>::Success();
+            }
+        }
         if (const bool hasPending = HasPendingHandle(pending, handle); hasPending || pendingCount >= state.limits.maximumPendingCommands)
             return Failure<void>(hasPending ? NavigationErrors::DynamicRegistryConflict
                                             : NavigationErrors::DynamicRegistryCapacityExceeded);

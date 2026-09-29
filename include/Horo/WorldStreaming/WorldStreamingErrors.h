@@ -8,6 +8,16 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::WorldStreaming::WorldStreamingErrors {
+    /** @brief A shared-asset charge, consumer, lease, or limit is malformed. */
+    extern const ErrorCodeDescriptor SharedAssetInvalid;
+    /** @brief A shared-asset claim names another partition incarnation, owner, or released lease. */
+    extern const ErrorCodeDescriptor SharedAssetStale;
+    /** @brief A charged asset revision is requested with conflicting resource cost or duplicate consumer identity. */
+    extern const ErrorCodeDescriptor SharedAssetConflict;
+    /** @brief A new shared charge or lease exceeds a mandatory entry, lease, or resource-axis ceiling. */
+    extern const ErrorCodeDescriptor SharedAssetCapacityExceeded;
+    /** @brief Shared-asset admission is closed or retirement still has consumers. */
+    extern const ErrorCodeDescriptor SharedAssetLifecycleUnavailable;
     /** @brief A streaming trace binding, stage, subject, parent, or terminal request is malformed. */
     extern const ErrorCodeDescriptor TraceInvalid;
     /** @brief A streaming trace stage or terminal status is unknown to this contract version. */

@@ -76,6 +76,10 @@ horo_configure_target_header_boundary(HoroMcpRegistry PUBLIC_HEADERS
     Horo/Mcp/McpToolRegistry.h
 )
 
+horo_configure_target_header_boundary(HoroMcpController PUBLIC_HEADERS
+    Horo/Mcp/McpController.h
+)
+
 horo_configure_target_header_boundary(HoroOpenTelemetry PUBLIC_HEADERS
     Horo/Foundation/Telemetry/OpenTelemetrySink.h)
 
@@ -123,19 +127,79 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Application/ProjectMigrationCatalog.h
     Horo/Application/ProjectVersion.h
     Horo/Release/DistributionModel.h
+    Horo/Release/ReleaseArtifactManifest.h
+    Horo/Release/ReleaseCandidateVerification.h
+    Horo/Release/ReleaseChecksums.h
+    Horo/Release/ReleaseBuildProvenance.h
     Horo/Release/ReleaseErrors.h
     Horo/Release/ReleaseJobTracker.h
     Horo/Release/ReleasePipelineExecutor.h
+    Horo/Release/ReleasePackageProducer.h
+    Horo/Release/ReleasePublication.h
+    Horo/Release/ReleaseSigningBoundary.h
     Horo/Release/ReleaseProfile.h
     Horo/Release/ReleasePreflight.h
     Horo/Release/ReleaseTargetMatrix.h
     Horo/Release/ReleaseVersion.h
 )
+horo_configure_target_header_boundary(HoroReleaseGitHub PUBLIC_HEADERS
+    Horo/Release/GitHubReleasePublication.h
+)
+horo_configure_target_header_boundary(HoroReleaseGitHubCli PUBLIC_HEADERS
+    Horo/Release/GitHubReleaseCliClient.h
+)
+horo_configure_target_header_boundary(HoroUpdateManifest PUBLIC_HEADERS
+    Horo/Release/UpdateManifest.h
+    Horo/Release/UpdateManifestErrors.h
+    Horo/Release/UpdateTrustRoot.h
+)
+horo_configure_target_header_boundary(HoroUpdateDiscovery PUBLIC_HEADERS
+    Horo/Release/UpdateDiscovery.h
+    Horo/Release/UpdateDiscoveryErrors.h
+)
+horo_configure_target_header_boundary(HoroUpdateTransfer PUBLIC_HEADERS
+    Horo/Release/UpdateArchiveIndex.h
+    Horo/Release/UpdateStagedTree.h
+    Horo/Release/UpdateFileDelta.h
+    Horo/Release/UpdateTransferCheckpointStore.h
+    Horo/Release/UpdateTransfer.h
+    Horo/Release/UpdateTransferErrors.h
+)
+horo_configure_target_header_boundary(HoroUpdateDownload PUBLIC_HEADERS
+    Horo/Release/UpdateDeltaStaging.h
+    Horo/Release/UpdateDownloadSession.h
+    Horo/Release/UpdateHttpDownload.h
+    Horo/Release/UpdateStageReady.h
+    Horo/Release/UpdateZipPackageProducer.h
+    Horo/Release/UpdateZipStagingJob.h
+)
+horo_configure_target_header_boundary(HoroUpdateOfflineSource PUBLIC_HEADERS
+    Horo/Release/UpdateOfflineSource.h
+    Horo/Release/UpdateOfflineSourceErrors.h
+)
+horo_configure_target_header_boundary(HoroUpdateActivation PUBLIC_HEADERS
+    Horo/Release/BootstrapInstallation.h
+    Horo/Release/BootstrapInstallationErrors.h
+    Horo/Release/LinuxPortableBootstrapHost.h
+    Horo/Release/ZipPortableBootstrapHost.h
+    Horo/Release/UpdateActivation.h
+    Horo/Release/UpdateActivationErrors.h
+    Horo/Release/UpdateRollback.h
+    Horo/Release/UpdateRollbackErrors.h
+    Horo/Release/UpdateRetention.h
+    Horo/Release/UpdateRetentionErrors.h
+)
+horo_configure_target_header_boundary(HoroUserStateMigration PUBLIC_HEADERS
+    Horo/Release/UserStateMigration.h
+    Horo/Release/UserStateMigrationErrors.h
+)
 horo_configure_target_header_boundary(HoroReleaseProcess PUBLIC_HEADERS
+    Horo/Release/ReleaseCandidatePublisher.h
     Horo/Release/ReleaseProcess.h
 )
 horo_configure_target_header_boundary(HoroReleaseService PUBLIC_HEADERS
     Horo/Release/ReleaseService.h
+    Horo/Release/ReleaseRunHistory.h
 )
 horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
     Horo/Packages/PackageDependencyResolver.h
@@ -208,6 +272,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiEventDispatch.h
     Horo/Runtime/Ui/UiPointerCapture.h
     Horo/Runtime/Ui/UiActions.h
+    Horo/Runtime/Ui/UiFeedback.h
     Horo/Runtime/Ui/UiScreenStack.h
     Horo/Runtime/Ui/UiRouteStack.h
     Horo/Runtime/Ui/UiFocusGraph.h
@@ -222,6 +287,10 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiRenderGeometry.h
     Horo/Runtime/Ui/UiPresentationReceipt.h
     Horo/Runtime/Ui/UiTextShaping.h
+)
+horo_configure_target_header_boundary(HoroUiTemplateGraph PUBLIC_HEADERS
+    Horo/UiTemplates/UiTemplateDependencyGraph.h
+    Horo/UiTemplates/UiTemplateErrors.h
 )
 horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/MessageCodecRegistry.h
@@ -255,6 +324,8 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/TransportBackendInstance.h
 )
 horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
+    Horo/Network/AdmissionProtection.h
+    Horo/Network/InboundMessageDispatcher.h
     Horo/Network/NetworkModeComposition.h
     Horo/Network/TransportBackendComposition.h
     Horo/Network/NetworkDiagnostics.h
@@ -341,12 +412,15 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioMediaFormatRegistry.h
     Horo/Audio/AudioPlanarBlock.h
     Horo/Audio/AudioErrors.h
+    Horo/Audio/AudioFailureRecovery.h
     Horo/Audio/AudioIdentity.h
     Horo/Audio/MixerAssetSchema.h
     Horo/Audio/AudioVoiceStateMachine.h
     Horo/Audio/AudioResamplerPlan.h
     Horo/Audio/AudioPlaybackRequest.h
     Horo/Audio/AudioSoundReference.h
+    Horo/Audio/AudioStreamDecoder.h
+    Horo/Audio/AudioStreamDecoderErrors.h
 )
 
 horo_configure_target_header_boundary(HoroAudioImport PUBLIC_HEADERS
@@ -369,10 +443,12 @@ horo_configure_target_header_boundary(HoroAudioCommands PUBLIC_HEADERS
     Horo/Audio/AudioCommandBuffer.h
     Horo/Audio/AudioCommandStaging.h
     Horo/Audio/AudioEventQueue.h
+    Horo/Audio/AudioFocusPolicy.h
     Horo/Audio/AudioLifecycleReconciler.h
     Horo/Audio/ScheduledAudioCommandBatch.h
 )
 horo_configure_target_header_boundary(HoroAudioMetrics PUBLIC_HEADERS
+    Horo/Audio/AudioMetricExtraction.h
     Horo/Audio/AudioMetrics.h
 )
 horo_configure_target_header_boundary(HoroInput PUBLIC_HEADERS
@@ -387,6 +463,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/CharacterCommandPipeline.h
     Horo/Physics/CharacterControllerContracts.h
     Horo/Physics/CharacterDiagnostics.h
+    Horo/Physics/CharacterMetrics.h
     Horo/Physics/CharacterErrors.h
     Horo/Physics/CharacterWorld.h
     Horo/Physics/CharacterWorldSettings.h
@@ -397,7 +474,9 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/PhysicsConstraintDescriptor.h
     Horo/Physics/PhysicsConvexHullCook.h
     Horo/Physics/PhysicsCookedShapeCache.h
+    Horo/Physics/PhysicsHeightFieldCook.h
     Horo/Physics/PhysicsCookedShapeDescriptor.h
+    Horo/Physics/PhysicsDebugSnapshot.h
     Horo/Physics/PhysicsDiagnostics.h
     Horo/Physics/PhysicsDeterminismPolicy.h
     Horo/Physics/PhysicsEvents.h
@@ -439,6 +518,8 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
     Horo/AI/AISceneActivation.h
     Horo/AI/AIScenePerceptionSource.h
+    Horo/AI/PerceptionSpatialBroadphase.h
+    Horo/AI/EnvironmentQueryContexts.h
 )
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/AnimationCompression.h
@@ -487,11 +568,17 @@ horo_configure_target_header_boundary(HoroDestructionApi PUBLIC_HEADERS
     Horo/Destruction/DestructionStateMachine.h
 )
 horo_configure_target_header_boundary(HoroDestructionCook PUBLIC_HEADERS
+    Horo/Destruction/StructuralGraphCook.h
+    Horo/Destruction/ChunkMeshCook.h
     Horo/Destruction/OfflineVoronoi.h
     Horo/Destruction/PreFracturedImport.h
 )
 horo_configure_target_header_boundary(HoroDestructionRuntime PUBLIC_HEADERS
     Horo/Destruction/DestructionDamageRuntime.h
+    Horo/Destruction/DestructionEventStream.h
+)
+horo_configure_target_header_boundary(HoroDestructionApplication PUBLIC_HEADERS
+    Horo/Destruction/DestructionEventDispatcher.h
 )
 horo_configure_target_header_boundary(HoroDestructionReplication PUBLIC_HEADERS
     Horo/Destruction/DestructionReplication.h
@@ -532,6 +619,7 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationCrowdSnapshot.h
     Horo/Navigation/NavigationCrowdAvoidance.h
     Horo/Navigation/NavigationDynamicRegistry.h
+    Horo/Navigation/NavigationObstacleOverlay.h
     Horo/Navigation/NavigationAgentRegistry.h
     Horo/Navigation/NavigationPathPolicy.h
     Horo/Navigation/NavigationRuntimeQueues.h
@@ -564,6 +652,12 @@ horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/TerrainFoliageRegistry.h
     Horo/Terrain/TerrainIdentity.h
 )
+horo_configure_target_header_boundary(HoroTerrainImport PUBLIC_HEADERS
+    Horo/Terrain/TerrainSourceImport.h
+)
+horo_configure_target_header_boundary(HoroTerrainCook PUBLIC_HEADERS
+    Horo/Terrain/TerrainTileCook.h
+)
 horo_configure_target_header_boundary(HoroTerrainRuntime PUBLIC_HEADERS
     Horo/Terrain/TerrainAsyncJobs.h
 )
@@ -586,6 +680,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/CookedWorldIndexManifest.h
     Horo/WorldStreaming/FallbackStreamingProvider.h
     Horo/WorldStreaming/StreamingBudgetModel.h
+    Horo/WorldStreaming/SharedAssetResidency.h
     Horo/WorldStreaming/StreamingCellOperation.h
     Horo/WorldStreaming/StreamingCellCandidate.h
     Horo/WorldStreaming/StreamingCellAssetRequest.h
@@ -811,6 +906,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ExtensionMarketplace.h
     Horo/Extensions/HeadlessExtensionHost.h
     Horo/Extensions/PipelineStepRegistry.h
+    Horo/Extensions/ProcessObserverRegistry.h
     Horo/Extensions/ProjectValidatorRegistry.h
     Horo/Extensions/ScriptExportDescriptor.h
     Horo/Extensions/ScriptInvocation.h

@@ -12,6 +12,12 @@
 #include <utility>
 
 namespace Horo::Mcp {
+    /** @copydoc IMcpToolAdapter::InvokeAsync */
+    void IMcpToolAdapter::InvokeAsync(const nlohmann::json &arguments, const McpRequestContext &context,
+                                      const std::function<void(Result<nlohmann::json>)> &complete) {
+        complete(Invoke(arguments, context));
+    }
+
     namespace {
         constexpr std::size_t MaximumTools = 256;
         constexpr std::size_t MaximumSchemaBytes = 16U << 10U;
@@ -310,6 +316,18 @@ namespace Horo::Mcp {
         return visible;
     }
 
+    /** @copydoc McpToolSnapshot::Owner */
+    Result<McpOwnerContext> McpToolSnapshot::Owner(const McpToolId &id, const std::span<const std::string> capabilities) const {
+        const auto found = std::ranges::lower_bound(entries_, id.value, {}, [](const McpToolRegistration &entry) -> const std::string & {
+            return entry.descriptor.id.value;
+        });
+        if (found == entries_.end() || found->descriptor.id != id)
+            return Result<McpOwnerContext>::Failure(MakeError(McpErrors::ToolUnavailable));
+        if (!Granted(found->descriptor, capabilities))
+            return Result<McpOwnerContext>::Failure(MakeError(McpErrors::ToolCapabilityUnavailable));
+        return Result<McpOwnerContext>::Success(found->owner);
+    }
+
     /** @copydoc McpToolSnapshot::Invoke */
     Result<nlohmann::json> McpToolSnapshot::Invoke(const McpToolId &id, const nlohmann::json &arguments,
                                                    const McpRequestContext &context) const {
@@ -335,6 +353,39 @@ namespace Horo::Mcp {
         }
     }
 
+    /** @copydoc McpToolSnapshot::InvokeAsync */
+    void McpToolSnapshot::InvokeAsync(const McpToolId &id, const nlohmann::json &arguments, const McpRequestContext &context,
+                                      std::function<void(Result<nlohmann::json>)> complete) const {
+        const auto found = std::ranges::lower_bound(entries_, id.value, {}, [](const McpToolRegistration &entry) -> const std::string & {
+            return entry.descriptor.id.value;
+        });
+        if (found == entries_.end() || found->descriptor.id != id) {
+            complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolUnavailable)));
+            return;
+        }
+        if (!Granted(found->descriptor, context.capabilities)) {
+            complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolCapabilityUnavailable)));
+            return;
+        }
+        if (!BoundedValue(arguments, found->descriptor.bounds.maximumInputBytes, found->descriptor.bounds) ||
+            !MatchesSchema(found->descriptor.inputSchema, arguments)) {
+            complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolInputInvalid)));
+            return;
+        }
+        auto checked = [descriptor = found->descriptor, complete = std::move(complete)](Result<nlohmann::json> outcome) {
+            if (outcome.HasValue() && (!BoundedValue(outcome.Value(), descriptor.bounds.maximumResultBytes, descriptor.bounds) ||
+                                       !MatchesSchema(descriptor.outputSchema, outcome.Value())))
+                complete(Result<nlohmann::json>::Failure(MakeError(McpErrors::ToolOutputInvalid)));
+            else
+                complete(std::move(outcome));
+        };
+        try {
+            found->adapter->InvokeAsync(arguments, context, checked);
+        } catch (...) {  // NOSONAR: untrusted adapter boundaries can throw non-standard exceptions.
+            checked(Result<nlohmann::json>::Failure(MakeError(McpErrors::ControllerFailed)));
+        }
+    }
+
     McpToolRegistry::McpToolRegistry()
         : current_(std::make_shared<const McpToolSnapshot>(McpToolSnapshot::ConstructionKey{}, 0, std::vector<McpToolRegistration>{})) {}
 
@@ -351,7 +402,7 @@ namespace Horo::Mcp {
             capabilities.push_back(capability);
         }
         for (const auto &entry : entries) {
-            if (entry.adapter == nullptr || !ValidDescriptor(entry.descriptor))
+            if (entry.adapter == nullptr || !ValidDescriptor(entry.descriptor) || entry.owner > McpOwnerContext::Build)
                 return Result<std::uint64_t>::Failure(MakeError(McpErrors::ToolDescriptorInvalid));
             if (!Granted(entry.descriptor, availableCapabilities))
                 return Result<std::uint64_t>::Failure(MakeError(McpErrors::ToolCapabilityUnavailable));

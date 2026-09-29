@@ -222,6 +222,16 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor HandshakeIncompatible;
     /** @brief A handshake operation is not legal from the current terminal or negotiating state. */
     extern const ErrorCodeDescriptor HandshakeStateInvalid;
+    /** @brief Host admission security limits are malformed or a charge has invalid metadata. */
+    extern const ErrorCodeDescriptor AdmissionPolicyInvalid;
+    /** @brief A challenge does not match the exact canonical negotiated transcript. */
+    extern const ErrorCodeDescriptor AdmissionBindingInvalid;
+    /** @brief The negotiated protocol version falls below the host security floor. */
+    extern const ErrorCodeDescriptor AdmissionDowngradeRejected;
+    /** @brief A recent client or server nonce was reused for another admission. */
+    extern const ErrorCodeDescriptor AdmissionReplayRejected;
+    /** @brief Pre-active peer, source, or global work exceeded a finite host limit. */
+    extern const ErrorCodeDescriptor AdmissionLimitExceeded;
     /** @brief Authentication policy, challenge, evidence, proof framing, or authority output is malformed. */
     extern const ErrorCodeDescriptor AuthenticationInvalid;
     /** @brief Authentication input conflicts with the immutable challenge or exposure security floor. */

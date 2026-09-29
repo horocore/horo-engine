@@ -19,6 +19,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <ranges>
@@ -36,6 +37,72 @@ namespace Horo::Physics {
         bool stale{};
     };
 
+    /** @brief Bounded request ownership and mutex-protected terminal publication; only Physics owner reads commands. */
+    struct PhysicsQueryBatchState final {
+        PhysicsQueryBatchState(const std::span<const PhysicsQueryCommand> commands,
+                               std::shared_ptr<PhysicsQueryEventCapabilityState> access)
+            : commands_(commands.begin(), commands.end()), access_(std::move(access)) {}
+
+        [[nodiscard]] const std::vector<PhysicsQueryCommand> &Commands() const noexcept {
+            return commands_;
+        }
+
+        [[nodiscard]] const std::shared_ptr<PhysicsQueryEventCapabilityState> &Access() const noexcept {
+            return access_;
+        }
+
+        [[nodiscard]] Result<std::shared_ptr<const PhysicsQueryBatchCompletion>> Poll() const {
+            std::lock_guard lock(terminalMutex);
+            if (failureCode)
+                return Result<std::shared_ptr<const PhysicsQueryBatchCompletion>>::Failure(MakeError(*failureCode));
+            if (failure)
+                return Result<std::shared_ptr<const PhysicsQueryBatchCompletion>>::Failure(*failure);
+            return Result<std::shared_ptr<const PhysicsQueryBatchCompletion>>::Success(completion);
+        }
+
+        [[nodiscard]] bool Fail(Error error) {
+            std::lock_guard lock(terminalMutex);
+            if (terminal)
+                return false;
+            failure = std::move(error);
+            terminal = true;
+            return true;
+        }
+
+        [[nodiscard]] bool FailCode(const ErrorCodeDescriptor &code) noexcept {
+            std::lock_guard lock(terminalMutex);
+            if (terminal)
+                return false;
+            failureCode = &code;
+            terminal = true;
+            return true;
+        }
+
+        [[nodiscard]] bool Complete(std::shared_ptr<const PhysicsQueryBatchCompletion> value) noexcept {
+            std::lock_guard lock(terminalMutex);
+            if (terminal)
+                return false;
+            // This lock is the publication point: a prior Cancel wins and discards all prepared hits.
+            completion = std::move(value);
+            terminal = true;
+            return true;
+        }
+
+        [[nodiscard]] bool IsTerminal() const noexcept {
+            std::lock_guard lock(terminalMutex);
+            return terminal;
+        }
+
+    private:
+        std::vector<PhysicsQueryCommand> commands_;
+        std::shared_ptr<PhysicsQueryEventCapabilityState> access_;
+        mutable std::mutex terminalMutex;
+        bool terminal{};
+        const ErrorCodeDescriptor *failureCode{};
+        std::optional<Error> failure;
+        std::shared_ptr<const PhysicsQueryBatchCompletion> completion;
+    };
+
     /** @brief Keeps completed events and their world-scoped access registrations together. */
     struct PhysicsQueryEventState final {
         explicit PhysicsQueryEventState(const PhysicsWorldSettings &settings)
@@ -45,6 +112,63 @@ namespace Horo::Physics {
         Detail::PhysicsEventProjection events;
         std::vector<std::weak_ptr<PhysicsQueryEventCapabilityState>> capabilities;
         std::uint64_t nextCapabilityGeneration{1};
+    };
+
+    /** @brief Owner-thread batch admission bookkeeping; the terminal handle has its own synchronization. */
+    struct PhysicsQueryBatchAdmissionState final {
+        std::shared_ptr<PhysicsQueryBatchState> pending;
+        std::uint64_t tick{};
+        std::uint32_t admissions{};
+    };
+
+    /** @brief Serializes one bounded completed-tick value between its owner writer and foreign snapshot readers. */
+    class PhysicsPublicationState final {
+    public:
+        [[nodiscard]] PhysicsPublishedTick Snapshot() const noexcept {
+            Detail::PublicationGuard guard{lock_};
+            return value_;
+        }
+
+        [[nodiscard]] Result<void> CheckRevisionCapacity() const {
+            if (Snapshot().publicationRevision == std::numeric_limits<std::uint64_t>::max())
+                return Result<void>::Failure(MakeError(PhysicsErrors::GenerationExhausted));
+            return Result<void>::Success();
+        }
+
+        void Reset() noexcept {
+            Detail::PublicationGuard guard{lock_};
+            value_ = {};
+        }
+
+        void InvalidateQueryEvents() noexcept {
+            Detail::PublicationGuard guard{lock_};
+            if (value_.completedTick == 0)
+                return;
+            // An immediate structural edit changes query results without completing a new event tick.
+            ++value_.publicationRevision;
+            value_.eventTick = 0;
+            value_.eventCount = 0;
+            value_.droppedEventCount = 0;
+        }
+
+        void Commit(const std::uint64_t tick, const std::uint32_t appliedCommands,
+                    const Detail::PhysicsEventProjectionResult &eventResult) noexcept {
+            Detail::PublicationGuard guard{lock_};
+            const std::uint64_t revision = value_.publicationRevision + 1;
+            value_ = {.completedTick = tick,
+                      .publicationRevision = revision,
+                      .transformTick = tick,
+                      .queryTick = tick,
+                      .eventTick = tick,
+                      .appliedCommands = appliedCommands,
+                      .eventCount = eventResult.publishedRecordCount,
+                      .droppedEventCount = eventResult.droppedRecordCount};
+        }
+
+    private:
+        // The owner thread writes; foreign readers snapshot through this same bounded guard.
+        mutable std::atomic_flag lock_ = ATOMIC_FLAG_INIT;  // NOSONAR(cpp:S8379) This guards value_.
+        PhysicsPublishedTick value_{};
     };
 
     namespace Detail {
@@ -128,12 +252,12 @@ namespace Horo::Physics {
                 lastDiagnostic = record.Value();
         }
 
-        void RecordEventOverflowDiagnostic(const std::uint64_t sceneGeneration, const std::uint64_t simulationTick) {
+        void RecordEventDropDiagnostic(const std::uint64_t sceneGeneration, const std::uint64_t simulationTick, const bool overflowed) {
             const auto context = Detail::DiagnosticContext(identity, sceneGeneration, simulationTick);
-            const auto record =
-                MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Event,
-                                            MakeError(PhysicsErrors::CapacityExceeded, "Physics event projection dropped bounded records."),
-                                            context);
+            const auto error =
+                overflowed ? MakeError(PhysicsErrors::CapacityExceeded, "Physics event projection dropped bounded records.")
+                           : MakeError(PhysicsErrors::DescriptorInvalid, "Physics event projection dropped invalid contact evidence.");
+            const auto record = MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Event, error, context);
             if (record.HasValue())
                 lastDiagnostic = record.Value();
         }
@@ -153,13 +277,12 @@ namespace Horo::Physics {
             commandCount = 0;
             activeTick = 0;
             querySceneGeneration = 0;
+            queryBatch.tick = 0;
+            queryBatch.admissions = 0;
             commandOrderDirty = false;
             stepping = false;
             queryEvents.events.Reset();
-            {
-                Detail::PublicationGuard publicationGuard{publicationLock};
-                published = {};
-            }
+            publication.Reset();
             statistics = {};
             lastFailure.reset();
             lastDiagnostic.reset();
@@ -167,6 +290,10 @@ namespace Horo::Physics {
         }
 
         void InvalidateQueryEventCapabilities() noexcept {
+            if (queryBatch.pending) {
+                (void)queryBatch.pending->FailCode(PhysicsErrors::CapabilityStale);
+                queryBatch.pending.reset();
+            }
             for (const auto &weak : queryEvents.capabilities) {
                 if (const auto access = weak.lock()) {
                     access->stale = true;
@@ -177,20 +304,11 @@ namespace Horo::Physics {
         }
 
         [[nodiscard]] Result<void> CheckPublicationRevisionCapacity() const {
-            if (published.publicationRevision == std::numeric_limits<std::uint64_t>::max())
-                return Result<void>::Failure(MakeError(PhysicsErrors::GenerationExhausted));
-            return Result<void>::Success();
+            return publication.CheckRevisionCapacity();
         }
 
         void InvalidateQueryEventPublication() noexcept {
-            Detail::PublicationGuard publicationGuard{publicationLock};
-            if (published.completedTick == 0)
-                return;
-            // An immediate structural edit changes query results without completing a new event tick.
-            ++published.publicationRevision;
-            published.eventTick = 0;
-            published.eventCount = 0;
-            published.droppedEventCount = 0;
+            publication.InvalidateQueryEvents();
         }
 
         [[nodiscard]] Result<void> Reinitialize() {
@@ -244,6 +362,7 @@ namespace Horo::Physics {
         Detail::CanonicalWorldHandle native;
         std::vector<PhysicsStructuralCommand> commands;
         std::vector<std::uint32_t> sourceOrder;
+        PhysicsQueryBatchAdmissionState queryBatch;
         PhysicsQueryEventState queryEvents;
         std::uint32_t commandHead{};
         std::uint32_t commandCount{};
@@ -251,10 +370,7 @@ namespace Horo::Physics {
         std::uint64_t querySceneGeneration{};
         bool commandOrderDirty{};
         bool stepping{};
-        // The owner thread alone writes publication state; any live-world thread may take a coherent snapshot.
-        // The flag protects only the bounded copy below and owns no worker or shutdown lifetime.
-        mutable std::atomic_flag publicationLock = ATOMIC_FLAG_INIT;
-        PhysicsPublishedTick published;
+        PhysicsPublicationState publication;
         PhysicsTickStatistics statistics;
         PhysicsWorldLifecycleCause lifecycleCause{PhysicsWorldLifecycleCause::None};
         std::optional<Error> lastFailure;

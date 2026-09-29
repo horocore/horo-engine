@@ -1,11 +1,14 @@
 #include "Horo/Release/ReleaseService.h"
 
+#include "Horo/Foundation/Assertions.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Release/ReleaseErrors.h"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <exception>
+#include <limits>
 #include <utility>
 
 namespace Horo::Release {
@@ -58,6 +61,28 @@ namespace Horo::Release {
             }
             return update;
         }
+
+        /** @brief Mirrors committed stage transitions to bounded host-owned storage. */
+        class HistoryObserver final : public IReleaseJobObserver {
+        public:
+            HistoryObserver(ReleaseRunHistory *history, WallClock *clock) noexcept : history_(history), clock_(clock) {}
+
+            void OnSnapshot(const ReleaseJobSnapshot &snapshot) noexcept override {
+                if (!history_)
+                    return;
+                try {
+                    const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(clock_->UtcNow().time_since_epoch());
+                    if (history_->Record(snapshot, timestamp.count()).HasError())
+                        Log::Logger::WriteEmergency("release.service", Log::Level::Error, "Release history write failed.");
+                } catch (...) {  // NOSONAR: A diagnostic sink must not unwind through a release worker.
+                    Log::Logger::WriteEmergency("release.service", Log::Level::Error, "Release history observer failed.");
+                }
+            }
+
+        private:
+            ReleaseRunHistory *history_{};
+            WallClock *clock_{};
+        };
     }  // namespace
 
     struct ReleaseService::CancellationSlot final {
@@ -94,6 +119,20 @@ namespace Horo::Release {
                                    const ReleaseServiceConfig &config)
         : operations_(operations), facts_(facts), workers_(workers), config_(config), jobs_(config.workers),
           cancellationGate_(std::make_shared<CancellationGate>()) {
+        HORO_INVARIANT_MSG((config_.history == nullptr) == (config_.wallClock == nullptr),
+                           "Release history requires a host-owned wall clock.");
+        if (config_.history) {
+            std::uint64_t maximumJob = 0U;
+            std::uint64_t maximumTarget = 0U;
+            const std::uint64_t maximumCandidate = config_.history->HighestCandidate();
+            for (const auto &entry : config_.history->List()) {
+                maximumJob = std::max(maximumJob, entry.job.value);
+                maximumTarget = std::max(maximumTarget, entry.target.value);
+            }
+            nextJob_ = maximumJob == std::numeric_limits<std::uint64_t>::max() ? 0U : maximumJob + 1U;
+            nextTarget_ = maximumTarget == std::numeric_limits<std::uint64_t>::max() ? 0U : maximumTarget + 1U;
+            nextCandidate_ = maximumCandidate == std::numeric_limits<std::uint64_t>::max() ? 0U : maximumCandidate + 1U;
+        }
         cancellationGate_->owner = this;
     }
 
@@ -118,6 +157,8 @@ namespace Horo::Release {
         } catch (...) {  // NOSONAR: A projection failure must not revoke the authoritative release terminal.
             Log::Logger::WriteEmergency("release.service", Log::Level::Error, "Release operation projection failed.");
         }
+        if (PersistSnapshot(snapshot).HasError())
+            Log::Logger::WriteEmergency("release.service", Log::Level::Error, "Release history write failed.");
         std::lock_guard lock(mutex_);
         if (activeCount_ > 0)
             --activeCount_;
@@ -126,6 +167,14 @@ namespace Horo::Release {
             records_.erase(recent_.front());
             recent_.pop_front();
         }
+    }
+
+    /** @copydoc ReleaseService::PersistSnapshot */
+    Result<void> ReleaseService::PersistSnapshot(const ReleaseJobSnapshot &snapshot) const {
+        if (!config_.history)
+            return Result<void>::Success();
+        const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(config_.wallClock->UtcNow().time_since_epoch());
+        return config_.history->Record(snapshot, timestamp.count());
     }
 
     /** @copydoc ReleaseService::CancelOperation */
@@ -180,6 +229,7 @@ namespace Horo::Release {
 
     /** @copydoc ReleaseService::RunRecord */
     Result<void> ReleaseService::RunRecord(const std::shared_ptr<Record> &record, const CancellationToken &token) {
+        HistoryObserver historyObserver{config_.history, config_.wallClock};
         if (!record->tracker.Snapshot().terminal) {
             try {
                 auto worker = workers_.Create(record->plan);
@@ -192,7 +242,9 @@ namespace Horo::Release {
                                                                                                    .phase = "release",
                                                                                                    .message = "Release pipeline running."});
                     (void)ReleasePipelineExecutor{}.Execute(record->tracker, record->candidate, record->plan, facts_, *worker.Value(),
-                                                            token, config_.pipeline);
+                                                            token,
+                                                            ReleasePipelineExecutionOptions{config_.pipeline,
+                                                                                            config_.history ? &historyObserver : nullptr});
                 }
             } catch (...) {  // NOSONAR: Worker implementations may throw non-standard exceptions.
                 FailUnexpected(record->tracker);
@@ -247,6 +299,12 @@ namespace Horo::Release {
         {
             std::lock_guard lock(mutex_);
             records_.try_emplace(job.value, record);
+        }
+        if (auto persisted = PersistSnapshot(record->tracker.Snapshot()); persisted.HasError()) {
+            if (!record->tracker.Snapshot().terminal)
+                (void)record->tracker.FailAdmission(persisted.ErrorValue());
+            RecordTerminal(record);
+            return Result<ReleaseSubmission>::Failure(std::move(persisted).ErrorValue());
         }
         {
             std::lock_guard lock(cancellationSlot->mutex);
@@ -307,6 +365,11 @@ namespace Horo::Release {
             return snapshot.id.value;
         });
         return snapshots;
+    }
+
+    /** @copydoc ReleaseService::ListHistory */
+    std::vector<ReleaseRunHistoryEntry> ReleaseService::ListHistory() const {
+        return config_.history ? config_.history->List() : std::vector<ReleaseRunHistoryEntry>{};
     }
 
     /** @copydoc ReleaseService::Diagnostic */

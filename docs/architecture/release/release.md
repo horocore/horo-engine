@@ -369,8 +369,39 @@ requires them.
 
 Output is assembled in a private staging directory and atomically promoted to
 its final path only after verification succeeds.
+After a successful rename, a retry may report success only when the original
+private stage is gone and the existing final tree still matches the exact
+candidate manifest. A conflicting or changed final tree remains a collision;
+retries never replace published bytes.
+
+Package production selects exactly one host-installed backend for the validated
+product/platform/format tuple. The shared dispatcher verifies the unsigned
+Build/Cook source tree against its frozen input inventory before invoking the
+backend; a missing or
+duplicate format producer fails without fallback. Producers receive a distinct
+private output root and report produced files in canonical path order. Native
+tool handles and format-specific layout rules remain inside the backend. This
+contract is additive; existing release callers do not require a migration until
+the host installs concrete package producers.
+
+The input inventory is captured before packaging. A separate inventory of the
+packaged private stage is captured after package production for pre-sign
+verification; the final post-sign manifest does not exist during packaging.
 
 ## Artifact Manifest
+
+The private unsigned stage has its own canonical pre-sign inventory. It records
+the candidate ID and exact paths, roles, sizes, and SHA-256 digests before
+signing. Pre-sign verification rejects missing, changed, undeclared, or linked
+files. This inventory is a separate schema and cannot be parsed or published as
+the final candidate manifest; signing may change its recorded bytes.
+
+The signing handoff verifies this complete unsigned tree immediately before it
+invokes a host-owned signer. It admits only a nonzero opaque credential handle
+already selected in the frozen release plan; credential values remain inside
+the signer. A successful handoff is not final candidate verification: signing
+may change files, so final metadata and exact post-sign verification still run.
+This boundary is additive and does not migrate existing host signing workers.
 
 Every release contains a versioned machine-readable manifest describing:
 
@@ -387,6 +418,13 @@ Every release contains a versioned machine-readable manifest describing:
 The manifest uses a canonical serialization format before hashing or signing.
 Unknown required manifest fields cause validation failure. Optional extensions
 are namespaced and versioned.
+
+Checksum metadata is a deterministic projection of post-sign artifact records.
+It lists each final artifact's SHA-256 digest in portable path order, before
+`checksums.txt` and `manifest.json` are written. Neither metadata file may list
+itself; the final manifest can then account for the checksum file without an
+identity cycle. The projection is additive to the existing manifest contract;
+release hosts still own final-byte hashing and verification before publication.
 
 ## Runtime Compatibility Contract
 
@@ -498,6 +536,20 @@ Given identical declared inputs and a reproducible toolchain, release content
 hashes should be identical. Non-deterministic platform signing metadata is
 tracked separately from reproducible unsigned content.
 
+`ReleaseBuildProvenance` is the canonical, public-safe unsigned evidence
+contract. It records the frozen source, dependency lock, profile, toolchain,
+policy, and reviewed notes digests; a build-script digest; sorted runtime
+features; named digests of declared non-secret environment values; the source
+epoch used by deterministic generators; and sorted relative file sizes and
+hashes. Its locale and timezone contract is `C` and `UTC`. Signed bytes and
+signing credentials belong only to the final candidate manifest. A comparison
+of two provenance values names each changed input field and unsigned file.
+The capture boundary streams exact files from a quiescent private unsigned tree
+without serializing the host path, and rejects symbolic links, special files,
+unreadable content, and portable-path collisions.
+Build and cook workers must capture this evidence from actual inputs and bytes
+and apply the declared normalization before claiming reproducibility.
+
 ## Job History And Logs
 
 Persistent job history contains:
@@ -510,6 +562,27 @@ Persistent job history contains:
 - manifest identity
 
 History never contains credentials or raw secret values.
+
+The service accepts an optional host-owned `ReleaseRunHistory` and UTC clock.
+The executor receives its stage limits and borrowed synchronous observer in one
+`ReleasePipelineExecutionOptions` value. Callers that previously passed separate
+limits and observer arguments move both into that value; the release service is
+the current production caller, and calls without custom options retain defaults.
+When supplied, admission, stage boundaries, and terminal transitions replace a
+bounded typed snapshot under an exclusive writer lock. The durable snapshot
+contains IDs, revision, stage states and attempts, candidate identity, and UTC
+creation, update, and terminal times; it excludes worker messages, arbitrary
+paths, and credentials.
+Publication uses a durable prepared file and atomic replacement. Recovery rejects
+malformed or oversized history and retains the highest candidate ID even after
+its job record ages out. Retention evicts the oldest terminal job; active jobs
+remain queryable, and admission fails when the store is full of active jobs.
+On process restart, a previously nonterminal record is projected as failed with
+`interruptedByRestart`; its last stage state remains visible, and no finish time
+is fabricated. Schema-v1 records remain readable and are rewritten as schema v2
+when the next snapshot is stored.
+Hosts that do not supply the optional store retain the existing in-memory
+behavior; no existing constructor call needs migration.
 
 Logs are separated by release job and stage. Log records include timestamp,
 severity, subsystem, target, and stage. User-facing adapters may render logs
@@ -559,6 +632,24 @@ A release succeeds only when:
 Packaged artifacts are the objects tested and published. CI does not publish
 artifacts that bypass release verification.
 
+The candidate verification dispatcher first checks every final manifest file
+and byte, requires a host signature verifier when the manifest declares
+signing, and then runs each distinct policy-required smoke probe exactly once.
+Missing or duplicate required probes fail closed. It checks final files again
+after the probes so a probe cannot silently alter the candidate it approved.
+Success issues a typed candidate identity carrying the final manifest digest
+and checked root; downstream publication must recheck the bytes before upload.
+This is an additive dispatch boundary; concrete archive, runtime, install,
+launch, and compatibility probes still need host composition and qualification.
+
+The publication dispatcher accepts only that verified identity and the same
+final manifest under a preflight-authorized destination. It checks local bytes,
+asks the destination adapter to upload only declared files, validates the
+receipt identity, asks the adapter to verify remote bytes and signatures, and
+rechecks local bytes before committing the channel. The adapter must keep
+upload idempotent and channel commit atomic. Concrete destination qualification
+and approval policy still belong to host composition.
+
 Additional required tests cover:
 
 - platform package format selection
@@ -592,6 +683,29 @@ policy checks pass:
 Promotion never rebuilds artifacts. It moves or references an already verified
 release candidate. If a promotion fails, the candidate remains valid but the
 channel state is unchanged.
+
+The GitHub Releases destination lives in `HoroReleaseGitHub`, outside the shared
+release application target. Its host-owned client resolves an existing tagged
+release, uploads only final-manifest files and canonical `manifest.json`, reads
+each remote asset back for size and SHA-256 verification, and binds the channel
+commit to the same remote release ID. The destination requires a canonical Git
+commit SHA in the candidate and peels the existing Git tag to that exact commit.
+A missing release, retargeted tag, or changed release ID fails
+without creating a tag or release. The `GitHubReleaseCliClient` uses the host's
+authenticated `gh` installation through the bounded, shell-free process runner;
+it never passes credentials in arguments or emits GitHub CLI diagnostic text.
+It treats an existing remote asset as an idempotent retry only after downloading
+and hashing its bytes, and changes the stable channel only after verifying the
+remote manifest and confirming the release is GitHub's latest. Other channels
+fail until they have an explicit remote mapping. `Release Binaries` workflow
+composition remains separate host work.
+
+The destination also compares the existing GitHub Release body to the exact
+reviewed Markdown in the frozen notes snapshot before upload and at every later
+identity check. This extends `GitHubReleaseIdentity` with a bounded body field;
+host clients constructing that identity must return the existing release body.
+Callers with an older client implementation must supply it or publication fails
+closed. Tests cover mismatched and changed release bodies before channel commit.
 
 ## Security
 

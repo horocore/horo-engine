@@ -614,6 +614,29 @@ parsing and compatibility checks precede expensive verification. Timeout,
 cancellation or shutdown invalidates the admission generation, so late transport
 or verifier completion cannot activate a session.
 
+`AdmissionProtection` is the host-owned, owner-thread ledger for NET-002.9. The
+host selects its protocol security floor and finite pending, per-source, work,
+byte and diagnostic limits before accepting connections. It derives a stable
+source bucket from transport evidence, calls
+`ComputeAdmissionTranscriptDigest` over the selected
+protocol/version/schema/features/transport, both fresh nonces and exact
+connection/session generations, then calls `Begin` after handshake
+selection and before constructing authentication. The host must use an
+unpredictable nonce generator and its credential authority must verify the proof
+against that same transcript; the bounded recent-nonce ledger is an additional
+replay fence, not a replacement for cryptographic freshness. It charges hostile
+bytes and parse failures before parsing, passes the ledger into
+`AuthenticationSessionAdapter` to charge attempts and each verifier call, and
+charges diagnostic events before emitting them. A rejected charge closes the
+specific admission and transport connection; the owner calls `End` on success,
+failure, timeout, cancellation or disconnect, and `Shutdown` before releasing
+the host policy or authority providers. The ledger uses fixed 64-slot peer,
+source and recent-nonce storage with no per-attempt allocation. A full source
+ledger rejects new sources until its accounting window expires. This public
+contract is additive: existing authentication callers remain valid, while
+production session composition must pass the shared ledger to enforce global
+limits. It stays in `NetworkRuntime`; transports and gameplay never own it.
+
 ## Delivery Semantics and Backpressure
 
 [ADR-070](../../adr/070-capture-and-voice-io-ownership.md) keeps voice packet policy
@@ -655,6 +678,18 @@ must construct the gate after session admission, derive its inputs from the
 validated event/envelope, call `Apply` at the owner safe point, and shut it down
 before retiring that session. It does not replace the owner-thread routing and
 handler registry work tracked separately by NET-002.7.
+
+`InboundMessageDispatcher` is the NetworkRuntime owner-thread route for NET-002.7.
+A host supplies its transport and immutable codec snapshot, registers only an
+already-Active `PeerSessionLifecycle` issued by its trust/admission authority,
+and transfers a generation-matched delivery gate. `RunNetworkPoll` stages
+transport events first; only after `PollEvents` returns does it decode bounded
+envelopes and call an exact protocol/message handler through the gate. Handler
+ownership is weak, work is rate-bounded and restricted to `NetworkPoll`, and
+absent, revoked, expired, malformed or overloaded work never reaches gameplay.
+Queue overflow closes the entire route rather than silently dropping an ordered
+packet. The minimal headless product still has no credential authority and
+deliberately closes native peers; connectivity alone cannot register gameplay.
 
 ### Backpressure and Overload Policies
 

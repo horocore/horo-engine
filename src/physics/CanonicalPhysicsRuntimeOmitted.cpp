@@ -2,6 +2,11 @@
 #include "Horo/Physics/PhysicsErrors.h"
 
 namespace Horo::Physics::Detail {
+    /** @copydoc ProjectCanonicalDebug */
+    CanonicalDebugProjection ProjectCanonicalDebug(const CanonicalWorldHandle, const PhysicsDebugBudget &) {
+        return {};
+    }
+
     /** @copydoc CreateCanonicalRuntime */
     Result<CanonicalRuntimeHandle> CreateCanonicalRuntime(const CanonicalFailurePoint) {
         return Result<CanonicalRuntimeHandle>::Failure(
@@ -110,7 +115,7 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc InvokeCanonicalContactCallbackForTesting */
     bool InvokeCanonicalContactCallbackForTesting(const CanonicalWorldHandle, const PhysicsQueryFixture &, const PhysicsQueryFixture &,
-                                                  const std::uint64_t, const bool, const bool, const CanonicalContactSink) {
+                                                  const std::uint64_t, const CanonicalContactSink, const CanonicalContactTestOptions) {
         return false;
     }
 

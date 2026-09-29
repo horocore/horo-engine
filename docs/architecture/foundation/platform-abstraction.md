@@ -101,6 +101,12 @@ Existing alternative adapters must adopt this behavior before serving those
 clients; the native implementation and fresh-root package-cache regressions are
 the compatibility reference.
 
+Private update-package transfer also uses a native durable append primitive.
+It requires an existing protected parent directory, creates a new file only at
+offset zero, and otherwise appends only to a regular single-link file with the
+exact expected length. The file is flushed before checkpoint publication;
+checkpoint recovery rejects any interrupted length mismatch.
+
 ## User Directories
 
 The platform service resolves logical directories:
@@ -315,6 +321,11 @@ obeys the renderer's render-capable-thread contract.
 
 The platform layer does not dispatch arbitrary callbacks while holding native
 or internal locks.
+
+Windows subprocesses inherit only the explicitly listed standard-stream handles.
+Callers that previously relied on ambient inheritable handles must pass a typed
+capability through a dedicated process contract; they must not set process-wide
+inheritance flags to transfer a release or installation lease.
 
 ## Testing
 

@@ -21,8 +21,13 @@ namespace Horo::Runtime {
 
         [[nodiscard]] std::uint64_t CandidateBytes(const SaveMigrationState &state) {
             std::uint64_t bytes = state.archiveBytes.size();
-            for (const auto &participant : state.participants)
+            for (const auto &participant : state.participants) {
                 bytes += participant.payload.size();
+                for (const SaveMigrationRecordState &record : participant.records)
+                    bytes += record.payload.size();
+                for (const PreservedSaveChunk &chunk : participant.preservedChunks)
+                    bytes += chunk.storedBytes.size();
+            }
             return bytes;
         }
 
@@ -31,6 +36,24 @@ namespace Horo::Runtime {
             ParticipantSchemaVersion schemaVersion;
             bool required{true};
             Sha256Digest payloadDigest;
+
+            struct Record final {
+                SaveRecordId id;
+                ParticipantSchemaVersion schemaVersion;
+                SaveParticipantId sourceParticipant;
+                SaveRecordId sourceRecord;
+                ParticipantSchemaVersion sourceSchemaVersion;
+                Sha256Digest payloadDigest;
+            };
+
+            std::vector<Record> records;
+
+            struct Preserved final {
+                SaveChunkDirectoryEntry entry;
+                Sha256Digest storedDigest;
+            };
+
+            std::vector<Preserved> preservedChunks;
         };
 
         struct StepBaseline final {
@@ -49,14 +72,25 @@ namespace Horo::Runtime {
                                                        ? ComputeSha256(std::span<const std::byte>{candidate.archiveBytes})
                                                        : Sha256Digest{}};
             baseline.participants.reserve(candidate.participants.size());
-            for (const SaveMigrationParticipantState &participant : candidate.participants)
-                baseline.participants.push_back(
-                    {.participant = participant.participant,
-                     .schemaVersion = participant.schemaVersion,
-                     .required = participant.required,
-                     .payloadDigest = axis == SaveMigrationAxis::ArchiveFormat || axis == SaveMigrationAxis::ParticipantSchema
-                                          ? ComputeSha256(std::span<const std::byte>{participant.payload})
-                                          : Sha256Digest{}});
+            for (const SaveMigrationParticipantState &participant : candidate.participants) {
+                ParticipantBaseline entry{.participant = participant.participant,
+                                          .schemaVersion = participant.schemaVersion,
+                                          .required = participant.required,
+                                          .payloadDigest = ComputeSha256(std::span<const std::byte>{participant.payload})};
+                entry.records.reserve(participant.records.size());
+                for (const SaveMigrationRecordState &record : participant.records)
+                    entry.records.push_back({.id = record.record,
+                                             .schemaVersion = record.schemaVersion,
+                                             .sourceParticipant = record.sourceParticipant,
+                                             .sourceRecord = record.sourceRecord,
+                                             .sourceSchemaVersion = record.sourceSchemaVersion,
+                                             .payloadDigest = ComputeSha256(std::span<const std::byte>{record.payload})});
+                entry.preservedChunks.reserve(participant.preservedChunks.size());
+                for (const PreservedSaveChunk &chunk : participant.preservedChunks)
+                    entry.preservedChunks.push_back(
+                        {.entry = chunk.entry, .storedDigest = ComputeSha256(std::span<const std::byte>{chunk.storedBytes})});
+                baseline.participants.push_back(std::move(entry));
+            }
             return Result<StepBaseline>::Success(std::move(baseline));
         }
 
@@ -67,10 +101,28 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] bool MatchesBaseline(const ParticipantBaseline &baseline, const SaveMigrationParticipantState &candidate,
-                                           const bool includePayload) {
-            return baseline.participant == candidate.participant && baseline.schemaVersion == candidate.schemaVersion &&
-                   baseline.required == candidate.required &&
-                   (!includePayload || baseline.payloadDigest == ComputeSha256(std::span<const std::byte>{candidate.payload}));
+                                           const bool includePayload, const bool includeRecordSchema = true) {
+            if (baseline.participant != candidate.participant || baseline.required != candidate.required ||
+                baseline.preservedChunks.size() != candidate.preservedChunks.size() ||
+                baseline.records.size() != candidate.records.size() ||
+                (includeRecordSchema && baseline.schemaVersion != candidate.schemaVersion) ||
+                (includePayload && baseline.payloadDigest != ComputeSha256(std::span<const std::byte>{candidate.payload})))
+                return false;
+            for (std::size_t index = 0; index < baseline.preservedChunks.size(); ++index)
+                if (baseline.preservedChunks[index].entry != candidate.preservedChunks[index].entry ||
+                    baseline.preservedChunks[index].storedDigest !=
+                        ComputeSha256(std::span<const std::byte>{candidate.preservedChunks[index].storedBytes}))
+                    return false;
+            for (std::size_t index = 0; index < baseline.records.size(); ++index) {
+                const auto &before = baseline.records[index];
+                const auto &after = candidate.records[index];
+                if (before.id != after.record || before.sourceParticipant != after.sourceParticipant ||
+                    before.sourceRecord != after.sourceRecord || before.sourceSchemaVersion != after.sourceSchemaVersion ||
+                    (includeRecordSchema && before.schemaVersion != after.schemaVersion) ||
+                    (includePayload && before.payloadDigest != ComputeSha256(std::span<const std::byte>{after.payload})))
+                    return false;
+            }
+            return true;
         }
 
         [[nodiscard]] std::string StepFailureContext(const StepView &step) {
@@ -100,7 +152,8 @@ namespace Horo::Runtime {
                 return InvalidStepOutput(step, "changed a version axis or participant composition outside save-schema ownership.");
             for (std::size_t index = 0; index < before.participants.size(); ++index) {
                 if (!MatchesBaseline(before.participants[index], after.participants[index], false))
-                    return InvalidStepOutput(step, "changed participant schema metadata outside save-schema ownership.");
+                    return InvalidStepOutput(step, "changed participant '" + before.participants[index].participant.Value() +
+                                                       "' schema, provenance, or protected opaque records outside save-schema ownership.");
             }
             return Result<void>::Success();
         }
@@ -111,8 +164,16 @@ namespace Horo::Runtime {
                 if (beforeEntry.participant == target)
                     continue;
                 const auto *afterEntry = FindStateParticipant(after, beforeEntry.participant);
-                if (afterEntry == nullptr || !MatchesBaseline(beforeEntry, *afterEntry, true))
-                    return InvalidStepOutput(step, "modified an unrelated participant candidate.");
+                bool granted = false;
+                if (step.crossParticipantTransforms) {
+                    const auto contract = std::ranges::lower_bound(*step.crossParticipantTransforms, beforeEntry.participant, {},
+                                                                   &SaveMigrationTransformContract::target);
+                    granted = contract != step.crossParticipantTransforms->end() && contract->target == beforeEntry.participant &&
+                              contract->targetSchemaVersion == beforeEntry.schemaVersion;
+                }
+                if (afterEntry == nullptr || !MatchesBaseline(beforeEntry, *afterEntry, !granted))
+                    return InvalidStepOutput(step, "modified participant '" + beforeEntry.participant.Value() +
+                                                       "' without an applicable cross-participant transform contract.");
             }
             return Result<void>::Success();
         }
@@ -127,6 +188,11 @@ namespace Horo::Runtime {
                 after.participants.size() != before.participants.size() ||
                 ComputeSha256(std::span<const std::byte>{after.archiveBytes}) != before.archiveDigest)
                 return InvalidStepOutput(step, "changed an unrelated axis, archive payload, or participant composition.");
+            if (!MatchesBaseline(*beforeParticipant, *afterParticipant, false, false))
+                return InvalidStepOutput(step, "changed owned record identity or provenance.");
+            for (const SaveMigrationRecordState &record : afterParticipant->records)
+                if (record.schemaVersion.Value() != step.to)
+                    return InvalidStepOutput(step, "left owned record at an unexpected schema version.");
             return ValidateUnrelatedParticipants(before, after, *step.participant, step);
         }
 
@@ -158,13 +224,60 @@ namespace Horo::Runtime {
                                    std::format("Migration step '{}' expects save schema {}, current candidate is {}.", step.id.value,
                                                step.from, candidate.saveSchemaVersion.Value())));
             if (step.axis == SaveMigrationAxis::ParticipantSchema) {
-                const auto *participant = FindStateParticipant(candidate, *step.participant);
-                if (participant == nullptr || participant->schemaVersion.Value() != step.from)
+                if (const auto *participant = FindStateParticipant(candidate, *step.participant);
+                    participant == nullptr || participant->schemaVersion.Value() != step.from)
                     return Result<void>::Failure(
                         MigrationError(SaveErrors::MigrationPlanInvalid,
                                        std::format("Migration step '{}' expects participant '{}' schema {}, but the candidate differs.",
                                                    step.id.value, step.participant->Value(), step.from)));
+                for (const SaveMigrationTransformContract &contract : *step.crossParticipantTransforms) {
+                    const auto *target = FindStateParticipant(candidate, contract.target);
+                    if (target != nullptr && target->schemaVersion != contract.targetSchemaVersion)
+                        return Result<void>::Failure(
+                            MigrationError(SaveErrors::MigrationPlanInvalid,
+                                           std::format("Migration step '{}' requires cross-participant target '{}' at schema {}.",
+                                                       step.id.value, contract.target.Value(), contract.targetSchemaVersion.Value())));
+                }
             }
+            return Result<void>::Success();
+        }
+
+        /** @brief Advances only the records owned by the participant step; caller still validates the detached candidate. */
+        [[nodiscard]] Result<void> MigrateOwnedRecords(SaveMigrationCandidate &candidate, const StepView &step,
+                                                       const SaveMigrationLimits &limits, const std::uint64_t remainingWorkBytes) {
+            if (!step.migrateRecord || !*step.migrateRecord)
+                return Result<void>::Success();
+            auto found = std::ranges::find(candidate.participants, *step.participant, &SaveMigrationParticipantState::participant);
+            if (found == candidate.participants.end())
+                return Result<void>::Failure(MigrationError(SaveErrors::MigrationPlanInvalid, StepFailureContext(step)));
+            for (SaveMigrationRecordState &record : found->records) {
+                if (record.schemaVersion.Value() != step.from)
+                    return Result<void>::Failure(
+                        MigrationError(SaveErrors::MigrationCandidateInvalid,
+                                       std::format("{} record={} has schema {}, expected {}.", StepFailureContext(step),
+                                                   record.record.ToString(), record.schemaVersion.Value(), step.from)));
+                const SaveMigrationRecordContext recordContext{.step = step.id,
+                                                               .participant = *step.participant,
+                                                               .record = record.record,
+                                                               .from = record.schemaVersion,
+                                                               .to = ParticipantSchemaVersion::Create(step.to).Value(),
+                                                               .maximumOutputBytes =
+                                                                   std::min(limits.maximumParticipantPayloadBytes, remainingWorkBytes)};
+                auto output = (*step.migrateRecord)(std::span<const std::byte>{record.payload}, recordContext);
+                if (output.HasError())
+                    return Result<void>::Failure(
+                        WithCause(MigrationError(SaveErrors::MigrationStepFailed,
+                                                 std::format("{} record={} {}", StepFailureContext(step), record.record.ToString(),
+                                                             output.ErrorValue().message.substr(0, 192))),
+                                  output.ErrorValue()));
+                if (output.Value().size() > recordContext.maximumOutputBytes)
+                    return Result<void>::Failure(MigrationError(SaveErrors::MigrationLimitExceeded,
+                                                                std::format("{} record={} output exceeds its declared byte budget.",
+                                                                            StepFailureContext(step), record.record.ToString())));
+                record.payload = std::move(output).Value();
+                record.schemaVersion = recordContext.to;
+            }
+            found->schemaVersion = ParticipantSchemaVersion::Create(step.to).Value();
             return Result<void>::Success();
         }
 
@@ -179,7 +292,11 @@ namespace Horo::Runtime {
                                                    .maximumParticipantPayloadBytes = limits.maximumParticipantPayloadBytes,
                                                    .maximumTotalPayloadBytes = limits.maximumTotalPayloadBytes};
             try {
-                return (*step.migrate)(std::move(candidate), context);
+                if (auto records = MigrateOwnedRecords(candidate, step, limits, context.remainingWorkBytes); records.HasError())
+                    return Result<SaveMigrationCandidate>::Failure(records.ErrorValue());
+                if (step.migrate && *step.migrate)
+                    return (*step.migrate)(std::move(candidate), context);
+                return Result<SaveMigrationCandidate>::Success(std::move(candidate));
             } catch (const std::bad_alloc &) {
                 return Result<SaveMigrationCandidate>::Failure(MigrationError(SaveErrors::MigrationAllocationFailed));
             } catch (...) {
@@ -207,7 +324,8 @@ namespace Horo::Runtime {
                 return Result<SaveMigrationCandidate>::Failure(baseline.ErrorValue());
             auto transformed = InvokeMigration(std::move(candidate), step, limits, workUsed);
             if (transformed.HasError()) {
-                Error wrapped = MigrationError(SaveErrors::MigrationStepFailed, StepFailureContext(step));
+                Error wrapped = MigrationError(SaveErrors::MigrationStepFailed,
+                                               StepFailureContext(step) + " " + transformed.ErrorValue().message.substr(0, 384));
                 return Result<SaveMigrationCandidate>::Failure(WithCause(std::move(wrapped), transformed.ErrorValue()));
             }
             SaveMigrationCandidate output = std::move(transformed).Value();
@@ -242,6 +360,22 @@ namespace Horo::Runtime {
             return ValidateState(candidate, limits);
         }
 
+        /** @brief Forbids migration callbacks from erasing or rewriting an unknown preservable owner. */
+        [[nodiscard]] Result<void> VerifyProtectedUnknown(const SaveMigrationSource &source, const SaveMigrationCandidate &candidate,
+                                                          const SaveMigrationPlan &plan) {
+            for (const SaveMigrationParticipantTarget &target : plan.participantTargets) {
+                if (!target.preserveUnknown)
+                    continue;
+                const auto *before = FindStateParticipant(source, target.participant);
+                const auto *after = FindStateParticipant(candidate, target.participant);
+                if (before == nullptr || after == nullptr || *before != *after)
+                    return Result<void>::Failure(
+                        MigrationError(SaveErrors::MigrationCandidateInvalid,
+                                       "Migration changed preservable unknown participant '" + target.participant.Value() + "'."));
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ValidatePlanBinding(const SaveMigrationSource &source, const SaveMigrationPlan &plan,
                                                        const SaveMigrationLimits &limits) {
             if (!ValidLimits(limits) || plan.registryGeneration == 0 || plan.definitions.size() > limits.maximumPlanSteps ||
@@ -271,6 +405,8 @@ namespace Horo::Runtime {
             ApplyTargetComposition(current, plan);
             if (const auto finalValidation = ValidateFinalCandidate(current, plan, limits); finalValidation.HasError())
                 return Result<SaveMigrationCandidate>::Failure(finalValidation.ErrorValue());
+            if (const auto protectedUnknown = VerifyProtectedUnknown(source, current, plan); protectedUnknown.HasError())
+                return Result<SaveMigrationCandidate>::Failure(protectedUnknown.ErrorValue());
             return Result<SaveMigrationCandidate>::Success(std::move(current));
         } catch (const std::bad_alloc &) {
             return Result<SaveMigrationCandidate>::Failure(MigrationError(SaveErrors::MigrationAllocationFailed));

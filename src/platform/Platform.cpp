@@ -1,8 +1,10 @@
 #include "Horo/Foundation/Platform.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <unordered_set>
 #include <vector>
@@ -14,6 +16,7 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -64,13 +67,75 @@ namespace Horo {
             return (error ? path.lexically_normal() : parent / path.filename()).generic_string();
         }
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+        /** @brief Appends only through a private Windows regular-file handle at the exact offset. */
+        [[nodiscard]] bool AppendPrivateBytes(const std::filesystem::path &path, const std::uint64_t expectedOffset,
+                                              const std::span<const std::byte> bytes) {
+            const DWORD disposition = expectedOffset == 0U ? CREATE_NEW : OPEN_EXISTING;
+            HANDLE handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, disposition,
+                                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+            if (handle == INVALID_HANDLE_VALUE)
+                return false;
+            BY_HANDLE_FILE_INFORMATION info{};
+            LARGE_INTEGER size{};
+            bool ok = GetFileType(handle) == FILE_TYPE_DISK && GetFileInformationByHandle(handle, &info) &&
+                      (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) == 0U &&
+                      info.nNumberOfLinks == 1U && GetFileSizeEx(handle, &size) && size.QuadPart >= 0 &&
+                      static_cast<std::uint64_t>(size.QuadPart) == expectedOffset;
+            LARGE_INTEGER zero{};
+            if (ok)
+                ok = SetFilePointerEx(handle, zero, nullptr, FILE_END) != 0;
+            std::size_t offset = 0U;
+            while (ok && offset < bytes.size()) {
+                const auto count = static_cast<DWORD>((std::min)(bytes.size() - offset, static_cast<std::size_t>(MAXDWORD)));
+                DWORD written{};
+                ok = WriteFile(handle, bytes.data() + offset, count, &written, nullptr) && written == count;
+                offset += written;
+            }
+            if (ok)
+                ok = FlushFileBuffers(handle) != 0;
+            if (!CloseHandle(handle))
+                ok = false;
+            return ok;
+        }
+#else
         [[nodiscard]] bool FlushFileDescriptor(const int descriptor) {
 #if defined(__APPLE__) && defined(F_FULLFSYNC)
             if (fcntl(descriptor, F_FULLFSYNC) == 0)
                 return true;
 #endif
             return fsync(descriptor) == 0;
+        }
+
+        /** @brief Appends only through a private POSIX regular-file descriptor at the exact offset. */
+        [[nodiscard]] bool AppendPrivateBytes(const std::filesystem::path &path, const std::uint64_t expectedOffset,
+                                              const std::span<const std::byte> bytes) {
+            if (expectedOffset > static_cast<std::uint64_t>(std::numeric_limits<off_t>::max()))
+                return false;
+            const int flags = O_WRONLY | O_NOFOLLOW | O_CLOEXEC | (expectedOffset == 0U ? O_CREAT | O_EXCL : 0);
+            const int descriptor = open(path.c_str(), flags, 0600);
+            if (descriptor < 0)
+                return false;
+            struct stat status{};
+            bool ok = fstat(descriptor, &status) == 0 && S_ISREG(status.st_mode) && status.st_nlink == 1U && status.st_size >= 0 &&
+                      static_cast<std::uint64_t>(status.st_size) == expectedOffset;
+            if (ok)
+                ok = lseek(descriptor, static_cast<off_t>(expectedOffset), SEEK_SET) == static_cast<off_t>(expectedOffset);
+            std::size_t offset = 0U;
+            while (ok && offset < bytes.size()) {
+                const auto count = (std::min)(bytes.size() - offset, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+                const ssize_t written = write(descriptor, bytes.data() + offset, count);
+                if (written <= 0) {
+                    ok = false;
+                    break;
+                }
+                offset += static_cast<std::size_t>(written);
+            }
+            if (ok)
+                ok = FlushFileDescriptor(descriptor);
+            if (close(descriptor) != 0)
+                ok = false;
+            return ok;
         }
 #endif
     }  // namespace
@@ -147,6 +212,110 @@ namespace Horo {
 
     ExclusiveFileLock::operator bool() const noexcept {
         return state_ != nullptr;
+    }
+
+    struct ProductLaunchLease::State {
+        State() = default;
+        State(const State &) = delete;
+        State &operator=(const State &) = delete;
+        State(State &&) = delete;
+        State &operator=(State &&) = delete;
+#if defined(_WIN32)
+        HANDLE handle{INVALID_HANDLE_VALUE};
+#else
+        int descriptor{-1};
+#endif
+        bool maintenance{};
+
+        ~State() {
+#if defined(_WIN32)
+            if (handle != INVALID_HANDLE_VALUE)
+                CloseHandle(handle);
+#else
+            // A forked or duplicated descriptor shares this flock; only the last close may release it.
+            if (descriptor >= 0)
+                close(descriptor);
+#endif
+        }
+    };
+
+    ProductLaunchLease::ProductLaunchLease() noexcept = default;
+
+    ProductLaunchLease::ProductLaunchLease(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
+
+    ProductLaunchLease::~ProductLaunchLease() = default;
+    ProductLaunchLease::ProductLaunchLease(ProductLaunchLease &&) noexcept = default;
+    ProductLaunchLease &ProductLaunchLease::operator=(ProductLaunchLease &&) noexcept = default;
+
+    ProductLaunchLease::operator bool() const noexcept {
+        return state_ != nullptr;
+    }
+
+    bool ProductLaunchLease::IsMaintenance() const noexcept {
+        return state_ != nullptr && state_->maintenance;
+    }
+
+    std::uintptr_t ProductLaunchLease::NativeHandle() const noexcept {
+#if defined(_WIN32)
+        return state_ == nullptr ? 0U : reinterpret_cast<std::uintptr_t>(state_->handle);
+#else
+        return state_ == nullptr ? 0U : static_cast<std::uintptr_t>(state_->descriptor);
+#endif
+    }
+
+    ProductLaunchLease ProductLaunchLease::AdoptMaintenanceNative(const std::uintptr_t native) {
+        auto state = std::make_unique<State>();
+#if defined(_WIN32)
+        state->handle = reinterpret_cast<HANDLE>(native);
+#else
+        state->descriptor = static_cast<int>(native);
+#endif
+        state->maintenance = true;
+        return ProductLaunchLease(std::move(state));
+    }
+
+    /** @copydoc NativeDurableFileSystem::TryAcquireProductLaunch */
+    Result<ProductLaunchLease> NativeDurableFileSystem::TryAcquireProductLaunch(const std::filesystem::path &installationRoot) const {
+        return TryAcquireProductLease(installationRoot, false);
+    }
+
+    /** @copydoc NativeDurableFileSystem::TryAcquireProductMaintenance */
+    Result<ProductLaunchLease> NativeDurableFileSystem::TryAcquireProductMaintenance(const std::filesystem::path &installationRoot) const {
+        return TryAcquireProductLease(installationRoot, true);
+    }
+
+    /** @brief Acquires one OS-held launch or maintenance lease without changing an existing installation root. */
+    Result<ProductLaunchLease> NativeDurableFileSystem::TryAcquireProductLease(const std::filesystem::path &installationRoot,
+                                                                               const bool maintenance) const {
+        const auto path = installationRoot / ".product-launch.lock";
+        if (!installationRoot.is_absolute() || std::ranges::any_of(installationRoot, [](const auto &part) {
+            return part == "." || part == "..";
+        }))
+            return Result<ProductLaunchLease>::Failure(FsError(IoFailed, path));
+        if (std::error_code error; !std::filesystem::is_directory(std::filesystem::symlink_status(installationRoot, error)) || error)
+            return Result<ProductLaunchLease>::Failure(FsError(IoFailed, path));
+        auto state = std::make_unique<ProductLaunchLease::State>();
+        state->maintenance = maintenance;
+#if defined(_WIN32)
+        const DWORD sharing = maintenance ? 0U : FILE_SHARE_READ | FILE_SHARE_WRITE;
+        state->handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, sharing, nullptr, OPEN_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (state->handle == INVALID_HANDLE_VALUE)
+            return Result<ProductLaunchLease>::Failure(FsError(GetLastError() == ERROR_SHARING_VIOLATION ? LockBusy : IoFailed, path));
+        BY_HANDLE_FILE_INFORMATION info{};
+        if (!GetFileInformationByHandle(state->handle, &info) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U ||
+            (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0U || info.nNumberOfLinks != 1U)
+            return Result<ProductLaunchLease>::Failure(FsError(IoFailed, path));
+#else
+        state->descriptor = open(path.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+        if (state->descriptor < 0)
+            return Result<ProductLaunchLease>::Failure(FsError(IoFailed, path));
+        if (struct stat info{}; fstat(state->descriptor, &info) != 0 || !S_ISREG(info.st_mode) || info.st_nlink != 1)
+            return Result<ProductLaunchLease>::Failure(FsError(IoFailed, path));
+        if (flock(state->descriptor, (maintenance ? LOCK_EX : LOCK_SH) | LOCK_NB) != 0)
+            return Result<ProductLaunchLease>::Failure(FsError(errno == EWOULDBLOCK ? LockBusy : IoFailed, path));
+#endif
+        return Result<ProductLaunchLease>::Success(ProductLaunchLease(std::move(state)));
     }
 
     /** @copydoc DurableFileSystem::TryAcquireExclusive */
@@ -240,6 +409,16 @@ namespace Horo {
             return Result<void>::Failure(FsError(IoFailed, path));
 #endif
         return SyncDirectory(path.parent_path());
+    }
+
+    /** @copydoc NativeDurableFileSystem::AppendPrivateDurable */
+    Result<void> NativeDurableFileSystem::AppendPrivateDurable(const std::filesystem::path &path, const std::uint64_t expectedOffset,
+                                                               const std::span<const std::byte> bytes) {
+        if (path.empty() || path.parent_path().empty() || bytes.empty() ||
+            bytes.size() > std::numeric_limits<std::uint64_t>::max() - expectedOffset)
+            return Result<void>::Failure(FsError(IoFailed, path));
+        return AppendPrivateBytes(path, expectedOffset, bytes) ? SyncDirectory(path.parent_path())
+                                                               : Result<void>::Failure(FsError(IoFailed, path));
     }
 
     /** @copydoc DurableFileSystem::CopyDurable */

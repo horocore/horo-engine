@@ -249,6 +249,10 @@ Native activation is gated before platform library loading. The gate requires
 an approved algorithm, exact artifact digest, trusted publisher/key identity,
 and valid detached signature. Missing, corrupt, stale, unknown, or unverifiable
 evidence prevents the platform loader and every module callback from running.
+Large private artifacts may be verified by streaming their exact file length and
+SHA-256 digest before applying the same trust-root and detached-signature check.
+The caller must keep that private file quiescent until the verified bytes are
+consumed; a verified path alone does not freeze its contents.
 
 Untrusted extension execution requires process isolation with:
 

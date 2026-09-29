@@ -155,9 +155,9 @@ namespace Horo::Physics {
         wrongTarget.target = Target(2);
         REQUIRE(HasPhysicsError(cache.Acquire(wrongTarget, cooked.payload), PhysicsErrors::ProfileUnsupported));
 
-        auto unsupported = cooked.descriptor;
-        unsupported.kind = PhysicsCookedShapeKind::HeightField;
-        REQUIRE(HasPhysicsError(cache.Acquire(unsupported, cooked.payload), PhysicsErrors::OperationUnsupported));
+        auto wrongKind = cooked.descriptor;
+        wrongKind.kind = PhysicsCookedShapeKind::HeightField;
+        REQUIRE(HasPhysicsError(cache.Acquire(wrongKind, cooked.payload), PhysicsErrors::ShapeArtifactInvalid));
         REQUIRE(cache.Stats().residentShapes == 0);
     }
 
