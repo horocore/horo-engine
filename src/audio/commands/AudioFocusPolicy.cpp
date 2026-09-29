@@ -22,26 +22,28 @@ namespace Horo::Audio {
         }
 
         [[nodiscard]] AudioFocusCause Cause(const AudioFocusFacts &facts) noexcept {
+            using enum AudioFocusCause;
             if (facts.deviceInterrupted)
-                return AudioFocusCause::DeviceInterrupted;
+                return DeviceInterrupted;
             if (facts.hostSuspended)
-                return AudioFocusCause::HostSuspended;
+                return HostSuspended;
             if (facts.minimized)
-                return AudioFocusCause::Minimized;
-            return facts.focused ? AudioFocusCause::None : AudioFocusCause::FocusLost;
+                return Minimized;
+            return facts.focused ? None : FocusLost;
         }
 
         [[nodiscard]] AudioFocusBehavior Behavior(const AudioFocusProfile &profile, const AudioFocusCause cause) noexcept {
+            using enum AudioFocusCause;
             switch (cause) {
-                case AudioFocusCause::None:
+                case None:
                     return AudioFocusBehavior::Continue;
-                case AudioFocusCause::FocusLost:
+                case FocusLost:
                     return profile.onFocusLost;
-                case AudioFocusCause::Minimized:
+                case Minimized:
                     return profile.onMinimized;
-                case AudioFocusCause::HostSuspended:
+                case HostSuspended:
                     return profile.onHostSuspended;
-                case AudioFocusCause::DeviceInterrupted:
+                case DeviceInterrupted:
                     return profile.onDeviceInterrupted;
             }
             return AudioFocusBehavior::Continue;
