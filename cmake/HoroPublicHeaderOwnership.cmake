@@ -168,6 +168,7 @@ horo_configure_target_header_boundary(HoroUpdateDownload PUBLIC_HEADERS
     Horo/Release/UpdateDownloadSession.h
     Horo/Release/UpdateHttpDownload.h
     Horo/Release/UpdateStageReady.h
+    Horo/Release/UpdateTarGzipStagingJob.h
     Horo/Release/UpdateZipPackageProducer.h
     Horo/Release/UpdateZipStagingJob.h
 )
