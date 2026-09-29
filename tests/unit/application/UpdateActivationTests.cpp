@@ -110,7 +110,11 @@ namespace {
             std::ofstream output(stageRoot / "bin/editor", std::ios::binary);
             output << content;
         }
-        std::vector<UpdateStagedFile> inventory{{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content}))}};
+#if !defined(_WIN32)
+        std::filesystem::permissions(stageRoot / "bin/editor", std::filesystem::perms{0755});
+#endif
+        std::vector<UpdateStagedFile> inventory{{"bin/editor", content.size(), Horo::ComputeSha256(std::as_bytes(std::span{content})),
+                                                 UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
         constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
         REQUIRE(
             PublishVerifiedUpdateStage({package, checkpoint, packageFile, stageRoot, inventory, limits}, files, verifier, {}).HasValue());

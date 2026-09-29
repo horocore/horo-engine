@@ -26,32 +26,15 @@ namespace Horo::Release {
             return true;
         }
 
-        /** @brief Hashes canonical ordered inventory rows without buffering file content. */
-        [[nodiscard]] Result<Sha256Digest> InventoryDigest(const std::span<const UpdateStagedFile> inventory) {
-            std::vector<const UpdateStagedFile *> ordered;
-            ordered.reserve(inventory.size());
-            for (const auto &file : inventory)
-                ordered.emplace_back(&file);
-            std::ranges::sort(ordered, {}, [](const UpdateStagedFile *file) -> const std::string & {
-                return file->path;
-            });
-            Sha256Builder hash;
-            for (const auto *file : ordered) {
-                const std::string row = std::format("{}\t{}\t{}\n", file->path, file->size, FormatSha256(file->digest));
-                if (!hash.Update(std::as_bytes(std::span{row})))
-                    return Result<Sha256Digest>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
-            }
-            return Result<Sha256Digest>::Success(hash.Finalize());
-        }
-
         /** @brief Encodes only verified identities into one bounded version-private marker. */
-        [[nodiscard]] Result<std::string> ReadyRecord(const UpdatePackageRecord &package,
-                                                      const std::span<const UpdateStagedFile> inventory) {
-            auto inventoryHash = InventoryDigest(inventory);
-            if (inventoryHash.HasError())
-                return Result<std::string>::Failure(inventoryHash.ErrorValue());
-            return Result<std::string>::Success(std::format("horo-update-stage-ready-v1\n{}\n{}\n{}\n", FormatSha256(package.digest),
-                                                            package.size, FormatSha256(inventoryHash.Value())));
+        [[nodiscard]] Result<std::string> ReadyRecord(const UpdatePackageRecord &package, const std::span<const UpdateStagedFile> inventory,
+                                                      const UpdateArchiveLimits &limits) {
+            auto encoded = BuildCanonicalUpdateFileInventory(inventory, limits);
+            if (encoded.HasError())
+                return Result<std::string>::Failure(encoded.ErrorValue());
+            const auto digest = ComputeSha256(std::as_bytes(std::span{encoded.Value()}));
+            return Result<std::string>::Success(
+                std::format("horo-update-stage-ready-v2\n{}\n{}\n{}\n", FormatSha256(package.digest), package.size, FormatSha256(digest)));
         }
 
         /** @brief Makes absence of a stale marker durable before any new validation. */
@@ -88,7 +71,7 @@ namespace Horo::Release {
             return Result<std::filesystem::path>::Failure(verified.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return failed(UpdateTransferErrors::Cancelled);
-        auto record = ReadyRecord(package, inventory);
+        auto record = ReadyRecord(package, inventory, limits);
         if (record.HasError())
             return Result<std::filesystem::path>::Failure(record.ErrorValue());
         if (auto written = files.AppendPrivateDurable(prepared, 0U, std::as_bytes(std::span{record.Value()})); written.HasError())
@@ -116,7 +99,7 @@ namespace Horo::Release {
         marker += ".ready";
         if (packageFile == marker)
             return invalid();
-        auto expected = ReadyRecord(package, inventory);
+        auto expected = ReadyRecord(package, inventory, limits);
         if (expected.HasError())
             return Result<void>::Failure(expected.ErrorValue());
         std::error_code error;
