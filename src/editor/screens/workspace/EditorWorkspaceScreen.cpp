@@ -23,7 +23,6 @@
 #include "Horo/Foundation/Paths.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
-#include "editor/modals/build/BuildWorkflowPreviewState.h"
 #include "editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.h"
 #include "editor/modals/scene_compare/SceneConflictCompareModal.h"
 #include "editor/renderer/EditorGuiRenderer.h"
@@ -225,18 +224,6 @@ namespace Horo::Editor {
                     controller_.reset();
                     return committed;
                 }
-                buildPreviewSubscription_ =
-                    context_.engineEvents.Subscribe<BuildPreviewCompletedEvent>([this](const BuildPreviewCompletedEvent &event) {
-                    if (controller_ == nullptr)
-                        return;
-                    const char *messageKey = event.kind == BuildPreviewKind::Build     ? "build.preview.notification.build"
-                                             : event.kind == BuildPreviewKind::Tests   ? "build.preview.notification.tests"
-                                             : event.kind == BuildPreviewKind::Release ? "build.preview.notification.release"
-                                                                                       : "build.preview.notification.publish";
-                    controller_->Notifications().Publish("build.preview", NotificationSeverity::Success,
-                                                         context_.localization.Get("editor", messageKey),
-                                                         context_.localization.Get("editor", "build.preview.completed"));
-                });
                 return Result<void>::Success();
             }
 
@@ -474,7 +461,6 @@ namespace Horo::Editor {
             }
 
             void OnLeave() override {
-                buildPreviewSubscription_.Reset();
                 LOG_INFO("editor.workspace", "EditorWorkspaceScreen leaving.");
                 if (controller_) {
                     controller_->FlushAutosave();
@@ -682,7 +668,6 @@ namespace Horo::Editor {
             WorkspacePublishedRevisions publishedRevisions_{};
             std::unique_ptr<EditorWorkspaceController> controller_;
             std::unique_ptr<EditorSnackbarHost> snackbarHost_;
-            Subscription buildPreviewSubscription_;
             std::optional<Input::InputBindingProfile> previousInputProfile_;
         };
     }  // namespace

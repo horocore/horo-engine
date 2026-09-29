@@ -112,9 +112,9 @@ namespace Horo::Editor {
                         auto nativeDialogContext = inputRouter_.PushContext(Input::InputContextId{"editor.native_dialog.delete_project"},
                                                                             Input::InputContextKind::NativeDialog);
                         const std::string title = context_.localization.Get("editor", "welcome.project.delete_confirm_title");
-                        const std::string prompt =
-                            context_.localization.Get("editor", "welcome.project.delete_confirm_message") + "\n\n" + projectRoot;
-                        if (pfd::message(title, prompt, pfd::choice::yes_no, pfd::icon::warning).result() != pfd::button::yes)
+                        if (const std::string prompt =
+                                context_.localization.Get("editor", "welcome.project.delete_confirm_message") + "\n\n" + projectRoot;
+                            pfd::message(title, prompt, pfd::choice::yes_no, pfd::icon::warning).result() != pfd::button::yes)
                             break;
                         if (!DeleteRecentProjectFiles(projectRoot)) {
                             static_cast<void>(

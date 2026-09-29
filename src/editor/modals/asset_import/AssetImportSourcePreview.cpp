@@ -16,6 +16,9 @@ namespace Horo::Editor {
         constexpr std::uint32_t PreviewHeight = 232;
     }  // namespace
 
+    // One worker owns generation; the UI thread consumes only after completion.
+    // The mutex protects the image handoff, and shared ownership keeps cancelled
+    // requests alive until their worker exits. Texture access stays on the UI thread.
     struct AssetImportSourcePreview::ResultState {
         std::mutex mutex;
         std::optional<Assets::AssetPreviewImage> image;
@@ -53,28 +56,34 @@ namespace Horo::Editor {
     Result<void> AssetImportSourcePreview::GeneratePreview(const std::shared_ptr<ResultState> &state, const PreviewRequest &request,
                                                            const CancellationToken &cancellation) {
         struct CompletionGuard {
+            explicit CompletionGuard(ResultState &result) : state(result) {}
+
+            CompletionGuard(const CompletionGuard &) = delete;
+            CompletionGuard &operator=(const CompletionGuard &) = delete;
+
             ResultState &state;
 
             ~CompletionGuard() {
-                state.finished.store(true, std::memory_order_release);
+                state.finished.store(true);
             }
-        } guard{*state};
+        };
+
+        CompletionGuard guard{*state};
 
         if (cancellation.IsCancellationRequested())
             return Result<void>::Success();
         std::error_code error;
-        const auto bytes = std::filesystem::file_size(request.path, error);
-        if (error || bytes > MaximumPreviewSourceBytes)
+        if (const auto bytes = std::filesystem::file_size(request.path, error); error || bytes > MaximumPreviewSourceBytes)
             return Result<void>::Success();
         auto source = Assets::ReadAssetImportSource(request.path);
         auto resolved = Assets::ResolveImportSettings(request.descriptor, request.settings);
         if (source.HasError() || resolved.HasError() || cancellation.IsCancellationRequested())
             return Result<void>::Success();
-        auto prepared = request.descriptor.strategy->Import(Assets::AssetImportInput{.sourceBytes = source.Value(),
-                                                                                     .sourceExtension = request.extension,
-                                                                                     .settings = std::move(resolved).Value()},
-                                                            cancellation);
-        if (prepared.HasValue() && !cancellation.IsCancellationRequested()) {
+        if (auto prepared = request.descriptor.strategy->Import(Assets::AssetImportInput{.sourceBytes = source.Value(),
+                                                                                         .sourceExtension = request.extension,
+                                                                                         .settings = std::move(resolved).Value()},
+                                                                cancellation);
+            prepared.HasValue() && !cancellation.IsCancellationRequested()) {
             auto preview = request.descriptor.previewProvider->GeneratePreview(
                 Assets::AssetPreviewInput{
                     .editorPayload = prepared.Value().editorPayload,
@@ -107,12 +116,12 @@ namespace Horo::Editor {
         if (submitted.HasValue())
             job_ = std::move(submitted).Value();
         else
-            result_->finished.store(true, std::memory_order_release);
+            result_->finished.store(true);
     }
 
     /** @brief Uploads only a completed image belonging to the currently selected request. */
     void AssetImportSourcePreview::UploadFinished() {
-        if (textureId_ != 0 || !result_ || !result_->finished.load(std::memory_order_acquire))
+        if (textureId_ != 0 || !result_ || !result_->finished.load())
             return;
         std::optional<Assets::AssetPreviewImage> image;
         {
@@ -135,8 +144,8 @@ namespace Horo::Editor {
                 Clear();
             return;
         }
-        const std::string path = item->absoluteSourcePath.string();
-        if (path != requestedPath_ || contribution->contributionId != requestedContribution_)
+        if (const std::string path = item->absoluteSourcePath.string();
+            path != requestedPath_ || contribution->contributionId != requestedContribution_)
             StartPreview(*item, *contribution, path);
         UploadFinished();
     }

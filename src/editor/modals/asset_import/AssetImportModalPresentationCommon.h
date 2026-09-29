@@ -10,14 +10,15 @@
 #include "Horo/Editor/EditorUiComponents.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <format>
 #include <imgui.h>
 #include <string>
 #include <string_view>
 
 namespace Horo::Editor::AssetImportPresentationDetail {
-    using namespace Theme;
-    using namespace Ui;
+    using Theme::Fonts;
+    using Ui::UiIcon;
 
     constexpr ImVec4 WarningColor{0.91f, 0.64f, 0.24f, 1.0f};
     constexpr ImVec4 ErrorColor{0.83f, 0.32f, 0.29f, 1.0f};
@@ -27,7 +28,7 @@ namespace Horo::Editor::AssetImportPresentationDetail {
     constexpr float ImportSectionGap = 12.0f;
 
     inline void BeginImportField(const char *label, const Fonts &fonts) {
-        FieldLabel(label, fonts);
+        Ui::FieldLabel(label, fonts);
         ImGui::SetNextItemWidth(-1.0f);
     }
 
@@ -56,7 +57,7 @@ namespace Horo::Editor::AssetImportPresentationDetail {
         std::size_t length = name.size();
         while (length > 0) {
             --length;
-            while (length > 0 && (static_cast<unsigned char>(name[length]) & 0xC0U) == 0x80U)
+            while (length > 0 && (static_cast<std::byte>(name[length]) & std::byte{0xC0}) == std::byte{0x80})
                 --length;
             if (ImGui::CalcTextSize(name.c_str(), name.c_str() + length).x <= available)
                 return name.substr(0, length) + std::string{ellipsis};
@@ -66,9 +67,9 @@ namespace Horo::Editor::AssetImportPresentationDetail {
 
     [[nodiscard]] inline std::string FileSize(const AssetImportModal &modal, std::size_t index) {
         const auto sourceSize = modal.SourceFileSize(index);
-        if (!sourceSize)
+        if (!sourceSize.has_value())
             return "—";
-        const float bytes = static_cast<float>(*sourceSize);
+        const auto bytes = static_cast<float>(*sourceSize);
         if (bytes >= 1024.0f * 1024.0f)
             return std::format("{:.1f} MB", bytes / (1024.0f * 1024.0f));
         if (bytes >= 1024.0f)
@@ -82,12 +83,13 @@ namespace Horo::Editor::AssetImportPresentationDetail {
     }
 
     [[nodiscard]] inline std::string AssetKind(const AssetImportModal &modal, const std::size_t index) {
+        using enum Assets::AssetPreviewFallback;
         switch (PreviewKind(modal, index)) {
-            case Assets::AssetPreviewFallback::Mesh:
+            case Mesh:
                 return Copy(modal.Localized("asset_import.type.model", "3D Model"));
-            case Assets::AssetPreviewFallback::Image:
+            case Image:
                 return Copy(modal.Localized("asset_import.type.texture", "Texture"));
-            case Assets::AssetPreviewFallback::Audio:
+            case Audio:
                 return Copy(modal.Localized("asset_import.type.audio", "Audio"));
             default:
                 return Copy(modal.Localized("asset_import.type.asset", "Asset"));
@@ -95,12 +97,13 @@ namespace Horo::Editor::AssetImportPresentationDetail {
     }
 
     [[nodiscard]] inline UiIcon AssetIcon(const AssetImportModal &modal, const std::size_t index) {
+        using enum Assets::AssetPreviewFallback;
         switch (PreviewKind(modal, index)) {
-            case Assets::AssetPreviewFallback::Mesh:
+            case Mesh:
                 return UiIcon::HierarchyMesh;
-            case Assets::AssetPreviewFallback::Image:
+            case Image:
                 return UiIcon::Image;
-            case Assets::AssetPreviewFallback::Audio:
+            case Audio:
                 return UiIcon::AudioFile;
             default:
                 return UiIcon::Package;

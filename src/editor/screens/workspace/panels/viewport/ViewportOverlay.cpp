@@ -83,7 +83,7 @@ namespace Horo::Editor {
                 case OverlayGlyph::Focus:
                     for (const float x : {-1.0F, 1.0F}) {
                         for (const float y : {-1.0F, 1.0F}) {
-                            const ImVec2 corner{center.x + x * 8.0F, center.y + y * 8.0F};
+                            const ImVec2 corner{center.x + static_cast<float>(x) * 8.0F, center.y + static_cast<float>(y) * 8.0F};
                             drawList.AddLine(corner, {corner.x - x * 5.0F, corner.y}, color, stroke);
                             drawList.AddLine(corner, {corner.x, corner.y - y * 5.0F}, color, stroke);
                         }
@@ -93,8 +93,11 @@ namespace Horo::Editor {
                 case OverlayGlyph::Grid:
                     for (int x = 0; x < 2; ++x)
                         for (int y = 0; y < 2; ++y)
-                            drawList.AddRect({center.x - 7.0F + x * 8.0F, center.y - 7.0F + y * 8.0F},
-                                             {center.x - 2.0F + x * 8.0F, center.y - 2.0F + y * 8.0F}, color, 0.0F, 0, 1.4F);
+                            drawList.AddRect({center.x - 7.0F + static_cast<float>(x) * 8.0F,
+                                              center.y - 7.0F + static_cast<float>(y) * 8.0F},
+                                             {center.x - 2.0F + static_cast<float>(x) * 8.0F,
+                                              center.y - 2.0F + static_cast<float>(y) * 8.0F},
+                                             color, 0.0F, 0, 1.4F);
                     break;
             }
         }
@@ -108,13 +111,15 @@ namespace Horo::Editor {
             const bool clicked = ImGui::InvisibleButton(id, {ButtonWidth, ControlHeight});
             const bool hovered = ImGui::IsItemHovered();
             ImGui::EndDisabled();
-            const ImVec4 surface = selected             ? Theme::Mix(Theme::Bg2(), Theme::Accent(), 0.20F)
-                                   : hovered && enabled ? Theme::Hover()
-                                                        : Theme::Bg2();
+            ImVec4 surface = hovered && enabled ? Theme::Hover() : Theme::Bg2();
+            if (selected)
+                surface = Theme::Mix(Theme::Bg2(), Theme::Accent(), 0.20F);
             drawList.AddRectFilled(position, end, Theme::U32(surface), 5.0F);
             drawList.AddRect(position, end, Theme::U32(selected ? Theme::Accent() : Theme::Border()), 5.0F);
-            DrawGlyph(drawList, glyph, {position.x + ButtonWidth * 0.5F, position.y + ControlHeight * 0.5F},
-                      Theme::U32(enabled ? selected ? Theme::Accent() : Theme::Text() : Theme::Muted()));
+            ImVec4 glyphColor = selected ? Theme::Accent() : Theme::Text();
+            if (!enabled)
+                glyphColor = Theme::Muted();
+            DrawGlyph(drawList, glyph, {position.x + ButtonWidth * 0.5F, position.y + ControlHeight * 0.5F}, Theme::U32(glyphColor));
             if (hovered && tooltip != nullptr)
                 Ui::ShowTooltip(tooltip, &fonts);
             return clicked && enabled;
@@ -152,16 +157,17 @@ namespace Horo::Editor {
         /** @brief Resolves a click against the frontmost axis endpoint under the pointer. */
         [[nodiscard]] std::optional<EditorViewportAxisView> HitTestCompass(const std::array<CompassEndpoint, 6> &endpoints,
                                                                            const ImVec2 pointer) {
+            using enum EditorViewportAxisView;
             for (auto it = endpoints.rbegin(); it != endpoints.rend(); ++it) {
                 const bool front = it->depth >= 0.0F;
-                const float radius = it->positive ? (front ? 10.0F : 8.5F) : (front ? 6.0F : 5.0F);
+                float radius = front ? 6.0F : 5.0F;
+                if (it->positive)
+                    radius = front ? 10.0F : 8.5F;
                 const float dx = pointer.x - it->tip.x;
-                const float dy = pointer.y - it->tip.y;
-                if (dx * dx + dy * dy > radius * radius)
+                if (const float dy = pointer.y - it->tip.y; dx * dx + dy * dy > radius * radius)
                     continue;
                 constexpr std::array views{
-                    EditorViewportAxisView::NegativeX, EditorViewportAxisView::PositiveX, EditorViewportAxisView::NegativeY,
-                    EditorViewportAxisView::PositiveY, EditorViewportAxisView::NegativeZ, EditorViewportAxisView::PositiveZ,
+                    NegativeX, PositiveX, NegativeY, PositiveY, NegativeZ, PositiveZ,
                 };
                 return views[it->axis * 2 + (it->positive ? 1U : 0U)];
             }
@@ -194,7 +200,7 @@ namespace Horo::Editor {
                     };
                 }
             }
-            std::sort(endpoints.begin(), endpoints.end(), [](const CompassEndpoint &lhs, const CompassEndpoint &rhs) {
+            std::ranges::sort(endpoints, [](const CompassEndpoint &lhs, const CompassEndpoint &rhs) {
                 return lhs.depth < rhs.depth;
             });
             for (const CompassEndpoint &endpoint : endpoints) {
@@ -216,9 +222,9 @@ namespace Horo::Editor {
             const std::string objects =
                 std::vformat(localization.Get("editor", "workspace.viewport.object_count"), std::make_format_args(state.objectCount));
             std::string text = objects;
-            if (state.vertexCount)
+            if (state.vertexCount.has_value())
                 text += std::format("  |  {}: {}", localization.Get("editor", "workspace.viewport.vertices"), *state.vertexCount);
-            if (state.triangleCount)
+            if (state.triangleCount.has_value())
                 text += std::format("  |  {}: {}", localization.Get("editor", "workspace.viewport.triangles"), *state.triangleCount);
             const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
             const ImVec2 min{origin.x + SideInset, origin.y + size.y - textSize.y - 24.0F};

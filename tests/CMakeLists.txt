@@ -1053,6 +1053,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/SettingsModalPresentationTests.cpp
             unit/editor/ProjectCreationViewPresentationTests.cpp
             unit/editor/AssetImportModalPresentationTests.cpp
+            unit/editor/AssetImportSourcePreviewTests.cpp
             unit/editor/ScreenViewPresentationTests.cpp
             unit/editor/EditorThemeBehaviorTests.cpp
     )
@@ -1434,8 +1435,6 @@ target_link_libraries(HoroNotificationServiceTests PRIVATE HoroEngine::EditorSer
 
 add_executable(HoroEditorMenuModelTests
         unit/editor/EditorMenuModelTests.cpp
-        unit/editor/BuildWorkflowPreviewStateTests.cpp
-        ${PROJECT_SOURCE_DIR}/src/editor/modals/build/BuildWorkflowPreviewState.cpp
 )
 
 target_compile_features(HoroEditorMenuModelTests PRIVATE cxx_std_20)

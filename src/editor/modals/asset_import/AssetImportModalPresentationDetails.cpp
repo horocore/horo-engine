@@ -3,6 +3,7 @@
 #include "AssetImportModalPresentationCommon.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <filesystem>
 #include <imgui.h>
@@ -59,19 +60,19 @@ namespace Horo::Editor {
             for (const auto &choice : localized)
                 choices.push_back(choice.c_str());
             const auto *selected = std::get_if<std::size_t>(&current);
-            int index = static_cast<int>(std::min(selected ? *selected : 0U, setting.choices.size() ? setting.choices.size() - 1 : 0U));
+            auto index = static_cast<int>(std::min(selected ? *selected : 0U, setting.choices.size() ? setting.choices.size() - 1 : 0U));
             if (!choices.empty() && ComboControl(id.c_str(), &index, choices.data(), static_cast<int>(choices.size()), fonts))
                 modal.SetSettingValue(itemIndex, setting, static_cast<std::size_t>(index));
         }
 
         void DrawSetting(AssetImportModal &modal, const Assets::ImportSettingDescriptor &setting, const std::size_t itemIndex,
                          const Fonts &fonts) {
-            const std::string label = Copy(modal.Localized(setting.labelKey, setting.labelKey));
+            const auto label = Copy(modal.Localized(setting.labelKey, setting.labelKey));
             const std::string id = "##Setting_" + setting.id;
             const auto current = modal.SettingValue(itemIndex, setting);
             if (setting.kind == Assets::ImportSettingKind::Boolean) {
-                bool value = std::get_if<bool>(&current) ? std::get<bool>(current) : false;
-                if (DrawBooleanSettingRow(modal, label, id.c_str(), &value, fonts))
+                if (bool value = std::get_if<bool>(&current) ? std::get<bool>(current) : false;
+                    DrawBooleanSettingRow(modal, label, id.c_str(), &value, fonts))
                     modal.SetSettingValue(itemIndex, setting, value);
                 EndImportField();
                 return;
@@ -84,8 +85,8 @@ namespace Horo::Editor {
                 }
                 case Assets::ImportSettingKind::Float: {
                     const auto *typed = std::get_if<double>(&current);
-                    float value = typed ? static_cast<float>(*typed) : 0.0f;
-                    if (InputFloatStepperControl(id.c_str(), &value, fonts, 0.1F, false))
+                    if (float value = typed ? static_cast<float>(*typed) : 0.0f;
+                        InputFloatStepperControl(id.c_str(), &value, fonts, 0.1F, false))
                         modal.SetSettingValue(itemIndex, setting, static_cast<double>(value));
                     break;
                 }
@@ -100,8 +101,7 @@ namespace Horo::Editor {
                 }
                 case Assets::ImportSettingKind::Text: {
                     const auto *typed = std::get_if<std::string>(&current);
-                    std::string value = typed ? *typed : std::string{};
-                    if (InputTextControl(id.c_str(), value, 256, fonts))
+                    if (std::string value = typed ? *typed : std::string{}; InputTextControl(id.c_str(), value, 256, fonts))
                         modal.SetSettingValue(itemIndex, setting, value);
                     break;
                 }
@@ -128,7 +128,7 @@ namespace Horo::Editor {
             EndImportField();
         }
 
-        void DrawPresetPopupHeader(AssetImportModal &modal, const Fonts &fonts, std::string &name, const float popupWidth,
+        void DrawPresetPopupHeader(const AssetImportModal &modal, const Fonts &fonts, std::string &name, const float popupWidth,
                                    const float popupHeight) {
             const ImVec2 origin = ImGui::GetWindowPos();
             ImDrawList *const drawList = ImGui::GetWindowDrawList();
@@ -160,7 +160,7 @@ namespace Horo::Editor {
             bool blank;
         };
 
-        PresetPopupState DrawPresetPopupHint(AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, const Fonts &fonts,
+        PresetPopupState DrawPresetPopupHint(const AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, const Fonts &fonts,
                                              const std::string &name, const float popupWidth) {
             const auto index = snapshot.selectedItemIndex;
             const bool importerAvailable = !snapshot.items[index].importerContributionId.empty();
@@ -169,10 +169,13 @@ namespace Horo::Editor {
             const bool blank = std::ranges::all_of(name, [](const unsigned char character) {
                 return std::isspace(character) != 0;
             });
-            const auto hint = !importerAvailable
-                                  ? Copy(modal.Localized("asset_import.preset_unavailable", "No importer is available for this file."))
-                              : duplicate ? Copy(modal.Localized("asset_import.preset_exists", "A preset with this name already exists."))
-                                          : Copy(modal.Localized("asset_import.preset_hint", "Save these settings for future imports."));
+            std::string hint;
+            if (!importerAvailable)
+                hint = Copy(modal.Localized("asset_import.preset_unavailable", "No importer is available for this file."));
+            else if (duplicate)
+                hint = Copy(modal.Localized("asset_import.preset_exists", "A preset with this name already exists."));
+            else
+                hint = Copy(modal.Localized("asset_import.preset_hint", "Save these settings for future imports."));
             ImGui::SetCursorPos({22.0f, 139.0f});
             {
                 ScopedTextStyle hintStyle(fonts.sansCompact, TextPx::Caption(), FontPx::SansCompact);
@@ -244,7 +247,7 @@ namespace Horo::Editor {
             ImGui::PopStyleColor(3);
         }
 
-        void DrawSelectedFileHeader(AssetImportModal &modal, const Assets::AssetImportItem &item, const std::size_t index,
+        void DrawSelectedFileHeader(const AssetImportModal &modal, const Assets::AssetImportItem &item, const std::size_t index,
                                     const Fonts &fonts) {
             const ImVec2 preview = ImGui::GetCursorScreenPos();
             auto *drawList = ImGui::GetWindowDrawList();
@@ -252,10 +255,12 @@ namespace Horo::Editor {
             if (PreviewKind(modal, index) == Assets::AssetPreviewFallback::Mesh) {
                 const ImU32 grid = ImGui::ColorConvertFloat4ToU32(Border());
                 drawList->PushClipRect({preview.x + 1.0f, preview.y + 1.0f}, {preview.x + 135.0f, preview.y + 115.0f}, true);
-                for (float y = 78.0f; y <= 116.0f; y += 10.0f)
-                    drawList->AddLine({preview.x, preview.y + y}, {preview.x + 136.0f, preview.y + y}, grid);
-                for (float x = -24.0f; x <= 160.0f; x += 20.0f)
-                    drawList->AddLine({preview.x + 68.0f, preview.y + 72.0f}, {preview.x + x, preview.y + 116.0f}, grid);
+                for (int y = 78; y <= 116; y += 10)
+                    drawList->AddLine({preview.x, preview.y + static_cast<float>(y)},
+                                      {preview.x + 136.0f, preview.y + static_cast<float>(y)}, grid);
+                for (int x = -24; x <= 160; x += 20)
+                    drawList->AddLine({preview.x + 68.0f, preview.y + 72.0f}, {preview.x + static_cast<float>(x), preview.y + 116.0f},
+                                      grid);
                 drawList->PopClipRect();
             }
             if (const std::uintptr_t texture = modal.SelectedPreviewTexture(); texture != 0) {
@@ -281,7 +286,7 @@ namespace Horo::Editor {
             ImGui::TextColored(Muted(), "%s  |  %s", AssetKind(modal, index).c_str(), FileSize(modal, index).c_str());
 #if defined(__APPLE__)
             ImGui::TextColored(Accent(), "%s", Copy(modal.Localized("asset_import.show_in_finder", "Show in Finder")).c_str());
-            if (ImGui::IsItemClicked() && item.absoluteSourcePath.is_absolute() && !modal.IsReadOnlyPresentation())
+            if (ImGui::IsItemClicked() && item.absoluteSourcePath.is_absolute())
                 modal.RevealSelectedSource();
 #else
             ImGui::TextColored(Dim(), "%s", item.absoluteSourcePath.parent_path().filename().string().c_str());
@@ -298,9 +303,9 @@ namespace Horo::Editor {
             } else {
                 BeginImportField(Copy(modal.Localized("asset_import.asset_type", "Asset Type")).c_str(), fonts);
                 const auto assetType = AssetKind(modal, snapshot.selectedItemIndex);
-                const char *assetTypes[]{assetType.c_str()};
+                const std::array assetTypes{assetType.c_str()};
                 int selectedType = 0;
-                static_cast<void>(ComboControl("##ImportAssetType", &selectedType, assetTypes, 1, fonts,
+                static_cast<void>(ComboControl("##ImportAssetType", &selectedType, assetTypes.data(), 1, fonts,
                                                {.leadingIcon = AssetIcon(modal, snapshot.selectedItemIndex)}));
                 EndImportField();
                 DrawPreset(modal, snapshot, fonts);
@@ -324,9 +329,9 @@ namespace Horo::Editor {
             const auto byType = Copy(modal.Localized("asset_import.folder.by_type", "By asset type"));
             const auto mirror = Copy(modal.Localized("asset_import.folder.mirror", "Mirror source"));
             const auto flat = Copy(modal.Localized("asset_import.folder.flat", "Flat"));
-            const char *folders[]{byType.c_str(), mirror.c_str(), flat.c_str()};
+            const std::array folders{byType.c_str(), mirror.c_str(), flat.c_str()};
             BeginImportField(Copy(modal.Localized("asset_import.folder_strategy", "Folder Strategy")).c_str(), fonts);
-            if (ComboControl("##ImportFolderStrategy", &subfolder, folders, 3, fonts)) {
+            if (ComboControl("##ImportFolderStrategy", &subfolder, folders.data(), 3, fonts)) {
                 options.folderStrategy = subfolder;
                 optionsChanged = true;
             }
@@ -334,21 +339,21 @@ namespace Horo::Editor {
             int idStrategy = options.assetIdStrategy;
             const auto newGuid = Copy(modal.Localized("asset_import.id.new_guid", "New GUID"));
             const auto stableHash = Copy(modal.Localized("asset_import.id.stable_hash", "Stable hash"));
-            const char *idStrategies[]{newGuid.c_str(), stableHash.c_str()};
+            const std::array idStrategies{newGuid.c_str(), stableHash.c_str()};
             BeginImportField(Copy(modal.Localized("asset_import.id_strategy", "Asset ID Strategy")).c_str(), fonts);
-            if (ComboControl("##ImportAssetIdStrategy", &idStrategy, idStrategies, 2, fonts)) {
+            if (ComboControl("##ImportAssetIdStrategy", &idStrategy, idStrategies.data(), 2, fonts)) {
                 options.assetIdStrategy = idStrategy;
                 optionsChanged = true;
             }
             EndImportField();
-            bool sidecar = options.createMetaSidecar;
-            if (CheckboxControl(Copy(modal.Localized("asset_import.meta_sidecar", "Create .meta sidecar")).c_str(), &sidecar, fonts)) {
+            if (bool sidecar = options.createMetaSidecar;
+                CheckboxControl(Copy(modal.Localized("asset_import.meta_sidecar", "Create .meta sidecar")).c_str(), &sidecar, fonts)) {
                 options.createMetaSidecar = sidecar;
                 optionsChanged = true;
             }
             ImGui::Dummy({0.0f, 3.0f});
-            bool overwrite = options.overwriteWithoutPrompt;
-            if (CheckboxControl(Copy(modal.Localized("asset_import.overwrite", "Overwrite without prompt")).c_str(), &overwrite, fonts)) {
+            if (bool overwrite = options.overwriteWithoutPrompt;
+                CheckboxControl(Copy(modal.Localized("asset_import.overwrite", "Overwrite without prompt")).c_str(), &overwrite, fonts)) {
                 options.overwriteWithoutPrompt = overwrite;
                 optionsChanged = true;
             }
@@ -359,8 +364,6 @@ namespace Horo::Editor {
         void DrawAdvancedOptions(AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, const Fonts &fonts) {
             ImGui::Dummy({0.0f, ImportSectionGap});
             ImGui::SetCursorPosX(PanelPadding);
-            if (modal.ConsumeInitialAdvancedState())
-                ImGui::SetNextItemOpen(modal.InitialAdvancedOpen(), ImGuiCond_Always);
             if (ImGui::TreeNodeEx(Copy(modal.Localized("asset_import.advanced", "Advanced")).c_str())) {
                 ImGui::Unindent();
                 ImGui::Dummy({0.0f, ImportSectionGap});
@@ -410,9 +413,7 @@ namespace Horo::Editor {
         ImGui::Dummy({0.0f, 3.0f});
         DrawImporterSettings(modal, snapshot, fonts);
         DrawAdvancedOptions(modal, snapshot, fonts);
-        if (modal.ConsumeInitialScrollReset())
-            ImGui::SetScrollY(0.0f);
-        else if (ImGui::IsWindowHovered() && ImGui::GetScrollMaxY() > 0.0f) {
+        if (ImGui::IsWindowHovered() && ImGui::GetScrollMaxY() > 0.0f) {
             // The editor distributes wheel deltas over several frames. Give this long
             // settings form a larger step without changing scrolling elsewhere.
             ImGui::SetScrollY(ImGui::GetScrollY() - ImGui::GetIO().MouseWheel * 72.0f);

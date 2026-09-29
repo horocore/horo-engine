@@ -300,6 +300,7 @@ add_library(HoroUpdateDownload STATIC application/release/UpdateDownloadSession.
         application/release/UpdateZipPackageProducer.cpp application/release/UpdateZipStagingJob.cpp)
 add_library(HoroEngine::UpdateDownload ALIAS HoroUpdateDownload)
 target_compile_features(HoroUpdateDownload PUBLIC cxx_std_20)
+target_compile_definitions(HoroUpdateDownload PRIVATE $<$<PLATFORM_ID:Windows>:NOMINMAX>)
 target_link_libraries(HoroUpdateDownload PUBLIC HoroEngine::UpdateTransfer HoroEngine::Platform PRIVATE CURL::libcurl miniz)
 
 add_library(HoroUpdateOfflineSource STATIC application/release/UpdateOfflineSource.cpp application/release/UpdateOfflineSourceErrors.cpp)
@@ -1872,15 +1873,12 @@ endif ()
 if (HORO_BUILD_EDITOR_GUI)
     add_library(HoroGui STATIC
             editor/design_system/components/EditorUiComponents.cpp
-            editor/design_system/components/BuildPreviewProgress.cpp
             editor/design_system/icons/EditorIcons.cpp
             editor/design_system/components/EditorSnackbarHost.cpp
             editor/app/EditorTheme.cpp
             editor/menu/EditorMenuPlatform.cpp
             editor/status_bar/EditorStatusBar.cpp
             editor/modals/settings/SettingsModal.cpp
-            editor/modals/build/BuildWorkflowPreviewModal.cpp
-            editor/modals/build/BuildWorkflowPreviewState.cpp
             editor/modals/settings/SettingsModalExtensions.cpp
             editor/modals/settings/SettingsModalFooter.cpp
             editor/modals/settings/SettingsModalLifecycle.cpp
@@ -1895,10 +1893,6 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/asset_import/AssetImportSourcePreview.cpp
             editor/modals/asset_import/AssetImportModalPresentation.cpp
             editor/modals/asset_import/AssetImportModalPresentationDetails.cpp
-            editor/ui_preview/AssetImportPreviewModal.cpp
-            editor/ui_preview/EditorUiPreviewGallery.cpp
-            editor/ui_preview/GuiScreenHostUiPreview.cpp
-            editor/ui_preview/ViewportPreview.cpp
             editor/modals/scene_compare/SceneConflictCompareModal.cpp
             editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.cpp
             editor/screens/welcome/WelcomeView.cpp

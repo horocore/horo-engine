@@ -155,7 +155,8 @@ TEST_CASE("AssetImportModal picker keeps native input context for both browse ac
     RecordingNativeDialogs dialogs{inputRouter};
     const Theme::Fonts fonts{};
     JobSystem jobs;
-    TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution()), nullptr, nullptr, nullptr, &dialogs, &inputRouter};
+    TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution()),
+                               AssetImportModalServices{.nativeDialogs = &dialogs, .inputRouter = &inputRouter}};
     modal.SetProjectRoot(std::filesystem::current_path());
 
     modal.BrowseSourceFiles();
@@ -181,7 +182,8 @@ TEST_CASE("AssetImportModal lifecycle completes the visible operation before the
     JobSystem jobs;
     OperationStore operations{4, 4};
 
-    auto modal = std::make_unique<TestAssetImportModal>(fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations);
+    auto modal = std::make_unique<TestAssetImportModal>(fonts, jobs, PublishCatalog(BasicContribution()),
+                                                        AssetImportModalServices{.operationStore = &operations});
     auto *modalPtr = modal.get();
 
     bool prepared = false;
@@ -268,7 +270,8 @@ TEST_CASE("AssetImportModal restores retained import history when reopened", "[n
                                                           .message = "Asset import completed",
                                                           .progress = 1.0F}));
 
-    auto modal = std::make_unique<TestAssetImportModal>(fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations);
+    auto modal = std::make_unique<TestAssetImportModal>(fonts, jobs, PublishCatalog(BasicContribution()),
+                                                        AssetImportModalServices{.operationStore = &operations});
     auto *modalPtr = modal.get();
     REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
     modalHost.OnUpdate(0.016F);
@@ -289,7 +292,8 @@ TEST_CASE("AssetImportModal keeps bounded incremental import history", "[native]
     EditorDataBus events;
     Input::InputRouter inputRouter;
     EditorModalHost modalHost{events, inputRouter};
-    auto modal = std::make_unique<TestAssetImportModal>(fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations);
+    auto modal = std::make_unique<TestAssetImportModal>(fonts, jobs, PublishCatalog(BasicContribution()),
+                                                        AssetImportModalServices{.operationStore = &operations});
     auto *modalPtr = modal.get();
     REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
     modalHost.OnUpdate(0.016F);
@@ -397,7 +401,7 @@ TEST_CASE("AssetImportModal tracks included queue items and appends files safely
         second << "second";
     }
 
-    TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations};
+    TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution()), AssetImportModalServices{.operationStore = &operations}};
     modal.SetProjectRoot(project.Path());
     std::filesystem::create_directories(project.Path() / "assets/Imported");
     modal.SetDefaultDestination(project.Path() / "assets/Imported");
@@ -431,7 +435,8 @@ TEST_CASE("AssetImportModal tracks included queue items and appends files safely
     REQUIRE((modal.ImportIncludedItems(cancellation).HasValue()));
     CHECK_FALSE(modal.SourceFileSize(99).has_value());
 
-    TestAssetImportModal batchModal{fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations};
+    TestAssetImportModal batchModal{fonts, jobs, PublishCatalog(BasicContribution()),
+                                    AssetImportModalServices{.operationStore = &operations}};
     REQUIRE((batchModal.BeginImport({firstSource, secondSource}, project.Path(), cancellation).HasValue()));
     const auto visibleOperations = operations.SnapshotIfChanged(0);
     REQUIRE(visibleOperations.has_value());
@@ -473,7 +478,8 @@ TEST_CASE("AssetImportModal rejects unresolved conflicts and invalid batch items
     CHECK(invalid.ErrorValue().code.Value() == "editor.asset_import.invalid_asset_name");
 
     OperationStore operations{4, 4};
-    TestAssetImportModal cancelledModal{fonts, jobs, PublishCatalog(BasicContribution()), nullptr, &operations};
+    TestAssetImportModal cancelledModal{fonts, jobs, PublishCatalog(BasicContribution()),
+                                        AssetImportModalServices{.operationStore = &operations}};
     REQUIRE((cancelledModal.BeginImport({source}, project.Path(), cancellation).HasValue()));
     const auto visibleOperations = operations.SnapshotIfChanged(0);
     REQUIRE(visibleOperations.has_value());
@@ -505,7 +511,8 @@ TEST_CASE("AssetImportModal projects terminal import history while ignoring othe
     });
     REQUIRE(import.has_value());
 
-    auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), PublishCatalog(BasicContribution()), nullptr, &operations);
+    auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), PublishCatalog(BasicContribution()),
+                                                    AssetImportModalServices{.operationStore = &operations});
     auto *const modalPtr = modal.get();
     REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
     modalHost.OnUpdate(0.016F);

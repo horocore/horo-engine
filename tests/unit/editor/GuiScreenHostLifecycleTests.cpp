@@ -1,4 +1,3 @@
-#include "../../helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorGuiContext.h"
@@ -11,13 +10,9 @@
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
-#include "editor/modals/build/BuildWorkflowPreviewModal.h"
-#include "editor/modals/build/BuildWorkflowPreviewState.h"
 #include "editor/project_model/RendererAvailability.h"
-#include "editor/ui_preview/EditorUiPreviewCatalog.h"
 
 #include <catch2/catch_test_macros.hpp>
-#include <imgui_internal.h>
 #include <memory>
 
 namespace Horo::Editor::Theme {
@@ -88,71 +83,6 @@ namespace {
         jobs.Shutdown(ShutdownPolicy::Cancel);
     }
 
-    /** @brief Verifies that each workflow preview opens and closes its modal. */
-    void ExerciseWorkflowPreviewModals(GuiScreenHost &host, EditorModalHost &modals, Horo::Editor::Tests::HeadlessEditorGuiFixture &imgui) {
-        for (const char *scenario : {"build", "run-tests", "prepare-release", "publish-candidate"}) {
-            REQUIRE(host.OpenUiPreview(scenario));
-            imgui.BeginFrame();
-            host.Draw();
-            imgui.EndFrame();
-            const auto workflowModalId = modals.TopModalId();
-            REQUIRE(workflowModalId.has_value());
-            REQUIRE(modals.RequestClose(*workflowModalId, ModalCloseReason::Cancelled).HasValue());
-            modals.OnUpdate(0.016F);
-            REQUIRE_FALSE(modals.HasOpenModal());
-        }
-    }
-
-    void ExerciseUiPreviewScenarios(GuiScreenHost &host, EditorModalHost &modals, Horo::Editor::Tests::HeadlessEditorGuiFixture &imgui) {
-        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::ImportAssets});
-        REQUIRE(modals.HasOpenModal());
-        REQUIRE(host.StartUiPreview("asset-import-empty").HasError());
-        const auto menuModalId = modals.TopModalId();
-        REQUIRE(menuModalId.has_value());
-        REQUIRE(modals.RequestClose(*menuModalId, ModalCloseReason::Cancelled).HasValue());
-        modals.OnUpdate(0.016F);
-        REQUIRE_FALSE(modals.HasOpenModal());
-
-        const auto invalid = host.StartUiPreview("not-a-preview");
-        REQUIRE(invalid.HasError());
-        REQUIRE(host.StartUiPreview("asset-import-empty").HasValue());
-        const auto duplicate = host.StartUiPreview("asset-import-empty");
-        REQUIRE(duplicate.HasError());
-        CHECK(duplicate.ErrorValue().code.Value() == "navigation.host_already_started");
-
-        imgui.BeginFrame();
-        host.Draw();
-        imgui.EndFrame();
-
-        const auto previewModalId = modals.TopModalId();
-        REQUIRE(previewModalId.has_value());
-        REQUIRE(modals.RequestClose(*previewModalId, ModalCloseReason::Cancelled).HasValue());
-        modals.OnUpdate(0.016F);
-        REQUIRE_FALSE(modals.HasOpenModal());
-
-        ExerciseWorkflowPreviewModals(host, modals, imgui);
-
-        const ImGuiWindow *const gallery = ImGui::FindWindowByName("##EditorUiPreviewGallery");
-        REQUIRE(gallery != nullptr);
-        const float firstButtonTop = EditorUiPreviewHeaderHeight + 54.0F;
-        const float buttonHeight = 38.0F;
-        const float secondButtonCenter = firstButtonTop + buttonHeight + ImGui::GetStyle().ItemSpacing.y + buttonHeight * 0.5F;
-        ImGuiIO &io = ImGui::GetIO();
-        io.AddMousePosEvent(gallery->Pos.x + EditorUiPreviewSidebarWidth * 0.5F, gallery->Pos.y + secondButtonCenter);
-        imgui.BeginFrame();
-        host.Draw();
-        imgui.EndFrame();
-        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
-        imgui.BeginFrame();
-        host.Draw();
-        imgui.EndFrame();
-        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
-        imgui.BeginFrame();
-        host.Draw();
-        imgui.EndFrame();
-        REQUIRE(modals.HasOpenModal());
-    }
-
     TEST_CASE("Gui Screen Host Registers Core Status And Shuts Down Safely", "[unit][editor]") {
         EngineDataBus engineEvents;
         EditorDataBus editorEvents;
@@ -196,57 +126,4 @@ namespace {
         ShutdownAndCheckGuiScreenHost(host, stats, jobs);
     }
 
-    TEST_CASE("Gui Screen Host admits only known isolated UI preview scenarios", "[unit][editor][gui]") {
-        ::Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
-        EngineDataBus engineEvents;
-        EditorDataBus editorEvents;
-        Input::InputRouter input;
-        ::Horo::Editor::Tests::ScopedJobSystem jobs;
-        ProjectCreationService creation{jobs.Get(), engineEvents};
-        LocalizationService localization{LocaleTag{"en-US"}};
-        ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
-        EditorSettingsService settings{DefaultEditorSettings(), configuration, editorEvents, localization};
-        EditorModalHost modals{editorEvents, input};
-        const Theme::Fonts &fonts = imgui.Fonts();
-        ThemeContext theme{fonts};
-        EditorGuiContext gui{engineEvents, editorEvents, localization, theme, settings.Snapshot()};
-        RendererAvailabilitySnapshot renderers{{RendererBackendAvailability{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}},
-                                               "opengl"};
-
-        GuiScreenHost host{gui,
-                           modals,
-                           settings,
-                           localization,
-                           engineEvents,
-                           creation,
-                           jobs.Get(),
-                           input,
-                           renderers,
-                           ScreenRegistry{},
-                           WorkspacePanelRegistry{}};
-        ExerciseUiPreviewScenarios(host, modals, imgui);
-
-        const auto galleryModalId = modals.TopModalId();
-        REQUIRE(galleryModalId.has_value());
-        REQUIRE(modals.RequestClose(*galleryModalId, ModalCloseReason::Cancelled).HasValue());
-        modals.OnUpdate(0.016F);
-        BuildWorkflowPreviewState activity;
-        REQUIRE(activity.Start(BuildPreviewRequest{.kind = BuildPreviewKind::Build,
-                                                   .target = "Game Runtime · Linux · x86_64 · Development",
-                                                   .output = "builds/local"}));
-        REQUIRE(modals.OpenRoot(std::make_unique<BuildWorkflowPreviewModal>(gui, activity, BuildPreviewKind::Build)).HasValue());
-        imgui.BeginFrame();
-        host.Draw();
-        imgui.EndFrame();
-        for (int stage = 0; stage < 4; ++stage)
-            activity.Update(1.8F);
-        REQUIRE(activity.Job()->status == BuildPreviewStatus::Completed);
-        imgui.BeginFrame();
-        host.Draw();
-        imgui.EndFrame();
-
-        host.Shutdown();
-        CHECK(host.IsShutdown());
-        CHECK(host.StartUiPreview("asset-import-empty").HasError());
-    }
 }  // namespace

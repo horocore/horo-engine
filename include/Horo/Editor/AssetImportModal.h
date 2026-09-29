@@ -44,6 +44,15 @@ namespace Horo::Editor {
     class IEditorGuiRenderer;
     class AssetImportSourcePreview;
 
+    /** @brief Optional borrowed capabilities used by the import workflow, valid for its lifetime. */
+    struct AssetImportModalServices {
+        Assets::AssetRegistry *assetRegistry{};     /**< Registry updated after committed imports. */
+        OperationStore *operationStore{};           /**< User-facing operation authority. */
+        const ILocalizationService *localization{}; /**< Editor presentation copy. */
+        NativeDialogs *nativeDialogs{};             /**< Host-owned native file picker. */
+        Input::InputRouter *inputRouter{};          /**< Input context owner while a picker is open. */
+    };
+
     /**
      * @brief Host-owned asset import workflow modal.
      * @details Owns an AssetImportOperation and exposes its snapshots to the GUI
@@ -62,16 +71,10 @@ namespace Horo::Editor {
          * @param fonts Theme fonts reference (valid for modal lifetime).
          * @param jobs Job system for background import work.
          * @param catalog Published immutable importer catalog snapshot.
-         * @param assetRegistry Optional mutable asset registry updated by committed imports.
-         * @param operationStore Optional user-facing operation authority.
-         * @param localization Optional editor localization service used by presentation copy.
-         * @param nativeDialogs Optional host-owned file picker, valid for the modal lifetime.
-         * @param inputRouter Input context owner used while a native picker is open.
+         * @param services Optional borrowed import capabilities, valid for the modal lifetime.
          */
         AssetImportModal(const Theme::Fonts &fonts, JobSystem &jobs, std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> catalog,
-                         Assets::AssetRegistry *assetRegistry = nullptr, OperationStore *operationStore = nullptr,
-                         const ILocalizationService *localization = nullptr, NativeDialogs *nativeDialogs = nullptr,
-                         Input::InputRouter *inputRouter = nullptr) noexcept;
+                         AssetImportModalServices services = {}) noexcept;
 
         /** @brief Destroys the modal and its target-private project committer. */
         ~AssetImportModal() override;
@@ -89,9 +92,6 @@ namespace Horo::Editor {
 
         /** @brief Returns mutable access to the operation snapshot for modal editing. */
         [[nodiscard]] Assets::AssetImportSnapshot &MutableSnapshot() noexcept;
-
-        /** @brief Returns the pinned importer catalog snapshot. */
-        [[nodiscard]] const Assets::AssetImporterCatalogSnapshot &Catalog() const noexcept;
 
         /** @brief Returns retained terminal import operations, newest first. */
         [[nodiscard]] std::span<const OperationRecord> ImportHistory() const noexcept;
@@ -208,35 +208,6 @@ namespace Horo::Editor {
         /** @brief Checks whether the current included items can start importing. @return True when ready. */
         [[nodiscard]] bool CanImportIncludedItems() const noexcept;
 
-        /** @brief Returns whether this modal is presenting data without file or import actions. */
-        [[nodiscard]] bool IsReadOnlyPresentation() const noexcept {
-            return m_readOnlyPresentation;
-        }
-
-        /** @brief Returns the left and top canvas insets for an embedded presentation. */
-        [[nodiscard]] std::pair<float, float> PresentationCanvasInsets() const noexcept {
-            return m_presentationCanvasInsets;
-        }
-
-        /** @brief Consumes an initial advanced-section expansion request. */
-        [[nodiscard]] bool ConsumeInitialAdvancedState() noexcept {
-            const bool pending = m_initialAdvancedStatePending;
-            m_initialAdvancedStatePending = false;
-            return pending;
-        }
-
-        /** @brief Returns whether the requested initial advanced-section state is open. */
-        [[nodiscard]] bool InitialAdvancedOpen() const noexcept {
-            return m_initialAdvancedOpen;
-        }
-
-        /** @brief Consumes an initial details-scroll reset request. */
-        [[nodiscard]] bool ConsumeInitialScrollReset() noexcept {
-            const bool pending = m_initialScrollResetPending;
-            m_initialScrollResetPending = false;
-            return pending;
-        }
-
         /** @brief Imports selected pending items in queue order. */
         [[nodiscard]] Result<void> ImportIncludedItems(const CancellationToken &cancellation);
 
@@ -315,6 +286,10 @@ namespace Horo::Editor {
         void ResolveCurrentConflict(ConflictChoice choice, bool applyAll);
 
     private:
+        /** @brief Appends sources to an existing operation and extends its queue projection. */
+        [[nodiscard]] Result<void> AppendImportFiles(const std::vector<std::filesystem::path> &sourceFiles,
+                                                     const std::filesystem::path &projectRoot, const CancellationToken &cancellation);
+
         /** @brief Checks whether importing @p item would overwrite an existing asset. */
         bool WouldConflict(const Assets::AssetImportItem &item) const;
 
@@ -332,20 +307,6 @@ namespace Horo::Editor {
 
         /** @brief Refreshes the retained import-operation projection from the process store. */
         void RefreshImportHistory();
-
-    protected:
-        /**
-         * @brief Installs an in-memory read-only view of the import workflow after OnOpen.
-         * @param snapshot Items and diagnostics to present without an import operation.
-         * @param sourceFileSizes Optional source sizes in item order.
-         * @param projectRoot Displayed project root; no files are read from it.
-         * @param defaultDestinationFolder Project-relative destination shown in the breadcrumb.
-         * @param canvasInsets Left and top insets reserved by an embedding canvas.
-         * @param advancedOpen Initial state of the Advanced section.
-         */
-        void PresentReadOnlySnapshot(Assets::AssetImportSnapshot snapshot, std::vector<std::optional<std::uintmax_t>> sourceFileSizes,
-                                     std::filesystem::path projectRoot, std::string defaultDestinationFolder,
-                                     std::pair<float, float> canvasInsets, bool advancedOpen);
 
     private:
         const Theme::Fonts &m_fonts;
@@ -374,11 +335,6 @@ namespace Horo::Editor {
         std::vector<bool> m_includedItems;
         std::vector<bool> m_itemVisible;
         std::vector<std::optional<std::uintmax_t>> m_sourceFileSizes;
-        bool m_readOnlyPresentation{false};
-        std::pair<float, float> m_presentationCanvasInsets{};
-        bool m_initialAdvancedStatePending{false};
-        bool m_initialAdvancedOpen{false};
-        bool m_initialScrollResetPending{false};
         bool m_prepared{false};
 
         // Conflict resolution popup state

@@ -546,6 +546,7 @@ namespace Horo::Editor::Ui {
     // ── IconCloseButton ──────────────────────────────────────────────────
 
     [[nodiscard]] bool IconCloseButton(const char *id, const ImVec2 size, const CloseButtonVariant variant) {
+        using enum CloseButtonVariant;
         using namespace Theme;
 
         ImGui::PushID(id);
@@ -554,14 +555,14 @@ namespace Horo::Editor::Ui {
         const bool hovered = ImGui::IsItemHovered();
 
         auto *dl = ImGui::GetWindowDrawList();
-        const float glyphSize = variant == CloseButtonVariant::Compact ? 10.0F : std::min(size.x, size.y) - 8.0F;
+        const float glyphSize = variant == Compact ? 10.0F : std::min(size.x, size.y) - 8.0F;
         const ImVec2 center{pos.x + size.x * 0.5F, pos.y + size.y * 0.5F};
         const float radius = glyphSize * 0.5F;
         const ImVec2 a{center.x - radius, center.y - radius};
         const ImVec2 b{center.x + radius, center.y + radius};
-        const ImU32 col = U32(variant == CloseButtonVariant::Compact || hovered ? Text() : Dim());
-        dl->AddLine(a, b, col, variant == CloseButtonVariant::Compact ? 1.7F : 1.5F);
-        dl->AddLine({b.x, a.y}, {a.x, b.y}, col, variant == CloseButtonVariant::Compact ? 1.7F : 1.5F);
+        const ImU32 col = U32(variant == Compact || hovered ? Text() : Dim());
+        dl->AddLine(a, b, col, variant == Compact ? 1.7F : 1.5F);
+        dl->AddLine({b.x, a.y}, {a.x, b.y}, col, variant == Compact ? 1.7F : 1.5F);
 
         ImGui::PopID();
         return clicked;

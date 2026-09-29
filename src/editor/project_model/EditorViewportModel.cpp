@@ -143,30 +143,31 @@ namespace Horo::Editor {
 
     /** @copydoc EditorViewportModel::AlignToAxis */
     Result<void> EditorViewportModel::AlignToAxis(const EditorViewportAxisView axis) {
+        using enum EditorViewportAxisView;
         const EditorViewportCamera &currentCamera = current_.camera;
         if (!currentCamera.IsValid())
             return Result<void>::Failure(MakeViewportError(ViewportModelErrors::InvalidCamera, "Viewport camera is invalid."));
         Math::Vec3 direction;
         Math::Vec3 up{0.0F, 1.0F, 0.0F};
         switch (axis) {
-            case EditorViewportAxisView::PositiveX:
+            case PositiveX:
                 direction = {1.0F, 0.0F, 0.0F};
                 break;
-            case EditorViewportAxisView::NegativeX:
+            case NegativeX:
                 direction = {-1.0F, 0.0F, 0.0F};
                 break;
-            case EditorViewportAxisView::PositiveY:
+            case PositiveY:
                 direction = {0.0F, 1.0F, 0.0F};
                 up = {0.0F, 0.0F, -1.0F};
                 break;
-            case EditorViewportAxisView::NegativeY:
+            case NegativeY:
                 direction = {0.0F, -1.0F, 0.0F};
                 up = {0.0F, 0.0F, 1.0F};
                 break;
-            case EditorViewportAxisView::PositiveZ:
+            case PositiveZ:
                 direction = {0.0F, 0.0F, 1.0F};
                 break;
-            case EditorViewportAxisView::NegativeZ:
+            case NegativeZ:
                 direction = {0.0F, 0.0F, -1.0F};
                 break;
             default:

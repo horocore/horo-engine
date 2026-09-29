@@ -42,26 +42,29 @@ namespace Horo::Editor {
         if (found == m_snapshot.items[index].settings.end())
             return DisplayDefault(setting);
         const std::string &raw = found->second;
+        using enum Assets::ImportSettingKind;
         switch (setting.kind) {
-            case Assets::ImportSettingKind::Boolean:
+            case Boolean:
                 return raw == "true";
-            case Assets::ImportSettingKind::Integer: {
+            case Integer: {
                 std::int64_t value{};
                 const auto [end, error] = std::from_chars(raw.data(), raw.data() + raw.size(), value);
                 return error == std::errc{} && end == raw.data() + raw.size() ? Assets::ImportSettingValue{value} : DisplayDefault(setting);
             }
-            case Assets::ImportSettingKind::Float: {
+            case Float: {
                 try {
                     std::size_t parsed{};
                     const double value = std::stod(raw, &parsed);
                     return parsed == raw.size() ? Assets::ImportSettingValue{value} : DisplayDefault(setting);
-                } catch (...) {
+                } catch (const std::invalid_argument &) {
+                    return DisplayDefault(setting);
+                } catch (const std::out_of_range &) {
                     return DisplayDefault(setting);
                 }
             }
-            case Assets::ImportSettingKind::Text:
+            case Text:
                 return raw;
-            case Assets::ImportSettingKind::Choice: {
+            case Choice: {
                 std::size_t value{};
                 const auto [end, error] = std::from_chars(raw.data(), raw.data() + raw.size(), value);
                 return error == std::errc{} && end == raw.data() + raw.size() && value < setting.choices.size()
@@ -75,27 +78,28 @@ namespace Horo::Editor {
     /** @copydoc AssetImportModal::SetSettingValue */
     void AssetImportModal::SetSettingValue(const std::size_t index, const Assets::ImportSettingDescriptor &setting,
                                            const Assets::ImportSettingValue &value) {
-        if (m_readOnlyPresentation || index >= m_snapshot.items.size() || m_snapshot.items[index].result)
+        if (index >= m_snapshot.items.size() || m_snapshot.items[index].result)
             return;
         std::string encoded;
+        using enum Assets::ImportSettingKind;
         switch (setting.kind) {
-            case Assets::ImportSettingKind::Boolean:
+            case Boolean:
                 if (const auto *typed = std::get_if<bool>(&value))
                     encoded = *typed ? "true" : "false";
                 break;
-            case Assets::ImportSettingKind::Integer:
+            case Integer:
                 if (const auto *typed = std::get_if<std::int64_t>(&value))
                     encoded = std::to_string(*typed);
                 break;
-            case Assets::ImportSettingKind::Float:
+            case Float:
                 if (const auto *typed = std::get_if<double>(&value))
                     encoded = std::to_string(*typed);
                 break;
-            case Assets::ImportSettingKind::Text:
+            case Text:
                 if (const auto *typed = std::get_if<std::string>(&value))
                     encoded = *typed;
                 break;
-            case Assets::ImportSettingKind::Choice:
+            case Choice:
                 if (const auto *typed = std::get_if<std::size_t>(&value))
                     encoded = std::to_string(*typed);
                 break;
@@ -106,7 +110,7 @@ namespace Horo::Editor {
 
     /** @copydoc AssetImportModal::AddSourceFiles */
     void AssetImportModal::AddSourceFiles(const std::vector<std::filesystem::path> &paths) {
-        if (paths.empty() || m_readOnlyPresentation)
+        if (paths.empty())
             return;
         CancellationToken cancellation;
         if (m_projectRoot.empty())
@@ -117,7 +121,7 @@ namespace Horo::Editor {
 
     /** @copydoc AssetImportModal::BrowseSourceFiles */
     void AssetImportModal::BrowseSourceFiles() {
-        if (m_readOnlyPresentation || m_nativeDialogs == nullptr || m_inputRouter == nullptr)
+        if (m_nativeDialogs == nullptr || m_inputRouter == nullptr)
             return;
         std::vector<std::filesystem::path> selected;
         {
@@ -130,7 +134,7 @@ namespace Horo::Editor {
 
     /** @copydoc AssetImportModal::BrowseDestination */
     void AssetImportModal::BrowseDestination() {
-        if (m_readOnlyPresentation || m_projectRoot.empty() || m_nativeDialogs == nullptr || m_inputRouter == nullptr)
+        if (m_projectRoot.empty() || m_nativeDialogs == nullptr || m_inputRouter == nullptr)
             return;
         std::optional<std::filesystem::path> selected;
         {
@@ -141,8 +145,7 @@ namespace Horo::Editor {
         if (!selected)
             return;
         SetDefaultDestination(*selected);
-        std::error_code error;
-        if (!std::filesystem::equivalent(*selected, m_projectRoot / m_defaultDestinationFolder, error) || error)
+        if (std::error_code error; !std::filesystem::equivalent(*selected, m_projectRoot / m_defaultDestinationFolder, error) || error)
             return;
         for (auto &item : m_snapshot.items)
             if (!item.result)
@@ -151,7 +154,7 @@ namespace Horo::Editor {
 
     /** @copydoc AssetImportModal::RevealSelectedSource */
     void AssetImportModal::RevealSelectedSource() const {
-        if (m_readOnlyPresentation || m_snapshot.selectedItemIndex >= m_snapshot.items.size())
+        if (m_snapshot.selectedItemIndex >= m_snapshot.items.size())
             return;
         const auto &path = m_snapshot.items[m_snapshot.selectedItemIndex].absoluteSourcePath;
         if (path.is_absolute())
@@ -160,8 +163,6 @@ namespace Horo::Editor {
 
     /** @copydoc AssetImportModal::StartIncludedImport */
     void AssetImportModal::StartIncludedImport() {
-        if (m_readOnlyPresentation)
-            return;
         CancellationToken cancellation;
         static_cast<void>(ImportIncludedItems(cancellation));
     }
@@ -180,7 +181,7 @@ namespace Horo::Editor {
 
     /** @copydoc AssetImportModal::SetOptionsFor */
     void AssetImportModal::SetOptionsFor(const std::size_t index, ItemOptions options) {
-        if (m_readOnlyPresentation || index >= m_snapshot.items.size() || m_snapshot.items[index].result)
+        if (index >= m_snapshot.items.size() || m_snapshot.items[index].result)
             return;
         auto &item = m_snapshot.items[index];
         item.displayName = std::move(options.assetName);

@@ -109,7 +109,7 @@ namespace Horo::Editor {
             if (Button({.label = Copy(modal.Localized("asset_import.change", "Change...")).c_str(),
                         .size = {buttonWidth, buttonHeight},
                         .variant = ButtonVariant::Secondary,
-                        .enabled = !modal.ProjectRoot().empty() && !modal.IsReadOnlyPresentation()})) {
+                        .enabled = !modal.ProjectRoot().empty()})) {
                 modal.BrowseDestination();
             }
             ImGui::EndChild();
@@ -120,11 +120,13 @@ namespace Horo::Editor {
         void DrawDashedBorder(ImDrawList *drawList, const ImVec2 &min, const ImVec2 &max, ImU32 color) {
             constexpr float dash = 6.0f;
             constexpr float step = 11.0f;
-            for (float x = min.x; x < max.x; x += step) {
+            for (int index = 0; min.x + static_cast<float>(index) * step < max.x; ++index) {
+                const float x = min.x + static_cast<float>(index) * step;
                 drawList->AddLine({x, min.y}, {std::min(x + dash, max.x), min.y}, color);
                 drawList->AddLine({x, max.y}, {std::min(x + dash, max.x), max.y}, color);
             }
-            for (float y = min.y; y < max.y; y += step) {
+            for (int index = 0; min.y + static_cast<float>(index) * step < max.y; ++index) {
+                const float y = min.y + static_cast<float>(index) * step;
                 drawList->AddLine({min.x, y}, {min.x, std::min(y + dash, max.y)}, color);
                 drawList->AddLine({max.x, y}, {max.x, std::min(y + dash, max.y)}, color);
             }
@@ -133,7 +135,7 @@ namespace Horo::Editor {
         void DrawDropZone(AssetImportModal &modal, const Fonts &fonts, float height) {
             const float width = ImGui::GetContentRegionAvail().x;
             const ImVec2 topLeft = ImGui::GetCursorScreenPos();
-            if (ImGui::InvisibleButton("##ImportDropZone", {width, height}) && !modal.IsReadOnlyPresentation())
+            if (ImGui::InvisibleButton("##ImportDropZone", {width, height}))
                 modal.BrowseSourceFiles();
             ImDrawList *drawList = ImGui::GetWindowDrawList();
             const ImVec2 bottomRight{topLeft.x + width, topLeft.y + height};
@@ -162,12 +164,12 @@ namespace Horo::Editor {
                                 const ImVec2 rowMax, const float rowCenterY) {
             ImGui::SetCursorScreenPos({rowMax.x - 58.0f, rowCenterY - 10.0f});
             bool included = modal.IsItemIncluded(index);
-            ImGui::BeginDisabled(item.result.has_value() || modal.IsReadOnlyPresentation());
+            ImGui::BeginDisabled(item.result.has_value());
             if (CheckboxControl(std::format("##IncludeImport{}", index).c_str(), &included, fonts, 20.0f))
                 modal.SetItemIncluded(index, included);
             ImGui::EndDisabled();
             ImGui::SetCursorScreenPos({rowMax.x - 29.0f, rowCenterY - 10.0f});
-            ImGui::BeginDisabled(modal.IsReadOnlyPresentation() || modal.HasPendingConflicts());
+            ImGui::BeginDisabled(modal.HasPendingConflicts());
             const bool remove = IconCloseButton(std::format("##RemoveImport{}", index).c_str(), {20.0f, 20.0f});
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered())
@@ -291,7 +293,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Draws visible error, warning, or file counts and the first diagnostic. */
-        void DrawFooterStatus(AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, const Fonts &fonts,
+        void DrawFooterStatus(const AssetImportModal &modal, const Assets::AssetImportSnapshot &snapshot, const Fonts &fonts,
                               const float footerCenterY) {
             ImGui::SetCursorScreenPos({ImGui::GetCursorScreenPos().x, footerCenterY - 9.0f});
             const FooterDiagnostics summary = SummarizeFooterDiagnostics(modal, snapshot);
@@ -333,8 +335,8 @@ namespace Horo::Editor {
             constexpr float importWidth = 174.0f;
             ImGui::SetCursorScreenPos({ImGui::GetWindowPos().x + ImGui::GetWindowWidth() - cancelWidth - importWidth - 38.0f,
                                        footerCenterY - actionHeight * 0.5f});
-            const bool complete = modal.IsImportComplete();
-            if (Button({.label = Copy(modal.Localized(complete ? "asset_import.done" : "asset_import.cancel", complete ? "Done" : "Cancel"))
+            if (const bool complete = modal.IsImportComplete();
+                Button({.label = Copy(modal.Localized(complete ? "asset_import.done" : "asset_import.cancel", complete ? "Done" : "Cancel"))
                                      .c_str(),
                         .size = {cancelWidth, actionHeight},
                         .variant = ButtonVariant::Secondary}))
@@ -345,9 +347,7 @@ namespace Horo::Editor {
                                            Copy(modal.Localized("asset_import.assets", "Assets")));
             if (Button(
                     {.label = label.c_str(), .size = {importWidth, actionHeight}, .variant = ButtonVariant::Primary, .enabled = valid})) {
-                if (!modal.IsReadOnlyPresentation()) {
-                    modal.StartIncludedImport();
-                }
+                modal.StartIncludedImport();
             }
         }
 
@@ -366,22 +366,12 @@ namespace Horo::Editor {
         const auto &snapshot = modal.Snapshot();
         ModalFrameResult result = ModalFrameResult::None();
         const auto title = Copy(modal.Localized("asset_import.title", "Import Assets"));
-        std::optional<ModalPlacementRegion> previewRegion;
-        const auto [canvasLeftInset, canvasTopInset] = modal.PresentationCanvasInsets();
-        if (canvasLeftInset > 0.0f || canvasTopInset > 0.0f) {
-            const ImGuiViewport *viewport = ImGui::GetMainViewport();
-            previewRegion = ModalPlacementRegion{
-                .position = {viewport->WorkPos.x + canvasLeftInset, viewport->WorkPos.y + canvasTopInset},
-                .size = {viewport->WorkSize.x - canvasLeftInset, viewport->WorkSize.y - canvasTopInset},
-            };
-        }
         ScopedModalShell shell({.id = "Asset Import",
                                 .title = title.c_str(),
                                 .requestedSize = {1000.0f, 690.0f},
                                 .viewportPadding = 64.0f,
                                 .headerHeight = 38.0f,
                                 .footerHeight = 68.0f,
-                                .placementRegion = previewRegion,
                                 .titleFontSize = TextPx::Title()},
                                fonts);
         if (shell.CloseRequested())

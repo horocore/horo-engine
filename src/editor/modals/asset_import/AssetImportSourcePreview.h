@@ -21,6 +21,9 @@ namespace Horo::Editor {
         AssetImportSourcePreview(JobSystem &jobs, IEditorGuiRenderer &renderer) noexcept;
         ~AssetImportSourcePreview();
 
+        AssetImportSourcePreview(const AssetImportSourcePreview &) = delete;
+        AssetImportSourcePreview &operator=(const AssetImportSourcePreview &) = delete;
+
         void Update(const Assets::AssetImportItem *item, const Assets::AssetImporterContribution *contribution);
         [[nodiscard]] std::uintptr_t TextureId() const noexcept;
 

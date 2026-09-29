@@ -7,9 +7,6 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Runtime/Input.h"
-#include "editor/ui_preview/AssetImportPreviewModal.h"
-#include "editor/ui_preview/EditorUiPreviewCatalog.h"
-#include "editor/ui_preview/EditorUiPreviewGallery.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <array>
@@ -118,26 +115,16 @@ namespace {
         Horo::Editor::AssetImportModal modal;
     };
 
-    void ClickTab(Horo::Editor::Tests::HeadlessEditorGuiFixture &imgui, Horo::Editor::AssetImportModal &modal, const std::size_t tabIndex) {
-        static constexpr std::array labels{"Overview", "Diagnostics", "Importer Settings", "Destination"};
-        REQUIRE(tabIndex < labels.size());
-        const ImGuiWindow *const window = ImGui::FindWindowByName("Asset Import");
-        REQUIRE(window != nullptr);
-
-        constexpr float horizontalPadding = 16.0F;
-        constexpr float tabGap = 2.0F;
-        float tabOffset = 22.0F;
-        for (std::size_t index = 0; index < tabIndex; ++index)
-            tabOffset += horizontalPadding * 2.0F + ImGui::CalcTextSize(labels[index]).x + tabGap;
-        const float tabWidth = horizontalPadding * 2.0F + ImGui::CalcTextSize(labels[tabIndex]).x;
-
-        ImGuiIO &io = ImGui::GetIO();
-        io.AddMousePosEvent(window->Pos.x + tabOffset + tabWidth * 0.5F, window->Pos.y + 44.0F + 64.0F + 24.0F);
-        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
-        DrawFrame(imgui, modal);
-        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
-        DrawFrame(imgui, modal);
+    void ExpandAdvancedSection() {
+        for (ImGuiWindow *window : ImGui::GetCurrentContext()->Windows) {
+            if (std::string_view{window->Name}.find("/ImportDetails_") != std::string_view::npos) {
+                window->StateStorage.SetInt(window->GetID("Advanced"), 1);
+                return;
+            }
+        }
+        FAIL("Import details child was not drawn");
     }
+
 }  // namespace
 
 TEST_CASE("Asset import presentation renders queue diagnostics settings destination and terminal phases",
@@ -156,9 +143,8 @@ TEST_CASE("Asset import presentation renders queue diagnostics settings destinat
     snapshot.items.front().settings["settings.normals"] = "invalid";
 
     DrawFrame(fixture.imgui, fixture.modal);
-    ClickTab(fixture.imgui, fixture.modal, 1);
-    ClickTab(fixture.imgui, fixture.modal, 2);
-    ClickTab(fixture.imgui, fixture.modal, 3);
+    ExpandAdvancedSection();
+    DrawFrame(fixture.imgui, fixture.modal);
 
     snapshot.items.front().result = PreparedAssetImport{.type = AssetTypeId::Parse("core.mesh").Value(), .editorPayload = {1, 2, 3}};
     snapshot.items.front().diagnostics.clear();
@@ -188,9 +174,49 @@ TEST_CASE("Asset import presentation handles empty and unresolved importer selec
     unresolved.importerContributionId.clear();
     fixture.modal.MutableSnapshot().items = {std::move(unresolved)};
     fixture.modal.MutableSnapshot().selectedItemIndex = 0;
-    ClickTab(fixture.imgui, fixture.modal, 2);
+    DrawFrame(fixture.imgui, fixture.modal);
 
     REQUIRE(fixture.modal.Snapshot().items.front().importerContributionId.empty());
+}
+
+TEST_CASE("Asset import settings round trip typed values and reject malformed or completed edits", "[unit][editor][asset-import]") {
+    using namespace Horo::Assets;
+    AssetImportPresentationFixture fixture;
+    auto &snapshot = fixture.modal.MutableSnapshot();
+    snapshot.items = {MakeItem()};
+    const auto settings = MakeCatalogSettings();
+    const std::array<ImportSettingValue, 7> values{false, true, true, std::int64_t{8}, 2.5, std::string{"custom"}, std::size_t{1}};
+    REQUIRE(settings.size() == values.size());
+    for (std::size_t index = 0; index < settings.size(); ++index) {
+        fixture.modal.SetSettingValue(0, settings[index], values[index]);
+        REQUIRE(fixture.modal.SettingValue(0, settings[index]) == values[index]);
+    }
+
+    SECTION("malformed numbers restore defaults") {
+        for (const std::size_t index : {3U, 4U, 6U}) {
+            auto &raw = snapshot.items.front().settings["settings." + settings[index].id];
+            raw = "invalid";
+            REQUIRE(fixture.modal.SettingValue(0, settings[index]) == settings[index].defaultValue);
+            raw = index == 4U ? "1e9999" : "9999999999999999999999999999999999999999999999999999999999999999999";
+            REQUIRE(fixture.modal.SettingValue(0, settings[index]) == settings[index].defaultValue);
+        }
+        snapshot.items.front().settings["settings.scale"] = "1e9999";
+        REQUIRE(fixture.modal.SettingValue(0, settings[4]) == settings[4].defaultValue);
+        snapshot.items.front().settings["settings.scale"] = "2.5trailing";
+        REQUIRE(fixture.modal.SettingValue(0, settings[4]) == settings[4].defaultValue);
+    }
+    SECTION("completed items retain their settings") {
+        snapshot.items.front().result = PreparedAssetImport{.type = AssetTypeId::Parse("core.mesh").Value()};
+        const auto before = snapshot.items.front().settings;
+        fixture.modal.SetSettingValue(0, settings[5], std::string{"changed"});
+        REQUIRE(snapshot.items.front().settings == before);
+    }
+    SECTION("missing items return defaults without mutation") {
+        const auto before = snapshot.items.front().settings;
+        fixture.modal.SetSettingValue(99, settings[5], std::string{"changed"});
+        REQUIRE(fixture.modal.SettingValue(99, settings[5]) == settings[5].defaultValue);
+        REQUIRE(snapshot.items.front().settings == before);
+    }
 }
 
 TEST_CASE("Asset import presentation formats captured kilobyte source sizes", "[unit][editor][gui][asset-import]") {
@@ -239,141 +265,12 @@ TEST_CASE("Asset import presentation renders retained history status variants", 
                                               }));
     }
 
-    auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), MakeCatalog(), nullptr, &operations);
+    auto modal = std::make_unique<AssetImportModal>(imgui.Fonts(), jobs.Get(), MakeCatalog(),
+                                                    AssetImportModalServices{.operationStore = &operations});
     auto *const modalPtr = modal.get();
     REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
     modalHost.OnUpdate(0.016F);
     REQUIRE(modalPtr->ImportHistory().size() == states.size());
 
-    DrawFrame(imgui, *modalPtr);
-}
-
-TEST_CASE("Asset import preview fixtures render populated and empty workflow states", "[unit][editor][gui][asset-import]") {
-    using namespace Horo;
-    using namespace Horo::Editor;
-
-    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
-    Horo::Editor::Tests::ScopedJobSystem jobs;
-    EditorDataBus events;
-    Input::InputRouter inputRouter;
-    EditorModalHost modalHost{events, inputRouter};
-
-    auto modal = std::make_unique<AssetImportPreviewModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
-    auto *const modalPtr = modal.get();
-    modalPtr->SetScenario(AssetImportPreviewScenario::Populated);
-    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
-    modalHost.OnUpdate(0.016F);
-
-    REQUIRE(modalPtr->IsReadOnlyPresentation());
-    REQUIRE(modalPtr->Snapshot().items.size() == 4);
-    REQUIRE(modalPtr->SourceFileSize(0).value() == 12'400'000);
-    DrawFrame(imgui, *modalPtr);
-
-    for (std::size_t index = 0; index < modalPtr->Snapshot().items.size(); ++index) {
-        modalPtr->SelectItem(index);
-        ClickTab(imgui, *modalPtr, 1);
-        ClickTab(imgui, *modalPtr, 2);
-        ClickTab(imgui, *modalPtr, 3);
-    }
-
-    REQUIRE(modalPtr->Snapshot().items[0].sourceExtension == "fbx");
-    REQUIRE(modalPtr->Snapshot().items[1].sourceExtension == "png");
-    REQUIRE(modalPtr->Snapshot().items[3].diagnostics.size() == 1);
-}
-
-TEST_CASE("Asset import preview fixture renders an empty queue", "[unit][editor][gui][asset-import]") {
-    using namespace Horo;
-    using namespace Horo::Editor;
-
-    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
-    Horo::Editor::Tests::ScopedJobSystem jobs;
-    EditorDataBus events;
-    Input::InputRouter inputRouter;
-    EditorModalHost modalHost{events, inputRouter};
-
-    auto modal = std::make_unique<AssetImportPreviewModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
-    auto *const modalPtr = modal.get();
-    modalPtr->SetScenario(AssetImportPreviewScenario::Empty);
-    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
-    modalHost.OnUpdate(0.016F);
-    DrawFrame(imgui, *modalPtr);
-
-    REQUIRE(modalPtr->IsReadOnlyPresentation());
-    REQUIRE(modalPtr->Snapshot().items.empty());
-}
-
-TEST_CASE("Editor UI preview gallery renders both interaction states", "[unit][editor][gui][ui-preview]") {
-    using namespace Horo;
-    using namespace Horo::Editor;
-
-    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
-    LocalizationService localization{LocaleTag{"en-US"}};
-
-    imgui.BeginFrame();
-    const auto initialSelection = DrawEditorUiPreviewGallery("asset-import-empty", true, imgui.Fonts(), localization);
-    imgui.EndFrame();
-    REQUIRE_FALSE(initialSelection.has_value());
-
-    const ImGuiWindow *const gallery = ImGui::FindWindowByName("##EditorUiPreviewGallery");
-    REQUIRE(gallery != nullptr);
-    const float firstButtonTop = EditorUiPreviewHeaderHeight + 54.0F;
-    const float buttonHeight = 38.0F;
-    const float secondButtonCenter = firstButtonTop + buttonHeight + ImGui::GetStyle().ItemSpacing.y + buttonHeight * 0.5F;
-    ImGuiIO &io = ImGui::GetIO();
-    io.AddMousePosEvent(gallery->Pos.x + EditorUiPreviewSidebarWidth * 0.5F, gallery->Pos.y + secondButtonCenter);
-    imgui.BeginFrame();
-    const auto hoveredSelection = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.Fonts(), localization);
-    imgui.EndFrame();
-    REQUIRE_FALSE(hoveredSelection.has_value());
-    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
-    imgui.BeginFrame();
-    const auto clickedSelection = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.Fonts(), localization);
-    imgui.EndFrame();
-    REQUIRE_FALSE(clickedSelection.has_value());
-    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
-    imgui.BeginFrame();
-    const auto releasedSelection = DrawEditorUiPreviewGallery("asset-import-empty", false, imgui.Fonts(), localization);
-    imgui.EndFrame();
-    REQUIRE(releasedSelection.has_value());
-    REQUIRE(*releasedSelection == "asset-import");
-}
-
-TEST_CASE("Asset import preview fixtures expose deterministic populated and empty states", "[unit][editor][gui][asset-import]") {
-    using namespace Horo;
-    using namespace Horo::Assets;
-    using namespace Horo::Editor;
-
-    {
-        Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
-        Horo::Editor::Tests::ScopedJobSystem jobs;
-        EditorDataBus events;
-        Input::InputRouter inputRouter;
-        EditorModalHost modalHost{events, inputRouter};
-        auto modal = std::make_unique<AssetImportPreviewModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
-        auto *const modalPtr = modal.get();
-        modalPtr->SetScenario(AssetImportPreviewScenario::Populated);
-        REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
-        modalHost.OnUpdate(0.016F);
-
-        REQUIRE(modalPtr->IsReadOnlyPresentation());
-        REQUIRE(modalPtr->Snapshot().items.size() == 4);
-        REQUIRE(modalPtr->Snapshot().items.front().displayName == "hero");
-        REQUIRE(modalPtr->Snapshot().items.back().diagnostics.size() == 1);
-        DrawFrame(imgui, *modalPtr);
-    }
-
-    Horo::Editor::Tests::HeadlessEditorGuiFixture imgui;
-    Horo::Editor::Tests::ScopedJobSystem jobs;
-    EditorDataBus events;
-    Input::InputRouter inputRouter;
-    EditorModalHost modalHost{events, inputRouter};
-    auto modal = std::make_unique<AssetImportPreviewModal>(imgui.Fonts(), jobs.Get(), MakeCatalog());
-    auto *const modalPtr = modal.get();
-    modalPtr->SetScenario(AssetImportPreviewScenario::Empty);
-    REQUIRE(modalHost.OpenRoot(std::move(modal)).HasValue());
-    modalHost.OnUpdate(0.016F);
-
-    REQUIRE(modalPtr->IsReadOnlyPresentation());
-    REQUIRE(modalPtr->Snapshot().items.empty());
     DrawFrame(imgui, *modalPtr);
 }

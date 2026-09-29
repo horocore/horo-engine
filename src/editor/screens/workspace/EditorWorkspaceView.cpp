@@ -538,7 +538,11 @@ namespace Horo::Editor {
                               EditorWorkspaceViewCommandData &outCommand, const EditorGuiContext &context) {
             const bool idle = viewModel.playState == EditorPlayState::Idle || viewModel.playState == EditorPlayState::Failed;
             const bool paused = viewModel.playState == EditorPlayState::Paused;
-            const float controlWidth = idle ? 64.0F : paused ? 196.0F : 130.0F;
+            float controlWidth = 130.0F;
+            if (idle)
+                controlWidth = 64.0F;
+            else if (paused)
+                controlWidth = 196.0F;
             const float controlX = availableRight - controlWidth;
             if (controlX < ImGui::GetCursorPosX() + 8.0F)
                 return;
@@ -867,11 +871,10 @@ namespace Horo::Editor {
         const bool clicked = ImGui::InvisibleButton("##DocumentTab", {tabWidth, tabHeight});
         const bool hovered = ImGui::IsItemHovered();
         ImDrawList *drawList = ImGui::GetWindowDrawList();
-        drawList->AddRectFilled(tabMin, tabMax,
-                                Theme::U32(stack.activeTab == panelId ? Theme::Bg2()
-                                           : hovered                  ? Theme::Hover()
-                                                                      : Theme::Bg1()),
-                                4.0F * scale);
+        ImVec4 tabSurface = hovered ? Theme::Hover() : Theme::Bg1();
+        if (stack.activeTab == panelId)
+            tabSurface = Theme::Bg2();
+        drawList->AddRectFilled(tabMin, tabMax, Theme::U32(tabSurface), 4.0F * scale);
         drawList->AddRect(tabMin, tabMax, Theme::U32(Theme::Border()), 4.0F * scale);
         const ImVec2 textSize = ImGui::CalcTextSize(title);
         drawList->AddText({tabMin.x + textInset, tabMin.y + (tabHeight - textSize.y) * 0.5F}, Theme::U32(Theme::Text()), title);

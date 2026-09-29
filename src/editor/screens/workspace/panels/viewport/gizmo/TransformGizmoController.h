@@ -63,6 +63,9 @@ namespace Horo::Editor {
                                                 const SceneObject &selectedObject, const TransformGizmoDrawContext &context,
                                                 ViewportInteractionCapture &capture);
         [[nodiscard]] bool HasInvalidDrag(const SceneObject *selectedObject, const EditorWorkspaceViewModel &viewModel) const noexcept;
+        /** @brief Reports a failed geometry projection and cancels any active drag. */
+        [[nodiscard]] bool HandleGeometryFailure(const Error &error, EditorWorkspaceViewCommandData &command,
+                                                 ViewportInteractionCapture &capture);
         void AdvanceDrag(const TransformGizmoDrawContext &context, ViewportInteractionCapture &capture);
 
         std::optional<DragSession> drag_;

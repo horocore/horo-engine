@@ -1,7 +1,9 @@
 #include "FullEditorUiTestActions.h"
 
 #include "FullEditorUiTestHost.h"
+#include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/EditorMenuModel.h"
+#include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/GuiScreenHost.h"
 
 #include <fstream>
@@ -263,6 +265,31 @@ namespace Horo::Tests::FullEditorActions {
                 ui.Yield();
             IM_CHECK(ui.ItemExists("//**/##ImportFile0"));
             ui.ItemClick("//**/##ImportFile0");
+            auto *const modal =
+                dynamic_cast<Editor::AssetImportModal *>(editor.Screens().Services().Get<Editor::EditorModalHost>().TopModal());
+            IM_CHECK(modal != nullptr);
+            const std::string advanced = "//**/" + std::string{modal->Localized("asset_import.advanced", "Advanced")};
+            ui.ItemOpen(advanced.c_str());
+            ui.Yield();
+            const std::string createPreset =
+                "//**/" + std::string{modal->Localized("asset_import.create_preset", "Create preset from current settings")};
+            ui.MouseMove(advanced.c_str());
+            for (int frame = 0; frame < 10 && !ui.ItemExists(createPreset.c_str()); ++frame) {
+                ui.MouseWheelY(-2.0F);
+                ui.Yield(3);
+            }
+            if (!ui.ItemExists(createPreset.c_str())) {
+                IM_CHECK(ui.ItemExists(createPreset.c_str()));
+                return;
+            }
+            ui.ItemClick(createPreset.c_str());
+            ui.Yield();
+            IM_CHECK(ui.ItemExists("//**/##PresetName"));
+            ui.ItemInputValue("//**/##PresetName", "Coverage preset");
+            const std::string create = "//**/" + std::string{modal->Localized("asset_import.create", "Create")};
+            ui.ItemClick(create.c_str());
+            ui.Yield();
+            IM_CHECK(modal->ActivePresetName(0) == "Coverage preset");
             IM_CHECK(editor.ImportFirstPendingAsset());
             ui.Yield();
             IM_CHECK(ui.ItemExists("//**/Done"));

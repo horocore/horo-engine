@@ -40,9 +40,9 @@ namespace Horo::Editor {
 
         [[nodiscard]] bool MatchesSearch(const RecentProjectEntry &project, const std::string_view query) {
             const auto contains = [query](const std::string_view value) {
-                return std::search(value.begin(), value.end(), query.begin(), query.end(), [](const char left, const char right) {
+                return std::ranges::search(value, query, [](const char left, const char right) {
                     return std::tolower(static_cast<unsigned char>(left)) == std::tolower(static_cast<unsigned char>(right));
-                }) != value.end();
+                }).begin() != value.end();
             };
             return query.empty() || contains(project.name) || contains(project.rootPath);
         }
@@ -220,22 +220,23 @@ namespace Horo::Editor {
 
         /** @brief Draws welcome navigation actions and records the selected command. */
         void DrawWelcomeSidebarActions(const EditorGuiContext &ctx, WelcomeViewResult &result) {
+            using enum Ui::ButtonVariant;
             const std::string newProject = ctx.localization.Get("editor", "welcome.new_project") + "###welcome_new_project";
             const std::string openProject = ctx.localization.Get("editor", "welcome.open_project") + "###welcome_open_project";
             const std::string openSettings = ctx.localization.Get("editor", "welcome.open_settings") + "###welcome_open_settings";
             const std::string pluginStore = ctx.localization.Get("editor", "welcome.plugin_store") + "###welcome_plugin_store";
-            if (DrawWelcomeActionButton(newProject.c_str(), Ui::ButtonVariant::Primary, ctx)) {
+            if (DrawWelcomeActionButton(newProject.c_str(), Primary, ctx)) {
                 result.command = WelcomeViewCommand::NewProject;
             }
-            if (DrawWelcomeActionButton(openProject.c_str(), Ui::ButtonVariant::Secondary, ctx)) {
+            if (DrawWelcomeActionButton(openProject.c_str(), Secondary, ctx)) {
                 result.command = WelcomeViewCommand::OpenProject;
             }
-            if (DrawWelcomeActionButton(openSettings.c_str(), Ui::ButtonVariant::Secondary, ctx)) {
+            if (DrawWelcomeActionButton(openSettings.c_str(), Secondary, ctx)) {
                 result.command = WelcomeViewCommand::OpenSettings;
             }
             static_cast<void>(Ui::Button(Ui::ButtonProps{.label = pluginStore.c_str(),
                                                          .size = {0.0F, 42.0F},
-                                                         .variant = Ui::ButtonVariant::Secondary,
+                                                         .variant = Secondary,
                                                          .enabled = false,
                                                          .font = ctx.theme.fonts.sans,
                                                          .componentSize = Ui::ComponentSize::Large,
@@ -262,7 +263,7 @@ namespace Horo::Editor {
         std::vector<std::size_t> indices(model.recentProjects.size());
         std::iota(indices.begin(), indices.end(), 0U);
         const std::string_view search{state.search.data()};
-        std::erase_if(indices, [&](const std::size_t index) {
+        std::erase_if(indices, [&model, search](const std::size_t index) {
             return !MatchesSearch(model.recentProjects[index], search);
         });
         const auto compare = [&](const std::size_t left, const std::size_t right) {
@@ -278,7 +279,7 @@ namespace Horo::Editor {
             };
             return modified(left) == modified(right) ? left < right : modified(left) > modified(right);
         };
-        std::sort(indices.begin(), indices.end(), compare);
+        std::ranges::sort(indices, compare);
         return indices;
     }
 

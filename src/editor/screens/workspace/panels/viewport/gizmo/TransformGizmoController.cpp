@@ -61,6 +61,21 @@ namespace Horo::Editor {
                viewModel.activeTransformSpace != drag_->space;
     }
 
+    /** @copydoc TransformGizmoController::HandleGeometryFailure */
+    bool TransformGizmoController::HandleGeometryFailure(const Error &error, EditorWorkspaceViewCommandData &command,
+                                                         ViewportInteractionCapture &capture) {
+        if (!geometryFailureReported_) {
+            LOG_ERROR("editor.viewport_gizmo", "Gizmo geometry failed: %s", error.message.c_str());
+            geometryFailureReported_ = true;
+        }
+        if (!drag_.has_value())
+            return false;
+        capture.Cancel(Input::CaptureCancellationReason::Explicit);
+        cancelPreviewOnNextDraw_ = false;
+        command.command = EditorWorkspaceViewCommand::CancelObjectTransformPreview;
+        return true;
+    }
+
     bool TransformGizmoController::Draw(ImDrawList &drawList, const TransformGizmoDrawContext &context,
                                         ViewportInteractionCapture &capture) {
         if (ConsumePendingCancellation(context.command))
@@ -96,19 +111,8 @@ namespace Horo::Editor {
                                                          .pointer = ImVec2{context.input.pointer.x, context.input.pointer.y},
                                                          .hovered = context.hovered,
                                                      });
-            if (geometry.HasError()) {
-                if (!geometryFailureReported_) {
-                    LOG_ERROR("editor.viewport_gizmo", "Gizmo geometry failed: %s", geometry.ErrorValue().message.c_str());
-                    geometryFailureReported_ = true;
-                }
-                if (drag_.has_value()) {
-                    capture.Cancel(Input::CaptureCancellationReason::Explicit);
-                    cancelPreviewOnNextDraw_ = false;
-                    context.command.command = EditorWorkspaceViewCommand::CancelObjectTransformPreview;
-                    return true;
-                }
-                return false;
-            }
+            if (geometry.HasError())
+                return HandleGeometryFailure(geometry.ErrorValue(), context.command, capture);
             geometryFailureReported_ = false;
             rotationCenter = geometry.Value().center;
             const Result<void> begun = TryBeginDrag(geometry.Value(), worldTransform, *selectedObject, context, capture);
@@ -121,10 +125,10 @@ namespace Horo::Editor {
             return false;
         AdvanceDrag(context, capture);
         if (drag_.has_value() && drag_->tool == EditorTransformTool::Rotate && rotationCenter.has_value()) {
-            const Result<void> sweep =
-                DrawTransformGizmoRotationSweep(drawList, viewModel.viewportCamera, *rotationCenter, drag_->math.worldAxis,
-                                                drag_->math.startRotationVector, drag_->currentRotationVector);
-            if (sweep.HasError())
+            if (const Result<void> sweep =
+                    DrawTransformGizmoRotationSweep(drawList, viewModel.viewportCamera, *rotationCenter, drag_->math.worldAxis,
+                                                    drag_->math.startRotationVector, drag_->currentRotationVector);
+                sweep.HasError())
                 LOG_ERROR("editor.viewport_gizmo", "Gizmo rotation sweep failed: %s", sweep.ErrorValue().message.c_str());
             const Result<void> pin = DrawTransformGizmoRotationPin(drawList, viewModel.viewportCamera, *rotationCenter,
                                                                    drag_->currentRotationVector, drag_->axis);
@@ -144,7 +148,11 @@ namespace Horo::Editor {
             return Result<void>::Success();
 
         const int axis = *geometry.hoveredAxis;
-        const Math::Vec3 chosenAxis = axis < 3 ? geometry.worldAxes[axis] : axis >= 4 ? geometry.worldAxes[axis - 4] : Math::Vec3{};
+        Math::Vec3 chosenAxis{};
+        if (axis < 3)
+            chosenAxis = geometry.worldAxes[axis];
+        else if (axis >= 4)
+            chosenAxis = geometry.worldAxes[axis - 4];
         const ImVec2 direction = axis < 3 ? geometry.screenDirections[axis] : ImVec2{0.7071F, -0.7071F};
         const ImVec2 pointer{input.pointer.x, input.pointer.y};
         std::optional<Math::Vec3> startRotationVector;

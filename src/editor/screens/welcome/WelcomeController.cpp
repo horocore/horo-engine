@@ -253,9 +253,13 @@ namespace Horo::Editor {
     /** @copydoc DeleteRecentProjectFiles */
     bool DeleteRecentProjectFiles(const std::filesystem::path &root) {
         std::error_code error;
-        if (!root.is_absolute() || root == root.root_path() || std::filesystem::is_symlink(root, error) || error ||
-            !std::filesystem::is_directory(root, error) || error || !std::filesystem::is_regular_file(root / ".horo/project.json", error) ||
-            error)
+        if (!root.is_absolute() || root == root.root_path())
+            return false;
+        if (std::filesystem::is_symlink(root, error) || error)
+            return false;
+        if (!std::filesystem::is_directory(root, error) || error)
+            return false;
+        if (!std::filesystem::is_regular_file(root / ".horo/project.json", error) || error)
             return false;
 
         const std::filesystem::path resolved = std::filesystem::canonical(root, error);
@@ -264,7 +268,12 @@ namespace Horo::Editor {
         const std::filesystem::path current = std::filesystem::current_path(error);
         if (error)
             return false;
-        const std::filesystem::path temporary = std::filesystem::canonical(std::filesystem::temp_directory_path(error), error);
+        // Only resolve the shared temporary root to reject its deletion; no files
+        // are created or opened in the publicly writable directory.
+        const std::filesystem::path temporaryRoot = std::filesystem::temp_directory_path(error);  // NOSONAR(cpp:S5443)
+        if (error)
+            return false;
+        const std::filesystem::path temporary = std::filesystem::canonical(temporaryRoot, error);
         if (error)
             return false;
         const std::filesystem::path home = std::filesystem::canonical(ResolveEditorSettingsPath().parent_path().parent_path(), error);
@@ -272,7 +281,7 @@ namespace Horo::Editor {
             return false;
         // A malformed recent-project entry must never target a shared directory.
         for (const std::filesystem::path &protectedPath : {current, temporary, home}) {
-            if (std::mismatch(resolved.begin(), resolved.end(), protectedPath.begin(), protectedPath.end()).first == resolved.end())
+            if (std::ranges::mismatch(resolved, protectedPath).in1 == resolved.end())
                 return false;
         }
 

@@ -426,6 +426,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::DockWorkspacePanel(const EditorWorkspaceViewCommandData &cmd) {
+        using enum WorkspacePanelHost::DropKind;
         if (!cmd.stringPayload.has_value() || !cmd.workspaceDropTarget.has_value())
             return;
         const auto &target = *cmd.workspaceDropTarget;
@@ -438,23 +439,17 @@ namespace Horo::Editor {
             area = WorkspaceDockArea::Bottom;
         else if (target.targetNodeId != "workspace.document")
             return;
-        if (area == WorkspaceDockArea::Document && target.kind != WorkspacePanelHost::DropKind::TabCenter)
+        if (area == WorkspaceDockArea::Document && target.kind != TabCenter)
             return;
 
         EditorWorkspaceViewCommandData activation;
         activation.command = EditorWorkspaceViewCommand::ChangeActivePanel;
         activation.targetIndex = static_cast<int>(area);
         activation.stringPayload = *cmd.stringPayload;
-        if (area == WorkspaceDockArea::Bottom && target.kind != WorkspacePanelHost::DropKind::TabCenter) {
-            activation.bottomDockSlot =
-                target.kind == WorkspacePanelHost::DropKind::SplitLeft || target.kind == WorkspacePanelHost::DropKind::SplitTop
-                    ? BottomDockSlot::Left
-                    : BottomDockSlot::Right;
-        } else if (area != WorkspaceDockArea::Document && target.kind != WorkspacePanelHost::DropKind::TabCenter) {
-            activation.sideDockSlot =
-                target.kind == WorkspacePanelHost::DropKind::SplitTop || target.kind == WorkspacePanelHost::DropKind::SplitLeft
-                    ? SideDockSlot::Top
-                    : SideDockSlot::Bottom;
+        if (area == WorkspaceDockArea::Bottom && target.kind != TabCenter) {
+            activation.bottomDockSlot = target.kind == SplitLeft || target.kind == SplitTop ? BottomDockSlot::Left : BottomDockSlot::Right;
+        } else if (area != WorkspaceDockArea::Document && target.kind != TabCenter) {
+            activation.sideDockSlot = target.kind == SplitTop || target.kind == SplitLeft ? SideDockSlot::Top : SideDockSlot::Bottom;
         }
         if (ProcessActivePanelCommand(activation))
             m_dataBus.Publish(WorkspacePanelDockedEvent{*cmd.stringPayload, target.targetNodeId, target.kind});
