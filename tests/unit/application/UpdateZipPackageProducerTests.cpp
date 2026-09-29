@@ -109,6 +109,57 @@ namespace {
 
         unsigned probes{};
     };
+
+    /** @brief Produces and stages the native ZIP candidate used by bootstrap failure tests. */
+    [[nodiscard]] UpdateActivationVersion PrepareNativeZipCandidate(TemporaryDirectory &directory, NativeDurableFileSystem &files,
+                                                                    const Security::ArtifactVerifier &verifier) {
+        auto native = DetectBootstrapBuildTarget();
+        REQUIRE(native.HasValue());
+        auto selection = Selection();
+        selection.artifact.platform = native.Value().platform;
+        selection.artifact.architecture = native.Value().architecture;
+        auto validated = ValidateDistributionPackageSelection(selection.artifact, DistributionPackageFormat::ZipArchive);
+        REQUIRE(validated.HasValue());
+        selection = std::move(validated).Value();
+        WriteFile(directory.root / "source/bin/game", "game");
+        auto inventory = Inventory();
+        UpdateZipPackageProducer producer{{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U}};
+        IReleasePackageProducer *producers[]{&producer};
+        ReleasePackageRequest production{selection,  inventory,   directory.root / "source", directory.root / "first",
+                                         "bin/game", {"bin/game"}};
+        auto produced = ProduceReleasePackage(production, producers);
+        REQUIRE(produced.HasValue());
+
+        UpdatePackageRecord package;
+        package.selection = selection;
+        package.url = "https://updates.example.test/game.zip";
+        package.size = produced.Value().files.front().size;
+        package.digest = produced.Value().files.front().digest;
+        package.signature = {.publisherId = "com.horo.updates",
+                             .keyId = "key-1",
+                             .artifactDigest = package.digest,
+                             .signature = std::vector<std::byte>(64U, std::byte{1})};
+        const UpdateTransferResponse response{.status = 200U,
+                                              .requestedUrl = package.url,
+                                              .effectiveUrl = package.url,
+                                              .strongEtag = "\"build-42\"",
+                                              .contentLength = package.size};
+        auto plan = PlanUpdateTransfer(package, response, std::nullopt);
+        REQUIRE(plan.HasValue());
+        auto checkpoint = AdvanceUpdateTransfer(plan.Value(), package.size);
+        REQUIRE(checkpoint.HasValue());
+        const auto versions = directory.root / "versions";
+        std::filesystem::create_directory(versions);
+        const auto packageFile = versions / "package_42.zip";
+        std::filesystem::rename(directory.root / "first/update.zip", packageFile);
+        const auto stage = versions / "package_42";
+        constexpr UpdateArchiveLimits limits{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
+        REQUIRE(StageVerifiedZipUpdate({package, checkpoint.Value(), packageFile, stage, limits}, files, verifier, {}).HasValue());
+        std::vector<UpdateStagedFile> stagedInventory{
+            {"bin/game", 4U, inventory.Artifacts().front().digest, UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
+        UpdateActivationVersion candidate{package, checkpoint.Value(), packageFile, stage, stagedInventory};
+        return candidate;
+    }
 #endif
 }  // namespace
 
@@ -246,53 +297,13 @@ TEST_CASE("ZIP producer refuses an existing output symlink", "[release][update][
 #if defined(_WIN32) || defined(__APPLE__)
 TEST_CASE("Native portable ZIP bootstrap repairs and removes only owned files", "[release][install][zip]") {
     TemporaryDirectory directory;
-    auto native = DetectBootstrapBuildTarget();
-    REQUIRE(native.HasValue());
-    auto selection = Selection();
-    selection.artifact.platform = native.Value().platform;
-    selection.artifact.architecture = native.Value().architecture;
-    auto validated = ValidateDistributionPackageSelection(selection.artifact, DistributionPackageFormat::ZipArchive);
-    REQUIRE(validated.HasValue());
-    selection = std::move(validated).Value();
-    WriteFile(directory.root / "source/bin/game", "game");
-    auto inventory = Inventory();
-    UpdateZipPackageProducer producer{{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U}};
-    IReleasePackageProducer *producers[]{&producer};
-    ReleasePackageRequest production{selection, inventory, directory.root / "source", directory.root / "first", "bin/game", {"bin/game"}};
-    auto produced = ProduceReleasePackage(production, producers);
-    REQUIRE(produced.HasValue());
-
-    UpdatePackageRecord package;
-    package.selection = selection;
-    package.url = "https://updates.example.test/game.zip";
-    package.size = produced.Value().files.front().size;
-    package.digest = produced.Value().files.front().digest;
-    package.signature = {.publisherId = "com.horo.updates",
-                         .keyId = "key-1",
-                         .artifactDigest = package.digest,
-                         .signature = std::vector<std::byte>(64U, std::byte{1})};
-    const UpdateTransferResponse response{.status = 200U,
-                                          .requestedUrl = package.url,
-                                          .effectiveUrl = package.url,
-                                          .strongEtag = "\"build-42\"",
-                                          .contentLength = package.size};
-    auto plan = PlanUpdateTransfer(package, response, std::nullopt);
-    REQUIRE(plan.HasValue());
-    auto checkpoint = AdvanceUpdateTransfer(plan.Value(), package.size);
-    REQUIRE(checkpoint.HasValue());
-    const auto versions = directory.root / "versions";
-    std::filesystem::create_directory(versions);
-    const auto packageFile = versions / "package_42.zip";
-    std::filesystem::rename(directory.root / "first/update.zip", packageFile);
-    const auto stage = versions / "package_42";
-    constexpr UpdateArchiveLimits limits{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
     NativeDurableFileSystem files;
     auto verifier = Verifier();
-    REQUIRE(StageVerifiedZipUpdate({package, checkpoint.Value(), packageFile, stage, limits}, files, verifier, {}).HasValue());
-    std::vector<UpdateStagedFile> stagedInventory{
-        {"bin/game", 4U, inventory.Artifacts().front().digest, UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
-    UpdateActivationVersion candidate{package, checkpoint.Value(), packageFile, stage, stagedInventory};
+    auto candidate = PrepareNativeZipCandidate(directory, files, verifier);
+    constexpr UpdateArchiveLimits limits{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
     BootstrapInstallationRequest request{directory.root, candidate, limits, std::chrono::seconds{2}};
+    const auto &stage = candidate.stageRoot;
+    const auto &packageFile = candidate.packageFile;
     HealthyProcessBridge processes;
     ZipPortableBootstrapHost host(files, verifier, processes, {});
     ZipPortableBootstrapHost noSpace(files, verifier, processes, {.minimumFreeBytes = std::numeric_limits<std::uint64_t>::max()});
