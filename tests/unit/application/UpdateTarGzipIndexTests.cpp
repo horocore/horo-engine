@@ -377,12 +377,34 @@ TEST_CASE("Linux portable bootstrap installs repairs and uninstalls only owned v
     processes.healthy = true;
     REQUIRE(BootstrapVerifiedInstallation(request, files, verifier, host).HasValue());
     REQUIRE(RepairVerifiedInstallation(request, files, verifier, host).HasValue());
+    const auto unexpectedDirectory = stage / "unexpected";
+    std::filesystem::create_directory(unexpectedDirectory);
+    std::ofstream(unexpectedDirectory / "keep.txt") << "user content";
+    CHECK(host.RemoveOwnedVersion(request).HasError());
+    CHECK(std::filesystem::is_regular_file(unexpectedDirectory / "keep.txt"));
+    CHECK(std::filesystem::is_regular_file(stage / "bin/editor"));
+    std::filesystem::remove_all(unexpectedDirectory);
+
+    const auto executable = stage / "bin/editor";
+    const auto original = stage / "bin/editor.original";
+    std::filesystem::rename(executable, original);
+    std::error_code symlinkError;
+    std::filesystem::create_symlink(original, executable, symlinkError);
+    if (!symlinkError) {
+        CHECK(host.RemoveOwnedVersion(request).HasError());
+        CHECK(std::filesystem::is_regular_file(original));
+        CHECK(std::filesystem::is_symlink(std::filesystem::symlink_status(executable)));
+        std::filesystem::remove(executable);
+    }
+    std::filesystem::rename(original, executable);
+
     std::ofstream(stage / "user-note") << "preserve";
     CHECK(UninstallVerifiedInstallation(request, files, verifier, host).HasError());
     CHECK(std::filesystem::is_regular_file(stage / "user-note"));
     CHECK(std::filesystem::is_regular_file(temporary.path / "active-version"));
     std::filesystem::remove(stage / "user-note");
     REQUIRE(UninstallVerifiedInstallation(request, files, verifier, host).HasValue());
+    REQUIRE(host.RemoveOwnedVersion(request).HasValue());
     CHECK_FALSE(std::filesystem::exists(stage));
     CHECK_FALSE(std::filesystem::exists(packageFile));
     CHECK_FALSE(std::filesystem::exists(temporary.path / "active-version"));

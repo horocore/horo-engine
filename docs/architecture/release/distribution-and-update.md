@@ -466,9 +466,14 @@ desktop or file-association integration. An executable-host process coordinator
 supplies the product-stop and bounded health operations. During uninstall the
 adapter reauthenticates any remaining package and ready marker, rejects altered
 or undeclared stage entries, and unlinks only signed inventory files and their
-empty parent directories. This additive host needs no migration for ZIP callers.
-Windows, macOS, and system-managed Linux native package readers and hosts remain
-outstanding. The public bootstrap-host
+empty parent directories. `ZipPortableBootstrapHost` applies the same owned-file
+removal to native Windows and macOS ZIP installations after checking the running
+OS, architecture, configured minimum OS version, writable destination, and free
+transaction space. ZIP policy deliberately leaves registration empty. The
+portable removal implementation moved to a target-private helper; there is no
+public migration for existing Linux host callers. System-managed package readers,
+OS integration hosts, and production process coordination remain outstanding.
+The public bootstrap-host
 contract now requires an idempotent `RemoveOwnedVersion` operation; existing
 host implementers must add that operation before adopting this interface. No
 production implementation existed when this contract was added.
