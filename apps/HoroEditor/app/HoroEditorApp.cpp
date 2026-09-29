@@ -776,7 +776,7 @@ namespace Horo::Editor {
 
         struct EditorBackgroundServices {
             JobSystem &jobs;
-            IEditorUpdateBackend *updates;
+            const EditorUpdateHostServices *updates;
         };
 
         struct RunEditorMainLoopParams {
@@ -1095,16 +1095,37 @@ namespace Horo::Editor {
             bool nativeMenuInstalled_{false};
         };
 
+        /** @brief Binds an authenticated installed-host update context before the settings view is created. */
+        void ConfigureUpdateExperience(RunEditorMainLoopParams &p, EditorGuiContext &guiContext,
+                                       std::optional<UpdateExperienceSession> &session) {
+            if (!p.background.updates)
+                return;
+            session.emplace(p.background.jobs, p.background.updates->backend);
+            if (const auto outcome = p.background.updates->verifiedOutcome; outcome) {
+                const EditorUpdatePhase phase =
+                    *outcome == EditorVerifiedUpdateOutcome::Active ? EditorUpdatePhase::Active : EditorUpdatePhase::RolledBack;
+                static_cast<void>(session->ReportVerifiedHostOutcome(phase));
+            }
+            guiContext.updates = &*session;
+        }
+
+        /** @brief Requests only a staged helper handoff during an orderly editor exit. */
+        void RequestUpdateActivationOnExit(std::optional<UpdateExperienceSession> &session, const bool closing,
+                                           const bool restartingRenderer) {
+            if (!session || !closing || restartingRenderer)
+                return;
+            const Result<bool> handoff = session->ActivateOnExit();
+            if (handoff.HasError())
+                LOG_ERROR("editor.update", "Install-on-exit handoff failed: %s", handoff.ErrorValue().message.c_str());
+        }
+
         /** @brief Runs the actual editor startup and reports failures to the process boundary. */
         std::optional<EditorRendererRestartRequest> RunEditorMainLoop(RunEditorMainLoopParams &p) {
             ThemeContext themeContext{p.fonts};
             EditorSettingsSnapshot settingsSnapshot = p.settings.Snapshot();
             EditorGuiContext guiContext{p.engineEvents, p.editorEvents, p.localization, themeContext, settingsSnapshot};
             std::optional<UpdateExperienceSession> updateSession;
-            if (p.background.updates) {
-                updateSession.emplace(p.background.jobs, *p.background.updates);
-                guiContext.updates = &*updateSession;
-            }
+            ConfigureUpdateExperience(p, guiContext, updateSession);
 
             // Borrowed screen services must outlive the host that invokes screen OnLeave().
             EditorViewportSceneState viewportSceneState;
@@ -1245,11 +1266,7 @@ namespace Horo::Editor {
                       ((!p.exitAfterFirstFrame && p.exitAfterFrames == 0) || completedFrame);
             runtime->Shutdown();
             p.healthy = healthy;
-            if (updateSession && screenHost.IsApplicationCloseRequested() && !rendererRestart) {
-                const Result<bool> handoff = updateSession->ActivateOnExit();
-                if (handoff.HasError())
-                    LOG_ERROR("editor.update", "Install-on-exit handoff failed: %s", handoff.ErrorValue().message.c_str());
-            }
+            RequestUpdateActivationOnExit(updateSession, screenHost.IsApplicationCloseRequested(), rendererRestart.has_value());
             return rendererRestart;
         }
     }  // namespace
@@ -1391,11 +1408,16 @@ namespace Horo::Editor {
         const Log::IStructuredLogQuery &logs;
         BuildOutputStore &buildOutput;
         OperationStore &operations;
-        IEditorUpdateBackend *updateBackend;
+        const EditorUpdateHostServices *updateHost;
+    };
+
+    struct EditorSessionResult final {
+        std::optional<EditorRendererRestartRequest> rendererRestart;
+        bool healthy;
     };
 
     /** @brief Owns runtime services and routes for one graphical editor session. */
-    [[nodiscard]] static std::optional<EditorRendererRestartRequest> RunEditorSession(EditorSessionLaunch launch) {
+    [[nodiscard]] static EditorSessionResult RunEditorSession(EditorSessionLaunch launch) {
         EngineDataBus engineEvents;
         JobSystem jobSystem{JobSystemConfig{.workerCount = 2, .maxQueuedJobs = 256}};
         ProjectCreationService projectCreationService{jobSystem, engineEvents};
@@ -1423,7 +1445,7 @@ namespace Horo::Editor {
                                            launch.fonts,
                                            launch.textures,
                                            projectCreationService,
-                                           {jobSystem, launch.updateBackend},
+                                           {jobSystem, launch.updateHost},
                                            settings,
                                            engineEvents,
                                            editorEvents,
@@ -1435,7 +1457,8 @@ namespace Horo::Editor {
                                            inputRouter,
                                            launch.logs,
                                            {launch.buildOutput, launch.operations}};
-        return RunEditorMainLoop(loopParams);
+        auto rendererRestart = RunEditorMainLoop(loopParams);
+        return {std::move(rendererRestart), loopParams.healthy};
     }
 
     /** @brief Repairs legacy user-state placement before any editor settings are loaded. */
@@ -1503,10 +1526,29 @@ namespace Horo::Editor {
         SDL_Quit();
     }
 
+    /** @brief Preserves the session's shutdown and renderer restart outcomes at the process boundary. */
+    [[nodiscard]] static int CompleteEditorSession(PreparedEditorStartup &startup, const EditorSessionResult &session,
+                                                   const char *executablePath) {
+        if (!session.healthy) {
+            startup.modules->DeactivateAll();
+            Log::Logger::Shutdown();
+            return 1;
+        }
+        if (session.rendererRestart.has_value()) {
+            LOG_INFO("editor.renderer", "Restarting editor with project renderer '%s' for '%s'.",
+                     session.rendererRestart->backendId.c_str(), session.rendererRestart->projectRoot.c_str());
+            Log::Logger::Shutdown();
+            return RelaunchEditorForProject(executablePath, *session.rendererRestart);
+        }
+        startup.modules->DeactivateAll();
+        Log::Logger::Shutdown();
+        return 0;
+    }
+
     // ── public entry ─────────────────────────────────────────────────────────
 
     /** @copydoc RunEditorGuiApp */
-    int RunEditorGuiApp(const int argc, char **argv, IEditorUpdateBackend *updateBackend) {
+    int RunEditorGuiApp(const int argc, char **argv, const EditorUpdateHostServices *updateHost) {
         // ── Bootstrap logging before any subsystem ───────────────────────
         auto observabilitySession = InitializeEditorObservability();
         EditorTelemetry editorTelemetry = RegisterEditorTelemetry();
@@ -1549,27 +1591,11 @@ namespace Horo::Editor {
 
         LOG_INFO("editor.startup", "Editor initialised with renderer '%s' — entering main loop", prepared->options.rendererBackend.c_str());
 
-        const std::optional<EditorRendererRestartRequest> rendererRestart = RunEditorSession(
-            {*prepared, *presentation->window, ImGui::GetIO(), presentation->fonts, presentation->textures, presentation->composition,
-             editorTelemetry, *structuredLogStore, buildOutputStore, operationStore, updateBackend});
+        const EditorSessionResult session = RunEditorSession({*prepared, *presentation->window, ImGui::GetIO(), presentation->fonts,
+                                                              presentation->textures, presentation->composition, editorTelemetry,
+                                                              *structuredLogStore, buildOutputStore, operationStore, updateHost});
 
         ShutdownEditorPresentation(presentation->window, presentation->composition, presentation->textures);
-
-        if (!loopParams.healthy) {
-            moduleHost->DeactivateAll();
-            Log::Logger::Shutdown();
-            return 1;
-        }
-
-        if (rendererRestart.has_value()) {
-            LOG_INFO("editor.renderer", "Restarting editor with project renderer '%s' for '%s'.", rendererRestart->backendId.c_str(),
-                     rendererRestart->projectRoot.c_str());
-            Log::Logger::Shutdown();
-            return RelaunchEditorForProject(argv[0], *rendererRestart);
-        }
-
-        prepared->modules->DeactivateAll();
-        Log::Logger::Shutdown();
-        return 0;
+        return CompleteEditorSession(*prepared, session, argv[0]);
     }
 }  // namespace Horo::Editor
