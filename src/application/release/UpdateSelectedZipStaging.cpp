@@ -88,9 +88,9 @@ namespace Horo::Release {
                                             delta.targetInventoryDigest, delta.deltaInventoryDigest, request.archiveLimits);
             if (plan.HasError())
                 return Result<RepackedDeltaZipResult>::Failure(plan.ErrorValue());
-            auto reconstructed = ReconstructUpdateFileDeltaStage(plan.Value(), request.baseRoot, request.deltaStageRoot, request.stageRoot,
-                                                                 request.archiveLimits, files, cancellation);
-            if (reconstructed.HasError())
+            if (auto reconstructed = ReconstructUpdateFileDeltaStage(plan.Value(), request.baseRoot, request.deltaStageRoot,
+                                                                     request.stageRoot, request.archiveLimits, files, cancellation);
+                reconstructed.HasError())
                 return Result<RepackedDeltaZipResult>::Failure(reconstructed.ErrorValue());
             return RepackVerifiedDeltaAsFullZip({request.candidates.full, plan.Value(), request.stageRoot, request.fullPaths.partialFile,
                                                  request.fullPaths.checkpointFile, request.archiveLimits},
@@ -116,9 +116,10 @@ namespace Horo::Release {
             const bool packageWasAbsent = Absent(request.fullPaths.partialFile);
             const bool checkpointWasAbsent = Absent(request.fullPaths.checkpointFile);
             auto repacked = TryDelta(request, files, verifier, cancellation, progress);
-            if (repacked.HasValue())
-                return Result<SelectedZipStagingResult>::Success(
-                    {std::move(repacked.Value().checkpoint), std::move(repacked.Value().readyMarker), true});
+            if (repacked.HasValue()) {
+                auto result = std::move(repacked).Value();
+                return Result<SelectedZipStagingResult>::Success({std::move(result.checkpoint), std::move(result.readyMarker), true});
+            }
             if (cancellation.IsCancellationRequested())
                 return Result<SelectedZipStagingResult>::Failure(repacked.ErrorValue());
             if (!Absent(request.stageRoot)) {
@@ -140,6 +141,7 @@ namespace Horo::Release {
         auto checkpoint = LoadUpdateTransferCheckpoint(request.fullPaths.partialFile, request.fullPaths.checkpointFile);
         if (checkpoint.HasError() || !checkpoint.Value())
             return invalid();
-        return Result<SelectedZipStagingResult>::Success({std::move(*checkpoint.Value()), std::move(ready).Value(), false});
+        auto loaded = std::move(checkpoint).Value();
+        return Result<SelectedZipStagingResult>::Success({std::move(*loaded), std::move(ready).Value(), false});
     }
 }  // namespace Horo::Release

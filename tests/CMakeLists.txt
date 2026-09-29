@@ -287,6 +287,7 @@ if(HORO_BUILD_NETWORK_GNS)
     horo_register_catch_test(HoroNetworkTransportGnsTests LABELS "unit;network;gns;socket")
 endif()
 add_executable(HoroNetworkRuntimeTests
+        unit/runtime/networking/AdmissionProtectionTests.cpp
         unit/runtime/networking/InboundMessageDispatcherTests.cpp
         unit/runtime/networking/AuthenticationSessionAdapterTests.cpp
         unit/runtime/networking/NetworkModeCompositionTests.cpp
@@ -456,6 +457,7 @@ add_executable(HoroAudioCommandTests
     unit/runtime/audio/AudioCommandBufferTests.cpp
     unit/runtime/audio/AudioCommandStagingTests.cpp
     unit/runtime/audio/AudioEventQueueTests.cpp
+    unit/runtime/audio/AudioFocusPolicyTests.cpp
     unit/runtime/audio/AudioLifecycleReconcilerTests.cpp
     unit/runtime/audio/ScheduledAudioCommandBatchTests.cpp
 )
@@ -1190,6 +1192,9 @@ horo_register_catch_test(HoroEditorUserStateMigrationTests LABELS "release;updat
 add_executable(HoroUpdateZipPackageProducerTests unit/application/UpdateZipPackageProducerTests.cpp)
 target_compile_features(HoroUpdateZipPackageProducerTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateZipPackageProducerTests PRIVATE HoroEngine::UpdateDownload miniz)
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    target_link_libraries(HoroUpdateZipPackageProducerTests PRIVATE HoroEngine::UpdateActivation)
+endif()
 horo_register_catch_test(HoroUpdateZipPackageProducerTests LABELS "release;update;package;headless")
 add_executable(HoroUpdateHttpResponseTests unit/application/UpdateHttpResponseTests.cpp
         ${PROJECT_SOURCE_DIR}/src/application/release/UpdateHttpResponse.cpp)

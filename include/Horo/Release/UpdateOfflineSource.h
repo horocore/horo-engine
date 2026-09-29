@@ -2,7 +2,7 @@
 
 /**
  * @file UpdateOfflineSource.h
- * @brief Managed local update sources and authenticated offline ZIP import.
+ * @brief Managed local update sources and authenticated offline package import.
  */
 
 #include "Horo/Release/UpdateDiscovery.h"
@@ -80,4 +80,18 @@ namespace Horo::Release {
                                                                        NativeDurableFileSystem &files,
                                                                        std::shared_ptr<const Security::SignatureProvider> provider,
                                                                        CancellationToken cancellation);
+
+    /**
+     * @brief Imports a signed Linux portable tar.gz through the same source and private-stage policy as offline ZIP.
+     * @param request Source, installed-product policy, trust roots, and private staging paths.
+     * @param files Durable private filesystem kept alive for the operation.
+     * @param provider Trusted signature provider for both manifest and package.
+     * @param cancellation Cooperative cancellation before ready publication.
+     * @return Authenticated package, durable checkpoint, and ready marker, or a typed failure.
+     * @note The host serializes source mutation and private staging. Only an authenticated Linux tar.gz selection is admitted.
+     */
+    [[nodiscard]] Result<ImportedOfflineUpdate> ImportOfflineTarGzipUpdate(const UpdateOfflineImportRequest &request,
+                                                                           NativeDurableFileSystem &files,
+                                                                           std::shared_ptr<const Security::SignatureProvider> provider,
+                                                                           CancellationToken cancellation);
 }  // namespace Horo::Release

@@ -392,6 +392,9 @@ keeps the stage quiescent and owns product-stop and launch-admission coordinatio
 the probe alone does not establish that gate or install platform integration.
 The native filesystem exposes OS-held shared product-launch leases and an
 exclusive maintenance gate on the installation's `.product-launch.lock` file.
+On POSIX, a lease closes its descriptor without an explicit `LOCK_UN`: descriptors
+inherited through `fork` or duplicated for a bounded probe share one lock, and
+closing one reference must not release the remaining process's gate.
 An installed product launcher retains a shared lease for its entire process
 lifetime. Bootstrap, repair, uninstall, and update activation retain the
 exclusive gate after requesting product shutdown and before mutating the active
@@ -516,9 +519,14 @@ desktop or file-association integration. An executable-host process coordinator
 supplies the product-stop and bounded health operations. During uninstall the
 adapter reauthenticates any remaining package and ready marker, rejects altered
 or undeclared stage entries, and unlinks only signed inventory files and their
-empty parent directories. This additive host needs no migration for ZIP callers.
-Windows, macOS, and system-managed Linux native package readers and hosts remain
-outstanding. The public bootstrap-host
+empty parent directories. `ZipPortableBootstrapHost` applies the same owned-file
+removal to native Windows and macOS ZIP installations after checking the running
+OS, architecture, configured minimum OS version, writable destination, and free
+transaction space. ZIP policy deliberately leaves registration empty. The
+portable removal implementation moved to a target-private helper; there is no
+public migration for existing Linux host callers. System-managed package readers,
+OS integration hosts, and production process coordination remain outstanding.
+The public bootstrap-host
 contract now requires an idempotent `RemoveOwnedVersion` operation; existing
 host implementers must add that operation before adopting this interface. No
 production implementation existed when this contract was added.

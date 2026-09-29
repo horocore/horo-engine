@@ -71,7 +71,8 @@ namespace Horo::Release {
         /** @brief Requires package content to live at its signed digest filename under a literal packages child. */
         [[nodiscard]] Result<std::filesystem::path> PackagePath(const std::filesystem::path &root, const UpdatePackageRecord &package) {
             const auto directory = root / "packages";
-            const auto path = directory / (FormatSha256(package.digest).substr(7U) + ".zip");
+            const auto suffix = package.selection.format == DistributionPackageFormat::TarGzip ? ".tar.gz" : ".zip";
+            const auto path = directory / (FormatSha256(package.digest).substr(7U) + suffix);
             if (auto checked = CheckType(directory, std::filesystem::file_type::directory); checked.HasError())
                 return Result<std::filesystem::path>::Failure(checked.ErrorValue());
             if (auto checked = CheckType(path, std::filesystem::file_type::regular); checked.HasError())
@@ -170,70 +171,92 @@ namespace Horo::Release {
         return failure.code.Value() == UpdateOfflineSourceErrors::Unavailable.code.Value();
     }
 
+    namespace {
+        /** @brief Imports one explicitly selected archive format without changing the source trust policy. */
+        Result<ImportedOfflineUpdate> ImportOfflinePackage(const UpdateOfflineImportRequest &request, NativeDurableFileSystem &files,
+                                                           std::shared_ptr<const Security::SignatureProvider> provider,
+                                                           CancellationToken cancellation, const DistributionPackageFormat format) {
+            if (!ValidSource(request.source) || request.admission.channel != request.source.channel)
+                return Result<ImportedOfflineUpdate>::Failure(MakeError(UpdateOfflineSourceErrors::InvalidPolicy));
+            if (cancellation.IsCancellationRequested())
+                return Result<ImportedOfflineUpdate>::Failure(MakeError(UpdateTransferErrors::Cancelled));
+            if (auto root = CheckRoot(request.source.root); root.HasError())
+                return Result<ImportedOfflineUpdate>::Failure(root.ErrorValue());
+            if (!PrivatePathsReady(request))
+                return Result<ImportedOfflineUpdate>::Failure(MakeError(UpdateOfflineSourceErrors::UnsafePath));
+            auto bytes = ReadManifest(request.source.root);
+            if (bytes.HasError())
+                return Result<ImportedOfflineUpdate>::Failure(bytes.ErrorValue());
+            auto manifest = SignedUpdateManifest::ParseCanonical(bytes.Value());
+            if (manifest.HasError())
+                return Result<ImportedOfflineUpdate>::Failure(manifest.ErrorValue());
+
+            auto admission = request.admission;
+            admission.authorizedDowngrade = admission.authorizedDowngrade && request.source.allowDowngrade;
+            const UpdatePackagePreferences preferences{{format}};
+            const auto discovery = AssessUpdate(manifest.Value(), admission, request.roots, provider, preferences,
+                                                {request.source.maximumExpiredManifestSeconds});
+            if (discovery.status != UpdateDiscoveryStatus::Available || !discovery.package)
+                return Result<ImportedOfflineUpdate>::Failure(discovery.failure.value_or(MakeError(UpdateOfflineSourceErrors::NoUpdate)));
+            const UpdatePackageRecord package = *discovery.package;
+            auto sourcePath = PackagePath(request.source.root, package);
+            if (sourcePath.HasError())
+                return Result<ImportedOfflineUpdate>::Failure(sourcePath.ErrorValue());
+            auto available = files.AvailableBytes(request.privatePaths.partialFile.parent_path());
+            if (available.HasError())
+                return Result<ImportedOfflineUpdate>::Failure(available.ErrorValue());
+            if (auto space = CheckUpdateTransferSpace(package, available.Value(), request.downloadLimits.maximumPackageBytes,
+                                                      request.downloadLimits.reserveBytes);
+                space.HasError())
+                return Result<ImportedOfflineUpdate>::Failure(space.ErrorValue());
+            if (auto copied = CopyPackage(sourcePath.Value(), request.privatePaths.partialFile, package.size, files, cancellation);
+                copied.HasError()) {
+                DiscardPrivateImport(request.privatePaths, files);
+                return Result<ImportedOfflineUpdate>::Failure(copied.ErrorValue());
+            }
+            const UpdateTransferCheckpoint checkpoint{package.digest, package.size, package.size, package.url, package.url, {}};
+            Security::ArtifactVerifier verifier{std::move(provider), request.roots.Roots()};
+            if (auto verified = VerifyCompletedUpdateTransfer(package, checkpoint, request.privatePaths.partialFile, verifier);
+                verified.HasError()) {
+                DiscardPrivateImport(request.privatePaths, files);
+                if (verified.ErrorValue().code.Value() == SecurityErrors::IntegrityMismatch.code.Value())
+                    return Result<ImportedOfflineUpdate>::Failure(MakeError(UpdateOfflineSourceErrors::MirrorMismatch));
+                return Result<ImportedOfflineUpdate>::Failure(verified.ErrorValue());
+            }
+            if (auto saved =
+                    SaveUpdateTransferCheckpoint(files, request.privatePaths.partialFile, request.privatePaths.checkpointFile, checkpoint);
+                saved.HasError()) {
+                DiscardPrivateImport(request.privatePaths, files);
+                return Result<ImportedOfflineUpdate>::Failure(saved.ErrorValue());
+            }
+            auto ready = format == DistributionPackageFormat::TarGzip
+                             ? StageVerifiedTarGzipUpdate({package, checkpoint, request.privatePaths.partialFile, request.stageRoot,
+                                                           request.archiveLimits},
+                                                          files, verifier, cancellation)
+                             : StageVerifiedZipUpdate({package, checkpoint, request.privatePaths.partialFile, request.stageRoot,
+                                                       request.archiveLimits},
+                                                      files, verifier, cancellation);
+            if (ready.HasError()) {
+                DiscardPrivateImport(request.privatePaths, files);
+                return Result<ImportedOfflineUpdate>::Failure(ready.ErrorValue());
+            }
+            return Result<ImportedOfflineUpdate>::Success({package, checkpoint, std::move(ready).Value()});
+        }
+    }  // namespace
+
     /** @copydoc ImportOfflineZipUpdate */
     Result<ImportedOfflineUpdate> ImportOfflineZipUpdate(const UpdateOfflineImportRequest &request, NativeDurableFileSystem &files,
                                                          std::shared_ptr<const Security::SignatureProvider> provider,
                                                          CancellationToken cancellation) {
-        if (!ValidSource(request.source) || request.admission.channel != request.source.channel)
-            return Result<ImportedOfflineUpdate>::Failure(MakeError(UpdateOfflineSourceErrors::InvalidPolicy));
-        if (cancellation.IsCancellationRequested())
-            return Result<ImportedOfflineUpdate>::Failure(MakeError(UpdateTransferErrors::Cancelled));
-        if (auto root = CheckRoot(request.source.root); root.HasError())
-            return Result<ImportedOfflineUpdate>::Failure(root.ErrorValue());
-        if (!PrivatePathsReady(request))
-            return Result<ImportedOfflineUpdate>::Failure(MakeError(UpdateOfflineSourceErrors::UnsafePath));
-        auto bytes = ReadManifest(request.source.root);
-        if (bytes.HasError())
-            return Result<ImportedOfflineUpdate>::Failure(bytes.ErrorValue());
-        auto manifest = SignedUpdateManifest::ParseCanonical(bytes.Value());
-        if (manifest.HasError())
-            return Result<ImportedOfflineUpdate>::Failure(manifest.ErrorValue());
+        return ImportOfflinePackage(request, files, std::move(provider), cancellation, DistributionPackageFormat::ZipArchive);
+    }
 
-        auto admission = request.admission;
-        admission.authorizedDowngrade = admission.authorizedDowngrade && request.source.allowDowngrade;
-        const UpdatePackagePreferences preferences{{DistributionPackageFormat::ZipArchive}};
-        const auto discovery =
-            AssessUpdate(manifest.Value(), admission, request.roots, provider, preferences, {request.source.maximumExpiredManifestSeconds});
-        if (discovery.status != UpdateDiscoveryStatus::Available || !discovery.package)
-            return Result<ImportedOfflineUpdate>::Failure(discovery.failure.value_or(MakeError(UpdateOfflineSourceErrors::NoUpdate)));
-        const UpdatePackageRecord package = *discovery.package;
-        auto sourcePath = PackagePath(request.source.root, package);
-        if (sourcePath.HasError())
-            return Result<ImportedOfflineUpdate>::Failure(sourcePath.ErrorValue());
-        auto available = files.AvailableBytes(request.privatePaths.partialFile.parent_path());
-        if (available.HasError())
-            return Result<ImportedOfflineUpdate>::Failure(available.ErrorValue());
-        if (auto space = CheckUpdateTransferSpace(package, available.Value(), request.downloadLimits.maximumPackageBytes,
-                                                  request.downloadLimits.reserveBytes);
-            space.HasError())
-            return Result<ImportedOfflineUpdate>::Failure(space.ErrorValue());
-        if (auto copied = CopyPackage(sourcePath.Value(), request.privatePaths.partialFile, package.size, files, cancellation);
-            copied.HasError()) {
-            DiscardPrivateImport(request.privatePaths, files);
-            return Result<ImportedOfflineUpdate>::Failure(copied.ErrorValue());
-        }
-        const UpdateTransferCheckpoint checkpoint{package.digest, package.size, package.size, package.url, package.url, {}};
-        Security::ArtifactVerifier verifier{std::move(provider), request.roots.Roots()};
-        if (auto verified = VerifyCompletedUpdateTransfer(package, checkpoint, request.privatePaths.partialFile, verifier);
-            verified.HasError()) {
-            DiscardPrivateImport(request.privatePaths, files);
-            if (verified.ErrorValue().code.Value() == SecurityErrors::IntegrityMismatch.code.Value())
-                return Result<ImportedOfflineUpdate>::Failure(MakeError(UpdateOfflineSourceErrors::MirrorMismatch));
-            return Result<ImportedOfflineUpdate>::Failure(verified.ErrorValue());
-        }
-        if (auto saved =
-                SaveUpdateTransferCheckpoint(files, request.privatePaths.partialFile, request.privatePaths.checkpointFile, checkpoint);
-            saved.HasError()) {
-            DiscardPrivateImport(request.privatePaths, files);
-            return Result<ImportedOfflineUpdate>::Failure(saved.ErrorValue());
-        }
-        auto ready =
-            StageVerifiedZipUpdate({package, checkpoint, request.privatePaths.partialFile, request.stageRoot, request.archiveLimits}, files,
-                                   verifier, cancellation);
-        if (ready.HasError()) {
-            DiscardPrivateImport(request.privatePaths, files);
-            return Result<ImportedOfflineUpdate>::Failure(ready.ErrorValue());
-        }
-        return Result<ImportedOfflineUpdate>::Success({package, checkpoint, std::move(ready).Value()});
+    /** @copydoc ImportOfflineTarGzipUpdate */
+    Result<ImportedOfflineUpdate> ImportOfflineTarGzipUpdate(const UpdateOfflineImportRequest &request, NativeDurableFileSystem &files,
+                                                             std::shared_ptr<const Security::SignatureProvider> provider,
+                                                             CancellationToken cancellation) {
+        if (request.admission.platform != DistributionPlatform::Linux)
+            return Result<ImportedOfflineUpdate>::Failure(MakeError(UpdateOfflineSourceErrors::InvalidPolicy));
+        return ImportOfflinePackage(request, files, std::move(provider), cancellation, DistributionPackageFormat::TarGzip);
     }
 }  // namespace Horo::Release

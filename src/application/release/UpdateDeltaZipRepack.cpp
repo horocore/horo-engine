@@ -67,7 +67,7 @@ namespace Horo::Release {
             std::vector<ReleaseArtifactRecord> artifacts;
             artifacts.reserve(plan.targetFiles.size());
             for (const auto &file : plan.targetFiles)
-                artifacts.push_back({file.target.path, ReleaseArtifactRole::Binary, file.target.size, file.target.digest});
+                artifacts.emplace_back(file.target.path, ReleaseArtifactRole::Binary, file.target.size, file.target.digest);
             return ReleasePreSignInventory::Create(ReleaseCandidateId{1U}, std::move(artifacts));
         }
 

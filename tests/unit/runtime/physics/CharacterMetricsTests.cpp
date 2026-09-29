@@ -149,13 +149,19 @@ namespace Horo::Character {
         auto active = TestDetail::ActiveWorldWithControllers();
         const auto &world = *active.world;
         const auto &settings = world.Settings().Values();
+        auto handles = RegisterCharacterMetricHandles(Telemetry::MetricCollectionLevel::Detailed);
+        for (const auto &handle : handles.counts)
+            REQUIRE(static_cast<bool>(handle));
+        for (const auto &handle : handles.events)
+            REQUIRE(static_cast<bool>(handle));
+        for (const auto &handle : handles.phaseDurations)
+            REQUIRE(static_cast<bool>(handle));
         auto created = CharacterMetricBinding::Create(world.Descriptor().identity, world.Descriptor().sceneGeneration, 9,
                                                       {.maximumControllers = settings.capacities.maximumControllers,
                                                        .maximumQueriesPerTick = settings.work.maximumQueriesPerTick,
                                                        .maximumMovementIterations = settings.work.maximumMovementIterations,
                                                        .maximumContactsPerMovement = settings.work.maximumContactsPerMovement},
-                                                      Telemetry::MetricCollectionLevel::Detailed,
-                                                      RegisterCharacterMetricHandles(Telemetry::MetricCollectionLevel::Detailed));
+                                                      Telemetry::MetricCollectionLevel::Detailed, std::move(handles));
         REQUIRE(created.HasValue());
         auto binding = std::move(created).Value();
         CharacterMetricSnapshot snapshot{.world = world.Descriptor().identity,
@@ -168,10 +174,15 @@ namespace Horo::Character {
                                          .overflows = 3,
                                          .phaseSeconds = {0.001, 0.002, 0.003},
                                          .phaseCompleted = {true, true, true}};
+        const auto before = Telemetry::Runtime::GetStatistics();
         REQUIRE(binding.Publish(snapshot, 9).HasValue());
         REQUIRE(Telemetry::Runtime::Flush(std::chrono::seconds{2}));
+        const auto after = Telemetry::Runtime::GetStatistics();
         const auto descriptors = sink->Descriptors();
-        REQUIRE(descriptors.size() == 8);
+        // The real-time queue deliberately drops records on contention; prebinding
+        // is independent of whether the dispatcher accepts every observation.
+        CHECK(after.acceptedRecords - before.acceptedRecords + after.droppedRecords - before.droppedRecords == 8);
+        REQUIRE(descriptors.size() == after.acceptedRecords - before.acceptedRecords);
         for (const auto &descriptor : descriptors)
             CHECK(descriptor.subsystem == "character");
         REQUIRE(binding.Close().HasValue());

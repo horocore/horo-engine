@@ -191,10 +191,25 @@ namespace Horo {
             }
         }
 
-        [[nodiscard]] bool JobHasActiveProcesses(const HANDLE job) noexcept {
-            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
-            return !QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr) ||
-                   accounting.ActiveProcesses != 0;
+        /** @brief Distinguishes a surviving descendant from a lagging accounting reference to the exited direct child. */
+        [[nodiscard]] bool JobHasActiveDescendants(const HANDLE job, const DWORD directProcessId) noexcept {
+            struct ProcessIds final {
+                DWORD assigned{};
+                DWORD count{};
+                std::array<ULONG_PTR, 16> ids{};
+            } processIds;
+
+            if (!QueryInformationJobObject(job, JobObjectBasicProcessIdList, &processIds, sizeof(processIds), nullptr) ||
+                processIds.assigned > processIds.ids.size() || processIds.count > processIds.ids.size())
+                return true;
+            return std::ranges::any_of(std::span{processIds.ids}.first(processIds.count), [directProcessId](const ULONG_PTR id) {
+                if (id == directProcessId)
+                    return false;
+                const Handle descendant{OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(id))};
+                if (descendant.value == nullptr)
+                    return GetLastError() != ERROR_INVALID_PARAMETER;
+                return WaitForSingleObject(descendant.value, 0) != WAIT_OBJECT_0;
+            });
         }
 
         /** @brief Owns capture, child, and Job handles across launch, monitoring, and terminal mapping. */
@@ -205,6 +220,41 @@ namespace Horo {
             Handle thread;
             Handle job;
             DWORD processId{};
+        };
+
+        /** @brief Limits inherited handles to the three streams owned by this launch. */
+        class ChildHandleAllowlist final {
+        public:
+            explicit ChildHandleAllowlist(const std::array<HANDLE, 3> &handles) : handles_(handles) {
+                SIZE_T bytes = 0;
+                static_cast<void>(InitializeProcThreadAttributeList(nullptr, 1, 0, &bytes));
+                storage_.resize(bytes);
+                list_ = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage_.data());
+                if (!InitializeProcThreadAttributeList(list_, 1, 0, &bytes)) {
+                    list_ = nullptr;
+                    return;
+                }
+                valid_ = UpdateProcThreadAttribute(list_, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles_.data(), sizeof(handles_), nullptr,
+                                                   nullptr) != 0;
+            }
+
+            ChildHandleAllowlist(const ChildHandleAllowlist &) = delete;
+            ChildHandleAllowlist &operator=(const ChildHandleAllowlist &) = delete;
+
+            ~ChildHandleAllowlist() {
+                if (list_ != nullptr)
+                    DeleteProcThreadAttributeList(list_);
+            }
+
+            [[nodiscard]] LPPROC_THREAD_ATTRIBUTE_LIST Get() const noexcept {
+                return valid_ ? list_ : nullptr;
+            }
+
+        private:
+            std::array<HANDLE, 3> handles_;
+            std::vector<std::byte> storage_;
+            LPPROC_THREAD_ATTRIBUTE_LIST list_{};
+            bool valid_{};
         };
 
         /** @brief Preserves Windows quoting and UTF-8 validation before any child is created. */
@@ -229,6 +279,10 @@ namespace Horo {
             Handle stdoutWrite;
             Handle stderrWrite;
             SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+            Handle stdinRead{CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING,
+                                         FILE_ATTRIBUTE_NORMAL, nullptr)};
+            if (stdinRead.value == INVALID_HANDLE_VALUE)
+                return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
             if (!CreatePipe(&captured.stdoutRead.value, &stdoutWrite.value, &security, 0) ||
                 !CreatePipe(&captured.stderrRead.value, &stderrWrite.value, &security, 0) ||
                 !SetHandleInformation(captured.stdoutRead.value, HANDLE_FLAG_INHERIT, 0) ||
@@ -244,16 +298,21 @@ namespace Horo {
                 return Result<CapturedProcess>::Failure(environment.ErrorValue());
             std::vector<wchar_t> environmentBlock = std::move(environment).Value();
             const std::wstring workingDirectory = request.workingDirectory.native();
-            STARTUPINFOW startup{};
-            startup.cb = sizeof(startup);
-            startup.dwFlags = STARTF_USESTDHANDLES;
-            startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-            startup.hStdOutput = stdoutWrite.value;
-            startup.hStdError = stderrWrite.value;
+            const std::array<HANDLE, 3> inherited{stdinRead.value, stdoutWrite.value, stderrWrite.value};
+            ChildHandleAllowlist allowlist{inherited};
+            if (allowlist.Get() == nullptr)
+                return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
+            STARTUPINFOEXW startup{};
+            startup.StartupInfo.cb = sizeof(startup);
+            startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+            startup.StartupInfo.hStdInput = stdinRead.value;
+            startup.StartupInfo.hStdOutput = stdoutWrite.value;
+            startup.StartupInfo.hStdError = stderrWrite.value;
+            startup.lpAttributeList = allowlist.Get();
             PROCESS_INFORMATION process{};
-            const DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED;
+            const DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT;
             if (!CreateProcessW(nullptr, commandLineBuffer.data(), nullptr, nullptr, TRUE, flags, environmentBlock.data(),
-                                workingDirectory.empty() ? nullptr : workingDirectory.c_str(), &startup, &process))
+                                workingDirectory.empty() ? nullptr : workingDirectory.c_str(), &startup.StartupInfo, &process))
                 return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed));
             captured.process = Handle{process.hProcess};
             captured.thread = Handle{process.hThread};
@@ -286,7 +345,7 @@ namespace Horo {
 
         /** @brief Applies the same cancellation, deadline, graceful, and forced Job escalation in priority order. */
         void UpdateTermination(const ExternalProcessRequest &request, const CancellationToken &cancellation,
-                               const CapturedProcess &captured, const DWORD wait, const bool jobActive,
+                               const CapturedProcess &captured, const DWORD wait, const bool descendantsActive,
                                const std::chrono::steady_clock::time_point now, ProcessMonitorState &state) {
             if (request.forceCancellation.IsCancellationRequested() && !state.forceTerminated) {
                 state.stopCause = state.stopCause == ProcessStopCause::None ? ProcessStopCause::Cancellation : state.stopCause;
@@ -296,7 +355,7 @@ namespace Horo {
                 state.forcedAt = now;
             } else if (const bool cancelled = cancellation.IsCancellationRequested();
                        !state.terminationRequested &&
-                       (cancelled || now - state.started >= request.timeout || (wait == WAIT_OBJECT_0 && jobActive))) {
+                       (cancelled || now - state.started >= request.timeout || (wait == WAIT_OBJECT_0 && descendantsActive))) {
                 state.terminationRequested = true;
                 state.stopCause = cancelled ? ProcessStopCause::Cancellation
                                             : (wait == WAIT_OBJECT_0 ? ProcessStopCause::DescendantCleanup : ProcessStopCause::Timeout);
@@ -321,7 +380,8 @@ namespace Horo {
                 !PeekNamedPipe(captured.stdoutRead.value, nullptr, 0, nullptr, &stdoutAvailable, nullptr) || stdoutAvailable == 0;
             const bool stderrEmpty =
                 !PeekNamedPipe(captured.stderrRead.value, nullptr, 0, nullptr, &stderrAvailable, nullptr) || stderrAvailable == 0;
-            if (!JobHasActiveProcesses(captured.job.value) && ((!stdoutOpen && !stderrOpen) || (stdoutEmpty && stderrEmpty))) {
+            if (!JobHasActiveDescendants(captured.job.value, captured.processId) &&
+                ((!stdoutOpen && !stderrOpen) || (stdoutEmpty && stderrEmpty))) {
                 if (stdoutEmpty && stderrEmpty) {
                     standardOutput.Finish();
                     standardError.Finish();
@@ -346,8 +406,8 @@ namespace Horo {
                 DrainAvailable(captured.stderrRead.value, stderrOpen, standardError);
                 const DWORD wait = WaitForSingleObject(captured.process.value, 10);
                 const auto now = std::chrono::steady_clock::now();
-                const bool jobActive = JobHasActiveProcesses(captured.job.value);
-                UpdateTermination(request, cancellation, captured, wait, jobActive, now, state);
+                const bool descendantsActive = wait == WAIT_OBJECT_0 && JobHasActiveDescendants(captured.job.value, captured.processId);
+                UpdateTermination(request, cancellation, captured, wait, descendantsActive, now, state);
                 if (wait == WAIT_OBJECT_0 && CompletedAndDrained(captured, stdoutOpen, stderrOpen, standardOutput, standardError))
                     break;
                 if (state.forceTerminated && now - state.forcedAt >= request.maximumDrainDuration)
@@ -358,15 +418,15 @@ namespace Horo {
             return state;
         }
 
-        /** @brief Verifies that the Job is empty before reporting one typed terminal process outcome. */
+        /** @brief Verifies that no owned descendant survives before reporting a typed terminal process outcome. */
         [[nodiscard]] Result<ExternalProcessResult> FinalizeProcess(const CapturedProcess &captured, const ProcessMonitorState &state) {
-            if (JobHasActiveProcesses(captured.job.value)) {
+            if (JobHasActiveDescendants(captured.job.value, captured.processId)) {
                 if (!TerminateJobObject(captured.job.value, 1))
                     return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
                 const auto stopWaiting = std::chrono::steady_clock::now() + std::chrono::seconds{1};
-                while (JobHasActiveProcesses(captured.job.value) && std::chrono::steady_clock::now() < stopWaiting)
+                while (JobHasActiveDescendants(captured.job.value, captured.processId) && std::chrono::steady_clock::now() < stopWaiting)
                     std::this_thread::sleep_for(std::chrono::milliseconds{10});
-                if (JobHasActiveProcesses(captured.job.value))
+                if (JobHasActiveDescendants(captured.job.value, captured.processId))
                     return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
             }
             if (WaitForSingleObject(captured.process.value, 0) != WAIT_OBJECT_0)

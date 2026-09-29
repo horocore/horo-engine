@@ -52,9 +52,13 @@ namespace Horo::Release {
 
         /** @brief Checks that one signed package belongs to its exact version directory. */
         [[nodiscard]] bool VersionPathsMatch(const UpdateActivationVersion &version, const ActivationPaths &paths) {
-            const auto &id = version.package.selection.artifact.package.value;
-            return IsValidDistributionIdentity(id) && version.stageRoot == paths.versions / id &&
-                   version.packageFile == paths.versions / (id + ".zip");
+            const auto &selection = version.package.selection;
+            const auto &id = selection.artifact.package.value;
+            const bool zip = selection.format == DistributionPackageFormat::ZipArchive;
+            const bool linuxTar =
+                selection.format == DistributionPackageFormat::TarGzip && selection.artifact.platform == DistributionPlatform::Linux;
+            return IsValidDistributionIdentity(id) && (zip || linuxTar) && version.stageRoot == paths.versions / id &&
+                   version.packageFile == paths.versions / (id + (zip ? ".zip" : ".tar.gz"));
         }
 
         /** @brief Requires two versions of one installable product and one protected layout. */

@@ -181,6 +181,7 @@ horo_configure_target_header_boundary(HoroUpdateActivation PUBLIC_HEADERS
     Horo/Release/BootstrapInstallation.h
     Horo/Release/BootstrapInstallationErrors.h
     Horo/Release/LinuxPortableBootstrapHost.h
+    Horo/Release/ZipPortableBootstrapHost.h
     Horo/Release/UpdateActivation.h
     Horo/Release/UpdateActivationErrors.h
     Horo/Release/UpdateRollback.h
@@ -321,6 +322,7 @@ horo_configure_target_header_boundary(HoroNetworkApi PUBLIC_HEADERS
     Horo/Network/TransportBackendInstance.h
 )
 horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
+    Horo/Network/AdmissionProtection.h
     Horo/Network/InboundMessageDispatcher.h
     Horo/Network/NetworkModeComposition.h
     Horo/Network/TransportBackendComposition.h
@@ -439,6 +441,7 @@ horo_configure_target_header_boundary(HoroAudioCommands PUBLIC_HEADERS
     Horo/Audio/AudioCommandBuffer.h
     Horo/Audio/AudioCommandStaging.h
     Horo/Audio/AudioEventQueue.h
+    Horo/Audio/AudioFocusPolicy.h
     Horo/Audio/AudioLifecycleReconciler.h
     Horo/Audio/ScheduledAudioCommandBatch.h
 )

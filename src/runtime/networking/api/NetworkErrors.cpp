@@ -656,6 +656,51 @@ namespace Horo::Network::NetworkErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor AdmissionPolicyInvalid{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.admission.policy_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The host admission protection policy or work charge is invalid.",
+        .remediationHint = "Provide positive finite limits, a secure protocol floor, and monotonic owner-clock work charges.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor AdmissionBindingInvalid{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.admission.binding_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The authentication challenge does not match this negotiated session transcript.",
+        .remediationHint = "Create fresh nonces and bind the exact selected protocol, version, capabilities and generations.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor AdmissionDowngradeRejected{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.admission.downgrade_rejected"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The negotiated protocol version is below the host security floor.",
+        .remediationHint = "Use a mutually supported version at or above the host security floor.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor AdmissionReplayRejected{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.admission.replay_rejected"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A recent authentication nonce was reused for a new admission.",
+        .remediationHint = "Start a fresh connection with new unpredictable client and server nonces.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor AdmissionLimitExceeded{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.admission.limit_exceeded"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Pre-active admission work exceeded a host resource limit.",
+        .remediationHint = "Close the rejected connection and retry only within host admission policy.",
+        .retryable = true,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor AuthenticationInvalid{
         .domain = NetworkDomain,
         .code = ErrorCode{"network.authentication.invalid"},

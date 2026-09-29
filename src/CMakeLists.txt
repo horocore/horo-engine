@@ -313,6 +313,7 @@ target_link_libraries(HoroUpdateOfflineSource PUBLIC HoroEngine::UpdateDiscovery
 add_library(HoroUpdateActivation STATIC application/release/UpdateActivation.cpp application/release/UpdateActivationErrors.cpp
         application/release/UpdateProductProcess.cpp
         application/release/BootstrapInstallation.cpp application/release/BootstrapInstallationErrors.cpp
+        application/release/PortableBootstrapOwnedFiles.cpp
         application/release/UpdateRollback.cpp application/release/UpdateRollbackErrors.cpp
         application/release/UpdateRetention.cpp application/release/UpdateRetentionErrors.cpp)
 add_library(HoroEngine::UpdateActivation ALIAS HoroUpdateActivation)
@@ -320,6 +321,8 @@ target_compile_features(HoroUpdateActivation PUBLIC cxx_std_20)
 target_link_libraries(HoroUpdateActivation PUBLIC HoroEngine::UpdateDownload HoroEngine::Platform)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_sources(HoroUpdateActivation PRIVATE application/release/LinuxPortableBootstrapHost.cpp)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    target_sources(HoroUpdateActivation PRIVATE application/release/ZipPortableBootstrapHost.cpp)
 endif()
 
 add_library(HoroUserStateMigration STATIC application/release/UserStateMigration.cpp
@@ -611,6 +614,7 @@ target_include_directories(HoroRuntimeScene PUBLIC ${PROJECT_SOURCE_DIR}/include
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::Foundation HoroEngine::Runtime HoroEngine::GameplayApi HoroEngine::RuntimeUi)
 
 add_library(HoroNetworkRuntime STATIC
+        runtime/networking/AdmissionProtection.cpp
         runtime/networking/InboundMessageDispatcher.cpp
         runtime/networking/NetworkModeComposition.cpp
         runtime/networking/TransportBackendComposition.cpp
@@ -845,6 +849,7 @@ add_library(HoroAudioCommands STATIC
         audio/commands/AudioCommandBuffer.cpp
         audio/commands/AudioCommandStaging.cpp
         audio/commands/AudioEventQueue.cpp
+        audio/commands/AudioFocusPolicy.cpp
         audio/commands/AudioLifecycleReconciler.cpp
         audio/commands/ScheduledAudioCommandBatch.cpp
 )
