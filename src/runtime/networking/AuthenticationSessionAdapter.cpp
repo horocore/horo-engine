@@ -189,12 +189,11 @@ namespace Horo::Network {
             failure_ = AuthenticationFailureClass::TimedOut;
             return Result<AuthenticationResult>::Failure(MakeError(NetworkErrors::SessionTimedOut));
         }
-        if (protection_ != nullptr) {
-            if (protection_->Charge(connection, sessionGeneration, AdmissionWork::AuthenticationAttempt, 1, nowTick).HasError() ||
-                (!response.proof.empty() &&
-                 protection_->Charge(connection, sessionGeneration, AdmissionWork::ParsedBytes, response.proof.size(), nowTick).HasError()))
-                return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
-        }
+        if (protection_ != nullptr &&
+            (protection_->Charge(connection, sessionGeneration, AdmissionWork::AuthenticationAttempt, 1, nowTick).HasError() ||
+             (!response.proof.empty() &&
+              protection_->Charge(connection, sessionGeneration, AdmissionWork::ParsedBytes, response.proof.size(), nowTick).HasError())))
+            return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
         if (response.contractVersion != AuthenticationContractVersion || response.proof.empty() ||
             response.proof.size() > policy_.maximumProofBytes) {
             if (protection_ != nullptr &&

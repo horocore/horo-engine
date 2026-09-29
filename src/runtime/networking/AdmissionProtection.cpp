@@ -157,41 +157,43 @@ namespace Horo::Network {
 
     bool AdmissionProtection::CanCharge(const Counters &counters, const AdmissionWork work, const std::uint64_t amount,
                                         const AdmissionProtectionPolicy &policy) noexcept {
+        using enum AdmissionWork;
         switch (work) {
-            case AdmissionWork::AuthenticationAttempt:
+            case AuthenticationAttempt:
                 return counters.attempts < policy.maximumAttemptsPerWindow;
-            case AdmissionWork::ParseFailure:
+            case ParseFailure:
                 return counters.parseFailures < policy.maximumParseFailuresPerWindow;
-            case AdmissionWork::VerifierCall:
+            case VerifierCall:
                 return counters.verifierCalls < policy.maximumVerifierCallsPerWindow;
-            case AdmissionWork::ParsedBytes:
+            case ParsedBytes:
                 return amount <= policy.maximumBytesPerWindow - counters.bytes;
-            case AdmissionWork::Diagnostic:
+            case Diagnostic:
                 return counters.diagnostics < policy.maximumDiagnosticsPerWindow;
-            case AdmissionWork::Count:
+            case Count:
                 return false;
         }
         return false;
     }
 
     void AdmissionProtection::AddCharge(Counters &counters, const AdmissionWork work, const std::uint64_t amount) noexcept {
+        using enum AdmissionWork;
         switch (work) {
-            case AdmissionWork::AuthenticationAttempt:
+            case AuthenticationAttempt:
                 ++counters.attempts;
                 break;
-            case AdmissionWork::ParseFailure:
+            case ParseFailure:
                 ++counters.parseFailures;
                 break;
-            case AdmissionWork::VerifierCall:
+            case VerifierCall:
                 ++counters.verifierCalls;
                 break;
-            case AdmissionWork::ParsedBytes:
+            case ParsedBytes:
                 counters.bytes += amount;
                 break;
-            case AdmissionWork::Diagnostic:
+            case Diagnostic:
                 ++counters.diagnostics;
                 break;
-            case AdmissionWork::Count:
+            case Count:
                 break;
         }
     }
