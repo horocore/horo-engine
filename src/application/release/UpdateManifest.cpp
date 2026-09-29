@@ -464,7 +464,7 @@ namespace Horo::Release {
                     return candidates.delta->package;
                 return candidates.full;
             case UpdatePackageAttempt::AfterDeltaFailure:
-                return candidates.full;
+                return candidates.delta ? std::optional<UpdatePackageRecord>{candidates.full} : std::nullopt;
             case UpdatePackageAttempt::AfterFullFailure:
                 return std::nullopt;
         }
