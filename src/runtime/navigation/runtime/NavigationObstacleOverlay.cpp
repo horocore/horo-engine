@@ -19,7 +19,7 @@ namespace Horo::Navigation {
 
         [[nodiscard]] Region Bounds(const Record &record) noexcept {
             Region region{.obstacle = record.id};
-            std::visit([&](const auto &shape) {
+            std::visit([&]<typename Shape>(const Shape &shape) {
                 const double halfX = [&] {
                     if constexpr (std::is_same_v<std::remove_cvref_t<decltype(shape)>, NavigationDynamicBoxShape>)
                         return static_cast<double>(shape.halfExtents.x);
@@ -43,7 +43,7 @@ namespace Horo::Navigation {
         [[nodiscard]] Region ChangedBounds(const Record &previous, const Record *current) noexcept {
             Region region = Bounds(previous);
             if (current && current->enabled) {
-                const auto newer = Bounds(*current);
+                const Region newer = Bounds(*current);
                 region.minimumX = std::min(region.minimumX, newer.minimumX);
                 region.minimumZ = std::min(region.minimumZ, newer.minimumZ);
                 region.maximumX = std::max(region.maximumX, newer.maximumX);
@@ -53,7 +53,7 @@ namespace Horo::Navigation {
         }
 
         [[nodiscard]] std::pair<double, double> VerticalBounds(const Record &record) noexcept {
-            return std::visit([](const auto &shape) {
+            return std::visit([]<typename Shape>(const Shape &shape) {
                 const double halfHeight = [&] {
                     if constexpr (std::is_same_v<std::remove_cvref_t<decltype(shape)>, NavigationDynamicBoxShape>)
                         return static_cast<double>(shape.halfExtents.y);
@@ -65,8 +65,8 @@ namespace Horo::Navigation {
         }
 
         [[nodiscard]] bool OnSurface(const Record &record, const NavigationObstacleOverlaySurface &surface) noexcept {
-            const auto footprint = Bounds(record);
-            if (footprint.maximumX < surface.bounds.minimum.x || footprint.minimumX > surface.bounds.maximum.x ||
+            if (const Region footprint = Bounds(record);
+                footprint.maximumX < surface.bounds.minimum.x || footprint.minimumX > surface.bounds.maximum.x ||
                 footprint.maximumZ < surface.bounds.minimum.z || footprint.minimumZ > surface.bounds.maximum.z)
                 return false;
             const auto [minimumY, maximumY] = VerticalBounds(record);
@@ -149,8 +149,8 @@ namespace Horo::Navigation {
         [[nodiscard]] bool IntersectsCylinder(const NavigationDynamicCylinderShape &cylinder, const Math::Vec3 from, const Math::Vec3 to,
                                               const double radius) noexcept {
             const double minimumY = static_cast<double>(cylinder.center.y) - cylinder.halfHeight - radius;
-            const double maximumY = static_cast<double>(cylinder.center.y) + cylinder.halfHeight + radius;
-            if (std::max(static_cast<double>(from.y), static_cast<double>(to.y)) < minimumY ||
+            if (const double maximumY = static_cast<double>(cylinder.center.y) + cylinder.halfHeight + radius;
+                std::max(static_cast<double>(from.y), static_cast<double>(to.y)) < minimumY ||
                 std::min(static_cast<double>(from.y), static_cast<double>(to.y)) > maximumY)
                 return false;
             const double dx = static_cast<double>(to.x) - from.x;
@@ -168,7 +168,7 @@ namespace Horo::Navigation {
         }
 
         [[nodiscard]] bool Intersects(const Record &record, const Math::Vec3 from, const Math::Vec3 to, const double radius) noexcept {
-            return std::visit([&](const auto &shape) {
+            return std::visit([&]<typename Shape>(const Shape &shape) {
                 if constexpr (std::is_same_v<std::remove_cvref_t<decltype(shape)>, NavigationDynamicBoxShape>)
                     return IntersectsBox(shape, from, to, radius);
                 else
@@ -176,23 +176,30 @@ namespace Horo::Navigation {
             }, record.shape);
         }
 
+        [[nodiscard]] std::pair<const Record *, const Record *> NextChangedPair(const std::span<const Record *> previous,
+                                                                                const std::span<const Record *> current,
+                                                                                std::size_t &oldIndex, std::size_t &newIndex) noexcept {
+            const Record *older = oldIndex < previous.size() ? previous[oldIndex] : nullptr;
+            const Record *newer = newIndex < current.size() ? current[newIndex] : nullptr;
+            if (older && (!newer || older->id < newer->id)) {
+                ++oldIndex;
+                return {older, nullptr};
+            }
+            if (newer && (!older || newer->id < older->id)) {
+                ++newIndex;
+                return {nullptr, newer};
+            }
+            ++oldIndex;
+            ++newIndex;
+            return {older, newer};
+        }
+
         template <typename Emit>
         void ForEachChanged(const std::span<const Record *> previous, const std::span<const Record *> current, Emit &&emit) {
             std::size_t oldIndex{};
             std::size_t newIndex{};
             while (oldIndex < previous.size() || newIndex < current.size()) {
-                const Record *older = oldIndex < previous.size() ? previous[oldIndex] : nullptr;
-                const Record *newer = newIndex < current.size() ? current[newIndex] : nullptr;
-                if (older && (!newer || older->id < newer->id)) {
-                    ++oldIndex;
-                    newer = nullptr;
-                } else if (newer && (!older || newer->id < older->id)) {
-                    ++newIndex;
-                    older = nullptr;
-                } else {
-                    ++oldIndex;
-                    ++newIndex;
-                }
+                const auto [older, newer] = NextChangedPair(previous, current, oldIndex, newIndex);
                 if ((!older || !older->enabled) && (!newer || !newer->enabled))
                     continue;
                 if (older && newer && older->handle == newer->handle && older->revision == newer->revision)
@@ -251,13 +258,13 @@ namespace Horo::Navigation {
         const auto oldSpan = std::span{older}.first(oldCount);
         const auto newSpan = std::span{newer}.first(newCount);
         std::size_t required{};
-        ForEachChanged(oldSpan, newSpan, [&](const Region &, const Record *, const Record *) {
+        ForEachChanged(oldSpan, newSpan, [&required](const Region &, const Record *, const Record *) {
             ++required;
         });
         if (required > output.size())
             return Result<std::size_t>::Failure(MakeError(NavigationErrors::DynamicRegistryCapacityExceeded));
         std::size_t written{};
-        ForEachChanged(oldSpan, newSpan, [&](const Region &region, const Record *, const Record *) {
+        ForEachChanged(oldSpan, newSpan, [&output, &written](const Region &region, const Record *, const Record *) {
             output[written++] = region;
         });
         return Result<std::size_t>::Success(written);
@@ -336,7 +343,7 @@ namespace Horo::Navigation {
         const auto oldSpan = std::span{older}.first(oldCount);
         const auto newSpan = std::span{newer}.first(newCount);
         std::size_t required{};
-        ForEachChanged(oldSpan, newSpan, [&](const Region &region, const Record *oldRecord, const Record *newRecord) {
+        ForEachChanged(oldSpan, newSpan, [&required, &surface](const Region &region, const Record *oldRecord, const Record *newRecord) {
             if (SurfaceChange(region, oldRecord, newRecord, surface))
                 ++required;
         });
@@ -344,7 +351,8 @@ namespace Horo::Navigation {
             return Result<NavigationObstacleOverlaySurfaceProjection>::Failure(
                 MakeError(NavigationErrors::DynamicRegistryCapacityExceeded));
         std::size_t written{};
-        ForEachChanged(oldSpan, newSpan, [&](const Region &region, const Record *oldRecord, const Record *newRecord) {
+        ForEachChanged(oldSpan, newSpan,
+                       [&output, &written, &surface](const Region &region, const Record *oldRecord, const Record *newRecord) {
             if (const auto changed = SurfaceChange(region, oldRecord, newRecord, surface))
                 output[written++] = *changed;
         });
