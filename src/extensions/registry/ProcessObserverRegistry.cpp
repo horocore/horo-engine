@@ -7,6 +7,7 @@
 #include <mutex>
 #include <ranges>
 #include <thread>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Extensions {
@@ -20,11 +21,10 @@ namespace Horo::Extensions {
     };
 
     struct ProcessObserverRegistryState final {
-        explicit ProcessObserverRegistryState(std::vector<ProcessObserverEventKind> allowed)
-            : ownerThread(std::this_thread::get_id()), hostAllowedEvents(std::move(allowed)) {}
+        explicit ProcessObserverRegistryState(std::vector<ProcessObserverEventKind> allowed) : hostAllowedEvents(std::move(allowed)) {}
 
         std::mutex mutex;
-        const std::thread::id ownerThread;
+        const std::thread::id ownerThread{std::this_thread::get_id()};
         const std::vector<ProcessObserverEventKind> hostAllowedEvents;
         std::vector<std::shared_ptr<ProcessObserverEntry>> entries;
         bool shutdown{};
@@ -50,20 +50,21 @@ namespace Horo::Extensions {
         [[nodiscard]] bool ValidEvent(const ProcessObserverEvent &event) noexcept {
             if (!Known(event.kind) || event.revision == 0)
                 return false;
+            using enum ProcessObserverEventKind;
             switch (event.kind) {
-                case ProcessObserverEventKind::HostStarted:
-                case ProcessObserverEventKind::HostStopping:
+                case HostStarted:
+                case HostStopping:
                     return event.operationId == 0 && event.outcome == ProcessObserverOutcome::None &&
                            event.diagnostic == ProcessObserverDiagnostic::None;
-                case ProcessObserverEventKind::OperationStarted:
+                case OperationStarted:
                     return event.operationId != 0 && event.outcome == ProcessObserverOutcome::None &&
                            event.diagnostic == ProcessObserverDiagnostic::None;
-                case ProcessObserverEventKind::OperationFinished:
+                case OperationFinished:
                     return event.operationId != 0 &&
                            (event.outcome == ProcessObserverOutcome::Succeeded || event.outcome == ProcessObserverOutcome::Failed ||
                             event.outcome == ProcessObserverOutcome::Cancelled) &&
                            event.diagnostic == ProcessObserverDiagnostic::None;
-                case ProcessObserverEventKind::DiagnosticRaised:
+                case DiagnosticRaised:
                     return event.outcome == ProcessObserverOutcome::None &&
                            (event.diagnostic == ProcessObserverDiagnostic::OperationRejected ||
                             event.diagnostic == ProcessObserverDiagnostic::OperationTimedOut ||
@@ -81,6 +82,28 @@ namespace Horo::Extensions {
             });
         }
 
+        /** @brief Clears the dispatching flag on every exit from a completed dispatch. */
+        class DispatchGuard final {
+        public:
+            explicit DispatchGuard(std::shared_ptr<ProcessObserverRegistryState> state) : state_(std::move(state)) {}
+
+            ~DispatchGuard() {
+                std::scoped_lock lock{state_->mutex};
+                state_->dispatching = false;
+            }
+
+            DispatchGuard(const DispatchGuard &) = delete;
+            DispatchGuard &operator=(const DispatchGuard &) = delete;
+            DispatchGuard(DispatchGuard &&) = delete;
+            DispatchGuard &operator=(DispatchGuard &&) = delete;
+
+        private:
+            std::shared_ptr<ProcessObserverRegistryState> state_;
+        };
+
+        static_assert(!std::is_copy_constructible_v<DispatchGuard> && !std::is_copy_assignable_v<DispatchGuard>);
+        static_assert(!std::is_move_constructible_v<DispatchGuard> && !std::is_move_assignable_v<DispatchGuard>);
+
         [[nodiscard]] bool DispatchToCandidate(const std::shared_ptr<ProcessObserverRegistryState> &state,
                                                const std::shared_ptr<ProcessObserverEntry> &entry, const ProcessObserverEvent &event) {
             Result<ExtensionCapabilityUseLease> use = [&]() {
@@ -91,12 +114,12 @@ namespace Horo::Extensions {
                 return entry->authority.AcquireUse(entry->descriptor.extensionId, entry->descriptor.moduleId,
                                                    entry->descriptor.activationGeneration);
             }();
-            if (!use.HasValue())
+            if (!use.HasValue())  // NOSONAR(cpp:S6004) The use lease must outlive the callback below.
                 return false;
             bool failed = false;
             try {
                 failed = !entry->callback(event).HasValue();
-            } catch (...) {
+            } catch (...) {  // NOSONAR(cpp:S2738) Provider callback may throw an arbitrary type.
                 failed = true;
             }
             if (failed)
@@ -155,10 +178,9 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc ProcessObserverRegistry::Register */
-    Result<ProcessObserverRegistration> ProcessObserverRegistry::Register(ProcessObserverDescriptor descriptor,
-                                                                          ExtensionCapabilityHandle authority,
-                                                                          ProcessObserverCallback callback,
-                                                                          std::shared_ptr<void> codeLease) {
+    Result<ProcessObserverRegistration> ProcessObserverRegistry::Register(  // NOSONAR(cpp:S5817) Publication mutates owner state.
+        ProcessObserverDescriptor descriptor, ExtensionCapabilityHandle authority, ProcessObserverCallback callback,
+        std::shared_ptr<void> codeLease) {
         if (!ValidKinds(state_->hostAllowedEvents, true) || !ValidKinds(descriptor.allowedEvents, true) ||
             !Detail::IsCanonicalExtensionAuthorityId(descriptor.observerId) ||
             !Detail::IsCanonicalExtensionAuthorityId(descriptor.extensionId) ||
@@ -171,7 +193,7 @@ namespace Horo::Extensions {
         if (authority.Capability().value != "horo.process.observe")
             return Result<ProcessObserverRegistration>::Failure(MakeError(ExtensionErrors::PermissionDenied));
         auto use = authority.AcquireUse(descriptor.extensionId, descriptor.moduleId, descriptor.activationGeneration);
-        if (!use.HasValue())
+        if (!use.HasValue())  // NOSONAR(cpp:S6004) Keep admission leased through publication.
             return Result<ProcessObserverRegistration>::Failure(use.ErrorValue());
 
         std::scoped_lock lock{state_->mutex};
@@ -194,7 +216,8 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc ProcessObserverRegistry::Dispatch */
-    Result<void> ProcessObserverRegistry::Dispatch(const ProcessObserverEvent &event) {
+    Result<void> ProcessObserverRegistry::Dispatch(  // NOSONAR(cpp:S5817) Dispatch mutates owner lifecycle state.
+        const ProcessObserverEvent &event) {
         if (std::this_thread::get_id() != state_->ownerThread)
             return Result<void>::Failure(MakeError(ExtensionErrors::ProcessObserverThreadViolation));
         if (!ValidKinds(state_->hostAllowedEvents, true) || !ValidEvent(event) ||
@@ -212,21 +235,12 @@ namespace Horo::Extensions {
             state_->dispatching = true;
         }
 
-        struct DispatchGuard final {
-            std::shared_ptr<ProcessObserverRegistryState> state;
-
-            ~DispatchGuard() {
-                std::scoped_lock lock{state->mutex};
-                state->dispatching = false;
-            }
-        } guard{state_};
+        DispatchGuard guard{state_};
 
         std::string failedObserver;
         for (const auto &entry : candidates) {
-            if (DispatchToCandidate(state_, entry, event)) {
-                if (failedObserver.empty())
-                    failedObserver = entry->descriptor.observerId;
-            }
+            if (DispatchToCandidate(state_, entry, event) && failedObserver.empty())
+                failedObserver = entry->descriptor.observerId;
         }
         if (!failedObserver.empty())
             return Result<void>::Failure(
@@ -235,7 +249,7 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc ProcessObserverRegistry::BeginShutdown */
-    void ProcessObserverRegistry::BeginShutdown() noexcept {
+    void ProcessObserverRegistry::BeginShutdown() noexcept {  // NOSONAR(cpp:S5817) Shutdown mutates owner lifecycle state.
         std::scoped_lock lock{state_->mutex};
         state_->shutdown = true;
         for (const auto &entry : state_->entries)
