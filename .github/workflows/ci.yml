@@ -299,6 +299,12 @@ jobs:
           cmake --build build/cli-process-windows --target HoroCliCommandRegistryTests HoroPlatformTests --parallel 2
           ctest --test-dir build/cli-process-windows -R '^Horo(CliCommandRegistry|Platform)Tests::' --output-on-failure
 
+      - name: Build and test native portable ZIP bootstrap
+        shell: bash
+        run: |
+          cmake --build build/cli-process-windows --target HoroUpdateZipPackageProducerTests --parallel 2
+          ctest --test-dir build/cli-process-windows -R '^HoroUpdateZipPackageProducerTests::' --output-on-failure
+
   input-sdl-windows:
     name: Input SDL and Runtime UI · Windows / MSVC
     runs-on: windows-2022
