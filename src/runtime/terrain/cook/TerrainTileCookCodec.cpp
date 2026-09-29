@@ -55,8 +55,9 @@ namespace Horo::Terrain::Detail {
             quantized > std::numeric_limits<std::int32_t>::max())
             return std::nullopt;
         const auto firstTile = static_cast<std::int32_t>(quantized);
-        const auto remaining = static_cast<std::uint64_t>(static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) - firstTile);
-        if (tileCount == 0 || tileCount - 1 > remaining)
+        if (const auto remaining =
+                static_cast<std::uint64_t>(static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) - firstTile);
+            tileCount == 0 || tileCount - 1 > remaining)
             return std::nullopt;
         return firstTile;
     }
