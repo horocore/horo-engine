@@ -203,7 +203,7 @@ namespace Horo::Release {
 
         /** @brief Checks common stopped-product and transaction prerequisites after the caller holds the installation lock. */
         [[nodiscard]] Result<ProductLaunchLease> ReadyForMaintenance(const InstallPaths &paths, IBootstrapInstallationHost &host,
-                                                                     NativeDurableFileSystem &files) {
+                                                                     const NativeDurableFileSystem &files) {
             if (auto stopped = host.EnsureProductsStopped(paths.root); stopped.HasError())
                 return Result<ProductLaunchLease>::Failure(stopped.ErrorValue());
             if (auto clear = NoOtherTransition(paths); clear.HasError())
