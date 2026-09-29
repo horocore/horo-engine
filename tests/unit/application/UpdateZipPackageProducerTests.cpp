@@ -127,6 +127,64 @@ namespace {
         mz_zip_writer_end(&writer);
         return archive;
     }
+
+    [[nodiscard]] UpdatePackageRecord SignedFullPackage(const std::string &bytes) {
+        UpdatePackageRecord full;
+        full.selection = Selection();
+        full.url = "https://updates.example.test/game.zip";
+        full.size = bytes.size();
+        full.digest = ComputeSha256(std::as_bytes(std::span{bytes}));
+        full.signature = {.publisherId = "com.horo.updates",
+                          .keyId = "key-1",
+                          .artifactDigest = full.digest,
+                          .signature = std::vector<std::byte>(64U, std::byte{1})};
+        return full;
+    }
+
+    [[nodiscard]] UpdateDeltaPackageRecord DeltaFor(const UpdatePackageRecord &full, const std::string &bytes,
+                                                    const Sha256Digest &baseDigest, const Sha256Digest &targetDigest) {
+        auto delta = full;
+        auto artifact = full.selection.artifact;
+        artifact.package = {"delta_42"};
+        auto selected = ValidateDistributionPackageSelection(artifact, DistributionPackageFormat::DeltaZipArchive);
+        REQUIRE(selected.HasValue());
+        delta.selection = std::move(selected).Value();
+        delta.url = "https://updates.example.test/delta.zip";
+        delta.size = bytes.size();
+        delta.digest = ComputeSha256(std::as_bytes(std::span{bytes}));
+        delta.signature.artifactDigest = delta.digest;
+        return {delta, full.selection.artifact.package, baseDigest, targetDigest, targetDigest};
+    }
+
+    void PopulateDeltaTree(const TemporaryDirectory &directory) {
+        std::filesystem::create_directories(directory.root / "base/bin");
+        std::filesystem::create_directories(directory.root / "base/assets");
+        std::filesystem::create_directories(directory.root / "patch/bin");
+        std::filesystem::create_directories(directory.root / "patch/assets");
+        std::filesystem::create_directories(directory.root / "source/assets");
+        std::filesystem::create_directories(directory.root / "versions");
+        WriteFile(directory.root / "base/bin/game", "old!");
+        WriteFile(directory.root / "base/assets/keep", "same");
+        WriteFile(directory.root / "base/assets/removed", "gone");
+        WriteFile(directory.root / "patch/bin/game", "game");
+        WriteFile(directory.root / "patch/assets/added", "new!");
+        WriteFile(directory.root / "source/bin/game", "game");
+        WriteFile(directory.root / "source/assets/keep", "same");
+        WriteFile(directory.root / "source/assets/added", "new!");
+    }
+
+    void PopulateSingleDeltaTree(const TemporaryDirectory &directory) {
+        std::filesystem::create_directories(directory.root / "base/bin");
+        std::filesystem::create_directories(directory.root / "versions");
+        WriteFile(directory.root / "base/bin/game", "old!");
+        WriteFile(directory.root / "source/bin/game", "game");
+    }
+
+    void PreloadCompleted(const UpdatePackageRecord &package, const UpdateDownloadPaths &paths, const std::string &bytes,
+                          NativeDurableFileSystem &files) {
+        WriteFile(paths.partialFile, bytes);
+        REQUIRE(SaveUpdateTransferCheckpoint(files, paths.partialFile, paths.checkpointFile, CompleteCheckpoint(package)).HasValue());
+    }
 }  // namespace
 
 TEST_CASE("Selected ZIP delivery uses verified delta then signed full fallback", "[release][update][delta]") {
@@ -136,10 +194,7 @@ TEST_CASE("Selected ZIP delivery uses verified delta then signed full fallback",
         const bool byteMismatch = scenario == 2U;
         TemporaryDirectory directory;
         NativeDurableFileSystem files;
-        std::filesystem::create_directories(directory.root / "base/bin");
-        std::filesystem::create_directories(directory.root / "versions");
-        WriteFile(directory.root / "base/bin/game", "old!");
-        WriteFile(directory.root / "source/bin/game", "game");
+        PopulateSingleDeltaTree(directory);
         const std::array base{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"old!", 4U}))}};
         const std::array target{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"game", 4U}))}};
         UpdateZipPackageProducer producer{limits};
@@ -149,41 +204,17 @@ TEST_CASE("Selected ZIP delivery uses verified delta then signed full fallback",
         const auto signedBytes = byteMismatch ? AlternateSignedZip(target, limits) : deltaBytes;
         if (byteMismatch)
             REQUIRE(signedBytes != deltaBytes);
-        UpdatePackageRecord full;
-        full.selection = Selection();
-        full.url = "https://updates.example.test/game.zip";
-        full.size = signedBytes.size();
-        full.digest = ComputeSha256(std::as_bytes(std::span{signedBytes}));
-        full.signature = {.publisherId = "com.horo.updates",
-                          .keyId = "key-1",
-                          .artifactDigest = full.digest,
-                          .signature = std::vector<std::byte>(64U, std::byte{1})};
-        auto delta = full;
-        auto deltaArtifact = full.selection.artifact;
-        deltaArtifact.package = {"delta_42"};
-        auto deltaSelection = ValidateDistributionPackageSelection(deltaArtifact, DistributionPackageFormat::DeltaZipArchive);
-        REQUIRE(deltaSelection.HasValue());
-        delta.selection = std::move(deltaSelection).Value();
-        delta.url = "https://updates.example.test/delta.zip";
-        delta.size = deltaBytes.size();
-        delta.digest = ComputeSha256(std::as_bytes(std::span{deltaBytes}));
-        delta.signature.artifactDigest = delta.digest;
-        UpdatePackageCandidates candidates{full,
-                                           UpdateDeltaPackageRecord{delta, full.selection.artifact.package, InventoryDigest(base, limits),
-                                                                    InventoryDigest(target, limits), InventoryDigest(target, limits)}};
+        auto full = SignedFullPackage(signedBytes);
+        auto delta = DeltaFor(full, deltaBytes, InventoryDigest(base, limits), InventoryDigest(target, limits));
+        UpdatePackageCandidates candidates{full, delta};
         const auto versions = directory.root / "versions";
         const UpdateDownloadPaths deltaPaths{versions / "delta_42.zip", versions / "delta_42.checkpoint"};
         const UpdateDownloadPaths fullPaths{versions / "package_42.zip", versions / "package_42.checkpoint"};
         const auto stage = versions / "package_42";
         const auto deltaStage = versions / "delta_42";
-        WriteFile(deltaPaths.partialFile, deltaBytes);
-        REQUIRE(
-            SaveUpdateTransferCheckpoint(files, deltaPaths.partialFile, deltaPaths.checkpointFile, CompleteCheckpoint(delta)).HasValue());
-        if (forceFallback) {
-            WriteFile(fullPaths.partialFile, signedBytes);
-            REQUIRE(
-                SaveUpdateTransferCheckpoint(files, fullPaths.partialFile, fullPaths.checkpointFile, CompleteCheckpoint(full)).HasValue());
-        }
+        PreloadCompleted(delta.package, deltaPaths, deltaBytes, files);
+        if (forceFallback)
+            PreloadCompleted(full, fullPaths, signedBytes, files);
         const std::span<const UpdateStagedFile> requestedTarget =
             scenario == 1U ? std::span<const UpdateStagedFile>{base} : std::span<const UpdateStagedFile>{target};
         auto staged = PrepareSelectedZipUpdateStageHttps({candidates,
@@ -210,20 +241,7 @@ TEST_CASE("Selected ZIP delivery uses verified delta then signed full fallback",
 TEST_CASE("Delta reconstruction reproduces the exact signed full ZIP before publishing ready", "[release][update][delta]") {
     TemporaryDirectory directory;
     constexpr UpdateArchiveLimits limits{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
-    std::filesystem::create_directories(directory.root / "base/bin");
-    std::filesystem::create_directories(directory.root / "base/assets");
-    std::filesystem::create_directories(directory.root / "patch/bin");
-    std::filesystem::create_directories(directory.root / "patch/assets");
-    std::filesystem::create_directories(directory.root / "source/assets");
-    std::filesystem::create_directories(directory.root / "versions");
-    WriteFile(directory.root / "base/bin/game", "old!");
-    WriteFile(directory.root / "base/assets/keep", "same");
-    WriteFile(directory.root / "base/assets/removed", "gone");
-    WriteFile(directory.root / "patch/bin/game", "game");
-    WriteFile(directory.root / "patch/assets/added", "new!");
-    WriteFile(directory.root / "source/bin/game", "game");
-    WriteFile(directory.root / "source/assets/keep", "same");
-    WriteFile(directory.root / "source/assets/added", "new!");
+    PopulateDeltaTree(directory);
     const std::array base{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"old!", 4U}))},
                           UpdateStagedFile{"assets/keep", 4U, ComputeSha256(std::as_bytes(std::span{"same", 4U}))},
                           UpdateStagedFile{"assets/removed", 4U, ComputeSha256(std::as_bytes(std::span{"gone", 4U}))}};
@@ -249,15 +267,7 @@ TEST_CASE("Delta reconstruction reproduces the exact signed full ZIP before publ
     auto produced = producer.Produce({Selection(), releaseInventory.Value(), directory.root / "source", directory.root / "first"});
     REQUIRE(produced.HasValue());
     const auto signedBytes = ReadFile(directory.root / "first/update.zip");
-    UpdatePackageRecord full;
-    full.selection = Selection();
-    full.url = "https://updates.example.test/game.zip";
-    full.size = signedBytes.size();
-    full.digest = ComputeSha256(std::as_bytes(std::span{signedBytes}));
-    full.signature = {.publisherId = "com.horo.updates",
-                      .keyId = "key-1",
-                      .artifactDigest = full.digest,
-                      .signature = std::vector<std::byte>(64U, std::byte{1})};
+    auto full = SignedFullPackage(signedBytes);
     const auto packageFile = directory.root / "versions/package_42.zip";
     const auto checkpointFile = directory.root / "versions/package_42.checkpoint";
     auto wrong = full;
