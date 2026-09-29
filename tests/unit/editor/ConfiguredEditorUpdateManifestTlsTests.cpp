@@ -45,9 +45,17 @@ namespace {
             Oversized
         };
 
-        explicit LoopbackManifestTlsServer(const Reply reply) : reply_(reply), context_(SSL_CTX_new(TLS_server_method()), &SSL_CTX_free) {
+        enum class Protocol {
+            Tls13,
+            Tls12Only
+        };
+
+        explicit LoopbackManifestTlsServer(const Reply reply, const Protocol protocol = Protocol::Tls13)
+            : reply_(reply), context_(SSL_CTX_new(TLS_server_method()), &SSL_CTX_free) {
             Check(context_ != nullptr, "TLS context");
-            Check(SSL_CTX_set_min_proto_version(context_.get(), TLS1_3_VERSION) == 1, "TLS 1.3 server");
+            const int version = protocol == Protocol::Tls13 ? TLS1_3_VERSION : TLS1_2_VERSION;
+            Check(SSL_CTX_set_min_proto_version(context_.get(), version) == 1, "TLS minimum version");
+            Check(SSL_CTX_set_max_proto_version(context_.get(), version) == 1, "TLS maximum version");
             CreateCertificate();
             StartListener();
             worker_ = std::jthread([this] {
@@ -216,6 +224,14 @@ TEST_CASE("Editor HTTPS manifest client rejects an untrusted test authority", "[
     LoopbackManifestTlsServer server{LoopbackManifestTlsServer::Reply::Ok};
     CurlEditorUpdateManifestHttpClient client;
     auto result = client.Get(server.Url(), {}, {});
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == Release::UpdateTransferErrors::TransportFailed.code.Value());
+}
+
+TEST_CASE("Editor HTTPS manifest client refuses a TLS 1.2-only server", "[editor][update][tls]") {
+    LoopbackManifestTlsServer server{LoopbackManifestTlsServer::Reply::Ok, LoopbackManifestTlsServer::Protocol::Tls12Only};
+    CurlEditorUpdateManifestHttpClient client;
+    auto result = client.Get(server.Url(), {.certificateAuthorityBundle = server.CertificatePath()}, {});
     REQUIRE(result.HasError());
     CHECK(result.ErrorValue().code.Value() == Release::UpdateTransferErrors::TransportFailed.code.Value());
 }
