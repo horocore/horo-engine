@@ -143,11 +143,19 @@ marker. `ReconstructUpdateFileDeltaStage` revalidates the
 plan, verifies both quiescent source trees, copies into a new private directory,
 and verifies its exact full target inventory. Failure or cancellation removes
 only that newly created directory. It does not publish a ready marker or grant
-activation authority. The current ready marker binds one complete package
-file, so a composite delta stage still needs a signed composite ready identity
-and activation support. Until that contract exists, hosts must use the allowed,
-independently verified full package for activation; no partial delta ZIP may
-be activated. Schema-v1 readers must not reinterpret v2 delta metadata as v1.
+activation authority. For a ZIP target produced by the deterministic full-ZIP
+producer, `RepackVerifiedDeltaAsFullZip` recreates the complete package from
+that verified tree. It compares the exact resulting size and digest with the
+allowed signed full package, verifies its publisher signature, and only then
+publishes the existing complete-package ready marker. Existing activation,
+rollback, and retention use this normal full-package evidence. A byte mismatch
+cannot be re-signed locally; `PrepareSelectedZipUpdateStageHttps` discards its
+owned reconstruction and downloads the signed allowed full ZIP instead. The
+same worker falls back after an inapplicable or failed delta, but cancellation
+and uncertain cleanup stop the attempt. Its target inventory must match the
+digest in authenticated delta metadata. Other full-package formats retain their
+ordinary complete-package delivery path. No partial delta ZIP may be activated.
+Schema-v1 readers must not reinterpret v2 delta metadata as v1.
 
 `ResolveAssetChunkMountOrder` checks an exact optional/DLC selection against a
 verified base-manifest digest, dependency closure, and dependency-first mount

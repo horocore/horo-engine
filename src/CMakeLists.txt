@@ -298,6 +298,8 @@ add_library(HoroUpdateDownload STATIC application/release/UpdateDownloadSession.
         application/release/UpdateTarGzipIndex.cpp
         application/release/UpdateTarGzipStaging.cpp
         application/release/UpdateDeltaStaging.cpp
+        application/release/UpdateDeltaZipRepack.cpp
+        application/release/UpdateSelectedZipStaging.cpp
         application/release/UpdateZipPackageProducer.cpp application/release/UpdateZipStagingJob.cpp)
 add_library(HoroEngine::UpdateDownload ALIAS HoroUpdateDownload)
 target_compile_features(HoroUpdateDownload PUBLIC cxx_std_20)
