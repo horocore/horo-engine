@@ -456,6 +456,8 @@ TEST_CASE("Linux portable install, failed update, rollback, repair, and uninstal
                                          true};
     REQUIRE(RollbackVerifiedUpdate(rollback, files, verifier, host).HasValue());
     CHECK(ReadFile(temporary.path / "active-version") == oldPointer.Value());
+    CHECK(ReadFile(temporary.path / "last-known-good-version") == newPointer.Value());
+    CHECK_FALSE(std::filesystem::exists(temporary.path / "activation.pending"));
     REQUIRE(UninstallVerifiedInstallation(initial, files, verifier, host).HasValue());
     CHECK_FALSE(std::filesystem::exists(temporary.path / "active-version"));
     CHECK_FALSE(std::filesystem::exists(oldVersion.stageRoot));
