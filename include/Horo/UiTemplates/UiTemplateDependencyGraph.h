@@ -97,7 +97,7 @@ namespace Horo::UiTemplates {
          */
         [[nodiscard]] static Result<UiTemplateDependencyGraph> Create(std::span<const UiTemplateDependencyDescriptor> descriptors,
                                                                       std::span<const Packages::LockedPackageReference> packages,
-                                                                      UiTemplateGraphLimits limits = {});
+                                                                      const UiTemplateGraphLimits &limits = {});
 
         UiTemplateDependencyGraph(const UiTemplateDependencyGraph &) = delete;
         UiTemplateDependencyGraph &operator=(const UiTemplateDependencyGraph &) = delete;
@@ -119,7 +119,7 @@ namespace Horo::UiTemplates {
     private:
         /** @brief Adopts the validated copied catalog and lock without further I/O. */
         UiTemplateDependencyGraph(std::vector<UiTemplateDependencyDescriptor> descriptors,
-                                  std::vector<Packages::LockedPackageReference> packages, UiTemplateGraphLimits limits) noexcept;
+                                  std::vector<Packages::LockedPackageReference> packages, const UiTemplateGraphLimits &limits) noexcept;
 
         std::vector<UiTemplateDependencyDescriptor> descriptors_;
         std::vector<Packages::LockedPackageReference> packages_;

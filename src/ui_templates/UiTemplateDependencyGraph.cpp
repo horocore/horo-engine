@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <memory>
 #include <ranges>
 #include <utility>
 
@@ -52,7 +53,28 @@ namespace Horo::UiTemplates {
             if (!Compatible(found->interfaceVersion, reference.minimumInterface))
                 return Result<const UiTemplateDependencyDescriptor *>::Failure(
                     MakeError(UiErrors::TemplateVersionIncompatible, reference.asset.asset.ToString()));
-            return Result<const UiTemplateDependencyDescriptor *>::Success(&*found);
+            return Result<const UiTemplateDependencyDescriptor *>::Success(std::to_address(found));
+        }
+
+        /** @brief Validates one sorted catalog entry before exposing the owned snapshot. */
+        [[nodiscard]] Result<void> ValidateDescriptor(UiTemplateDependencyDescriptor &descriptor, const UiTemplateAssetId *previous) {
+            if (!descriptor.asset.IsValid() || !HasDigest(descriptor.revision) || descriptor.interfaceVersion.major == 0 ||
+                (previous != nullptr && *previous == descriptor.asset))
+                return Failure(UiErrors::TemplateGraphInvalid);
+            if (descriptor.schema.major != CurrentUiTemplateSchemaVersion.major ||
+                descriptor.schema.minor > CurrentUiTemplateSchemaVersion.minor)
+                return Failure(UiErrors::TemplateVersionIncompatible);
+            for (const auto &nested : descriptor.nested) {
+                if (!ValidReference(nested))
+                    return Failure(UiErrors::TemplateGraphInvalid);
+            }
+            for (const auto &package : descriptor.packages) {
+                if (!ValidPackageRange(package.versions))
+                    return Failure(UiErrors::TemplateGraphInvalid);
+            }
+            std::ranges::sort(descriptor.nested, {}, &UiTemplateReference::asset);
+            std::ranges::sort(descriptor.packages, {}, &UiTemplatePackageRequirement::package);
+            return Result<void>::Success();
         }
 
         /** @brief Adds required pinned packages once, rejecting missing or incompatible locks. */
@@ -82,6 +104,56 @@ namespace Horo::UiTemplates {
             std::ranges::sort(resolved.packages, {}, &Packages::LockedPackageReference::package);
             return Result<UiTemplateResolvedDependencies>::Success(std::move(resolved));
         }
+
+        /** @brief Owns bounded scratch state for one depth-first load-time resolution. */
+        struct GraphTraversal final {
+            std::span<const UiTemplateDependencyDescriptor> descriptors;
+            std::span<const Packages::LockedPackageReference> packages;
+            const UiTemplateGraphLimits &limits;
+            UiTemplateResolvedDependencies resolved;
+            std::vector<UiTemplateAssetId> active;
+            std::vector<std::size_t> subtreeHeights;
+            std::size_t traversedEdges{};
+
+            /** @brief Visits one exact revision and appends it after all dependencies. */
+            [[nodiscard]] Result<void> Visit(const UiTemplateReference &reference, const std::size_t depth) {
+                if (std::ranges::find(active, reference.asset) != active.end())
+                    return Result<void>::Failure(MakeError(UiErrors::TemplateDependencyCycle, reference.asset.asset.ToString()));
+                if (depth > limits.maximumDepth)
+                    return Failure(UiErrors::TemplateGraphBudgetExceeded);
+                const auto descriptor = FindCompatibleDescriptor(descriptors, reference);
+                if (descriptor.HasError())
+                    return Result<void>::Failure(descriptor.ErrorValue());
+                if (const auto resolvedTemplate = std::ranges::find(resolved.templates, reference.asset);
+                    resolvedTemplate != resolved.templates.end()) {
+                    if (const auto index = static_cast<std::size_t>(std::distance(resolved.templates.begin(), resolvedTemplate));
+                        subtreeHeights[index] > limits.maximumDepth - depth + 1)
+                        return Failure(UiErrors::TemplateGraphBudgetExceeded);
+                    return Result<void>::Success();
+                }
+                active.push_back(reference.asset);
+                std::size_t subtreeHeight{1};
+                for (const auto &nested : descriptor.Value()->nested) {
+                    if (traversedEdges >= limits.maximumEdges)
+                        return Failure(UiErrors::TemplateGraphBudgetExceeded);
+                    ++traversedEdges;
+                    if (const auto child = Visit(nested, depth + 1); child.HasError())
+                        return child;
+                    const auto resolvedChild = std::ranges::find(resolved.templates, nested.asset);
+                    const auto childIndex = static_cast<std::size_t>(std::distance(resolved.templates.begin(), resolvedChild));
+                    subtreeHeight = std::max(subtreeHeight, subtreeHeights[childIndex] + 1);
+                }
+                if (const auto required = AppendPackages(descriptor.Value()->packages, packages, limits.maximumPackages, resolved.packages);
+                    required.HasError())
+                    return required;
+                active.pop_back();
+                if (resolved.templates.size() >= limits.maximumTemplates)
+                    return Failure(UiErrors::TemplateGraphBudgetExceeded);
+                resolved.templates.push_back(reference.asset);
+                subtreeHeights.push_back(subtreeHeight);
+                return Result<void>::Success();
+            }
+        };
     }  // namespace
 
     /** @copydoc UiTemplateGraphLimits::IsValid */
@@ -93,13 +165,13 @@ namespace Horo::UiTemplates {
     /** @copydoc UiTemplateDependencyGraph::UiTemplateDependencyGraph */
     UiTemplateDependencyGraph::UiTemplateDependencyGraph(std::vector<UiTemplateDependencyDescriptor> descriptors,
                                                          std::vector<Packages::LockedPackageReference> packages,
-                                                         const UiTemplateGraphLimits limits) noexcept
+                                                         const UiTemplateGraphLimits &limits) noexcept
         : descriptors_(std::move(descriptors)), packages_(std::move(packages)), limits_(limits) {}
 
     /** @copydoc UiTemplateDependencyGraph::Create */
     Result<UiTemplateDependencyGraph> UiTemplateDependencyGraph::Create(const std::span<const UiTemplateDependencyDescriptor> descriptors,
                                                                         const std::span<const Packages::LockedPackageReference> packages,
-                                                                        const UiTemplateGraphLimits limits) {
+                                                                        const UiTemplateGraphLimits &limits) {
         if (!limits.IsValid() || descriptors.size() > limits.maximumTemplates || packages.size() > limits.maximumPackages)
             return Failure<UiTemplateDependencyGraph>(UiErrors::TemplateGraphBudgetExceeded);
 
@@ -122,24 +194,9 @@ namespace Horo::UiTemplates {
 
         for (std::size_t index = 0; index < ownedDescriptors.size(); ++index) {
             auto &descriptor = ownedDescriptors[index];
-            if (!descriptor.asset.IsValid() || !HasDigest(descriptor.revision) || descriptor.interfaceVersion.major == 0 ||
-                (index > 0 && ownedDescriptors[index - 1].asset == descriptor.asset))
-                return Failure<UiTemplateDependencyGraph>(UiErrors::TemplateGraphInvalid);
-            if (descriptor.schema.major != CurrentUiTemplateSchemaVersion.major ||
-                descriptor.schema.minor > CurrentUiTemplateSchemaVersion.minor)
-                return Failure<UiTemplateDependencyGraph>(UiErrors::TemplateVersionIncompatible);
-            for (const auto &nested : descriptor.nested) {
-                if (!ValidReference(nested))
-                    return Failure<UiTemplateDependencyGraph>(UiErrors::TemplateGraphInvalid);
-            }
-            for (const auto &package : descriptor.packages) {
-                if (!ValidPackageRange(package.versions))
-                    return Failure<UiTemplateDependencyGraph>(UiErrors::TemplateGraphInvalid);
-            }
-            std::ranges::sort(descriptor.nested, {}, &UiTemplateReference::asset);
-            std::ranges::sort(descriptor.packages, {}, [](const auto &package) {
-                return package.package.Value();
-            });
+            const auto *previous = index > 0 ? &ownedDescriptors[index - 1].asset : nullptr;
+            if (const auto validation = ValidateDescriptor(descriptor, previous); validation.HasError())
+                return Result<UiTemplateDependencyGraph>::Failure(validation.ErrorValue());
         }
         for (std::size_t index = 1; index < ownedPackages.size(); ++index) {
             if (ownedPackages[index - 1].package == ownedPackages[index].package)
@@ -154,50 +211,10 @@ namespace Horo::UiTemplates {
         if (const auto admission = ValidateAdmission(active_, root); admission.HasError())
             return Result<UiTemplateResolvedDependencies>::Failure(admission.ErrorValue());
 
-        UiTemplateResolvedDependencies resolved;
-        std::vector<UiTemplateAssetId> active;
-        std::vector<std::size_t> subtreeHeights;
-        std::size_t traversedEdges{};
-        auto visit = [&](auto &&self, const UiTemplateReference &reference, const std::size_t depth) -> Result<void> {
-            if (std::ranges::find(active, reference.asset) != active.end())
-                return Result<void>::Failure(MakeError(UiErrors::TemplateDependencyCycle, reference.asset.asset.ToString()));
-            if (depth > limits_.maximumDepth)
-                return Failure(UiErrors::TemplateGraphBudgetExceeded);
-            const auto descriptor = FindCompatibleDescriptor(descriptors_, reference);
-            if (descriptor.HasError())
-                return Result<void>::Failure(descriptor.ErrorValue());
-            const auto resolvedTemplate = std::ranges::find(resolved.templates, reference.asset);
-            if (resolvedTemplate != resolved.templates.end()) {
-                const auto index = static_cast<std::size_t>(std::distance(resolved.templates.begin(), resolvedTemplate));
-                if (subtreeHeights[index] > limits_.maximumDepth - depth + 1)
-                    return Failure(UiErrors::TemplateGraphBudgetExceeded);
-                return Result<void>::Success();
-            }
-            active.push_back(reference.asset);
-            std::size_t subtreeHeight{1};
-            for (const auto &nested : descriptor.Value()->nested) {
-                if (traversedEdges >= limits_.maximumEdges)
-                    return Failure(UiErrors::TemplateGraphBudgetExceeded);
-                ++traversedEdges;
-                if (const auto child = self(self, nested, depth + 1); child.HasError())
-                    return child;
-                const auto resolvedChild = std::ranges::find(resolved.templates, nested.asset);
-                const auto childIndex = static_cast<std::size_t>(std::distance(resolved.templates.begin(), resolvedChild));
-                subtreeHeight = std::max(subtreeHeight, subtreeHeights[childIndex] + 1);
-            }
-            if (const auto packages = AppendPackages(descriptor.Value()->packages, packages_, limits_.maximumPackages, resolved.packages);
-                packages.HasError())
-                return packages;
-            active.pop_back();
-            if (resolved.templates.size() >= limits_.maximumTemplates)
-                return Failure(UiErrors::TemplateGraphBudgetExceeded);
-            resolved.templates.push_back(reference.asset);
-            subtreeHeights.push_back(subtreeHeight);
-            return Result<void>::Success();
-        };
-        if (const auto result = visit(visit, root, 1); result.HasError())
+        GraphTraversal traversal{descriptors_, packages_, limits_, {}, {}, {}, 0};
+        if (const auto result = traversal.Visit(root, 1); result.HasError())
             return Result<UiTemplateResolvedDependencies>::Failure(result.ErrorValue());
-        return FinishClosure(std::move(resolved));
+        return FinishClosure(std::move(traversal.resolved));
     }
 
     /** @copydoc UiTemplateDependencyGraph::Shutdown */
