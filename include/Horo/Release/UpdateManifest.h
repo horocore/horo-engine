@@ -100,17 +100,24 @@ namespace Horo::Release {
         bool authorizedDowngrade{};
     };
 
+    /** @brief Explicit administrator exception for offline manifest expiry; trust roots never receive an expiry exception. */
+    struct UpdateMetadataFreshnessPolicy final {
+        std::uint64_t maximumExpiredManifestSeconds{}; /**< Zero requires fresh metadata. */
+    };
+
     /**
      * @brief Authenticates metadata before applying freshness, product, platform and rollback policy.
      * @param manifest Canonical signed document.
      * @param context Installed product and monotonic trusted state.
      * @param roots Installed versioned trust roots for this product.
      * @param provider Host-composed signature provider; null fails closed.
-     * @return Success only for authenticated, fresh, matching and policy-admitted metadata.
+     * @param freshness Explicit bounded offline expiry exception; zero keeps the default strict policy.
+     * @return Success only for authenticated, policy-fresh, matching and admitted metadata.
      */
     [[nodiscard]] Result<void> VerifyUpdateManifest(const SignedUpdateManifest &manifest, const UpdateAdmissionContext &context,
                                                     const UpdateTrustRootSnapshot &roots,
-                                                    std::shared_ptr<const Security::SignatureProvider> provider);
+                                                    std::shared_ptr<const Security::SignatureProvider> provider,
+                                                    UpdateMetadataFreshnessPolicy freshness = {});
 
     /**
      * @brief Verifies exact downloaded bytes against the selected signed package record.

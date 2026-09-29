@@ -25,7 +25,9 @@ horo_allow_target_dependencies(TARGET HoroUpdateManifest DEPENDENCIES HoroApplic
 horo_allow_target_dependencies(TARGET HoroUpdateDiscovery DEPENDENCIES HoroUpdateManifest)
 horo_allow_target_dependencies(TARGET HoroUpdateTransfer DEPENDENCIES HoroUpdateManifest)
 horo_allow_target_dependencies(TARGET HoroUpdateDownload DEPENDENCIES HoroUpdateTransfer HoroPlatform)
+horo_allow_target_dependencies(TARGET HoroUpdateOfflineSource DEPENDENCIES HoroUpdateDiscovery HoroUpdateDownload HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroUpdateActivation DEPENDENCIES HoroUpdateDownload HoroPlatform)
+horo_allow_target_dependencies(TARGET HoroUserStateMigration DEPENDENCIES HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroProjectMigrations DEPENDENCIES HoroApplication)
 horo_allow_target_dependencies(TARGET HoroRuntime DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroRuntimeUi DEPENDENCIES HoroFoundation HoroAssets)
@@ -162,6 +164,7 @@ horo_allow_target_dependencies(TARGET HoroEditor
         HoroExtensions
         HoroPlatform
         HoroProjectMigrations
+        HoroUserStateMigration
         HoroInputSdl
         HoroOpenTelemetry
         HoroEditorViewportOpenGL

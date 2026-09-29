@@ -366,7 +366,7 @@ namespace Horo::Runtime::SaveMigrationDetail {
     }
 
     Sha256Digest CatalogIdentity(const std::vector<SaveMigrationDefinition> &definitions) {
-        std::string canonical{"Horo.SaveMigrationCatalog.v1"};
+        std::string canonical{"Horo.SaveMigrationCatalog.v2"};
         AppendCount(canonical, definitions.size());
         for (const SaveMigrationDefinition &definition : definitions)
             AppendStep(canonical, View(definition));
@@ -374,7 +374,7 @@ namespace Horo::Runtime::SaveMigrationDetail {
     }
 
     Sha256Digest RouteIdentity(const SaveMigrationPlan &plan) {
-        std::string canonical{"Horo.SaveMigrationRoute.v1"};
+        std::string canonical{"Horo.SaveMigrationRoute.v2"};
         AppendVersion(canonical, plan.sourceArchiveFormat.Value());
         AppendVersion(canonical, plan.sourceSaveSchema.Value());
         AppendVersion(canonical, plan.sourceProductCompatibility.Value());

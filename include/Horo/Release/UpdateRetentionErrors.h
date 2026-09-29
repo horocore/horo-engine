@@ -12,4 +12,6 @@ namespace Horo::Release::UpdateRetentionErrors {
     extern const ErrorCodeDescriptor InvalidSnapshot;
     /** @brief Active and last-known-good versions alone exceed the configured budget. */
     extern const ErrorCodeDescriptor ProtectedBudgetExceeded;
+    /** @brief Installed records, authenticated ownership evidence, or private tree disagrees with the cleanup request. */
+    extern const ErrorCodeDescriptor UnsafeCleanup;
 }  // namespace Horo::Release::UpdateRetentionErrors

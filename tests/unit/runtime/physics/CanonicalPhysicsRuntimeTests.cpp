@@ -250,8 +250,9 @@ namespace Horo::Physics::Detail {
         PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
         const CanonicalContactSink sink{.context = &projection, .append = CaptureProjection};
         projection.BeginTick(1);
-        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, false, false, sink));
-        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, false, true, sink));
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, sink, {}));
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, sink,
+                                                         CanonicalContactTestOptions{.persisted = true}));
         const auto completed = projection.CompleteTick(1);
         REQUIRE(completed.HasValue());
         REQUIRE(completed.Value().publishedRecordCount == 1);
@@ -264,9 +265,40 @@ namespace Horo::Physics::Detail {
         REQUIRE(record.firstMaterial->assetGeneration == 4);
         REQUIRE(record.firstMaterial->slot == PhysicsMaterialSlotId::FromValue(7));
         REQUIRE_FALSE(record.secondMaterial.has_value());
-        REQUIRE(record.contact.position == Math::Vec3{0.0F, 0.0F, 0.0F});
-        REQUIRE(record.contact.normal == Math::Vec3{0.0F, 1.0F, 0.0F});
-        REQUIRE(record.contact.penetrationDepthMeters == 0.1F);
+        REQUIRE(record.contact.pointCount == 1);
+        REQUIRE(record.contact.omittedPointCount == 0);
+        REQUIRE(record.contact.points[0].positionOnFirst == Math::Vec3{0.0F, 0.0F, 0.0F});
+        REQUIRE(record.contact.points[0].positionOnSecond == Math::Vec3{0.0F, 0.0F, 0.0F});
+        REQUIRE(record.contact.points[0].normal == Math::Vec3{0.0F, 1.0F, 0.0F});
+        REQUIRE(record.contact.points[0].penetrationDepthMeters == 0.1F);
+        REQUIRE_FALSE(record.contact.points[0].normalImpulseEstimateNewtonSeconds.has_value());
+    }
+
+    TEST_CASE("Canonical contact callbacks select a bounded deterministic manifold prefix", "[physics][native][events][manifold]") {
+        const RuntimeOwner runtime{CreateCanonicalRuntime().Value()};
+        const WorldOwner world{CreateCanonicalWorld(runtime.handle, Test::SmallWorldSettings()).Value()};
+        const auto owner = PhysicsWorldId::Create(902).Value();
+        const auto first = CreateCanonicalQueryFixture(world.handle, owner, ContactFixture({0.0F, 0.0F, 0.0F})).Value();
+        const auto second = CreateCanonicalQueryFixture(world.handle, owner, ContactFixture({2.0F, 0.0F, 0.0F})).Value();
+        PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
+        const CanonicalContactSink sink{.context = &projection, .append = CaptureProjection};
+
+        projection.BeginTick(1);
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first, second, 1, sink,
+                                                         CanonicalContactTestOptions{.contactPointCount = 6}));
+        REQUIRE(projection.CompleteTick(1).HasValue());
+        const auto &contact = projection.PublishedEvents().front().contact;
+        REQUIRE(contact.pointCount == MaximumPhysicsContactPoints);
+        REQUIRE(contact.omittedPointCount == 2);
+        for (std::uint32_t index = 0; index < contact.pointCount; ++index) {
+            REQUIRE(contact.points[index].positionOnFirst.x == static_cast<float>(index));
+            REQUIRE(contact.points[index].positionOnSecond.x == static_cast<float>(index));
+            REQUIRE_FALSE(contact.points[index].normalImpulseEstimateNewtonSeconds.has_value());
+        }
+        REQUIRE_FALSE(InvokeCanonicalContactCallbackForTesting(world.handle, first, second, 2, sink,
+                                                               CanonicalContactTestOptions{.contactPointCount = 0}));
+        REQUIRE_FALSE(InvokeCanonicalContactCallbackForTesting(world.handle, first, second, 2, sink,
+                                                               CanonicalContactTestOptions{.contactPointCount = 65}));
     }
 
     TEST_CASE("Canonical compound callback copies stable child identity and material", "[physics][native][events][compound]") {
@@ -298,13 +330,17 @@ namespace Horo::Physics::Detail {
         PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
         projection.BeginTick(1);
         const CanonicalContactSink sink{.context = &projection, .append = CaptureProjection};
-        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, false, false, sink));
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, sink,
+                                                         CanonicalContactTestOptions{.contactPointCount = 6}));
         REQUIRE(projection.CompleteTick(1).Value().publishedRecordCount == 1);
         const auto &event = projection.PublishedEvents().front();
         REQUIRE(event.pair.first.subshape == child.subshape);
         REQUIRE(event.firstMaterial.has_value());
         REQUIRE(event.firstMaterial->assetGeneration == material.assetGeneration);
         REQUIRE(event.firstMaterial->slot == material.slot);
+        REQUIRE(event.contact.pointCount == MaximumPhysicsContactPoints);
+        REQUIRE(event.contact.omittedPointCount == 2);
+        REQUIRE(event.contact.points[0].positionOnFirst == Math::Vec3{0.0F, 0.0F, 0.0F});
     }
 
     TEST_CASE("Canonical diagnostic callbacks are restored after runtime shutdown", "[physics][native][diagnostics][shutdown]") {
