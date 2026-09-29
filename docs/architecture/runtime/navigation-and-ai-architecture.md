@@ -865,6 +865,20 @@ only const spans, so a sensing job may borrow one frozen snapshot for its full
 bounded execution window. Descriptor capture is inert: it does not install
 services, select a backend, or touch ambient runtime state.
 
+`Horo/AI/PerceptionSpatialBroadphase.h` provides the Scene-integrated candidate
+slice. After a structural commit, the owner projects only declared listener and
+source entities into canonical global positions, layer bits, affiliation keys,
+and typed sense sets. It validates exact scene/entity generations and bounded
+population, builds a spatial hierarchy privately, then atomically publishes a
+shared immutable revision. Failed capture leaves the previous publication intact.
+Workers borrow that value snapshot without a Scene pointer, callback, allocation,
+rendering dependency, or live entity traversal. Bounded radius queries prune
+spatial nodes, apply sense/layer/affiliation filters, and return candidates in
+stable entity-identity order with explicit truncation. A retained old snapshot is
+historical data only; new dispatch after spawn/despawn must use the next
+post-commit publication. Detailed sight/occlusion and sense scheduling remain
+separate Perception/Physics responsibilities.
+
 Every built-in sense has an explicit authority, timing owner, and underlying
 query seam:
 
@@ -933,9 +947,12 @@ struct StimulusEvent {
    - LOS queries are read-only and operate against physics spatial acceleration
      structures without mutating collision state.
 2. **Scene Spatial Seam**:
-   - Candidate emitter gathering queries `SceneRuntime` spatial acceleration
-     structures (octree / BVH) to discover potential emitters within sensory
-     range before issuing detailed LOS physics traces, eliminating $O(N^2)$ scaling.
+   - Candidate emitter gathering queries a scene-scoped spatial acceleration
+     snapshot (BVH) projected from `SceneRuntime`'s declared perception participants
+     after its structural safe point. The integration index is a derived cache, not
+     a second Scene entity authority. It discovers potential emitters within
+     sensory range before detailed LOS physics traces, avoiding all-entity scans
+     per listener; a future shared Scene spatial index may supply the same seam.
 3. **Team Dispatch Split**:
    - Membership, faction, direct distress, and explicit target-spot events wake or
      invalidate affected agents immediately.

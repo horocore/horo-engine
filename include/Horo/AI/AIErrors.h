@@ -72,6 +72,16 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor PerceptionMemoryInvalid;
     /** @brief Perception memory received a backward committed simulation tick. */
     extern const ErrorCodeDescriptor PerceptionMemoryTimeInvalid;
+    /** @brief A spatial publication record or query violates its typed range/filter contract. */
+    extern const ErrorCodeDescriptor PerceptionSpatialInvalid;
+    /** @brief A spatial publication exceeds a hard participant capacity. */
+    extern const ErrorCodeDescriptor PerceptionSpatialLimitExceeded;
+    /** @brief A spatial publication has duplicate listener or source entity identities. */
+    extern const ErrorCodeDescriptor PerceptionSpatialConflict;
+    /** @brief A spatial publication uses a stale scene generation or non-increasing revision. */
+    extern const ErrorCodeDescriptor PerceptionSpatialStale;
+    /** @brief A spatial query refers to no listener in the immutable publication. */
+    extern const ErrorCodeDescriptor PerceptionSpatialListenerMissing;
     /** @brief An environment-query asset or descriptor has an invalid typed representation. */
     extern const ErrorCodeDescriptor EnvironmentQuerySchemaInvalid;
     /** @brief Environment-query metadata exceeds a fixed admission bound. */
