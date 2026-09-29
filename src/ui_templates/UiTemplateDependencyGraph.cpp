@@ -21,6 +21,15 @@ namespace Horo::UiTemplates {
             return reference.asset.IsValid() && HasDigest(reference.revision) && reference.minimumInterface.major != 0;
         }
 
+        /** @brief Rejects resolution after shutdown or with a malformed root. */
+        [[nodiscard]] Result<void> ValidateAdmission(const bool active, const UiTemplateReference &root) {
+            if (!active)
+                return Failure(UiErrors::TemplateGraphShutdown);
+            if (!ValidReference(root))
+                return Failure(UiErrors::TemplateGraphInvalid);
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] bool ValidPackageRange(const Packages::PackageVersionRange &range) noexcept {
             using enum Packages::PackageVersionRange::Kind;
             return range.kind == Any || range.kind == Exact || range.kind == Caret;
@@ -66,6 +75,12 @@ namespace Horo::UiTemplates {
                 }
             }
             return Result<void>::Success();
+        }
+
+        /** @brief Canonicalizes the detached package closure before publication. */
+        [[nodiscard]] Result<UiTemplateResolvedDependencies> FinishClosure(UiTemplateResolvedDependencies resolved) {
+            std::ranges::sort(resolved.packages, {}, &Packages::LockedPackageReference::package);
+            return Result<UiTemplateResolvedDependencies>::Success(std::move(resolved));
         }
     }  // namespace
 
@@ -136,10 +151,8 @@ namespace Horo::UiTemplates {
 
     /** @copydoc UiTemplateDependencyGraph::Resolve */
     Result<UiTemplateResolvedDependencies> UiTemplateDependencyGraph::Resolve(const UiTemplateReference &root) const {
-        if (!active_)
-            return Failure<UiTemplateResolvedDependencies>(UiErrors::TemplateGraphShutdown);
-        if (!ValidReference(root))
-            return Failure<UiTemplateResolvedDependencies>(UiErrors::TemplateGraphInvalid);
+        if (const auto admission = ValidateAdmission(active_, root); admission.HasError())
+            return Result<UiTemplateResolvedDependencies>::Failure(admission.ErrorValue());
 
         UiTemplateResolvedDependencies resolved;
         std::vector<UiTemplateAssetId> active;
@@ -184,8 +197,7 @@ namespace Horo::UiTemplates {
         };
         if (const auto result = visit(visit, root, 1); result.HasError())
             return Result<UiTemplateResolvedDependencies>::Failure(result.ErrorValue());
-        std::ranges::sort(resolved.packages, {}, &Packages::LockedPackageReference::package);
-        return Result<UiTemplateResolvedDependencies>::Success(std::move(resolved));
+        return FinishClosure(std::move(resolved));
     }
 
     /** @copydoc UiTemplateDependencyGraph::Shutdown */
