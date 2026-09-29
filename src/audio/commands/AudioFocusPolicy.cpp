@@ -77,12 +77,16 @@ namespace Horo::Audio {
 
     /** @copydoc AudioFocusController::Prepare */
     Result<std::optional<AudioFocusTransition>> AudioFocusController::Prepare(const AudioFocusFacts facts) {
-        if (facts.hostSuspended || facts.deviceInterrupted)
+        const bool critical = facts.hostSuspended || facts.deviceInterrupted;
+        if (critical)
             criticalHold_ = true;
         if (facts.deviceInterrupted && !facts_.deviceInterrupted)
             deviceRecoveryRequired_ = true;
-        if (pending_.has_value())
+        if (pending_.has_value()) {
+            if (critical)
+                pendingCoversCriticalHold_ = false;
             return Result<std::optional<AudioFocusTransition>>::Failure(MakeError(AudioErrors::RuntimeInactive));
+        }
         if (!facts.deviceInterrupted && deviceRecoveryRequired_)
             return Result<std::optional<AudioFocusTransition>>::Failure(MakeError(AudioErrors::RuntimeInactive));
         const auto cause = Cause(facts);

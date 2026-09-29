@@ -160,6 +160,24 @@ namespace Horo::Audio {
             CHECK_FALSE(controller.Snapshot().ordinaryAdmissionClosed);
         }
 
+        TEST_CASE("Audio critical fact during pending resume cannot reopen admission", "[unit][audio][focus]") {
+            auto controller = Controller();
+            const auto focus = RequireTransition(controller, {.focused = false});
+            ExpectError(controller.Prepare({.focused = false, .hostSuspended = true}), AudioErrors::RuntimeInactive);
+            REQUIRE(controller.Commit(Ack(focus, 1)).HasValue());
+
+            const auto resume = RequireTransition(controller, {.focused = false});
+            CHECK(controller.Snapshot().ordinaryAdmissionClosed);
+            ExpectError(controller.Prepare({.focused = false, .hostSuspended = true}), AudioErrors::RuntimeInactive);
+            REQUIRE(controller.Commit(Ack(resume, 2)).HasValue());
+            CHECK(controller.Snapshot().ordinaryAdmissionClosed);
+
+            const auto suspended = RequireTransition(controller, {.focused = false, .hostSuspended = true});
+            CHECK(suspended.closeOrdinaryAdmission);
+            REQUIRE(controller.Commit(Ack(suspended, 3)).HasValue());
+            CHECK(controller.Snapshot().ordinaryAdmissionClosed);
+        }
+
         TEST_CASE("Audio interruption cannot resume merely because the native edge ended", "[unit][audio][focus]") {
             auto controller = Controller();
             const auto interrupted = RequireTransition(controller, {.deviceInterrupted = true});
