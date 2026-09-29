@@ -89,7 +89,7 @@ namespace Horo::Audio {
          * @param limits Host-admitted finite resource limits.
          * @return Session or typed invalid/capacity error; failure does not call release.
          */
-        [[nodiscard]] static Result<AudioStreamDecoder> Create(AudioStreamDecoderSpec spec, AudioStreamDecoderProvider provider,
+        [[nodiscard]] static Result<AudioStreamDecoder> Create(AudioStreamDecoderSpec spec, const AudioStreamDecoderProvider &provider,
                                                                const AudioStreamDecoderLimits &limits = {});
 
         AudioStreamDecoder(const AudioStreamDecoder &) = delete;
@@ -132,7 +132,7 @@ namespace Horo::Audio {
         [[nodiscard]] const AudioStreamDecoderSpec &Spec() const noexcept;
 
     private:
-        AudioStreamDecoder(AudioStreamDecoderSpec spec, AudioStreamDecoderProvider provider) noexcept;
+        AudioStreamDecoder(AudioStreamDecoderSpec spec, const AudioStreamDecoderProvider &provider) noexcept;
 
         AudioStreamDecoderSpec spec_;
         AudioStreamDecoderProvider provider_;

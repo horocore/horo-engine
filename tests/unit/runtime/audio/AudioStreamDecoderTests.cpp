@@ -14,6 +14,7 @@ namespace Horo::Audio {
             Normal,
             Error,
             Throw,
+            ThrowNonStd,
             BadProgress,
             Cancel
         };
@@ -37,6 +38,8 @@ namespace Horo::Audio {
                     return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioStreamDecoderErrors::Invalid));
                 if (self.behavior == Behavior::Throw)
                     throw std::runtime_error("provider failure");
+                if (self.behavior == Behavior::ThrowNonStd)
+                    throw 42;
                 if (self.behavior == Behavior::Error)
                     return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioStreamDecoderErrors::SeekUnsupported));
                 if (self.behavior == Behavior::Cancel)
@@ -53,6 +56,8 @@ namespace Horo::Audio {
                 auto &self = *static_cast<FakeProvider *>(context);
                 ++self.seekCalls;
                 self.lastSeek = target;
+                if (self.behavior == Behavior::ThrowNonStd)
+                    throw 42;
                 if (self.behavior == Behavior::Error)
                     return Result<void>::Failure(MakeError(AudioStreamDecoderErrors::ProviderFailed));
                 return Result<void>::Success();
@@ -142,7 +147,7 @@ namespace Horo::Audio {
     TEST_CASE("Runtime stream decoder preserves provider failure and latches unsafe progress", "[unit][audio][stream_decoder]") {
         std::array<AudioSample, 4> output{};
         std::array<std::byte, 16> scratch{};
-        for (const Behavior behavior : {Behavior::Error, Behavior::Throw, Behavior::BadProgress, Behavior::Cancel}) {
+        for (const Behavior behavior : {Behavior::Error, Behavior::Throw, Behavior::ThrowNonStd, Behavior::BadProgress, Behavior::Cancel}) {
             FakeProvider fake;
             fake.behavior = behavior;
             auto created = AudioStreamDecoder::Create(Spec(), Provider(fake));
@@ -183,6 +188,15 @@ namespace Horo::Audio {
         CHECK(fake.seekCalls == 0);
         RequireCode(failing.Seek(2), AudioStreamDecoderErrors::ProviderFailed);
         CHECK(failing.State() == AudioStreamDecoderState::Failed);
+
+        FakeProvider throwingProvider;
+        throwingProvider.behavior = Behavior::ThrowNonStd;
+        auto throwingResult = AudioStreamDecoder::Create(Spec(), Provider(throwingProvider));
+        REQUIRE(throwingResult.HasValue());
+        auto throwing = std::move(throwingResult).Value();
+        RequireCode(throwing.Seek(2), AudioStreamDecoderErrors::ProviderFailed);
+        CHECK(throwing.CursorFrame() == 0);
+        CHECK(throwing.State() == AudioStreamDecoderState::Failed);
     }
 
     TEST_CASE("Runtime stream decoder handles empty media and cancellation before provider entry", "[unit][audio][stream_decoder]") {

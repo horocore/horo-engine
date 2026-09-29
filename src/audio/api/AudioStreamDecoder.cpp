@@ -26,12 +26,12 @@ namespace Horo::Audio {
         }
     }  // namespace
 
-    AudioStreamDecoder::AudioStreamDecoder(AudioStreamDecoderSpec spec, const AudioStreamDecoderProvider provider) noexcept
+    AudioStreamDecoder::AudioStreamDecoder(AudioStreamDecoderSpec spec, const AudioStreamDecoderProvider &provider) noexcept
         : spec_(std::move(spec)), provider_(provider),
           state_(spec_.frameCount == 0 ? AudioStreamDecoderState::Ended : AudioStreamDecoderState::Ready) {}
 
     /** @copydoc AudioStreamDecoder::Create */
-    Result<AudioStreamDecoder> AudioStreamDecoder::Create(AudioStreamDecoderSpec spec, const AudioStreamDecoderProvider provider,
+    Result<AudioStreamDecoder> AudioStreamDecoder::Create(AudioStreamDecoderSpec spec, const AudioStreamDecoderProvider &provider,
                                                           const AudioStreamDecoderLimits &limits) {
         if (const auto valid = Validate(spec, provider, limits); valid.HasError())
             return Result<AudioStreamDecoder>::Failure(valid.ErrorValue());
@@ -71,13 +71,14 @@ namespace Horo::Audio {
             return Result<AudioStreamDecodedBlock>::Success({cursor_, 0, true});
 
         const std::uint64_t firstFrame = cursor_;
-        auto produced = [&]() -> Result<AudioStreamDecodeProgress> {
+        auto produced = [&]() {
+            // Provider exceptions, including non-std ones, must not escape this worker boundary.
             try {
                 return provider_.decode(provider_.context, firstFrame,
                                         output.first(static_cast<std::size_t>(requestedFrames) *
                                                      spec_.outputFormat.layout.orderedChannels.size()),
                                         workingMemory.first(spec_.requiredWorkingBytes), cancelled_);
-            } catch (...) {
+            } catch (...) {  // NOSONAR
                 return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioStreamDecoderErrors::ProviderFailed));
             }
         }();
@@ -115,6 +116,7 @@ namespace Horo::Audio {
             return Result<void>::Failure(MakeError(AudioStreamDecoderErrors::SeekUnsupported));
         if (targetFrame > spec_.frameCount)
             return Result<void>::Failure(MakeError(AudioStreamDecoderErrors::Invalid));
+        // Provider exceptions, including non-std ones, must not escape this worker boundary.
         try {
             auto sought = provider_.seek(provider_.context, targetFrame, cancelled_);
             if (cancelled_.load()) {
@@ -125,7 +127,7 @@ namespace Horo::Audio {
                 state_ = AudioStreamDecoderState::Failed;
                 return sought;
             }
-        } catch (...) {
+        } catch (...) {  // NOSONAR
             state_ = AudioStreamDecoderState::Failed;
             return Result<void>::Failure(MakeError(AudioStreamDecoderErrors::ProviderFailed));
         }
