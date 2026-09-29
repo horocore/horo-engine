@@ -109,6 +109,39 @@ namespace Horo::Editor::Ui {
         ImGui::PopStyleVar(2);
     }
 
+    namespace {
+        /** @brief Draws the rows of the review table while its columns are active. */
+        void DrawReviewSections(const std::span<const BuildPreviewReviewSection> sections, const Theme::Fonts &fonts) {
+            for (std::size_t sectionIndex = 0; sectionIndex < sections.size(); ++sectionIndex) {
+                const BuildPreviewReviewSection &section = sections[sectionIndex];
+                ImGui::TableNextRow();
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, Theme::U32(Theme::Bg1()));
+                ImGui::TableSetColumnIndex(0);
+                {
+                    Theme::ScopedTextStyle style(fonts.sansCompact, Theme::TextPx::Caption(), Theme::FontPx::SansCompact);
+                    ImGui::TextColored(sectionIndex == 0 ? Theme::Accent() : Theme::Dim(), "%s", section.title.c_str());
+                }
+                for (const BuildPreviewReviewField &field : section.fields) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    {
+                        Theme::ScopedTextStyle style(fonts.sansCompact, Theme::TextPx::Caption(), Theme::FontPx::SansCompact);
+                        ImGui::PushStyleColor(ImGuiCol_Text, Theme::Muted());
+                        ImGui::TextWrapped("%s", field.label.c_str());
+                        ImGui::PopStyleColor();
+                    }
+                    ImGui::TableSetColumnIndex(1);
+                    {
+                        Theme::ScopedTextStyle style(fonts.sans, Theme::TextPx::Body(), Theme::FontPx::Sans);
+                        ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
+                        ImGui::TextWrapped("%s", field.value.c_str());
+                        ImGui::PopStyleColor();
+                    }
+                }
+            }
+        }
+    }  // namespace
+
     void BuildPreviewReview(const char *heading, const char *description, const char *notice,
                             const std::span<const BuildPreviewReviewSection> sections, const Theme::Fonts &fonts) {
         const float availableWidth = ImGui::GetContentRegionAvail().x;
@@ -148,33 +181,7 @@ namespace Horo::Editor::Ui {
                                   ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX)) {
                 ImGui::TableSetupColumn("##reviewLabel", ImGuiTableColumnFlags_WidthFixed, ScaledLayoutValue(190.0F));
                 ImGui::TableSetupColumn("##reviewValue", ImGuiTableColumnFlags_WidthStretch);
-                for (std::size_t sectionIndex = 0; sectionIndex < sections.size(); ++sectionIndex) {
-                    const BuildPreviewReviewSection &section = sections[sectionIndex];
-                    ImGui::TableNextRow();
-                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, Theme::U32(Theme::Bg1()));
-                    ImGui::TableSetColumnIndex(0);
-                    {
-                        Theme::ScopedTextStyle style(fonts.sansCompact, Theme::TextPx::Caption(), Theme::FontPx::SansCompact);
-                        ImGui::TextColored(sectionIndex == 0 ? Theme::Accent() : Theme::Dim(), "%s", section.title.c_str());
-                    }
-                    for (const BuildPreviewReviewField &field : section.fields) {
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        {
-                            Theme::ScopedTextStyle style(fonts.sansCompact, Theme::TextPx::Caption(), Theme::FontPx::SansCompact);
-                            ImGui::PushStyleColor(ImGuiCol_Text, Theme::Muted());
-                            ImGui::TextWrapped("%s", field.label.c_str());
-                            ImGui::PopStyleColor();
-                        }
-                        ImGui::TableSetColumnIndex(1);
-                        {
-                            Theme::ScopedTextStyle style(fonts.sans, Theme::TextPx::Body(), Theme::FontPx::Sans);
-                            ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
-                            ImGui::TextWrapped("%s", field.value.c_str());
-                            ImGui::PopStyleColor();
-                        }
-                    }
-                }
+                DrawReviewSections(sections, fonts);
                 ImGui::EndTable();
             }
             ImGui::PopStyleColor();

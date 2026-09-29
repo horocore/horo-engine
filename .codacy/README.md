@@ -41,10 +41,6 @@ Codacy already uses configuration-file mode for Bandit. The `bandit.yml` change
 takes effect in cloud analysis when the analyzed branch includes it. Merge this
 configuration through the normal delivery process to apply it to the default branch.
 
-Stylelint uses `.stylelintrc.json` in configuration-file mode. Its only
-non-null cloud pattern is `selector-not-notation: complex`; the inherited
-`scss/function-disallowed-list` pattern is unsupported by the installed
-Stylelint version and reported an unknown-rule issue on every stylesheet.
 
 Keep generated analysis summaries and raw output outside the source tree. Record
 validation results and limitations in the pull request description.

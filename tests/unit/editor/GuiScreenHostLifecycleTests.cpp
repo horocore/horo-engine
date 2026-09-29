@@ -88,6 +88,21 @@ namespace {
         jobs.Shutdown(ShutdownPolicy::Cancel);
     }
 
+    /** @brief Verifies that each workflow preview opens and closes its modal. */
+    void ExerciseWorkflowPreviewModals(GuiScreenHost &host, EditorModalHost &modals, Horo::Editor::Tests::HeadlessEditorGuiFixture &imgui) {
+        for (const char *scenario : {"build", "run-tests", "prepare-release", "publish-candidate"}) {
+            REQUIRE(host.OpenUiPreview(scenario));
+            imgui.BeginFrame();
+            host.Draw();
+            imgui.EndFrame();
+            const auto workflowModalId = modals.TopModalId();
+            REQUIRE(workflowModalId.has_value());
+            REQUIRE(modals.RequestClose(*workflowModalId, ModalCloseReason::Cancelled).HasValue());
+            modals.OnUpdate(0.016F);
+            REQUIRE_FALSE(modals.HasOpenModal());
+        }
+    }
+
     void ExerciseUiPreviewScenarios(GuiScreenHost &host, EditorModalHost &modals, Horo::Editor::Tests::HeadlessEditorGuiFixture &imgui) {
         host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::ImportAssets});
         REQUIRE(modals.HasOpenModal());
@@ -115,17 +130,7 @@ namespace {
         modals.OnUpdate(0.016F);
         REQUIRE_FALSE(modals.HasOpenModal());
 
-        for (const char *scenario : {"build", "run-tests", "prepare-release", "publish-candidate"}) {
-            REQUIRE(host.OpenUiPreview(scenario));
-            imgui.BeginFrame();
-            host.Draw();
-            imgui.EndFrame();
-            const auto workflowModalId = modals.TopModalId();
-            REQUIRE(workflowModalId.has_value());
-            REQUIRE(modals.RequestClose(*workflowModalId, ModalCloseReason::Cancelled).HasValue());
-            modals.OnUpdate(0.016F);
-            REQUIRE_FALSE(modals.HasOpenModal());
-        }
+        ExerciseWorkflowPreviewModals(host, modals, imgui);
 
         const ImGuiWindow *const gallery = ImGui::FindWindowByName("##EditorUiPreviewGallery");
         REQUIRE(gallery != nullptr);

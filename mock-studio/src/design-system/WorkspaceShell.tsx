@@ -19,7 +19,8 @@ type WorkspaceShellProps = {
   children: ReactNode;
 };
 
-export function WorkspaceShell({ title, subtitle, badges, actions, tabs, activeTab, onTabChange, toolbar, leftTitle, left, rightTitle, right, status, children }: WorkspaceShellProps) {
+export function WorkspaceShell(props: WorkspaceShellProps) {
+  const { title, subtitle, badges, actions, tabs, activeTab, onTabChange, toolbar, leftTitle, left, rightTitle, right, status, children } = props;
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   return <div className={`wb-shell${leftOpen ? '' : ' left-closed'}${rightOpen ? '' : ' right-closed'}`}>
