@@ -125,19 +125,6 @@ namespace Horo::AI {
                 std::get<std::vector<Runtime::EntityRef>>(first.Value()->Find(BuiltinQueryContextId(BuiltinQueryContext::Group))->value) ==
                 std::vector<Runtime::EntityRef>{group.begin(), group.end()});
 
-            QueryContextCapture emptyGroupCapture;
-            source.group = std::span<const Runtime::EntityRef>{};
-            const auto emptyGroup = emptyGroupCapture.Capture(plan, registry, providers.Value(), view, source);
-            REQUIRE(emptyGroup.HasValue());
-            CHECK(std::get<std::vector<Runtime::EntityRef>>(
-                      emptyGroup.Value()->Find(BuiltinQueryContextId(BuiltinQueryContext::Group))->value)
-                      .empty());
-            source.group.reset();
-            QueryContextCapture missingGroupCapture;
-            ExpectError(missingGroupCapture.Capture(plan, registry, providers.Value(), view, source),
-                        AIErrors::EnvironmentQueryContextMissing);
-            source.group = group;
-
             source.querierLocation = Math::WorldCoordinate64::FromMillimeters(99, 99, 99);
             const auto repeated = capture.Capture(plan, registry, providers.Value(), view, source);
             REQUIRE(repeated.HasValue());
@@ -158,6 +145,28 @@ namespace Horo::AI {
             source.executionRevision = 3;
             ExpectError(capture.Capture(plan, registry, providers.Value(), scene->View(), source), AIErrors::EnvironmentQueryContextStale);
             CHECK(first.Value()->Values().size() == 6);
+        }
+
+        TEST_CASE("EQS present empty group differs from a missing required group", "[unit][ai][eqs][context]") {
+            QueryFixture fixture;
+            fixture.generator.contexts = {{BuiltinQueryContextId(BuiltinQueryContext::Group), {1, 1}}};
+            const auto registry = fixture.Registry();
+            const auto plan = fixture.Plan(registry);
+            const auto providers = QueryContextProviderRegistry::Capture({}, registry);
+            REQUIRE(providers.HasValue());
+            auto scene = MakeScene();
+            const auto view = scene->View();
+            auto source = Source(view);
+            source.group = std::span<const Runtime::EntityRef>{};
+            QueryContextCapture capture;
+            const auto emptyGroup = capture.Capture(plan, registry, providers.Value(), view, source);
+            REQUIRE(emptyGroup.HasValue());
+            CHECK(std::get<std::vector<Runtime::EntityRef>>(
+                      emptyGroup.Value()->Find(BuiltinQueryContextId(BuiltinQueryContext::Group))->value)
+                      .empty());
+            source.group.reset();
+            source.executionRevision = 2;
+            ExpectError(capture.Capture(plan, registry, providers.Value(), view, source), AIErrors::EnvironmentQueryContextMissing);
         }
 
         TEST_CASE("EQS required target and scene generations fail closed", "[unit][ai][eqs][context]") {
