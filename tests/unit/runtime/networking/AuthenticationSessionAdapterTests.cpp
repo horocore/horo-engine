@@ -405,4 +405,46 @@ namespace Horo::Network {
         REQUIRE(fixture.privateKeys.calls == 0);
         REQUIRE(protection.Pending() == 0);
     }
+
+    TEST_CASE("Authentication rejects a captured response after admission generation replacement",
+              "[unit][network][authentication][admission]") {
+        Fixture fixture;
+        AdmissionProtectionPolicy limits{{1, 2}, 2, 2, 2, 2, 4, 2, 64, 100};
+        auto createdProtection = AdmissionProtection::Create(limits);
+        REQUIRE(createdProtection.HasValue());
+        auto protection = std::move(createdProtection).Value();
+        HandshakeSelection selection;
+        selection.connection = Connection();
+        selection.sessionGeneration = Session();
+        selection.protocol = TestSupport::WireIdentity<ProtocolId>(1);
+        selection.version = {1, 2};
+        selection.schemaFingerprint = 42;
+        auto previousChallenge = fixture.Challenge();
+        previousChallenge.transcriptDigest = ComputeAdmissionTranscriptDigest(selection, previousChallenge);
+        REQUIRE(protection.Begin({1}, selection, previousChallenge, 1).HasValue());
+        REQUIRE(protection.End(selection.connection, selection.sessionGeneration).HasValue());
+
+        selection.sessionGeneration = Session(8);
+        auto challenge = previousChallenge;
+        challenge.sessionGeneration = selection.sessionGeneration;
+        challenge.clientNonce[0] ^= std::byte{0x01};
+        challenge.serverNonce[0] ^= std::byte{0x01};
+        challenge.transcriptDigest = ComputeAdmissionTranscriptDigest(selection, challenge);
+        REQUIRE(protection.Begin({1}, selection, challenge, 2).HasValue());
+        auto created = AuthenticationSessionAdapter::Create(fixture.Policy(), challenge, fixture.Authorities(), 100, &protection);
+        REQUIRE(created.HasValue());
+        auto adapter = std::move(created).Value();
+        auto capturedResponse = fixture.Response();
+        capturedResponse.transcriptDigest = previousChallenge.transcriptDigest;
+        auto evidence = fixture.Evidence();
+        evidence.transport.sessionGeneration = selection.sessionGeneration;
+        RequireError(adapter.Authenticate(selection.connection, selection.sessionGeneration, capturedResponse, evidence, 20),
+                     NetworkErrors::AuthenticationIncompatible);
+        REQUIRE(fixture.certificates.calls == 0);
+        REQUIRE(fixture.peers.calls == 0);
+        REQUIRE(fixture.credentials.calls == 0);
+        REQUIRE(fixture.privateKeys.calls == 0);
+        REQUIRE(protection.Pending() == 1);
+        REQUIRE(protection.End(selection.connection, selection.sessionGeneration).HasValue());
+    }
 }  // namespace Horo::Network
