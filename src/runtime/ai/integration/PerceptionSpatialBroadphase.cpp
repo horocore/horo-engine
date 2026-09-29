@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <numeric>
 #include <ranges>
 #include <utility>
 
@@ -143,7 +144,7 @@ namespace Horo::AI {
         for (std::size_t candidate = 1; candidate < 3; ++candidate)
             if (Separation(maximum[candidate], minimum[candidate]) > Separation(maximum[axis], minimum[axis]))
                 axis = candidate;
-        const auto middle = begin + (end - begin) / 2;
+        const auto middle = std::midpoint(begin, end);
         std::nth_element(sources_.begin() + begin, sources_.begin() + middle, sources_.begin() + end,
                          [axis](const PerceptionSpatialSource &first, const PerceptionSpatialSource &second) {
             const auto firstAxis = first.position.Millimeters()[axis];
@@ -234,11 +235,11 @@ namespace Horo::AI {
         }
         std::ranges::sort(next->listeners_, {}, &PerceptionSpatialListener::entity);
         std::ranges::sort(next->sources_, {}, &PerceptionSpatialSource::entity);
-        if (std::adjacent_find(next->listeners_.begin(), next->listeners_.end(),
-                               [](const auto &first, const auto &second) {
+        if (std::ranges::adjacent_find(next->listeners_,
+                                       [](const auto &first, const auto &second) {
             return first.entity == second.entity;
         }) != next->listeners_.end() ||
-            std::adjacent_find(next->sources_.begin(), next->sources_.end(), [](const auto &first, const auto &second) {
+            std::ranges::adjacent_find(next->sources_, [](const auto &first, const auto &second) {
             return first.entity == second.entity;
         }) != next->sources_.end())
             return SnapshotResult::Failure(MakeError(AIErrors::PerceptionSpatialConflict));
