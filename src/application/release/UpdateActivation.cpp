@@ -69,9 +69,11 @@ namespace Horo::Release {
                 current.package == staged.package || !current.installation || current.installation != staged.installation ||
                 current.product != staged.product || current.platform != staged.platform || current.architecture != staged.architecture ||
                 current.artifactClass != DistributionArtifactClass::InstallableProduct ||
-                staged.artifactClass != DistributionArtifactClass::InstallableProduct || !VersionPathsMatch(request.current, paths) ||
-                !VersionPathsMatch(request.staged, paths) || request.current.packageFile == request.staged.stageRoot ||
-                request.staged.packageFile == request.current.stageRoot)
+                staged.artifactClass != DistributionArtifactClass::InstallableProduct ||
+                request.current.package.selection.format == DistributionPackageFormat::DeltaZipArchive ||
+                request.staged.package.selection.format == DistributionPackageFormat::DeltaZipArchive ||
+                !VersionPathsMatch(request.current, paths) || !VersionPathsMatch(request.staged, paths) ||
+                request.current.packageFile == request.staged.stageRoot || request.staged.packageFile == request.current.stageRoot)
                 return false;
             if (const auto isDirectory = [](const std::filesystem::path &path) {
                 std::error_code error;
