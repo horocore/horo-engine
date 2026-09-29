@@ -80,6 +80,29 @@ namespace Horo::Extensions {
                 return candidate == entry;
             });
         }
+
+        [[nodiscard]] bool DispatchToCandidate(const std::shared_ptr<ProcessObserverRegistryState> &state,
+                                               const std::shared_ptr<ProcessObserverEntry> &entry, const ProcessObserverEvent &event) {
+            Result<ExtensionCapabilityUseLease> use = [&]() {
+                std::scoped_lock lock{state->mutex};
+                if (state->shutdown || !entry->registered ||
+                    std::ranges::find(entry->descriptor.allowedEvents, event.kind) == entry->descriptor.allowedEvents.end())
+                    return Result<ExtensionCapabilityUseLease>::Failure(MakeError(ExtensionErrors::CapabilityRevoked));
+                return entry->authority.AcquireUse(entry->descriptor.extensionId, entry->descriptor.moduleId,
+                                                   entry->descriptor.activationGeneration);
+            }();
+            if (!use.HasValue())
+                return false;
+            bool failed = false;
+            try {
+                failed = !entry->callback(event).HasValue();
+            } catch (...) {
+                failed = true;
+            }
+            if (failed)
+                Remove(state, entry);
+            return failed;
+        }
     }  // namespace
 
     ProcessObserverRegistration::ProcessObserverRegistration(std::weak_ptr<ProcessObserverRegistryState> registry,
@@ -200,26 +223,9 @@ namespace Horo::Extensions {
 
         std::string failedObserver;
         for (const auto &entry : candidates) {
-            Result<ExtensionCapabilityUseLease> use = [&]() {
-                std::scoped_lock lock{state_->mutex};
-                if (state_->shutdown || !entry->registered ||
-                    std::ranges::find(entry->descriptor.allowedEvents, event.kind) == entry->descriptor.allowedEvents.end())
-                    return Result<ExtensionCapabilityUseLease>::Failure(MakeError(ExtensionErrors::CapabilityRevoked));
-                return entry->authority.AcquireUse(entry->descriptor.extensionId, entry->descriptor.moduleId,
-                                                   entry->descriptor.activationGeneration);
-            }();
-            if (!use.HasValue())
-                continue;
-            bool failed = false;
-            try {
-                failed = !entry->callback(event).HasValue();
-            } catch (...) {
-                failed = true;
-            }
-            if (failed) {
+            if (DispatchToCandidate(state_, entry, event)) {
                 if (failedObserver.empty())
                     failedObserver = entry->descriptor.observerId;
-                Remove(state_, entry);
             }
         }
         if (!failedObserver.empty())
