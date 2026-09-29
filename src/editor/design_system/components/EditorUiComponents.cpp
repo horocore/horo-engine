@@ -1830,8 +1830,7 @@ namespace Horo::Editor::Ui {
         if (foregroundBorder_) {
             const ImVec2 min = ImGui::GetWindowPos();
             const ImVec2 size = ImGui::GetWindowSize();
-            ImGui::GetForegroundDrawList()->AddRect({min.x + 0.5F, min.y + 0.5F},
-                                                    {min.x + size.x - 0.5F, min.y + size.y - 0.5F},
+            ImGui::GetForegroundDrawList()->AddRect({min.x + 0.5F, min.y + 0.5F}, {min.x + size.x - 0.5F, min.y + size.y - 0.5F},
                                                     Theme::U32(Theme::Border()), Theme::GetActiveTokens().radii.modal, 0, 1.0F);
         }
         ImGui::End();

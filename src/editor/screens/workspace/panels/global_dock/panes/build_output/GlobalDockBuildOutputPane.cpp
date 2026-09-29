@@ -173,8 +173,7 @@ namespace Horo::Editor {
 
     /** @copydoc GlobalDockBuildOutputPane::Attach */
     void GlobalDockBuildOutputPane::Attach(const IBuildOutputQuery *buildOutputQuery,
-                                           const Application::GameplayBuildService *gameplayBuilds,
-                                           const std::string_view projectRoot) {
+                                           const Application::GameplayBuildService *gameplayBuilds, const std::string_view projectRoot) {
         m_buildOutputQuery = buildOutputQuery;
         m_gameplayBuilds = gameplayBuilds;
         m_projectRoot = projectRoot;
@@ -202,12 +201,10 @@ namespace Horo::Editor {
         if (m_filterDirty)
             RebuildFilter();
         const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
-        GlobalDockPaneRegions regions = ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight,
-                                                                      {.hasToolbar = true});
+        GlobalDockPaneRegions regions = ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
-        const auto active = m_gameplayBuilds != nullptr && !m_projectRoot.empty()
-                                ? m_gameplayBuilds->QueryActiveProject(m_projectRoot)
-                                : std::nullopt;
+        const auto active =
+            m_gameplayBuilds != nullptr && !m_projectRoot.empty() ? m_gameplayBuilds->QueryActiveProject(m_projectRoot) : std::nullopt;
 
         std::size_t errorCount = 0U;
         std::size_t warningCount = 0U;

@@ -1,6 +1,5 @@
 #include "Horo/Runtime/Render/RenderCapabilities.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
-#include "Horo/Runtime/Render/RenderCapabilities.h"
 #include "RenderFrontendErrors.h"
 #include "RenderResourceOperations.h"
 #include "RenderResourceRegistry.h"

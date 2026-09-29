@@ -92,9 +92,8 @@ namespace Horo::Editor {
 
         : context_(&context), modalHost_(&modalHost), inputRouter_(&inputRouter), settingsService_(&settingsService),
           localization_(&localization), engineEvents_(&engineEvents), logoTexture_(logoTexture), extensionInventory_(extensionInventory),
-          extensionMarketplace_(extensionMarketplace), nativeDialogs_(nativeDialogs),
-          screenRegistry_(std::move(screenRegistry)), workspacePanelRegistry_(std::move(workspacePanelRegistry)),
-          buildPreviewState_(std::make_unique<BuildWorkflowPreviewState>()) {
+          extensionMarketplace_(extensionMarketplace), nativeDialogs_(nativeDialogs), screenRegistry_(std::move(screenRegistry)),
+          workspacePanelRegistry_(std::move(workspacePanelRegistry)), buildPreviewState_(std::make_unique<BuildWorkflowPreviewState>()) {
         services_.Register(*this);
         services_.RegisterConst(context);
         services_.Register(modalHost);

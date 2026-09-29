@@ -70,4 +70,4 @@ namespace Horo::Editor {
             static_cast<void>(m_gameplayBuilds->RequestCancel(snapshot.id));
     }
 
- }  // namespace Horo::Editor
+}  // namespace Horo::Editor

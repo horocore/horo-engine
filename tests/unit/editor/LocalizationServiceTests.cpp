@@ -220,9 +220,8 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.game_asset.category.missing") == "Eksik Oynanış Asset Türü"));
         REQUIRE((service.Get("editor", "build.preview.release.review.heading") == "Sürüm isteğini gözden geçir"));
         REQUIRE((service.Get("editor", "build.preview.release.review.identity") == "Sürüm kimliği"));
-        REQUIRE(
-            (service.Get("editor", "build.preview.release.review.notice") ==
-             "Aday tüm zorunlu kontrollerden geçmelidir. Bu maket dosya oluşturmaz, yapıtları imzalamaz veya bir hedefe yayımlamaz."));
+        REQUIRE((service.Get("editor", "build.preview.release.review.notice") ==
+                 "Aday tüm zorunlu kontrollerden geçmelidir. Bu maket dosya oluşturmaz, yapıtları imzalamaz veya bir hedefe yayımlamaz."));
         RequireSettingsCatalogKeys(service);
     }
 }  // namespace
