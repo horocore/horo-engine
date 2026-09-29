@@ -2536,6 +2536,12 @@ if(TARGET HoroAssetImporterBasicExample)
 endif()
 add_test(NAME HoroExtensionManagerTests COMMAND HoroExtensionManagerTests)
 
+add_executable(HoroProcessObserverTests unit/extensions/ProcessObserverRegistryTests.cpp)
+target_compile_features(HoroProcessObserverTests PRIVATE cxx_std_20)
+target_link_libraries(HoroProcessObserverTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+add_test(NAME HoroProcessObserverTests COMMAND HoroProcessObserverTests)
+set_tests_properties(HoroProcessObserverTests PROPERTIES LABELS "unit;extensions;headless")
+
 add_executable(HoroEditorThemeTokenTests
         unit/extensions/EditorThemeTokenTests.cpp
 )
