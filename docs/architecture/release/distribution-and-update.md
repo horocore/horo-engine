@@ -210,7 +210,12 @@ ZIP packages and the Linux tar.gz stager accepts only tar.gz packages. The
 installed-product host selects one for its admitted format; an absent stager
 leaves update actions unavailable. A restart or rollback action requests
 a helper handoff and remains pending until the host reports a verified outcome
-on a later launch. The running editor never switches its own executable files.
+on a later launch. The installed host may inject only a verified `Active` or
+`RolledBack` helper result with the update backend when starting the editor;
+the editor maps that result to the visible session state. A failed or absent
+helper result never becomes a success state. Hosts that do not compose updates
+keep using the default app entry point without an update context. The running
+editor never switches its own executable files.
 
 ## Update Trust Root And Metadata Freshness
 
