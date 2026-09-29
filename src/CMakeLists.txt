@@ -982,7 +982,7 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::AI)
 add_library(HoroAISceneIntegration STATIC
         runtime/ai/integration/AISceneActivation.cpp
         runtime/ai/integration/AIScenePerceptionSource.cpp
-        runtime/ai/integration/PerceptionSpatialBroadphase.cpp)
+        runtime/ai/integration/PerceptionSpatialBroadphase.cpp
         runtime/ai/integration/EnvironmentQueryContexts.cpp)
 add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
 target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
