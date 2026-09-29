@@ -755,6 +755,7 @@ namespace Horo::Editor {
             const Log::IStructuredLogQuery &logQuery;
             BuildOutputStore &buildOutputStore;
             OperationStore &operationStore;
+            bool healthy{false}; /**< Set only after runtime startup and a normal, completed main-loop closure. */
         };
 
         class EditorRuntimeParticipant final : public Runtime::RuntimeLifecycleParticipant {
@@ -1042,14 +1043,8 @@ namespace Horo::Editor {
             bool nativeMenuInstalled_{false};
         };
 
-        /** @brief Carries a renderer restart only after the initial runtime and every executed frame completed successfully. */
-        struct EditorMainLoopOutcome final {
-            std::optional<EditorRendererRestartRequest> rendererRestart;
-            bool healthy{false};
-        };
-
         /** @brief Runs the actual editor startup and reports failures to the process boundary. */
-        EditorMainLoopOutcome RunEditorMainLoop(RunEditorMainLoopParams &p) {
+        std::optional<EditorRendererRestartRequest> RunEditorMainLoop(RunEditorMainLoopParams &p) {
             ThemeContext themeContext{p.fonts};
             EditorSettingsSnapshot settingsSnapshot = p.settings.Snapshot();
             EditorGuiContext guiContext{p.engineEvents, p.editorEvents, p.localization, themeContext, settingsSnapshot};
@@ -1084,7 +1079,7 @@ namespace Horo::Editor {
             auto physicsRuntime = Physics::PhysicsRuntime::Create(Physics::PhysicsRuntimeMode::Null);
             if (physicsSettings.HasError() || characterSettings.HasError() || physicsRuntime.HasError()) {
                 LOG_ERROR("editor.runtime", "Scene Physics composition could not be prepared.");
-                return {};
+                return std::nullopt;
             }
             Physics::PhysicsSceneActivationAuthority physicsSceneAuthority;
             auto runtimeScene = std::make_unique<Runtime::RuntimeSceneService>();
@@ -1095,7 +1090,7 @@ namespace Horo::Editor {
                                                                                                     characterSettings.Value()});
             if (const Result<void> added = runtimeScene->AddActivationParticipant(std::move(physicsParticipant)); added.HasError()) {
                 LOG_ERROR("editor.runtime", "Scene Physics participant registration failed: %s", added.ErrorValue().message.c_str());
-                return {};
+                return std::nullopt;
             }
             ScreenRegistry screenRegistry;
             RegisterWelcomeScreen(screenRegistry);
@@ -1146,7 +1141,7 @@ namespace Horo::Editor {
                 LOG_ERROR("editor.screens", "Initial screen startup failed: %s", started.ErrorValue().message.c_str());
                 screenHost.RequestFatalShutdown();
                 screenHost.Shutdown();
-                return {};
+                return std::nullopt;
             }
             std::optional<EditorRendererRestartRequest> rendererRestart;
             SteadyClock clock;
@@ -1155,14 +1150,14 @@ namespace Horo::Editor {
                 LOG_ERROR("editor.runtime", "Runtime host creation failed: %s", createdRuntime.ErrorValue().message.c_str());
                 screenHost.RequestFatalShutdown();
                 screenHost.Shutdown();
-                return {};
+                return std::nullopt;
             }
             std::unique_ptr<Runtime::RuntimeHost> runtime = std::move(createdRuntime).Value();
             if (const Result<void> addedScene = runtime->AddParticipant(std::move(runtimeScene)); addedScene.HasError()) {
                 LOG_ERROR("editor.runtime", "Runtime scene service registration failed: %s", addedScene.ErrorValue().message.c_str());
                 screenHost.RequestFatalShutdown();
                 screenHost.Shutdown();
-                return {};
+                return std::nullopt;
             }
             auto participant =
                 std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, rendererRestart);
@@ -1172,7 +1167,7 @@ namespace Horo::Editor {
                 LOG_ERROR("editor.runtime", "Runtime host startup failed.");
                 screenHost.RequestFatalShutdown();
                 runtime->Shutdown();
-                return {};
+                return std::nullopt;
             }
 
             bool healthy = true;
@@ -1193,7 +1188,8 @@ namespace Horo::Editor {
             healthy = healthy && screenHost.IsApplicationCloseRequested() &&
                       ((!p.exitAfterFirstFrame && p.exitAfterFrames == 0) || completedFrame);
             runtime->Shutdown();
-            return {.rendererRestart = std::move(rendererRestart), .healthy = healthy};
+            p.healthy = healthy;
+            return rendererRestart;
         }
     }  // namespace
 
@@ -1403,7 +1399,7 @@ namespace Horo::Editor {
                                            *structuredLogStore,
                                            buildOutputStore,
                                            operationStore};
-        EditorMainLoopOutcome loopOutcome = RunEditorMainLoop(loopParams);
+        const std::optional<EditorRendererRestartRequest> rendererRestart = RunEditorMainLoop(loopParams);
 
         DestroyEditorTextures(textures, *composition.guiRenderer);
         composition.frontend->DetachStaticMeshPassExecutor(*composition.viewportRenderer);
@@ -1422,17 +1418,17 @@ namespace Horo::Editor {
         SDL_DestroyWindow(w);
         SDL_Quit();
 
-        if (!loopOutcome.healthy) {
+        if (!loopParams.healthy) {
             moduleHost->DeactivateAll();
             Log::Logger::Shutdown();
             return 1;
         }
 
-        if (loopOutcome.rendererRestart.has_value()) {
-            LOG_INFO("editor.renderer", "Restarting editor with project renderer '%s' for '%s'.",
-                     loopOutcome.rendererRestart->backendId.c_str(), loopOutcome.rendererRestart->projectRoot.c_str());
+        if (rendererRestart.has_value()) {
+            LOG_INFO("editor.renderer", "Restarting editor with project renderer '%s' for '%s'.", rendererRestart->backendId.c_str(),
+                     rendererRestart->projectRoot.c_str());
             Log::Logger::Shutdown();
-            return RelaunchEditorForProject(argv[0], *loopOutcome.rendererRestart);
+            return RelaunchEditorForProject(argv[0], *rendererRestart);
         }
 
         moduleHost->DeactivateAll();
