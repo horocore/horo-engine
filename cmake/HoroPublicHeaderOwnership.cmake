@@ -511,6 +511,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
     Horo/AI/AISceneActivation.h
     Horo/AI/AIScenePerceptionSource.h
+    Horo/AI/EnvironmentQueryContexts.h
 )
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/AnimationCompression.h

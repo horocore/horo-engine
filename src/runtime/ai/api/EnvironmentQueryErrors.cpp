@@ -59,4 +59,40 @@ namespace Horo::AI::AIErrors {
         .retryable = true,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor EnvironmentQueryContextMissing{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.environment_query.context_missing"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A required environment-query context cannot be captured.",
+        .remediationHint = "Supply the target or explicitly compose the owning context provider before submission.",
+        .retryable = true,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor EnvironmentQueryContextStale{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.environment_query.context_stale"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "An environment-query context has a stale scene, entity, or execution revision.",
+        .remediationHint = "Acquire a current scene view and resubmit with current generation-checked entities.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor EnvironmentQueryContextCapabilityUnavailable{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.environment_query.context_capability_unavailable"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A required environment-query context provider capability is unavailable.",
+        .remediationHint = "Select a composition that supplies the declared capability.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor EnvironmentQueryContextInvalid{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.environment_query.context_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "An environment-query context provider returned invalid typed data.",
+        .remediationHint = "Return only bounded owned canonical values and current scene entity references.",
+        .retryable = false,
+        .userActionable = true,
+    };
 }  // namespace Horo::AI::AIErrors

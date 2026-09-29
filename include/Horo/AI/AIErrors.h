@@ -84,6 +84,14 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor EnvironmentQueryVersionIncompatible;
     /** @brief An unknown environment-query stage was retained for authoring but cannot execute. */
     extern const ErrorCodeDescriptor EnvironmentQueryStageUnsupported;
+    /** @brief A required context has no value or registered capture provider. */
+    extern const ErrorCodeDescriptor EnvironmentQueryContextMissing;
+    /** @brief A context references a retired entity, scene, or execution revision. */
+    extern const ErrorCodeDescriptor EnvironmentQueryContextStale;
+    /** @brief A context provider needs a capability absent from this scene composition. */
+    extern const ErrorCodeDescriptor EnvironmentQueryContextCapabilityUnavailable;
+    /** @brief A provider produced malformed, oversized, or wrong-kind context data. */
+    extern const ErrorCodeDescriptor EnvironmentQueryContextInvalid;
     /** @brief A behavior-tree schema version, identity, or typed node/property contract is malformed. */
     extern const ErrorCodeDescriptor BehaviorTreeSchemaInvalid;
     /** @brief A behavior-tree source exceeds one of its finite node, edge, pin, or payload bounds. */
