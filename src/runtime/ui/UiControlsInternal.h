@@ -62,6 +62,8 @@ namespace Horo::Runtime::Ui {
 
         UiControlDescriptor descriptor;
         UiControlState state;
+        std::optional<UiAsyncActionSnapshot> asyncAction;
+        UiControlAvailability configuredAvailability{UiControlAvailability::Enabled};
         UiActionText editStartText;
         UiControlDetail::PendingDefault pendingDefault;
         UiControlActivationSource pressSource{UiControlActivationSource::Programmatic};

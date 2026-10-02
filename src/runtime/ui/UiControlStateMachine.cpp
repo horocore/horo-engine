@@ -173,15 +173,45 @@ namespace Horo::Runtime::Ui {
     Result<void> UiControlStateMachine::SetAvailability(const UiControlAvailability availability) {
         if (!storage_ || storage_->lifecycle != UiControlLifecycleState::Active)
             return Failure(UiErrors::ControlLifecycleUnavailable);
-        if (!IsKnown(availability, UiControlAvailability::Count))
+        if (!IsKnown(availability, UiControlAvailability::Count) || availability == UiControlAvailability::Busy)
             return Failure(UiErrors::ControlInputInvalid);
+        storage_->configuredAvailability = availability;
+        const auto effective = availability == UiControlAvailability::Enabled && storage_->asyncAction && storage_->asyncAction->Busy()
+                                   ? UiControlAvailability::Busy
+                                   : availability;
         if (availability == UiControlAvailability::Disabled) {
             storage_->ClearTransient(true);
-            storage_->SetAvailabilityProjection(availability);
+            storage_->SetAvailabilityProjection(effective);
         } else {
-            storage_->SetAvailabilityProjection(availability);
+            storage_->SetAvailabilityProjection(effective);
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc UiControlStateMachine::ObserveAsyncActions */
+    Result<void> UiControlStateMachine::ObserveAsyncActions(const UiAsyncActionStore &actions) {
+        if (!storage_ || storage_->lifecycle != UiControlLifecycleState::Active)
+            return Failure(UiErrors::ControlLifecycleUnavailable);
+        const auto &base = UiControlDetail::BaseOf(storage_->descriptor);
+        auto projected = actions.Project({base.owner, base.element});
+        if (projected.HasError())
+            return Result<void>::Failure(projected.ErrorValue());
+        const bool busy = projected.Value() && projected.Value()->Busy();
+        if (busy)
+            storage_->ClearTransient(false);
+        storage_->asyncAction = std::move(projected).Value();
+        const auto effective = storage_->configuredAvailability == UiControlAvailability::Enabled && busy
+                                   ? UiControlAvailability::Busy
+                                   : storage_->configuredAvailability;
+        storage_->SetAvailabilityProjection(effective);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiControlStateMachine::AsyncAction */
+    Result<std::optional<UiAsyncActionSnapshot>> UiControlStateMachine::AsyncAction() const {
+        if (!storage_ || storage_->lifecycle == UiControlLifecycleState::Stopped)
+            return Failure<std::optional<UiAsyncActionSnapshot>>(UiErrors::ControlLifecycleUnavailable);
+        return Result<std::optional<UiAsyncActionSnapshot>>::Success(storage_->asyncAction);
     }
 
     /** @copydoc UiControlStateMachine::BeginRetirement */
@@ -190,6 +220,7 @@ namespace Horo::Runtime::Ui {
             return Failure(UiErrors::ControlLifecycleUnavailable);
         storage_->ClearTransient(true);
         storage_->lifecycle = UiControlLifecycleState::Retiring;
+        storage_->asyncAction.reset();
         return Result<void>::Success();
     }
 
@@ -200,5 +231,6 @@ namespace Horo::Runtime::Ui {
         storage_->ClearTransient(true);
         storage_->SetAvailabilityProjection(UiControlAvailability::Disabled);
         storage_->lifecycle = UiControlLifecycleState::Stopped;
+        storage_->asyncAction.reset();
     }
 }  // namespace Horo::Runtime::Ui

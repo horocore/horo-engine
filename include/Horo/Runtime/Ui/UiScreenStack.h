@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Ui/UiActions.h"
 #include "Horo/Runtime/Ui/UiDocument.h"
 #include "Horo/Runtime/Ui/UiIdentity.h"
 
@@ -257,6 +258,19 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::span<const UiRouteInstance> Routes() const noexcept;
         /** @brief Creates a guard against the current stack revision and top instance. */
         [[nodiscard]] Result<UiRouteStackGuard> Guard() const;
+
+        /**
+         * @brief Transfers one active router into the exact live route's lifetime.
+         * @param route Exact committed route incarnation.
+         * @param router Same-owner router, moved only on success; its source revisions stay immutable.
+         * @return Success or typed stale/duplicate/lifecycle failure. Preparation failure leaves both owners unchanged.
+         * @details Pop/back/clear cancel with OwnerRetired, replacement cancels with Superseded, stack shutdown
+         * cancels with Shutdown. Failed/cancelled route transactions preserve pending operations.
+         */
+        [[nodiscard]] Result<void> AttachActions(UiRouteInstanceId route, UiActionRouter &&router);
+        /** @brief Borrows a live route's action router for one owner-thread operation. @param route Exact route. @return Router or null;
+         * never retain across route mutation. */
+        [[nodiscard]] UiActionRouter *Actions(UiRouteInstanceId route) noexcept;
 
         /** @brief Closes new operation admission while retaining committed routes for drain/inspection. */
         [[nodiscard]] Result<void> BeginRetirement();
