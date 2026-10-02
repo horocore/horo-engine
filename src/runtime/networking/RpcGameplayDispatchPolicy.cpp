@@ -145,7 +145,7 @@ namespace Horo::Network {
                 return Result<void>::Failure(WrapError(NetworkErrors::RpcPermissionDenied, allowed.ErrorValue()));
             if (allowed.Value())
                 return Result<void>::Success();
-        } catch (...) {
+        } catch (...) {  // NOSONAR: Required module exception containment boundary.
             // Host-approved policies are external module code, including non-standard exception sources.
             return Result<void>::Failure(MakeError(NetworkErrors::RpcPermissionDenied));
         }

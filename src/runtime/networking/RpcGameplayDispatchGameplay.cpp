@@ -20,7 +20,7 @@ namespace Horo::Network {
                 if (executed.HasError())
                     return Result<void>::Failure(WrapError(NetworkErrors::RpcGameplayFailed, std::move(executed).ErrorValue()));
                 return executed;
-            } catch (...) {
+            } catch (...) {  // NOSONAR: Required module exception containment boundary.
                 // A non-standard throw is also a terminal Gameplay failure; never retry an accepted logical command.
                 return Result<void>::Failure(MakeError(NetworkErrors::RpcGameplayFailed));
             }
