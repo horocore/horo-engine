@@ -738,7 +738,8 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_link_libraries(HoroNavigationBakeDiagnosticsPublicConsumer PRIVATE HoroEngine::NavigationBakeService)
     add_test(NAME HoroNavigationBakeDiagnosticsPublicConsumer COMMAND HoroNavigationBakeDiagnosticsPublicConsumer)
     add_executable(HoroNavigationBakeServiceTests unit/runtime/navigation/NavigationBakeServiceTests.cpp
-            unit/runtime/navigation/NavigationBakeDiagnosticsTests.cpp)
+            unit/runtime/navigation/NavigationBakeDiagnosticsTests.cpp
+            unit/runtime/navigation/NavigationBakeDiagnosticRecoveryTests.cpp)
     target_compile_features(HoroNavigationBakeServiceTests PRIVATE cxx_std_20)
     target_include_directories(HoroNavigationBakeServiceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_link_libraries(HoroNavigationBakeServiceTests PRIVATE HoroEngine::NavigationBakeService HoroEngine::NavigationRecastDetour)

@@ -157,10 +157,10 @@ namespace Horo::Application {
         active_ = std::move(pending_);
         auto submitted = StartNavigationBakeJob(operations_, jobs_, Descriptor(state_, active_));
         if (submitted.HasError()) {
-            const bool newlyTerminal =
-                operations_.Update(active_->operation,
-                                   {.state = OperationState::Failed, .phase = "admission", .error = submitted.ErrorValue()});
-            if (newlyTerminal && active_->diagnostics)
+            if (const bool newlyTerminal =
+                    operations_.Update(active_->operation,
+                                       {.state = OperationState::Failed, .phase = "admission", .error = submitted.ErrorValue()});
+                newlyTerminal && active_->diagnostics)
                 active_->diagnostics->Record({.operation = active_->operation,
                                               .event = NavigationBakeDiagnosticEvent::StageFailed,
                                               .stage = "admission",

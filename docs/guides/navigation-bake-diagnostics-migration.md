@@ -54,8 +54,9 @@ accepted checkpoints retain cumulative counts across history recovery.
 The Foundation history file/roll/recovery limits independently bound disk and
 replay retention. Set `maxFileBytes` to accommodate checkpoint envelopes (the
 decoder permits at most 8192 payload bytes); a smaller limit is an observable
-sink failure. The journal reports submission rejection, process-wide dispatcher
-drops and its own history export failures separately. Rejected delivery emits a
+sink failure. The journal reports diagnostic construction failures, persistence
+submission rejection, process-wide dispatcher drops and its own history export
+failures separately. Rejected delivery emits a
 shared output warning. These counters describe incomplete retention rather than
 changing the bake's terminal result.
 

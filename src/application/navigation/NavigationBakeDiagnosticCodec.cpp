@@ -75,8 +75,7 @@ namespace Horo::Application::NavigationBakeDetail {
                                               .target = {.scene = {Unsigned(input, "scene")},
                                                          .object = {Unsigned(input, "object")},
                                                          .relativePath = input.at("path").get<std::string>()}};
-            const auto asset = input.at("asset").get<std::string>();
-            if (!asset.empty()) {
+            if (const auto asset = input.at("asset").get<std::string>(); !asset.empty()) {
                 auto id = Assets::AssetId::Parse(asset);
                 if (id.HasError() || !id.Value().IsValid())
                     throw Json::type_error::create(302, "invalid asset identity", &input);
@@ -85,6 +84,40 @@ namespace Horo::Application::NavigationBakeDetail {
             if (source.target.relativePath.size() > 1024 || source.target.scene.IsValid() != source.target.object.IsValid())
                 throw Json::type_error::create(302, "invalid source target", &input);
             return source;
+        }
+
+        /** @brief Validates fixed checkpoint text bounds independently of optional navigation context. */
+        [[nodiscard]] bool ValidText(const NavigationBakeDiagnosticRecord &record) {
+            return record.stage.size() <= 64 && record.message.size() <= 1024 && record.causeCode.size() <= 160 &&
+                   IsValidUtf8ScalarSequence(record.stage) && IsValidUtf8ScalarSequence(record.message) &&
+                   IsValidUtf8ScalarSequence(record.causeCode);
+        }
+
+        /** @brief Decodes bounded progress without narrowing non-finite or out-of-range values. */
+        [[nodiscard]] float Progress(const Json &value) {
+            const auto progress = value.get<float>();
+            if (!std::isfinite(progress) || progress < 0 || progress > 1)
+                throw Json::type_error::create(302, "invalid progress", &value);
+            return progress;
+        }
+
+        /** @brief Decodes the optional tile/source/progress evidence with checked domain identities. */
+        void ReadContext(const Json &value, NavigationBakeDiagnosticRecord &record) {
+            if (value.contains("progress"))
+                record.progress = Progress(value.at("progress"));
+            if (value.contains("tile")) {
+                const auto &tile = value.at("tile");
+                const auto layer = Unsigned(tile, "layer");
+                if (layer > UINT16_MAX)
+                    throw Json::type_error::create(302, "invalid tile layer", &tile);
+                record.tile = Navigation::NavigationBakeTileKey{.profile = Identity<Navigation::NavigationAgentProfileId>(tile, "profile"),
+                                                                .surface = Identity<Navigation::SurfaceId>(tile, "surface"),
+                                                                .tile = {.x = Coordinate(tile, "x"),
+                                                                         .z = Coordinate(tile, "z"),
+                                                                         .layer = static_cast<std::uint16_t>(layer)}};
+            }
+            if (value.contains("source"))
+                record.source = Source(value.at("source"));
         }
     }  // namespace
 
@@ -111,7 +144,7 @@ namespace Horo::Application::NavigationBakeDetail {
                    {"suppressed", record.suppressedCount},
                    {"totalSuppressed", record.totalSuppressedRecords},
                    {"totalDropped", record.totalDroppedRecords}};
-        if (record.progress)
+        if (record.progress.has_value())
             value["progress"] = *record.progress;
         if (record.tile) {
             const auto &tile = *record.tile;
@@ -161,29 +194,9 @@ namespace Horo::Application::NavigationBakeDetail {
                                                   .totalSuppressedRecords = Unsigned(value, "totalSuppressed"),
                                                   .totalDroppedRecords = Unsigned(value, "totalDropped"),
                                                   .recovered = true};
-            if (record.sequence == 0 || record.operation == 0 || record.stage.size() > 64 || record.message.size() > 1024 ||
-                record.causeCode.size() > 160 || !IsValidUtf8ScalarSequence(record.stage) || !IsValidUtf8ScalarSequence(record.message) ||
-                !IsValidUtf8ScalarSequence(record.causeCode))
+            if (record.sequence == 0 || record.operation == 0 || !ValidText(record))
                 return std::nullopt;
-            if (value.contains("progress")) {
-                const auto progress = value.at("progress").get<float>();
-                if (!std::isfinite(progress) || progress < 0 || progress > 1)
-                    return std::nullopt;
-                record.progress = progress;
-            }
-            if (value.contains("tile")) {
-                const auto &tile = value.at("tile");
-                const auto x = Coordinate(tile, "x");
-                const auto z = Coordinate(tile, "z");
-                const auto layer = Unsigned(tile, "layer");
-                if (layer > UINT16_MAX)
-                    return std::nullopt;
-                record.tile = Navigation::NavigationBakeTileKey{.profile = Identity<Navigation::NavigationAgentProfileId>(tile, "profile"),
-                                                                .surface = Identity<Navigation::SurfaceId>(tile, "surface"),
-                                                                .tile = {.x = x, .z = z, .layer = static_cast<std::uint16_t>(layer)}};
-            }
-            if (value.contains("source"))
-                record.source = Source(value.at("source"));
+            ReadContext(value, record);
             DescribeDiagnostic(record);
             return record;
         } catch (const Json::exception &) {

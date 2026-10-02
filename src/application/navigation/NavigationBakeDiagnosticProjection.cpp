@@ -53,7 +53,7 @@ namespace Horo::Application::NavigationBakeDetail {
             }
             diagnostics->Record(std::move(record));
         } catch (const std::exception &) {
-            // This optional consumer cannot alter scheduler or operation terminal truth.
+            diagnostics->NoteSubmissionFailure();
         }
     }
 
@@ -87,7 +87,7 @@ namespace Horo::Application::NavigationBakeDetail {
                 state.config.diagnostics->Record(record);
             }
         } catch (const std::exception &) {
-            // Optional diagnostic construction cannot replace the tile's original error.
+            state.config.diagnostics->NoteSubmissionFailure();
         }
     }
 }  // namespace Horo::Application::NavigationBakeDetail

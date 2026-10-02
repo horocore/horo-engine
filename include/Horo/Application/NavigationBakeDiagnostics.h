@@ -77,8 +77,9 @@ namespace Horo::Application {
         std::uint64_t droppedRecords{};
         std::uint64_t suppressedRecords{};
         std::uint64_t persistenceDrops{};
-        std::uint64_t dispatcherDrops{}; /**< Process-wide telemetry delivery loss, separate from journal submission rejection. */
-        std::uint64_t historyFailures{}; /**< Failures of this journal's persistence sink. */
+        std::uint64_t dispatcherDrops{};    /**< Process-wide telemetry delivery loss, separate from journal submission rejection. */
+        std::uint64_t historyFailures{};    /**< Failures of this journal's persistence sink. */
+        std::uint64_t submissionFailures{}; /**< Rejected or failed diagnostic construction, separate from detail suppression. */
         std::vector<NavigationBakeDiagnosticRecord> records;
     };
 
@@ -99,7 +100,16 @@ namespace Horo::Application {
      * Stop producers, drain telemetry, then release this sink and its output/history owners.
      */
     class NavigationBakeDiagnostics final : public Telemetry::ISink {
+        struct ConstructionKey {
+        private:
+            friend class NavigationBakeDiagnostics;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Internal factory-only construction; the private key prevents bypassing Create validation.
+         * @param config Validated composition. */
+        NavigationBakeDiagnostics(ConstructionKey, NavigationBakeDiagnosticsConfig config);
         /** @brief Validates composition and recovers retained checkpoints into shared Build Output.
          * @param config Persistent project identity, canonical root, stores and positive bounded policy.
          * @return Shared sink or typed invalid composition error. */
@@ -108,6 +118,8 @@ namespace Horo::Application {
          * @param record Owned evidence. Terminal and suppression summaries bypass the detail limit.
          * @return True if retained; false for suppressed, invalid or rejected evidence. Persistence loss is reported in Snapshot. */
         bool Record(NavigationBakeDiagnosticRecord record) noexcept;
+        /** @brief Counts producer-side construction failure without altering operation terminal truth. */
+        void NoteSubmissionFailure() noexcept;
         /** @brief Returns an owned bounded snapshot. @return Records and explicit loss counts. */
         [[nodiscard]] NavigationBakeDiagnosticSnapshot Snapshot() const;
         /** @brief Checks the fixed definition binding at service composition. @param definition Requested asset owner. @return True for
@@ -129,11 +141,13 @@ namespace Horo::Application {
         void Flush() override;
 
     private:
-        explicit NavigationBakeDiagnostics(NavigationBakeDiagnosticsConfig config);
         void Retain(NavigationBakeDiagnosticRecord record);
         void Project(const NavigationBakeDiagnosticRecord &record) const;
         void Recover();
         bool RecordImpl(NavigationBakeDiagnosticRecord record);
+        bool AdmitRecord(NavigationBakeDiagnosticRecord &record);
+        bool ApplyDetailLimit(NavigationBakeDiagnosticRecord &record);
+        void Persist(const NavigationBakeDiagnosticRecord &record);
         NavigationBakeDiagnosticsConfig config_;
         // Serializes producer ordering and protects retained records/counters. No I/O or callbacks under this lock.
         mutable std::mutex mutex_;
@@ -147,5 +161,6 @@ namespace Horo::Application {
         std::uint64_t suppressedTotal_{};
         std::uint64_t persistenceDrops_{};
         std::uint64_t historyFailures_{};
+        std::uint64_t submissionFailures_{};
     };
 }  // namespace Horo::Application

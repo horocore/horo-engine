@@ -19,38 +19,47 @@ namespace Horo::Application {
                 text.pop_back();
         }
 
-        /** @brief Rejects every symlink and noncanonical relative component before resolving a regular file. */
-        [[nodiscard]] Result<std::filesystem::path> ResolvePath(const std::filesystem::path &root, const std::string &relative) {
-            using namespace Navigation;
-            const std::filesystem::path path{relative};
-            if (relative.empty() || relative.size() > 1024 || relative.find('\0') != std::string::npos ||
-                relative.find_first_of("\\:") != std::string::npos || !IsValidUtf8ScalarSequence(relative) || path.is_absolute() ||
-                path.has_root_path() || path.lexically_normal().generic_string() != relative)
-                return Result<std::filesystem::path>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
-            auto rootPart = root.root_path();
-            std::error_code rootError;
-            for (const auto &part : root.relative_path()) {
-                rootPart /= part;
-                if (std::filesystem::is_symlink(std::filesystem::symlink_status(rootPart, rootError)) || rootError)
-                    return Result<std::filesystem::path>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
-            }
-            auto candidate = root;
+        /** @brief Checks portable path text before filesystem interpretation. */
+        [[nodiscard]] bool SafePathText(const std::string &relative) {
+            return !relative.empty() && relative.size() <= 1024 && relative.find('\0') == std::string::npos &&
+                   relative.find_first_of("\\:") == std::string::npos && IsValidUtf8ScalarSequence(relative);
+        }
+
+        /** @brief Checks every absolute ancestor without following a symlink. */
+        [[nodiscard]] bool HasSafeAncestors(const std::filesystem::path &absolute) {
+            auto candidate = absolute.root_path();
             std::error_code error;
-            for (const auto &part : path) {
-                if (part == ".." || part == "." || part.empty())
-                    return Result<std::filesystem::path>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+            for (const auto &part : absolute.relative_path()) {
                 candidate /= part;
                 const auto status = std::filesystem::symlink_status(candidate, error);
                 if (error || std::filesystem::is_symlink(status))
-                    return Result<std::filesystem::path>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+                    return false;
             }
+            return true;
+        }
+
+        /** @brief Rejects unsafe relative components and ancestors before resolving a regular file. */
+        [[nodiscard]] Result<std::filesystem::path> ResolvePath(const std::filesystem::path &root, const std::string &relative) {
+            using namespace Navigation;
+            const std::filesystem::path path{relative};
+            if (!SafePathText(relative) || path.has_root_path() || path.lexically_normal().generic_string() != relative ||
+                std::ranges::any_of(path, [](const auto &part) {
+                return part == ".." || part == "." || part.empty();
+            }))
+                return Result<std::filesystem::path>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+            auto candidate = root / path;
+            if (!HasSafeAncestors(candidate))
+                return Result<std::filesystem::path>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+            std::error_code error;
             if (!std::filesystem::is_regular_file(candidate, error) || error)
                 return Result<std::filesystem::path>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
             return Result<std::filesystem::path>::Success(std::move(candidate));
         }
     }  // namespace
 
-    NavigationBakeDiagnostics::NavigationBakeDiagnostics(NavigationBakeDiagnosticsConfig config) : config_(std::move(config)) {}
+    /** @copydoc NavigationBakeDiagnostics::NavigationBakeDiagnostics */
+    NavigationBakeDiagnostics::NavigationBakeDiagnostics(ConstructionKey, NavigationBakeDiagnosticsConfig config)
+        : config_(std::move(config)) {}
 
     /** @copydoc NavigationBakeDiagnostics::Create */
     Result<std::shared_ptr<NavigationBakeDiagnostics>> NavigationBakeDiagnostics::Create(NavigationBakeDiagnosticsConfig config) {
@@ -61,9 +70,11 @@ namespace Horo::Application {
             return Result<std::shared_ptr<NavigationBakeDiagnostics>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         std::error_code error;
         config.projectRoot = std::filesystem::canonical(config.projectRoot, error);
-        if (error || !std::filesystem::is_directory(config.projectRoot, error) || error)
+        if (error)
             return Result<std::shared_ptr<NavigationBakeDiagnostics>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
-        auto journal = std::shared_ptr<NavigationBakeDiagnostics>{new NavigationBakeDiagnostics{std::move(config)}};
+        if (!std::filesystem::is_directory(config.projectRoot, error) || error)
+            return Result<std::shared_ptr<NavigationBakeDiagnostics>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+        auto journal = std::make_shared<NavigationBakeDiagnostics>(ConstructionKey{}, std::move(config));
         journal->Recover();
         return Result<std::shared_ptr<NavigationBakeDiagnostics>>::Success(std::move(journal));
     }
@@ -110,45 +121,73 @@ namespace Horo::Application {
         try {
             return RecordImpl(std::move(record));
         } catch (const std::exception &) {
-            // Diagnostic allocation/encoding failure must never rewrite a committed bake result.
+            NoteSubmissionFailure();
             return false;
         }
+    }
+
+    /** @copydoc NavigationBakeDiagnostics::NoteSubmissionFailure */
+    void NavigationBakeDiagnostics::NoteSubmissionFailure() noexcept {
+        std::lock_guard lock(mutex_);
+        ++submissionFailures_;
+        ++revision_;
+    }
+
+    /** @brief Admits a bounded operation session under the producer lock. */
+    bool NavigationBakeDiagnostics::AdmitRecord(NavigationBakeDiagnosticRecord &record) {
+        if (!counts_.contains(record.operation) && counts_.size() >= 128) {
+            ++submissionFailures_;
+            ++revision_;
+            return false;
+        }
+        if (!sessions_.contains(record.operation)) {
+            auto session = config_.output->BeginSession();
+            if (!session) {
+                ++submissionFailures_;
+                ++revision_;
+                return false;
+            }
+            sessions_.emplace(record.operation, *session);
+        }
+        record.session = sessions_.at(record.operation);
+        return true;
+    }
+
+    /** @brief Converts excess detail into an explicitly counted summary under the producer lock. */
+    bool NavigationBakeDiagnostics::ApplyDetailLimit(NavigationBakeDiagnosticRecord &record) {
+        if (record.result != BuildOutputResult::None || record.event == NavigationBakeDiagnosticEvent::Suppressed)
+            return true;
+        const auto count = counts_[record.operation]++;
+        if (count < config_.maximumRecordsPerOperation)
+            return true;
+        ++suppressedTotal_;
+        const auto total = ++suppressed_[record.operation];
+        record.event = NavigationBakeDiagnosticEvent::Suppressed;
+        record.message = std::format("{} navigation bake detail records suppressed", total);
+        record.suppressedCount = 1;
+        record.tile.reset();
+        record.source.reset();
+        return false;
     }
 
     /** @brief Applies bounded producer policy before projecting and enqueuing one checkpoint. */
     bool NavigationBakeDiagnostics::RecordImpl(NavigationBakeDiagnosticRecord record) {
         using enum NavigationBakeDiagnosticEvent;
         if (record.operation == 0 || record.event >= Count || record.recovered ||
-            (record.progress && (!std::isfinite(*record.progress) || *record.progress < 0 || *record.progress > 1)))
+            (record.progress.has_value() && (!std::isfinite(*record.progress) || *record.progress < 0 || *record.progress > 1))) {
+            NoteSubmissionFailure();
             return false;
+        }
         BoundText(record.stage, 64);
         BoundText(record.message, 1024);
         BoundText(record.causeCode, 160);
         if (record.source && record.source->target.relativePath.size() > 1024)
             record.source->target.relativePath.clear();
         const bool terminal = record.result != BuildOutputResult::None;
-        bool retained = true;
         std::lock_guard lock(mutex_);
-        if (!counts_.contains(record.operation) && counts_.size() >= 128)
+        if (!AdmitRecord(record))
             return false;
-        if (!sessions_.contains(record.operation)) {
-            auto session = config_.output->BeginSession();
-            if (!session)
-                return false;
-            sessions_.emplace(record.operation, *session);
-        }
-        record.session = sessions_.at(record.operation);
-        auto &count = counts_[record.operation];
-        if (!terminal && record.event != Suppressed && count++ >= config_.maximumRecordsPerOperation) {
-            ++suppressedTotal_;
-            const auto total = ++suppressed_[record.operation];
-            record.event = Suppressed;
-            record.message = std::format("{} navigation bake detail records suppressed", total);
-            record.suppressedCount = 1;
-            record.tile.reset();
-            record.source.reset();
-            retained = false;
-        }
+        const bool retained = ApplyDetailLimit(record);
         NavigationBakeDetail::DescribeDiagnostic(record);
         Retain(record);
         record = records_.back();
@@ -158,14 +197,21 @@ namespace Horo::Application {
             suppressed_.erase(record.operation);
         }
         Project(record);
-        Telemetry::Record checkpoint{.subsystem = "navigation.bake",
-                                     .payload =
-                                         Telemetry::SpanRecord{.name = std::string{CheckpointName},
-                                                               .status = Telemetry::SpanStatus::Succeeded,
-                                                               .fields = {
-                                                                   {.key = "diagnostic",
-                                                                    .value = NavigationBakeDetail::EncodeDiagnostic(record, config_)}}}};
-        if (!Telemetry::Runtime::EmitRecord(std::move(checkpoint))) {
+        Persist(record);
+        return retained;
+    }
+
+    /** @brief Enqueues a replay-valid checkpoint under the producer lock; never performs persistent I/O. */
+    void NavigationBakeDiagnostics::Persist(const NavigationBakeDiagnosticRecord &record) {
+        auto bytes = NavigationBakeDetail::EncodeDiagnostic(record, config_);
+        bool accepted{};
+        if (NavigationBakeDetail::DecodeDiagnostic(bytes, config_).has_value())
+            accepted = Telemetry::Runtime::EmitRecord(
+                {.subsystem = "navigation.bake",
+                 .payload = Telemetry::SpanRecord{.name = std::string{CheckpointName},
+                                                  .status = Telemetry::SpanStatus::Succeeded,
+                                                  .fields = {{.key = "diagnostic", .value = std::move(bytes)}}}});
+        if (!accepted) {
             const bool first = ++persistenceDrops_ == 1;
             ++revision_;
             if (first)
@@ -176,7 +222,6 @@ namespace Horo::Application {
                      .code = DiagnosticCode{"navigation.bake.history_unavailable"},
                      .message = "Navigation diagnostic persistence rejected a checkpoint; inspect the diagnostic loss counters."});
         }
-        return retained;
     }
 
     /** @copydoc NavigationBakeDiagnostics::Snapshot */
@@ -188,6 +233,7 @@ namespace Horo::Application {
                 .persistenceDrops = persistenceDrops_,
                 .dispatcherDrops = Telemetry::Runtime::GetStatistics().droppedRecords,
                 .historyFailures = historyFailures_,
+                .submissionFailures = submissionFailures_,
                 .records = {records_.begin(), records_.end()}};
     }
 
@@ -235,11 +281,12 @@ namespace Horo::Application {
         if (!source)
             return Result<bool>::Failure(MakeError(NavigationErrors::BakeInputStale));
         const auto &target = source->target;
-        const auto sameIdentity = [&source](const auto &current) {
+        if (const auto sameIdentity =
+                [&source](const auto &current) {
             return current.observation.producer == source->observation.producer &&
                    current.observation.contribution == source->observation.contribution;
         };
-        if (target.scene.IsValid() != target.object.IsValid() || (!target.asset.IsValid() && !target.object.IsValid()) ||
+            target.scene.IsValid() != target.object.IsValid() || (!target.asset.IsValid() && !target.object.IsValid()) ||
             std::ranges::count(sources, *source) != 1 || std::ranges::count_if(sources, sameIdentity) != 1)
             return Result<bool>::Failure(MakeError(NavigationErrors::BakeInputStale));
         auto path = ResolvePath(config_.projectRoot, target.relativePath);
