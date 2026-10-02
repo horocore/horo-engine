@@ -135,8 +135,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsAllowed(const std::size_t index) const noexcept {
             if (index >= nodes.size() || !IsWithinModal(index))
                 return false;
-            const UiFocusNodeDescriptor &node = nodes[index].descriptor;
-            if (!node.focusable)
+            if (const UiFocusNodeDescriptor &node = nodes[index].descriptor; !node.focusable)
                 return false;
             std::size_t current = index;
             for (std::uint32_t depth = 0; depth < MaximumUiFocusGraphDepth; ++depth) {
@@ -351,7 +350,7 @@ namespace Horo::Runtime::Ui {
             handleOrder.clear();
             for (std::size_t index = 0; index < nodes.size(); ++index)
                 handleOrder.push_back(index);
-            std::sort(handleOrder.begin(), handleOrder.end(), [this](const std::size_t left, const std::size_t right) {
+            std::ranges::sort(handleOrder, [this](const std::size_t left, const std::size_t right) {
                 return nodes[left].descriptor.element < nodes[right].descriptor.element;
             });
         }

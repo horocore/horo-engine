@@ -11,6 +11,7 @@
 namespace Horo::Runtime::Ui {
     namespace {
         using Test::Stable;
+        using enum UiNavigationDirection;
 
         template <typename T> T Revision(const std::uint64_t value = 1) {
             return T::Create(value).Value();
@@ -22,7 +23,7 @@ namespace Horo::Runtime::Ui {
 
             Result<void> ResolveChildConstraints(const UiLayoutChildConstraintRequest &request,
                                                  const std::span<UiLayoutConstraints> output) const override {
-                std::fill(output.begin(), output.end(), request.constraints);
+                std::ranges::fill(output, request.constraints);
                 return Result<void>::Success();
             }
 
@@ -125,15 +126,15 @@ namespace Horo::Runtime::Ui {
             f.evaluator.boxes[5] = {{30, 100}, {20, 20}};
             auto graph = f.Graph();
             f.Apply(graph);
-            f.MovesTo(graph, UiNavigationDirection::Right, 2);
-            f.MovesTo(graph, UiNavigationDirection::Left, 1);
+            f.MovesTo(graph, Right, 2);
+            f.MovesTo(graph, Left, 1);
             std::swap(f.nodes[2], f.nodes[4]);
             f.descriptor.owner.interaction = Revision<UiInteractionRevision>(2);
             REQUIRE(graph.Reload(f.descriptor, f.nodes).HasValue());
-            CHECK(graph.Move(UiNavigationDirection::Right).Value().kind == UiFocusChangeKind::NoTarget);
+            CHECK(graph.Move(Right).Value().kind == UiFocusChangeKind::NoTarget);
             f.Apply(graph, 2);
-            f.MovesTo(graph, UiNavigationDirection::Right, 4);
-            CHECK(graph.Move(UiNavigationDirection::Next).Value().kind == UiFocusChangeKind::NoTarget);
+            f.MovesTo(graph, Right, 4);
+            CHECK(graph.Move(Next).Value().kind == UiFocusChangeKind::NoTarget);
         }
 
         TEST_CASE("Spatial focus updates moving layout and returns current bring-into-view evidence", "[runtime_ui][focus][spatial]") {
@@ -142,17 +143,17 @@ namespace Horo::Runtime::Ui {
             auto old = f.Publish();
             REQUIRE(old.HasValue());
             REQUIRE(graph.UpdateLayout(old.Value()).HasValue());
-            f.MovesTo(graph, UiNavigationDirection::Right, 2);
+            f.MovesTo(graph, Right, 2);
             REQUIRE(graph.SetFocus(f.nodes[1].element).HasValue());
             f.evaluator.boxes[2].origin.x = 700;
             f.Apply(graph, 2);
-            f.MovesTo(graph, UiNavigationDirection::Right, 4);
+            f.MovesTo(graph, Right, 4);
             CHECK(graph.Owner().interaction == Revision<UiInteractionRevision>(2));
             const auto stale = graph.UpdateLayout(old.Value());
             REQUIRE(stale.HasError());
             CHECK(stale.ErrorValue().code.Value() == UiErrors::FocusSourceStale.code.Value());
             REQUIRE(graph.SetFocus(f.nodes[1].element).HasValue());
-            const auto moved = graph.Move(UiNavigationDirection::Right).Value();
+            const auto moved = graph.Move(Right).Value();
             REQUIRE(moved.bringIntoView.has_value());
             CHECK(moved.bringIntoView->owner.interaction == graph.Owner().interaction);
             CHECK(moved.current->id == f.nodes[4].id);
@@ -164,9 +165,9 @@ namespace Horo::Runtime::Ui {
             f.nodes[1].links.targets[5] = f.nodes[5].id;
             auto graph = f.Graph();
             f.Apply(graph);
-            f.MovesTo(graph, UiNavigationDirection::Right, 5);
-            f.MovesTo(graph, UiNavigationDirection::Right, 1);
-            CHECK(graph.Move(UiNavigationDirection::Up).Value().kind == UiFocusChangeKind::NoTarget);
+            f.MovesTo(graph, Right, 5);
+            f.MovesTo(graph, Right, 1);
+            CHECK(graph.Move(Up).Value().kind == UiFocusChangeKind::NoTarget);
             f.descriptor.owner.interaction = Revision<UiInteractionRevision>(2);
             f.descriptor.wrap = UiFocusWrapPolicy::Vertical;
             f.nodes[1].links.targets[5] = {};
@@ -174,8 +175,8 @@ namespace Horo::Runtime::Ui {
             REQUIRE(graph.Reload(f.descriptor, f.nodes).HasValue());
             f.Apply(graph, 2);
             REQUIRE(graph.SetFocus(f.nodes[5].element).HasValue());
-            f.MovesTo(graph, UiNavigationDirection::Down, 4);
-            CHECK(graph.Move(UiNavigationDirection::Left).HasValue());
+            f.MovesTo(graph, Down, 4);
+            CHECK(graph.Move(Left).HasValue());
             f.descriptor.wrap = UiFocusWrapPolicy::Count;
             CHECK_FALSE(f.descriptor.IsValid());
         }
@@ -186,7 +187,7 @@ namespace Horo::Runtime::Ui {
             f.nodes[3].visible = false;
             auto graph = f.Graph();
             f.Apply(graph);
-            CHECK(graph.Move(UiNavigationDirection::Right).Value().kind == UiFocusChangeKind::NoTarget);
+            CHECK(graph.Move(Right).Value().kind == UiFocusChangeKind::NoTarget);
             f.nodes[2].enabled = true;
             ++f.nodes[2].element.generation;
             f.nodes[3].visible = true;
@@ -195,7 +196,7 @@ namespace Horo::Runtime::Ui {
             f.descriptor.owner.interaction = Revision<UiInteractionRevision>(2);
             REQUIRE(graph.Reload(f.descriptor, f.nodes).HasValue());
             f.Apply(graph, 2);
-            CHECK(graph.Move(UiNavigationDirection::Right).Value().kind == UiFocusChangeKind::NoTarget);
+            CHECK(graph.Move(Right).Value().kind == UiFocusChangeKind::NoTarget);
             CHECK(graph.SetFocus({f.ownership, f.nodes[2].element.slot, 1}).HasError());
         }
 
@@ -207,12 +208,12 @@ namespace Horo::Runtime::Ui {
             f.Apply(graph);
             auto modal = graph.PushModal({f.nodes[3].element, f.nodes[3].id, f.nodes[4].id});
             REQUIRE(modal.HasValue());
-            CHECK(graph.Move(UiNavigationDirection::Left).Value().kind == UiFocusChangeKind::NoTarget);
-            f.MovesTo(graph, UiNavigationDirection::Right, 5);
-            f.MovesTo(graph, UiNavigationDirection::Right, 4);
+            CHECK(graph.Move(Left).Value().kind == UiFocusChangeKind::NoTarget);
+            f.MovesTo(graph, Right, 5);
+            f.MovesTo(graph, Right, 4);
             REQUIRE(graph.PopModal(modal.Value().modal).HasValue());
             CHECK(graph.CurrentFocus().Value()->id == f.nodes[1].id);
-            f.MovesTo(graph, UiNavigationDirection::Right, 2);
+            f.MovesTo(graph, Right, 2);
         }
 
         TEST_CASE("Spatial focus preserves geometry on invalid publication and foreign layout", "[runtime_ui][focus][spatial]") {
@@ -221,7 +222,7 @@ namespace Horo::Runtime::Ui {
             f.Apply(graph);
             f.evaluator.boxes[2].extent.width = -1;
             CHECK(f.Publish(2).HasError());
-            f.MovesTo(graph, UiNavigationDirection::Right, 2);
+            f.MovesTo(graph, Right, 2);
             Fixture foreign;
             auto foreignDescriptor = foreign.descriptor;
             foreignDescriptor.owner.canvas.generation = 2;
@@ -232,7 +233,7 @@ namespace Horo::Runtime::Ui {
             CHECK(foreignGraph.UpdateLayout(snapshot.Value()).ErrorValue().code.Value() == UiErrors::FocusScopeMismatch.code.Value());
             graph.Shutdown();
             CHECK(graph.UpdateLayout(snapshot.Value()).ErrorValue().code.Value() == UiErrors::FocusLifecycleUnavailable.code.Value());
-            CHECK(graph.Move(UiNavigationDirection::Right).HasError());
+            CHECK(graph.Move(Right).HasError());
         }
 
         TEST_CASE("Spatial focus handles signed coordinate extremes and empty scope reload", "[runtime_ui][focus][spatial]") {
@@ -242,12 +243,12 @@ namespace Horo::Runtime::Ui {
             f.nodes[3].enabled = false;
             auto graph = f.Graph();
             f.Apply(graph);
-            f.MovesTo(graph, UiNavigationDirection::Right, 2);
-            f.MovesTo(graph, UiNavigationDirection::Left, 1);
+            f.MovesTo(graph, Right, 2);
+            f.MovesTo(graph, Left, 1);
             f.descriptor.owner.interaction = Revision<UiInteractionRevision>(2);
             REQUIRE(graph.Reload(f.descriptor, {}).HasValue());
             f.Apply(graph, 2);
-            CHECK(graph.Move(UiNavigationDirection::Right).Value().kind == UiFocusChangeKind::NoTarget);
+            CHECK(graph.Move(Right).Value().kind == UiFocusChangeKind::NoTarget);
             auto empty = UiFocusGraph::Create(f.descriptor, {});
             REQUIRE(empty.HasValue());
             CHECK_FALSE(empty.Value().CurrentFocus().Value().has_value());
@@ -262,15 +263,15 @@ namespace Horo::Runtime::Ui {
             const auto after = ::Horo::Tests::AllocationProbe::Count();
             REQUIRE(changed.HasValue());
             CHECK(after == before);
-            f.MovesTo(graph, UiNavigationDirection::Right, 4);
+            f.MovesTo(graph, Right, 4);
             const auto hidden = graph.SetParticipation(graph.Owner(), {f.nodes[3].element, false, true, false});
             REQUIRE(hidden.HasValue());
             REQUIRE(hidden.Value().current.has_value());
             CHECK(hidden.Value().current->id == f.nodes[1].id);
             CHECK(hidden.Value().kind == UiFocusChangeKind::FocusRecovered);
-            CHECK(graph.Move(UiNavigationDirection::Right).Value().kind == UiFocusChangeKind::NoTarget);
+            CHECK(graph.Move(Right).Value().kind == UiFocusChangeKind::NoTarget);
             REQUIRE(graph.SetParticipation(graph.Owner(), {f.nodes[3].element, false, false, true}).HasValue());
-            CHECK(graph.Move(UiNavigationDirection::Right).Value().kind == UiFocusChangeKind::NoTarget);
+            CHECK(graph.Move(Right).Value().kind == UiFocusChangeKind::NoTarget);
             auto stale = graph.Owner();
             f.Apply(graph, 2);
             CHECK(graph.SetParticipation(stale, {f.nodes[2].element}).ErrorValue().code.Value() == UiErrors::FocusSourceStale.code.Value());
@@ -283,7 +284,7 @@ namespace Horo::Runtime::Ui {
             CHECK(graph.SetParticipation(graph.Owner(), {recycled}).ErrorValue().code.Value() ==
                   UiErrors::FocusTargetUnavailable.code.Value());
             REQUIRE(graph.SetParticipation(graph.Owner(), {f.nodes[2].element, false, true, true}).HasValue());
-            CHECK(graph.Move(UiNavigationDirection::Right).Value().kind == UiFocusChangeKind::NoTarget);
+            CHECK(graph.Move(Right).Value().kind == UiFocusChangeKind::NoTarget);
             REQUIRE(graph.BeginRetirement().HasValue());
             CHECK(graph.SetParticipation(graph.Owner(), {f.nodes[2].element}).ErrorValue().code.Value() ==
                   UiErrors::FocusLifecycleUnavailable.code.Value());
@@ -297,10 +298,10 @@ namespace Horo::Runtime::Ui {
             f.nodes[5].focusable = false;
             auto graph = f.Graph();
             f.Apply(graph);
-            f.MovesTo(graph, UiNavigationDirection::Up, 4);
-            f.MovesTo(graph, UiNavigationDirection::Down, 1);
-            f.MovesTo(graph, UiNavigationDirection::Down, 2);
-            auto edge = graph.Move(UiNavigationDirection::Down).Value();
+            f.MovesTo(graph, Up, 4);
+            f.MovesTo(graph, Down, 1);
+            f.MovesTo(graph, Down, 2);
+            auto edge = graph.Move(Down).Value();
             CHECK(edge.kind == UiFocusChangeKind::NoTarget);
             CHECK(edge.reason == UiFocusChangeReason::InvalidTarget);
             f.nodes[1].links.targets[3] = Stable<UiElementId>(99);
@@ -308,7 +309,7 @@ namespace Horo::Runtime::Ui {
             REQUIRE(graph.Reload(f.descriptor, f.nodes).HasValue());
             f.Apply(graph, 2);
             REQUIRE(graph.SetFocus(f.nodes[1].element).HasValue());
-            edge = graph.Move(UiNavigationDirection::Down).Value();
+            edge = graph.Move(Down).Value();
             CHECK(edge.current->id == f.nodes[1].id);
             CHECK(edge.reason == UiFocusChangeReason::InvalidTarget);
             CHECK(graph.Move(static_cast<UiNavigationDirection>(255)).HasError());
@@ -333,7 +334,7 @@ namespace Horo::Runtime::Ui {
             wrong = f.descriptor;
             wrong.owner.interaction = Revision<UiInteractionRevision>(2);
             CHECK(graph.Reload(wrong, invalid).HasError());
-            f.MovesTo(graph, UiNavigationDirection::Right, 2);
+            f.MovesTo(graph, Right, 2);
         }
     }  // namespace
 }  // namespace Horo::Runtime::Ui

@@ -23,9 +23,25 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Enables wrap only for the explicitly selected cardinal axis. */
         bool CanWrap(const UiFocusWrapPolicy policy, const bool horizontal) noexcept {
-            return policy == UiFocusWrapPolicy::Both ||
-                   policy == (horizontal ? UiFocusWrapPolicy::Horizontal : UiFocusWrapPolicy::Vertical);
+            using enum UiFocusWrapPolicy;
+            return policy == Both || policy == (horizontal ? Horizontal : Vertical);
         }
+
+        using SpatialRank = std::tuple<bool, std::int64_t, std::int64_t, std::int64_t, UiElementId>;
+
+        /** @brief Keeps the best deterministic candidate in fixed storage, shared by forward and wrap selection. */
+        struct RankedTarget final {
+            std::optional<SpatialRank> rank;
+            std::optional<std::size_t> target;
+
+            /** @brief Adopts a strictly better candidate without allocating. */
+            void Consider(const std::size_t index, const SpatialRank &candidate) noexcept {
+                if (!rank.has_value() || candidate < *rank) {
+                    rank = candidate;
+                    target = index;
+                }
+            }
+        };
     }  // namespace
 
     /** @copydoc UiFocusGraph::UpdateLayout */
@@ -44,13 +60,12 @@ namespace Horo::Runtime::Ui {
         if (records.size() > MaximumUiTreeElements)
             return Failure(UiErrors::FocusCapacityExceeded);
 
-        std::fill(storage_->layoutScratch.begin(), storage_->layoutScratch.end(), std::nullopt);
+        std::ranges::fill(storage_->layoutScratch, std::nullopt);
         for (const UiLayoutRecord &record : records) {
             if (!record.element.IsValid() || record.element.ownership != owner.instance.ownership || !record.arrangement.IsValid())
                 return Failure(UiErrors::FocusInvalid);
-            const auto found = std::lower_bound(storage_->handleOrder.begin(), storage_->handleOrder.end(), record.element,
-                                                [this](const std::size_t index, const UiElementHandle handle) {
-                return storage_->nodes[index].descriptor.element < handle;
+            const auto found = std::ranges::lower_bound(storage_->handleOrder, record.element, {}, [this](const std::size_t index) {
+                return storage_->nodes[index].descriptor.element;
             });
             if (found == storage_->handleOrder.end() || storage_->nodes[*found].descriptor.element != record.element)
                 continue;
@@ -77,11 +92,8 @@ namespace Horo::Runtime::Ui {
         const bool horizontal = direction == Left || direction == Right;
         const std::int64_t sign = direction == Left || direction == Up ? -1 : 1;
         const AxisBox origin = Project(*sourceBounds, horizontal, sign);
-        using Rank = std::tuple<bool, std::int64_t, std::int64_t, std::int64_t, UiElementId>;
-        std::optional<Rank> bestRank;
-        std::optional<Rank> wrapRank;
-        std::optional<std::size_t> best;
-        std::optional<std::size_t> wrapped;
+        RankedTarget best;
+        RankedTarget wrapped;
         for (std::size_t index = 0; index < nodes.size(); ++index) {
             const Node &node = nodes[index];
             if (index == source || !node.bounds.has_value() || node.bounds->extent.width == 0 || node.bounds->extent.height == 0 ||
@@ -95,20 +107,12 @@ namespace Horo::Runtime::Ui {
                                            : origin.perpendicularCenter - candidate.perpendicularCenter;
             const auto forward = candidate.center - origin.center;
             if (forward > 0) {
-                const Rank rank{outsideBeam, forward, gap, crossDistance, node.descriptor.id};
-                if (!bestRank.has_value() || rank < *bestRank) {
-                    bestRank = rank;
-                    best = index;
-                }
+                best.Consider(index, {outsideBeam, forward, gap, crossDistance, node.descriptor.id});
             } else if (forward < 0 && CanWrap(descriptor.wrap, horizontal)) {
                 // Opposite edge precedes perpendicular alignment during wrap.
-                const Rank rank{false, candidate.center, gap, crossDistance, node.descriptor.id};
-                if (!wrapRank.has_value() || rank < *wrapRank) {
-                    wrapRank = rank;
-                    wrapped = index;
-                }
+                wrapped.Consider(index, {false, candidate.center, gap, crossDistance, node.descriptor.id});
             }
         }
-        return best.has_value() ? best : wrapped;
+        return best.target.has_value() ? best.target : wrapped.target;
     }
 }  // namespace Horo::Runtime::Ui
