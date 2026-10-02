@@ -210,7 +210,8 @@ namespace Horo::Runtime::Ui {
                         {.id = Stable<UiBindingId>(id),
                          .source = {schema.Type(), source.id, {1, 0}, source.signatureFingerprint},
                          .target = {Stable<UiElementId>(element), target, {.maximumBytes = 64, .minimumScalar = 0.0, .maximumScalar = 1.0}},
-                         .direction = direction}};
+                         .direction = direction},
+                        direction == UiBindingDirection::TargetToSource ? std::optional<UiBindingValue>{false} : std::nullopt};
             }
 
             UiBindingStore Store() const {
@@ -718,6 +719,124 @@ namespace Horo::Runtime::Ui {
             CHECK(Process(store, fixture.tree, layout).disposition == UiBindingWriteDisposition::Ready);
             CHECK(std::get<bool>(store.Find(fixture.tree, Stable<UiBindingId>(15))->value));
             CHECK(fixture.state->revision.Value() == 3);
+        }
+
+        TEST_CASE("Rejected write-only controls reconcile to their authored nondefault UI value without reading the provider",
+                  "[runtime_ui][binding][write][initial_target]") {
+            const auto kind = GENERATE(UiControlKind::Toggle, UiControlKind::Slider, UiControlKind::TextInput);
+            Fixture fixture;
+            const std::uint8_t element = kind == UiControlKind::Toggle ? 2 : kind == UiControlKind::Slider ? 3 : 4;
+            const std::uint16_t property = kind == UiControlKind::Toggle ? 0 : kind == UiControlKind::Slider ? 2 : 1;
+            const auto target = kind == UiControlKind::Toggle   ? UiBindingTargetProperty::BooleanValue
+                                : kind == UiControlKind::Slider ? UiBindingTargetProperty::ScalarValue
+                                                                : UiBindingTargetProperty::Text;
+            auto binding = fixture.Binding(20, element, property, target, UiBindingDirection::TargetToSource);
+            if (kind == UiControlKind::Toggle)
+                binding.initialTarget = true;
+            else if (kind == UiControlKind::Slider)
+                binding.initialTarget = 0.75;
+            else
+                binding.initialTarget = std::string{"authored"};
+            const UiBindingValue authored = *binding.initialTarget;
+            const std::array registrations{UiBindingProviderRegistration{fixture.provider,
+                                                                         UiBindingProviderScopeKind::Player,
+                                                                         &fixture.schema,
+                                                                         Rev<UiBindingSnapshotRevision>(),
+                                                                         {}}};
+            auto store = Take(UiBindingStore::Create(fixture.tree, registrations, std::array{binding}));
+            const auto *initial = store.Find(fixture.tree, binding.binding.id);
+            REQUIRE(initial);
+            CHECK(initial->origin == UiBindingValueOrigin::UiLocal);
+            CHECK(initial->value == authored);
+            binding.initialTarget = false;
+            CHECK(store.Find(fixture.tree, binding.binding.id)->value == authored);
+
+            const UiControlDescriptorBase base{fixture.Context(), fixture.Source(element).element, fixture.Action()};
+            const UiControlDescriptor descriptor =
+                kind == UiControlKind::Toggle   ? UiControlDescriptor{UiToggleControlDescriptor{base, true}}
+                : kind == UiControlKind::Slider ? UiControlDescriptor{UiSliderControlDescriptor{base, 0.0, 1.0, 0.25, 0.75}}
+                                                : UiControlDescriptor{UiTextInputControlDescriptor{base, Text("authored"), 64, true}};
+            auto control = Take(UiControlStateMachine::Create(descriptor));
+            auto router = fixture.Router();
+            auto layout = fixture.Layout();
+            auto authority = fixture.Authority(property);
+            authority->disposition = UiBindingWriteDisposition::Rejected;
+            const auto trigger = kind == UiControlKind::TextInput ? UiBindingCommitTrigger::Submit : UiBindingCommitTrigger::Change;
+            fixture.Admit(store, 20, authority, trigger);
+            const auto edit = Take(store.BeginEdit(fixture.tree, binding.binding.id, fixture.Source(element)));
+            REQUIRE(control.Handle(fixture.Input(control, UiControlInputKind::FocusGained, 1)).HasValue());
+            if (kind == UiControlKind::Slider) {
+                REQUIRE(control.Handle(fixture.Input(control, UiControlInputKind::AdjustPress, 2)).HasValue());
+            } else {
+                if (kind == UiControlKind::TextInput)
+                    REQUIRE(control.Handle(fixture.Input(control, UiControlInputKind::TextInput, 2, Text("edit"))).HasValue());
+                REQUIRE(control.Handle(fixture.Input(control, UiControlInputKind::SubmitPress, 3)).HasValue());
+                REQUIRE(control.Handle(fixture.Input(control, UiControlInputKind::SubmitRelease, 4)).HasValue());
+            }
+            const auto request = fixture.DefaultRequest(router, control);
+            UiBindingWriteActionHandler handler{store, fixture.tree, edit, control};
+            REQUIRE(router.Dispatch(request, handler).HasValue());
+            CHECK(Process(store, fixture.tree, layout).disposition == UiBindingWriteDisposition::Rejected);
+            CHECK(store.Find(fixture.tree, binding.binding.id)->value == authored);
+            REQUIRE(store.ReconcileControl(fixture.tree, binding.binding.id, control).HasValue());
+            if (kind == UiControlKind::Toggle)
+                CHECK(std::get<UiToggleControlState>(control.Snapshot().Value()).checked);
+            else if (kind == UiControlKind::Slider)
+                CHECK(std::get<UiSliderControlState>(control.Snapshot().Value()).value == 0.75);
+            else
+                CHECK(std::get<UiTextInputControlState>(control.Snapshot().Value()).text.View() == "authored");
+            CHECK(fixture.state->revision.Value() == 1);
+            CHECK(fixture.state->commits == 0);
+            CHECK_FALSE(std::get<bool>(fixture.state->values[0]));
+            CHECK(std::get<double>(fixture.state->values[2]) == 0.5);
+            CHECK(std::get<UiActionText>(fixture.state->values[1]).View() == "old");
+        }
+
+        TEST_CASE("Write-only initial projections require a typed bounded authored seed and readable bindings refuse seeds",
+                  "[runtime_ui][binding][write][initial_target][validation]") {
+            Fixture fixture;
+            const std::array values{UiBindingPropertyUpdate{0, false}, UiBindingPropertyUpdate{1, std::string{"old"}},
+                                    UiBindingPropertyUpdate{2, 0.5}};
+            const std::array registrations{UiBindingProviderRegistration{fixture.provider, UiBindingProviderScopeKind::Player,
+                                                                         &fixture.schema, Rev<UiBindingSnapshotRevision>(), values}};
+            auto binding = fixture.Binding(20, 3, 2, UiBindingTargetProperty::ScalarValue, UiBindingDirection::TargetToSource);
+            SECTION("absent authored value") {
+                binding.initialTarget.reset();
+            }
+            SECTION("wrong type") {
+                binding.initialTarget = true;
+            }
+            SECTION("property limit rejects even when target permits") {
+                binding.initialTarget = 1.25;
+                binding.binding.target.limits.maximumScalar = 2.0;
+            }
+            SECTION("target limit rejects even when property permits") {
+                binding.initialTarget = 0.75;
+                binding.binding.target.limits.maximumScalar = 0.5;
+            }
+            SECTION("nonfinite scalar") {
+                binding.initialTarget = std::numeric_limits<double>::quiet_NaN();
+            }
+            SECTION("oversized text") {
+                binding = fixture.Binding(20, 4, 1, UiBindingTargetProperty::Text, UiBindingDirection::TargetToSource);
+                binding.initialTarget = std::string(65, 'x');
+            }
+            SECTION("malformed UTF-8") {
+                binding = fixture.Binding(20, 4, 1, UiBindingTargetProperty::Text, UiBindingDirection::TargetToSource);
+                binding.initialTarget = std::string{"\xc0\xaf"};
+            }
+            SECTION("read-only seed") {
+                binding.binding.direction = UiBindingDirection::SourceToTarget;
+                binding.initialTarget = 0.75;
+            }
+            SECTION("two-way seed cannot override committed source") {
+                binding.binding.direction = UiBindingDirection::TwoWay;
+                binding.initialTarget = 0.75;
+            }
+            REQUIRE(UiBindingStore::Create(fixture.tree, registrations, std::array{binding}).HasError());
+            CHECK(fixture.state->prepares == 0);
+            CHECK(fixture.state->commits == 0);
+            CHECK(fixture.tree.State() == UiElementTreeState::Active);
         }
 
         TEST_CASE("Layout backpressure rejects a prepared text write without publishing any owner",

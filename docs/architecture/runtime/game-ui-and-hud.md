@@ -858,7 +858,8 @@ reports required unavailability for the owning UI activation policy, and permane
 closes that provider incarnation in the store. The host stops provider producers
 before unregister and must retry reported layout backpressure or retire the entire
 UI generation before releasing its provider scope. Retirement closes all target
-reads and update admission; shutdown releases only Horo-owned copies. Old downstream
+reads and update admission; retirement/shutdown abandon pending write reservations
+before releasing authority leases and Horo-owned copies. Old downstream
 immutable leases remain with their existing owners. Repeated unregister/retirement/
 shutdown is harmless. Structural/document reload prepares a new store against the
 replacement retained tree and fresh provider evidence; an old store never silently
@@ -866,7 +867,11 @@ rebinds a recycled slot or stable ID.
 
 This is an additive publication API. Existing descriptor validation and callers
 remain valid. SourceToTarget and TwoWay retain committed provider projections.
-TargetToSource keeps an initial UI-local value and ignores incoming provider deltas;
+TargetToSource requires an explicitly authored typed `initialTarget` in the resolved
+descriptor and ignores incoming provider deltas. Store preparation validates this
+value against provider and target limits and reports its origin as `UiLocal` until
+an accepted commit. Missing/invalid values fail preparation atomically. Readable
+directions reject `initialTarget` so the provider projection remains authoritative;
 it requires the same explicit write admission as TwoWay. Converter metadata needs an
 executable conversion capability and preparation still rejects converters. Provider cadence
 is producer-driven for OnChange, EveryVariableUpdate and Manual; none permits a

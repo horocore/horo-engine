@@ -144,16 +144,14 @@ namespace Horo::Runtime::Ui {
         const auto *property = provider->schema.Find(binding.source.property);
         const auto propertySlot = static_cast<std::size_t>(property - provider->schema.Properties().data());
         const auto providerIndex = static_cast<std::size_t>(provider - providers.data());
-        UiBindingValue local = false;
         const auto type = *UiBindingTargetValueType(binding.target.property);
-        if (type == UiBindingValueType::BoundedText)
-            local = std::string{};
-        else if (type == UiBindingValueType::FixedScalar)
-            local = binding.target.limits.minimumScalar.value_or(0.0);
-        const auto *value = binding.direction == UiBindingDirection::TargetToSource
-                                ? &local
-                                : InitialValue(registrations[providerIndex].values, propertySlot);
-        const auto origin = value ? UiBindingValueOrigin::Provider : UiBindingValueOrigin::Fallback;
+        const bool writeOnly = binding.direction == UiBindingDirection::TargetToSource;
+        if (writeOnly != resolved.initialTarget.has_value())
+            return Failure(UiErrors::BindingValueInvalid);
+        const auto *value = writeOnly ? &*resolved.initialTarget : InitialValue(registrations[providerIndex].values, propertySlot);
+        auto origin = UiBindingValueOrigin::UiLocal;
+        if (!writeOnly)
+            origin = value ? UiBindingValueOrigin::Provider : UiBindingValueOrigin::Fallback;
         if (!value) {
             if (!binding.fallback)
                 return Failure(UiErrors::BindingProviderUnknown);
@@ -163,6 +161,9 @@ namespace Horo::Runtime::Ui {
                 BindingInternal::ValidateValue(*value, *UiBindingTargetValueType(binding.target.property), binding.target.limits);
             valid.HasError())
             return valid;
+        if (writeOnly)
+            if (const auto valid = BindingInternal::ValidateValue(*value, property->type, property->limits); valid.HasError())
+                return valid;
         if (const auto admitted = AdmitTextStorage(binding, property->type, limits.valueBytes, reservedBytes); admitted.HasError())
             return admitted;
         Target target{{binding.id, handle.Value(), binding.target.property, *value, origin},

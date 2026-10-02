@@ -154,6 +154,7 @@ namespace Horo::Runtime::Ui {
     struct UiResolvedBindingDescriptor final {
         UiBindingProviderInstanceId provider;
         UiBindingDescriptor binding;
+        std::optional<UiBindingValue> initialTarget; /**< Authored UI value required only for TargetToSource; never a provider read. */
     };
 
     /** @brief Delta from one coherent provider revision to a newer revision. */
@@ -188,7 +189,8 @@ namespace Horo::Runtime::Ui {
     enum class UiBindingValueOrigin : std::uint8_t {
         Provider,
         Fallback,
-        Unavailable
+        Unavailable,
+        UiLocal /**< Authored initial value of a write-only target before its first accepted provider commit. */
     };
 
     /** @brief One retained typed target, borrowed only until the next store mutation or destruction. */
@@ -237,7 +239,8 @@ namespace Horo::Runtime::Ui {
      * Target borrows cannot escape a synchronous owner phase; immutable text/layout/render snapshots own their derived copies.
      * Reload/structural replacement prepares a new store against the replacement tree; stale batches never reconcile by slot alone.
      * SourceToTarget, TwoWay and TargetToSource are supported; converters require separate conversion capability and fail explicitly.
-     * Writes require explicit AdmitWrites. TargetToSource keeps initial UI-local state and does not subscribe to provider deltas.
+     * Writes require explicit AdmitWrites. TargetToSource requires a typed authored initialTarget and does not subscribe to provider
+     * deltas.
      */
     class UiBindingStore final {
     public:
@@ -245,7 +248,7 @@ namespace Horo::Runtime::Ui {
          * @brief Prepares complete target state against one active retained tree.
          * @param tree Exact active canvas; no tree pointer is retained.
          * @param providers Exact host-resolved provider registrations; all spans are copied or consumed before return.
-         * @param bindings Conflict-free resolved descriptors; required initial values must be present.
+         * @param bindings Conflict-free resolved descriptors; TargetToSource requires initialTarget, readable directions forbid it.
          * @param limits Hard-bounded lifetime capacities.
          * @return Complete private candidate or typed identity, schema, availability, value or capacity failure.
          */
@@ -352,7 +355,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> ReconcileControl(const UiElementTree &tree, UiBindingId binding, UiControlStateMachine &control) const;
         /** @brief Closes admission and target borrows; existing immutable downstream snapshots remain owned by their consumers. */
         void BeginRetirement() noexcept;
-        /** @brief Idempotently releases owned metadata and target storage; no provider or downstream owner is called. */
+        /** @brief Idempotently abandons pending provider reservations before releasing owned storage and authority leases. */
         void Shutdown() noexcept;
 
     private:
