@@ -1365,6 +1365,8 @@ target_compile_features(HoroWorldStreaming PUBLIC cxx_std_20)
 target_link_libraries(HoroWorldStreaming PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
 add_library(HoroPrefab STATIC
+        runtime/prefab/CookedPrefab.cpp
+        runtime/prefab/CookedPrefabCodec.cpp
         runtime/prefab/PrefabErrors.cpp
         runtime/prefab/PrefabIdentity.cpp
         runtime/prefab/PrefabLimits.cpp

@@ -1272,3 +1272,16 @@ into the separate session and supply caller-owned output/scratch and an owned
 provider context. No codec-specific or native backend type crosses the public
 boundary. The generated `HoroAudioApiPublicHeaderConsumer` and focused
 `HoroAudioApiTests` cover the new headers and lifecycle contract.
+
+## Cooked Runtime Prefab Template (PFB-004.1)
+
+`HoroEngine::Prefab` solely owns `Horo/Prefab/CookedPrefab.h`. The immutable
+`CookedPrefab` value, portable codec and dense entity/member/reference/dependency
+tables require only existing Foundation, Assets and GameplayApi dependencies.
+They do not depend on PrefabAuthoring, Application, source resolution, filesystem
+paths, native backends or scene mutation. The generated standalone
+`HoroPrefabPublicHeaderConsumer` and dedicated `HoroCookedPrefabTests` consume
+this contract through its owning target. This is an additive runtime contract;
+existing authoring callers require no migration. Future provider and spawn
+implementations consume this value rather than extending `PrefabDocument` into
+a runtime source authority.

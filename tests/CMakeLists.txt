@@ -857,6 +857,11 @@ target_compile_features(HoroWorldStreamingTests PRIVATE cxx_std_20)
 target_link_libraries(HoroWorldStreamingTests PRIVATE HoroEngine::WorldStreaming)
 horo_register_catch_test(HoroWorldStreamingTests LABELS "unit;world_streaming;headless")
 
+add_executable(HoroCookedPrefabTests unit/runtime/prefab/CookedPrefabTests.cpp)
+target_compile_features(HoroCookedPrefabTests PRIVATE cxx_std_20)
+target_link_libraries(HoroCookedPrefabTests PRIVATE HoroEngine::Prefab)
+horo_register_catch_test(HoroCookedPrefabTests LABELS "unit;prefab;headless")
+
 add_executable(HoroPrefabTests
         unit/runtime/prefab/PrefabDependencyGraphTests.cpp
         unit/runtime/prefab/PrefabDiagnosticsTests.cpp
