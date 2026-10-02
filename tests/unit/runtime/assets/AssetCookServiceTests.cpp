@@ -199,8 +199,8 @@ namespace {
         REQUIRE(assetFailure->sessionId == snapshot.records.back().sessionId);
         const std::filesystem::path secondSource = project.assetsDir / "second_mesh.fbx";
         REQUIRE(std::ranges::count_if(snapshot.records, [&](const BuildOutputRecord &record) {
-            const bool expectedTerminalResult = record.result == BuildOutputResult::Cancelled ||
-                                                 (fail && record.result == BuildOutputResult::Failed);
+            const bool expectedTerminalResult =
+                record.result == BuildOutputResult::Cancelled || (fail && record.result == BuildOutputResult::Failed);
             return record.source.has_value() && record.source->absolutePath == secondSource.string() && expectedTerminalResult;
         }) == 1);
     }
