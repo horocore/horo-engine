@@ -2630,11 +2630,14 @@ target_compile_features(HoroAssetCookCacheTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAssetCookCacheTests PRIVATE HoroEngine::Assets)
 add_executable(HoroAssetCookOutputTests
         unit/runtime/assets/AssetCookOutputTests.cpp
+        unit/runtime/assets/AssetCookPublicationTests.cpp
 )
 target_compile_features(HoroAssetCookOutputTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAssetCookOutputTests PRIVATE HoroEngine::Assets HoroEngine::Platform)
+target_include_directories(HoroAssetCookOutputTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 add_executable(HoroAssetCookServiceTests
         unit/runtime/assets/AssetCookServiceTests.cpp
+        unit/runtime/assets/AssetCookServicePublicationTests.cpp
 )
 target_compile_features(HoroAssetCookServiceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAssetCookServiceTests PRIVATE HoroEngine::Assets HoroEngine::Foundation HoroEngine::Platform)

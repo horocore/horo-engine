@@ -1,0 +1,21 @@
+#pragma once
+
+#include "Horo/Assets/AssetId.h"
+#include "Horo/Platform/SecureRandom.h"
+
+#include <array>
+#include <cstdint>
+#include <span>
+
+namespace Horo::TestSupport {
+    /** @brief Uses host-owned OS entropy for a private publication namespace; the UUID is never an authored asset identity. */
+    [[nodiscard]] inline Result<Assets::AssetId> NewPublicationOperationId() {
+        std::array<std::uint8_t, 16> bytes{};
+        auto source = Platform::CreateNativeSecureRandomSource();
+        if (auto filled = source->Fill(std::as_writable_bytes(std::span{bytes})); filled.HasError())
+            return Result<Assets::AssetId>::Failure(filled.ErrorValue());
+        bytes[6] = static_cast<std::uint8_t>((bytes[6] & 0x0fU) | 0x40U);
+        bytes[8] = static_cast<std::uint8_t>((bytes[8] & 0x3fU) | 0x80U);
+        return Result<Assets::AssetId>::Success(Assets::AssetId::FromBytes(bytes));
+    }
+}  // namespace Horo::TestSupport

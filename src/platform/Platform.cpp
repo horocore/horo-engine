@@ -198,18 +198,23 @@ namespace Horo {
         State(const State &) = delete;
         State &operator=(const State &) = delete;
 
-        State(State &&other) noexcept : processKey(std::move(other.processKey)) {
+        State(State &&other) noexcept
+            : processKey(std::move(other.processKey)), processRegistered(std::exchange(other.processRegistered, false))
 #if defined(_WIN32)
-            handle = std::exchange(other.handle, INVALID_HANDLE_VALUE);
+              ,
+              handle(std::exchange(other.handle, INVALID_HANDLE_VALUE))
 #else
-            descriptor = std::exchange(other.descriptor, -1);
+              ,
+              descriptor(std::exchange(other.descriptor, -1))
 #endif
+        {
         }
 
         State &operator=(State &&other) noexcept {
             if (this != &other) {
                 Release();
                 processKey = std::move(other.processKey);
+                processRegistered = std::exchange(other.processRegistered, false);
 #if defined(_WIN32)
                 handle = std::exchange(other.handle, INVALID_HANDLE_VALUE);
 #else
