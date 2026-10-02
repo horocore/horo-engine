@@ -42,13 +42,17 @@ namespace Horo::Physics {
             return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
         if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
             return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::InvalidState));
-        if (const Result<void> valid = ValidatePhysicsBodyDescriptor(descriptor.body, impl_->identity); valid.HasError())
+        if (const Result<void> valid = ValidatePhysicsBodyDescriptor(descriptor.body, impl_->identity); valid.HasError()) {
+            impl_->RecordAdmissionDiagnostic(valid.ErrorValue(), descriptor.sceneEntity);
             return Result<BodyHandle>::Failure(valid.ErrorValue());
+        }
         if (const auto capacity = impl_->CheckPublicationRevisionCapacity(); capacity.HasError())
             return Result<BodyHandle>::Failure(capacity.ErrorValue());
         auto created = Detail::CreateCanonicalSceneBody(impl_->native, impl_->identity, descriptor);
-        if (created.HasValue())
+        if (created.HasValue()) {
+            Detail::SetCanonicalSceneEntity(impl_->native, created.Value(), descriptor.sceneEntity);
             impl_->InvalidateQueryEventPublication();
+        }
         return created;
     }
 

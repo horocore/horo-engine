@@ -238,7 +238,9 @@ capacity error. Native Jolt allocation cannot unwind through its no-exception fr
 the explicitly installed allocation hooks terminate on heap exhaustion rather than
 returning a null pointer into native code. This is not a recoverable world-creation
 OOM guarantee or a replacement for process-wide memory admission. Body quarantine
-is rejected at native preparation until its safe-point retirement path is implemented.
+retires the corrupt body and attached constraints after the joined solver step,
+before event reduction and publication. The body handle is stale thereafter;
+recovery requires a new body through an explicit scene activation or rebuild.
 Zero body capacity remains a valid descriptor for omitted compositions, but canonical
 preparation rejects it with `OperationUnsupported` before allocation: the pinned
 native broad phase requires storage for its root nodes even in an empty world.
@@ -1065,7 +1067,8 @@ joined native step is active. The owner thread drains that inbox after the step,
 normalizes validation, assertion and fatal conditions to stable `horo.physics` codes,
 and retains one owned `PhysicsDiagnosticRecord`. Validation evidence is inert;
 assertion and fatal evidence fail the world exactly once while preserving the prior
-coherent publication. Reset, scene unload and shutdown clear the retained evidence,
+coherent publication. Explicit reset clears retained evidence; scene unload and shutdown preserve the first
+terminal failure and its diagnostic,
 and no callback may log, allocate, mutate gameplay state or retain native text.
 
 `PhysicsMetricSnapshot` is the immutable bounded handoff for one committed tick.
@@ -1087,9 +1090,28 @@ simulation admission, order, state or determinism. Detailed stage timings are
 profiler-consumable measurements only; this slice does not create a second profiler
 store, arm native capture or claim backend timing support.
 
-NaN or non-finite body state is detected at owned boundaries, associated with
-body/entity identity, and quarantined or treated as fatal according to the
-configured runtime policy.
+NaN or non-finite body state is rejected at descriptor and mutation admission.
+Rejected admission retains structured world and authored-entity evidence; mutation
+rejection also retains the body, owning scene generation and consuming tick. No
+rejected input changes resident solver state or invokes containment policy.
+Before solver entry and after each joined native step, resident body pose, velocity and bounds are scanned
+before event reduction or publication. The stable `physics.body_state.non_finite`
+diagnostic carries world, body, scene object when supplied, scene generation and
+tick. `SceneEntity` appends to the diagnostic context key vocabulary without
+renumbering existing keys; direct world admission leaves it absent. Scene
+activation passes its authored object ID into the body record. `QuarantineBody`
+retires the native body and attached constraints at the
+owner-thread safe point, suppresses its contact and trigger evidence, invalidates
+query generation, removes authored body/collider/constraint bindings and drops
+future payloads and observer dispatch for that handle. Bounded inert command keys
+remain until their consuming tick so removing a source-sequence predecessor cannot
+invalidate a healthy command from the same producer. These reservations still count
+against queue and per-tick capacity until consumption, while pending-command metrics
+exclude suppressed payloads; only the remaining
+finite world may publish the tick. `FailWorld` aborts the tick, preserves the first
+failure through unload/shutdown and publishes no further tick until an explicit
+reset creates a new world generation. Immutable shape resources remain owned by
+the world and are released at normal world teardown.
 
 ## Testing
 
