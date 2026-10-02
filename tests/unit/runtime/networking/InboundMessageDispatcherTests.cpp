@@ -99,12 +99,12 @@ namespace Horo::Network {
             }
         };
 
-        class NonStandardThrowingHandler final : public IInboundMessageHandler {
+        class ThrowingHandler final : public IInboundMessageHandler {
         public:
             std::size_t called{};
             bool standardException{};
 
-            Result<void> Handle(const MessageEnvelope &) override {
+            [[noreturn]] Result<void> Handle(const MessageEnvelope &) override {
                 ++called;
                 if (standardException)
                     throw std::invalid_argument{"hostile inbound callback"};
@@ -217,7 +217,7 @@ namespace Horo::Network {
             }
         };
 
-        void RequirePacketRejection(Result<InboundDispatchReport> polled, const ErrorCodeDescriptor &expected) {
+        void RequirePacketRejection(const Result<InboundDispatchReport> &polled, const ErrorCodeDescriptor &expected) {
             REQUIRE(polled.HasValue());
             REQUIRE(polled.Value().rejectedPackets == 1);
             REQUIRE(polled.Value().lastPacketRejection.has_value());
@@ -250,7 +250,7 @@ namespace Horo::Network {
               "[unit][network][dispatch]") {
         for (const bool standardException : {false, true}) {
             Fixture fixture;
-            auto throwing = std::make_shared<NonStandardThrowingHandler>();
+            auto throwing = std::make_shared<ThrowingHandler>();
             throwing->standardException = standardException;
             REQUIRE(fixture.router
                         ->RegisterHandler({fixture.protocols[0].id, fixture.messages[0].id, MessageTrafficClass::Command,
