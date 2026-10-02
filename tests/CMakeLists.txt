@@ -2344,11 +2344,18 @@ target_compile_features(HoroRuntimeSaveSlotRecoveryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveSlotRecoveryTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveSafePointCoordinatorTests
         unit/runtime/save/SaveSafePointCoordinatorTests.cpp
+        unit/runtime/save/SaveCaptureBarrierTests.cpp
         unit/runtime/save/SaveFoundationQualificationTests.cpp
 )
 target_compile_features(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_link_libraries(HoroRuntimeSaveSafePointCoordinatorTests PRIVATE HoroEngine::Runtime)
+
+add_executable(HoroSaveCaptureBarrierPublicHeaderConsumer support/SaveCaptureBarrierPublicHeaderConsumer.cpp)
+target_compile_features(HoroSaveCaptureBarrierPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroSaveCaptureBarrierPublicHeaderConsumer PRIVATE HoroEngine::Runtime)
+add_test(NAME HoroSaveCaptureBarrierPublicHeaderConsumer COMMAND HoroSaveCaptureBarrierPublicHeaderConsumer)
+set_tests_properties(HoroSaveCaptureBarrierPublicHeaderConsumer PROPERTIES LABELS "unit;save;headless")
 
 add_executable(HoroRuntimeSaveProjectPolicyTests
         unit/runtime/save/SaveProjectPolicyTests.cpp
