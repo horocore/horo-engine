@@ -262,7 +262,7 @@ namespace Horo::Audio {
         Result<AudioPlaybackLaneHandle> StoreLane(const AudioPlaybackBinding &binding, const AudioRepeatedPlaybackPolicy &policy,
                                                   const BucketSelection &selection) {
             const auto &bucketIndex = selection.index;
-            const auto key = selection.key;
+            const auto &key = selection.key;
             for (std::size_t index = 0; index < lanes.size(); ++index) {
                 if (lanes[index] || generations[index] == std::numeric_limits<std::uint32_t>::max())
                     continue;
@@ -492,7 +492,7 @@ namespace Horo::Audio {
                                                             : PrepareStart(lane, request, clips, admission.receipt);
                     prepared.HasError())
                     return Result<AudioRepeatedPlaybackReceipt>::Failure(prepared.ErrorValue());
-                if (lane.bucket)
+                if (lane.bucket.has_value())
                     buckets[*lane.bucket].lastAdmission = AdmissionFrame(request, time);
             }
             return Result<AudioRepeatedPlaybackReceipt>::Success(Remember(lane, request, admission.receipt, time));
