@@ -684,7 +684,7 @@ TEST_CASE("AssetCookService publication cancellation preserves true commit outco
         OperationStore operations{4, 4};
         fixture.request.operationStore = &operations;
         const auto result = fixture.service.Cook(fixture.request, cancellation.Token());
-        CHECK(cancellation.IsCancellationRequested());
+        CHECK(cancellation.Token().IsCancellationRequested());
         CHECK(result.HasValue() == committed);
         const auto snapshot = operations.SnapshotIfChanged(0);
         REQUIRE(snapshot.has_value());

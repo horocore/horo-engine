@@ -92,7 +92,8 @@ namespace Horo::Assets {
      * @param target Exact expected target.
      * @param maximumTotalBytes Aggregate ceiling for verifying the active generation.
      * @param limits Per-file, inventory and recovery-work bounds.
-     * @param policy Required durable filesystem; callbacks are not invoked by recovery.
+     * @param policy Required durable filesystem, exact native lease and bootstrap attempt identity;
+     *               adoption and checkpoint callbacks are not invoked by recovery.
      * @return Verified current generation, empty for a verified unpublished bootstrap selector, or a typed error.
      * @pre Every cooperating writer creates and accesses .cook-staging only while holding the same native writer lock.
      * @details Recovery prevalidates every exact private file before removal. It never follows links, recursively deletes,

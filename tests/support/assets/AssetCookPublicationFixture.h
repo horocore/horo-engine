@@ -19,6 +19,7 @@ namespace Horo::Assets::CookPublicationTestSupport {
 
     /** @brief Supplies the same native publication authority used by a real application composition root. */
     inline void ConfigureNativeCookPublication(AssetCookRequest &request) {
+        request.cookedRoot = std::filesystem::weakly_canonical(request.cookedRoot);
         request.publicationFiles = std::make_shared<NativeDurableFileSystem>();
         request.newPublicationOperationId = NewCookPublicationOperationId;
     }

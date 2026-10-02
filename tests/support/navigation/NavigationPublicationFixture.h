@@ -87,6 +87,8 @@ namespace Horo::Application::TestSupport {
         }
 
         Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
+            if (RenameFails(destination))
+                return InjectedFailure();
             return native.AtomicReplace(prepared, destination);
         }
 

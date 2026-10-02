@@ -462,7 +462,7 @@ TEST_CASE("Immutable replay never repairs or overwrites corrupted reader storage
     const auto id = Id("00000000-0000-0000-0000-000000000001");
     const auto bytes = MakePayload(id, 8);
     const std::vector entries{Entry(id, bytes)};
-    const std::vector payloads{bytes};
+    const std::vector<std::vector<std::uint8_t>> payloads{bytes};
     auto first = PublishFixture(tmp.path, Target("headless-null"), entries, payloads);
     REQUIRE(first.HasValue());
     const auto pointer = ReadText(tmp.path / "current.json");
@@ -650,7 +650,8 @@ TEST_CASE("Restart cleans bounded owned staging without selecting inactive gener
     files.root = tmp.path;
     const auto id = Id("00000000-0000-0000-0000-000000000001");
     const auto bytes = MakePayload(id, 8);
-    auto published = PublishFixture(tmp.path, Target("headless-null"), std::vector{Entry(id, bytes)}, std::vector{bytes});
+    auto published =
+        PublishFixture(tmp.path, Target("headless-null"), std::vector{Entry(id, bytes)}, std::vector<std::vector<std::uint8_t>>{bytes});
     REQUIRE(published.HasValue());
     const auto staging = tmp.path / ".cook-staging" / "20000000-0000-0000-0000-000000000001";
     std::filesystem::create_directories(staging / "generation");
@@ -740,7 +741,7 @@ TEST_CASE("Publication has no unlocked filesystem fallback", "[native]") {
     const auto id = Id("00000000-0000-0000-0000-000000000001");
     const auto bytes = MakePayload(id, 8);
     const std::vector entries{Entry(id, bytes)};
-    const std::vector payloads{bytes};
+    const std::vector<std::vector<std::uint8_t>> payloads{bytes};
     CHECK(Horo::Assets::PublishCookGeneration(tmp.path, Target("headless-null"), entries, payloads).HasError());
     CHECK_FALSE(std::filesystem::exists(tmp.path / "generations"));
     NativeDurableFileSystem files;

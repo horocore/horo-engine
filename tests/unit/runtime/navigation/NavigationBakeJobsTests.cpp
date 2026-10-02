@@ -363,7 +363,7 @@ namespace Horo::Navigation {
         CHECK(childClosed.load());
         CHECK(handle.Snapshot()->state == NavigationBakeJobState::Failed);
         REQUIRE(handle.Snapshot()->terminalError.has_value());
-        CHECK(handle.Snapshot()->terminalError->code.Value() == JobErrors::WaitTimedOut.code.Value());
+        CHECK(handle.Snapshot()->terminalError->code.Value() == "job.wait_timed_out");
         CHECK(handle.Snapshot()->terminalChildJobs == handle.Snapshot()->acceptedChildJobs);
     }
 
@@ -384,11 +384,13 @@ namespace Horo::Navigation {
         }
         auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
         RequireEventually([&] {
-            return entered.load() == 2;
+            return entered.load() != 0 && handle.Snapshot()->acceptedChildJobs == 4;
         });
         REQUIRE(handle.RequestCancellation());
         RequireTerminal(handle);
-        CHECK(entered.load() == 2);
+        // Join may assist a child or wait for the other worker; three accepted tile jobs still exceed two workers.
+        CHECK(entered.load() >= 1);
+        CHECK(entered.load() < 3);
         CHECK(handle.Snapshot()->state == NavigationBakeJobState::Cancelled);
         CHECK(handle.Snapshot()->acceptedChildJobs == 4);
         CHECK(handle.Snapshot()->terminalChildJobs == 4);

@@ -139,6 +139,11 @@ application dependency. Public-header consumer coverage includes the new header
 and changed NavigationRuntime/Assets contracts. GUI/CLI/MCP command registration
 remains NAV-003.10, not an alternate publication implementation.
 
+Cook inventory readers and publishers may tighten the compiled `AssetCookLimits`
+artifact/count ceilings, and enforce a 1 GiB aggregate generation ceiling.
+Release archives intersect their own limits with those cook ceilings when reading
+a pinned cook generation; their independent archive input format is unchanged.
+
 HNT1 tile bytes and HNS1 complete-set bytes use explicit little-endian fields,
 canonical zero floats, bounded counts and content digests. No native structure,
 allocator capacity, operation ID or timing statistic enters portable identity.
