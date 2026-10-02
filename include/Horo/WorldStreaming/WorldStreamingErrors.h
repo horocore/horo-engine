@@ -460,4 +460,16 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
     extern const ErrorCodeDescriptor CellAssetRequestNotReady;
     /** @brief The terminal aggregate result was already consumed. */
     extern const ErrorCodeDescriptor CellAssetRequestConsumed;
+    /** @brief A queue owner, context or entry is malformed. */
+    extern const ErrorCodeDescriptor FairQueueInvalid;
+    /** @brief A queue version, eligibility or withdrawal outcome is unsupported. */
+    extern const ErrorCodeDescriptor FairQueueUnsupported;
+    /** @brief A queue command or proposal no longer names current pending work. */
+    extern const ErrorCodeDescriptor FairQueueStale;
+    /** @brief The bounded queue or admission snapshot exceeds its ceiling. */
+    extern const ErrorCodeDescriptor FairQueueCapacityExceeded;
+    /** @brief Pending work repeats an operation or cell identity. */
+    extern const ErrorCodeDescriptor FairQueueIdentityConflict;
+    /** @brief Pending admission is closed by shutdown. */
+    extern const ErrorCodeDescriptor FairQueueLifecycleUnavailable;
 }  // namespace Horo::WorldStreaming::WorldStreamingErrors
