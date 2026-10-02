@@ -236,7 +236,7 @@ namespace Horo::Navigation::RecastDetourMeshBuilderInternal {
                     return Failure<PolygonData>(NavigationErrors::ProviderFailed);
                 output.vertexIndices.push_back(vertex);
                 const unsigned short neighbor = mesh.polys[polygonOffset + static_cast<std::size_t>(nvp + corner)];
-                output.neighbors.push_back(neighbor == RC_MESH_NULL_IDX ? NavMeshBoundaryAdjacency : neighbor);
+                output.neighbors.push_back((neighbor & 0x8000U) != 0 ? NavMeshBoundaryAdjacency : neighbor);
             }
             if (output.vertexIndices.size() < 3 || output.vertexIndices.size() > request.limits.maximumVerticesPerPolygon)
                 return Failure<PolygonData>(NavigationErrors::ProviderFailed);

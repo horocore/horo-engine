@@ -86,6 +86,7 @@ namespace Horo::Navigation {
         std::span<const NavigationTileBuildTriangle> triangles; /**< Borrowed canonical source triangles. */
         std::span<const NavigationTileBuildModifier> modifiers; /**< Borrowed area/exclusion volumes. */
         NavigationTileBuildLimits limits{};                     /**< Caller-selected ceilings no greater than hard limits. */
+        std::uint32_t borderSizeCells{}; /**< Sampling halo in voxels; zero preserves isolated-tile builds. Tiled builds use radius+3. */
     };
 
     /** @brief Owned provider-neutral tile output with portable topology and source provenance. */

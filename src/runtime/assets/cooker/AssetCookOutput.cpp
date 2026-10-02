@@ -180,7 +180,8 @@ namespace Horo::Assets {
         /**
          * @brief Writes bytes atomically: write to temp, then rename.
          */
-        Result<void> WriteAtomic(const std::filesystem::path &path, std::span<const std::uint8_t> bytes) {
+        Result<void> WriteAtomic(const std::filesystem::path &path, std::span<const std::uint8_t> bytes,
+                                 const AssetCookPublicationPolicy &policy = {}, std::optional<Error> *postCommitError = nullptr) {
             if (path.empty() || !path.is_absolute() || !IsSafePathWithin(path.parent_path(), path))
                 return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
             auto tempPath = path;
@@ -188,7 +189,11 @@ namespace Horo::Assets {
             if (!IsSafePathWithin(path.parent_path(), tempPath))
                 return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
 
-            {
+            if (policy.files != nullptr) {
+                const auto written = policy.files->WriteDurable(tempPath, std::as_bytes(bytes));
+                if (written.HasError())
+                    return written;
+            } else {
                 // Both paths are canonical descendants of the caller-validated output directory.
                 std::ofstream temp(tempPath, std::ios::binary | std::ios::trunc);  // NOSONAR
                 if (!temp) {
@@ -202,6 +207,26 @@ namespace Horo::Assets {
                 }
             }
 
+            if (policy.beforeCommit) {
+                auto accepted = policy.beforeCommit();
+                if (accepted.HasError()) {
+                    std::error_code cleanup;
+                    std::filesystem::remove(tempPath, cleanup);
+                    return accepted;
+                }
+            }
+            if (policy.files != nullptr) {
+                auto replaced = policy.files->AtomicReplace(tempPath, path);
+                if (replaced.HasError() && postCommitError != nullptr) {
+                    // A directory-sync failure can follow a successful rename. Report the actual active generation.
+                    auto observed = ReadFile(path, bytes.size());
+                    if (observed.HasValue() && std::ranges::equal(observed.Value(), bytes)) {
+                        *postCommitError = replaced.ErrorValue();
+                        return Result<void>::Success();
+                    }
+                }
+                return replaced;
+            }
             std::error_code ec;
             std::filesystem::rename(tempPath, path, ec);  // NOSONAR
             if (ec) {
@@ -254,19 +279,19 @@ namespace Horo::Assets {
         [[nodiscard]] Result<void> WriteGenerationFiles(const std::filesystem::path &root,
                                                         const std::span<const AssetCookManifestEntry> entries,
                                                         const std::span<const std::vector<std::uint8_t>> payloads,
-                                                        const std::span<const std::uint8_t> manifestBytes) {
+                                                        const std::span<const std::uint8_t> manifestBytes, DurableFileSystem *files) {
             for (std::size_t i = 0; i < entries.size(); ++i) {
                 if (!IsSafeArtifactFile(entries[i].artifactFile))
                     return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
                 const auto artifactPath = root / entries[i].artifactFile;
                 if (!IsSafePathWithin(root, artifactPath))
                     return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
-                auto writeResult = WriteAtomic(artifactPath, payloads[i]);
+                auto writeResult = WriteAtomic(artifactPath, payloads[i], {.files = files});
                 if (writeResult.HasError())
                     return writeResult;
             }
             const std::vector<std::uint8_t> manifest(manifestBytes.begin(), manifestBytes.end());
-            return WriteAtomic(root / "manifest.json", manifest);
+            return WriteAtomic(root / "manifest.json", manifest, {.files = files});
         }
 
         /** @brief Parses only the exact canonical manifest bound to a pinned generation. */
@@ -418,7 +443,7 @@ namespace Horo::Assets {
     Result<AssetCookGeneration> PublishCookGeneration(const std::filesystem::path &targetRoot, const AssetCookTargetId &target,
                                                       std::span<const AssetCookManifestEntry> entries,
                                                       std::span<const std::vector<std::uint8_t>> artifactPayloads,
-                                                      const AssetCookLimits &limits) {
+                                                      const AssetCookLimits &limits, const AssetCookPublicationPolicy &policy) {
         if (entries.empty()) {
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
         }
@@ -458,7 +483,7 @@ namespace Horo::Assets {
         if (directoryError)
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
 
-        if (auto written = WriteGenerationFiles(genRoot, entries, artifactPayloads, manifestBytes); written.HasError())
+        if (auto written = WriteGenerationFiles(genRoot, entries, artifactPayloads, manifestBytes, policy.files); written.HasError())
             return Result<AssetCookGeneration>::Failure(std::move(written).ErrorValue());
 
         // Build and write current.json atomically
@@ -468,7 +493,9 @@ namespace Horo::Assets {
         auto currentBytes = std::vector<std::uint8_t>(reinterpret_cast<const std::uint8_t *>(currentStr.data()),
                                                       reinterpret_cast<const std::uint8_t *>(currentStr.data()) + currentStr.size());
 
-        if (const auto writeResult = WriteAtomic(targetRoot / "current.json", currentBytes); writeResult.HasError())
+        std::optional<Error> durabilityError;
+        if (const auto writeResult = WriteAtomic(targetRoot / "current.json", currentBytes, policy, &durabilityError);
+            writeResult.HasError())
             return Result<AssetCookGeneration>::Failure(writeResult.ErrorValue());
 
         return Result<AssetCookGeneration>::Success(AssetCookGeneration{
@@ -476,6 +503,7 @@ namespace Horo::Assets {
             .manifestDigest = manifestDigest,
             .generationRoot = genRoot,
             .artifactCount = entries.size(),
+            .durabilityError = std::move(durabilityError),
         });
     }
 }  // namespace Horo::Assets

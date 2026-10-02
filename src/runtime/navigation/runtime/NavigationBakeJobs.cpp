@@ -382,13 +382,22 @@ namespace Horo::Navigation {
             return Result<NavigationBakeJobHandle>::Failure(validation.ErrorValue());
 
         auto cancellation = std::make_shared<CancellationSource>(descriptor.parentCancellation);
-        const auto operation = operations.Begin(OperationDescriptor{.kind = OperationKind::Cook,
-                                                                    .title = descriptor.title,
-                                                                    .phase = "queued",
-                                                                    .message = "Navigation bake queued",
-                                                                    .progress = 0.0F,
-                                                                    .cancellable = true,
-                                                                    .requestCancel = [cancellation] {
+        if (descriptor.queuedOperation) {
+            const auto snapshot = operations.SnapshotIfChanged(0);
+            if (!snapshot || !std::ranges::any_of(snapshot->operations, [&descriptor](const auto &record) {
+                return record.id == *descriptor.queuedOperation &&
+                       (record.state == OperationState::Queued || record.state == OperationState::Cancelling);
+            }))
+                return BakeFailure<NavigationBakeJobHandle>(NavigationErrors::BakeJobAdmissionRejected);
+        }
+        const auto operation = descriptor.queuedOperation ? descriptor.queuedOperation
+                                                          : operations.Begin(OperationDescriptor{.kind = OperationKind::Cook,
+                                                                                                 .title = descriptor.title,
+                                                                                                 .phase = "queued",
+                                                                                                 .message = "Navigation bake queued",
+                                                                                                 .progress = 0.0F,
+                                                                                                 .cancellable = true,
+                                                                                                 .requestCancel = [cancellation] {
             cancellation->RequestCancellation();
         }});
         if (!operation.has_value())
