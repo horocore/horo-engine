@@ -62,6 +62,11 @@ covered by `HoroAudioDspPublicHeaderConsumer`; existing AudioApi consumers need 
 migration or DSP dependency. This is a DSP primitive, not an audio runtime or
 device backend.
 
+The additive
+`Audio/CoreAudioDSPNode.h` is owned by that same DSP target and its standalone
+consumer. Existing callers require no migration; new built-in node consumers link
+`HoroEngine::AudioDsp` and retain admitted host state through node use.
+
 | Real target (alias) | Availability | Owner and public/private boundary | Direct first-party dependencies |
 |---|---|---|---|
 | `HoroFoundation` (`HoroEngine::Foundation`) | Always | Owns Foundation primitives, canonical cross-subsystem asset cook-target identity, immutable host-published error-code registry snapshots, diagnostics, logging, telemetry facade, jobs, configuration, paths, hashing, strings, and shared `Math/**` contracts. Implementation is under `src/foundation/`. | None |

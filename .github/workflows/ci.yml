@@ -263,7 +263,7 @@ jobs:
             -DHORO_BUILD_EXAMPLES=OFF \
             -DHORO_ENABLE_OPENTELEMETRY=OFF
           cmake --build build/audio-realtime-safety \
-            --target HoroAudioRealtimeSafetyHarnessTests HoroAudioWatchdogTests HoroAudioNullTests HoroAudioDspTests HoroAudioCommandTests \
+            --target HoroAudioRealtimeSafetyHarnessTests HoroAudioWatchdogTests HoroAudioNullTests HoroAudioDspTests HoroCoreAudioDspTests HoroAudioCommandTests \
             --parallel 1
 
       - name: Checkpoint successful audio build
@@ -280,7 +280,7 @@ jobs:
         run: |
           cmake -E make_directory build/audio-realtime-safety/test-results
           ctest --test-dir build/audio-realtime-safety \
-            -R '^HoroAudio(CallbackLockPolicyTest|RealtimeSafetyHarnessTests::|WatchdogTests::|NullTests::|DspTests::|CommandTests::)' \
+            -R '^(HoroAudio(CallbackLockPolicyTest|RealtimeSafetyHarnessTests::|WatchdogTests::|NullTests::|DspTests::|CommandTests::)|HoroCoreAudioDspTests::)' \
             --output-on-failure --output-junit "${{ github.workspace }}/build/audio-realtime-safety/test-results/ctest.xml" --timeout 90 -j 1
 
       - name: Report compiler statistics for an incomplete audio build
