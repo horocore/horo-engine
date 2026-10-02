@@ -84,7 +84,7 @@ namespace Horo::Runtime::Ui {
         if (const auto valid = ValidateEnvelope(batches, limits); valid.HasError())
             return valid;
         for (const auto &batch : batches) {
-            auto *provider = FindProvider(batch.provider);
+            const auto *provider = FindProvider(batch.provider);
             if (!provider)
                 return Failure(UiErrors::HandleStale);
             if (!provider->active)
@@ -102,10 +102,17 @@ namespace Horo::Runtime::Ui {
         for (const auto &batch : batches) {
             const auto *provider = FindProvider(batch.provider);
             for (const auto &change : batch.changes)
-                for (const auto target : provider->targets[change.property])
-                    if (const auto result = Stage(target, &change.value, UiBindingValueOrigin::Provider); result.HasError())
-                        return result;
+                if (const auto result = StageProperty(*provider, change); result.HasError())
+                    return result;
         }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiBindingStore::Storage::StageProperty */
+    Result<void> UiBindingStore::Storage::StageProperty(const Provider &provider, const UiBindingPropertyUpdate &change) {
+        for (const auto target : provider.targets[change.property])
+            if (const auto result = Stage(target, &change.value, UiBindingValueOrigin::Provider); result.HasError())
+                return result;
         return Result<void>::Success();
     }
 
@@ -124,7 +131,7 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiBindingStore::Storage::Stage */
     Result<void> UiBindingStore::Storage::Stage(const std::size_t targetIndex, const UiBindingValue *value,
                                                 const UiBindingValueOrigin origin) {
-        auto &target = targets[targetIndex];
+        const auto &target = targets[targetIndex];
         if (value) {
             if (const auto valid = BindingInternal::ValidateValue(*value, *UiBindingTargetValueType(target.bound.property), target.limits);
                 valid.HasError())
@@ -132,9 +139,9 @@ namespace Horo::Runtime::Ui {
         }
         if (target.bound.origin == origin && (!value || target.bound.value == *value))
             return Result<void>::Success();
-        staged.push_back({targetIndex, value, origin});
+        staged.emplace_back(targetIndex, value, origin);
         if (HasFlag(target.categories, UiBindingDirty::Layout))
-            invalidations.push_back({target.bound.element, treeRevision, UiLayoutDirtyKind::Measure});
+            invalidations.emplace_back(target.bound.element, treeRevision, UiLayoutDirtyKind::Measure);
         return Result<void>::Success();
     }
 

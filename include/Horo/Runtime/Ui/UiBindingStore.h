@@ -67,12 +67,12 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Combines independent downstream work. */
     [[nodiscard]] constexpr UiBindingDirty operator|(const UiBindingDirty left, const UiBindingDirty right) noexcept {
-        return static_cast<UiBindingDirty>(static_cast<std::uint8_t>(left) | static_cast<std::uint8_t>(right));
+        return static_cast<UiBindingDirty>(static_cast<unsigned>(left) | static_cast<unsigned>(right));
     }
 
     /** @brief Tests downstream work without changing target state. */
     [[nodiscard]] constexpr bool HasFlag(const UiBindingDirty flags, const UiBindingDirty flag) noexcept {
-        return (static_cast<std::uint8_t>(flags) & static_cast<std::uint8_t>(flag)) != 0;
+        return (static_cast<unsigned>(flags) & static_cast<unsigned>(flag)) != 0;
     }
 
     /** @brief Explicit source availability; an unavailable required binding has no readable stale value. */

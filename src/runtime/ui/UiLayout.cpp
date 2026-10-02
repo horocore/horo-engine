@@ -60,8 +60,8 @@ namespace Horo::Runtime::Ui {
                     candidate.push_back(item);
                     continue;
                 }
-                const auto existing = std::ranges::find(candidate, item.element, &UiLayoutInvalidation::element);
-                if (existing != candidate.end()) {
+                if (const auto existing = std::ranges::find(candidate, item.element, &UiLayoutInvalidation::element);
+                    existing != candidate.end()) {
                     existing->kind = std::max(existing->kind, item.kind);
                     continue;
                 }
