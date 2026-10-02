@@ -88,10 +88,10 @@ namespace Horo::Audio::StreamingTests {
             CHECK(output.right[frame] == output.left[frame]);
         }
         REQUIRE(PumpUntil(*service, handle, 3));
-        const auto final = output.Render(port, 4);
-        CHECK(final.availableFrames == 3);
-        CHECK(final.silentFrames == 1);
-        CHECK(final.ended);
+        const auto terminalBlock = output.Render(port, 4);
+        CHECK(terminalBlock.availableFrames == 3);
+        CHECK(terminalBlock.silentFrames == 1);
+        CHECK(terminalBlock.ended);
         CHECK(output.left[0] == 6.0F);
         CHECK(output.right[2] == 8.0F);
         CHECK(output.left[3] == 0.0F);
