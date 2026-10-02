@@ -11,6 +11,7 @@
 #include "Horo/Navigation/NavigationAgentProfiles.h"
 #include "Horo/Navigation/NavigationAreas.h"
 #include "Horo/Navigation/NavigationIdentity.h"
+#include "Horo/Navigation/NavigationLinkTypes.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -121,21 +122,10 @@ namespace Horo::Runtime {
         [[nodiscard]] constexpr bool operator==(const NavigationModifierComponent &) const noexcept = default;
     };
 
-    /** @brief Closed traversal semantics for one explicit grounded transition. */
-    enum class NavigationLinkKind : std::uint8_t {
-        Jump,
-        Ladder,
-        Door,
-        Teleport,
-        Count,
-    };
-
-    /** @brief Direction of a link relative to its explicitly named start and end endpoints. */
-    enum class NavigationLinkDirection : std::uint8_t {
-        StartToEnd,
-        Bidirectional,
-        Count,
-    };
+    /** @brief Shared grounded traversal semantics retained under the existing Scene spelling. */
+    using NavigationLinkKind = Navigation::NavigationLinkKind;
+    /** @brief Shared ordered direction retained under the existing Scene spelling. */
+    using NavigationLinkDirection = Navigation::NavigationLinkDirection;
 
     /** @brief One finite object-local endpoint attached to an exact authored navigation surface. */
     struct NavigationLinkEndpoint final {

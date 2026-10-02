@@ -704,6 +704,7 @@ add_executable(HoroNavigationApiTests
         unit/runtime/navigation/NavigationBakeInputTests.cpp
         unit/runtime/navigation/NavigationCapabilitiesTests.cpp
         unit/runtime/navigation/NavigationIdentityTests.cpp
+        unit/runtime/navigation/NavigationLinkValidationTests.cpp
         unit/runtime/navigation/NavigationOutcomesTests.cpp
         unit/runtime/navigation/NavigationProjectProfileTests.cpp
         unit/runtime/navigation/NavigationProviderTests.cpp
@@ -735,6 +736,7 @@ horo_register_catch_test(HoroNavigationRuntimeTests LABELS "unit;navigation;head
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     add_executable(HoroNavigationRecastDetourTests
             unit/runtime/navigation/RecastDetourProviderTests.cpp
+            unit/runtime/navigation/RecastDetourLinkValidationTests.cpp
             unit/runtime/navigation/RecastDetourProviderPathTests.cpp
             unit/runtime/navigation/RecastDetourMeshBuilderTests.cpp
     )
@@ -2313,10 +2315,12 @@ target_link_libraries(HoroRuntimeSaveTestCompositionsTests PRIVATE HoroEngine::R
 add_executable(HoroRuntimeSceneTests
         unit/runtime/scene/NavigationSceneComponentsTests.cpp
         unit/runtime/scene/NavigationSceneActivationTests.cpp
+        unit/runtime/scene/NavigationSceneLinkCaptureTests.cpp
         unit/runtime/scene/PhysicsSceneComponentsTests.cpp
         unit/runtime/scene/RuntimeSceneTests.cpp
 )
 target_compile_features(HoroRuntimeSceneTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeSceneTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSceneTests PRIVATE HoroEngine::NavigationSceneIntegration HoroEngine::RuntimeScene)
 add_executable(HoroRuntimeSavedSceneBootstrapTests
         unit/runtime/scene/SavedSceneBootstrapTests.cpp
