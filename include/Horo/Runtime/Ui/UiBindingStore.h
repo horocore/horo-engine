@@ -175,12 +175,22 @@ namespace Horo::Runtime::Ui {
         Actions = 1U << 3U,
     };
 
-    /** @brief Combines independent downstream work. */
+    /**
+     * @brief Combines independent downstream work.
+     * @param left First set of dirty categories.
+     * @param right Additional dirty categories.
+     * @return Union of both category sets.
+     */
     [[nodiscard]] constexpr UiBindingDirty operator|(const UiBindingDirty left, const UiBindingDirty right) noexcept {
         return static_cast<UiBindingDirty>(static_cast<unsigned>(left) | static_cast<unsigned>(right));
     }
 
-    /** @brief Tests downstream work without changing target state. */
+    /**
+     * @brief Tests downstream work without changing target state.
+     * @param flags Dirty categories to inspect.
+     * @param flag Category mask to test.
+     * @return True when any category in flag is present in flags.
+     */
     [[nodiscard]] constexpr bool HasFlag(const UiBindingDirty flags, const UiBindingDirty flag) noexcept {
         return (static_cast<unsigned>(flags) & static_cast<unsigned>(flag)) != 0;
     }
@@ -259,9 +269,9 @@ namespace Horo::Runtime::Ui {
         /** @brief Abandons pending reservations before releasing Horo-owned storage and admitted authority leases. */
         ~UiBindingStore();
         /** @brief Transfers unique binding ownership and invalidates other. @param other Store to transfer. */
-        UiBindingStore(UiBindingStore &&) noexcept;
+        UiBindingStore(UiBindingStore &&other) noexcept;
         /** @brief Replaces this owner with other. @param other Store to transfer. @return This store. */
-        UiBindingStore &operator=(UiBindingStore &&) noexcept;
+        UiBindingStore &operator=(UiBindingStore &&other) noexcept;
         UiBindingStore(const UiBindingStore &) = delete;
         UiBindingStore &operator=(const UiBindingStore &) = delete;
 
