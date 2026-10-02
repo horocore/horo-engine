@@ -55,10 +55,14 @@ namespace Horo::Navigation {
         const auto tile = created.Value();
         auto roundtrip = NavigationCookedTile::Decode(tile->Bytes());
         REQUIRE(roundtrip.HasValue());
+        CHECK(NavigationCookedTile::Decode(tile->Bytes(), 0).HasError());
+        CHECK(NavigationCookedTile::Decode(tile->Bytes(), NavigationTileBuildLimits::MaximumOwnedBytes + 1).HasError());
+        CHECK(tile->StorageBytes() >= tile->Bytes().size());
         CHECK(tile->ContentIdentity() == roundtrip.Value()->ContentIdentity());
         NavigationCookedTileSet set{.inputFingerprint = fixture.Input()->Fingerprint(), .tiles = {tile}};
         const auto encoded = EncodeNavigationCookedTileSet(set, 4096).Value();
         REQUIRE(DecodeNavigationCookedTileSet(encoded, 4096).HasValue());
+        CHECK(DecodeNavigationCookedTileSet(encoded, encoded.size()).HasError());
         for (const auto size : {std::size_t{0}, std::size_t{4}, encoded.size() - 1})
             CHECK(DecodeNavigationCookedTileSet(std::span{encoded}.first(size), 4096).HasError());
         auto corrupt = encoded;

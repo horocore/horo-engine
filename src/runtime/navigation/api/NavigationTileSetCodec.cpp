@@ -48,6 +48,9 @@ namespace Horo::Navigation {
             if (count == 0 || !Present(set.inputFingerprint))
                 return Failure<NavigationCookedTileSet>(NavigationErrors::NavMeshArtifactCorrupt);
             set.tiles.reserve(count);
+            std::size_t storage = sizeof(set) + set.tiles.capacity() * sizeof(std::shared_ptr<const NavigationCookedTile>);
+            if (storage > maximumBytes)
+                return Failure<NavigationCookedTileSet>(NavigationErrors::CapacityExceeded);
             for (std::size_t i = 0; i < count; ++i) {
                 const auto content = reader.Digest();
                 const auto size = reader.Integer(8);
@@ -61,6 +64,9 @@ namespace Horo::Navigation {
                     return Result<NavigationCookedTileSet>::Failure(tile.ErrorValue());
                 if (!set.tiles.empty() && set.tiles.back()->Key() >= tile.Value()->Key())
                     return Failure<NavigationCookedTileSet>(NavigationErrors::NavMeshArtifactCorrupt);
+                if (tile.Value()->StorageBytes() > maximumBytes - storage)
+                    return Failure<NavigationCookedTileSet>(NavigationErrors::CapacityExceeded);
+                storage += tile.Value()->StorageBytes();
                 set.tiles.push_back(std::move(tile).Value());
             }
             if (!reader.Empty())

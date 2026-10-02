@@ -95,10 +95,11 @@ namespace Horo::Application::NavigationBakeDetail {
             const std::shared_ptr<const NavigationBakePublication> &previous, const NavigationPreparedTile &prepared) {
             if (!previous)
                 return nullptr;
-            const auto found = std::ranges::lower_bound(previous->tiles.tiles, prepared.tile.key, {}, [](const auto &item) {
+            if (const auto found = std::ranges::lower_bound(previous->tiles.tiles, prepared.tile.key, {},
+                                                            [](const auto &item) {
                 return item->Key();
             });
-            if (found != previous->tiles.tiles.end() && (*found)->Key() == prepared.tile.key &&
+                found != previous->tiles.tiles.end() && (*found)->Key() == prepared.tile.key &&
                 (*found)->DependencyKey() == prepared.dependencyKey)
                 return *found;
             return nullptr;
@@ -172,10 +173,10 @@ namespace Horo::Application::NavigationBakeDetail {
                 if (resolved.HasError())
                     return Result<void>::Failure(resolved.ErrorValue());
                 auto tile = std::move(resolved).Value();
-                if (tile->Bytes().size() > state.config.maximumCandidateBytes - bytes ||
+                if (tile->StorageBytes() > state.config.maximumCandidateBytes - bytes ||
                     !TopologyWithinLimits(tile->Topology(), state.config.tileLimits))
                     return Failure<void>(NavigationErrors::CapacityExceeded);
-                bytes += tile->Bytes().size();
+                bytes += tile->StorageBytes();
                 attempt.candidate->tiles.tiles.push_back(std::move(tile));
             }
             return Result<void>::Success();

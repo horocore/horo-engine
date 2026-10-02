@@ -16,7 +16,10 @@ namespace Horo::Navigation {
         };
 
     public:
-        /** @brief Factory-only construction; the private key prevents bypassing Create validation. */
+        /** @brief Factory-only construction; the private key prevents bypassing Create validation.
+         * @param key Validated partition/grid identity. @param dependency Validated complete dependency key.
+         * @param result Validated owned neutral topology. @param bytes Canonical encoded topology.
+         */
         NavigationCookedTile(ConstructionKey, const NavigationBakeTileKey &key, const Sha256Digest &dependency,
                              NavigationTileBuildResult result, std::vector<std::uint8_t> bytes);
         /**
@@ -37,6 +40,11 @@ namespace Horo::Navigation {
          */
         [[nodiscard]] static Result<std::shared_ptr<const NavigationCookedTile>> Decode(
             std::span<const std::uint8_t> bytes, std::size_t maximumBytes = NavigationTileBuildLimits::MaximumOwnedBytes);
+
+        /** @brief Returns measured retained storage, including vector capacities and portable bytes.
+         * @return Object and owned table/byte storage, excluding the shared-ownership control block.
+         */
+        [[nodiscard]] std::size_t StorageBytes() const noexcept;
 
         /** @brief Returns the stable partition/grid identity. @return Immutable tile address. */
         [[nodiscard]] const NavigationBakeTileKey &Key() const noexcept {
@@ -88,7 +96,8 @@ namespace Horo::Navigation {
     /**
      * @brief Validates the complete cooked closure and every tile's actual-byte content identity.
      * @param bytes Complete versioned tile-set payload from a verified asset envelope.
-     * @param maximumBytes Aggregate encoded/decoded storage ceiling.
+     * @param maximumBytes Aggregate encoded and retained decoded storage ceiling; one bounded tile is decoded before checking its retained
+     * size.
      * @return Owned immutable tile set or typed corrupt/capacity failure.
      */
     [[nodiscard]] Result<NavigationCookedTileSet> DecodeNavigationCookedTileSet(std::span<const std::uint8_t> bytes,
