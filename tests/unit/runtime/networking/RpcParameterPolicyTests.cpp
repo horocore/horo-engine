@@ -8,6 +8,13 @@ namespace Horo::Network {
     using RpcDispatchTestSupport::Fixture;
 
     namespace {
+        /** @brief Expected terminal category for the owned numeric policy fixture. */
+        enum class NumericOutcome {
+            InvalidPolicy,
+            InvalidValue,
+            Allowed
+        };
+
         class NumericHandler final : public IRpcGameplayHandler {
         public:
             std::size_t calls{};
@@ -48,6 +55,26 @@ namespace Horo::Network {
                 message.payload.resize(58);
                 message.payload.insert(message.payload.end(), bytes.begin(), bytes.end());
                 return dispatch->HandleAdmitted(fixture.Context(), message);
+            }
+
+            /** @brief Checks registration, receipt and real handler execution as one typed policy outcome. */
+            void Verify(const Fixture &fixture, const RpcGameplayPolicy &policy, const ReplicationRuntimeValue &value,
+                        const NumericOutcome expected) const {
+                const auto installed = dispatch->RegisterHandler(fixture.rpc, handler, codecs, fixture.moduleLease, policy);
+                if (expected == NumericOutcome::InvalidPolicy) {
+                    TestSupport::RequireError(installed, NetworkErrors::RpcParameterInvalid);
+                    return;
+                }
+                REQUIRE(installed.HasValue());
+                const auto received = Receive(fixture, value);
+                if (expected == NumericOutcome::InvalidValue) {
+                    TestSupport::RequireError(received, NetworkErrors::RpcParameterInvalid);
+                    REQUIRE(handler->calls == 0);
+                    return;
+                }
+                REQUIRE(received.HasValue());
+                REQUIRE(dispatch->DrainAtGameplaySafePoint(fixture.Work()).Value().invoked == 1);
+                REQUIRE(handler->last == value);
             }
         };
     }  // namespace
@@ -121,8 +148,7 @@ namespace Horo::Network {
         RpcScalar minimum = 7.0;
         RpcScalar maximum = 7.0;
         ReplicationRuntimeValue value = 7.0;
-        bool validPolicy = true;
-        bool inside = true;
+        auto expected = NumericOutcome::Allowed;
         auto metadata = Fixture::SerializerMetadata();
         metadata.valueType = ReplicationValueTypeId::Create(2).Value();
         metadata.codec = ReplicationCodecId::Create(2).Value();
@@ -138,38 +164,24 @@ namespace Horo::Network {
         }
         SECTION("floating outside range") {
             value = 8.0;
-            inside = false;
+            expected = NumericOutcome::InvalidValue;
         }
         SECTION("NaN endpoint") {
             minimum = std::numeric_limits<double>::quiet_NaN();
-            validPolicy = false;
+            expected = NumericOutcome::InvalidPolicy;
         }
         SECTION("infinite maximum") {
             maximum = std::numeric_limits<double>::infinity();
-            validPolicy = false;
+            expected = NumericOutcome::InvalidPolicy;
         }
         SECTION("infinite minimum") {
             minimum = -std::numeric_limits<double>::infinity();
-            validPolicy = false;
+            expected = NumericOutcome::InvalidPolicy;
         }
         NumericHarness numeric(fixture, metadata);
         RpcGameplayPolicy policy;
         policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), minimum, maximum);
-        const auto installed = numeric.dispatch->RegisterHandler(fixture.rpc, numeric.handler, numeric.codecs, fixture.moduleLease, policy);
-        if (!validPolicy) {
-            TestSupport::RequireError(installed, NetworkErrors::RpcParameterInvalid);
-            return;
-        }
-        REQUIRE(installed.HasValue());
-        const auto received = numeric.Receive(fixture, value);
-        if (!inside) {
-            TestSupport::RequireError(received, NetworkErrors::RpcParameterInvalid);
-            REQUIRE(numeric.handler->calls == 0);
-            return;
-        }
-        REQUIRE(received.HasValue());
-        REQUIRE(numeric.dispatch->DrainAtGameplaySafePoint(fixture.Work()).Value().invoked == 1);
-        REQUIRE(numeric.handler->last == value);
+        numeric.Verify(fixture, policy, value, expected);
     }
 
 }  // namespace Horo::Network

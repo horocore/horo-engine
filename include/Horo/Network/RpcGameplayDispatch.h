@@ -243,7 +243,7 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> ExecutePending(const Pending &command, const ReplicationWorldWorkRequest &request);
         /** @brief Pins an executable binding and revalidates its queued publication around custom policy. */
         [[nodiscard]] Result<void> ExecuteBinding(const Pending &command, const ReplicationWorldWorkRequest &request,
-                                                  const Binding &binding, const Peer &peer, const Object &object);
+                                                  const Binding &binding, const Peer &peer, const Object &object) const;
         [[nodiscard]] Result<void> StageAdmitted(const InboundMessageContext &context, const MessageEnvelope &message, const Peer &peer,
                                                  std::uint64_t revision);
         /** @brief Validates target/session/envelope/rate evidence and pins it before any external decoder runs. */

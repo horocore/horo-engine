@@ -151,7 +151,7 @@ namespace Horo::Network {
 
     /** @copydoc RpcGameplayDispatch::ExecuteBinding */
     Result<void> RpcGameplayDispatch::ExecuteBinding(const Pending &command, const ReplicationWorldWorkRequest &request,
-                                                     const Binding &binding, const Peer &peer, const Object &object) {
+                                                     const Binding &binding, const Peer &peer, const Object &object) const {
         const Binding pinned = binding.Pin();
         const Peer pinnedPeer = peer;
         const Object pinnedObject = object;
