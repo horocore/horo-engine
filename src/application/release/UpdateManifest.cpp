@@ -273,10 +273,10 @@ namespace Horo::Release {
 
         /** @brief Enforces the exact canonical shape and bounded collection sizes for one schema version. */
         [[nodiscard]] bool ValidPayloadShape(const Json &json) {
-            const std::size_t optionalFields = static_cast<std::size_t>(json.contains("minimumAllowedVersion")) +
-                                               static_cast<std::size_t>(json.contains("releaseNotes")) +
-                                               static_cast<std::size_t>(json.contains("compatibilityImpacts"));
-            if (!json.is_object() || !json.at("schemaVersion").is_number_integer() ||
+            if (const std::size_t optionalFields = static_cast<std::size_t>(json.contains("minimumAllowedVersion")) +
+                                                   static_cast<std::size_t>(json.contains("releaseNotes")) +
+                                                   static_cast<std::size_t>(json.contains("compatibilityImpacts"));
+                !json.is_object() || !json.at("schemaVersion").is_number_integer() ||
                 ((json.at("schemaVersion") == 1 && json.size() != 11U + optionalFields) ||
                  (json.at("schemaVersion") == 2 && json.size() != 12U + optionalFields)) ||
                 (json.at("schemaVersion") != 1 && json.at("schemaVersion") != 2) || !json.at("product").is_object() ||
