@@ -43,27 +43,19 @@ namespace Horo::Destruction {
         ChunkCollisionCookOwner() = default;
 
         /** @brief Cancels remaining detached tokens before the publication owner disappears. */
-        ~ChunkCollisionCookOwner() {
-            Shutdown();
-        }
+        ~ChunkCollisionCookOwner();
 
         ChunkCollisionCookOwner(const ChunkCollisionCookOwner &) = delete;
         ChunkCollisionCookOwner &operator=(const ChunkCollisionCookOwner &) = delete;
 
         /** @brief Current non-wrapping generation. @return Nonzero owner revision. */
-        [[nodiscard]] std::uint64_t Revision() const noexcept {
-            return revision_;
-        }
+        [[nodiscard]] std::uint64_t Revision() const noexcept;
 
         /** @brief Token retained by detached work. @return Current generation cancellation. */
-        [[nodiscard]] CancellationToken Token() const noexcept {
-            return cancellation_.Token();
-        }
+        [[nodiscard]] CancellationToken Token() const noexcept;
 
         /** @brief Last completely accepted dependency closure. @return Immutable snapshot or null. */
-        [[nodiscard]] std::shared_ptr<const ChunkCollisionArtifactSet> Snapshot() const noexcept {
-            return current_;
-        }
+        [[nodiscard]] std::shared_ptr<const ChunkCollisionArtifactSet> Snapshot() const noexcept;
 
         /**
          * @brief Accepts a complete candidate only for the current content, mesh, target and owner generation.

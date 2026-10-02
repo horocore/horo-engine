@@ -273,6 +273,26 @@ namespace Horo::Destruction {
         }
     }
 
+    /** @copydoc ChunkCollisionCookOwner::~ChunkCollisionCookOwner */
+    ChunkCollisionCookOwner::~ChunkCollisionCookOwner() {
+        Shutdown();
+    }
+
+    /** @copydoc ChunkCollisionCookOwner::Revision */
+    std::uint64_t ChunkCollisionCookOwner::Revision() const noexcept {
+        return revision_;
+    }
+
+    /** @copydoc ChunkCollisionCookOwner::Token */
+    CancellationToken ChunkCollisionCookOwner::Token() const noexcept {
+        return cancellation_.Token();
+    }
+
+    /** @copydoc ChunkCollisionCookOwner::Snapshot */
+    std::shared_ptr<const ChunkCollisionArtifactSet> ChunkCollisionCookOwner::Snapshot() const noexcept {
+        return current_;
+    }
+
     /** @copydoc ChunkCollisionCookOwner::Accept */
     Result<void> ChunkCollisionCookOwner::Accept(std::shared_ptr<const ChunkCollisionArtifactSet> candidate, std::uint64_t expectedRevision,
                                                  const ChunkCollisionCookRequest &current) {
