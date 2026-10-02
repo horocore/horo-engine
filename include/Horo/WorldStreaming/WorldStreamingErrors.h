@@ -8,6 +8,21 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::WorldStreaming::WorldStreamingErrors {
+    /** @brief Malformed failure-policy facts or identities. */
+    extern const ErrorCodeDescriptor FailurePolicyInvalid;
+    /** @brief Unsupported failure contract version or enum. */
+    extern const ErrorCodeDescriptor FailurePolicyUnsupported;
+    /** @brief Stale failure policy, revision, generation or clock. */
+    extern const ErrorCodeDescriptor FailurePolicyStale;
+    /** @brief Failure history exceeds its bounded record ceiling. */
+    extern const ErrorCodeDescriptor FailurePolicyCapacityExceeded;
+    /** @brief New retry work is closed during cancellation or shutdown. */
+    extern const ErrorCodeDescriptor FailurePolicyLifecycleUnavailable;
+    /** @brief Failure cleanup or retry eligibility is incomplete. */
+    extern const ErrorCodeDescriptor FailurePolicyTransitionInvalid;
+    /** @brief The next monotonic cooldown cannot be represented. */
+    extern const ErrorCodeDescriptor FailurePolicyTimeExhausted;
+
     /** @brief A shared-asset charge, consumer, lease, or limit is malformed. */
     extern const ErrorCodeDescriptor SharedAssetInvalid;
     /** @brief A shared-asset claim names another partition incarnation, owner, or released lease. */

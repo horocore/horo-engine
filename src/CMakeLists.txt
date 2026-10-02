@@ -1330,6 +1330,8 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/StreamingCellAssetRequest.cpp
         runtime/world_streaming/StreamingCellActivation.cpp
         runtime/world_streaming/StreamingCellStability.cpp
+        runtime/world_streaming/StreamingFailurePolicy.cpp
+        runtime/world_streaming/StreamingFailurePolicyErrors.cpp
         runtime/world_streaming/StreamingCellState.cpp
         runtime/world_streaming/StreamingSchedulerAdmission.cpp
         runtime/world_streaming/WorldDependencyPlan.cpp

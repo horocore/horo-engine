@@ -644,6 +644,31 @@ not reset the counter; this replaces the ambiguous "volume cooldown trigger" and
 prevents camera flapping from creating endless retry storms. Diagnostics expose
 attempt count, next retry time and terminal cause.
 
+`StreamingFailurePolicy` and immutable authority-owned `StreamingFailureRecord`
+implement WST-003.12 at that boundary. `RecordFailure` accepts only a canonical
+failed terminal after retirement acknowledgement, then starts the cooldown from
+that safe point. Producers distinguish transient I/O/provider causes from permanent
+integrity, schema, missing-required-provider and permanently oversized causes;
+ordinary budget pressure stays in scheduler admission and never creates a failure.
+
+Eligibility is a pure observation. `IssueRetry` consumes it once for an exact queued
+Load operation with a distinct operation identity and strictly greater generation.
+The authority publishes that successor together with async requeue, then obtains
+fresh ordinary scheduler and multidimensional budget admission before starting work.
+Failed admission leaves that same queued retry pending, without consuming another
+allowance. No sleeps, ambient clocks, allocation or backend selection occur here.
+
+The record retains attempt count and cause through demand loss and issued work.
+Newer content/provider publications or explicit host authorization start a fresh
+series; older publications, replaced policy/partition facts, duplicate completions,
+and backward clocks fail without mutation. Cancellation/shutdown closes new policy
+work while canonical retirement drains separately. Only canonical Active residency of the exact issued
+generation authorizes releasing the record; demand exit, cancellation and policy
+replacement do not. The authority retains quarantine tombstones under the configured
+record ceiling for the mounted epoch, preventing eviction from resetting failures.
+Unrepresentable cooldown deadlines return a typed time-exhaustion error.
+
+
 ## Bounded Diagnostic Projection And Decision Evidence
 
 `WorldStreamingDiagnosticSnapshot` is the single immutable diagnostic projection
@@ -1634,3 +1659,10 @@ See [Coordinate Precision And Origin Rebasing](./coordinate-precision-and-origin
 - [Concurrency And Job System](../foundation/concurrency-and-jobs.md): Job workers, cancellation tokens, and thread roles.
 - [Error And Diagnostics](../foundation/error-and-diagnostics.md): Fallible `Result<T, Error>` contracts and diagnostic codes.
 - [Editor Document Model](../editor/editor-document-model.md): Multi-layer authoring documents and offline cell baking.
+
+An issued retry that is cancelled, replaced or shut down remains charged to the
+retry allowance. After its exact canonical terminal proves cleanup, an active
+(resumed) authority calls `ReconcileInterruption` to retain the cause/count and
+begin the next cooldown or quarantine. Duplicate acknowledgements and live
+retirement snapshots are rejected. A closed authority simply retains history
+until teardown; it admits no new retry work.
