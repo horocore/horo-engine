@@ -911,6 +911,7 @@ add_library(HoroPhysics STATIC
         physics/CharacterWorldMovementInternal.h
         physics/CharacterWorldInternal.h
         physics/CharacterWorldPlacementInternal.h
+        physics/CharacterWorldShapeInternal.h
         physics/CharacterWorldSettings.cpp
         physics/GenerationalSlotStorage.h
         physics/PhysicsBodyDescriptor.cpp
