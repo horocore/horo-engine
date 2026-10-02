@@ -24,7 +24,7 @@ project its already authorized behavior capabilities into those provider calls;
 the core never discovers Scene, jobs, native backends or editor services.
 
 `AIDecisionSystem` remains the scheduling authority in `AiDecisionEvaluate`.
-This core owns no update loop, threads or worker completion queue. Call
+The core owns bounded task mailboxes, but no update loop or worker threads. Call
 `Evaluate` with a positive nondecreasing fixed tick; event resumes may use the
 same tick. Successful evaluation allocates no core storage. Node state, service
 state and depth-limited scratch frames are contiguous arrays allocated before
@@ -74,8 +74,9 @@ Malformed evaluation inputs preserve state and return typed failures. Agent
 retirement and scene cancellation cancel before any later provider call and
 close the instance. Explicit Shutdown and destruction cancel remaining work
 with OwnerShutdown. Adapters must fence detached worker outcomes with their
-operation handle; broader async completion remains separate from this
-control-flow delivery (#1339).
+operation handle. Instance-issued continuations now perform that fencing at the
+actual task slot; providers must use this path instead of retaining an instance
+pointer or directly publishing a second terminal store.
 
 Replacement is a safe-point operation. Null/failed compilations preserve the
 active instance. Exact stable executable semantics, provider versions, binding
@@ -86,3 +87,61 @@ failure. Cross-plan dependencies are explicitly rejected by this compiler until
 the dependency-frame runner is composed; they are never silently ignored or
 flattened into competing shared declarations. Save/restore and concrete
 navigation/animation task adapters remain their own later integration work.
+
+## Async task delivery and migration
+
+`AITaskContinuation.h` and `AITaskJobService.h` belong to `HoroEngine::AI`, which
+still depends only on Foundation. `BehaviorTreeEvaluationContext` now supplies
+a copyable `continuation` for Start/Resume, and `IBehaviorTreeExecutor` adds an
+optional `Pump()` hook. Rebuild all executor implementations and their consumers:
+this changes the C++ context layout and executor vtable. Existing synchronous
+implementations retain their Start/Resume return behavior and inherit an empty
+Pump. This is a host C++ integration contract, not a gameplay SDK or extension
+ABI capability. Conditions and services receive an empty continuation.
+
+Detached callbacks may retain only the continuation and their owned inputs,
+never the borrowed evaluation context, blackboard snapshot, executor or mutable
+Scene. `PublishTerminal` validates the canonical success/failure/cancellation
+shape and moves one candidate only when accepted. It preserves original typed
+failure information. `NotifyEvent` coalesces wakes. Both use one preallocated
+terminal record and event bit per task slot, with nonblocking try-lock admission:
+Contended requires a later retry; AlreadyPublished and Stale are final rejection
+dispositions. A candidate does not complete a lifecycle or advance the tree.
+
+The owner calls Evaluate in `AiDecisionEvaluate`. After validating the scene,
+agent, frozen blackboard and clock, it invokes Pump, observes reactive priority
+and deadlines, and consumes candidates in declared traversal order. Only that
+phase can publish the immutable lifecycle terminal and advance Sequence,
+Selector, Parallel or decorators. Event wakes select Event for the next provider
+resume; recurring evaluations retain FixedTick. A queued completion loses to
+an owner abort or expired deadline before consumption. Timeout uses TimedOut;
+restart/priority replacement uses Superseded; incompatible reload uses
+PlanReplaced. Existing cancellation enum values retain their numeric identity.
+Completion invalidates its continuation before Cleanup. Abort invalidates it
+before downstream Abort and Cleanup, each once. Later task starts, loops and
+replacement reuse slots with fresh nonwrapping generations. Compatible reload
+retains the active continuation. Tokens surviving destruction retain inert
+mailbox storage and reject publication; they retain no executable callback.
+
+The explicit `AiTaskJobService` connects the same path to the process
+Foundation JobSystem. The composition root injects the scheduler; a task adapter
+admits owned `IAiTaskJob` work with an exact `AiTaskJobLease`, calls Pump from its
+executor hook, and forwards Abort to Cancel. Start returns typed scheduler
+admission failures. Pump maps immutable job terminals into canonical candidates
+without waiting and retains candidates on mailbox contention. Service capacity
+is finite and project-lowerable (maximum 1024); cancelled running work consumes
+capacity until its worker reaches terminal. Admission-time scheduler allocation
+is separate from the allocation-free tree evaluation path for direct events and
+completions. Async availability timing is not promised to be replay deterministic.
+
+Workers capture detached operation identity, cooperative cancellation ancestry,
+immutable work and the required code-image/callback pin. The pin must cover work
+destruction and all activation-scoped dependencies; work is destroyed first.
+For module callbacks, retain the admitted Foundation ModuleCallbackLease in that
+pin. Service Shutdown closes admission and requests cancellation without waiting;
+workers may outlive both service and decision instance. The host keeps the
+JobSystem alive and drains callback/image leases at teardown before releasing
+dependencies or unloading code. Results never authorize worker Scene writes;
+navigation, animation and script adapters must stage their own authorized owner
+commands. Their concrete adapters, aggregate scheduling and save/restore remain
+separate deliveries.

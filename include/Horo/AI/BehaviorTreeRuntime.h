@@ -4,6 +4,7 @@
  * @brief Bounded deterministic execution of compiled behavior-tree control flow.
  */
 
+#include "Horo/AI/AITaskContinuation.h"
 #include "Horo/AI/AITaskLifecycle.h"
 #include "Horo/AI/BlackboardInstance.h"
 #include "Horo/AI/DecisionAssetValidation.h"
@@ -168,6 +169,7 @@ namespace Horo::AI {
         const BlackboardSnapshot &blackboard;
         std::uint64_t tick{};
         AiTaskResumeReason reason{AiTaskResumeReason::FixedTick};
+        AiTaskContinuation continuation; /**< Detached task-only publication capability; empty for conditions/services. */
     };
 
     /**
@@ -179,6 +181,14 @@ namespace Horo::AI {
     class IBehaviorTreeExecutor {
     public:
         virtual ~IBehaviorTreeExecutor() = default;
+
+        /** @brief Pumps bounded detached task-service outcomes at AiDecisionEvaluate, after owner/input validation.
+         * @details Implementations must not mutate Scene or reenter this instance. Default adapters have no queued work.
+         */
+        virtual void Pump() noexcept {
+            // Synchronous adapters have no detached service outcomes to pump.
+        }
+
         /** @brief Starts one admitted task. @param context Borrowed frozen inputs. @param operation Exact execution fence.
          * @return Running/Succeeded/Failed/Cancelled, or a typed failure retained by the lifecycle.
          */
@@ -259,6 +269,10 @@ namespace Horo::AI {
         /** @brief Returns one stable node's subtree status. @param node Stable identity. @return Status or typed missing identity failure.
          */
         [[nodiscard]] Result<AiTaskState> Status(DecisionNodeId node) const;
+        /** @brief Copies a task's canonical outcome for owner inspection.
+         * @param node Stable task identity. @return Outcome if terminal, empty if unstarted/running, or typed missing-node failure.
+         */
+        [[nodiscard]] Result<std::optional<AiTaskTerminalResult>> TaskResult(DecisionNodeId node) const;
         /** @brief Returns the root status. @return Current subtree state. */
         [[nodiscard]] AiTaskState RootStatus() const noexcept;
         /** @brief Destroys owned state after exactly-once cancellation/cleanup. */
@@ -284,6 +298,12 @@ namespace Horo::AI {
         [[nodiscard]] Result<void> Enter(std::size_t node, const BlackboardSnapshot &blackboard);
         /** @brief Starts or resumes one generation-fenced task and publishes its outcome. */
         [[nodiscard]] Result<void> RunTask(std::size_t node, const BlackboardSnapshot &blackboard);
+        /** @brief Starts the canonical lifecycle and binds its reserved continuation slot. */
+        [[nodiscard]] Result<void> StartTask(std::size_t node);
+        /** @brief Publishes a validated detached terminal through the existing lifecycle authority. */
+        void ApplyTerminal(std::size_t node, AiTaskTerminalResult result) const;
+        /** @brief Translates synchronous adapter outcomes to the canonical lifecycle. */
+        void ApplyProviderResult(std::size_t node, const Result<AiTaskState> &result) const;
         /** @brief Claims exactly-once downstream abort/cleanup for a terminal task. */
         void FinishTask(std::size_t node) noexcept;
         /** @brief Cancels every running task in one contiguous preorder descendant range. */
@@ -306,6 +326,7 @@ namespace Horo::AI {
         std::unique_ptr<NodeState[]> states_;
         std::unique_ptr<ServiceState[]> services_;
         std::unique_ptr<Frame[]> frames_;
+        std::shared_ptr<Detail::AiTaskMailbox> mailbox_;
         std::uint64_t tick_{};
         std::uint64_t evaluation_{};
         std::uint32_t nextGeneration_{};

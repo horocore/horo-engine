@@ -1,3 +1,5 @@
+#include "AITaskMailbox.h"
+#include "BehaviorTreeInstanceState.h"
 #include "Horo/AI/BehaviorTreeRuntime.h"
 
 #include <limits>
@@ -42,30 +44,6 @@ namespace Horo::AI {
         static_assert(!std::is_move_assignable_v<EvaluationGuard>);
     }  // namespace
 
-    struct BehaviorTreeInstance::NodeState final {
-        AiTaskState status{AiTaskState::Idle};
-        std::size_t cursor{};
-        std::uint32_t iterations{};
-        std::uint64_t startedTick{};
-        std::uint64_t completedTick{};
-        bool cooldownSet{};
-        std::uint64_t checkedEvaluation{};
-        bool condition{};
-        std::optional<AiTaskLifecycle> task;
-    };
-
-    struct BehaviorTreeInstance::ServiceState final {
-        std::uint64_t tick{};
-        std::uint64_t revision{};
-        bool active{};
-    };
-
-    struct BehaviorTreeInstance::Frame final {
-        std::size_t node{};
-        std::size_t nextChild{};
-        bool entered{};
-    };
-
     /** @copydoc BehaviorTreeInstance::BehaviorTreeInstance */
     BehaviorTreeInstance::BehaviorTreeInstance(ConstructionKey) {}
 
@@ -83,6 +61,7 @@ namespace Horo::AI {
             instance->states_ = std::make_unique<NodeState[]>(plan->Nodes().size());
             instance->services_ = std::make_unique<ServiceState[]>(plan->Services().size());
             instance->frames_ = std::make_unique<Frame[]>(plan->Depth());
+            instance->mailbox_ = std::make_shared<Detail::AiTaskMailbox>(BehaviorTreeExecutionLimits::HardNodes);
             instance->binding_ = std::move(binding);
             instance->nextGeneration_ = instance->binding_.firstTaskGeneration;
             instance->executor_ = std::move(executor);
@@ -126,6 +105,7 @@ namespace Horo::AI {
         tick_ = tick;
         reason_ = reason;
         ++evaluation_;
+        executor_->Pump();
         if (Terminal(states_[0].status))
             return Result<AiTaskState>::Success(states_[0].status);
         if (const auto observed = ObservePriority(blackboard); observed.HasError()) {
@@ -190,7 +170,7 @@ namespace Horo::AI {
                 if (!checked.Value())
                     continue;
                 const std::size_t active = plan_->Children()[selector.firstChild + state.cursor];
-                CancelRange(active, AiTaskCancellationReason::Requested);
+                CancelRange(active, AiTaskCancellationReason::Superseded);
                 ResetRange(active);
                 ResetRange(child);
                 state.cursor = priority;
@@ -215,7 +195,7 @@ namespace Horo::AI {
         if (op == Cooldown && entering && state.cooldownSet && tick_ - state.completedTick < record.execution.durationTicks)
             state.status = Failed;
         if (op == TimeLimit && tick_ - state.startedTick >= record.execution.durationTicks) {
-            CancelRange(node, AiTaskCancellationReason::Requested);
+            CancelRange(node, AiTaskCancellationReason::TimedOut);
             state.status = Failed;
         }
         if (op == BlackboardCheck &&
@@ -242,15 +222,8 @@ namespace Horo::AI {
         auto &state = states_[node];
         const bool starting = !state.task;
         if (starting) {
-            if (nextGeneration_ == 0)
-                return Failure<void>(AIErrors::GenerationExhausted);
-            const TaskHandle handle{binding_.agent.incarnation,
-                                    {binding_.firstTaskSlot + static_cast<std::uint32_t>(node), nextGeneration_}};
-            nextGeneration_ = nextGeneration_ == std::numeric_limits<std::uint32_t>::max() ? 0 : nextGeneration_ + 1;
-            state.task.emplace();
-            const auto started = state.task->Start({plan_->Nodes()[node].execution.task, handle, binding_.agent, binding_.cancellation});
-            if (started.HasError())
-                return Result<void>::Failure(started.ErrorValue());
+            if (const auto started = StartTask(node); started.HasError())
+                return started;
         }
         const auto ready = state.task->PrepareResume(reason_, binding_.agent);
         if (ready.HasError())
@@ -259,19 +232,15 @@ namespace Horo::AI {
             FinishTask(node);
             return Result<void>::Success();
         }
-        const auto context = Context(plan_->Nodes()[node].execution.id, blackboard);
-        if (auto result = starting ? executor_->Start(context, *state.task->Context()) : executor_->Resume(context, *state.task->Context());
-            result.HasError()) {
-            const auto completed = state.task->CompleteFailure(binding_.agent, {AiTaskFailureKind::Execution, result.ErrorValue()});
-            if (completed.HasError())
-                return Result<void>::Failure(completed.ErrorValue());
-        } else if (result.Value() == AiTaskState::Succeeded) {
-            static_cast<void>(state.task->CompleteSuccess(binding_.agent));
-        } else if (result.Value() == AiTaskState::Cancelled) {
-            static_cast<void>(state.task->RequestCancellation(AiTaskCancellationReason::Requested));
-        } else if (result.Value() != AiTaskState::Running) {
-            const auto kind = result.Value() == AiTaskState::Failed ? AiTaskFailureKind::Execution : AiTaskFailureKind::InvalidOutput;
-            static_cast<void>(state.task->CompleteFailure(binding_.agent, {kind, MakeError(AIErrors::TaskFailureInvalid)}));
+        if (auto pending = mailbox_->Take(node, state.task->Context()->task); pending.terminal) {
+            ApplyTerminal(node, std::move(*pending.terminal));
+        } else {
+            auto context = Context(plan_->Nodes()[node].execution.id, blackboard);
+            context.continuation = state.continuation;
+            if (pending.event)
+                context.reason = AiTaskResumeReason::Event;
+            ApplyProviderResult(node, starting ? executor_->Start(context, *state.task->Context())
+                                               : executor_->Resume(context, *state.task->Context()));
         }
         FinishTask(node);
         return Result<void>::Success();
@@ -283,6 +252,7 @@ namespace Horo::AI {
         state.status = state.task->State();
         if (!Terminal(state.status))
             return;
+        mailbox_->Retire(node);
         if (const auto claim = state.task->ClaimCleanup(); !claim.HasValue() || !claim.Value())
             return;
         const auto &result = *state.task->TerminalResult();
@@ -315,6 +285,7 @@ namespace Horo::AI {
             state.cursor = 0;
             state.iterations = 0;
             state.task.reset();
+            state.continuation = {};
             // Cooldown and this evaluation's pure condition cache intentionally survive a branch restart.
             const auto &record = plan_->Nodes()[index];
             for (std::size_t service = record.firstService; service < record.firstService + record.serviceCount; ++service)
@@ -468,7 +439,7 @@ namespace Horo::AI {
         if (shutdown_ || evaluating_)
             return Failure<void>(AIErrors::TaskTransitionInvalid);
         EvaluationGuard guard(evaluating_);
-        CancelRange(0, AiTaskCancellationReason::Requested);
+        CancelRange(0, AiTaskCancellationReason::Superseded);
         ResetRange(0);
         return Result<void>::Success();
     }
@@ -488,7 +459,7 @@ namespace Horo::AI {
             auto states = std::make_unique<NodeState[]>(candidate->Nodes().size());
             auto services = std::make_unique<ServiceState[]>(candidate->Services().size());
             auto frames = std::make_unique<Frame[]>(candidate->Depth());
-            CancelRange(0, AiTaskCancellationReason::Requested);
+            CancelRange(0, AiTaskCancellationReason::PlanReplaced);
             states_ = std::move(states);
             services_ = std::move(services);
             frames_ = std::move(frames);
@@ -521,5 +492,15 @@ namespace Horo::AI {
     /** @copydoc BehaviorTreeInstance::RootStatus */
     AiTaskState BehaviorTreeInstance::RootStatus() const noexcept {
         return states_[0].status;
+    }
+
+    /** @copydoc BehaviorTreeInstance::TaskResult */
+    Result<std::optional<AiTaskTerminalResult>> BehaviorTreeInstance::TaskResult(const DecisionNodeId node) const {
+        const auto index = Find(node);
+        if (index == plan_->Nodes().size() || plan_->Nodes()[index].execution.operation != BehaviorTreeOperation::Task)
+            return Failure<std::optional<AiTaskTerminalResult>>(AIErrors::BehaviorTreeTopologyInvalid);
+        const auto &task = states_[index].task;
+        return Result<std::optional<AiTaskTerminalResult>>::Success(task && task->TerminalResult() ? std::optional{*task->TerminalResult()}
+                                                                                                   : std::nullopt);
     }
 }  // namespace Horo::AI
