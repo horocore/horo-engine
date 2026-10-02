@@ -218,6 +218,29 @@ TEST_CASE("Save operation arbiter reports active conflicts while coalescing the 
     CHECK(rejected.ErrorValue().message.find("46") != std::string::npos);
 }
 
+TEST_CASE("Save arbiter polls precommit cancellation without changing postcommit ownership", "[unit][runtime][save][arbiter]") {
+    auto arbiter = Arbiter();
+    CHECK(arbiter.PollCancellation(101).HasError());
+    Admit(arbiter, Request(101));
+    REQUIRE(arbiter.StartNext());
+    REQUIRE(arbiter.Advance(101, SaveArbiterState::WaitingForSafePoint).HasValue());
+    CHECK_FALSE(arbiter.PollCancellation(101).Value());
+    CHECK(arbiter.Cancel(101) == SaveCancellationRequestResult::Requested);
+    CHECK(arbiter.PollCancellation(101).Value());
+    CHECK(Snapshot(arbiter, 101).operation.state == SaveOperationState::Cancelled);
+    CHECK_FALSE(arbiter.ActiveOperation());
+    Admit(arbiter, Request(102));
+    REQUIRE(arbiter.StartNext());
+    REQUIRE(arbiter.Advance(102, SaveArbiterState::WaitingForSafePoint).HasValue());
+    REQUIRE(arbiter.Advance(102, SaveArbiterState::Capturing).HasValue());
+    REQUIRE(arbiter.Advance(102, SaveArbiterState::Encoding).HasValue());
+    REQUIRE(arbiter.Advance(102, SaveArbiterState::Committing, {1, 1}).HasValue());
+    CHECK(arbiter.Cancel(102) == SaveCancellationRequestResult::TooLate);
+    CHECK_FALSE(arbiter.PollCancellation(102).Value());
+    REQUIRE(arbiter.Complete(102).HasValue());
+    CHECK(Snapshot(arbiter, 102).operation.commit == SaveOperationCommitOutcome::Committed);
+}
+
 TEST_CASE("Save operation arbiter keeps producer ownership independent from observers", "[unit][runtime][save][arbiter]") {
     SaveOperationHandle survivor;
     std::atomic<int> completions{};
