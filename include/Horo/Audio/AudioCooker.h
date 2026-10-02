@@ -5,8 +5,10 @@
  * @brief Deterministic Audio-owned PCM cook contribution and compatibility manifest.
  */
 
+#include "Horo/Assets/AssetProvider.h"
 #include "Horo/Assets/CookCatalog.h"
 #include "Horo/Audio/AudioCookProfile.h"
+#include "Horo/Audio/AudioStreamingService.h"
 #include "Horo/Foundation/CancellationToken.h"
 
 #include <cstddef>
@@ -71,6 +73,23 @@ namespace Horo::Audio {
      * @return Verified immutable compatibility manifest or a typed invalid-payload error.
      */
     [[nodiscard]] Result<AudioCookManifest> InspectCookedAudio(std::span<const std::uint8_t> bytes);
+
+    /**
+     * @brief Binds a pinned cooked provider to the worker-side PCM streaming opener.
+     * @param provider Owned immutable package or cooked-filesystem generation, never an authoring source.
+     * @param target Exact runtime cook target.
+     * @param type Expected registered Audio asset type.
+     * @param maximumArtifactBytes Provider's configured per-load allocation ceiling.
+     * @return Owned source binding or a typed invalid-limit error. The source lease pins the provider.
+     * @pre The provider enforces maximumArtifactBytes before allocating a load. Configure filesystem/archive
+     * provider limits accordingly; mutable providers must not replace this captured generation.
+     * @details Worker opening verifies AST identity, type, target, integrity and Audio's cooked schema.
+     * Requests reserve at least three times the artifact ceiling for load/envelope/inspection peak storage.
+     * PCM decode reads only the retained verified cooked payload; no source codec or file fallback is used.
+     */
+    [[nodiscard]] Result<AudioStreamPackageSource> MakeCookedAudioStreamSource(std::shared_ptr<const Assets::IAssetProvider> provider,
+                                                                               AssetCookTargetId target, Assets::AssetTypeId type,
+                                                                               std::size_t maximumArtifactBytes);
 
     /**
      * @brief Creates an inert exact-target Audio cooker contribution for host catalog registration.

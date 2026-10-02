@@ -1393,8 +1393,41 @@ cancellation concurrently. Provider failure or inconsistent progress discards th
 candidate block and closes admission. The host joins worker work before releasing
 the provider, and only the Audio control owner publishes prepared blocks or ring
 generations at the ADR-062 boundary. This contract neither performs file I/O nor
-invokes a codec from the callback; concrete codec providers and stream-ring
-publication are separate integration work.
+invokes a codec from the callback. `AudioStreamingService` owns bounded stream
+slots and preallocated decode/ring storage. The host supplies a package-generation
+opener keyed by a published `AssetId`; worker jobs open that generation, validate
+its exact decoder facts, and serially fill each ring. Control `Pump` schedules
+bounded jobs by declared priority until the lookahead is met. A single-consumer
+callback port reads only published frames and writes ADR-063 planar output,
+filling missing frames with positive-zero silence. The host detaches a callback
+port before retiring its stream generation; retirement cancels and joins worker
+work before releasing the decoder, package lease, and ring. Source providers
+honor worker cancellation and bounded I/O. Package selection and publication
+remain in Assets without authoring-file fallback.
+
+`MakeCookedAudioStreamSource` in the existing AudioCook contribution target supplies
+the concrete adapter for a host-pinned `FilesystemAssetProvider` or verified
+`AssetArchiveProvider`. Opening occurs inside the fill job and validates the AST
+envelope's identity, type, target and integrity followed by the existing Audio
+cooked inspector. The initial cooked codec is seekable little-endian PCM; the
+worker converts bounded blocks without invoking the source importer. Other cooked
+codecs remain explicit unsupported combinations. The provider must enforce its
+declared per-artifact ceiling before allocating. Stream admission reserves three
+times that ceiling for load, envelope and inspection peak memory in addition to
+ring/decode/scratch storage. This adapter retains the complete bounded cooked
+payload, not a file-range streaming cache. The archive/provider generation itself
+is host-owned and budgeted separately. Hosts link AudioCook explicitly for this
+adapter; AudioApi does not gain a dependency on cook/import code.
+
+One release/acquire cursor publication contains both the produced frame count and
+its terminal marker. The callback cannot observe final data without the matching
+EOF fact. Control retains original worker errors until retirement and projects
+coalesced underrun deltas at a caller-supplied sample-frame interval. Shutdown
+closes admission before cancellation; a join timeout retains storage and permits
+only retirement/shutdown retry. External decoder code is pinned by the source's
+owner lease through decoder destruction. Fixed owner/slot metadata and allocator
+overhead are outside payload byte reservations; no wall-time deadline qualification
+is implied by the deterministic storage and frame limits.
 
 Underrun behavior:
 
@@ -2026,6 +2059,7 @@ without a measured source observation is unavailable, not a fabricated zero.
 Callback underruns count consumed facts; separately measured telemetry drops
 explain records lost under event-queue pressure. Critical retries are not called
 drops, because the caller retains the work.
+
 ### Development callback safety watchdog
 
 The build-tree-only `AudioCallbackWatchdog` instruments each SDL3 Horo render-port

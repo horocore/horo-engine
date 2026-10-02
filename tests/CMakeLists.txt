@@ -364,6 +364,7 @@ add_executable(HoroAudioApiTests
         unit/runtime/audio/MixerAssetSchemaTests.cpp
         unit/runtime/audio/AudioSoundReferenceTests.cpp
         unit/runtime/audio/AudioStreamDecoderTests.cpp
+        unit/runtime/audio/AudioStreamingServiceTests.cpp
         unit/runtime/audio/AudioBackendCapabilitiesTests.cpp
         unit/runtime/audio/AudioCallbackEventsTests.cpp
         unit/runtime/audio/AudioDeviceDiscoveryTests.cpp

@@ -20,6 +20,25 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## AUD-002.8 Streaming Service Boundary
+
+`HoroEngine::AudioApi` owns the additive `Horo/Audio/AudioStreamingService.h`
+contract. Existing decoder and callback callers need no signature migration.
+Hosts opting into package streaming supply a retained cooked-generation opener,
+the process JobSystem, exact decoder facts and explicit budgets. The service
+does not select packages or a device. Its sole callback port is borrowed by one
+render epoch and detached before control retires the stream. The generated
+`HoroAudioApi` public-header consumer checks the staged header and its declared
+Foundation/Assets dependencies.
+
+The existing `HoroEngine::AudioCook` header `AudioCooker.h` additionally owns
+`MakeCookedAudioStreamSource`. The host explicitly binds an immutable bounded
+cooked provider and retains no mutable publication pointer. The adapter verifies
+AST and Audio schemas on a worker and owns decoded-generation payload lifetime.
+There is no AudioApi-to-AudioCook dependency or source-import fallback. Existing
+cook callers need no migration; generated AudioCook public-header consumers and
+filesystem/archive streaming regressions cover the additive composition route.
+
 ## AUD-007.9 Focus Policy Boundary
 
 `HoroEngine::AudioCommands` solely owns the additive
