@@ -21,7 +21,7 @@ namespace Horo::Packages {
                 graph.platform.architecture.empty() || graph.platform.sdkAbi.empty())
                 return Result<void>::Failure(MakeError(PackageInstallErrors::InvalidInput));
 
-            std::set<std::string> identities;
+            std::set<std::string, std::less<>> identities;
             for (const auto &package : graph.packages) {
                 if (!package.archive || !identities.insert(package.lock.package.Value()).second)
                     return Result<void>::Failure(MakeError(PackageInstallErrors::InvalidInput));
@@ -66,23 +66,65 @@ namespace Horo::Packages {
 
     class PackageInstallService::Impl final {
     public:
-        Impl(DurableFileSystem &files, std::filesystem::path root) : files(files), root(std::move(root)) {}
+        Impl(DurableFileSystem &files, std::filesystem::path root) : files_(files), root_(std::move(root)) {}
 
-        DurableFileSystem &files;
-        std::filesystem::path root;
-        mutable std::mutex mutex;
-        std::shared_ptr<const PackageRestoreGraph> activeGraph;
+        /** @brief Serializes installation and holds the project lease through the complete commit attempt. */
+        Result<void> Install(std::shared_ptr<const PackageRestoreGraph> graph, const CancellationToken &cancellation) {
+            std::lock_guard guard(mutex_);
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(PackageInstallErrors::Cancelled));
+
+            const auto metadata = root_ / ".horo";
+            if (auto lock = files_.TryAcquireExclusive(metadata / "packages.install.lock", "package install"); lock.HasValue())
+                return CommitRecord(std::move(graph), cancellation, metadata);
+            return Result<void>::Failure(MakeError(PackageInstallErrors::LockUnavailable));
+        }
+
+        /** @brief Reads the graph under the same mutex that protects publication. */
+        std::shared_ptr<const PackageRestoreGraph> ActiveGraph() const {
+            std::lock_guard guard(mutex_);
+            return activeGraph_;
+        }
+
+    private:
+        /** @brief Publishes a record while the caller retains both the mutex and exclusive project lease. */
+        Result<void> CommitRecord(std::shared_ptr<const PackageRestoreGraph> graph, const CancellationToken &cancellation,
+                                  const std::filesystem::path &metadata) {
+            const std::string record = SerializeRecord(*graph);
+            const auto pending = metadata / "packages.install.pending";
+            const auto committed = metadata / "packages.installed.json";
+            const auto bytes = std::as_bytes(std::span{record.data(), record.size()});
+            if (auto written = files_.WriteDurable(pending, bytes); written.HasError())
+                return Result<void>::Failure(MakeError(PackageInstallErrors::CommitFailed));
+            if (cancellation.IsCancellationRequested()) {
+                static_cast<void>(files_.RemoveDurable(pending));
+                return Result<void>::Failure(MakeError(PackageInstallErrors::Cancelled));
+            }
+            if (auto replaced = files_.AtomicReplace(pending, committed); replaced.HasError()) {
+                static_cast<void>(files_.RemoveDurable(pending));
+                return Result<void>::Failure(MakeError(PackageInstallErrors::CommitFailed));
+            }
+            activeGraph_ = std::move(graph);
+            return Result<void>::Success();
+        }
+
+        DurableFileSystem &files_;
+        std::filesystem::path root_;
+        // Serializes file transactions and graph publication/readback for every calling thread.
+        mutable std::mutex mutex_;
+        std::shared_ptr<const PackageRestoreGraph> activeGraph_;
     };
 
     /** @copydoc PackageInstallService::Create */
     Result<PackageInstallService> PackageInstallService::Create(DurableFileSystem &files, const std::filesystem::path &projectRoot) {
         std::error_code error;
         const auto canonical = std::filesystem::canonical(projectRoot, error);
-        if (error || !projectRoot.is_absolute() || canonical != projectRoot.lexically_normal() ||
-            !std::filesystem::is_directory(canonical, error) || error)
+        if (error || !projectRoot.is_absolute() || canonical != projectRoot.lexically_normal())
             return Result<PackageInstallService>::Failure(MakeError(PackageInstallErrors::InvalidInput));
-        const auto metadataStatus = std::filesystem::symlink_status(canonical / ".horo", error);
-        if ((error && error != std::errc::no_such_file_or_directory) ||
+        if (!std::filesystem::is_directory(canonical, error) || error)
+            return Result<PackageInstallService>::Failure(MakeError(PackageInstallErrors::InvalidInput));
+        if (const auto metadataStatus = std::filesystem::symlink_status(canonical / ".horo", error);
+            (error && error != std::errc::no_such_file_or_directory) ||
             (std::filesystem::exists(metadataStatus) && !std::filesystem::is_directory(metadataStatus)))
             return Result<PackageInstallService>::Failure(MakeError(PackageInstallErrors::InvalidInput));
         return Result<PackageInstallService>::Success(PackageInstallService{std::make_unique<Impl>(files, canonical)});
@@ -102,36 +144,11 @@ namespace Horo::Packages {
         if (auto valid = ValidateGraph(*graph); valid.HasError())
             return valid;
 
-        std::lock_guard guard(state_->mutex);
-        if (cancellation.IsCancellationRequested())
-            return Result<void>::Failure(MakeError(PackageInstallErrors::Cancelled));
-
-        const auto metadata = state_->root / ".horo";
-        auto lock = state_->files.TryAcquireExclusive(metadata / "packages.install.lock", "package install");
-        if (lock.HasError())
-            return Result<void>::Failure(MakeError(PackageInstallErrors::LockUnavailable));
-
-        const std::string record = SerializeRecord(*graph);
-        const auto pending = metadata / "packages.install.pending";
-        const auto committed = metadata / "packages.installed.json";
-        const auto bytes = std::as_bytes(std::span{record.data(), record.size()});
-        if (auto written = state_->files.WriteDurable(pending, bytes); written.HasError())
-            return Result<void>::Failure(MakeError(PackageInstallErrors::CommitFailed));
-        if (cancellation.IsCancellationRequested()) {
-            static_cast<void>(state_->files.RemoveDurable(pending));
-            return Result<void>::Failure(MakeError(PackageInstallErrors::Cancelled));
-        }
-        if (auto replaced = state_->files.AtomicReplace(pending, committed); replaced.HasError()) {
-            static_cast<void>(state_->files.RemoveDurable(pending));
-            return Result<void>::Failure(MakeError(PackageInstallErrors::CommitFailed));
-        }
-        state_->activeGraph = std::move(graph);
-        return Result<void>::Success();
+        return state_->Install(std::move(graph), cancellation);
     }
 
     /** @copydoc PackageInstallService::ActiveGraph */
     std::shared_ptr<const PackageRestoreGraph> PackageInstallService::ActiveGraph() const {
-        std::lock_guard guard(state_->mutex);
-        return state_->activeGraph;
+        return state_->ActiveGraph();
     }
 }  // namespace Horo::Packages

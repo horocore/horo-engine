@@ -67,6 +67,12 @@ namespace {
         }
 
         [[nodiscard]] Result<void> WriteDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes) override {
+            if (verifyLease) {
+                auto contender = native.TryAcquireExclusive(path.parent_path() / "packages.install.lock", "install test contender");
+                leaseRetained = contender.HasError();
+                if (!leaseRetained)
+                    return Result<void>::Failure(MakeError(PackageInstallErrors::CommitFailed));
+            }
             if (failWrite)
                 return Result<void>::Failure(MakeError(PackageInstallErrors::CommitFailed));
             return native.WriteDurable(path, bytes);
@@ -94,6 +100,8 @@ namespace {
         bool failWrite{};
         bool failReplace{};
         bool failLock{};
+        bool verifyLease{};
+        bool leaseRetained{};
     };
 }  // namespace
 
@@ -138,7 +146,9 @@ TEST_CASE("Package install leaves the previous record active when a durable comm
     auto service = std::move(created).Value();
     auto first = Graph();
     CancellationSource running;
+    files.verifyLease = true;
     REQUIRE(service.Install(first, running.Token()).HasValue());
+    REQUIRE(files.leaseRetained);
     const auto recordPath = project.Path() / ".horo/packages.installed.json";
     const auto originalRecord = ReadFile(recordPath);
 
