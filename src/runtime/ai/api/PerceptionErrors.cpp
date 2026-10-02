@@ -86,6 +86,42 @@ namespace Horo::AI::AIErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor PerceptionEventInvalid{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.perception.event_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A gameplay perception event or admission adapter is malformed.",
+        .remediationHint = "Supply typed facts and exact scene identities from the current authoritative event producer.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor PerceptionEventUnauthorized{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.perception.event_unauthorized"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "Gameplay did not authorize this recipient or disclosure of the perception event.",
+        .remediationHint = "Deliver through the Gameplay owner after applying team and network authority policy.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor PerceptionEventStale{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.perception.event_stale"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "A perception event references a retired source, sender or recipient generation.",
+        .remediationHint = "Discard the stale delivery and acquire current scene participants before retrying.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor PerceptionEventFiltered{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.perception.event_filtered"},
+        .defaultSeverity = ErrorSeverity::Info,
+        .summary = "The recipient's current perception filter rejected the gameplay event.",
+        .remediationHint = "No action is needed unless the listener's declared filter policy is incorrect.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor PerceptionSpatialInvalid{
         .domain = AiDomain,
         .code = ErrorCode{"ai.perception.spatial_invalid"},

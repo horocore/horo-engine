@@ -1,17 +1,23 @@
 #include "Horo/AI/PerceptionMemory.h"
 
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/PerceptionDescriptorRegistry.h"
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 #include <utility>
 
 namespace Horo::AI {
     namespace {
+        /** @brief Checks that a declared capacity fits the bounded memory storage. */
+        [[nodiscard]] bool ValidCapacity(const std::size_t capacity) noexcept {
+            return capacity > 0 && capacity <= MaximumPerceptionMemoryEntries;
+        }
+
         /** @brief Checks every policy value before admitting fixed-tick memory state. */
         [[nodiscard]] bool ValidPolicy(const PerceptionMemoryPolicy &policy) noexcept {
-            return policy.listenerMaximumEntries > 0 && policy.listenerMaximumEntries <= MaximumPerceptionMemoryEntries &&
-                   policy.profileMaximumEntries > 0 && policy.profileMaximumEntries <= MaximumPerceptionMemoryEntries &&
+            return ValidCapacity(policy.listenerMaximumEntries) && ValidCapacity(policy.profileMaximumEntries) &&
                    policy.fixedStep.count() > 0 && std::isfinite(policy.memoryDurationSeconds) && policy.memoryDurationSeconds > 0 &&
                    std::isfinite(policy.decayPerSecond) && policy.decayPerSecond >= 0 && std::isfinite(policy.forgetThreshold) &&
                    policy.forgetThreshold >= 0 && policy.forgetThreshold < 1;
@@ -75,8 +81,25 @@ namespace Horo::AI {
 
     /** @copydoc AIPerceptionMemory::Observe */
     Result<void> AIPerceptionMemory::Observe(const PerceptionObservation &observation, const std::uint64_t simulationTick) {
+        if (observation.key.sense == SenseTypeIds::Team || observation.key.stimulus == StimulusTypeIds::Team)
+            return Result<void>::Failure(MakeError(AIErrors::PerceptionEventUnauthorized));
+        return ObserveAdmitted(observation, simulationTick);
+    }
+
+    /** @copydoc AIPerceptionMemory::ValidObservation */
+    bool AIPerceptionMemory::ValidObservation(const PerceptionObservation &observation) const noexcept {
         if (!ValidKey(observation.key) || !ValidVelocity(observation.velocity))
+            return false;
+        const bool suppliedProvenance =
+            observation.provenance.sceneIncarnation != 0 || observation.provenance.slot != 0 || observation.provenance.generation != 0;
+        return !suppliedProvenance || (observation.provenance.IsValid() && observation.provenance.sceneIncarnation == sceneIncarnation_);
+    }
+
+    /** @copydoc AIPerceptionMemory::ObserveAdmitted */
+    Result<void> AIPerceptionMemory::ObserveAdmitted(const PerceptionObservation &observation, const std::uint64_t simulationTick) {
+        if (!ValidObservation(observation))
             return Result<void>::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
+        const PerceptionSourceRef provenance = observation.provenance.IsValid() ? observation.provenance : observation.key.source;
         if (const auto advanced = AdvanceTo(simulationTick); advanced.HasError())
             return advanced;
 
@@ -85,6 +108,7 @@ namespace Horo::AI {
             if (entry.key != observation.key)
                 continue;
             entry.lastKnownPosition = observation.position;
+            entry.provenance = provenance;
             entry.lastKnownVelocity = observation.velocity;
             entry.lastSensedTick = simulationTick;
             entry.ageSeconds = 0;
@@ -93,27 +117,33 @@ namespace Horo::AI {
             return Result<void>::Success();
         }
 
-        std::size_t listenerCount = 0;
-        for (std::size_t index = 0; index < count_; ++index)
-            listenerCount += entries_[index].key.listener == observation.key.listener ? 1U : 0U;
-        if (const bool listenerFull = listenerCount >= ListenerCapacity(); listenerFull || count_ == Capacity()) {
-            std::size_t victim = count_;
-            for (std::size_t index = 0; index < count_; ++index) {
-                if (listenerFull && entries_[index].key.listener != observation.key.listener)
-                    continue;
-                if (victim == count_ || entries_[index].confidence < entries_[victim].confidence ||
-                    (entries_[index].confidence == entries_[victim].confidence &&
-                     entries_[index].lastSensedTick < entries_[victim].lastSensedTick))
-                    victim = index;
-            }
-            Erase(victim);
-        }
+        EvictFor(observation.key.listener);
         entries_[count_++] = {.key = observation.key,
+                              .provenance = provenance,
                               .lastKnownPosition = observation.position,
                               .lastKnownVelocity = observation.velocity,
                               .firstSensedTick = simulationTick,
                               .lastSensedTick = simulationTick};
         return Result<void>::Success();
+    }
+
+    /** @copydoc AIPerceptionMemory::EvictFor */
+    void AIPerceptionMemory::EvictFor(const PerceptionListenerTypeId listener) noexcept {
+        const auto listenerCount =
+            static_cast<std::size_t>(std::ranges::count(std::span{entries_}.first(count_), listener, [](const PerceivedStimulus &entry) {
+            return entry.key.listener;
+        }));
+        if (const bool listenerFull = listenerCount >= ListenerCapacity(); listenerFull || count_ == Capacity()) {
+            std::size_t victim = count_;
+            for (std::size_t index = 0; index < count_; ++index) {
+                if (listenerFull && entries_[index].key.listener != listener)
+                    continue;
+                if (victim == count_ || std::tie(entries_[index].confidence, entries_[index].lastSensedTick) <
+                                            std::tie(entries_[victim].confidence, entries_[victim].lastSensedTick))
+                    victim = index;
+            }
+            Erase(victim);
+        }
     }
 
     /** @copydoc AIPerceptionMemory::MarkLost */
@@ -206,6 +236,11 @@ namespace Horo::AI {
     /** @copydoc AIPerceptionMemory::Agent */
     AgentHandle AIPerceptionMemory::Agent() const noexcept {
         return agent_;
+    }
+
+    /** @copydoc AIPerceptionMemory::SceneIncarnation */
+    std::uint64_t AIPerceptionMemory::SceneIncarnation() const noexcept {
+        return sceneIncarnation_;
     }
 
     /** @copydoc AIPerceptionMemory::StoredCount */

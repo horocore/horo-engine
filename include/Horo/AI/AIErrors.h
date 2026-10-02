@@ -72,6 +72,14 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor PerceptionMemoryInvalid;
     /** @brief Perception memory received a backward committed simulation tick. */
     extern const ErrorCodeDescriptor PerceptionMemoryTimeInvalid;
+    /** @brief An authoritative gameplay perception event or its admission adapter is malformed. */
+    extern const ErrorCodeDescriptor PerceptionEventInvalid;
+    /** @brief Gameplay has not authorized this exact recipient or disclosure. */
+    extern const ErrorCodeDescriptor PerceptionEventUnauthorized;
+    /** @brief An event source, sender or recipient no longer has its exact scene generation. */
+    extern const ErrorCodeDescriptor PerceptionEventStale;
+    /** @brief The current recipient's perception filter rejects this event. */
+    extern const ErrorCodeDescriptor PerceptionEventFiltered;
     /** @brief A spatial publication record or query violates its typed range/filter contract. */
     extern const ErrorCodeDescriptor PerceptionSpatialInvalid;
     /** @brief A spatial publication exceeds a hard participant capacity. */
