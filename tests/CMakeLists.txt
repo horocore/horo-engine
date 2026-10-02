@@ -819,6 +819,7 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/CookedWorldIndexManifestTests.cpp
         unit/runtime/world_streaming/FallbackStreamingProviderTests.cpp
         unit/runtime/world_streaming/StreamingBudgetModelTests.cpp
+        unit/runtime/world_streaming/StreamingFeatureBudgetReservationsTests.cpp
         unit/runtime/world_streaming/SharedAssetResidencyTests.cpp
         unit/runtime/world_streaming/StreamingCellOperationTests.cpp
         unit/runtime/world_streaming/StreamingCellCandidateTests.cpp
@@ -3055,3 +3056,9 @@ if (HORO_ENABLE_GPU_SMOKE_TESTS)
         )
     endif ()
 endif ()
+
+add_executable(HoroFeatureBudgetReservationsPublicConsumer support/FeatureBudgetReservationsPublicConsumer.cpp)
+target_compile_features(HoroFeatureBudgetReservationsPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroFeatureBudgetReservationsPublicConsumer PRIVATE HoroEngine::WorldStreaming)
+add_test(NAME HoroFeatureBudgetReservationsPublicConsumer COMMAND HoroFeatureBudgetReservationsPublicConsumer)
+set_tests_properties(HoroFeatureBudgetReservationsPublicConsumer PROPERTIES LABELS "unit;world_streaming;headless")

@@ -8,6 +8,16 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::WorldStreaming::WorldStreamingErrors {
+    /** @brief A feature reservation has malformed owner, complete plan, or mandatory configuration. */
+    extern const ErrorCodeDescriptor FeatureBudgetInvalid;
+    /** @brief A feature reservation names a superseded owner, policy, revision, or operation. */
+    extern const ErrorCodeDescriptor FeatureBudgetStale;
+    /** @brief A feature reservation exceeds global, feature, or bounded metadata capacity. */
+    extern const ErrorCodeDescriptor FeatureBudgetCapacityExceeded;
+    /** @brief A feature reservation uses an unsupported contract version or feature identifier. */
+    extern const ErrorCodeDescriptor FeatureBudgetUnsupported;
+    /** @brief Feature materialization, release, or replacement is unavailable before retirement. */
+    extern const ErrorCodeDescriptor FeatureBudgetLifecycleUnavailable;
     /** @brief A shared-asset charge, consumer, lease, or limit is malformed. */
     extern const ErrorCodeDescriptor SharedAssetInvalid;
     /** @brief A shared-asset claim names another partition incarnation, owner, or released lease. */

@@ -1323,6 +1323,9 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/CookedWorldIndexManifest.cpp
         runtime/world_streaming/FallbackStreamingProvider.cpp
         runtime/world_streaming/StreamingBudgetModel.cpp
+        runtime/world_streaming/StreamingFeatureBudgetPolicy.cpp
+        runtime/world_streaming/StreamingFeatureBudgetReservations.cpp
+        runtime/world_streaming/StreamingFeatureBudgetErrors.cpp
         runtime/world_streaming/SharedAssetResidency.cpp
         runtime/world_streaming/SharedAssetResidencyErrors.cpp
         runtime/world_streaming/StreamingCellOperation.cpp
