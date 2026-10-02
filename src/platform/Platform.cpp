@@ -266,6 +266,16 @@ namespace Horo {
         return state_ != nullptr;
     }
 
+    /** @copydoc ExclusiveFileLock::ProtectsPath */
+    bool ExclusiveFileLock::ProtectsPath(const std::filesystem::path &path) const {
+        if (state_ == nullptr || !path.is_absolute())
+            return false;
+        std::error_code error;
+        if (std::filesystem::weakly_canonical(path.parent_path(), error) != path.parent_path() || error)
+            return false;
+        return state_->processKey == LockKey(path);
+    }
+
     struct ProductLaunchLease::State {
         State() = default;
         State(const State &) = delete;
@@ -373,7 +383,11 @@ namespace Horo {
     /** @copydoc DurableFileSystem::TryAcquireExclusive */
     Result<ExclusiveFileLock> NativeDurableFileSystem::TryAcquireExclusive(const std::filesystem::path &path,
                                                                            const std::string_view ownerMetadata) {
+        if (!path.is_absolute() || ownerMetadata.size() > 4096U)
+            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
         std::error_code error;
+        if (std::filesystem::weakly_canonical(path.parent_path(), error) != path.parent_path() || error)
+            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
         std::filesystem::create_directories(path.parent_path(), error);
         if (error)
             return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
@@ -398,6 +412,9 @@ namespace Horo {
         state->descriptor = open(path.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
         if (state->descriptor < 0)
             return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
+        struct stat information{};
+        if (fstat(state->descriptor, &information) != 0 || !S_ISREG(information.st_mode) || information.st_nlink != 1)
+            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
 
         if (!IsPrivateLockFile(state->descriptor))
             return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
@@ -405,7 +422,7 @@ namespace Horo {
         lock.l_type = F_WRLCK;
         lock.l_whence = SEEK_SET;
         if (fcntl(state->descriptor, F_SETLK, &lock) != 0)
-            return Result<ExclusiveFileLock>::Failure(FsError(LockBusy, path));
+            return Result<ExclusiveFileLock>::Failure(FsError(errno == EACCES || errno == EAGAIN ? LockBusy : IoFailed, path));
         if (!WriteLockOwner(state->descriptor, ownerMetadata))
             return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
 #endif

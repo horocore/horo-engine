@@ -49,6 +49,8 @@ namespace Horo::Application::NavigationBakeDetail {
         std::shared_ptr<NavigationBakePublication> candidate;
         std::vector<std::uint8_t> envelope;
         std::shared_ptr<NavigationBakeDiagnostics> diagnostics;
+        std::shared_ptr<Navigation::NavigationBakePublicationReceipt> publicationReceipt{
+            std::make_shared<Navigation::NavigationBakePublicationReceipt>()};
     };
 
     /** @brief Creates complete concrete gather/build/validate/publish work for the process scheduler. */

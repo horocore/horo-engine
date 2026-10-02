@@ -5,6 +5,7 @@
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Sha256.h"
+#include "assets/AssetCookPublicationFixture.h"
 
 #include <algorithm>
 #include <array>
@@ -16,6 +17,7 @@
 #include <fstream>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -205,6 +207,96 @@ namespace {
         }) == 1);
     }
 
+    /** @brief Owns a real native publication callback so cancellation can be injected on either side of replacement. */
+    class CookPublicationFiles final : public DurableFileSystem {
+    public:
+        NativeDurableFileSystem native;
+        CancellationSource *cancellation{};
+        bool cancelAfterCommit{};
+        bool failCommittedSync{};
+        bool committed{};
+
+        Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path, const std::string_view owner) override {
+            return native.TryAcquireExclusive(path, owner);
+        }
+
+        Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override {
+            return native.AvailableBytes(path);
+        }
+
+        Result<void> WriteDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes) override {
+            auto written = native.WriteDurable(path, bytes);
+            if (written.HasValue() && cancellation && !cancelAfterCommit && path.filename() == "current.json")
+                cancellation->RequestCancellation();
+            return written;
+        }
+
+        Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override {
+            return native.CopyDurable(source, destination);
+        }
+
+        Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
+            auto replaced = native.AtomicReplace(prepared, destination);
+            if (replaced.HasValue() && destination.filename() == "current.json") {
+                committed = true;
+                if (cancellation && cancelAfterCommit)
+                    cancellation->RequestCancellation();
+            }
+            return replaced;
+        }
+
+        Result<void> RemoveDurable(const std::filesystem::path &path) override {
+            return native.RemoveDurable(path);
+        }
+
+        Result<void> SyncDirectory(const std::filesystem::path &path) override {
+            if (committed && failCommittedSync)
+                return Result<void>::Failure(Error{ErrorCode{"test.cook.publication_sync_failed"}});
+            return native.SyncDirectory(path);
+        }
+    };
+
+    /** @brief Creates an empty full-cook host with genuine publication files and entropy. */
+    struct EmptyCookPublicationFixture {
+        TempDir source;
+        TempDir cache;
+        TempDir cooked;
+        JobSystem jobs;
+        AssetCookService service{jobs, Catalog()};
+        AssetCookRequest request{.sourceRoot = source.path,
+                                 .cacheRoot = cache.path,
+                                 .cookedRoot = cooked.path,
+                                 .registry = AssetRegistry{}.Snapshot(),
+                                 .target = Target("headless-null")};
+
+        EmptyCookPublicationFixture() {
+            Horo::Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(request);
+        }
+
+    private:
+        [[nodiscard]] static std::shared_ptr<const CookerCatalogSnapshot> Catalog() {
+            CookerCatalog catalog;
+            REQUIRE(RegisterHeadlessMeshCooker(catalog).HasValue());
+            auto snapshot = catalog.Publish();
+            REQUIRE(snapshot.HasValue());
+            return std::move(snapshot).Value();
+        }
+    };
+
+    /** @brief Exercises both standard and foreign exceptions from optional operation-history delivery. */
+    class ThrowingCookHistorySink final : public IOperationHistorySink {
+    public:
+        bool nonstandard{};
+        std::size_t attempted{};
+
+        void AppendTerminal(const OperationRecord &) override {
+            ++attempted;
+            if (nonstandard)
+                throw 73;
+            throw std::runtime_error("Optional cook history notification failed");
+        }
+    };
+
 }  // namespace
 
 TEST_CASE("AssetCookService empty registry publishes empty generation", "[native]") {
@@ -237,6 +329,7 @@ TEST_CASE("AssetCookService empty registry publishes empty generation", "[native
         .buildOutputStore = &buildOutput,
         .operationStore = &operations,
     };
+    Horo::Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(request);
 
     CancellationToken cancellation;
     auto result = service.Cook(request, cancellation);
@@ -246,6 +339,14 @@ TEST_CASE("AssetCookService empty registry publishes empty generation", "[native
     REQUIRE((report.totalAssets == 0));
     REQUIRE((report.cookedAssets == 0));
     REQUIRE((report.cacheHits == 0));
+    const auto current = ResolveCurrentCookGeneration(request.cookedRoot, request.limits);
+    REQUIRE(current.HasValue());
+    CHECK(current.Value().manifestDigest == report.generation.manifestDigest);
+    CHECK(current.Value().artifactCount == 0);
+    const auto contents = ReadCookGenerationContents(current.Value(), request.limits.maximumArtifactBytes, request.limits);
+    REQUIRE(contents.HasValue());
+    CHECK(contents.Value().entries.empty());
+    CHECK(contents.Value().artifacts.empty());
     const auto buildSnapshot = buildOutput.SnapshotIfChanged(0);
     REQUIRE(buildSnapshot.has_value());
     REQUIRE((buildSnapshot->records.size() == 2U));
@@ -294,6 +395,7 @@ TEST_CASE("AssetCookService honours cancellation before work", "[native]") {
         .registry = snapshot,
         .target = Target("headless-null"),
     };
+    Horo::Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(request);
 
     auto result = service.Cook(request, cancellation);
     REQUIRE((result.HasError()));
@@ -329,6 +431,7 @@ TEST_CASE("AssetCookService keeps cook cancellation separate from concurrent fai
                                  .target = Target("headless-null"),
                                  .buildOutputStore = &output,
                                  .operationStore = &operations};
+        Horo::Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(request);
 
         const auto result = service.Cook(request, source.Token());
         REQUIRE(result.HasError());
@@ -376,6 +479,7 @@ TEST_CASE("AssetCookService publishes cache hits as cached scoped results", "[na
         .target = Target("headless-null"),
         .buildOutputStore = &buildOutput,
     };
+    Horo::Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(request);
     CancellationToken cancellation;
 
     REQUIRE(service.Cook(request, cancellation).HasValue());
@@ -403,6 +507,7 @@ TEST_CASE("AssetCookService isolates cache entries by exact strategy settings", 
         .registry = registry.Snapshot(),
         .target = target,
     };
+    Horo::Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(request);
     const auto cookWithSetting = [&](const std::uint8_t setting) {
         CookerCatalog catalog;
         REQUIRE(catalog
@@ -453,6 +558,7 @@ TEST_CASE("AssetCookService reports source admission failures with navigable dia
                              .target = Target("headless-null"),
                              .buildOutputStore = &output,
                              .operationStore = &operations};
+    Horo::Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(request);
     CancellationToken cancellation;
 
     const auto result = service.Cook(request, cancellation);
@@ -487,6 +593,7 @@ TEST_CASE("AssetCookService reports unreadable source paths without publishing a
                              .registry = registry.Snapshot(),
                              .target = Target("headless-null"),
                              .buildOutputStore = &output};
+    Horo::Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(request);
     REQUIRE(std::filesystem::remove(project.sourceFile));
     CancellationToken cancellation;
 
@@ -523,6 +630,7 @@ TEST_CASE("AssetCookService rejects cook when operation admission is full", "[na
                              .target = Target("headless-null"),
                              .buildOutputStore = &output,
                              .operationStore = &operations};
+    Horo::Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(request);
     CancellationToken cancellation;
 
     const auto result = service.Cook(request, cancellation);
@@ -530,4 +638,94 @@ TEST_CASE("AssetCookService rejects cook when operation admission is full", "[na
     REQUIRE(result.ErrorValue().code.Value() == "asset.cook.operation_admission_failed");
     REQUIRE_FALSE(output.SnapshotIfChanged(0).has_value());
     REQUIRE_FALSE(std::filesystem::exists(cookedDir.path / "current.json"));
+}
+
+TEST_CASE("AssetCookService rejects missing host publication authority before writing", "[native]") {
+    for (const bool missingFiles : {false, true}) {
+        EmptyCookPublicationFixture fixture;
+        if (missingFiles)
+            fixture.request.publicationFiles.reset();
+        else
+            fixture.request.newPublicationOperationId = {};
+        const auto result = fixture.service.Cook(fixture.request, {});
+        REQUIRE(result.HasError());
+        CHECK_FALSE(std::filesystem::exists(fixture.cooked.path / "current.json"));
+        CHECK(std::filesystem::is_empty(fixture.cache.path));
+    }
+}
+
+TEST_CASE("AssetCookService honors the same native writer lock as partial generation publishers", "[native]") {
+    EmptyCookPublicationFixture fixture;
+    {
+        auto lock = fixture.request.publicationFiles->TryAcquireExclusive(fixture.cooked.path / ".cook-writer.lock", "another publisher");
+        REQUIRE(lock.HasValue());
+        const auto blocked = fixture.service.Cook(fixture.request, {});
+        REQUIRE(blocked.HasError());
+        CHECK_FALSE(std::filesystem::exists(fixture.cooked.path / "current.json"));
+    }
+    REQUIRE(fixture.service.Cook(fixture.request, {}).HasValue());
+    REQUIRE(ResolveCurrentCookGeneration(fixture.cooked.path).HasValue());
+}
+
+TEST_CASE("AssetCookService publication cancellation preserves true commit outcome and durability diagnostic", "[native]") {
+    for (const bool committed : {false, true}) {
+        EmptyCookPublicationFixture fixture;
+        CancellationSource cancellation;
+        auto files = std::make_shared<CookPublicationFiles>();
+        files->cancellation = &cancellation;
+        files->cancelAfterCommit = committed;
+        files->failCommittedSync = committed;
+        fixture.request.publicationFiles = files;
+        OperationStore operations{4, 4};
+        fixture.request.operationStore = &operations;
+        const auto result = fixture.service.Cook(fixture.request, cancellation.Token());
+        CHECK(cancellation.IsCancellationRequested());
+        CHECK(result.HasValue() == committed);
+        const auto snapshot = operations.SnapshotIfChanged(0);
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->operations.front().state == (committed ? OperationState::Succeeded : OperationState::Cancelled));
+        if (committed) {
+            REQUIRE(result.HasValue());
+            REQUIRE(result.Value().generation.durabilityError.has_value());
+            CHECK(result.Value().generation.durabilityError->code.Value() == "test.cook.publication_sync_failed");
+            REQUIRE(ResolveCurrentCookGeneration(fixture.cooked.path).HasValue());
+        } else {
+            REQUIRE(result.HasError());
+            CHECK(result.ErrorValue().code.Value() == "asset.cook.cancelled");
+            CHECK_FALSE(std::filesystem::exists(fixture.cooked.path / "current.json"));
+        }
+    }
+}
+
+TEST_CASE("AssetCookService rejects corrupt current authority instead of replacing it", "[native]") {
+    EmptyCookPublicationFixture fixture;
+    const std::array<std::uint8_t, 3> malformed{'b', 'a', 'd'};
+    WriteFile(fixture.cooked.path / "current.json", malformed);
+    const auto result = fixture.service.Cook(fixture.request, {});
+    REQUIRE(result.HasError());
+    CHECK(std::filesystem::file_size(fixture.cooked.path / "current.json") == malformed.size());
+}
+
+TEST_CASE("AssetCookService contains optional history exceptions before and after pointer commit", "[native]") {
+    for (const bool committed : {false, true}) {
+        for (const bool nonstandard : {false, true}) {
+            EmptyCookPublicationFixture fixture;
+            CancellationSource cancellation;
+            auto files = std::make_shared<CookPublicationFiles>();
+            files->cancellation = &cancellation;
+            files->cancelAfterCommit = committed;
+            fixture.request.publicationFiles = files;
+            auto sink = std::make_shared<ThrowingCookHistorySink>();
+            sink->nonstandard = nonstandard;
+            OperationStore operations{4, 4, sink};
+            fixture.request.operationStore = &operations;
+            const auto result = fixture.service.Cook(fixture.request, cancellation.Token());
+            CHECK(result.HasValue() == committed);
+            CHECK(sink->attempted == 1);
+            const auto snapshot = operations.SnapshotIfChanged(0);
+            REQUIRE(snapshot.has_value());
+            CHECK(snapshot->operations.front().state == (committed ? OperationState::Succeeded : OperationState::Cancelled));
+            CHECK(ResolveCurrentCookGeneration(fixture.cooked.path).HasValue() == committed);
+        }
+    }
 }

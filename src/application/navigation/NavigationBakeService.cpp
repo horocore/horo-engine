@@ -64,16 +64,18 @@ namespace Horo::Application {
     /** @copydoc NavigationBakeService::Create */
     Result<std::unique_ptr<NavigationBakeService>> NavigationBakeService::Create(NavigationBakeServiceConfig config,
                                                                                  OperationStore &operations, JobSystem &jobs) {
-        if (!config.definition.IsValid() || config.artifactType.Value().empty() || !config.target.IsValid() || !config.builder ||
-            !config.files || config.cacheRoot.empty() || !config.cacheRoot.is_absolute() || config.targetRoot.empty() ||
+        if (jobs.WorkerCount() < 2 || !config.definition.IsValid() || config.artifactType.Value().empty() || !config.target.IsValid() ||
+            !config.builder || !config.files || config.cacheRoot.empty() || !config.cacheRoot.is_absolute() || config.targetRoot.empty() ||
             !config.targetRoot.is_absolute() || config.maximumTiles == 0 || config.maximumTiles > NavMeshArtifactLimits::MaximumTiles ||
             config.maximumCandidateBytes == 0 || config.maximumCandidateBytes > config.cookLimits.maximumArtifactBytes ||
             config.maximumCandidateBytes > NavMeshArtifactLimits::MaximumOwnedBytes || !config.tileLimits.IsValid() ||
-            (config.diagnostics && !config.diagnostics->Owns(config.definition)))
+            (config.diagnostics && !config.diagnostics->Owns(config.definition)) ||
+            config.maximumCandidateBytes > NavMeshArtifactLimits::MaximumOwnedBytes || !config.sourceAuthority ||
+            config.writerWaitTimeout.ToNanoseconds() <= 0 || !config.newOperationId)
             return Result<std::unique_ptr<NavigationBakeService>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         std::error_code error;
-        config.targetRoot = std::filesystem::weakly_canonical(config.targetRoot, error);
-        if (error)
+        const auto canonical = std::filesystem::weakly_canonical(config.targetRoot, error);
+        if (error || canonical != config.targetRoot.lexically_normal())
             return Result<std::unique_ptr<NavigationBakeService>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         auto state = std::make_shared<ServiceState>();
         state->config = std::move(config);
@@ -97,6 +99,11 @@ namespace Horo::Application {
             return Result<OperationId>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         if (const auto valid = ValidateRequest(request, state_->config.maximumTiles); valid.HasError())
             return Result<OperationId>::Failure(valid.ErrorValue());
+        // Admission never waits on a background pointer adoption. Keep this guard until desired-generation mutation.
+        auto admittedSource = state_->config.sourceAuthority->TryAcquirePublication(*request.input, request.cancellation);
+        if (admittedSource.HasError())
+            return Result<OperationId>::Failure(admittedSource.ErrorValue());
+        std::optional<NavigationBakeSourceLease> sourceLease{std::move(admittedSource).Value()};
         if (IdenticalRequest(pending_, request))
             return Result<OperationId>::Success(pending_->operation);
         if (const auto activeSnapshot = activeJob_.Snapshot();
@@ -129,13 +136,16 @@ namespace Horo::Application {
         if (active_)
             active_->cancellation->RequestCancellation();
         pending_ = std::move(attempt);
+        sourceLease.reset();
         Pump();
         return Result<OperationId>::Success(*id);
     }
 
     /** @copydoc NavigationBakeService::Invalidate */
     void NavigationBakeService::Invalidate() noexcept {
-        state_->desired.store(0);
+        auto desired = state_->desired.load();
+        while ((desired & Adopted) == 0 && !state_->desired.compare_exchange_weak(desired, 0)) {
+        }
         CancelPending(operations_, pending_);
         pending_.reset();
         if (active_)

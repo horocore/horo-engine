@@ -54,6 +54,15 @@ namespace Horo {
         /** @brief Reports whether this object currently owns the native lock. */
         [[nodiscard]] explicit operator bool() const noexcept;
 
+        /**
+         * @brief Verifies that this owned native lease protects one exact canonical lock-file path.
+         * @param path Absolute canonical lock-file path selected by the host publication authority.
+         * @return True only for a live lease acquired for that exact path; default and moved-from leases return false.
+         * @details Diagnostic owner metadata never participates in this authority check. Callers must protect the
+         *          parent directory against external rename or replacement for the lease's lifetime.
+         */
+        [[nodiscard]] bool ProtectsPath(const std::filesystem::path &path) const;
+
     private:
         friend class NativeDurableFileSystem;
         explicit ExclusiveFileLock(std::unique_ptr<State> state) noexcept;

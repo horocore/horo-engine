@@ -1304,6 +1304,8 @@ target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::Navigati
 add_library(HoroNavigationBakeService STATIC
         application/navigation/NavigationBakeService.cpp
         application/navigation/NavigationBakeCook.cpp
+        application/navigation/NavigationBakeSourceAuthority.cpp
+        application/navigation/NavigationBakePublication.cpp
         application/navigation/NavigationBakeDiagnostics.cpp
         application/navigation/NavigationBakeDiagnosticCodec.cpp
         application/navigation/NavigationBakeDiagnosticProjection.cpp

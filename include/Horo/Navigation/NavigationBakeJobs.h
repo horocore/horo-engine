@@ -10,6 +10,7 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Result.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -72,6 +73,22 @@ namespace Horo::Navigation {
         JobFunction execute;
     };
 
+    /** @brief One operation's irreversible publication acknowledgement, shared with its host transaction. */
+    class NavigationBakePublicationReceipt final {
+    public:
+        /**
+         * @brief Records successful authoritative generation-pointer replacement.
+         * @pre Called only by the final Publication work item after the atomic replacement succeeds.
+         * @post Later cancellation cannot change the operation's committed terminal outcome.
+         */
+        void RecordCommitted() noexcept;
+        /** @brief Reports whether the host has acknowledged irreversible publication. @return True after replacement. */
+        [[nodiscard]] bool IsCommitted() const noexcept;
+
+    private:
+        std::atomic<bool> committed_{};
+    };
+
     /** @brief Inputs copied before an asynchronous bake operation is made visible. */
     struct NavigationBakeJobDescriptor final {
         std::string title;
@@ -81,6 +98,8 @@ namespace Horo::Navigation {
         std::optional<OperationId> queuedOperation; /**< Host-owned queued operation whose cancellation uses parentCancellation. */
         std::function<void(const NavigationBakeJobSnapshot &)>
             observe; /**< Optional non-throwing owned checkpoint consumer; invoked outside locks after store updates. */
+        std::shared_ptr<NavigationBakePublicationReceipt>
+            publicationReceipt; /**< Optional fresh receipt for exactly one final Publication item. */
     };
 
     /** @brief Immutable polling projection of one accepted navigation bake. */
@@ -93,7 +112,7 @@ namespace Horo::Navigation {
         std::size_t acceptedChildJobs{};
         std::size_t terminalChildJobs{};
         std::optional<NavigationBakeBudgetResource> limitingResource;
-        std::optional<Error> terminalError;
+        std::optional<Error> terminalError; /**< Failure cause, or a postcommit diagnostic when publication already succeeded. */
         std::uint64_t revision{1};
 
         /** @brief Reports whether no further snapshot mutation is possible. @return True for a terminal state. */
@@ -130,6 +149,8 @@ namespace Horo::Navigation {
      * @return Non-blocking operation handle, or a typed descriptor/store/scheduler admission error.
      * @pre `operations` and `jobs` outlive the returned operation and all accepted child work.
      * @pre A queuedOperation is exclusively owned by this admission, used once, and its cancellation callback owns parentCancellation.
+     * @pre A publicationReceipt belongs to this attempt only; the host retains it through its final Publication callback.
+     * @post Accepted children drain before terminal state or callback-owned resources are released, including after drain timeout.
      */
     [[nodiscard]] Result<NavigationBakeJobHandle> StartNavigationBakeJob(OperationStore &operations, JobSystem &jobs,
                                                                          NavigationBakeJobDescriptor descriptor);

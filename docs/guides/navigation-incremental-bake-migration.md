@@ -36,10 +36,19 @@ Always recompute the entire requested layout; movement, deletion and empty tiles
 must replace old footprints rather than overlaying only newly occupied tiles.
 
 The service is one host-thread authority per project/definition/scope/target.
-Submit a complete sorted layout, immutable bake snapshot and complete current
-source observations. Every source change must call Invalidate or submit its
-new coherent capture before that change becomes authoritative. This is the host
-freshness contract: workers must not query mutable editor or producer objects.
+Submit a complete sorted layout, immutable bake snapshot and complete source
+observations. NAV-003.7 requires `NavigationBakeServiceConfig::sourceAuthority`:
+compose one `NavigationBakeSourceAuthority` shared with the host source transaction.
+Supply `newOperationId` from the host's native secure entropy provider; operation
+UUIDs choose only private staging and never grant authored asset identity.
+Call `UpdateCurrent` with complete proposed revisions and source observations before
+that source change becomes authoritative. If it returns contention, defer the
+source mutation; the call never waits on the GUI/render thread. A successful source
+transaction then invalidates/submits its new capture. A captured request cannot
+validate itself as current. Background publication acquires an exact source lease
+under the AssetCook writer and retains it through pointer replacement and live
+adoption. Source capture/edit revision fences remain separate from compatibility
+and halo dependency fingerprints.
 Requests expose queued operation identities immediately; one active operation
 with identical complete input can be joined by another caller. A differing active operation
 drains while at most one pending replacement is retained. Call Pump from the
@@ -73,6 +82,53 @@ operation. The writer verifies the exact current bytes before reporting this
 committed outcome; a failure before replacement preserves the prior pointer.
 Invalid current authority fails closed; no older generation is silently selected.
 Immutable cache writes may survive cancelled attempts without activating them.
+
+All publishers use the common `.cook-writer.lock`, including unrelated artifact
+writers. Navigation waits only on a background worker, observes cancellation and
+current source revisions while waiting, and stops at `writerWaitTimeout`. After
+acquisition, AssetCook verifies the then-current inventory before carrying it
+forward. A fresh empty output root can bootstrap; a missing current pointer with
+existing immutable generations requires explicit repair/recook intent.
+
+AssetCook owns `.cook-staging/<operation-token>` and publishes a complete verified
+directory before the selector. Restart recovery runs under the same native lock,
+validates the current pointer and every envelope, and removes only recognized
+bounded owned staging entries. It neither follows symlinks nor recursively removes
+unrecognized paths, picks an orphan, or deletes immutable generations. Retained
+reader contents and old generation paths therefore survive replacement. This is
+retention, not a garbage collector.
+
+`ResolveNavigationBakePublication` is the reusable host reader for Editor/runtime
+composition: it resolves AssetCook's selector, pins its exact manifest, checks the
+target/definition/type and standard envelopes, then decodes every portable tile.
+It returns owned immutable content, including stable keys, links, provenance and
+diagnostics. It does not load source or invoke a builder. Native provider activation
+still occurs at the ordinary Scene safe point.
+
+Navigation bake jobs with irreversible publication now supply one fresh
+`NavigationBakePublicationReceipt` and exactly one final Publication work item.
+Record it inside the writer lease only after pointer replacement is confirmed.
+Cancellation before final adoption prevents publication; a raced cancellation
+after committed replacement cannot relabel disk truth. All accepted child jobs,
+including cancelled queued children, drain before a terminal operation releases
+its resources. A drain timeout requests cancellation and retains ownership until
+callbacks close; it does not abandon a live writer.
+
+Affected callers are the host `NavigationBakeService` composition, the generic
+`AssetCookService` publication host and their filesystem test harnesses. All
+generic cook requests now inject shared `publicationFiles` and
+`newPublicationOperationId`; an empty registry publishes one verified empty
+manifest through the same writer lease. `PublishCookGeneration` and recovery
+require `policy.writerLease` to reference the real native writer capability for
+the chosen root; `ExclusiveFileLock::ProtectsPath` verifies that capability against
+the exact lock path. Null-policy publication refuses to write. This removes the old
+unlocked/empty-registry selector bypass while keeping Assets backend neutral.
+Existing isolated tile builders and no-publication
+`StartNavigationBakeJob` consumers remain compatible. The source-authority header
+belongs only to `HoroNavigationBakeService`; runtime/provider targets gain no
+application dependency. Public-header consumer coverage includes the new header
+and changed NavigationRuntime/Assets contracts. GUI/CLI/MCP command registration
+remains NAV-003.10, not an alternate publication implementation.
 
 HNT1 tile bytes and HNS1 complete-set bytes use explicit little-endian fields,
 canonical zero floats, bounded counts and content digests. No native structure,
