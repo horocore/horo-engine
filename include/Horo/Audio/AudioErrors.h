@@ -51,6 +51,10 @@ namespace Horo::Audio::AudioErrors {
     extern const ErrorCodeDescriptor HandleStale;
     extern const ErrorCodeDescriptor HandleCapacityExhausted;
     extern const ErrorCodeDescriptor HandleGenerationExhausted;
+    /** @brief An authored concurrency group or bucket projection is malformed. */
+    extern const ErrorCodeDescriptor ConcurrencyInvalid;
+    /** @brief Cooldown history belongs to a retired timeline or lies in the future. */
+    extern const ErrorCodeDescriptor ConcurrencyTimelineStale;
     extern const ErrorCodeDescriptor VoiceInvalidTransition;
     extern const ErrorCodeDescriptor VoiceAdmissionClosed;
     extern const ErrorCodeDescriptor CapabilityUnavailable;

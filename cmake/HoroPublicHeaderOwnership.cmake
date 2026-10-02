@@ -416,6 +416,7 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioFailureRecovery.h
     Horo/Audio/AudioIdentity.h
     Horo/Audio/MixerAssetSchema.h
+    Horo/Audio/AudioConcurrencyGroup.h
     Horo/Audio/AudioVoiceStateMachine.h
     Horo/Audio/AudioResamplerPlan.h
     Horo/Audio/AudioPlaybackRequest.h
