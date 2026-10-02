@@ -501,6 +501,8 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiDiagnostics.cpp
         runtime/ui/UiDiagnosticDescriptors.cpp
         runtime/ui/UiAccessibility.cpp
+        runtime/ui/UiAccessibilityReading.cpp
+        runtime/ui/UiAccessibilityChanges.cpp
         runtime/ui/UiAccessibilityPolicy.cpp
         runtime/ui/UiAccessibilityStorage.cpp
         runtime/ui/UiElementTree.cpp

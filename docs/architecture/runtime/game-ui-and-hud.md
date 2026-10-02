@@ -127,6 +127,45 @@ ECS, renderer, asset or scheduler state directly. Failed or skipped presentation
 suppresses interaction for that viewport until a matching layout is presented, so
 the player cannot click geometry that was never visible.
 
+## Accessibility projection and change publication
+
+`UiAccessibilityExtractor` copies the existing typed core/contributed semantics
+against the exact retained tree. Snapshot nodes now follow retained preorder,
+regardless of contributor input order; parents are the nearest exposed semantic
+ancestor. Hidden nodes remove their entire subtree. Offscreen propagates to visible
+descendants, while covered/suppressed/suspended ancestors prevent descendants from
+remaining actionable or focused. Disabled controls remain readable. An exposed
+relation targeting an omitted node fails transactionally instead of dangling.
+
+`UiAccessibilityChangePublisher` is an optional Runtime UI owner-thread companion
+to that extractor, owned by the same instance/canvas/document composition. It
+retains one latest immutable snapshot lease, publishes generation-fenced removals,
+insertions, reparent/reorder records, coalesced property masks, authoritative focus
+changes and owned polite/assertive announcements. It never consults render nodes,
+Platform, gameplay or mutable widget pointers. Consumers correlate PreviousRevision
+and Revision with the complete snapshot descriptor; only matching successful
+presentation evidence may authorize native exposure. Model-only recording needs
+no renderer. Traversal/navigation policy and native adapters are separate work.
+
+Create preallocates node indexes, delta output, text and deduplication history.
+Delta overflow discards partial output and publishes one Resynchronize record;
+consumers must adopt the complete latest snapshot before further deltas. Suppressed
+announcements are remembered and never replayed during resync. Event IDs are scoped
+to exact node generations and an inclusive, explicit semantic-revision window.
+Unexpired history exhaustion, invalid/stale announcements and source regressions
+return typed failures while preserving prior output and the last-good baseline.
+Retire publishes final reverse-preorder removals and focus release, closes admission
+idempotently and releases its lease; other snapshot leases remain readable.
+
+Migration: former extraction callers must consume snapshot-owned node order rather
+than assuming candidate order, and must not refer to hidden nodes from exposed
+relations. The new changes header belongs only to HoroRuntimeUi. Existing extractors
+and their slot budgets are unchanged; a composed publisher occupies one slot lease,
+so at least two concurrent slots are needed for subsequent successful publication.
+Reload within the same semantic owner uses the publisher; owner/canvas/document
+replacement retires the old publisher and creates a new one. Output borrows last
+until successful publication, retirement, owner replacement or destruction.
+
 ## Pause, Suspension And Teardown
 
 Gameplay pause stops fixed simulation, not Runtime UI lifecycle, input, layout or

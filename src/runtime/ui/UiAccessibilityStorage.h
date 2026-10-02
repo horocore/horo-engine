@@ -44,6 +44,8 @@ namespace Horo::Runtime::Ui {
         UiAccessibilitySemanticRevision lastRevision;
         std::vector<std::uint8_t> cycleScratch;
         std::vector<AccessibilityInternal::ProjectionLookupEntry> lookupScratch;
+        std::vector<UiElementHandle> preorderScratch;
+        std::vector<UiAccessibilityNodeInput> readingScratch;
 
         explicit Storage(const UiAccessibilityExtractorDescriptor &source);
 
