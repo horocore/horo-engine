@@ -17,8 +17,7 @@
 #include <vector>
 
 namespace Horo::Terrain {
-    struct FoliageClusterCookRequest;
-    class CookedFoliageClusterSet;
+    struct FoliageClusterCookWorker;
 
     namespace FoliagePlacementCookErrors {
         extern const ErrorCodeDescriptor InvalidInput;  /**< Invalid source, rule, revision, or geometry. */
@@ -192,7 +191,7 @@ namespace Horo::Terrain {
     private:
         friend Result<CookedFoliagePlacement> CookFoliagePlacement(const FoliagePlacementCookRequest &, const CancellationToken &);
         friend class FoliagePlacementCookOwner;
-        friend Result<CookedFoliageClusterSet> CookFoliageClusters(const FoliageClusterCookRequest &, const CancellationToken &);
+        friend struct FoliageClusterCookWorker;
         CookedFoliagePlacement() = default;
         [[nodiscard]] bool IsWellFormed(const CancellationToken &cancellation = {}) const noexcept;
 

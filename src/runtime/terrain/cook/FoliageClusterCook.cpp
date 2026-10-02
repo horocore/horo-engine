@@ -1,5 +1,7 @@
 #include "Horo/Terrain/FoliageClusterCook.h"
 
+#include "FoliageClusterCookInternal.h"
+
 #include <algorithm>
 #include <limits>
 #include <string_view>
@@ -7,24 +9,6 @@
 #include <utility>
 
 namespace Horo::Terrain {
-    namespace FoliageClusterCookErrors {
-        namespace {
-            const ErrorDomainId Domain{"horo.terrain.foliage.cluster"};
-        }
-
-        const ErrorCodeDescriptor InvalidInput{Domain, ErrorCode{"terrain.foliage.cluster_invalid"}, ErrorSeverity::Error,
-                                               "Foliage cluster evidence is invalid.",
-                                               "Check exact placement, geometry and target provenance."};
-        const ErrorCodeDescriptor LimitExceeded{Domain, ErrorCode{"terrain.foliage.cluster_limit_exceeded"}, ErrorSeverity::Error,
-                                                "Foliage clusters exceed a finite limit.",
-                                                "Reduce required content or select an explicitly compatible profile."};
-        const ErrorCodeDescriptor Cancelled{Domain, ErrorCode{"terrain.foliage.cluster_cancelled"}, ErrorSeverity::Warning,
-                                            "Foliage cluster work was cancelled.", "Retry against current source evidence."};
-        const ErrorCodeDescriptor Stale{Domain, ErrorCode{"terrain.foliage.cluster_stale"}, ErrorSeverity::Error,
-                                        "Foliage cluster replacement is stale.", "Prepare the exact successor of the current generation."};
-        const ErrorCodeDescriptor Closed{Domain, ErrorCode{"terrain.foliage.cluster_closed"}, ErrorSeverity::Error,
-                                         "Foliage cluster admission is closed.", "Create a new owner for the next session."};
-    }  // namespace FoliageClusterCookErrors
 
     namespace {
         constexpr std::uint64_t InstanceBytes = 128;
@@ -306,14 +290,32 @@ namespace Horo::Terrain {
             return writer.Finish();
         }
 
+        /** @brief Checks stable source identities independently from geometry and buffer shape. */
+        [[nodiscard]] bool ValidClusterIdentity(const CookedFoliageCluster &cluster, const TerrainDatasetId dataset,
+                                                const TerrainCapabilityRevision capability) {
+            return cluster.tile.IsValid() && cluster.tile.dataset == dataset && cluster.id.IsValid() && cluster.type.IsValid() &&
+                   cluster.sourceRevision.IsValid() && cluster.definitionRevision.IsValid() && cluster.placementRevision.IsValid() &&
+                   cluster.capability == capability;
+        }
+
+        /** @brief Requires verified finite geometry evidence and exact profile identity. */
+        [[nodiscard]] bool ValidClusterGeometry(const CookedFoliageCluster &cluster, const Sha256Digest &profile) {
+            return cluster.profileFingerprint == profile && cluster.geometryRadiusMillimeters != 0 &&
+                   cluster.geometryRadiusMillimeters <= MaximumGeometryRadius && HasDigest(cluster.geometryDigest);
+        }
+
         /** @brief Validates the exact independently addressed cluster envelope before visiting record storage. */
         [[nodiscard]] bool ValidClusterMetadata(const CookedFoliageCluster &cluster, const TerrainDatasetId dataset,
                                                 const TerrainCapabilityRevision capability, const Sha256Digest &profile) {
-            return cluster.tile.IsValid() && cluster.tile.dataset == dataset && cluster.id.IsValid() && cluster.type.IsValid() &&
-                   cluster.sourceRevision.IsValid() && cluster.definitionRevision.IsValid() && cluster.placementRevision.IsValid() &&
-                   cluster.capability == capability && cluster.profileFingerprint == profile && !cluster.instances.empty() &&
-                   cluster.geometryRadiusMillimeters != 0 && cluster.geometryRadiusMillimeters <= MaximumGeometryRadius &&
-                   HasDigest(cluster.geometryDigest) && cluster.payload.size() == HeaderBytes + InstanceBytes * cluster.instances.size();
+            return ValidClusterIdentity(cluster, dataset, capability) && ValidClusterGeometry(cluster, profile) &&
+                   !cluster.instances.empty() && cluster.payload.size() == HeaderBytes + InstanceBytes * cluster.instances.size();
+        }
+
+        /** @brief Checks exact typed membership and strictly increasing stable instance IDs. */
+        [[nodiscard]] bool ValidInstance(const CookedFoliageCluster &cluster, const std::size_t index) {
+            const auto &instance = cluster.instances[index];
+            return instance.id.IsValid() && instance.cluster == cluster.id && instance.type == cluster.type &&
+                   (index == 0 || cluster.instances[index - 1].id < instance.id);
         }
 
         /** @brief Verifies canonical typed records and exact geometry bounds without allocating or repairing evidence. */
@@ -324,11 +326,8 @@ namespace Horo::Terrain {
                 return false;
             FoliageClusterBounds bounds;
             for (std::size_t index = 0; index < cluster.instances.size(); ++index) {
-                if (cancellation.IsCancellationRequested())
-                    return false;
                 const auto &instance = cluster.instances[index];
-                if (!instance.id.IsValid() || instance.cluster != cluster.id || instance.type != cluster.type ||
-                    (index != 0 && cluster.instances[index - 1].id >= instance.id) ||
+                if (cancellation.IsCancellationRequested() || !ValidInstance(cluster, index) ||
                     !IncludeBounds(bounds, instance, cluster.geometryRadiusMillimeters, index == 0))
                     return false;
             }
@@ -343,11 +342,16 @@ namespace Horo::Terrain {
                    VerifyFoliageClusterPayload(cluster, cluster.payload, cancellation).HasValue();
         }
 
+        /** @brief Rejects absent dataset, revision and target identity without selecting a fallback. */
+        [[nodiscard]] bool ValidRequestIdentity(const FoliageClusterCookRequest &request) {
+            return request.dataset.IsValid() && request.content.IsValid() && HasDigest(request.profile.targetDigest) &&
+                   HasDigest(request.profile.toolchainDigest);
+        }
+
         /** @brief Admits the exact target and predecessor before allocating source or record workspaces. */
         [[nodiscard]] Result<void> ValidateRequest(const FoliageClusterCookRequest &request) {
             const auto &limits = request.profile.configuration.Data().limits;
-            if (!request.dataset.IsValid() || !request.content.IsValid() || !HasDigest(request.profile.targetDigest) ||
-                !HasDigest(request.profile.toolchainDigest))
+            if (!ValidRequestIdentity(request))
                 return Result<void>::Failure(MakeError(FoliageClusterCookErrors::InvalidInput));
             if (request.previous && (request.previous->Dataset() != request.dataset ||
                                      request.previous->ContentRevision().Value() == std::numeric_limits<std::uint64_t>::max() ||
@@ -365,6 +369,16 @@ namespace Horo::Terrain {
             std::uint64_t instanceCount{};
         };
 
+        /** @brief Validates a source's exact geometry, dataset, capability and target contract without dereferencing null evidence. */
+        [[nodiscard]] bool SourceMatches(const FoliageClusterCookSource &source, const FoliageClusterCookRequest &request) {
+            const auto &configuration = request.profile.configuration.Data();
+            return source.placement && HasDigest(source.geometryDigest) && source.geometryRadiusMillimeters != 0 &&
+                   source.geometryRadiusMillimeters <= MaximumGeometryRadius && source.placement->Tile().dataset == request.dataset &&
+                   source.placement->CapabilityRevision() == configuration.capability &&
+                   source.placement->TargetDigest() == request.profile.targetDigest &&
+                   source.placement->ToolchainDigest() == request.profile.toolchainDigest && source.placement->Tier() == configuration.tier;
+        }
+
         /** @brief Validates source membership and finite geometry/counts before any record-sized allocation. */
         [[nodiscard]] Result<SourceCollection> CollectSources(const FoliageClusterCookRequest &request, Work &work) {
             SourceCollection collection;
@@ -373,12 +387,7 @@ namespace Horo::Terrain {
             for (const auto &source : request.sources) {
                 if (!work.Spend())
                     return Result<SourceCollection>::Failure(MakeError(*work.error));
-                if (!source.placement || !HasDigest(source.geometryDigest) || source.geometryRadiusMillimeters == 0 ||
-                    source.geometryRadiusMillimeters > MaximumGeometryRadius || source.placement->Tile().dataset != request.dataset ||
-                    source.placement->CapabilityRevision() != configuration.capability ||
-                    source.placement->TargetDigest() != request.profile.targetDigest ||
-                    source.placement->ToolchainDigest() != request.profile.toolchainDigest ||
-                    source.placement->Tier() != configuration.tier)
+                if (!SourceMatches(source, request))
                     return Result<SourceCollection>::Failure(MakeError(FoliageClusterCookErrors::InvalidInput));
                 const auto count = source.placement->Instances().size();
                 if (count > configuration.limits.maximumActiveFoliageInstances - collection.instanceCount)
@@ -414,6 +423,15 @@ namespace Horo::Terrain {
             return Result<std::uint32_t>::Success(count);
         }
 
+        /** @brief Admits the complete peak output/scratch footprint and the actual predecessor's retirement cost. */
+        [[nodiscard]] bool FitsFootprint(const TerrainDescriptorLimits &limits, const std::uint32_t clusters,
+                                         const std::uint64_t residentBytes, const std::uint64_t scratchBytes,
+                                         const std::uint64_t retiringBytes) {
+            return clusters <= limits.maximumActiveFoliageClusters && residentBytes <= limits.maximumResidentFoliageBytes &&
+                   residentBytes <= limits.maximumStagingBytes && scratchBytes <= limits.maximumStagingBytes - residentBytes &&
+                   retiringBytes <= limits.maximumRetiringBytes;
+        }
+
         /** @brief Reserves sorting and output accounting before creating instance or encoded output buffers. */
         [[nodiscard]] Result<PreparedReferences> PrepareReferences(const FoliageClusterCookRequest &request,
                                                                    const SourceCollection &sources, Work &work) {
@@ -439,9 +457,7 @@ namespace Horo::Terrain {
                                        std::uint64_t{clusters.Value()} * (sizeof(CookedFoliageCluster) + HeaderBytes) +
                                        sources.instanceCount * (sizeof(CookedFoliageInstance) + InstanceBytes);
             const auto retiringBytes = request.previous ? request.previous->Footprint().residentFoliageBytes : 0;
-            if (clusters.Value() > limits.maximumActiveFoliageClusters || residentBytes > limits.maximumResidentFoliageBytes ||
-                residentBytes > limits.maximumStagingBytes || scratchBytes > limits.maximumStagingBytes - residentBytes ||
-                retiringBytes > limits.maximumRetiringBytes)
+            if (!FitsFootprint(limits, clusters.Value(), residentBytes, scratchBytes, retiringBytes))
                 return Result<PreparedReferences>::Failure(MakeError(FoliageClusterCookErrors::LimitExceeded));
             prepared.footprint = {.activeFoliageClusters = clusters.Value(),
                                   .activeFoliageInstances = sources.instanceCount,
@@ -476,114 +492,98 @@ namespace Horo::Terrain {
         }
     }  // namespace
 
+    /** @brief Target-private synchronous worker; borrowed sources and cancellation outlive this bounded call. */
+    struct FoliageClusterCookWorker final {
+        const FoliageClusterCookRequest &request;
+        const CancellationToken &cancellation;
+        Work work;
+
+        FoliageClusterCookWorker(const FoliageClusterCookRequest &input, const CancellationToken &observer)
+            : request(input), cancellation(observer), work{observer, input.profile.configuration.Data().limits.maximumWorkItems} {}
+
+        /** @brief Charges and revalidates the exact predecessor before admitting new storage. */
+        [[nodiscard]] Result<void> ValidatePrevious() {
+            if (!request.previous)
+                return Result<void>::Success();
+            if (!work.Spend(request.previous->Footprint().activeFoliageInstances * 3 + request.previous->Clusters().size()))
+                return Result<void>::Failure(MakeError(*work.error));
+            if (!request.previous->IsWellFormed(cancellation))
+                return Result<void>::Failure(MakeError(cancellation.IsCancellationRequested() ? FoliageClusterCookErrors::Cancelled
+                                                                                              : FoliageClusterCookErrors::InvalidInput));
+            return Result<void>::Success();
+        }
+
+        /** @brief Rechecks every cook-issued placement digest with cooperative cancellation and exact visit accounting. */
+        [[nodiscard]] Result<void> ValidatePlacements(const SourceCollection &sources) {
+            for (const auto *source : sources.sources) {
+                if (!work.Spend(source->placement->Instances().size()))
+                    return Result<void>::Failure(MakeError(*work.error));
+                if (!source->placement->IsWellFormed(cancellation))
+                    return Result<void>::Failure(MakeError(cancellation.IsCancellationRequested()
+                                                               ? FoliageClusterCookErrors::Cancelled
+                                                               : FoliageClusterCookErrors::InvalidInput));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Prepares one complete detached generation; each validation failure discards all candidate storage. */
+        [[nodiscard]] Result<CookedFoliageClusterSet> Run() {
+            if (!work.Spend())
+                return Result<CookedFoliageClusterSet>::Failure(MakeError(*work.error));
+            if (const auto valid = ValidateRequest(request); valid.HasError())
+                return Result<CookedFoliageClusterSet>::Failure(valid.ErrorValue());
+            if (const auto valid = ValidatePrevious(); valid.HasError())
+                return Result<CookedFoliageClusterSet>::Failure(valid.ErrorValue());
+            auto sources = CollectSources(request, work);
+            if (sources.HasError())
+                return Result<CookedFoliageClusterSet>::Failure(sources.ErrorValue());
+            if (const auto valid = ValidatePlacements(sources.Value()); valid.HasError())
+                return Result<CookedFoliageClusterSet>::Failure(valid.ErrorValue());
+            auto prepared = PrepareReferences(request, sources.Value(), work);
+            if (prepared.HasError())
+                return Result<CookedFoliageClusterSet>::Failure(prepared.ErrorValue());
+            CookedFoliageClusterSet output{request.profile};
+            output.dataset_ = request.dataset;
+            output.content_ = request.content;
+            const auto profile = ProfileDigest(request.profile);
+            output.fingerprint_ = Fingerprint(request, sources.Value().sources, profile);
+            auto clusters = BuildClusters(prepared.Value(), profile, work);
+            if (clusters.HasError())
+                return Result<CookedFoliageClusterSet>::Failure(clusters.ErrorValue());
+            output.clusters_ = std::move(clusters).Value();
+            if (!work.Spend(output.clusters_.size()))
+                return Result<CookedFoliageClusterSet>::Failure(MakeError(*work.error));
+            output.manifestDigest_ = ComputeManifestDigest(output.dataset_, output.content_, output.fingerprint_, output.clusters_);
+            if (!work.Spend())
+                return Result<CookedFoliageClusterSet>::Failure(MakeError(*work.error));
+            output.footprint_ = prepared.Value().footprint;
+            output.footprint_.workItems = work.used;
+            return Result<CookedFoliageClusterSet>::Success(std::move(output));
+        }
+    };
+
     /** @copydoc CookFoliageClusters */
     Result<CookedFoliageClusterSet> CookFoliageClusters(const FoliageClusterCookRequest &request, const CancellationToken &cancellation) {
-        Work work{cancellation, request.profile.configuration.Data().limits.maximumWorkItems};
-        if (!work.Spend())
-            return Result<CookedFoliageClusterSet>::Failure(MakeError(*work.error));
-        if (const auto valid = ValidateRequest(request); valid.HasError())
-            return Result<CookedFoliageClusterSet>::Failure(valid.ErrorValue());
-        if (request.previous) {
-            if (!work.Spend(request.previous->Footprint().activeFoliageInstances * 3 + request.previous->Clusters().size()))
-                return Result<CookedFoliageClusterSet>::Failure(MakeError(*work.error));
-            if (!request.previous->IsWellFormed(cancellation))
-                return Result<CookedFoliageClusterSet>::Failure(MakeError(
-                    cancellation.IsCancellationRequested() ? FoliageClusterCookErrors::Cancelled : FoliageClusterCookErrors::InvalidInput));
-        }
-
-        auto sources = CollectSources(request, work);
-        if (sources.HasError())
-            return Result<CookedFoliageClusterSet>::Failure(sources.ErrorValue());
-        for (const auto *source : sources.Value().sources) {
-            if (!work.Spend(source->placement->Instances().size()))
-                return Result<CookedFoliageClusterSet>::Failure(MakeError(*work.error));
-            if (!source->placement->IsWellFormed(cancellation))
-                return Result<CookedFoliageClusterSet>::Failure(MakeError(
-                    cancellation.IsCancellationRequested() ? FoliageClusterCookErrors::Cancelled : FoliageClusterCookErrors::InvalidInput));
-        }
-        auto prepared = PrepareReferences(request, sources.Value(), work);
-        if (prepared.HasError())
-            return Result<CookedFoliageClusterSet>::Failure(prepared.ErrorValue());
-
-        CookedFoliageClusterSet output{request.profile};
-        output.dataset_ = request.dataset;
-        output.content_ = request.content;
-        const auto profile = ProfileDigest(request.profile);
-        output.fingerprint_ = Fingerprint(request, sources.Value().sources, profile);
-        auto clusters = BuildClusters(prepared.Value(), profile, work);
-        if (clusters.HasError())
-            return Result<CookedFoliageClusterSet>::Failure(clusters.ErrorValue());
-        output.clusters_ = std::move(clusters).Value();
-        if (!work.Spend(output.clusters_.size()))
-            return Result<CookedFoliageClusterSet>::Failure(MakeError(*work.error));
-        output.manifestDigest_ = ComputeManifestDigest(output.dataset_, output.content_, output.fingerprint_, output.clusters_);
-        if (!work.Spend())
-            return Result<CookedFoliageClusterSet>::Failure(MakeError(*work.error));
-        output.footprint_ = prepared.Value().footprint;
-        output.footprint_.workItems = work.used;
-        return Result<CookedFoliageClusterSet>::Success(std::move(output));
+        return FoliageClusterCookWorker{request, cancellation}.Run();
     }
 
-    /** @copydoc VerifyFoliageClusterPayload */
-    Result<void> VerifyFoliageClusterPayload(const CookedFoliageCluster &expected, const std::span<const std::uint8_t> payload,
-                                             const CancellationToken &cancellation) {
-        if (cancellation.IsCancellationRequested())
-            return Result<void>::Failure(MakeError(FoliageClusterCookErrors::Cancelled));
-        if (payload.size() != expected.payload.size())
-            return Result<void>::Failure(MakeError(FoliageClusterCookErrors::InvalidInput));
-        Sha256Builder hash;
-        for (std::size_t offset = 0; offset < payload.size();) {
-            if (cancellation.IsCancellationRequested())
-                return Result<void>::Failure(MakeError(FoliageClusterCookErrors::Cancelled));
-            const auto count = std::min<std::size_t>(4'096, payload.size() - offset);
-            static_cast<void>(hash.Update(std::as_bytes(payload.subspan(offset, count))));
-            offset += count;
+    namespace FoliageClusterCookInternal {
+        /** @copydoc ProfileFingerprint */
+        Sha256Digest ProfileFingerprint(const FoliageClusterCookProfile &profile) {
+            return ProfileDigest(profile);
         }
-        if (hash.Finalize() != expected.digest)
-            return Result<void>::Failure(MakeError(FoliageClusterCookErrors::InvalidInput));
-        return Result<void>::Success();
-    }
 
-    /** @brief Revalidates a bounded cook-issued generation, including moved-from values, before replacement/publication. */
-    bool CookedFoliageClusterSet::IsWellFormed(const CancellationToken &cancellation) const noexcept {
-        if (!dataset_.IsValid() || !content_.IsValid() || clusters_.size() != footprint_.activeFoliageClusters)
-            return false;
-        const auto profile = ProfileDigest(profile_);
-        std::uint64_t instances{};
-        for (std::size_t index = 0; index < clusters_.size(); ++index) {
-            const auto &cluster = clusters_[index];
-            if (!ValidCluster(cluster, dataset_, profile_.configuration.Data().capability, profile, cancellation))
-                return false;
-            if (index != 0 && std::tuple{clusters_[index - 1].tile, clusters_[index - 1].type, clusters_[index - 1].id} >=
-                                  std::tuple{cluster.tile, cluster.type, cluster.id})
-                return false;
-            instances += cluster.instances.size();
+        /** @copydoc ManifestFingerprint */
+        Sha256Digest ManifestFingerprint(const TerrainDatasetId dataset, const TerrainContentRevision content,
+                                         const Sha256Digest &fingerprint, const std::span<const CookedFoliageCluster> clusters) {
+            return ComputeManifestDigest(dataset, content, fingerprint, clusters);
         }
-        return instances == footprint_.activeFoliageInstances &&
-               manifestDigest_ == ComputeManifestDigest(dataset_, content_, fingerprint_, clusters_);
-    }
 
-    /** @copydoc FoliageClusterCookOwner::Publish */
-    Result<void> FoliageClusterCookOwner::Publish(CookedFoliageClusterSet candidate,
-                                                  const std::optional<TerrainContentRevision> expectedCurrent,
-                                                  const CancellationToken &cancellation) {
-        if (closed_)
-            return Result<void>::Failure(MakeError(FoliageClusterCookErrors::Closed));
-        if (cancellation.IsCancellationRequested())
-            return Result<void>::Failure(MakeError(FoliageClusterCookErrors::Cancelled));
-        if (current_.has_value() != expectedCurrent.has_value() ||
-            (current_ && (current_->ContentRevision() != *expectedCurrent || candidate.Dataset() != current_->Dataset() ||
-                          current_->ContentRevision().Value() == std::numeric_limits<std::uint64_t>::max() ||
-                          candidate.ContentRevision().Value() != current_->ContentRevision().Value() + 1)))
-            return Result<void>::Failure(MakeError(FoliageClusterCookErrors::Stale));
-        if (!candidate.IsWellFormed(cancellation))
-            return Result<void>::Failure(MakeError(cancellation.IsCancellationRequested() ? FoliageClusterCookErrors::Cancelled
-                                                                                          : FoliageClusterCookErrors::InvalidInput));
-        if (current_ && current_->Footprint().residentFoliageBytes > candidate.Profile().configuration.Data().limits.maximumRetiringBytes)
-            return Result<void>::Failure(MakeError(FoliageClusterCookErrors::LimitExceeded));
-        if (cancellation.IsCancellationRequested())
-            return Result<void>::Failure(MakeError(FoliageClusterCookErrors::Cancelled));
-        current_ = std::move(candidate);
-        return Result<void>::Success();
-    }
+        /** @copydoc ValidateCluster */
+        bool ValidateCluster(const CookedFoliageCluster &cluster, const TerrainDatasetId dataset,
+                             const TerrainCapabilityRevision capability, const Sha256Digest &profile,
+                             const CancellationToken &cancellation) {
+            return ValidCluster(cluster, dataset, capability, profile, cancellation);
+        }
+    }  // namespace FoliageClusterCookInternal
 }  // namespace Horo::Terrain

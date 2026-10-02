@@ -116,7 +116,7 @@ namespace Horo::Terrain {
         }
 
     private:
-        friend Result<CookedFoliageClusterSet> CookFoliageClusters(const FoliageClusterCookRequest &, const CancellationToken &);
+        friend struct FoliageClusterCookWorker;
         friend class FoliageClusterCookOwner;
 
         explicit CookedFoliageClusterSet(const FoliageClusterCookProfile &profile) : profile_(profile) {}
