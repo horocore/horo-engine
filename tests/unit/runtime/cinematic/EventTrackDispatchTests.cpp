@@ -58,8 +58,10 @@ namespace Horo::Cinematic {
 
         REQUIRE(dispatcher.BeginTick(11).HasValue());
         const std::size_t before = Horo::Tests::AllocationProbe::Count();
-        REQUIRE(dispatcher.Stage(std::span{&occurrence, 1}).HasValue());
-        CHECK(Horo::Tests::AllocationProbe::Count() == before);
+        const auto staged = dispatcher.Stage(std::span{&occurrence, 1});
+        const std::size_t after = Horo::Tests::AllocationProbe::Count();
+        REQUIRE(staged.HasValue());
+        CHECK(after == before);
         REQUIRE(dispatcher.CommitTick().HasValue());
         CHECK(probe->calls == 0);
         REQUIRE(dispatcher.Drain(1).Value() == 1);
