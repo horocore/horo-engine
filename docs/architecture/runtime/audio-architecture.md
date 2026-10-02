@@ -1465,6 +1465,18 @@ Their bodies immediately recover concrete owned state; replacement of these
 signatures requires a deliberate decoder/source contract migration, not type
 aliases or generic callbacks that merely hide the same opaque boundary.
 
+The service's allocation constructor is publicly declared only to permit
+`std::make_unique`, but takes a private, non-aggregate `ConstructionKey` whose
+default constructor is accessible only to the service. `Create` validates source
+and limits before originating that key. The service remains final; neither
+ordinary construction nor an empty-brace key can bypass admission. Public-header
+consumer assertions compile this boundary independently of test-private headers.
+This follows the existing RuntimeHost/McpController factory authority pattern,
+without making invalid source/limits publicly constructible. Existing host callers
+continue using `Create` with ownership-taking source transfer; no caller migration
+or competing unchecked construction API is introduced. Allocation failures remain
+translated by Create, with partially constructed lease/slot members unwound by RAII.
+
 Underrun behavior:
 
 - output silence for missing frames

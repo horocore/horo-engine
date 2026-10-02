@@ -270,7 +270,9 @@ namespace Horo::Audio {
         return result;
     }
 
-    AudioStreamingService::AudioStreamingService(JobSystem &jobs, AudioStreamPackageSource source, const AudioStreamingLimits limits)
+    /** @copydoc AudioStreamingService::AudioStreamingService */
+    AudioStreamingService::AudioStreamingService(ConstructionKey, JobSystem &jobs, AudioStreamPackageSource source,
+                                                 const AudioStreamingLimits limits)
         : jobs_(jobs), source_(std::move(source)), limits_(limits), slots_(limits.maximumStreams) {}
 
     /** @copydoc AudioStreamingService::Create */
@@ -280,7 +282,7 @@ namespace Horo::Audio {
             return Result<std::unique_ptr<AudioStreamingService>>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
         try {
             return Result<std::unique_ptr<AudioStreamingService>>::Success(
-                std::unique_ptr<AudioStreamingService>(new AudioStreamingService(jobs, std::move(source), limits)));
+                std::make_unique<AudioStreamingService>(ConstructionKey{}, jobs, std::move(source), limits));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<AudioStreamingService>>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
         }

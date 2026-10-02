@@ -83,8 +83,10 @@ namespace Horo::Audio::StreamingTests {
         CallbackBlock output;
         CHECK(output.Render(port, 4).availableFrames == 4);
         REQUIRE(PumpUntil(*service, admitted.Value(), 2));
-        service->Pump();
         REQUIRE(Until([&] {
+            // Published samples do not prove the prior fill job is terminal; keep
+            // the control lane reaping and scheduling until the final decode enters.
+            service->Pump();
             return fixture.finalDecodeEntered.load();
         }));
         const auto beforeFinal = output.Render(port, 2);

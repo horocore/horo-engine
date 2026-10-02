@@ -135,6 +135,15 @@ namespace Horo::Audio {
      * Shutdown while the injected JobSystem and package source remain alive.
      */
     class AudioStreamingService final {
+        /** @brief Unforgeable factory authority; only Create can originate a key. */
+        class ConstructionKey final {
+            friend class AudioStreamingService;
+            ConstructionKey() = default;
+
+        public:
+            ConstructionKey(const ConstructionKey &) = default;
+        };
+
     public:
         /**
          * @brief Validates limits and reserves fixed stream slots without starting work.
@@ -145,6 +154,17 @@ namespace Horo::Audio {
          */
         [[nodiscard]] static Result<std::unique_ptr<AudioStreamingService>> Create(JobSystem &jobs, AudioStreamPackageSource source,
                                                                                    AudioStreamingLimits limits = {});
+
+        /**
+         * @brief Factory-only allocation seam for std::make_unique, not a host admission bypass.
+         * @param key Private construction authority originated only after Create validates inputs.
+         * @param jobs Process-owned worker scheduler retained by reference.
+         * @param source Validated source transferred with its provider/code lease.
+         * @param limits Validated finite stream storage and join budgets.
+         * @throws std::bad_alloc When fixed slot allocation fails; Create translates this failure.
+         * @pre Create has validated the source and limits. No worker is started during construction.
+         */
+        AudioStreamingService(ConstructionKey key, JobSystem &jobs, AudioStreamPackageSource source, AudioStreamingLimits limits);
 
         AudioStreamingService(const AudioStreamingService &) = delete;
         AudioStreamingService &operator=(const AudioStreamingService &) = delete;
@@ -193,7 +213,6 @@ namespace Horo::Audio {
 
     private:
         struct Slot;
-        AudioStreamingService(JobSystem &jobs, AudioStreamPackageSource source, AudioStreamingLimits limits);
         [[nodiscard]] AudioStreamState *Find(AudioStreamHandle handle) noexcept;
         [[nodiscard]] const AudioStreamState *Find(AudioStreamHandle handle) const noexcept;
 
