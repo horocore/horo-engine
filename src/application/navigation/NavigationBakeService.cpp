@@ -8,6 +8,25 @@ namespace Horo::Application {
     using namespace NavigationBakeDetail;
 
     namespace {
+        /** @brief Validates injected host composition and canonical-root prerequisites. */
+        [[nodiscard]] bool ValidHostConfig(const NavigationBakeServiceConfig &config) {
+            return config.definition.IsValid() && !config.artifactType.Value().empty() && config.target.IsValid() && config.builder &&
+                   config.files && config.sourceAuthority && config.newOperationId && config.writerWaitTimeout.ToNanoseconds() > 0;
+        }
+
+        /** @brief Rejects unusable storage paths before admission or staging. */
+        [[nodiscard]] bool ValidStorageConfig(const NavigationBakeServiceConfig &config) {
+            return !config.cacheRoot.empty() && config.cacheRoot.is_absolute() && !config.targetRoot.empty() &&
+                   config.targetRoot.is_absolute();
+        }
+
+        /** @brief Enforces both portable artifact ceilings and the caller's cook limit. */
+        [[nodiscard]] bool ValidCapacityConfig(const NavigationBakeServiceConfig &config) {
+            return config.maximumTiles > 0 && config.maximumTiles <= NavMeshArtifactLimits::MaximumTiles &&
+                   config.maximumCandidateBytes > 0 && config.maximumCandidateBytes <= config.cookLimits.maximumArtifactBytes &&
+                   config.maximumCandidateBytes <= NavMeshArtifactLimits::MaximumOwnedBytes;
+        }
+
         /** @brief Validates complete sorted tile coverage and immutable capture freshness before admission. */
         [[nodiscard]] Result<void> ValidateRequest(const NavigationBakeRequest &request, const std::size_t maximumTiles) {
             if (!request.input || request.tiles.empty() || request.tiles.size() > maximumTiles ||
@@ -43,6 +62,13 @@ namespace Horo::Application {
                        a.tileSizeMeters == b.tileSizeMeters;
             });
         }
+
+        /** @brief Only an unfinished active operation can own a coalesced request. */
+        [[nodiscard]] bool CanJoinActive(const NavigationBakeJobHandle &job, const std::shared_ptr<Attempt> &attempt,
+                                         const NavigationBakeRequest &request) {
+            const auto snapshot = job.Snapshot();
+            return IdenticalRequest(attempt, request) && snapshot && !snapshot->IsTerminal();
+        }
     }  // namespace
 
     /** @copydoc NavigationBakeDetail::CancelPending */
@@ -64,14 +90,8 @@ namespace Horo::Application {
     /** @copydoc NavigationBakeService::Create */
     Result<std::unique_ptr<NavigationBakeService>> NavigationBakeService::Create(NavigationBakeServiceConfig config,
                                                                                  OperationStore &operations, JobSystem &jobs) {
-        if (jobs.WorkerCount() < 2 || !config.definition.IsValid() || config.artifactType.Value().empty() || !config.target.IsValid() ||
-            !config.builder || !config.files || config.cacheRoot.empty() || !config.cacheRoot.is_absolute() || config.targetRoot.empty() ||
-            !config.targetRoot.is_absolute() || config.maximumTiles == 0 || config.maximumTiles > NavMeshArtifactLimits::MaximumTiles ||
-            config.maximumCandidateBytes == 0 || config.maximumCandidateBytes > config.cookLimits.maximumArtifactBytes ||
-            config.maximumCandidateBytes > NavMeshArtifactLimits::MaximumOwnedBytes || !config.tileLimits.IsValid() ||
-            (config.diagnostics && !config.diagnostics->Owns(config.definition)) ||
-            config.maximumCandidateBytes > NavMeshArtifactLimits::MaximumOwnedBytes || !config.sourceAuthority ||
-            config.writerWaitTimeout.ToNanoseconds() <= 0 || !config.newOperationId)
+        if (jobs.WorkerCount() < 2 || !ValidHostConfig(config) || !ValidStorageConfig(config) || !ValidCapacityConfig(config) || !config.tileLimits.IsValid() ||
+            (config.diagnostics && !config.diagnostics->Owns(config.definition)))
             return Result<std::unique_ptr<NavigationBakeService>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         std::error_code error;
         const auto canonical = std::filesystem::weakly_canonical(config.targetRoot, error);
@@ -106,8 +126,7 @@ namespace Horo::Application {
         std::optional<NavigationBakeSourceLease> sourceLease{std::move(admittedSource).Value()};
         if (IdenticalRequest(pending_, request))
             return Result<OperationId>::Success(pending_->operation);
-        if (const auto activeSnapshot = activeJob_.Snapshot();
-            IdenticalRequest(active_, request) && activeSnapshot && !activeSnapshot->IsTerminal())
+        if (CanJoinActive(activeJob_, active_, request))
             return Result<OperationId>::Success(active_->operation);
         auto attempt = std::make_shared<Attempt>();
         attempt->request = std::move(request);

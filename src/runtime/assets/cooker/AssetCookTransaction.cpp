@@ -35,38 +35,26 @@ namespace Horo::Assets {
             for (auto &entry : contents.entries)
                 entry.artifactFile = entry.assetId.ToString() + ".cooked";
         }
-    }  // namespace
 
-    /** @copydoc PublishCookArtifactReplacement */
-    Result<AssetCookGeneration> PublishCookArtifactReplacement(const std::filesystem::path &root, const AssetCookTargetId &target,
-                                                               AssetCookManifestEntry entry, std::vector<std::uint8_t> artifact,
-                                                               const std::size_t maximumBytes, const AssetCookLimits &limits,
-                                                               const AssetCookPublicationPolicy &policy) {
-        if (policy.files == nullptr || root.empty() || !root.is_absolute() || maximumBytes == 0 || artifact.size() > maximumBytes ||
-            entry.artifactFile != entry.assetId.ToString() + ".cooked" ||
-            entry.artifactHash != ComputeSha256(std::as_bytes(std::span{artifact})))
-            return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::MalformedArtifact));
-        std::error_code pathError;
-        if (std::filesystem::weakly_canonical(root, pathError) != root || pathError)
-            return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::MalformedArtifact));
-        auto envelope = DecodeCookedArtifact(artifact, limits);
-        if (envelope.HasError())
-            return Result<AssetCookGeneration>::Failure(envelope.ErrorValue());
-        if (envelope.Value().id != entry.assetId || envelope.Value().type != entry.assetType || envelope.Value().target != target)
-            return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::MalformedArtifact));
-        if (auto lock = AcquireWriter(root, policy); lock.HasError())
-            return Result<AssetCookGeneration>::Failure(lock.ErrorValue());
-        else {
-            auto lockedPolicy = policy;
-            lockedPolicy.writerLease = &lock.Value();
-            if (policy.afterWriterAcquired) {
-                if (auto accepted = policy.afterWriterAcquired(); accepted.HasError())
-                    return Result<AssetCookGeneration>::Failure(accepted.ErrorValue());
-            }
-            auto base = CurrentBase(root, target, maximumBytes, limits, lockedPolicy);
-            if (base.HasError())
-                return Result<AssetCookGeneration>::Failure(base.ErrorValue());
-            auto contents = std::move(base).Value();
+        /** @brief Validates the replacement envelope independently from acquiring publication authority. */
+        [[nodiscard]] Result<void> ValidateReplacement(const std::filesystem::path &root, const AssetCookTargetId &target,
+                                                       const AssetCookManifestEntry &entry, const std::vector<std::uint8_t> &artifact,
+                                                       const AssetCookLimits &limits) {
+            std::error_code pathError;
+            if (std::filesystem::weakly_canonical(root, pathError) != root || pathError)
+                return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
+            auto envelope = DecodeCookedArtifact(artifact, limits);
+            if (envelope.HasError())
+                return Result<void>::Failure(envelope.ErrorValue());
+            if (envelope.Value().id != entry.assetId || envelope.Value().type != entry.assetType || envelope.Value().target != target)
+                return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
+            return Result<void>::Success();
+        }
+
+        /** @brief Replaces one definition while retaining every unrelated artifact byte under the same writer lease. */
+        [[nodiscard]] Result<void> MergeReplacement(AssetCookGenerationContents &contents, AssetCookManifestEntry entry,
+                                                    std::vector<std::uint8_t> artifact, const std::size_t maximumBytes,
+                                                    const AssetCookLimits &limits) {
             CanonicalizeStorageNames(contents);
             const auto found = std::ranges::lower_bound(contents.entries, entry.assetId, {}, &AssetCookManifestEntry::assetId);
             const auto index = static_cast<std::size_t>(found - contents.entries.begin());
@@ -80,11 +68,41 @@ namespace Horo::Assets {
             std::size_t total{};
             for (const auto &bytes : contents.artifacts) {
                 if (bytes.size() > maximumBytes - total)
-                    return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::TooLarge));
+                    return Result<void>::Failure(MakeError(CookErrors::TooLarge));
                 total += bytes.size();
             }
             if (contents.entries.size() > limits.maximumAssets)
-                return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::TooLarge));
+                return Result<void>::Failure(MakeError(CookErrors::TooLarge));
+            return Result<void>::Success();
+        }
+    }  // namespace
+
+    /** @copydoc PublishCookArtifactReplacement */
+    Result<AssetCookGeneration> PublishCookArtifactReplacement(const std::filesystem::path &root, const AssetCookTargetId &target,
+                                                               AssetCookManifestEntry entry, std::vector<std::uint8_t> artifact,
+                                                               const std::size_t maximumBytes, const AssetCookLimits &limits,
+                                                               const AssetCookPublicationPolicy &policy) {
+        if (policy.files == nullptr || root.empty() || !root.is_absolute() || maximumBytes == 0 || artifact.size() > maximumBytes ||
+            entry.artifactFile != entry.assetId.ToString() + ".cooked" ||
+            entry.artifactHash != ComputeSha256(std::as_bytes(std::span{artifact})))
+            return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::MalformedArtifact));
+        if (auto validated = ValidateReplacement(root, target, entry, artifact, limits); validated.HasError())
+            return Result<AssetCookGeneration>::Failure(validated.ErrorValue());
+        if (auto lock = AcquireWriter(root, policy); lock.HasError())
+            return Result<AssetCookGeneration>::Failure(lock.ErrorValue());
+        else {
+            auto lockedPolicy = policy;
+            lockedPolicy.writerLease = &lock.Value();
+            if (policy.afterWriterAcquired) {
+                if (auto accepted = policy.afterWriterAcquired(); accepted.HasError())
+                    return Result<AssetCookGeneration>::Failure(accepted.ErrorValue());
+            }
+            auto base = CurrentBase(root, target, maximumBytes, limits, lockedPolicy);
+            if (base.HasError())
+                return Result<AssetCookGeneration>::Failure(base.ErrorValue());
+            auto contents = std::move(base).Value();
+            if (auto merged = MergeReplacement(contents, std::move(entry), std::move(artifact), maximumBytes, limits); merged.HasError())
+                return Result<AssetCookGeneration>::Failure(merged.ErrorValue());
             return PublishCookGeneration(root, target, contents.entries, contents.artifacts, limits, lockedPolicy);
         }
     }

@@ -14,6 +14,7 @@
 #include <vector>
 
 #if !defined(_WIN32)
+#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -862,9 +863,10 @@ TEST_CASE("Writer contention is enforced by the OS across independent processes"
     REQUIRE(child >= 0);
     if (child == 0) {
         close(wake[1]);
-        char signal{};
-        if (read(wake[0], &signal, 1) != 1)
+        pollfd wakeSignal{.fd = wake[0], .events = POLLIN | POLLHUP, .revents = 0};
+        if (poll(&wakeSignal, 1, 5000) != 1 || (wakeSignal.revents & POLLHUP) == 0)
             _exit(2);
+        close(wake[0]);
         NativeDurableFileSystem childFiles;
         auto contested = childFiles.TryAcquireExclusive(tmp.path / ".cook-writer.lock", "child");
         const bool busy = contested.HasError() && contested.ErrorValue().code.Value() == "filesystem.lock_busy";
@@ -874,8 +876,7 @@ TEST_CASE("Writer contention is enforced by the OS across independent processes"
     // Acquire after fork: the child registry is empty, so only the native OS lock can reject it.
     NativeDurableFileSystem files;
     auto lease = files.TryAcquireExclusive(tmp.path / ".cook-writer.lock", "parent");
-    const char signal = 'x';
-    CHECK(write(wake[1], &signal, 1) == 1);
+    // Closing the writer releases the child only after the acquisition attempt, without a SIGPIPE race on timeout.
     close(wake[1]);
     int status{};
     REQUIRE(waitpid(child, &status, 0) == child);

@@ -97,7 +97,7 @@ namespace Horo::Application::TestSupport {
             if (RenameFails(destination))
                 return InjectedFailure();
             auto replaced = native.AtomicReplaceTracked(prepared, destination, receipt);
-            if (receipt.WasCommitted() && destination.filename() == "current.json") {
+            if (receipt.WasCommitted() && destination.filename() == "current.json" && prepared.filename() == "current.json") {
                 afterCurrentReached.store(true);
                 while (pauseAfterCurrent.load())
                     std::this_thread::yield();

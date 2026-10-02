@@ -1,11 +1,6 @@
 #include "Horo/Assets/AssetCookTransaction.h"
 #include "navigation/NavigationPublicationFixture.h"
-
-#if !defined(_WIN32)
-#include <poll.h>
-#include <sys/wait.h>
-#include <unistd.h>
-#endif
+#include "navigation/NavigationPublicationProcess.h"
 
 namespace Horo::Application {
     using namespace TestSupport;
@@ -23,6 +18,25 @@ namespace Horo::Application {
                 CHECK(decoded.tiles[i]->ContentIdentity() == expected.tiles.tiles[i]->ContentIdentity());
                 CHECK(std::ranges::equal(decoded.tiles[i]->Bytes(), expected.tiles.tiles[i]->Bytes()));
             }
+        }
+
+        /** @brief Both source barriers preserve the same serialized and live publication when their capture becomes stale. */
+        void CheckStalePreservesPublication(PublicationHarness &harness, const OperationId operation,
+                                            const std::shared_ptr<const NavigationBakePublication> &prior) {
+            const auto terminal = harness.Terminal(operation);
+            CHECK(terminal.state == OperationState::Cancelled);
+            REQUIRE(terminal.error);
+            CHECK(terminal.error->code.Value() == NavigationErrors::BakeInputStale.code.Value());
+            CHECK(harness.service->Published() == prior);
+            CHECK(harness.Current().manifestDigest == prior->generation.manifestDigest);
+            CheckCompletePublication(harness, harness.Current(), *prior);
+        }
+
+        /** @brief Reader corruption also rejects a new writer instead of allowing a different selector to hide the damage. */
+        void CheckCorruptGenerationCannotPublish(PublicationHarness &harness) {
+            CHECK(ResolveNavigationBakePublication(harness.config).HasError());
+            harness.fixture.ExcludeBorder();
+            CHECK(harness.Terminal(harness.Submit()).state == OperationState::Failed);
         }
 
         /** @brief Publishes another real standard envelope through the sole AssetCook writer authority. */
@@ -50,66 +64,6 @@ namespace Horo::Application {
             return bytes;
         }
 
-#if !defined(_WIN32)
-        /** @brief Holds the writer lease in a distinct process created before any test scheduler threads. */
-        class ChildWriterLease final {
-        public:
-            explicit ChildWriterLease(const std::filesystem::path &lockPath) {
-                REQUIRE(pipe(ready_) == 0);
-                REQUIRE(pipe(release_) == 0);
-                child_ = fork();
-                REQUIRE(child_ >= 0);
-                if (child_ == 0) {
-                    close(ready_[0]);
-                    close(release_[1]);
-                    NativeDurableFileSystem files;
-                    auto lease = files.TryAcquireExclusive(lockPath, "navigation child publication owner");
-                    const char acquired = lease.HasValue() ? '1' : '0';
-                    if (write(ready_[1], &acquired, 1) != 1)
-                        _exit(2);
-                    char done{};
-                    if (read(release_[0], &done, 1) != 1)
-                        _exit(3);
-                    _exit(lease.HasValue() ? 0 : 4);
-                }
-                close(ready_[1]);
-                close(release_[0]);
-                pollfd descriptor{.fd = ready_[0], .events = POLLIN, .revents = 0};
-                const int signalled = poll(&descriptor, 1, 5000);
-                char acquired{};
-                const bool held = signalled == 1 && read(ready_[0], &acquired, 1) == 1 && acquired == '1';
-                close(ready_[0]);
-                if (!held)
-                    Release();
-                REQUIRE(held);
-            }
-
-            ChildWriterLease(const ChildWriterLease &) = delete;
-            ChildWriterLease &operator=(const ChildWriterLease &) = delete;
-
-            ~ChildWriterLease() {
-                Release();
-            }
-
-            void Release() noexcept {
-                if (child_ <= 0)
-                    return;
-                const char done = '1';
-                const auto ignored = write(release_[1], &done, 1);
-                (void)ignored;
-                close(release_[1]);
-                int status{};
-                const auto waited = waitpid(child_, &status, 0);
-                (void)waited;
-                child_ = 0;
-            }
-
-        private:
-            int ready_[2]{};
-            int release_[2]{};
-            pid_t child_{};
-        };
-#endif
     }  // namespace
 
     TEST_CASE("Disk readers pin complete old or new navigation closures across the actual pointer rename") {
@@ -280,12 +234,7 @@ namespace Horo::Application {
         changed.geometry = Navigation::TestSupport::Id<NavigationSourceSnapshotRevision>(changed.geometry.Value() + 1);
         REQUIRE(harness.config.sourceAuthority->UpdateCurrent(changed, harness.fixture.Observations()).HasValue());
         harness.files->pauseBeforeCurrent.store(false);
-        const auto terminal = harness.Terminal(operation);
-        CHECK(terminal.state == OperationState::Cancelled);
-        REQUIRE(terminal.error);
-        CHECK(terminal.error->code.Value() == NavigationErrors::BakeInputStale.code.Value());
-        CHECK(harness.service->Published() == prior);
-        CHECK(harness.Current().manifestDigest == prior->generation.manifestDigest);
+        CheckStalePreservesPublication(harness, operation, prior);
     }
 
     TEST_CASE("Navigation revalidates source observations after waiting for the native writer lease") {
@@ -304,12 +253,7 @@ namespace Horo::Application {
         sources.front().revision = Navigation::TestSupport::Id<NavigationSourceRevision>(2);
         REQUIRE(harness.config.sourceAuthority->UpdateCurrent(harness.fixture.revisions, sources).HasValue());
         owner = ExclusiveFileLock{};
-        const auto terminal = harness.Terminal(operation);
-        CHECK(terminal.state == OperationState::Cancelled);
-        REQUIRE(terminal.error);
-        CHECK(terminal.error->code.Value() == NavigationErrors::BakeInputStale.code.Value());
-        CHECK(harness.service->Published() == prior);
-        CHECK(harness.Current().manifestDigest == prior->generation.manifestDigest);
+        CheckStalePreservesPublication(harness, operation, prior);
     }
 
     TEST_CASE("Navigation source authority rejects malformed evidence without replacing its valid adoption fence") {
@@ -433,9 +377,7 @@ namespace Horo::Application {
         }
         WritePublicationBytes(pointer, malformed);
         CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot, harness.config.cookLimits).HasError());
-        CHECK(ResolveNavigationBakePublication(harness.config).HasError());
-        harness.fixture.ExcludeBorder();
-        CHECK(harness.Terminal(harness.Submit()).state == OperationState::Failed);
+        CheckCorruptGenerationCannotPublish(harness);
         CHECK(harness.service->Published() == prior);
         CHECK(PublicationBytes(pointer) == malformed);
         CheckCompletePublication(harness, prior->generation, *prior);
@@ -457,9 +399,7 @@ namespace Horo::Application {
             WritePublicationBytes(current.generationRoot / contents.entries.front().artifactFile, bytes);
         }
         CHECK(Assets::ReadCookGenerationContents(current, harness.config.maximumCandidateBytes, harness.config.cookLimits).HasError());
-        CHECK(ResolveNavigationBakePublication(harness.config).HasError());
-        harness.fixture.ExcludeBorder();
-        CHECK(harness.Terminal(harness.Submit()).state == OperationState::Failed);
+        CheckCorruptGenerationCannotPublish(harness);
     }
 
     TEST_CASE("Production navigation reader enforces exact target type and lowered complete closure bounds") {
@@ -528,9 +468,7 @@ namespace Horo::Application {
         REQUIRE_FALSE(error);
         std::filesystem::create_symlink(outside, link, error);
         REQUIRE_FALSE(error);
-        CHECK(ResolveNavigationBakePublication(harness.config).HasError());
-        harness.fixture.ExcludeBorder();
-        CHECK(harness.Terminal(harness.Submit()).state == OperationState::Failed);
+        CheckCorruptGenerationCannotPublish(harness);
         CHECK(PublicationBytes(outside) == outsideBytes);
     }
 
@@ -550,9 +488,7 @@ namespace Horo::Application {
         std::filesystem::create_hard_link(linked, alias, error);
         REQUIRE_FALSE(error);
         const auto before = PublicationBytes(alias);
-        CHECK(ResolveNavigationBakePublication(harness.config).HasError());
-        harness.fixture.ExcludeBorder();
-        CHECK(harness.Terminal(harness.Submit()).state == OperationState::Failed);
+        CheckCorruptGenerationCannotPublish(harness);
         CHECK(PublicationBytes(alias) == before);
     }
 #endif

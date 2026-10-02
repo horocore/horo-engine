@@ -113,6 +113,11 @@ namespace Horo::Assets {
                     Succeed("Cooked generation committed");
                     return;
                 }
+                PublishUncommittedOutcome();
+            }
+
+            /** @brief Projects precommit cancellation or failure without permitting it to rewrite committed success. */
+            void PublishUncommittedOutcome() {
                 const bool cancelled = cancelledResult_.value_or(cancellation_->IsCancellationRequested());
                 Publish(BuildOutputRecord{.timestampUtc = std::chrono::system_clock::now(),
                                           .severity = cancelled ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error,
@@ -578,6 +583,68 @@ namespace Horo::Assets {
                 return Result<std::optional<BuildOutputSessionId>>::Failure(MakeError(CookErrors::OutputIdentityExhausted));
             return Result<std::optional<BuildOutputSessionId>>::Success(std::move(sessionId));
         }
+
+        /** @brief Requires an explicit bounded publication composition before cooking can perform any writes. */
+        [[nodiscard]] bool HasValidCookComposition(const AssetCookRequest &request, const bool hasCatalog) noexcept {
+            return hasCatalog && request.publicationFiles && request.newPublicationOperationId && !request.cookedRoot.empty() &&
+                   request.cookedRoot.is_absolute() && request.limits.maximumAssets > 0U && request.limits.maximumArtifactBytes > 0U;
+        }
+
+        /** @brief Admits the optional authoritative cook row only after its output identity was allocated. */
+        [[nodiscard]] Result<std::optional<OperationId>> BeginCookOperation(const AssetCookRequest &request,
+                                                                            const std::size_t recordCount) {
+            if (request.operationStore == nullptr)
+                return Result<std::optional<OperationId>>::Success(std::nullopt);
+            auto operation = request.operationStore->Begin(OperationDescriptor{.kind = OperationKind::Cook,
+                                                                               .title = "Cook assets",
+                                                                               .phase = "prepare",
+                                                                               .message = std::format("{} assets", recordCount),
+                                                                               .progress = 0.0F,
+                                                                               .cancellable = static_cast<bool>(request.requestCancel),
+                                                                               .requestCancel = request.requestCancel});
+            if (!operation.has_value())
+                return Result<std::optional<OperationId>>::Failure(MakeError(CookErrors::OperationAdmissionFailed));
+            return Result<std::optional<OperationId>>::Success(operation);
+        }
+
+        /** @brief Executes the admitted immutable registry closure and preserves typed stage outcomes until publication. */
+        [[nodiscard]] Result<AssetCookReport> CookRegistryRecords(JobSystem &jobs, const CookerCatalogSnapshot &catalog,
+                                                                  const AssetCookRequest &request,
+                                                                  const std::span<const AssetRecord> records,
+                                                                  const CancellationToken &cancellation, CookOperationScope &operation) {
+            if (records.empty())
+                return HandleEmptyCookSnapshot(request, cancellation, operation);
+            if (records.size() > request.limits.maximumAssets) {
+                operation.RecordOutcome(false);
+                return Result<AssetCookReport>::Failure(Error{CookErrors::TooLarge.code});
+            }
+            AssetCookCache cache(request.cacheRoot, request.limits);
+            auto slotsResult = PrepareCookSlots(request, catalog, records, operation);
+            if (slotsResult.HasError()) {
+                operation.RecordError(slotsResult.ErrorValue());
+                return Result<AssetCookReport>::Failure(slotsResult.ErrorValue());
+            }
+            auto slots = std::move(slotsResult).Value();
+            auto cacheHitsResult = ResolveCacheHits(request, catalog, cache, slots, cancellation, operation);
+            if (cacheHitsResult.HasError()) {
+                operation.RecordError(cacheHitsResult.ErrorValue());
+                return Result<AssetCookReport>::Failure(cacheHitsResult.ErrorValue());
+            }
+            const std::size_t cacheHits = cacheHitsResult.Value();
+            if (cacheHits < slots.size()) {
+                operation.Update("cook", std::format("Cooking {} assets", slots.size() - cacheHits), 0.4F);
+                if (const auto cooked = CookUncachedSlots(jobs, catalog, request, slots, cancellation, operation); cooked.HasError()) {
+                    const bool cancelled = IsJobCancelled(cooked.ErrorValue());
+                    Error error = cancelled ? WithCause(MakeError(CookErrors::Cancelled), cooked.ErrorValue()) : cooked.ErrorValue();
+                    operation.RecordOutcome(cancelled);
+                    return Result<AssetCookReport>::Failure(std::move(error));
+                }
+            }
+            Result<AssetCookReport> published = PublishCookedSlots(request, cache, slots, cacheHits, cancellation, operation);
+            if (published.HasError())
+                operation.RecordError(published.ErrorValue());
+            return published;
+        }
     }  // namespace
 
     AssetCookService::AssetCookService(JobSystem &jobs, std::shared_ptr<const CookerCatalogSnapshot> catalog)
@@ -587,8 +654,7 @@ namespace Horo::Assets {
         if (cancellation.IsCancellationRequested())
             return Result<AssetCookReport>::Failure(Error{CookErrors::Cancelled.code});
 
-        if (!catalog_ || !request.publicationFiles || !request.newPublicationOperationId || request.cookedRoot.empty() ||
-            !request.cookedRoot.is_absolute() || request.limits.maximumAssets == 0U || request.limits.maximumArtifactBytes == 0U)
+        if (!HasValidCookComposition(request, static_cast<bool>(catalog_)))
             return Result<AssetCookReport>::Failure(Error{CookErrors::MalformedArtifact.code});
 
         auto records = request.registry.Records();
@@ -596,20 +662,11 @@ namespace Horo::Assets {
         Result<std::optional<BuildOutputSessionId>> outputSession = BeginOutputSession(request.buildOutputStore);
         if (outputSession.HasError())
             return Result<AssetCookReport>::Failure(outputSession.ErrorValue());
-        std::optional<OperationId> operationId;
-        if (request.operationStore != nullptr) {
-            operationId = request.operationStore->Begin(OperationDescriptor{.kind = OperationKind::Cook,
-                                                                            .title = "Cook assets",
-                                                                            .phase = "prepare",
-                                                                            .message = std::format("{} assets", records.size()),
-                                                                            .progress = 0.0F,
-                                                                            .cancellable = static_cast<bool>(request.requestCancel),
-                                                                            .requestCancel = request.requestCancel});
-            if (!operationId.has_value())
-                return Result<AssetCookReport>::Failure(MakeError(CookErrors::OperationAdmissionFailed));
-        }
+        auto operationId = BeginCookOperation(request, records.size());
+        if (operationId.HasError())
+            return Result<AssetCookReport>::Failure(operationId.ErrorValue());
         CookOperationScope operation{request.operationStore, request.buildOutputStore, cancellation,
-                                     outputSession.Value().value_or(BuildOutputSessionId{}), operationId};
+                                     outputSession.Value().value_or(BuildOutputSessionId{}), operationId.Value()};
 
         if (request.buildOutputStore != nullptr) {
             const auto now = std::chrono::system_clock::now();
@@ -621,15 +678,7 @@ namespace Horo::Assets {
             });
         }
 
-        if (records.empty())
-            return HandleEmptyCookSnapshot(request, cancellation, operation);
-
-        if (records.size() > request.limits.maximumAssets) {
-            operation.RecordOutcome(false);
-            return Result<AssetCookReport>::Failure(Error{CookErrors::TooLarge.code});
-        }
-
-        return ExecuteCapturedCook(jobs_, *catalog_, request, records, cancellation, operation);
+        return CookRegistryRecords(jobs_, *catalog_, request, records, cancellation, operation);
     }
 
 }  // namespace Horo::Assets

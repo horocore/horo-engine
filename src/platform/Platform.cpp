@@ -220,6 +220,7 @@ namespace Horo {
         }
 
         std::string processKey;
+        bool processRegistered{};
 #if defined(_WIN32)
         HANDLE handle{INVALID_HANDLE_VALUE};
 #else
@@ -242,10 +243,11 @@ namespace Horo {
                 descriptor = -1;
             }
 #endif
-            if (!processKey.empty()) {
+            if (processRegistered) {
                 auto &registry = GetProcessLockRegistry();
                 std::lock_guard lock(registry.mutex);
                 registry.locks.erase(processKey);
+                processRegistered = false;
                 processKey.clear();
             }
         }
@@ -254,6 +256,87 @@ namespace Horo {
             Release();
         }
     };
+
+    namespace {
+        /** @brief Validates native lock authority and creates only its canonical parent directory. */
+        [[nodiscard]] Result<void> PrepareExclusiveLockDirectory(const std::filesystem::path &path, const std::string_view ownerMetadata) {
+            if (!path.is_absolute() || ownerMetadata.size() > 4096U)
+                return Result<void>::Failure(FsError(IoFailed, path));
+            std::error_code error;
+            if (std::filesystem::weakly_canonical(path.parent_path(), error) != path.parent_path() || error)
+                return Result<void>::Failure(FsError(IoFailed, path));
+            std::filesystem::create_directories(path.parent_path(), error);
+            return error ? Result<void>::Failure(FsError(IoFailed, path)) : Result<void>::Success();
+        }
+
+        /** @brief Reserves process exclusion only after allocating the state that will release it. */
+        [[nodiscard]] bool ReserveProcessLock(ExclusiveFileLock::State &state, const std::filesystem::path &path) {
+            state.processKey = LockKey(path);
+            auto &registry = GetProcessLockRegistry();
+            std::lock_guard lock(registry.mutex);
+            if (!registry.locks.emplace(state.processKey).second)
+                return false;
+            state.processRegistered = true;
+            return true;
+        }
+
+#if defined(_WIN32)
+        /** @brief Acquires Windows sharing exclusion and verifies a single-link regular native lock file. */
+        [[nodiscard]] Result<void> AcquireNativeExclusiveLock(ExclusiveFileLock::State &state, const std::filesystem::path &path) {
+            state.handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+                                       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+            if (state.handle == INVALID_HANDLE_VALUE)
+                return Result<void>::Failure(FsError(GetLastError() == ERROR_SHARING_VIOLATION ? LockBusy : IoFailed, path));
+            BY_HANDLE_FILE_INFORMATION information{};
+            if (!GetFileInformationByHandle(state.handle, &information) || GetFileType(state.handle) != FILE_TYPE_DISK ||
+                (information.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0U ||
+                information.nNumberOfLinks != 1U)
+                return Result<void>::Failure(FsError(IoFailed, path));
+            return Result<void>::Success();
+        }
+
+        /** @brief Writes diagnostic-only metadata after Windows exclusion has been acquired. */
+        [[nodiscard]] Result<void> WriteExclusiveLockMetadata(ExclusiveFileLock::State &state, const std::filesystem::path &path,
+                                                              const std::string_view ownerMetadata) {
+            LARGE_INTEGER zero{};
+            if (!SetFilePointerEx(state.handle, zero, nullptr, FILE_BEGIN) || !SetEndOfFile(state.handle))
+                return Result<void>::Failure(FsError(IoFailed, path));
+            DWORD written{};
+            if (!ownerMetadata.empty() &&
+                (!WriteFile(state.handle, ownerMetadata.data(), static_cast<DWORD>(ownerMetadata.size()), &written, nullptr) ||
+                 written != ownerMetadata.size()))
+                return Result<void>::Failure(FsError(IoFailed, path));
+            return FlushFileBuffers(state.handle) ? Result<void>::Success() : Result<void>::Failure(FsError(IoFailed, path));
+        }
+#else
+        /** @brief Acquires nonblocking POSIX record-lock authority on a verified single-link regular file. */
+        [[nodiscard]] Result<void> AcquireNativeExclusiveLock(ExclusiveFileLock::State &state, const std::filesystem::path &path) {
+            state.descriptor = open(path.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+            if (state.descriptor < 0)
+                return Result<void>::Failure(FsError(IoFailed, path));
+            struct stat information{};
+            if (fstat(state.descriptor, &information) != 0 || !S_ISREG(information.st_mode) || information.st_nlink != 1)
+                return Result<void>::Failure(FsError(IoFailed, path));
+            struct flock lock = {};
+            lock.l_type = F_WRLCK;
+            lock.l_whence = SEEK_SET;
+            if (fcntl(state.descriptor, F_SETLK, &lock) != 0)
+                return Result<void>::Failure(FsError(errno == EACCES || errno == EAGAIN ? LockBusy : IoFailed, path));
+            return Result<void>::Success();
+        }
+
+        /** @brief Writes diagnostic-only metadata after POSIX record-lock authority has been acquired. */
+        [[nodiscard]] Result<void> WriteExclusiveLockMetadata(ExclusiveFileLock::State &state, const std::filesystem::path &path,
+                                                              const std::string_view ownerMetadata) {
+            if (ftruncate(state.descriptor, 0) != 0)
+                return Result<void>::Failure(FsError(IoFailed, path));
+            if (!ownerMetadata.empty() &&
+                write(state.descriptor, ownerMetadata.data(), ownerMetadata.size()) != static_cast<ssize_t>(ownerMetadata.size()))
+                return Result<void>::Failure(FsError(IoFailed, path));
+            return FlushFileDescriptor(state.descriptor) ? Result<void>::Success() : Result<void>::Failure(FsError(IoFailed, path));
+        }
+#endif
+    }  // namespace
 
     ExclusiveFileLock::ExclusiveFileLock() noexcept = default;
 
@@ -384,49 +467,15 @@ namespace Horo {
     /** @copydoc DurableFileSystem::TryAcquireExclusive */
     Result<ExclusiveFileLock> NativeDurableFileSystem::TryAcquireExclusive(const std::filesystem::path &path,
                                                                            const std::string_view ownerMetadata) {
-        if (!path.is_absolute() || ownerMetadata.size() > 4096U)
-            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
-        std::error_code error;
-        if (std::filesystem::weakly_canonical(path.parent_path(), error) != path.parent_path() || error)
-            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
-        std::filesystem::create_directories(path.parent_path(), error);
-        if (error)
-            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
-        const std::string key = LockKey(path);
-        {
-            auto &registry = GetProcessLockRegistry();
-            std::lock_guard lock(registry.mutex);
-            if (!registry.locks.emplace(key).second)
-                return Result<ExclusiveFileLock>::Failure(FsError(LockBusy, path));
-        }
+        if (auto prepared = PrepareExclusiveLockDirectory(path, ownerMetadata); prepared.HasError())
+            return Result<ExclusiveFileLock>::Failure(prepared.ErrorValue());
         auto state = std::make_unique<ExclusiveFileLock::State>();
-
-        state->processKey = key;
-#if defined(_WIN32)
-        state->handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
-                                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-        if (state->handle == INVALID_HANDLE_VALUE)
-            return Result<ExclusiveFileLock>::Failure(FsError(GetLastError() == ERROR_SHARING_VIOLATION ? LockBusy : IoFailed, path));
-        if (!WriteLockOwner(state->handle, ownerMetadata))
-            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
-#else
-        state->descriptor = open(path.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
-        if (state->descriptor < 0)
-            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
-        struct stat information{};
-        if (fstat(state->descriptor, &information) != 0 || !S_ISREG(information.st_mode) || information.st_nlink != 1)
-            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
-
-        if (!IsPrivateLockFile(state->descriptor))
-            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
-        struct flock lock = {};
-        lock.l_type = F_WRLCK;
-        lock.l_whence = SEEK_SET;
-        if (fcntl(state->descriptor, F_SETLK, &lock) != 0)
-            return Result<ExclusiveFileLock>::Failure(FsError(errno == EACCES || errno == EAGAIN ? LockBusy : IoFailed, path));
-        if (!WriteLockOwner(state->descriptor, ownerMetadata))
-            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
-#endif
+        if (!ReserveProcessLock(*state, path))
+            return Result<ExclusiveFileLock>::Failure(FsError(LockBusy, path));
+        if (auto acquired = AcquireNativeExclusiveLock(*state, path); acquired.HasError())
+            return Result<ExclusiveFileLock>::Failure(acquired.ErrorValue());
+        if (auto written = WriteExclusiveLockMetadata(*state, path, ownerMetadata); written.HasError())
+            return Result<ExclusiveFileLock>::Failure(written.ErrorValue());
         return Result<ExclusiveFileLock>::Success(ExclusiveFileLock(std::move(state)));
     }
 

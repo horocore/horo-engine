@@ -218,6 +218,44 @@ namespace Horo::Application::NavigationBakeDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Revalidates actual authoritative evidence while waiting for the common writer. */
+        [[nodiscard]] Result<void> EligiblePublication(const ServiceState &state, const Attempt &attempt, const CancellationToken &cancel) {
+            if (cancel.IsCancellationRequested())
+                return Failure<void>(NavigationErrors::BakeInputCancelled);
+            if (state.desired.load() != attempt.generation)
+                return Failure<void>(NavigationErrors::BakeInputStale);
+            auto current = state.config.sourceAuthority->TryAcquirePublication(*attempt.request.input, cancel);
+            if (current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            return Result<void>::Success();
+        }
+
+        /** @brief Holds current-source authority through the irreversible selector replacement and live adoption. */
+        [[nodiscard]] Result<void> AcquireAdoption(ServiceState &state, const Attempt &attempt, const CancellationToken &cancel,
+                                                   std::optional<NavigationBakeSourceLease> &sourceLease) {
+            if (cancel.IsCancellationRequested())
+                return Failure<void>(NavigationErrors::BakeInputCancelled);
+            auto current = state.config.sourceAuthority->TryAcquirePublication(*attempt.request.input, cancel);
+            if (current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            sourceLease.emplace(std::move(current).Value());
+            if (auto expected = attempt.generation; !state.desired.compare_exchange_strong(expected, attempt.generation | Adopted))
+                return Failure<void>(NavigationErrors::BakeInputStale);
+            return Result<void>::Success();
+        }
+
+        /** @brief Projects committed disk truth without permitting diagnostic allocation failure to lose live adoption. */
+        void AdoptCommitted(ServiceState &state, Attempt &attempt, const Assets::AssetCookGeneration &generation,
+                            Error &lostDurabilityDiagnostic) noexcept {
+            attempt.publicationReceipt->RecordCommitted();
+            try {
+                attempt.candidate->generation.durabilityError = generation.durabilityError;
+            } catch (...) {
+                attempt.candidate->generation.durabilityError = std::move(lostDurabilityDiagnostic);
+            }
+            state.publication.Store(std::move(attempt.candidate));
+        }
+
         /** @brief Stages durably, adopts the latest capture at one CAS barrier, then replaces current.json last. */
         [[nodiscard]] Result<void> Publish(const std::shared_ptr<ServiceState> &state, Attempt &attempt, const CancellationToken &cancel) {
             const auto &config = state->config;
@@ -226,15 +264,8 @@ namespace Horo::Application::NavigationBakeDetail {
             auto lostDurabilityDiagnostic =
                 MakeError(NavigationErrors::ProviderFailed,
                           "Publication committed; durability is unknown and its diagnostic could not be retained.");
-            const auto eligible = [&attempt, &config, state, cancel]() -> Result<void> {
-                if (cancel.IsCancellationRequested())
-                    return Failure<void>(NavigationErrors::BakeInputCancelled);
-                if (state->desired.load() != attempt.generation)
-                    return Failure<void>(NavigationErrors::BakeInputStale);
-                auto current = config.sourceAuthority->TryAcquirePublication(*attempt.request.input, cancel);
-                if (current.HasError())
-                    return Result<void>::Failure(current.ErrorValue());
-                return Result<void>::Success();
+            const auto eligible = [&attempt, state, cancel]() -> Result<void> {
+                return EligiblePublication(*state, attempt, cancel);
             };
             const Assets::AssetCookManifestEntry entry{.assetId = config.definition,
                                                        .assetType = config.artifactType,
@@ -244,15 +275,7 @@ namespace Horo::Application::NavigationBakeDetail {
                 PublishCookArtifactReplacement(config.targetRoot, config.target, entry, std::move(attempt.envelope),
                                                config.maximumCandidateBytes, config.cookLimits,
                                                {.files = config.files.get(), .beforeCommit = [&attempt, &sourceLease, state, cancel] {
-                if (cancel.IsCancellationRequested())
-                    return Failure<void>(NavigationErrors::BakeInputCancelled);
-                auto current = state->config.sourceAuthority->TryAcquirePublication(*attempt.request.input, cancel);
-                if (current.HasError())
-                    return Result<void>::Failure(current.ErrorValue());
-                sourceLease.emplace(std::move(current).Value());
-                if (auto expected = attempt.generation; !state->desired.compare_exchange_strong(expected, attempt.generation | Adopted))
-                    return Failure<void>(NavigationErrors::BakeInputStale);
-                return Result<void>::Success();
+                return AcquireAdoption(*state, attempt, cancel, sourceLease);
             }, .waitingForWriter = [eligible, deadline] {
                 if (auto fresh = eligible(); fresh.HasError())
                     return fresh;
@@ -264,13 +287,7 @@ namespace Horo::Application::NavigationBakeDetail {
                 attempt.candidate->generation = generation;
                 return Result<void>::Success();
             }, .afterCommit = [&attempt, state, &lostDurabilityDiagnostic](const Assets::AssetCookGeneration &generation) noexcept {
-                attempt.publicationReceipt->RecordCommitted();
-                try {
-                    attempt.candidate->generation.durabilityError = generation.durabilityError;
-                } catch (...) {
-                    attempt.candidate->generation.durabilityError = std::move(lostDurabilityDiagnostic);
-                }
-                state->publication.Store(std::move(attempt.candidate));
+                AdoptCommitted(*state, attempt, generation, lostDurabilityDiagnostic);
             }, .newOperationId = config.newOperationId});
             if (published.HasError()) {
                 if (!attempt.publicationReceipt->IsCommitted()) {

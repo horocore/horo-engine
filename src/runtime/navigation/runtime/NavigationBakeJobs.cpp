@@ -111,13 +111,22 @@ namespace Horo::Navigation {
             return Result<std::optional<NavigationBakeBudgetResource>>::Success(std::nullopt);
         }
 
+        /** @brief Requires a fresh receipt with exactly one final publication item when host commit tracking is supplied. */
+        [[nodiscard]] bool HasValidPublicationReceipt(const NavigationBakeJobDescriptor &descriptor) noexcept {
+            return !descriptor.publicationReceipt ||
+                   (!descriptor.publicationReceipt->IsCommitted() &&
+                    std::ranges::count(descriptor.work, NavigationBakeJobStage::Publication, &NavigationBakeWorkItem::stage) == 1);
+        }
+
+        /** @brief Validates operation admission independently of work accounting and stage-order inspection. */
+        [[nodiscard]] bool HasValidDescriptorInputs(const NavigationBakeJobDescriptor &descriptor) noexcept {
+            return !descriptor.title.empty() && !descriptor.work.empty() && HasValidBudget(descriptor.budget) &&
+                   HasValidPublicationReceipt(descriptor);
+        }
+
         [[nodiscard]] Result<Preflight> Validate(const NavigationBakeJobDescriptor &descriptor) {
             const auto &budget = descriptor.budget;
-            if (descriptor.title.empty() || descriptor.work.empty() || !HasValidBudget(budget))
-                return BakeFailure<Preflight>(NavigationErrors::BakeJobInvalid);
-            if (descriptor.publicationReceipt &&
-                (descriptor.publicationReceipt->IsCommitted() ||
-                 std::ranges::count(descriptor.work, NavigationBakeJobStage::Publication, &NavigationBakeWorkItem::stage) != 1))
+            if (!HasValidDescriptorInputs(descriptor))
                 return BakeFailure<Preflight>(NavigationErrors::BakeJobInvalid);
 
             if (descriptor.work.size() > budget.maximumWorkItems)
