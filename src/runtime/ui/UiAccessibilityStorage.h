@@ -55,6 +55,9 @@ namespace Horo::Runtime::Ui {
         std::vector<UiAccessibilityNodeInput> focusProjectionScratch;
         std::vector<UiFocusTarget> focusOrderScratch;
         std::optional<UiFocusScope> focusScope;
+        /** @brief Validates a complete candidate and prepares retained reading/relationship evidence before leasing a slot. */
+        [[nodiscard]] Result<void> PrepareReading(const UiElementTree &tree, const UiAccessibilitySnapshotDescriptor &source,
+                                                  const UiAccessibilityProjection &projection);
 
         explicit Storage(const UiAccessibilityExtractorDescriptor &source);
 

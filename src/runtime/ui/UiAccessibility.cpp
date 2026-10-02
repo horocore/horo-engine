@@ -428,6 +428,23 @@ namespace Horo::Runtime::Ui {
         return ExtractPrepared(tree, descriptor, projection);
     }
 
+    /** @copydoc UiAccessibilityExtractor::Storage::PrepareReading */
+    Result<void> UiAccessibilityExtractor::Storage::PrepareReading(const UiElementTree &tree,
+                                                                   const UiAccessibilitySnapshotDescriptor &source,
+                                                                   const UiAccessibilityProjection &projection) {
+        if (const auto validation = ValidateProjection(tree, source, projection, descriptor, lastRevision, cycleScratch, lookupScratch);
+            validation.HasError())
+            return validation;
+        if (const auto reading =
+                AccessibilityInternal::BuildReadingProjection(tree, projection, lookupScratch, preorderScratch, readingScratch);
+            reading.HasError())
+            return reading;
+        const UiAccessibilityProjection reading{readingScratch};
+        if (const auto lookup = BuildProjectionLookup(reading.nodes, lookupScratch); lookup.HasError())
+            return lookup;
+        return ValidateRelations(reading.nodes, lookupScratch);
+    }
+
     /** @copydoc UiAccessibilityExtractor::ExtractPrepared */
     Result<UiAccessibilitySnapshot> UiAccessibilityExtractor::ExtractPrepared(const UiElementTree &tree,
                                                                               const UiAccessibilitySnapshotDescriptor &descriptor,
@@ -436,19 +453,9 @@ namespace Horo::Runtime::Ui {
                                                                               const UiFocusSnapshot *focusState) {
         if (!storage_ || storage_->lifecycle != UiAccessibilityExtractorState::Active)
             return Failure<UiAccessibilitySnapshot>(UiErrors::AccessibilityLifecycleUnavailable);
-        if (const auto validation = ValidateProjection(tree, descriptor, projection, storage_->descriptor, storage_->lastRevision,
-                                                       storage_->cycleScratch, storage_->lookupScratch);
-            validation.HasError())
+        if (const auto validation = storage_->PrepareReading(tree, descriptor, projection); validation.HasError())
             return Result<UiAccessibilitySnapshot>::Failure(validation.ErrorValue());
-        if (const auto reading = AccessibilityInternal::BuildReadingProjection(tree, projection, storage_->lookupScratch,
-                                                                               storage_->preorderScratch, storage_->readingScratch);
-            reading.HasError())
-            return Result<UiAccessibilitySnapshot>::Failure(reading.ErrorValue());
         const UiAccessibilityProjection reading{storage_->readingScratch};
-        if (const auto lookup = BuildProjectionLookup(reading.nodes, storage_->lookupScratch); lookup.HasError())
-            return Result<UiAccessibilitySnapshot>::Failure(lookup.ErrorValue());
-        if (const auto relations = ValidateRelations(reading.nodes, storage_->lookupScratch); relations.HasError())
-            return Result<UiAccessibilitySnapshot>::Failure(relations.ErrorValue());
         auto slot = storage_->TryAcquire();
         if (!slot)
             return Failure<UiAccessibilitySnapshot>(UiErrors::AccessibilitySnapshotStorageExhausted);
