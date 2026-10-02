@@ -28,22 +28,21 @@ namespace Horo::Runtime::Ui::AccessibilityInternal {
 
         /** @brief Classifies exposure that retains readable semantics while closing interaction. */
         bool IsInactive(const UiAccessibilityExposure exposure) noexcept {
-            return exposure == UiAccessibilityExposure::Covered || exposure == UiAccessibilityExposure::Suppressed ||
-                   exposure == UiAccessibilityExposure::Suspended;
+            using enum UiAccessibilityExposure;
+            return exposure == Covered || exposure == Suppressed || exposure == Suspended;
         }
 
         /** @brief Applies ancestor policy over at most the retained tree's fixed depth bound. */
         UiAccessibilityExposure Exposure(const UiElementTree &tree, UiElementHandle parent, UiAccessibilityExposure exposure,
                                          const UiAccessibilityProjection &projection, const ProjectionLookup lookup) {
+            using enum UiAccessibilityExposure;
             while (parent.IsValid()) {
                 const auto ancestor = tree.Get(parent).Value();
-                const auto index = FindProjectionIndex(lookup, ancestor.id);
-                if (index != std::numeric_limits<std::size_t>::max()) {
+                if (const auto index = FindProjectionIndex(lookup, ancestor.id); index != std::numeric_limits<std::size_t>::max()) {
                     const auto policy = projection.nodes[index].exposure;
-                    if (policy == UiAccessibilityExposure::Hidden)
+                    if (policy == Hidden)
                         return policy;
-                    if (IsInactive(policy) ||
-                        (policy == UiAccessibilityExposure::Offscreen && exposure == UiAccessibilityExposure::Visible))
+                    if (IsInactive(policy) || (policy == Offscreen && exposure == Visible))
                         exposure = policy;
                 }
                 parent = ancestor.parent;
@@ -60,7 +59,9 @@ namespace Horo::Runtime::Ui::AccessibilityInternal {
 
     /** @copydoc ValidateInputBounds */
     Result<void> ValidateInputBounds(const UiAccessibilityProjection &projection, const UiAccessibilityLimits &limits) {
-        std::size_t relations = limits.relations, actions = limits.actions, text = limits.textBytes;
+        std::size_t relations = limits.relations;
+        std::size_t actions = limits.actions;
+        std::size_t text = limits.textBytes;
         for (const auto &node : projection.nodes) {
             if (node.relations.size() > relations || node.actions.size() > actions)
                 return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));

@@ -28,9 +28,7 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Finds an exact generation identity in a sorted, preallocated index. */
         auto Find(std::vector<NodeIndex> &index, const UiAccessibilityNodeId id) {
-            return std::lower_bound(index.begin(), index.end(), id, [](const NodeIndex &entry, const UiAccessibilityNodeId key) {
-                return entry.id < key;
-            });
+            return std::ranges::lower_bound(index, id, {}, &NodeIndex::id);
         }
 
         /** @brief Builds O(N log N) identity/sibling evidence using only reserved storage. */
@@ -66,15 +64,16 @@ namespace Horo::Runtime::Ui {
             if (a.kind != b.kind)
                 return false;
             switch (a.kind) {
-                case UiAccessibilityValueKind::None:
+                using enum UiAccessibilityValueKind;
+                case None:
                     return true;
-                case UiAccessibilityValueKind::Boolean:
+                case Boolean:
                     return a.boolean == b.boolean;
-                case UiAccessibilityValueKind::Integer:
+                case Integer:
                     return a.integer == b.integer;
-                case UiAccessibilityValueKind::Number:
+                case Number:
                     return a.number == b.number;
-                case UiAccessibilityValueKind::Text:
+                case Text:
                     return EqualText(left, a.text, right, b.text);
             }
             return false;
@@ -144,12 +143,13 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Rejects regressions while permitting a newer document to reset runtime revisions. */
         bool StaleRevisions(const UiAccessibilitySnapshotDescriptor &source, const UiAccessibilitySnapshotDescriptor &prior) noexcept {
-            if (source.semanticRevision.Compare(prior.semanticRevision) != UiRevisionRelation::Newer ||
-                source.documentRevision.Compare(prior.documentRevision) == UiRevisionRelation::Older)
+            using enum UiRevisionRelation;
+            if (source.semanticRevision.Compare(prior.semanticRevision) != Newer ||
+                source.documentRevision.Compare(prior.documentRevision) == Older)
                 return true;
             return source.documentRevision == prior.documentRevision &&
-                   (source.treeRevision.Compare(prior.treeRevision) == UiRevisionRelation::Older ||
-                    source.interactionRevision.Compare(prior.interactionRevision) == UiRevisionRelation::Older);
+                   (source.treeRevision.Compare(prior.treeRevision) == Older ||
+                    source.interactionRevision.Compare(prior.interactionRevision) == Older);
         }
 
         /** @brief Validates a live-region declaration and its exact active-node admission. */
@@ -173,12 +173,15 @@ namespace Horo::Runtime::Ui {
         UiAccessibilityExtractorDescriptor owner;
         UiAccessibilityChangeLimits limits;
         std::optional<UiAccessibilitySnapshot> baseline;
-        std::vector<NodeIndex> oldIndex, newIndex;
+        std::vector<NodeIndex> oldIndex;
+        std::vector<NodeIndex> newIndex;
         std::vector<UiAccessibilityChange> changes;
         std::vector<char> text;
-        std::vector<AnnouncementHistory> history, candidateHistory;
+        std::vector<AnnouncementHistory> history;
+        std::vector<AnnouncementHistory> candidateHistory;
         std::vector<std::uint8_t> admitted;
-        UiAccessibilitySemanticRevision previousRevision, revision;
+        UiAccessibilitySemanticRevision previousRevision;
+        UiAccessibilitySemanticRevision revision;
         UiAccessibilityChangeStatus status{UiAccessibilityChangeStatus::Complete};
         bool retired{};
 
@@ -208,14 +211,15 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Reserves a new live-region identity without evicting an unexpired event. */
         Result<bool> Remember(const UiAccessibilityAnnouncementInput &announcement, const std::uint64_t currentRevision) {
-            const bool duplicate = std::ranges::any_of(candidateHistory, [&](const auto &record) {
+            if (const bool duplicate = std::ranges::any_of(candidateHistory,
+                                                           [&](const auto &record) {
                 return record.id == announcement.id && record.node == announcement.node;
             });
-            if (duplicate || announcement.policy == UiAccessibilityAnnouncementPolicy::Off)
+                duplicate || announcement.policy == UiAccessibilityAnnouncementPolicy::Off)
                 return Result<bool>::Success(false);
             if (candidateHistory.size() == limits.announcements)
                 return Failure<bool>(UiErrors::CapacityExceeded);
-            candidateHistory.push_back({announcement.id, announcement.node, currentRevision});
+            candidateHistory.emplace_back(announcement.id, announcement.node, currentRevision);
             return Result<bool>::Success(true);
         }
 
