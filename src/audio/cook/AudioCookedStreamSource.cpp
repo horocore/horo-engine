@@ -35,7 +35,9 @@ namespace Horo::Audio {
             const auto frames =
                 static_cast<std::uint32_t>(std::min<std::uint64_t>(output.size() / state.channels, state.frames - firstFrame));
             for (std::uint32_t frame = 0; frame < frames; ++frame) {
-                if (cancelled.load(std::memory_order_relaxed))
+                // Worker-side polling follows the decoder session's SC cancellation contract;
+                // no callback ring or real-time operations use this path.
+                if (cancelled.load())
                     return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioErrors::OperationCancelled));
                 for (std::size_t channel = 0; channel < state.channels; ++channel) {
                     const auto offset = state.pcmOffset + ((firstFrame + frame) * state.channels + channel) * sizeof(AudioSample);
@@ -53,7 +55,7 @@ namespace Horo::Audio {
 
         /** @brief PCM random access needs no private cursor or I/O. */
         Result<void> SeekPcm(void *, std::uint64_t, const std::atomic<bool> &cancelled) {
-            if (cancelled.load(std::memory_order_relaxed))
+            if (cancelled.load())
                 return Result<void>::Failure(MakeError(AudioErrors::OperationCancelled));
             return Result<void>::Success();
         }

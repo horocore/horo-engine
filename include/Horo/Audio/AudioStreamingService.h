@@ -193,8 +193,9 @@ namespace Horo::Audio {
 
     private:
         struct Slot;
-        AudioStreamingService(JobSystem &jobs, const AudioStreamPackageSource &source, AudioStreamingLimits limits);
-        [[nodiscard]] AudioStreamState *Find(AudioStreamHandle handle) const noexcept;
+        AudioStreamingService(JobSystem &jobs, AudioStreamPackageSource source, AudioStreamingLimits limits);
+        [[nodiscard]] AudioStreamState *Find(AudioStreamHandle handle) noexcept;
+        [[nodiscard]] const AudioStreamState *Find(AudioStreamHandle handle) const noexcept;
 
         JobSystem &jobs_;
         AudioStreamPackageSource source_;

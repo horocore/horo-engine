@@ -7,11 +7,18 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
 // Shared deterministic package/decoder fixture; no production behavior is replaced here.
 namespace Horo::Audio::StreamingTests {
+    enum class OpenFailure : std::uint8_t {
+        None,
+        StandardException,
+        UnknownException
+    };
+
     struct PackageFixture final {
         std::atomic<std::uint32_t> opens{};
         std::atomic<std::uint32_t> releases{};
@@ -29,6 +36,7 @@ namespace Horo::Audio::StreamingTests {
         bool openAfterCancellation{};
         bool decodeFailure{};
         bool wrongSpec{};
+        OpenFailure openFailure{OpenFailure::None};
     };
 
     /** @brief Stable stereo callback storage shared by ring and cancellation regressions. */
@@ -116,6 +124,10 @@ namespace Horo::Audio::StreamingTests {
                                            const std::size_t maximumPackageBytes, const CancellationToken &cancelled) {
         auto &fixture = *static_cast<PackageFixture *>(opaque);
         fixture.opening.store(true);
+        if (fixture.openFailure == OpenFailure::StandardException)
+            throw std::runtime_error("Injected package provider failure");
+        if (fixture.openFailure == OpenFailure::UnknownException)
+            throw OpenFailure::UnknownException;
         while (fixture.holdOpen.load() && (fixture.ignoreCancellation.load() || !cancelled.IsCancellationRequested()))
             std::this_thread::yield();
         if (cancelled.IsCancellationRequested() && !fixture.openAfterCancellation)

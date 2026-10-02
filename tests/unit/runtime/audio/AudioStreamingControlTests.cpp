@@ -146,4 +146,53 @@ namespace Horo::Audio::StreamingTests {
         REQUIRE(service->Retire(admitted.Value()).HasValue());
     }
 
+    TEST_CASE("Streaming source transfer retains its lease through work and retirement", "[unit][audio][streaming]") {
+        JobSystem jobs({.workerCount = 1});
+        PackageFixture fixture;
+        AudioStreamPackageSource source{&fixture, &Open, std::make_shared<int>(1)};
+        const std::weak_ptr<const void> lease = source.ownerLease;
+        auto created = AudioStreamingService::Create(jobs, std::move(source));
+        REQUIRE(created.HasValue());
+        CHECK_FALSE(source.ownerLease);
+        auto service = std::move(created).Value();
+        const auto handle = service->Admit(Request()).Value();
+        REQUIRE(PumpUntil(*service, handle, 4));
+        CHECK_FALSE(lease.expired());
+        REQUIRE(service->Retire(handle).HasValue());
+        CHECK(fixture.releases.load() == 1);
+        CHECK_FALSE(lease.expired());
+        service.reset();
+        CHECK(lease.expired());
+    }
+
+    TEST_CASE("Streaming provider exceptions become original control errors without callback work", "[unit][audio][streaming]") {
+        JobSystem jobs({.workerCount = 1});
+        PackageFixture fixture;
+        SECTION("Standard provider exception") {
+            fixture.openFailure = OpenFailure::StandardException;
+        }
+        SECTION("Unknown provider exception") {
+            fixture.openFailure = OpenFailure::UnknownException;
+        }
+        auto service = Service(jobs, fixture);
+        const auto handle = service->Admit(Request()).Value();
+        auto port = std::move(service->RenderPort(handle)).Value();
+        REQUIRE(Until([&service, handle] {
+            service->Pump();
+            return service->Snapshot(handle).Value().failed;
+        }));
+        const auto failure = service->Snapshot(handle).Value().failure;
+        REQUIRE(failure.has_value());
+        CHECK(failure->code.Value() == AudioErrors::StreamReadFailed.code.Value());
+        CallbackBlock output;
+        const auto before = Tests::AllocationProbe::Count();
+        const auto rendered = output.Render(port, 4);
+        CHECK(Tests::AllocationProbe::Count() == before);
+        CHECK(rendered.silentFrames == 4);
+        CHECK(output.left[0] == 0.0F);
+        CHECK(output.right[3] == 0.0F);
+        REQUIRE(service->Retire(handle).HasValue());
+        CHECK(fixture.opens.load() == 0);
+        CHECK(fixture.releases.load() == 0);
+    }
 }  // namespace Horo::Audio::StreamingTests

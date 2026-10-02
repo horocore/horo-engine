@@ -1445,6 +1445,26 @@ callback ports must already be detached before reclamation. This proof relies on
 Foundation's SC cancellation contract; changing it requires reviewing this
 handshake, not just stress-testing one architecture.
 
+Streaming memory ownership and ordering audit:
+
+| State | Writer / reader | Required ordering and lifetime |
+|---|---|---|
+| Ring samples and combined producer/EOF cursor | Serialized fill worker / sole callback | Worker copies samples before its release publication; callback acquire-loads that exact cursor before reading. Partial reads advance only by available frames, so EOF never hides pending final samples. |
+| Consumer cursor and ring reuse | Sole callback / serialized fill worker | Callback finishes sample reads before release-storing consumption; worker acquire-loads consumption before overwriting reclaimed frames. Control occupancy is a bounded observational snapshot, not an allocation/reclamation authority. |
+| Stop and diagnostic counters | Control or sole callback / control and callback | Stop has release/acquire visibility. Counters have one callback writer and atomic observational reads; relaxed counter updates publish no ring storage or rich errors. |
+| Decoder pointer and cancellation | Worker and control | The SC handshake above applies; cooked PCM polls the session's SC private cancellation flag only on the worker, not the callback. |
+| Errors, decoder destruction and source lease | Control after terminal JobSystem synchronization | Rich errors never cross the callback; a missing/nonterminal completion snapshot retains storage. Retire requires host callback detachment and a bounded worker join before decoder release. Shutdown closes admission before stopping all streams and retains failed-join streams for retry. |
+
+The public source factory remains ownership-taking by value, then moves that
+source through private construction without extra shared-lease copies. Const
+service access returns only const stream state; issuing the sole render port and
+advancing report cursors require mutable control access. The cooked provider's
+opaque context signatures are the existing Horo `AudioStreamDecoderProvider` and
+`AudioStreamPackageSource` contracts, not a newly selected third-party/native API.
+Their bodies immediately recover concrete owned state; replacement of these
+signatures requires a deliberate decoder/source contract migration, not type
+aliases or generic callbacks that merely hide the same opaque boundary.
+
 Underrun behavior:
 
 - output silence for missing frames

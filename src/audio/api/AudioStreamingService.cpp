@@ -270,17 +270,17 @@ namespace Horo::Audio {
         return result;
     }
 
-    AudioStreamingService::AudioStreamingService(JobSystem &jobs, const AudioStreamPackageSource &source, const AudioStreamingLimits limits)
-        : jobs_(jobs), source_(source), limits_(limits), slots_(limits.maximumStreams) {}
+    AudioStreamingService::AudioStreamingService(JobSystem &jobs, AudioStreamPackageSource source, const AudioStreamingLimits limits)
+        : jobs_(jobs), source_(std::move(source)), limits_(limits), slots_(limits.maximumStreams) {}
 
     /** @copydoc AudioStreamingService::Create */
-    Result<std::unique_ptr<AudioStreamingService>> AudioStreamingService::Create(JobSystem &jobs, const AudioStreamPackageSource source,
+    Result<std::unique_ptr<AudioStreamingService>> AudioStreamingService::Create(JobSystem &jobs, AudioStreamPackageSource source,
                                                                                  const AudioStreamingLimits limits) {
         if (source.context == nullptr || source.open == nullptr || !ValidLimits(limits))
             return Result<std::unique_ptr<AudioStreamingService>>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
         try {
             return Result<std::unique_ptr<AudioStreamingService>>::Success(
-                std::unique_ptr<AudioStreamingService>(new AudioStreamingService(jobs, source, limits)));
+                std::unique_ptr<AudioStreamingService>(new AudioStreamingService(jobs, std::move(source), limits)));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<AudioStreamingService>>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
         }
@@ -314,7 +314,14 @@ namespace Horo::Audio {
         return Result<AudioStreamHandle>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
     }
 
-    AudioStreamState *AudioStreamingService::Find(const AudioStreamHandle handle) const noexcept {
+    AudioStreamState *AudioStreamingService::Find(const AudioStreamHandle handle) noexcept {
+        if (!handle.IsValid() || handle.slot > limits_.maximumStreams)
+            return nullptr;
+        auto &slot = slots_[handle.slot - 1];
+        return slot.generation == handle.generation ? slot.state.get() : nullptr;
+    }
+
+    const AudioStreamState *AudioStreamingService::Find(const AudioStreamHandle handle) const noexcept {
         if (!handle.IsValid() || handle.slot > limits_.maximumStreams)
             return nullptr;
         const auto &slot = slots_[handle.slot - 1];
