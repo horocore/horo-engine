@@ -248,6 +248,33 @@ geometry rather than bypassing Input or adding an Input-to-RuntimeUi dependency.
 
 ## Gameplay Input Frames
 
+### RUI-005.8 Navigation composition
+
+`HoroEngine::RuntimeUiInput` also owns the public `UiNavigationInput` adapter over
+the existing Input router, focus graph and action queue. Hosts install canonical
+keyboard/D-pad/left-stick action descriptors explicitly. The adapter reads routed
+semantic values with exact gamepad generation and post-filter meaningful evidence;
+it never tests backend identities or device names. Canonical glyph IDs and static
+label fallback belong to Input. Missing icon packs do not affect navigation;
+unmapped/raw bindings return typed unsupported capability evidence.
+
+One adapter belongs to one exact Input token and UI player/layer owner generation.
+It emits at most one focus step and one queued submit/cancel action per frame;
+simultaneous cancel takes precedence. Held repeat uses an owner-supplied monotonic
+unscaled clock and never catches up a missed interval. Modality hysteresis changes
+only presentation. It never rewrites focus, modal restoration, controls or pending
+owner actions. Foreign players, consumed presses, pointer hover, noise and blocked
+contexts cannot establish modality or start navigation.
+
+Creation/rebind validate finite bounds of 512 action definitions, 512 overrides,
+32 effective bindings per navigation action, 64 Input contexts and 16 current or
+previous gamepads. Successful pumping allocates no storage; collection/commit and
+load-time action configuration remain outside that guarantee. Preemption, host
+suspension, modal/assignment changes, disconnect and reload disarm held input until
+neutral. Configuration replacement returns `NeedsRebind`; stale UI owner evidence
+fails closed. Hosts retain the existing presentation and retirement responsibilities;
+this adapter does not implicitly compose a packaged UI host.
+
 The runtime transforms action state into a simulation input frame:
 
 ```cpp

@@ -8,6 +8,32 @@ consumer of one module to discover every header in the repository.
 
 ## Classifications
 
+### RUI-005.8 Navigation Input Boundary
+
+`HoroEngine::RuntimeUiInput` solely owns the additive
+`Horo/Runtime/Ui/UiNavigationInput.h` contract. It composes the existing Input
+router, Runtime UI focus graph and action queue through their public contracts;
+Input and Runtime UI retain their existing one-way dependencies. The text-input
+adapter stays target-private. No existing caller changes signature.
+
+Hosts opting into navigation compose `DefaultUiNavigationActions` into their
+Input action map, copy the eight digital action IDs into the adapter descriptor,
+provide the separate signed `ui.navigate` action and explicit Input player
+assignment, then bind their existing presented focus graph and matching action
+queue. They pump once per committed snapshot before gameplay capture, rebind
+after publishing a complete UI or binding replacement, and suspend/stop input
+before retiring its borrowed owners. The adapter does not create a UI service,
+renderer, device assignment or second focus graph. The generated staged header
+consumer and `HoroRuntimeUiNavigationPublicHeaderConsumer` exercise this boundary.
+
+Input's existing value-only `ReadAction` remains source-compatible. New consumers
+use `ReadActionEvidence` for canonical source and typed admission status; legacy
+consumers can query `LastActionStatus`. A full 4,096-entry exact gamepad transition
+ledger refuses an action atomically with `CapacityExceeded`, preserving prior
+consumers and rolling back that action's key, pointer, wheel and gamepad admission.
+The next committed frame releases the ledger. Keyboard and pointer ledgers use
+fixed bitsets. These are runtime storage changes with no profile/wire migration.
+
 Every header has exactly one classification:
 
 | Classification | Location | Visibility |

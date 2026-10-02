@@ -21,6 +21,7 @@ namespace Horo::Input {
     using FrameNumber = std::uint64_t;
     using SimulationTick = std::uint64_t;
     using PlayerId = std::uint8_t;
+    inline constexpr std::size_t MaximumConsumedGamepadTransitions = 4'096;
 
     /** @brief Stable physical-key identity independent of a native window API. */
     enum class Key : std::uint16_t {
@@ -368,6 +369,66 @@ namespace Horo::Input {
         bool released{false};
     };
 
+    /** @brief Presentation modality derived from eligible semantic input, never device assignment. */
+    enum class InputModality : std::uint8_t {
+        Unknown,
+        KeyboardMouse,
+        Gamepad,
+        Touch,
+        Pen,
+        Accessibility
+    };
+
+    /** @brief Stable canonical control identity; glyph packages may realize it without owning input. */
+    struct InputGlyphId {
+        BindingControlKind kind{BindingControlKind::Key};
+        std::uint16_t control{};
+        [[nodiscard]] friend constexpr bool operator==(InputGlyphId, InputGlyphId) noexcept = default;
+    };
+
+    /** @brief Copied canonical binding and exact device generation supplying a routed action. */
+    struct ActionSource {
+        InputModality modality{InputModality::Unknown};
+        InputGlyphId glyph;
+        std::optional<GamepadDeviceId> gamepad;
+        [[nodiscard]] friend constexpr bool operator==(const ActionSource &, const ActionSource &) noexcept = default;
+    };
+
+    /** @brief Typed action resolution outcome, including atomic ledger admission refusal. */
+    enum class ActionReadStatus : std::uint8_t {
+        Resolved,
+        Unavailable,
+        CapacityExceeded
+    };
+
+    /** @brief Semantic value with post-filter, routing-eligible modality evidence. Releases are never meaningful. */
+    struct ActionEvidence {
+        ActionValue value;
+        std::optional<ActionSource> source;
+        bool meaningful{};
+        ActionReadStatus status{ActionReadStatus::Unavailable};
+    };
+
+    /** @brief Glyph realization availability, independent of navigation capability. */
+    enum class InputGlyphSupport : std::uint8_t {
+        CanonicalLabel,
+        Unsupported
+    };
+
+    /** @brief Borrowed static canonical fallback; no icon package or native API is required. */
+    struct InputGlyphPresentation {
+        InputGlyphId id;
+        InputGlyphSupport support{InputGlyphSupport::Unsupported};
+        std::string_view label;
+    };
+
+    /** @brief Resolves a typed binding to a stable canonical source. @param binding Effective binding. @param device Exact gamepad when
+     * known. @return Copied source; raw controls have Unknown modality. */
+    [[nodiscard]] ActionSource CanonicalActionSource(const InputBinding &binding, std::optional<GamepadDeviceId> device = {}) noexcept;
+    /** @brief Resolves a glyph without allocation or device-name checks. @param id Stable canonical control. @return Static label or typed
+     * Unsupported. */
+    [[nodiscard]] InputGlyphPresentation CanonicalGlyph(InputGlyphId id) noexcept;
+
     /** @brief Complete profile-level binding replacement for one action. */
     struct BindingOverride {
         ActionId action;
@@ -561,6 +622,34 @@ namespace Horo::Input {
         /** @brief Resolves and consumes an action transition for an eligible matching context. */
         [[nodiscard]] ActionValue ReadAction(const InputContextToken &context, const ActionId &action,
                                              std::optional<PlayerId> player = std::nullopt);
+        /**
+         * @brief Resolves and consumes the same action as ReadAction, including canonical source evidence.
+         * @param context Exact live matching context.
+         * @param action Registered action identity.
+         * @param player Optional exact gamepad assignment filter.
+         * @return Neutral evidence when blocked/missing. CapacityExceeded atomically refuses this action's transitions;
+         *         previously admitted consumers are preserved. Meaningful evidence comes only from unconsumed press edges.
+         * @details Call this or ReadAction once per action per frame. Exact simultaneous sources prefer keyboard/mouse,
+         *          then gamepad in snapshot order. This does not poll a backend or change assignment.
+         */
+        [[nodiscard]] ActionEvidence ReadActionEvidence(const InputContextToken &context, const ActionId &action,
+                                                        std::optional<PlayerId> player = std::nullopt);
+        /** @brief Returns the last ReadAction/ReadActionEvidence outcome for legacy value-only consumers. @return Typed
+         * unavailable/admission result. */
+        [[nodiscard]] ActionReadStatus LastActionStatus() const noexcept;
+        /** @brief Returns the non-wrapping action-map/profile revision. @return Zero only after revision exhaustion. */
+        [[nodiscard]] std::uint64_t ConfigurationRevision() const noexcept;
+        /** @brief Returns the assignment mutation revision. @return Zero only after revision exhaustion. */
+        [[nodiscard]] std::uint64_t AssignmentRevision() const noexcept;
+        /** @brief Returns a matching live token identity. @param context Borrowed token. @return Nonzero exact identity or zero for
+         * foreign/removed tokens. */
+        [[nodiscard]] std::uint64_t ContextIdentity(const InputContextToken &context) const noexcept;
+        /** @brief Checks finite routing scan bounds, including previous axis evidence. @param contexts Maximum live contexts. @param
+         * devices Maximum current/previous gamepads. @return Whether resolution stays within those bounds. */
+        [[nodiscard]] bool RoutingWithinLimits(std::size_t contexts, std::size_t devices) const noexcept;
+        /** @brief Checks an action-map context against an exact live token, including suspended tokens. @param context Live token. @param
+         * id Descriptor context identity. @return Whether both name the same Input-owned context. */
+        [[nodiscard]] bool ContextMatches(const InputContextToken &context, const InputContextId &id) const noexcept;
         /** @brief Consumes a key press once at the eligible context. */
         [[nodiscard]] bool ConsumeKey(const InputContextToken &context, Key key);
         /** @brief Consumes a pointer-button press once at the eligible context. */

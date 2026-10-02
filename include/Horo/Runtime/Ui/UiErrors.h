@@ -266,6 +266,8 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor ActionLifecycleUnavailable;
     /** @brief A default navigation command or result has invalid focus evidence. */
     extern const ErrorCodeDescriptor NavigationInvalid;
+    /** @brief Canonical navigation or glyph capability is unsupported by the supplied action bindings. */
+    extern const ErrorCodeDescriptor NavigationCapabilityUnsupported;
     /** @brief A semantic Runtime UI feedback intent or producer outcome is malformed. */
     extern const ErrorCodeDescriptor FeedbackInvalid;
     /** @brief Feedback source or audience belongs to another presented owner generation. */

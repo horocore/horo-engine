@@ -5,6 +5,16 @@ namespace Horo::Runtime::Ui::UiErrors {
         const ErrorDomainId UiDomain{"horo.runtime_ui"};
     }
 
+    /** @copydoc NavigationCapabilityUnsupported */
+    const ErrorCodeDescriptor
+        NavigationCapabilityUnsupported{UiDomain,
+                                        ErrorCode{"runtime_ui.navigation.capability_unsupported"},
+                                        ErrorSeverity::Error,
+                                        "The input binding does not provide canonical Runtime UI navigation.",
+                                        "Bind canonical keyboard, pointer, or mapped gamepad controls with supported scalar actions.",
+                                        false,
+                                        true};
+
     /** @copydoc FocusInvalid */
     const ErrorCodeDescriptor FocusInvalid{UiDomain,
                                            ErrorCode{"runtime_ui.focus.invalid"},
