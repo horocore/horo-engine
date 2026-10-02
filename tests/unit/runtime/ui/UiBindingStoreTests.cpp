@@ -17,7 +17,10 @@ namespace {
 
 void *operator new(const std::size_t bytes) {
     BindingAllocations().fetch_add(1);
-    std::unique_ptr<void, decltype(&std::free)> memory{std::malloc(bytes == 0 ? 1 : bytes), &std::free};
+    const auto release = [](std::byte *memory) noexcept {
+        ::operator delete(memory);
+    };
+    std::unique_ptr<std::byte[], decltype(release)> memory{static_cast<std::byte *>(std::malloc(bytes == 0 ? 1 : bytes)), release};
     if (!memory)
         throw std::bad_alloc{};
     return memory.release();
