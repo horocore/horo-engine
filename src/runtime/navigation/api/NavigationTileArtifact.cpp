@@ -61,9 +61,8 @@ namespace Horo::Navigation {
             return input;
         }
 
-        /** @brief Validates fresh and cached output with the same existing neutral topology contract. */
-        [[nodiscard]] Result<void> Validate(const NavigationPreparedTile &input, const NavigationTileBuildResult &result,
-                                            const std::size_t bytes) {
+        /** @brief Checks exact descriptor placement and resolved build geometry for both fresh and decoded tiles. */
+        [[nodiscard]] Result<void> ValidateDescriptor(const NavigationPreparedTile &input, const NavigationTileBuildResult &result) {
             if (!input.tile.key.surface.IsValid() || !input.tile.key.profile.IsValid() || !Present(input.dependencyKey) ||
                 result.key != input.tile.key.tile || result.bounds.minimum != input.tile.bounds.minimum ||
                 result.bounds.maximum != input.tile.bounds.maximum || !input.tile.bounds.IsValid() ||
@@ -73,20 +72,18 @@ namespace Horo::Navigation {
             const double cells = static_cast<double>(input.tile.tileSizeMeters) / input.geometry.cellSizeMeters;
             const double requiredBorder = std::ceil(static_cast<double>(input.geometry.radiusMeters) / input.geometry.cellSizeMeters) + 3;
             const float x = static_cast<float>(input.tile.key.tile.x) * input.tile.tileSizeMeters;
-            const float z = static_cast<float>(input.tile.key.tile.z) * input.tile.tileSizeMeters;
-            if (!std::isfinite(cells) || cells < 1 || cells > 65'000 || std::abs(cells - std::round(cells)) > 1.0e-4 ||
+            if (const float z = static_cast<float>(input.tile.key.tile.z) * input.tile.tileSizeMeters;
+                !std::isfinite(cells) || cells < 1 || cells > 65'000 || std::abs(cells - std::round(cells)) > 1.0e-4 ||
                 requiredBorder >= 255 || input.borderSizeCells != requiredBorder || input.tile.bounds.minimum.x != x ||
                 input.tile.bounds.minimum.z != z || input.tile.bounds.maximum.x != x + input.tile.tileSizeMeters ||
                 input.tile.bounds.maximum.z != z + input.tile.tileSizeMeters || input.tile.bounds.maximum.y <= input.tile.bounds.minimum.y)
                 return Failure<void>(NavigationErrors::BakeInputInvalid);
-            if (result.IsEmpty()) {
-                if (!result.vertices.empty() || !result.polygons.empty() || !result.polygonVertexIndices.empty() ||
-                    !result.polygonAdjacencies.empty() || !result.provenance.empty() || !result.offMeshLinks.empty())
-                    return Failure<void>(NavigationErrors::NavMeshArtifactCorrupt);
-                return Result<void>::Success();
-            }
-            if (result.state != NavigationTileBuildState::Built)
-                return Failure<void>(NavigationErrors::NavMeshArtifactCorrupt);
+            return Result<void>::Success();
+        }
+
+        /** @brief Applies the neutral topology validator after portable encoding established exact byte size. */
+        [[nodiscard]] Result<void> ValidateBuiltTopology(const NavigationPreparedTile &input, const NavigationTileBuildResult &result,
+                                                         const std::size_t bytes) {
             const Sha256Digest digest = input.dependencyKey;
             const NavMeshTileDescriptor tile{.key = result.key,
                                              .bounds = result.bounds,
@@ -121,6 +118,22 @@ namespace Horo::Navigation {
                                                       .offMeshLinks = result.offMeshLinks,
                                                       .provenance = result.provenance}};
             return ValidateNavMeshTile(view, 0);
+        }
+
+        /** @brief Validates empty state invariants or the same neutral contract for fresh and cached built topology. */
+        [[nodiscard]] Result<void> Validate(const NavigationPreparedTile &input, const NavigationTileBuildResult &result,
+                                            const std::size_t bytes) {
+            if (const auto descriptor = ValidateDescriptor(input, result); descriptor.HasError())
+                return descriptor;
+            if (result.IsEmpty()) {
+                if (!result.vertices.empty() || !result.polygons.empty() || !result.polygonVertexIndices.empty() ||
+                    !result.polygonAdjacencies.empty() || !result.provenance.empty() || !result.offMeshLinks.empty())
+                    return Failure<void>(NavigationErrors::NavMeshArtifactCorrupt);
+                return Result<void>::Success();
+            }
+            if (result.state != NavigationTileBuildState::Built)
+                return Failure<void>(NavigationErrors::NavMeshArtifactCorrupt);
+            return ValidateBuiltTopology(input, result, bytes);
         }
 
         /** @brief Encodes portable topology; no statistics, allocator capacity or provider memory layout is persisted. */
@@ -227,10 +240,11 @@ namespace Horo::Navigation {
                 return Failure<std::shared_ptr<const NavigationCookedTile>>(NavigationErrors::CapacityExceeded);
             EncodeDescriptor(writer, input);
             EncodeTopology(writer, result);
-            if (const auto valid = Validate(input, result, writer.bytes.size()); valid.HasError())
+            if (const auto valid = Validate(input, result, writer.Bytes().size()); valid.HasError())
                 return Result<std::shared_ptr<const NavigationCookedTile>>::Failure(valid.ErrorValue());
-            return Result<std::shared_ptr<const NavigationCookedTile>>::Success(std::shared_ptr<const NavigationCookedTile>{
-                new NavigationCookedTile(input.tile.key, input.dependencyKey, std::move(result), std::move(writer.bytes))});
+            return Result<std::shared_ptr<const NavigationCookedTile>>::Success(
+                std::make_shared<const NavigationCookedTile>(ConstructionKey{}, input.tile.key, input.dependencyKey, std::move(result),
+                                                             std::move(writer).TakeBytes()));
         } catch (const std::length_error &) {
             return Failure<std::shared_ptr<const NavigationCookedTile>>(NavigationErrors::CapacityExceeded);
         } catch (const std::bad_alloc &) {
@@ -261,8 +275,9 @@ namespace Horo::Navigation {
         }
     }
 
-    NavigationCookedTile::NavigationCookedTile(NavigationBakeTileKey key, Sha256Digest dependency, NavigationTileBuildResult result,
-                                               std::vector<std::uint8_t> bytes)
+    /** @copydoc NavigationCookedTile::NavigationCookedTile */
+    NavigationCookedTile::NavigationCookedTile(ConstructionKey, const NavigationBakeTileKey &key, const Sha256Digest &dependency,
+                                               NavigationTileBuildResult result, std::vector<std::uint8_t> bytes)
         : key_(key), dependencyKey_(dependency), contentIdentity_(ComputeSha256(std::as_bytes(std::span{bytes}))),
           topology_(std::move(result)), bytes_(std::move(bytes)) {}
 }  // namespace Horo::Navigation

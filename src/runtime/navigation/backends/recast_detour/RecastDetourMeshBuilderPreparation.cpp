@@ -91,8 +91,8 @@ namespace Horo::Navigation::RecastDetourMeshBuilderInternal {
             config.value.bmax[2] = request.bounds.maximum.z;
             const double cells = static_cast<double>(request.tileSizeMeters) / config.value.cs;
             const double border = request.borderSizeCells;
-            const double requiredBorder = std::ceil(static_cast<double>(request.buildGeometry.radiusMeters) / config.value.cs) + 3;
-            if (!std::isfinite(cells) || cells < 1 || cells + 2 * border > 65'535 ||
+            if (const double requiredBorder = std::ceil(static_cast<double>(request.buildGeometry.radiusMeters) / config.value.cs) + 3;
+                !std::isfinite(cells) || cells < 1 || cells + 2 * border > 65'535 ||
                 (border != 0 && (border < requiredBorder || border >= 255 || std::abs(cells - std::round(cells)) > 1.0e-4)))
                 return Failure<void>(NavigationErrors::CapacityExceeded);
             rcCalcGridSize(config.value.bmin, config.value.bmax, config.value.cs, &config.value.width, &config.value.height);
@@ -100,7 +100,7 @@ namespace Horo::Navigation::RecastDetourMeshBuilderInternal {
                 return Failure<void>(NavigationErrors::BakeInputInvalid);
             config.value.tileSize = std::max(config.value.width, config.value.height);
             config.value.borderSize = static_cast<int>(request.borderSizeCells);
-            const float halo = request.borderSizeCells * config.value.cs;
+            const float halo = static_cast<float>(request.borderSizeCells) * config.value.cs;
             config.value.bmin[0] -= halo;
             config.value.bmin[2] -= halo;
             config.value.bmax[0] += halo;
@@ -232,7 +232,7 @@ namespace Horo::Navigation::RecastDetourMeshBuilderInternal {
         prepared.areas.reserve(ordered.size());
         prepared.sources.reserve(ordered.size());
         auto samplingBounds = request.bounds;
-        const float halo = request.borderSizeCells * request.buildGeometry.cellSizeMeters;
+        const float halo = static_cast<float>(request.borderSizeCells) * request.buildGeometry.cellSizeMeters;
         samplingBounds.minimum.x -= halo;
         samplingBounds.minimum.z -= halo;
         samplingBounds.maximum.x += halo;

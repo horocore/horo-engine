@@ -111,92 +111,70 @@ namespace Horo::Navigation {
             writer.Vector(modifier.canonicalBounds.minimum);
             writer.Vector(modifier.canonicalBounds.maximum);
         }
-    }  // namespace
 
-    /** @copydoc PrepareNavigationBakeTile */
-    Result<NavigationPreparedTile> PrepareNavigationBakeTile(const NavigationBakeInputSnapshot &input, const NavigationBakeTile &tile,
-                                                             const NavigationTileBakeCompatibility &compatibility,
-                                                             const CancellationToken &cancellation, const std::size_t maximumOwnedBytes) {
-        const auto invalid = [] {
-            return Result<NavigationPreparedTile>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+        /** @brief Validated rasterization halo for one integral grid tile. */
+        struct TileSampling final {
+            Math::Aabb bounds;
+            std::uint32_t border{};
         };
-        if (cancellation.IsCancellationRequested())
-            return Result<NavigationPreparedTile>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
-        if (maximumOwnedBytes == 0 || maximumOwnedBytes > NavigationBakeInputLimits::MaximumOwnedBytes ||
-            !Present(compatibility.provider) || !Present(compatibility.schemas) || !Present(compatibility.settings) ||
-            !tile.bounds.IsValid() || !std::isfinite(tile.tileSizeMeters) || tile.tileSizeMeters <= 0.0F)
-            return invalid();
-        const auto partition = std::ranges::find_if(input.Partitions(), [&tile](const auto &value) {
-            return value.surface == tile.key.surface && value.profile == tile.key.profile;
-        });
-        const auto profile = std::ranges::find(input.Profiles(), tile.key.profile, &NavigationResolvedBakeProfile::id);
-        if (partition == input.Partitions().end() || profile == input.Profiles().end())
-            return invalid();
-        const auto &geometry = profile->buildGeometry;
-        const double cells = static_cast<double>(tile.tileSizeMeters) / geometry.cellSizeMeters;
-        const double border = std::ceil(static_cast<double>(geometry.radiusMeters) / geometry.cellSizeMeters) + 3.0;
-        if (!std::isfinite(cells) || cells < 1 || cells > 65'000 || std::abs(cells - std::round(cells)) > 1.0e-4 || border >= 255)
-            return invalid();
-        const float x = static_cast<float>(tile.key.tile.x) * tile.tileSizeMeters;
-        const float z = static_cast<float>(tile.key.tile.z) * tile.tileSizeMeters;
-        if (!std::isfinite(x) || !std::isfinite(z) || tile.bounds.minimum.x != x || tile.bounds.minimum.z != z ||
-            tile.bounds.maximum.x != x + tile.tileSizeMeters || tile.bounds.maximum.z != z + tile.tileSizeMeters ||
-            tile.bounds.maximum.y <= tile.bounds.minimum.y)
-            return invalid();
-        const float halo = static_cast<float>(border) * geometry.cellSizeMeters;
-        const Math::Aabb sampling{{x - halo, tile.bounds.minimum.y, z - halo},
-                                  {tile.bounds.maximum.x + halo, tile.bounds.maximum.y, tile.bounds.maximum.z + halo}};
-        if (!sampling.IsValid())
-            return invalid();
-        try {
-            NavigationPreparedTile result{.tile = tile, .geometry = geometry, .borderSizeCells = static_cast<std::uint32_t>(border)};
-            TileKeyWriter writer;
-            writer.Digest(compatibility.provider);
-            writer.Digest(compatibility.schemas);
-            writer.Digest(compatibility.settings);
-            writer.Integer(tile.key.profile.Value());
-            writer.Integer(tile.key.surface.Value());
-            writer.Integer(partition->filter.Value());
-            writer.Integer(static_cast<std::uint32_t>(tile.key.tile.x));
-            writer.Integer(static_cast<std::uint32_t>(tile.key.tile.z));
-            writer.Integer(tile.key.tile.layer);
-            writer.Vector(tile.bounds.minimum);
-            writer.Vector(tile.bounds.maximum);
-            writer.Float(tile.tileSizeMeters);
-            writer.Integer(result.borderSizeCells);
-            writer.Integer(input.Revisions().coordinates.Value());
-            Geometry(writer, geometry);
-            const auto triangles = input.Triangles().subspan(partition->firstTriangle, partition->triangleCount);
-            const auto modifiers = input.Modifiers().subspan(partition->firstModifier, partition->modifierCount);
+
+        /** @brief Validates grid placement and expands only the sampling footprint. */
+        [[nodiscard]] Result<TileSampling> Sampling(const NavigationBakeTile &tile, const NavigationAgentBuildGeometry &geometry) {
+            const auto invalid = [] {
+                return Result<TileSampling>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+            };
+            if (!tile.bounds.IsValid() || !std::isfinite(tile.tileSizeMeters) || tile.tileSizeMeters <= 0.0F)
+                return invalid();
+            const double cells = static_cast<double>(tile.tileSizeMeters) / geometry.cellSizeMeters;
+            const double border = std::ceil(static_cast<double>(geometry.radiusMeters) / geometry.cellSizeMeters) + 3.0;
+            if (!std::isfinite(cells) || cells < 1 || cells > 65'000 || std::abs(cells - std::round(cells)) > 1.0e-4 || border >= 255)
+                return invalid();
+            const float x = static_cast<float>(tile.key.tile.x) * tile.tileSizeMeters;
+            const float z = static_cast<float>(tile.key.tile.z) * tile.tileSizeMeters;
+            if (!std::isfinite(x) || !std::isfinite(z) || tile.bounds.minimum.x != x || tile.bounds.minimum.z != z ||
+                tile.bounds.maximum.x != x + tile.tileSizeMeters || tile.bounds.maximum.z != z + tile.tileSizeMeters ||
+                tile.bounds.maximum.y <= tile.bounds.minimum.y)
+                return invalid();
+            const float halo = static_cast<float>(border) * geometry.cellSizeMeters;
+            const Math::Aabb bounds{{x - halo, tile.bounds.minimum.y, z - halo},
+                                    {tile.bounds.maximum.x + halo, tile.bounds.maximum.y, tile.bounds.maximum.z + halo}};
+            if (!bounds.IsValid())
+                return invalid();
+            return Result<TileSampling>::Success({bounds, static_cast<std::uint32_t>(border)});
+        }
+
+        /** @brief Owns intersecting rows within the conservative vector-growth budget. */
+        [[nodiscard]] Result<void> SelectDependencies(NavigationPreparedTile &result, const NavigationBakeInputSnapshot &input,
+                                                      const NavigationTileBuildPartition &partition, const Math::Aabb &sampling,
+                                                      const CancellationToken &cancellation, const std::size_t maximumBytes) {
             std::size_t selectedBytes{};
-            for (const auto &triangle : triangles) {
+            for (const auto &triangle : input.Triangles().subspan(partition.firstTriangle, partition.triangleCount)) {
                 if (cancellation.IsCancellationRequested())
-                    return Result<NavigationPreparedTile>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
+                    return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
                 if (Intersects(Bounds(triangle), sampling)) {
-                    if (sizeof(triangle) > maximumOwnedBytes / 2 - selectedBytes)
-                        return Result<NavigationPreparedTile>::Failure(MakeError(NavigationErrors::BakeInputCapacityExceeded));
+                    if (sizeof(triangle) > maximumBytes / 2 - selectedBytes)
+                        return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCapacityExceeded));
                     selectedBytes += sizeof(triangle);
                     result.triangles.push_back(triangle);
                 }
             }
-            for (const auto &modifier : modifiers) {
+            for (const auto &modifier : input.Modifiers().subspan(partition.firstModifier, partition.modifierCount)) {
                 if (cancellation.IsCancellationRequested())
-                    return Result<NavigationPreparedTile>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
+                    return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
                 if (Intersects(modifier.canonicalBounds, sampling)) {
-                    if (sizeof(modifier) > maximumOwnedBytes / 2 - selectedBytes)
-                        return Result<NavigationPreparedTile>::Failure(MakeError(NavigationErrors::BakeInputCapacityExceeded));
+                    if (sizeof(modifier) > maximumBytes / 2 - selectedBytes)
+                        return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCapacityExceeded));
                     selectedBytes += sizeof(modifier);
                     result.modifiers.push_back(modifier);
                 }
             }
-            writer.Integer(result.triangles.size());
-            for (const auto &triangle : result.triangles)
-                Triangle(writer, triangle);
-            writer.Integer(result.modifiers.size());
-            for (const auto &modifier : result.modifiers)
-                Modifier(writer, modifier);
-            // Registry semantics may affect meaning without changing a triangle's area identity.
-            for (const auto &area : input.Areas()) {
+            return Result<void>::Success();
+        }
+
+        /** @brief Includes registry semantics only for areas actually referenced by selected inputs. */
+        void ReferencedAreas(TileKeyWriter &writer, const NavigationPreparedTile &result,
+                             const std::span<const NavigationResolvedBakeArea> areas) noexcept {
+            for (const auto &area : areas) {
                 const bool used = std::ranges::any_of(result.triangles, [&area](const auto &v) {
                     return v.area == area.id;
                 }) || std::ranges::any_of(result.modifiers, [&area](const auto &v) {
@@ -210,7 +188,65 @@ namespace Horo::Navigation {
                     writer.Integer(area.flags.bits);
                 }
             }
-            result.dependencyKey = writer.Finish();
+        }
+
+        /** @brief Canonical identity covers grid, compatibility and the complete selected rasterization closure. */
+        [[nodiscard]] Sha256Digest DependencyKey(const NavigationPreparedTile &result, const NavigationBakeInputSnapshot &input,
+                                                 const NavigationTileBuildPartition &partition,
+                                                 const NavigationTileBakeCompatibility &compatibility) noexcept {
+            TileKeyWriter writer;
+            writer.Digest(compatibility.provider);
+            writer.Digest(compatibility.schemas);
+            writer.Digest(compatibility.settings);
+            const auto &tile = result.tile;
+            writer.Integer(tile.key.profile.Value());
+            writer.Integer(tile.key.surface.Value());
+            writer.Integer(partition.filter.Value());
+            writer.Integer(static_cast<std::uint32_t>(tile.key.tile.x));
+            writer.Integer(static_cast<std::uint32_t>(tile.key.tile.z));
+            writer.Integer(tile.key.tile.layer);
+            writer.Vector(tile.bounds.minimum);
+            writer.Vector(tile.bounds.maximum);
+            writer.Float(tile.tileSizeMeters);
+            writer.Integer(result.borderSizeCells);
+            writer.Integer(input.Revisions().coordinates.Value());
+            Geometry(writer, result.geometry);
+            writer.Integer(result.triangles.size());
+            for (const auto &triangle : result.triangles)
+                Triangle(writer, triangle);
+            writer.Integer(result.modifiers.size());
+            for (const auto &modifier : result.modifiers)
+                Modifier(writer, modifier);
+            ReferencedAreas(writer, result, input.Areas());
+            return writer.Finish();
+        }
+    }  // namespace
+
+    /** @copydoc PrepareNavigationBakeTile */
+    Result<NavigationPreparedTile> PrepareNavigationBakeTile(const NavigationBakeInputSnapshot &input, const NavigationBakeTile &tile,
+                                                             const NavigationTileBakeCompatibility &compatibility,
+                                                             const CancellationToken &cancellation, const std::size_t maximumOwnedBytes) {
+        if (cancellation.IsCancellationRequested())
+            return Result<NavigationPreparedTile>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
+        if (maximumOwnedBytes == 0 || maximumOwnedBytes > NavigationBakeInputLimits::MaximumOwnedBytes ||
+            !Present(compatibility.provider) || !Present(compatibility.schemas) || !Present(compatibility.settings))
+            return Result<NavigationPreparedTile>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+        const auto partition = std::ranges::find_if(input.Partitions(), [&tile](const auto &value) {
+            return value.surface == tile.key.surface && value.profile == tile.key.profile;
+        });
+        const auto profile = std::ranges::find(input.Profiles(), tile.key.profile, &NavigationResolvedBakeProfile::id);
+        if (partition == input.Partitions().end() || profile == input.Profiles().end())
+            return Result<NavigationPreparedTile>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+        const auto sampling = Sampling(tile, profile->buildGeometry);
+        if (sampling.HasError())
+            return Result<NavigationPreparedTile>::Failure(sampling.ErrorValue());
+        try {
+            NavigationPreparedTile result{.tile = tile, .geometry = profile->buildGeometry, .borderSizeCells = sampling.Value().border};
+            if (const auto selected =
+                    SelectDependencies(result, input, *partition, sampling.Value().bounds, cancellation, maximumOwnedBytes);
+                selected.HasError())
+                return Result<NavigationPreparedTile>::Failure(selected.ErrorValue());
+            result.dependencyKey = DependencyKey(result, input, *partition, compatibility);
             return Result<NavigationPreparedTile>::Success(std::move(result));
         } catch (const std::bad_alloc &) {
             return Result<NavigationPreparedTile>::Failure(MakeError(NavigationErrors::BakeInputCapacityExceeded));

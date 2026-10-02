@@ -4,7 +4,41 @@
 #include <limits>
 
 namespace Horo::Application {
+    using namespace Horo::Navigation;
     using namespace NavigationBakeDetail;
+
+    namespace {
+        /** @brief Validates complete sorted tile coverage and immutable capture freshness before admission. */
+        [[nodiscard]] Result<void> ValidateRequest(const NavigationBakeRequest &request, const std::uint32_t maximumTiles) {
+            if (!request.input || request.tiles.empty() || request.tiles.size() > maximumTiles ||
+                !std::ranges::is_sorted(request.tiles, {}, &NavigationBakeTile::key) ||
+                std::ranges::adjacent_find(request.tiles, {}, &NavigationBakeTile::key) != request.tiles.end())
+                return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+            if (request.cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
+            if (!std::ranges::all_of(request.input->Partitions(), [&request](const auto &partition) {
+                return std::ranges::any_of(request.tiles, [&partition](const auto &tile) {
+                    return tile.key.surface == partition.surface && tile.key.profile == partition.profile;
+                });
+            }))
+                return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+            return request.input->ValidatePublication(request.input->Revisions().requestGeneration, request.input->Revisions(),
+                                                      request.sources);
+        }
+
+        /** @brief Joins only identical uncancelled captures with the same complete layout and source observations. */
+        [[nodiscard]] bool IdenticalRequest(const std::shared_ptr<Attempt> &existing, const NavigationBakeRequest &request) {
+            if (!existing || existing->cancellation->Token().IsCancellationRequested() ||
+                existing->request.input->Fingerprint() != request.input->Fingerprint() ||
+                existing->request.compatibility != request.compatibility || existing->request.sources != request.sources ||
+                existing->request.tiles.size() != request.tiles.size())
+                return false;
+            return std::ranges::equal(existing->request.tiles, request.tiles, [](const auto &a, const auto &b) {
+                return a.key == b.key && a.bounds.minimum == b.bounds.minimum && a.bounds.maximum == b.bounds.maximum &&
+                       a.tileSizeMeters == b.tileSizeMeters;
+            });
+        }
+    }  // namespace
 
     /** @copydoc NavigationBakeDetail::CancelPending */
     void NavigationBakeDetail::CancelPending(OperationStore &operations, const std::shared_ptr<Attempt> &attempt) noexcept {
@@ -32,10 +66,12 @@ namespace Horo::Application {
         auto state = std::make_shared<ServiceState>();
         state->config = std::move(config);
         return Result<std::unique_ptr<NavigationBakeService>>::Success(
-            std::unique_ptr<NavigationBakeService>{new NavigationBakeService(std::move(state), operations, jobs)});
+            std::make_unique<NavigationBakeService>(ConstructionKey{}, std::move(state), operations, jobs));
     }
 
-    NavigationBakeService::NavigationBakeService(std::shared_ptr<ServiceState> state, OperationStore &operations, JobSystem &jobs)
+    /** @copydoc NavigationBakeService::NavigationBakeService */
+    NavigationBakeService::NavigationBakeService(ConstructionKey, std::shared_ptr<ServiceState> state, OperationStore &operations,
+                                                 JobSystem &jobs)
         : state_(std::move(state)), operations_(operations), jobs_(jobs) {}
 
     /** @copydoc NavigationBakeService::~NavigationBakeService */
@@ -45,39 +81,16 @@ namespace Horo::Application {
 
     /** @copydoc NavigationBakeService::Submit */
     Result<OperationId> NavigationBakeService::Submit(NavigationBakeRequest request) {
-        if (closed_ || !request.input || request.tiles.empty() || request.tiles.size() > state_->config.maximumTiles ||
-            nextGeneration_ >= Adopted || !std::ranges::is_sorted(request.tiles, {}, &NavigationBakeTile::key) ||
-            std::ranges::adjacent_find(request.tiles, {}, &NavigationBakeTile::key) != request.tiles.end())
+        if (closed_ || nextGeneration_ >= Adopted)
             return Result<OperationId>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
-        if (request.cancellation.IsCancellationRequested())
-            return Result<OperationId>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
-        if (!std::ranges::all_of(request.input->Partitions(), [&request](const auto &partition) {
-            return std::ranges::any_of(request.tiles, [&partition](const auto &tile) {
-                return tile.key.surface == partition.surface && tile.key.profile == partition.profile;
-            });
-        }))
-            return Result<OperationId>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
-        auto attempt = std::make_shared<Attempt>();
-        const auto fresh =
-            request.input->ValidatePublication(request.input->Revisions().requestGeneration, request.input->Revisions(), request.sources);
-        if (fresh.HasError())
-            return Result<OperationId>::Failure(fresh.ErrorValue());
-        const auto identical = [&request](const std::shared_ptr<Attempt> &existing) {
-            if (!existing || existing->cancellation->Token().IsCancellationRequested() ||
-                existing->request.input->Fingerprint() != request.input->Fingerprint() ||
-                existing->request.compatibility != request.compatibility || existing->request.sources != request.sources ||
-                existing->request.tiles.size() != request.tiles.size())
-                return false;
-            return std::ranges::equal(existing->request.tiles, request.tiles, [](const auto &a, const auto &b) {
-                return a.key == b.key && a.bounds.minimum == b.bounds.minimum && a.bounds.maximum == b.bounds.maximum &&
-                       a.tileSizeMeters == b.tileSizeMeters;
-            });
-        };
-        if (identical(pending_))
+        if (const auto valid = ValidateRequest(request, state_->config.maximumTiles); valid.HasError())
+            return Result<OperationId>::Failure(valid.ErrorValue());
+        if (IdenticalRequest(pending_, request))
             return Result<OperationId>::Success(pending_->operation);
-        const auto activeSnapshot = activeJob_.Snapshot();
-        if (identical(active_) && activeSnapshot && !activeSnapshot->IsTerminal())
+        if (const auto activeSnapshot = activeJob_.Snapshot();
+            IdenticalRequest(active_, request) && activeSnapshot && !activeSnapshot->IsTerminal())
             return Result<OperationId>::Success(active_->operation);
+        auto attempt = std::make_shared<Attempt>();
         attempt->request = std::move(request);
         attempt->cancellation = std::make_shared<CancellationSource>(attempt->request.cancellation);
         const auto id = operations_.Begin({.kind = OperationKind::Cook,
@@ -88,7 +101,7 @@ namespace Horo::Application {
                                            .requestCancel = [cancel = attempt->cancellation] {
             cancel->RequestCancellation();
         }});
-        if (!id)
+        if (!id.has_value())
             return Result<OperationId>::Failure(MakeError(NavigationErrors::BakeJobAdmissionRejected));
         attempt->generation = nextGeneration_++;
         attempt->operation = *id;
@@ -115,8 +128,7 @@ namespace Horo::Application {
         if (closed_)
             return;
         if (activeJob_.IsValid()) {
-            const auto snapshot = activeJob_.Snapshot();
-            if (!snapshot || !snapshot->IsTerminal())
+            if (const auto snapshot = activeJob_.Snapshot(); !snapshot || !snapshot->IsTerminal())
                 return;
             activeJob_ = {};
             active_.reset();

@@ -25,7 +25,7 @@ namespace Horo::Navigation {
                 writer.Raw(tile->Bytes());
                 previous = tile.get();
             }
-            return Result<std::vector<std::uint8_t>>::Success(std::move(writer.bytes));
+            return Result<std::vector<std::uint8_t>>::Success(std::move(writer).TakeBytes());
         } catch (const std::length_error &) {
             return Failure<std::vector<std::uint8_t>>(NavigationErrors::CapacityExceeded);
         } catch (const std::bad_alloc &) {

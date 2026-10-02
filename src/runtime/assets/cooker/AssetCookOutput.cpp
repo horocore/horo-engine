@@ -177,6 +177,21 @@ namespace Horo::Assets {
             return Result<std::vector<std::uint8_t>>::Success(std::move(bytes));
         }
 
+        /** @brief Reconciles a post-rename durability error against the bytes actually committed under the writer lease. */
+        Result<void> ReplaceDurably(DurableFileSystem &files, const std::filesystem::path &prepared,
+                                    const std::filesystem::path &destination, const std::span<const std::uint8_t> bytes,
+                                    std::optional<Error> *postCommitError) {
+            auto replaced = files.AtomicReplace(prepared, destination);
+            if (replaced.HasError() && postCommitError != nullptr) {
+                if (auto observed = ReadFile(destination, bytes.size());
+                    observed.HasValue() && std::ranges::equal(observed.Value(), bytes)) {
+                    *postCommitError = replaced.ErrorValue();
+                    return Result<void>::Success();
+                }
+            }
+            return replaced;
+        }
+
         /**
          * @brief Writes bytes atomically: write to temp, then rename.
          */
@@ -215,18 +230,8 @@ namespace Horo::Assets {
                     return accepted;
                 }
             }
-            if (policy.files != nullptr) {
-                auto replaced = policy.files->AtomicReplace(tempPath, path);
-                if (replaced.HasError() && postCommitError != nullptr) {
-                    // A directory-sync failure can follow a successful rename. Report the actual active generation.
-                    auto observed = ReadFile(path, bytes.size());
-                    if (observed.HasValue() && std::ranges::equal(observed.Value(), bytes)) {
-                        *postCommitError = replaced.ErrorValue();
-                        return Result<void>::Success();
-                    }
-                }
-                return replaced;
-            }
+            if (policy.files != nullptr)
+                return ReplaceDurably(*policy.files, tempPath, path, bytes, postCommitError);
             std::error_code ec;
             std::filesystem::rename(tempPath, path, ec);  // NOSONAR
             if (ec) {
@@ -436,6 +441,37 @@ namespace Horo::Assets {
         return Result<AssetCookGenerationContents>::Success(std::move(contents));
     }
 
+    namespace {
+        /** @brief Verifies the complete inventory ordering and encoded payload bounds before staging. */
+        Result<void> ValidateGenerationEntries(const std::span<const AssetCookManifestEntry> entries,
+                                               const std::span<const std::vector<std::uint8_t>> artifactPayloads,
+                                               const AssetCookLimits &limits) {
+            if (entries.empty()) {
+                return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
+            }
+
+            if (entries.size() != artifactPayloads.size()) {
+                return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
+            }
+
+            // Verify entries are sorted and have no duplicate IDs
+            for (std::size_t i = 1; i < entries.size(); ++i) {
+                if (entries[i].assetId <= entries[i - 1].assetId) {
+                    return Result<void>::Failure(Error{CookErrors::DuplicateCooker.code});
+                }
+            }
+
+            // Verify artifact payloads are within bounds
+            for (const auto &payload : artifactPayloads) {
+                if (payload.size() > limits.maximumArtifactBytes) {
+                    return Result<void>::Failure(Error{CookErrors::TooLarge.code});
+                }
+            }
+
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     // ---------------------------------------------------------------------------
     // PublishCookGeneration
     // ---------------------------------------------------------------------------
@@ -444,27 +480,8 @@ namespace Horo::Assets {
                                                       std::span<const AssetCookManifestEntry> entries,
                                                       std::span<const std::vector<std::uint8_t>> artifactPayloads,
                                                       const AssetCookLimits &limits, const AssetCookPublicationPolicy &policy) {
-        if (entries.empty()) {
-            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
-        }
-
-        if (entries.size() != artifactPayloads.size()) {
-            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
-        }
-
-        // Verify entries are sorted and have no duplicate IDs
-        for (std::size_t i = 1; i < entries.size(); ++i) {
-            if (entries[i].assetId <= entries[i - 1].assetId) {
-                return Result<AssetCookGeneration>::Failure(Error{CookErrors::DuplicateCooker.code});
-            }
-        }
-
-        // Verify artifact payloads are within bounds
-        for (const auto &payload : artifactPayloads) {
-            if (payload.size() > limits.maximumArtifactBytes) {
-                return Result<AssetCookGeneration>::Failure(Error{CookErrors::TooLarge.code});
-            }
-        }
+        if (const auto valid = ValidateGenerationEntries(entries, artifactPayloads, limits); valid.HasError())
+            return Result<AssetCookGeneration>::Failure(valid.ErrorValue());
 
         // Build manifest JSON
         auto manifestJson = BuildManifestJson(target.Value(), entries);

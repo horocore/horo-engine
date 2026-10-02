@@ -9,7 +9,16 @@
 namespace Horo::Navigation {
     /** @brief Validated tile shared by a candidate, a last-valid generation and retained readers. */
     class NavigationCookedTile final {
+        struct ConstructionKey {
+        private:
+            friend class NavigationCookedTile;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Factory-only construction; the private key prevents bypassing Create validation. */
+        NavigationCookedTile(ConstructionKey, const NavigationBakeTileKey &key, const Sha256Digest &dependency,
+                             NavigationTileBuildResult result, std::vector<std::uint8_t> bytes);
         /**
          * @brief Validates and encodes a complete builder result without publishing it.
          * @param input Exact canonical tile work descriptor.
@@ -55,8 +64,6 @@ namespace Horo::Navigation {
         }
 
     private:
-        NavigationCookedTile(NavigationBakeTileKey key, Sha256Digest dependency, NavigationTileBuildResult result,
-                             std::vector<std::uint8_t> bytes);
         NavigationBakeTileKey key_;
         Sha256Digest dependencyKey_;
         Sha256Digest contentIdentity_;

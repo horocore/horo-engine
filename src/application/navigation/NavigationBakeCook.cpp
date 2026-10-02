@@ -4,6 +4,8 @@
 #include <algorithm>
 
 namespace Horo::Application::NavigationBakeDetail {
+    using namespace Horo::Navigation;
+
     namespace {
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &code) {
             return Result<T>::Failure(MakeError(code));
@@ -88,67 +90,92 @@ namespace Horo::Application::NavigationBakeDetail {
             return Result<void>::Success();
         }
 
-        /** @brief Reuses exact immutable tile identities and builds only changed dependency subsets. */
-        [[nodiscard]] Result<void> Build(const ServiceState &state, Attempt &attempt, const CancellationToken &cancel) {
+        /** @brief Looks up a tile in the retained immutable generation by exact dependency identity. */
+        [[nodiscard]] std::shared_ptr<const NavigationCookedTile> RetainedTile(
+            const std::shared_ptr<const NavigationBakePublication> &previous, const NavigationPreparedTile &prepared) {
+            if (!previous)
+                return nullptr;
+            const auto found = std::ranges::lower_bound(previous->tiles.tiles, prepared.tile.key, {}, [](const auto &item) {
+                return item->Key();
+            });
+            if (found != previous->tiles.tiles.end() && (*found)->Key() == prepared.tile.key &&
+                (*found)->DependencyKey() == prepared.dependencyKey)
+                return *found;
+            return nullptr;
+        }
+
+        /** @brief Builds, verifies and caches one missing tile without activating a generation. */
+        [[nodiscard]] Result<std::shared_ptr<const NavigationCookedTile>> BuildFreshTile(const NavigationBakeServiceConfig &config,
+                                                                                         const NavigationPreparedTile &prepared,
+                                                                                         const CancellationToken &cancel) {
+            auto built = config.builder->BuildTile({.key = prepared.tile.key.tile,
+                                                    .bounds = prepared.tile.bounds,
+                                                    .tileSizeMeters = prepared.tile.tileSizeMeters,
+                                                    .buildGeometry = prepared.geometry,
+                                                    .triangles = prepared.triangles,
+                                                    .modifiers = prepared.modifiers,
+                                                    .limits = config.tileLimits,
+                                                    .borderSizeCells = prepared.borderSizeCells},
+                                                   cancel);
+            if (built.HasError())
+                return Result<std::shared_ptr<const NavigationCookedTile>>::Failure(built.ErrorValue());
+            auto tile = NavigationCookedTile::Create(prepared, std::move(built).Value(), config.tileLimits.maximumOwnedBytes);
+            if (tile.HasError())
+                return tile;
+            auto envelope = TileEnvelope(config, *tile.Value());
+            if (envelope.HasError())
+                return Result<std::shared_ptr<const NavigationCookedTile>>::Failure(envelope.ErrorValue());
+            Assets::AssetCookCache cache(config.cacheRoot, config.cookLimits);
+            if (const auto stored = cache.Store(CacheKey(config, prepared.dependencyKey), envelope.Value(), cancel); stored.HasError())
+                return Result<std::shared_ptr<const NavigationCookedTile>>::Failure(stored.ErrorValue());
+            return tile;
+        }
+
+        /** @brief Resolves a verified retained/cache hit before invoking the native builder. */
+        [[nodiscard]] Result<std::shared_ptr<const NavigationCookedTile>> ResolveTile(
+            const NavigationBakeServiceConfig &config, const std::shared_ptr<const NavigationBakePublication> &previous,
+            const NavigationPreparedTile &prepared, const CancellationToken &cancel, NavigationBakePublication &candidate) {
+            auto tile = RetainedTile(previous, prepared);
+            if (!tile) {
+                auto cached = CachedTile(config, prepared, cancel);
+                if (cached.HasError())
+                    return cached;
+                tile = std::move(cached).Value();
+            }
+            if (tile) {
+                ++candidate.reusedTiles;
+                return Result<std::shared_ptr<const NavigationCookedTile>>::Success(std::move(tile));
+            }
+            auto built = BuildFreshTile(config, prepared, cancel);
+            if (built.HasValue())
+                ++candidate.rebuiltTiles;
+            return built;
+        }
+
+        /** @brief Enforces the configured topology limits equally on fresh output and cache hits. */
+        [[nodiscard]] bool TopologyWithinLimits(const NavigationTileBuildResult &topology, const NavigationTileBuildLimits &limits) {
+            return topology.vertices.size() <= limits.maximumVertices && topology.polygons.size() <= limits.maximumPolygons &&
+                   topology.offMeshLinks.size() <= limits.maximumOffMeshLinks &&
+                   std::ranges::none_of(topology.polygons, [&limits](const auto &polygon) {
+                return polygon.vertexIndices.count > limits.maximumVerticesPerPolygon;
+            });
+        }
+
+        /** @brief Resolves changed subsets into a complete bounded candidate without modifying published leases. */
+        [[nodiscard]] Result<void> Build(const ServiceState &state, const Attempt &attempt, const CancellationToken &cancel) {
             const auto previous = state.published.load();
             std::size_t bytes{};
             for (const auto &prepared : attempt.prepared) {
                 if (cancel.IsCancellationRequested())
                     return Failure<void>(NavigationErrors::BakeInputCancelled);
-                std::shared_ptr<const NavigationCookedTile> tile;
-                if (previous) {
-                    const auto found = std::ranges::lower_bound(previous->tiles.tiles, prepared.tile.key, {}, [](const auto &item) {
-                        return item->Key();
-                    });
-                    if (found != previous->tiles.tiles.end() && (*found)->Key() == prepared.tile.key &&
-                        (*found)->DependencyKey() == prepared.dependencyKey)
-                        tile = *found;
-                }
-                if (!tile) {
-                    auto cached = CachedTile(state.config, prepared, cancel);
-                    if (cached.HasError())
-                        return Result<void>::Failure(cached.ErrorValue());
-                    tile = std::move(cached).Value();
-                }
-                if (tile)
-                    ++attempt.candidate->reusedTiles;
-                else {
-                    auto built = state.config.builder->BuildTile({.key = prepared.tile.key.tile,
-                                                                  .bounds = prepared.tile.bounds,
-                                                                  .tileSizeMeters = prepared.tile.tileSizeMeters,
-                                                                  .buildGeometry = prepared.geometry,
-                                                                  .triangles = prepared.triangles,
-                                                                  .modifiers = prepared.modifiers,
-                                                                  .limits = state.config.tileLimits,
-                                                                  .borderSizeCells = prepared.borderSizeCells},
-                                                                 cancel);
-                    if (built.HasError())
-                        return Result<void>::Failure(built.ErrorValue());
-                    auto encoded =
-                        NavigationCookedTile::Create(prepared, std::move(built).Value(), state.config.tileLimits.maximumOwnedBytes);
-                    if (encoded.HasError())
-                        return Result<void>::Failure(encoded.ErrorValue());
-                    tile = std::move(encoded).Value();
-                    auto envelope = TileEnvelope(state.config, *tile);
-                    if (envelope.HasError())
-                        return Result<void>::Failure(envelope.ErrorValue());
-                    Assets::AssetCookCache cache(state.config.cacheRoot, state.config.cookLimits);
-                    auto stored = cache.Store(CacheKey(state.config, prepared.dependencyKey), envelope.Value(), cancel);
-                    if (stored.HasError())
-                        return stored;
-                    ++attempt.candidate->rebuiltTiles;
-                }
-                if (tile->Bytes().size() > state.config.maximumCandidateBytes - bytes)
+                auto resolved = ResolveTile(state.config, previous, prepared, cancel, *attempt.candidate);
+                if (resolved.HasError())
+                    return Result<void>::Failure(resolved.ErrorValue());
+                auto tile = std::move(resolved).Value();
+                if (tile->Bytes().size() > state.config.maximumCandidateBytes - bytes ||
+                    !TopologyWithinLimits(tile->Topology(), state.config.tileLimits))
                     return Failure<void>(NavigationErrors::CapacityExceeded);
                 bytes += tile->Bytes().size();
-                const auto &topology = tile->Topology();
-                if (topology.vertices.size() > state.config.tileLimits.maximumVertices ||
-                    topology.polygons.size() > state.config.tileLimits.maximumPolygons ||
-                    topology.offMeshLinks.size() > state.config.tileLimits.maximumOffMeshLinks ||
-                    std::ranges::any_of(topology.polygons, [&state](const auto &polygon) {
-                    return polygon.vertexIndices.count > state.config.tileLimits.maximumVerticesPerPolygon;
-                }))
-                    return Failure<void>(NavigationErrors::CapacityExceeded);
                 attempt.candidate->tiles.tiles.push_back(std::move(tile));
             }
             return Result<void>::Success();
@@ -189,12 +216,11 @@ namespace Horo::Application::NavigationBakeDetail {
                                                        {.files = config.files.get(), .beforeCommit = [&attempt, state, cancel] {
                 if (cancel.IsCancellationRequested())
                     return Failure<void>(NavigationErrors::BakeInputCancelled);
-                auto fresh = attempt.request.input->ValidatePublication(attempt.request.input->Revisions().requestGeneration,
-                                                                        attempt.request.input->Revisions(), attempt.request.sources);
-                if (fresh.HasError())
+                if (auto fresh = attempt.request.input->ValidatePublication(attempt.request.input->Revisions().requestGeneration,
+                                                                            attempt.request.input->Revisions(), attempt.request.sources);
+                    fresh.HasError())
                     return fresh;
-                auto expected = attempt.generation;
-                if (!state->desired.compare_exchange_strong(expected, attempt.generation | Adopted))
+                if (auto expected = attempt.generation; !state->desired.compare_exchange_strong(expected, attempt.generation | Adopted))
                     return Failure<void>(NavigationErrors::BakeInputStale);
                 return Result<void>::Success();
             }});

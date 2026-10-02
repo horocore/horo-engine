@@ -32,12 +32,14 @@ namespace Horo::Navigation {
         fixture.vertices.front().y = 0.2F;  // Producer revision and digest deliberately remain unchanged.
         CHECK(PrepareNavigationBakeTile(*fixture.Input(), tile, fixture.compatibility).Value().dependencyKey != initial);
         fixture.vertices.front().y = 0;
-        for (auto *digest : {&fixture.compatibility.provider, &fixture.compatibility.schemas, &fixture.compatibility.settings}) {
-            const auto saved = *digest;
-            *digest = Digest(90);
-            CHECK(PrepareNavigationBakeTile(*fixture.Input(), tile, fixture.compatibility).Value().dependencyKey != initial);
-            *digest = saved;
-        }
+        const std::array compatibilityCases{NavigationTileBakeCompatibility{Digest(90), fixture.compatibility.schemas,
+                                                                            fixture.compatibility.settings},
+                                            NavigationTileBakeCompatibility{fixture.compatibility.provider, Digest(90),
+                                                                            fixture.compatibility.settings},
+                                            NavigationTileBakeCompatibility{fixture.compatibility.provider, fixture.compatibility.schemas,
+                                                                            Digest(90)}};
+        for (const auto &compatibility : compatibilityCases)
+            CHECK(PrepareNavigationBakeTile(*fixture.Input(), tile, compatibility).Value().dependencyKey != initial);
         fixture.profile.buildGeometry.radiusMeters = 0.6F;
         CHECK(PrepareNavigationBakeTile(*fixture.Input(), tile, fixture.compatibility).Value().dependencyKey != initial);
         fixture.profile.buildGeometry.radiusMeters = 0.5F;
@@ -60,7 +62,7 @@ namespace Horo::Navigation {
         for (const auto size : {std::size_t{0}, std::size_t{4}, encoded.size() - 1})
             CHECK(DecodeNavigationCookedTileSet(std::span{encoded}.first(size), 4096).HasError());
         auto corrupt = encoded;
-        corrupt.back() ^= 1;
+        corrupt.back() = static_cast<std::uint8_t>(std::byte{corrupt.back()} ^ std::byte{1});
         CHECK(DecodeNavigationCookedTileSet(corrupt, 4096).HasError());
         corrupt = encoded;
         corrupt.push_back(0);

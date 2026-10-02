@@ -31,7 +31,7 @@ namespace Horo::Navigation::TestSupport {
 
         IncrementalBakeFixture() {
             for (int tile = 0; tile < 4; ++tile) {
-                const float x = tile * 8.0F;
+                const float x = static_cast<float>(tile) * 8.0F;
                 const auto first = static_cast<std::uint32_t>(vertices.size());
                 vertices.insert(vertices.end(), {{x, 0, 0}, {x, 0, 8}, {x + 8, 0, 8}, {x + 8, 0, 0}});
                 triangles.push_back({.vertexIndices = {first, first + 2, first + 3}, .area = Id<NavigationAreaId>(1)});
@@ -39,13 +39,21 @@ namespace Horo::Navigation::TestSupport {
             }
         }
 
+        [[nodiscard]] static auto Areas() {
+            return std::array{NavigationAreaDescriptor{.id = Id<NavigationAreaId>(1),
+                                                       .source = {.id = Id<NavigationDescriptorSourceId>(1)},
+                                                       .flags = {.bits = 1}}};
+        }
+
+        [[nodiscard]] static auto Filters() {
+            return std::array{NavigationQueryFilterDescriptor{.id = Id<NavigationFilterId>(1),
+                                                              .source = {.id = Id<NavigationDescriptorSourceId>(1)},
+                                                              .includedFlags = {.bits = 1}}};
+        }
+
         [[nodiscard]] std::shared_ptr<const NavigationBakeInputSnapshot> Input() const {
-            const std::array areas{NavigationAreaDescriptor{.id = Id<NavigationAreaId>(1),
-                                                            .source = {.id = Id<NavigationDescriptorSourceId>(1)},
-                                                            .flags = {.bits = 1}}};
-            const std::array filters{NavigationQueryFilterDescriptor{.id = Id<NavigationFilterId>(1),
-                                                                     .source = {.id = Id<NavigationDescriptorSourceId>(1)},
-                                                                     .includedFlags = {.bits = 1}}};
+            const auto areas = Areas();
+            const auto filters = Filters();
             auto registry = NavigationAreaRegistry::Create(areas, filters).Value();
             const std::array contributions{NavigationSourceContributionInput{.producer = Id<NavigationSourceProducerId>(1),
                                                                              .contribution = Id<NavigationSourceContributionId>(1),
@@ -69,7 +77,7 @@ namespace Horo::Navigation::TestSupport {
             std::vector<NavigationBakeTile> tiles;
             for (int x = 0; x < 4; ++x)
                 tiles.push_back({.key = {.profile = profile.id, .surface = Id<SurfaceId>(1), .tile = {.x = x}},
-                                 .bounds = {{x * 8.0F, -1, 0}, {(x + 1) * 8.0F, 3, 8}},
+                                 .bounds = {{static_cast<float>(x) * 8.0F, -1, 0}, {static_cast<float>(x + 1) * 8.0F, 3, 8}},
                                  .tileSizeMeters = 8});
             return tiles;
         }

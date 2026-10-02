@@ -16,7 +16,7 @@ namespace Horo::Navigation::TileArtifactInternal {
         void Integer(const std::uint64_t value, const std::size_t width = 4) {
             Require(width);
             for (std::size_t i = 0; i < width; ++i)
-                bytes.push_back(static_cast<std::uint8_t>((value >> (i * 8U)) & 0xffU));
+                bytes_.push_back(static_cast<std::uint8_t>((value >> (i * 8U)) & 0xffU));
         }
 
         void Float(const float value) {
@@ -35,17 +35,24 @@ namespace Horo::Navigation::TileArtifactInternal {
 
         void Raw(const std::span<const std::uint8_t> value) {
             Require(value.size());
-            bytes.insert(bytes.end(), value.begin(), value.end());
+            bytes_.insert(bytes_.end(), value.begin(), value.end());
         }
 
-        std::vector<std::uint8_t> bytes;
+        [[nodiscard]] const std::vector<std::uint8_t> &Bytes() const noexcept {
+            return bytes_;
+        }
+
+        [[nodiscard]] std::vector<std::uint8_t> TakeBytes() && noexcept {
+            return std::move(bytes_);
+        }
 
     private:
         void Require(const std::size_t count) const {
-            if (count > maximum_ - bytes.size())
+            if (count > maximum_ - bytes_.size())
                 throw std::length_error("Navigation tile artifact byte ceiling");
         }
 
+        std::vector<std::uint8_t> bytes_;
         std::size_t maximum_;
     };
 

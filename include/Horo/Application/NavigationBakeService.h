@@ -53,7 +53,16 @@ namespace Horo::Application {
      * Workers own captures and service state; they never retain the facade or host stack references.
      */
     class NavigationBakeService final {
+        struct ConstructionKey {
+        private:
+            friend class NavigationBakeService;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Internal factory-only construction; the private key prevents bypassing Create validation. */
+        NavigationBakeService(ConstructionKey, std::shared_ptr<NavigationBakeDetail::ServiceState> state, OperationStore &operations,
+                              JobSystem &jobs);
         /** @brief Creates an explicit composition; no backend is discovered or selected.
          * @param config Fixed validated host configuration. @param operations Process operation authority.
          * @param jobs Process scheduler with at least two workers. @return Owned service or typed admission failure.
@@ -79,7 +88,6 @@ namespace Horo::Application {
         [[nodiscard]] std::shared_ptr<const NavigationBakePublication> Published() const noexcept;
 
     private:
-        NavigationBakeService(std::shared_ptr<NavigationBakeDetail::ServiceState> state, OperationStore &operations, JobSystem &jobs);
         std::shared_ptr<NavigationBakeDetail::ServiceState> state_;
         OperationStore &operations_;
         JobSystem &jobs_;

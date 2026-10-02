@@ -1,10 +1,12 @@
 #include "Horo/Application/NavigationBakeService.h"
+#include "Horo/Assets/AssetCookTransaction.h"
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #include "navigation/IncrementalBakeFixture.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <format>
 #include <fstream>
 #include <thread>
 
@@ -13,10 +15,20 @@ namespace Horo::Application {
     using namespace Horo::Navigation::TestSupport;
 
     namespace {
+        /** @brief Owns one atomically created private test directory with spaces and Unicode in its path. */
         struct TempDirectory {
             std::filesystem::path path =
-                std::filesystem::temp_directory_path() /
-                ("horo incremental bake " + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+                std::filesystem::current_path() /
+                std::format("horo incremental bake ü {}", std::chrono::steady_clock::now().time_since_epoch().count());
+
+            TempDirectory() {
+                REQUIRE(std::filesystem::create_directory(path));
+            }
+
+            TempDirectory(const TempDirectory &) = delete;
+            TempDirectory &operator=(const TempDirectory &) = delete;
+            TempDirectory(TempDirectory &&) = delete;
+            TempDirectory &operator=(TempDirectory &&) = delete;
 
             ~TempDirectory() {
                 std::error_code error;
@@ -109,12 +121,29 @@ namespace Horo::Application {
                                .childDrainTimeout = Duration::FromMilliseconds(2000)}};
         }
 
-        [[nodiscard]] OperationRecord Terminal(NavigationBakeService &service, OperationStore &operations, OperationId id) {
+        /** @brief Shared owner order keeps operation storage and job execution alive beyond the service facade. */
+        struct BakeHarness {
+            TempDirectory directory;
+            std::shared_ptr<ControlledBuilder> builder{std::make_shared<ControlledBuilder>()};
+            OperationStore operations{8, 16};
+            JobSystem jobs{{.workerCount = 2, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 32}};
+            NavigationBakeServiceConfig config{Config(directory, builder)};
+            std::unique_ptr<NavigationBakeService> service;
+            IncrementalBakeFixture fixture;
+
+            explicit BakeHarness(std::shared_ptr<DurableFileSystem> files = {}) {
+                if (files)
+                    config.files = std::move(files);
+                service = NavigationBakeService::Create(config, operations, jobs).Value();
+            }
+        };
+
+        [[nodiscard]] OperationRecord Terminal(NavigationBakeService &service, const OperationStore &operations, OperationId id) {
             for (std::size_t i = 0; i < 5000; ++i) {
                 service.Pump();
                 const auto snapshot = operations.SnapshotIfChanged(0);
-                const auto found = std::ranges::find(snapshot->operations, id, &OperationRecord::id);
-                if (found != snapshot->operations.end() && found->finishedAt)
+                if (const auto found = std::ranges::find(snapshot->operations, id, &OperationRecord::id);
+                    found != snapshot->operations.end() && found->finishedAt)
                     return *found;
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
@@ -131,34 +160,38 @@ namespace Horo::Application {
             return id.Value();
         }
 
-        /** @brief Sends actual cooked topology through the production Detour query API, welding exact shared portal vertices. */
+        /** @brief Reuses exact shared portal vertices when feeding cooked polygons to the production query provider. */
+        [[nodiscard]] std::uint32_t WeldVertex(std::vector<Math::Vec3> &vertices, const Math::Vec3 vertex) {
+            const auto found = std::ranges::find(vertices, vertex);
+            if (found != vertices.end())
+                return static_cast<std::uint32_t>(found - vertices.begin());
+            vertices.push_back(vertex);
+            return static_cast<std::uint32_t>(vertices.size() - 1);
+        }
+
+        /** @brief Translates one portable polygon without changing cooked vertex positions. */
+        [[nodiscard]] GroundedNavigationPolygon QueryPolygon(const NavigationCookedTile &tile, const NavMeshPolygon &polygon,
+                                                             std::vector<Math::Vec3> &vertices) {
+            const auto &topology = tile.Topology();
+            GroundedNavigationPolygon grounded{.vertexCount = static_cast<std::uint8_t>(polygon.vertexIndices.count),
+                                               .area = polygon.area,
+                                               .surface = tile.Key().surface};
+            for (std::uint32_t i = 0; i < polygon.vertexIndices.count; ++i) {
+                const auto vertex = topology.vertices[topology.polygonVertexIndices[polygon.vertexIndices.first + i]];
+                grounded.vertexIndices[i] = WeldVertex(vertices, vertex);
+            }
+            return grounded;
+        }
+
+        /** @brief Sends actual cooked topology through the production Detour query API. */
         [[nodiscard]] Result<NavigationPath> Query(const NavigationCookedTileSet &tiles) {
             std::vector<Math::Vec3> vertices;
             std::vector<GroundedNavigationPolygon> polygons;
-            for (const auto &tile : tiles.tiles) {
-                const auto &topology = tile->Topology();
-                for (const auto &polygon : topology.polygons) {
-                    GroundedNavigationPolygon grounded{.vertexCount = static_cast<std::uint8_t>(polygon.vertexIndices.count),
-                                                       .area = polygon.area,
-                                                       .surface = tile->Key().surface};
-                    for (std::uint32_t i = 0; i < polygon.vertexIndices.count; ++i) {
-                        const auto vertex = topology.vertices[topology.polygonVertexIndices[polygon.vertexIndices.first + i]];
-                        auto found = std::ranges::find(vertices, vertex);
-                        if (found == vertices.end()) {
-                            vertices.push_back(vertex);
-                            found = vertices.end() - 1;
-                        }
-                        grounded.vertexIndices[i] = static_cast<std::uint32_t>(found - vertices.begin());
-                    }
-                    polygons.push_back(grounded);
-                }
-            }
-            const std::array areas{NavigationAreaDescriptor{.id = Id<NavigationAreaId>(1),
-                                                            .source = {.id = Id<NavigationDescriptorSourceId>(1)},
-                                                            .flags = {.bits = 1}}};
-            const std::array filters{NavigationQueryFilterDescriptor{.id = Id<NavigationFilterId>(1),
-                                                                     .source = {.id = Id<NavigationDescriptorSourceId>(1)},
-                                                                     .includedFlags = {.bits = 1}}};
+            for (const auto &tile : tiles.tiles)
+                for (const auto &polygon : tile->Topology().polygons)
+                    polygons.push_back(QueryPolygon(*tile, polygon, vertices));
+            const auto areas = IncrementalBakeFixture::Areas();
+            const auto filters = IncrementalBakeFixture::Filters();
             const RecastDetourProviderCreateInfo info{.world = Id<NavigationWorldId>(1),
                                                       .topology = Id<NavigationGeneration>(1),
                                                       .vertices = vertices,
@@ -186,153 +219,135 @@ namespace Horo::Application {
     }  // namespace
 
     TEST_CASE("Incremental production cook rebuilds both sides of an edited border and reuses remote content identities") {
-        TempDirectory directory;
-        auto builder = std::make_shared<ControlledBuilder>();
-        OperationStore operations(4, 16);
-        JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 32});
-        auto config = Config(directory, builder);
-        auto service = NavigationBakeService::Create(config, operations, jobs).Value();
-        IncrementalBakeFixture fixture;
-        REQUIRE(Terminal(*service, operations, Submit(*service, fixture)).state == OperationState::Succeeded);
-        const auto before = service->Published();
+        BakeHarness harness;
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                OperationState::Succeeded);
+        const auto before = harness.service->Published();
         REQUIRE(before);
         REQUIRE(before->rebuiltTiles == 4);
         REQUIRE(Query(before->tiles).Value().status == NavigationPathStatus::Reachable);
-        fixture.ExcludeBorder();
-        REQUIRE(Terminal(*service, operations, Submit(*service, fixture)).state == OperationState::Succeeded);
-        const auto after = service->Published();
+        harness.fixture.ExcludeBorder();
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                OperationState::Succeeded);
+        const auto after = harness.service->Published();
         REQUIRE(after);
         CHECK(after->rebuiltTiles == 2);
         CHECK(after->reusedTiles == 2);
-        CHECK(builder->builds.load() == 6);
+        CHECK(harness.builder->builds.load() == 6);
         CHECK(before->tiles.tiles[2] == after->tiles.tiles[2]);
         CHECK(before->tiles.tiles[3]->ContentIdentity() == after->tiles.tiles[3]->ContentIdentity());
         CHECK(Query(after->tiles).Value().status != NavigationPathStatus::Reachable);
         CHECK(Query(before->tiles).Value().status == NavigationPathStatus::Reachable);  // Retained generation remains queryable.
-        auto current = Assets::ResolveCurrentCookGeneration(config.targetRoot);
+        auto current = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
         REQUIRE(current.HasValue());
-        auto contents = Assets::ReadCookGenerationContents(current.Value(), config.maximumCandidateBytes);
+        auto contents = Assets::ReadCookGenerationContents(current.Value(), harness.config.maximumCandidateBytes);
         REQUIRE(contents.HasValue());
         auto envelope = Assets::DecodeCookedArtifact(contents.Value().artifacts.front());
         REQUIRE(envelope.HasValue());
-        auto restored = DecodeNavigationCookedTileSet(envelope.Value().payload, config.maximumCandidateBytes);
+        auto restored = DecodeNavigationCookedTileSet(envelope.Value().payload, harness.config.maximumCandidateBytes);
         REQUIRE(restored.HasValue());
         CHECK(restored.Value().tiles[3]->ContentIdentity() == after->tiles.tiles[3]->ContentIdentity());
         CHECK(Query(restored.Value()).Value().status != NavigationPathStatus::Reachable);
-        service->Close();
-        service = NavigationBakeService::Create(config, operations, jobs).Value();
-        REQUIRE(Terminal(*service, operations, Submit(*service, fixture)).state == OperationState::Succeeded);
-        CHECK(service->Published()->reusedTiles == 4);
-        CHECK(builder->builds.load() == 6);
+        harness.service->Close();
+        harness.service = NavigationBakeService::Create(harness.config, harness.operations, harness.jobs).Value();
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                OperationState::Succeeded);
+        CHECK(harness.service->Published()->reusedTiles == 4);
+        CHECK(harness.builder->builds.load() == 6);
     }
 
     TEST_CASE("Latest request replaces pending work and shutdown cancels unadopted native baking") {
-        TempDirectory directory;
-        auto builder = std::make_shared<ControlledBuilder>();
-        builder->pause.store(true);
-        OperationStore operations(8, 16);
-        JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 32});
-        auto service = NavigationBakeService::Create(Config(directory, builder), operations, jobs).Value();
-        IncrementalBakeFixture fixture;
-        const auto first = Submit(*service, fixture);
-        for (std::size_t i = 0; i < 2000 && !builder->entered.load(); ++i)
+        BakeHarness harness;
+        harness.builder->pause.store(true);
+        const auto first = Submit(*harness.service, harness.fixture);
+        for (std::size_t i = 0; i < 2000 && !harness.builder->entered.load(); ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        REQUIRE(builder->entered.load());
-        fixture.ExcludeBorder();
-        const auto second = Submit(*service, fixture);
-        fixture.ExcludeBorder(16);
-        const auto third = Submit(*service, fixture);
-        builder->pause.store(false);
-        CHECK(Terminal(*service, operations, first).state == OperationState::Cancelled);
-        CHECK(Terminal(*service, operations, second).state == OperationState::Cancelled);
-        CHECK(Terminal(*service, operations, third).state == OperationState::Succeeded);
-        const auto last = service->Published();
-        builder->pause.store(true);
-        builder->entered.store(false);
-        fixture.compatibility.provider = Digest(80);
-        const auto closing = Submit(*service, fixture);
-        for (std::size_t i = 0; i < 2000 && !builder->entered.load(); ++i)
+        REQUIRE(harness.builder->entered.load());
+        CHECK(Submit(*harness.service, harness.fixture) == first);
+        harness.fixture.ExcludeBorder();
+        const auto second = Submit(*harness.service, harness.fixture);
+        harness.fixture.ExcludeBorder(16);
+        const auto third = Submit(*harness.service, harness.fixture);
+        harness.builder->pause.store(false);
+        CHECK(Terminal(*harness.service, harness.operations, first).state == OperationState::Cancelled);
+        CHECK(Terminal(*harness.service, harness.operations, second).state == OperationState::Cancelled);
+        CHECK(Terminal(*harness.service, harness.operations, third).state == OperationState::Succeeded);
+        const auto last = harness.service->Published();
+        harness.builder->pause.store(true);
+        harness.builder->entered.store(false);
+        harness.fixture.compatibility.provider = Digest(80);
+        const auto closing = Submit(*harness.service, harness.fixture);
+        for (std::size_t i = 0; i < 2000 && !harness.builder->entered.load(); ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        REQUIRE(builder->entered.load());
-        service->Close();
-        CHECK(Terminal(*service, operations, closing).state == OperationState::Cancelled);
-        CHECK(service->Published() == last);
-        CHECK(service->Submit({.input = fixture.Input(), .compatibility = fixture.compatibility, .tiles = fixture.Tiles()}).HasError());
+        REQUIRE(harness.builder->entered.load());
+        harness.service->Close();
+        CHECK(Terminal(*harness.service, harness.operations, closing).state == OperationState::Cancelled);
+        CHECK(harness.service->Published() == last);
+        CHECK(harness.service
+                  ->Submit(
+                      {.input = harness.fixture.Input(), .compatibility = harness.fixture.compatibility, .tiles = harness.fixture.Tiles()})
+                  .HasError());
     }
 
     TEST_CASE("Malformed current authority fails incremental publication and preserves the last valid lease") {
-        TempDirectory directory;
-        auto builder = std::make_shared<ControlledBuilder>();
-        OperationStore operations(4, 16);
-        JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 32});
-        auto config = Config(directory, builder);
-        auto service = NavigationBakeService::Create(config, operations, jobs).Value();
-        IncrementalBakeFixture fixture;
-        REQUIRE(Terminal(*service, operations, Submit(*service, fixture)).state == OperationState::Succeeded);
-        const auto before = service->Published();
+        BakeHarness harness;
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                OperationState::Succeeded);
+        const auto before = harness.service->Published();
         {
-            std::ofstream current(config.targetRoot / "current.json", std::ios::trunc);
+            std::ofstream current(harness.config.targetRoot / "current.json", std::ios::trunc);
             current << "invalid";
         }
-        fixture.ExcludeBorder();
-        CHECK(Terminal(*service, operations, Submit(*service, fixture)).state == OperationState::Failed);
-        CHECK(service->Published() == before);
-        CHECK(Assets::ResolveCurrentCookGeneration(config.targetRoot).HasError());
+        harness.fixture.ExcludeBorder();
+        CHECK(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state == OperationState::Failed);
+        CHECK(harness.service->Published() == before);
+        CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).HasError());
     }
 
     TEST_CASE("Source invalidation and replacement failure preserve current while post-rename failure reports committed truth") {
-        TempDirectory directory;
-        auto builder = std::make_shared<ControlledBuilder>();
         auto files = std::make_shared<ControlledFiles>();
-        OperationStore operations(4, 16);
-        JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 32});
-        auto config = Config(directory, builder);
-        config.files = files;
-        auto service = NavigationBakeService::Create(config, operations, jobs).Value();
-        IncrementalBakeFixture fixture;
-        REQUIRE(Terminal(*service, operations, Submit(*service, fixture)).state == OperationState::Succeeded);
-        const auto before = service->Published();
-        fixture.ExcludeBorder();
+        BakeHarness harness(files);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                OperationState::Succeeded);
+        const auto before = harness.service->Published();
+        harness.fixture.ExcludeBorder();
         files->holdCurrent.store(true);
         files->currentStaged.store(false);
-        const auto stale = Submit(*service, fixture);
+        const auto stale = Submit(*harness.service, harness.fixture);
         for (std::size_t i = 0; i < 2000 && !files->currentStaged.load(); ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         const bool staged = files->currentStaged.load();
-        service->Invalidate();
+        harness.service->Invalidate();
         files->holdCurrent.store(false);
         REQUIRE(staged);
-        CHECK(Terminal(*service, operations, stale).state == OperationState::Cancelled);
-        CHECK(service->Published() == before);
-        CHECK(Assets::ResolveCurrentCookGeneration(config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
+        CHECK(Terminal(*harness.service, harness.operations, stale).state == OperationState::Cancelled);
+        CHECK(harness.service->Published() == before);
+        CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
         files->failReplacement.store(true);
-        CHECK(Terminal(*service, operations, Submit(*service, fixture)).state == OperationState::Failed);
-        CHECK(service->Published() == before);
-        CHECK(Assets::ResolveCurrentCookGeneration(config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
+        CHECK(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state == OperationState::Failed);
+        CHECK(harness.service->Published() == before);
+        CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
         files->failReplacement.store(false);
         files->failAfterReplacement.store(true);
-        REQUIRE(Terminal(*service, operations, Submit(*service, fixture)).state == OperationState::Succeeded);
-        REQUIRE(service->Published()->generation.durabilityError);
-        CHECK(Assets::ResolveCurrentCookGeneration(config.targetRoot).Value().manifestDigest ==
-              service->Published()->generation.manifestDigest);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                OperationState::Succeeded);
+        REQUIRE(harness.service->Published()->generation.durabilityError);
+        CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest ==
+              harness.service->Published()->generation.manifestDigest);
     }
 
     TEST_CASE("Production cache reuse rejects valid foreign source envelopes and unchanged producer digests cannot hide edits") {
-        TempDirectory directory;
-        auto builder = std::make_shared<ControlledBuilder>();
-        OperationStore operations(4, 16);
-        JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 32});
-        auto config = Config(directory, builder);
-        auto service = NavigationBakeService::Create(config, operations, jobs).Value();
-        IncrementalBakeFixture fixture;
-        REQUIRE(Terminal(*service, operations, Submit(*service, fixture)).state == OperationState::Succeeded);
-        fixture.vertices.front().y = 0.2F;
-        REQUIRE(Terminal(*service, operations, Submit(*service, fixture)).state == OperationState::Succeeded);
-        CHECK(service->Published()->rebuiltTiles == 2);
-        CHECK(service->Published()->reusedTiles == 2);
-        const auto before = service->Published();
-        service->Close();
-        for (const auto &entry : std::filesystem::recursive_directory_iterator(config.cacheRoot)) {
+        BakeHarness harness;
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                OperationState::Succeeded);
+        harness.fixture.vertices.front().y = 0.2F;
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                OperationState::Succeeded);
+        CHECK(harness.service->Published()->rebuiltTiles == 2);
+        CHECK(harness.service->Published()->reusedTiles == 2);
+        const auto before = harness.service->Published();
+        harness.service->Close();
+        for (const auto &entry : std::filesystem::recursive_directory_iterator(harness.config.cacheRoot)) {
             if (entry.path().extension() != ".cooked")
                 continue;
             std::ifstream file(entry.path(), std::ios::binary);
@@ -346,9 +361,79 @@ namespace Horo::Application {
             std::ofstream output(entry.path(), std::ios::binary | std::ios::trunc);
             output.write(reinterpret_cast<const char *>(encoded.data()), static_cast<std::streamsize>(encoded.size()));
         }
-        service = NavigationBakeService::Create(config, operations, jobs).Value();
-        CHECK(Terminal(*service, operations, Submit(*service, fixture)).state == OperationState::Failed);
-        CHECK_FALSE(service->Published());
-        CHECK(Assets::ResolveCurrentCookGeneration(config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
+        harness.service = NavigationBakeService::Create(harness.config, harness.operations, harness.jobs).Value();
+        CHECK(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state == OperationState::Failed);
+        CHECK_FALSE(harness.service->Published());
+        CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
+    }
+
+    TEST_CASE("Locked incremental publication preserves every unrelated artifact and rejects another writer") {
+        BakeHarness harness;
+        const auto otherId = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000002").Value();
+        const auto otherType = Assets::AssetTypeId::Parse("core.mesh").Value();
+        const std::vector<std::uint8_t> payload{1, 2, 3};
+        const auto artifact = Assets::EncodeCookedArtifact({.id = otherId,
+                                                            .type = otherType,
+                                                            .target = harness.config.target,
+                                                            .cacheKeyDigest = Digest(70),
+                                                            .sourceDigest = Digest(71),
+                                                            .payloadDigest = ComputeSha256(std::as_bytes(std::span{payload})),
+                                                            .payload = payload})
+                                  .Value();
+        const Assets::AssetCookManifestEntry other{.assetId = otherId,
+                                                   .assetType = otherType,
+                                                   .artifactFile = otherId.ToString() + ".cooked",
+                                                   .artifactHash = ComputeSha256(std::as_bytes(std::span{artifact}))};
+        REQUIRE(Assets::PublishCookArtifactReplacement(harness.config.targetRoot, harness.config.target, other, artifact,
+                                                       harness.config.maximumCandidateBytes, harness.config.cookLimits,
+                                                       {.files = harness.config.files.get()})
+                    .HasValue());
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                OperationState::Succeeded);
+        const auto before = harness.service->Published();
+        harness.fixture.ExcludeBorder();
+        {
+            auto lock = harness.config.files->TryAcquireExclusive(harness.config.targetRoot / ".cook-writer.lock", "competing test writer");
+            REQUIRE(lock.HasValue());
+            CHECK(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                  OperationState::Failed);
+            CHECK(harness.service->Published() == before);
+            CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest ==
+                  before->generation.manifestDigest);
+        }
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                OperationState::Succeeded);
+        const auto current = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value();
+        const auto contents = Assets::ReadCookGenerationContents(current, harness.config.maximumCandidateBytes).Value();
+        REQUIRE(contents.entries.size() == 2);
+        CHECK(contents.entries.back().assetId == otherId);
+        CHECK(contents.entries.back().artifactHash == other.artifactHash);
+        CHECK(contents.artifacts.back() == artifact);
+    }
+
+    TEST_CASE("Removing all walkable geometry publishes a complete empty tile closure without retaining old topology") {
+        BakeHarness harness;
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                OperationState::Succeeded);
+        const auto before = harness.service->Published();
+        harness.fixture.ExcludeBorder();
+        harness.fixture.modifiers.front().localBounds = {{-1, -1, -1}, {33, 3, 9}};
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                OperationState::Succeeded);
+        const auto after = harness.service->Published();
+        REQUIRE(after->tiles.tiles.size() == 4);
+        CHECK(after->rebuiltTiles == 4);
+        CHECK(after->reusedTiles == 0);
+        for (const auto &tile : after->tiles.tiles) {
+            CHECK(tile->Topology().IsEmpty());
+            CHECK(tile->Topology().polygons.empty());
+        }
+        CHECK(Query(before->tiles).Value().status == NavigationPathStatus::Reachable);
+        const auto contents = Assets::ReadCookGenerationContents(after->generation, harness.config.maximumCandidateBytes).Value();
+        const auto envelope = Assets::DecodeCookedArtifact(contents.artifacts.front()).Value();
+        const auto decoded = DecodeNavigationCookedTileSet(envelope.payload, harness.config.maximumCandidateBytes).Value();
+        CHECK(std::ranges::all_of(decoded.tiles, [](const auto &tile) {
+            return tile->Topology().IsEmpty();
+        }));
     }
 }  // namespace Horo::Application
