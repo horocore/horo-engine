@@ -198,6 +198,24 @@ namespace Horo::Destruction {
         CHECK(LoadChunkCollisionArtifacts(reference, encoded, fixture.request.limits).HasError());
     }
 
+    TEST_CASE("Collision bundle decoding rejects every truncated prefix with a valid payload digest", "[destruction][collision][archive]") {
+        CollisionFixture fixture{2};
+        const auto collision = CookChunkCollision(*fixture.mesh, fixture.request);
+        REQUIRE(collision.HasValue());
+        const auto encoded = EncodeChunkCollisionArtifacts(*collision.Value());
+        REQUIRE(encoded.HasValue());
+        ChunkCollisionBundleReference reference{fixture.request.content, fixture.request.meshIntegrityDigest, fixture.request.target, {}};
+        const std::span<const std::uint8_t> bytes{encoded.Value()};
+        for (std::size_t size = 0; size < bytes.size(); ++size) {
+            CAPTURE(size);
+            const auto prefix = bytes.first(size);
+            reference.payloadDigest = ComputeSha256(std::as_bytes(prefix));
+            CHECK(LoadChunkCollisionArtifacts(reference, prefix, fixture.request.limits).HasError());
+        }
+        reference.payloadDigest = ComputeSha256(std::as_bytes(bytes));
+        CHECK(LoadChunkCollisionArtifacts(reference, bytes, fixture.request.limits).HasValue());
+    }
+
     TEST_CASE("DFR collision rejects stale provenance, explicit missing materials and bounded limits", "[destruction][collision]") {
         CollisionFixture fixture;
         SECTION("content revision") {

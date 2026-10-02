@@ -1,6 +1,7 @@
 #include "Horo/Destruction/ChunkCollisionArtifact.h"
 
 #include <algorithm>
+#include <concepts>
 #include <new>
 
 namespace Horo::Destruction {
@@ -50,36 +51,23 @@ namespace Horo::Destruction {
             explicit Reader(std::span<const std::uint8_t> bytes) : bytes_(bytes) {}
 
             bool Bytes(std::span<std::uint8_t> output) {
-                if (output.size() > bytes_.size())
+                std::span<const std::uint8_t> encoded;
+                if (!Payload(output.size(), encoded))
                     return false;
-                std::ranges::copy(bytes_.first(output.size()), output.begin());
-                bytes_ = bytes_.subspan(output.size());
+                std::ranges::copy(encoded, output.begin());
                 return true;
             }
 
             bool U64(std::uint64_t &value) {
-                std::array<std::uint8_t, 8> bytes{};
-                if (!Bytes(bytes))
-                    return false;
-                value = 0;
-                for (unsigned i = 0; i < bytes.size(); ++i)
-                    value |= static_cast<std::uint64_t>(bytes[i]) << (i * 8U);
-                return true;
+                return Unsigned(value);
             }
 
             bool U32(std::uint32_t &value) {
-                std::array<std::uint8_t, 4> bytes{};
-                if (!Bytes(bytes))
-                    return false;
-                value = 0;
-                for (unsigned i = 0; i < bytes.size(); ++i)
-                    value |= static_cast<std::uint32_t>(bytes[i]) << (i * 8U);
-                return true;
+                return Unsigned(value);
             }
 
             bool U8(std::uint8_t &value) {
-                std::span<std::uint8_t> output{&value, 1};
-                return Bytes(output);
+                return Unsigned(value);
             }
 
             bool Payload(std::uint64_t size, std::span<const std::uint8_t> &output) {
@@ -95,6 +83,17 @@ namespace Horo::Destruction {
             }
 
         private:
+            /** @brief Reads one complete little-endian scalar without changing the output on truncation. */
+            template <std::unsigned_integral Integer> bool Unsigned(Integer &value) {
+                std::span<const std::uint8_t> encoded;
+                if (!Payload(sizeof(Integer), encoded))
+                    return false;
+                value = 0;
+                for (unsigned index = 0; index < sizeof(Integer); ++index)
+                    value |= static_cast<Integer>(encoded[index]) << (index * 8U);
+                return true;
+            }
+
             std::span<const std::uint8_t> bytes_;
         };
 
