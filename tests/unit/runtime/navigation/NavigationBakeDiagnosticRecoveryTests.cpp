@@ -378,4 +378,22 @@ namespace Horo::Application {
         REQUIRE(routed.HasValue());
         REQUIRE_FALSE(routed.Value());
     }
+
+    TEST_CASE("Invalid UTF-8 source hints are rejected before native path conversion or host navigation",
+              "[navigation][diagnostics][security]") {
+        RoutingFixture fixture;
+        fixture.source.target.relativePath = std::string{"\xC3\x28", 2};
+        REQUIRE_FALSE(
+            fixture.journal->Record({.operation = 1, .event = NavigationBakeDiagnosticEvent::TileFailed, .source = fixture.source}));
+        REQUIRE(fixture.journal->Snapshot().submissionFailures == 1);
+        std::size_t callbacks{};
+        Navigator navigator{[&callbacks](const auto &, const auto &) noexcept {
+            ++callbacks;
+            return true;
+        }};
+        const auto routed = fixture.journal->Navigate(fixture.journal->Snapshot().records.back().sequence, fixture.config.project,
+                                                      fixture.config.definition, std::span{&fixture.source, 1}, navigator);
+        REQUIRE(routed.HasError());
+        REQUIRE(callbacks == 0);
+    }
 }  // namespace Horo::Application
