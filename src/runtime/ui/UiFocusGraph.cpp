@@ -91,6 +91,8 @@ namespace Horo::Runtime::Ui {
     bool UiFocusSnapshot::IsValid() const noexcept {
         return owner.IsValid() && (!focused.has_value() || focused->IsValid()) && (!activeModal.has_value() || activeModal->IsValid()) &&
                modalDepth <= MaximumUiFocusModalDepth &&
-               ((modalDepth == 0 && !activeModal.has_value()) || (modalDepth != 0 && activeModal.has_value()));
+               ((modalDepth == 0 && !activeModal.has_value() && !modalRoot.has_value()) ||
+                (modalDepth != 0 && activeModal.has_value() && modalRoot.has_value() && modalRoot->IsValid() &&
+                 modalRoot->element.ownership == owner.instance.ownership));
     }
 }  // namespace Horo::Runtime::Ui

@@ -132,6 +132,7 @@ namespace Horo::Runtime::Ui {
             const auto second = extractor.Extract(tree, Descriptor(tree, 3), fixture.View()).Value();
             REQUIRE(publisher.Publish(second, announcement).HasValue());
             REQUIRE(publisher.Changes().empty());
+            REQUIRE(publisher.Acknowledge(publisher.Announcements().front().cursor).HasValue());
             const auto third = extractor.Extract(tree, Descriptor(tree, 4), fixture.View()).Value();
             REQUIRE(publisher.Publish(third, announcement).HasValue());
             REQUIRE(publisher.Changes().size() == 1);

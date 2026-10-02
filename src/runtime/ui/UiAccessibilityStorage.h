@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Runtime/Ui/UiAccessibility.h"
+#include "Horo/Runtime/Ui/UiFocusGraph.h"
 
 #include <atomic>
 #include <cstddef>
@@ -28,6 +29,9 @@ namespace Horo::Runtime::Ui {
         std::vector<UiAccessibilityRelation> relations;
         std::vector<UiAccessibilityAction> actions;
         std::vector<char> text;
+        std::vector<UiAccessibilityNodeId> readingOrder;
+        std::vector<UiAccessibilityNodeId> focusOrder;
+        std::optional<UiFocusSnapshot> focusState;
 
         explicit Storage(const UiAccessibilityLimits &limits);
 
@@ -46,6 +50,9 @@ namespace Horo::Runtime::Ui {
         std::vector<AccessibilityInternal::ProjectionLookupEntry> lookupScratch;
         std::vector<UiElementHandle> preorderScratch;
         std::vector<UiAccessibilityNodeInput> readingScratch;
+        std::vector<UiAccessibilityNodeInput> focusProjectionScratch;
+        std::vector<UiFocusTarget> focusOrderScratch;
+        std::optional<UiFocusScope> focusScope;
 
         explicit Storage(const UiAccessibilityExtractorDescriptor &source);
 

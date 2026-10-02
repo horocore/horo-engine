@@ -425,6 +425,15 @@ namespace Horo::Runtime::Ui {
     Result<UiAccessibilitySnapshot> UiAccessibilityExtractor::Extract(const UiElementTree &tree,
                                                                       const UiAccessibilitySnapshotDescriptor &descriptor,
                                                                       const UiAccessibilityProjection &projection) {
+        return ExtractPrepared(tree, descriptor, projection);
+    }
+
+    /** @copydoc UiAccessibilityExtractor::ExtractPrepared */
+    Result<UiAccessibilitySnapshot> UiAccessibilityExtractor::ExtractPrepared(const UiElementTree &tree,
+                                                                              const UiAccessibilitySnapshotDescriptor &descriptor,
+                                                                              const UiAccessibilityProjection &projection,
+                                                                              const std::span<const UiFocusTarget> focusOrder,
+                                                                              const UiFocusSnapshot *focusState) {
         if (!storage_ || storage_->lifecycle != UiAccessibilityExtractorState::Active)
             return Failure<UiAccessibilitySnapshot>(UiErrors::AccessibilityLifecycleUnavailable);
         if (const auto validation = ValidateProjection(tree, descriptor, projection, storage_->descriptor, storage_->lastRevision,
@@ -459,6 +468,11 @@ namespace Horo::Runtime::Ui {
 
         try {
             slot->Publish(tree, descriptor, reading, storage_->lookupScratch);
+            if (focusState) {
+                slot->focusState = *focusState;
+                for (const auto &target : focusOrder)
+                    slot->focusOrder.push_back({target.element.ownership, target.element.slot, target.element.generation});
+            }
         } catch (const std::bad_alloc &) {
             return Failure<UiAccessibilitySnapshot>(UiErrors::CapacityExceeded);
         }
