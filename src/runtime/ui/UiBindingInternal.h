@@ -6,6 +6,9 @@
 #include <memory>
 
 namespace Horo::Runtime::Ui::BindingInternal {
+    /** @brief Validates a borrowed runtime value using the same closed type/range rules as descriptor fallbacks. */
+    [[nodiscard]] Result<void> ValidateValue(const UiBindingValue &value, UiBindingValueType type, const UiBindingValueLimits &limits);
+
     [[nodiscard]] constexpr bool IsLowercaseAlphaNumeric(const unsigned char value) noexcept {
         return (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9');
     }

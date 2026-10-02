@@ -72,6 +72,7 @@ namespace Horo::Runtime::Ui {
         std::vector<UiLayoutChildPlacement> placementScratch;
         std::vector<UiLayoutLine> lineScratch;
         std::vector<UiLayoutInvalidation> invalidations;
+        std::vector<UiLayoutInvalidation> invalidationScratch;
         std::vector<std::shared_ptr<UiLayoutSnapshot::Storage>> slots;
         std::shared_ptr<UiLayoutSnapshot::Storage> current;
         std::size_t nextSlot{};
@@ -92,6 +93,7 @@ namespace Horo::Runtime::Ui {
             placementScratch.reserve(source.elementCapacity);
             lineScratch.reserve(source.elementCapacity);
             invalidations.reserve(source.invalidationCapacity);
+            invalidationScratch.reserve(source.invalidationCapacity);
             slots.reserve(source.concurrentSnapshots);
             for (std::uint32_t index = 0; index < source.concurrentSnapshots; ++index)
                 slots.push_back(std::make_shared<UiLayoutSnapshot::Storage>(source.elementCapacity));
@@ -523,6 +525,56 @@ namespace Horo::Runtime::Ui {
         if (storage_->invalidations.size() == storage_->descriptor.invalidationCapacity)
             return Failure(UiErrors::CapacityExceeded);
         storage_->invalidations.push_back(invalidation);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiLayoutEngine::InvalidateBatch */
+    Result<void> UiLayoutEngine::InvalidateBatch(const UiElementTree &tree, const std::span<const UiLayoutInvalidation> invalidations) {
+        if (!storage_ || storage_->lifecycle != UiLayoutEngineState::Active || tree.State() != UiElementTreeState::Active)
+            return Failure(UiErrors::LayoutLifecycleUnavailable);
+        const auto &owner = storage_->descriptor;
+        if (tree.Instance() != owner.instance || tree.Canvas() != owner.canvas || tree.SourceDocument() != owner.document)
+            return Failure(UiErrors::HandleOwnerMismatch);
+        if (invalidations.size() > MaximumUiStructuralCommands)
+            return Failure(UiErrors::CapacityExceeded);
+        const auto validate = [&tree](const UiLayoutInvalidation &item) -> Result<void> {
+            if (!item.tree.IsValid() || !IsDirtyKind(item.kind))
+                return Failure(UiErrors::LayoutInvalid);
+            if (item.tree != tree.Revision())
+                return Failure(UiErrors::RevisionStale);
+            if (item.kind != UiLayoutDirtyKind::All) {
+                if (const auto element = tree.Get(item.element); element.HasError())
+                    return Result<void>::Failure(element.ErrorValue());
+            }
+            return Result<void>::Success();
+        };
+        for (const auto &item : storage_->invalidations)
+            if (const auto valid = validate(item); valid.HasError())
+                return valid;
+        for (const auto &item : invalidations)
+            if (const auto valid = validate(item); valid.HasError())
+                return valid;
+
+        auto &candidate = storage_->invalidationScratch;
+        candidate = storage_->invalidations;
+        for (const auto &item : invalidations) {
+            if (std::ranges::find(candidate, UiLayoutDirtyKind::All, &UiLayoutInvalidation::kind) != candidate.end())
+                continue;
+            if (item.kind == UiLayoutDirtyKind::All) {
+                candidate.clear();
+                candidate.push_back(item);
+                continue;
+            }
+            const auto existing = std::ranges::find(candidate, item.element, &UiLayoutInvalidation::element);
+            if (existing != candidate.end()) {
+                existing->kind = std::max(existing->kind, item.kind);
+                continue;
+            }
+            if (candidate.size() == owner.invalidationCapacity)
+                return Failure(UiErrors::CapacityExceeded);
+            candidate.push_back(item);
+        }
+        storage_->invalidations.swap(candidate);
         return Result<void>::Success();
     }
 

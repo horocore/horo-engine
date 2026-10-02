@@ -918,4 +918,20 @@ namespace Horo::Runtime::Ui::UiErrors {
                                                       "Reduce the bounded binding contribution or use a host-admitted capacity.",
                                                       true,
                                                       true};
+    /** @copydoc BindingValueInvalid */
+    const ErrorCodeDescriptor BindingValueInvalid{UiDomain,
+                                                  ErrorCode{"runtime_ui.binding.value_invalid"},
+                                                  ErrorSeverity::Error,
+                                                  "A runtime binding value violates its typed contract.",
+                                                  "Publish a bounded value matching the exact property and target limits.",
+                                                  false,
+                                                  true};
+    /** @copydoc BindingLifecycleUnavailable */
+    const ErrorCodeDescriptor BindingLifecycleUnavailable{UiDomain,
+                                                          ErrorCode{"runtime_ui.binding.lifecycle_unavailable"},
+                                                          ErrorSeverity::Error,
+                                                          "The retained binding owner or provider registration is closed.",
+                                                          "Prepare a new binding generation for the active owner.",
+                                                          false,
+                                                          true};
 }  // namespace Horo::Runtime::Ui::UiErrors

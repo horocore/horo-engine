@@ -674,6 +674,14 @@ namespace Horo::Runtime::Ui {
          * @return Success or typed validation/capacity/lifecycle failure.
          */
         [[nodiscard]] Result<void> Invalidate(const UiLayoutInvalidation &invalidation);
+        /**
+         * @brief Atomically queues exact-tree invalidations for binding/content publication.
+         * @param tree Active retained tree owned by this layout engine.
+         * @param invalidations Bounded dirty evidence; duplicate elements merge to the strongest kind.
+         * @return Success or typed owner/revision/capacity/lifecycle failure, leaving the queue unchanged on failure.
+         * @pre Serialized on the Runtime UI owner thread before Update; no allocation occurs.
+         */
+        [[nodiscard]] Result<void> InvalidateBatch(const UiElementTree &tree, std::span<const UiLayoutInvalidation> invalidations);
         /** @brief Evaluates dirty work and atomically publishes a complete immutable generation.
          * @param tree Exact active retained tree.
          * @param request Coherent source revisions, root geometry, and synchronous evaluator.
