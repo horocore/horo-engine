@@ -41,8 +41,11 @@ namespace Horo::Application {
         /** @brief Rejects unsafe relative components and ancestors before resolving a regular file. */
         [[nodiscard]] Result<std::filesystem::path> ResolvePath(const std::filesystem::path &root, const std::string &relative) {
             using namespace Navigation;
-            const std::filesystem::path path{relative};
-            if (!SafePathText(relative) || path.has_root_path() || path.lexically_normal().generic_string() != relative ||
+            if (!SafePathText(relative))
+                return Result<std::filesystem::path>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+            const std::u8string utf8{relative.begin(), relative.end()};
+            const std::filesystem::path path{utf8};
+            if (path.has_root_path() || path.lexically_normal().generic_u8string() != utf8 ||
                 std::ranges::any_of(path, [](const auto &part) {
                 return part == ".." || part == "." || part.empty();
             }))
@@ -50,8 +53,7 @@ namespace Horo::Application {
             auto candidate = root / path;
             if (!HasSafeAncestors(candidate))
                 return Result<std::filesystem::path>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
-            std::error_code error;
-            if (!std::filesystem::is_regular_file(candidate, error) || error)
+            if (std::error_code error; !std::filesystem::is_regular_file(candidate, error) || error)
                 return Result<std::filesystem::path>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
             return Result<std::filesystem::path>::Success(std::move(candidate));
         }
@@ -157,8 +159,7 @@ namespace Horo::Application {
     bool NavigationBakeDiagnostics::ApplyDetailLimit(NavigationBakeDiagnosticRecord &record) {
         if (record.result != BuildOutputResult::None || record.event == NavigationBakeDiagnosticEvent::Suppressed)
             return true;
-        const auto count = counts_[record.operation]++;
-        if (count < config_.maximumRecordsPerOperation)
+        if (const auto count = counts_[record.operation]++; count < config_.maximumRecordsPerOperation)
             return true;
         ++suppressedTotal_;
         const auto total = ++suppressed_[record.operation];
@@ -264,12 +265,12 @@ namespace Horo::Application {
     }
 
     /** @copydoc NavigationBakeDiagnostics::Navigate */
-    Result<bool> NavigationBakeDiagnostics::Navigate(
-        const std::uint64_t sequence, const NavigationDiagnosticProjectId project, const Assets::AssetId definition,
-        const std::span<const NavigationDiagnosticSource> sources,
-        const std::function<bool(const NavigationDiagnosticTarget &, const std::filesystem::path &)> &navigate) const {
+    Result<bool> NavigationBakeDiagnostics::Navigate(const std::uint64_t sequence, const NavigationDiagnosticProjectId project,
+                                                     const Assets::AssetId definition,
+                                                     const std::span<const NavigationDiagnosticSource> sources,
+                                                     INavigationDiagnosticNavigator &navigator) const {
         using namespace Navigation;
-        if (project != config_.project || definition != config_.definition || !navigate || sources.size() > 4096)
+        if (project != config_.project || definition != config_.definition || sources.size() > 4096)
             return Result<bool>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         std::optional<NavigationDiagnosticSource> source;
         {
@@ -292,7 +293,7 @@ namespace Horo::Application {
         auto path = ResolvePath(config_.projectRoot, target.relativePath);
         if (path.HasError())
             return Result<bool>::Failure(path.ErrorValue());
-        return Result<bool>::Success(navigate(target, path.Value()));
+        return navigator.Navigate(target, path.Value());
     }
 
     /** @copydoc NavigationBakeDiagnostics::Export */

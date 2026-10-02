@@ -122,7 +122,7 @@ namespace Horo::Application {
         Directory directory;
         IncrementalBakeFixture fixture;
         const auto capturedSource = Source(fixture);
-        std::ofstream(directory.root / capturedSource.target.relativePath) << "source";
+        std::ofstream(directory.root / Utf8Path(capturedSource.target.relativePath)) << "source";
         {
             auto config = DiagnosticConfig(directory);
             auto journal = NavigationBakeDiagnostics::Create(config).Value();
@@ -154,11 +154,12 @@ namespace Horo::Application {
             std::ranges::find(snapshot.records, NavigationBakeDiagnosticEvent::TileFailed, &NavigationBakeDiagnosticRecord::event);
         REQUIRE(failure != snapshot.records.end());
         bool invoked{};
-        auto routed = recovered->Navigate(failure->sequence, recoveredConfig.project, recoveredConfig.definition,
-                                          std::span{&capturedSource, 1}, [&invoked, &directory](const auto &target, const auto &path) {
+        Navigator navigator{[&invoked, &directory](const auto &target, const auto &path) noexcept {
             invoked = true;
-            return target.object.value == 11 && path == directory.root / target.relativePath;
-        });
+            return target.object.value == 11 && path == directory.root / Utf8Path(target.relativePath);
+        }};
+        auto routed = recovered->Navigate(failure->sequence, recoveredConfig.project, recoveredConfig.definition,
+                                          std::span{&capturedSource, 1}, navigator);
         REQUIRE(routed.HasValue());
         REQUIRE(routed.Value());
         REQUIRE(invoked);

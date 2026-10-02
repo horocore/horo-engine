@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <fstream>
+#include <stdexcept>
 
 namespace Horo::Application {
     using namespace Navigation;
@@ -10,17 +11,36 @@ namespace Horo::Application {
     using namespace DiagnosticsTestSupport;
 
     namespace {
+        /** @brief Owned host adapter normalizing its private library failure before the public result boundary. */
+        class FailingNavigator final : public INavigationDiagnosticNavigator {
+        public:
+            Error failure{WrapError(NavigationErrors::BakeInputFailed, MakeError(NavigationErrors::BakeInputStale))};
+            bool privateException{};
+
+            Result<bool> Navigate(const NavigationDiagnosticTarget &, const std::filesystem::path &) noexcept override {
+                if (!privateException)
+                    return Result<bool>::Failure(failure);
+                try {
+                    throw std::logic_error{"private source adapter failure"};
+                } catch (const std::logic_error &error) {
+                    auto normalized = failure;
+                    normalized.message = error.what();
+                    return Result<bool>::Failure(std::move(normalized));
+                }
+            }
+        };
+
         /** @brief Owns a valid routing destination and all stores beyond each callback. */
         struct RoutingFixture {
             Directory directory;
             NavigationBakeDiagnosticsConfig config{DiagnosticConfig(directory)};
             std::shared_ptr<NavigationBakeDiagnostics> journal{NavigationBakeDiagnostics::Create(config).Value()};
-            TelemetryOwner telemetry{journal};
+            [[no_unique_address]] TelemetryOwner telemetry{journal};
             IncrementalBakeFixture input;
             NavigationDiagnosticSource source{Source(input)};
 
             RoutingFixture() {
-                std::ofstream(directory.root / source.target.relativePath) << "source";
+                std::ofstream(directory.root / Utf8Path(source.target.relativePath)) << "source";
             }
 
             [[nodiscard]] std::uint64_t Record() const {
@@ -112,10 +132,10 @@ namespace Horo::Application {
         auto &source = fixture.source;
         const auto sequence = fixture.Record();
         std::size_t callbacks{};
-        const auto navigate = [&callbacks](const auto &, const auto &) {
+        Navigator navigate{[&callbacks](const auto &, const auto &) noexcept {
             ++callbacks;
             return true;
-        };
+        }};
         SECTION("source revision changed") {
             source.observation.revision = Id<NavigationSourceRevision>(2);
         }
@@ -132,7 +152,7 @@ namespace Horo::Application {
             source.target.asset = Asset("3");
         }
         SECTION("source deleted") {
-            std::filesystem::remove(fixture.directory.root / source.target.relativePath);
+            std::filesystem::remove(fixture.directory.root / Utf8Path(source.target.relativePath));
         }
         SECTION("duplicate current mapping") {
             const std::array duplicate{source, source};
@@ -140,6 +160,21 @@ namespace Horo::Application {
             REQUIRE(callbacks == 0);
             return;
         }
+        REQUIRE(journal->Navigate(sequence, config.project, config.definition, std::span{&source, 1}, navigate).HasError());
+        REQUIRE(callbacks == 0);
+    }
+
+    TEST_CASE("Foreign project and definition cannot invoke a valid source navigator", "[navigation][diagnostics][security]") {
+        RoutingFixture fixture;
+        const auto &config = fixture.config;
+        const auto &journal = fixture.journal;
+        auto &source = fixture.source;
+        const auto sequence = fixture.Record();
+        std::size_t callbacks{};
+        Navigator navigate{[&callbacks](const auto &, const auto &) noexcept {
+            ++callbacks;
+            return true;
+        }};
         SECTION("foreign project") {
             REQUIRE(journal
                         ->Navigate(sequence, NavigationDiagnosticProjectId::Create(2).Value(), config.definition, std::span{&source, 1},
@@ -153,8 +188,6 @@ namespace Horo::Application {
             REQUIRE(callbacks == 0);
             return;
         }
-        REQUIRE(journal->Navigate(sequence, config.project, config.definition, std::span{&source, 1}, navigate).HasError());
-        REQUIRE(callbacks == 0);
     }
 
     TEST_CASE("Even matching source identities cannot route malicious or symlinked paths", "[navigation][diagnostics][security]") {
@@ -199,11 +232,12 @@ namespace Horo::Application {
                                  .message = "failed",
                                  .source = source}));
         std::size_t callbacks{};
-        auto routed = journal->Navigate(journal->Snapshot().records.back().sequence, config.project, config.definition,
-                                        std::span{&source, 1}, [&callbacks](const auto &, const auto &) {
+        Navigator navigator{[&callbacks](const auto &, const auto &) noexcept {
             ++callbacks;
             return true;
-        });
+        }};
+        auto routed = journal->Navigate(journal->Snapshot().records.back().sequence, config.project, config.definition,
+                                        std::span{&source, 1}, navigator);
         REQUIRE(routed.HasError());
         REQUIRE(callbacks == 0);
     }
@@ -222,14 +256,15 @@ namespace Horo::Application {
         SECTION("scene object") {
             source.target.asset = {};
         }
-        std::ofstream(directory.root / source.target.relativePath) << "source";
+        std::ofstream(directory.root / Utf8Path(source.target.relativePath)) << "source";
         REQUIRE(journal->Record({.operation = 1, .event = NavigationBakeDiagnosticEvent::TileFailed, .source = source}));
         std::size_t callbacks{};
-        auto routed = journal->Navigate(journal->Snapshot().records.back().sequence, config.project, config.definition,
-                                        std::span{&source, 1}, [&callbacks, &source, &directory](const auto &target, const auto &path) {
+        Navigator navigator{[&callbacks, &source, &directory](const auto &target, const auto &path) noexcept {
             ++callbacks;
-            return target == source.target && path == directory.root / source.target.relativePath;
-        });
+            return target == source.target && path == directory.root / Utf8Path(source.target.relativePath);
+        }};
+        auto routed = journal->Navigate(journal->Snapshot().records.back().sequence, config.project, config.definition,
+                                        std::span{&source, 1}, navigator);
         REQUIRE(routed.HasValue());
         REQUIRE(routed.Value());
         REQUIRE(callbacks == 1);
@@ -313,5 +348,34 @@ namespace Horo::Application {
         REQUIRE(journal->Snapshot().persistenceDrops == 1);
         REQUIRE(config.history->Snapshot().empty());
         REQUIRE(config.output->SnapshotIfChanged(0)->records.back().code.Value() == "navigation.bake.history_unavailable");
+    }
+
+    TEST_CASE("Owned source navigation failures preserve typed identity and cause after private normalization",
+              "[navigation][diagnostics][routing]") {
+        RoutingFixture fixture;
+        FailingNavigator navigator;
+        SECTION("typed host failure") { /* Return the already normalized failure. */ }
+        SECTION("private adapter exception") {
+            navigator.privateException = true;
+        }
+        const auto routed = fixture.journal->Navigate(fixture.Record(), fixture.config.project, fixture.config.definition,
+                                                      std::span{&fixture.source, 1}, navigator);
+        REQUIRE(routed.HasError());
+        REQUIRE(routed.ErrorValue().code.Value() == navigator.failure.code.Value());
+        REQUIRE(routed.ErrorValue().domain.Value() == navigator.failure.domain.Value());
+        REQUIRE(routed.ErrorValue().cause.Get() == navigator.failure.cause.Get());
+        if (navigator.privateException)
+            REQUIRE(routed.ErrorValue().message == "private source adapter failure");
+    }
+
+    TEST_CASE("A valid source adapter may decline navigation without fabricating a failure", "[navigation][diagnostics][routing]") {
+        RoutingFixture fixture;
+        Navigator navigator{[](const auto &, const auto &) noexcept {
+            return false;
+        }};
+        const auto routed = fixture.journal->Navigate(fixture.Record(), fixture.config.project, fixture.config.definition,
+                                                      std::span{&fixture.source, 1}, navigator);
+        REQUIRE(routed.HasValue());
+        REQUIRE_FALSE(routed.Value());
     }
 }  // namespace Horo::Application

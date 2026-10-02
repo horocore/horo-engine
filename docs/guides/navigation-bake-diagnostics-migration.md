@@ -72,14 +72,27 @@ Use the retained journal sequence with `Navigate`, passing the current project
 and definition and a fresh authoritative source ownership map. The map must
 reflect current Scene object/asset existence and exact producer, contribution,
 revision, digest and authored destination. Missing, changed or ambiguous entries
-are rejected before the host callback.
+are rejected before invoking the host adapter.
 
 Paths are hints within the project root. Navigation rejects noncanonical relative
 paths, traversal, drive/absolute paths, invalid UTF-8, missing files and symlinked
-components, including project-root ancestors. The callback receives the stable
-authored target and validated absolute file path, outside the journal lock. Hosts
-must perform navigation on their owning thread and preserve source ownership
-while handling the callback.
+components, including project-root ancestors. The host-owned
+`INavigationDiagnosticNavigator` adapter receives the stable authored target and
+validated absolute file path, outside the journal lock. Its synchronous `noexcept`
+method returns `Result<bool>`: expected navigation failures and their cause chains
+pass through unchanged, while false denotes a declined action. Hosts convert
+private UI/filesystem exceptions at that adapter's owning boundary before
+returning. The interface's one virtual call is a tooling-only action enforcing
+the exception-free application boundary; it is not frame work. Hosts perform
+navigation on their owning thread and preserve source ownership through the
+synchronous call. No callback or adapter reference is retained.
+
+This replaces the initial boolean callback with a typed host adapter. The affected
+consumers in this change are the production/recovery routing tests and public
+header consumers. New presentation adapters implement
+`INavigationDiagnosticNavigator` and return their existing normalized application
+errors. UTF-8 path hints are converted through `char8_t` paths and compared as
+UTF-8 on Linux, macOS and Windows.
 
 The generic Build Output `source` field stays unset because its ordinary file
 opener cannot validate navigation source identities. A navigation presentation

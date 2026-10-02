@@ -11,7 +11,6 @@
 #include "Horo/Runtime/Scene/SceneIdentity.h"
 
 #include <deque>
-#include <functional>
 #include <mutex>
 #include <unordered_map>
 
@@ -94,6 +93,21 @@ namespace Horo::Application {
         std::size_t maximumRecordsPerOperation{128};
     };
 
+    /** @brief Host-owned, exception-free adapter for one synchronous authored-source navigation action.
+     * @details The adapter converts private filesystem/UI exceptions at their owned boundary before returning.
+     * Navigation is tooling-only; this interface enforces typed failure propagation without storing a callback owner.
+     */
+    class INavigationDiagnosticNavigator {
+    public:
+        virtual ~INavigationDiagnosticNavigator() = default;
+        /** @brief Navigates the validated authored destination on its owning host thread.
+         * @param target Stable Scene object or asset identity validated against current ownership.
+         * @param path Validated absolute source file path.
+         * @return True for completed navigation, false for a declined action, or an owned typed failure with its causes. */
+        [[nodiscard]] virtual Result<bool> Navigate(const NavigationDiagnosticTarget &target,
+                                                    const std::filesystem::path &path) noexcept = 0;
+    };
+
     /** @brief Project-lifetime diagnostic consumer and producer, independent of panels and service facades.
      * @details Record/Snapshot/Export are thread-safe. Navigation is host-thread-only and receives
      * a fresh complete source mapping. The shared dispatcher alone performs persistent I/O.
@@ -129,12 +143,12 @@ namespace Horo::Application {
          * @param sequence Retained record identity from this journal's snapshot.
          * @param project Current persistent project identity. @param definition Current definition identity.
          * @param sources Fresh authoritative source ownership mappings, including current object/asset existence.
-         * @param navigate Host callback receiving only the validated stable destination and canonical file.
-         * @return Typed stale/invalid error or callback result; rejected input never invokes the callback. */
-        [[nodiscard]] Result<bool> Navigate(
-            std::uint64_t sequence, NavigationDiagnosticProjectId project, Assets::AssetId definition,
-            std::span<const NavigationDiagnosticSource> sources,
-            const std::function<bool(const NavigationDiagnosticTarget &, const std::filesystem::path &)> &navigate) const;
+         * @param navigator Host-owned synchronous adapter receiving only the validated destination and canonical file.
+         * @return Typed stale/invalid error or the adapter result unchanged, including its cause chain.
+         * Rejected input never invokes the adapter. */
+        [[nodiscard]] Result<bool> Navigate(std::uint64_t sequence, NavigationDiagnosticProjectId project, Assets::AssetId definition,
+                                            std::span<const NavigationDiagnosticSource> sources,
+                                            INavigationDiagnosticNavigator &navigator) const;
         /** @copydoc Telemetry::ISink::Export */
         void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *descriptor) override;
         /** @copydoc Telemetry::ISink::Flush */

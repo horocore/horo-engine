@@ -5,15 +5,19 @@
 
 #include <chrono>
 #include <format>
+#include <functional>
 
 namespace Horo::Application::DiagnosticsTestSupport {
-    using namespace Navigation;
-    using namespace Navigation::TestSupport;
+    /** @brief Converts UTF-8 fixture text explicitly on every supported platform. */
+    [[nodiscard]] inline std::filesystem::path Utf8Path(const std::string_view bytes) {
+        return std::filesystem::path{std::u8string{bytes.begin(), bytes.end()}};
+    }
 
     /** @brief Owns isolated files with realistic spaces and non-ASCII project names. */
     struct Directory {
-        std::filesystem::path root{std::filesystem::current_path() /
-                                   std::format("horo bake diagnostics ü {}", std::chrono::steady_clock::now().time_since_epoch().count())};
+        std::filesystem::path root{
+            std::filesystem::current_path() /
+            Utf8Path(std::format("horo bake diagnostics ü {}", std::chrono::steady_clock::now().time_since_epoch().count()))};
 
         Directory() {
             REQUIRE(std::filesystem::create_directory(root));
@@ -63,9 +67,23 @@ namespace Horo::Application::DiagnosticsTestSupport {
         }
     };
 
-    [[nodiscard]] inline NavigationDiagnosticSource Source(const IncrementalBakeFixture &fixture) {
+    [[nodiscard]] inline NavigationDiagnosticSource Source(const Navigation::TestSupport::IncrementalBakeFixture &fixture) {
         return {.observation = fixture.Observations().front(),
                 .target = {.asset = Asset("2"), .scene = {7}, .object = {11}, .relativePath = "geometry ü source.scene"}};
     }
+
+    /** @brief Test host adapter for exception-free successful/declined actions. */
+    class Navigator final : public INavigationDiagnosticNavigator {
+    public:
+        explicit Navigator(std::function<bool(const NavigationDiagnosticTarget &, const std::filesystem::path &)> invoke)
+            : invoke_(std::move(invoke)) {}
+
+        Result<bool> Navigate(const NavigationDiagnosticTarget &target, const std::filesystem::path &path) noexcept override {
+            return Result<bool>::Success(invoke_(target, path));
+        }
+
+    private:
+        std::function<bool(const NavigationDiagnosticTarget &, const std::filesystem::path &)> invoke_;
+    };
 
 }  // namespace Horo::Application::DiagnosticsTestSupport
