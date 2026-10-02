@@ -295,9 +295,13 @@ namespace Horo::Runtime {
             return owner;
         if (snapshot_.operation != operation || snapshot_.state != SaveBarrierState::Pending)
             return Failure<void>(SaveErrors::OperationInvalid);
-        MeasureElapsed();
         snapshot_.state = SaveBarrierState::Cancelled;
         ++snapshot_.revision;
+        try {
+            MeasureElapsed();
+        } catch (...) {  // Timing failure must not prevent exact-request cancellation and acknowledgement.
+            return Failure<void>(SaveErrors::LifecycleCallbackFailed);
+        }
         return Result<void>::Success();
     }
 

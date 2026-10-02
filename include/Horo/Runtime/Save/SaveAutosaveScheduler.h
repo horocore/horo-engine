@@ -174,6 +174,8 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> ValidateOwner() const;
         /** @brief Checks affinity, reentry and closed-admission invariants. */
         [[nodiscard]] Result<void> ValidateMutation() const;
+        /** @brief Validates current owner, phase and generation before any capture admission mutation. */
+        [[nodiscard]] Result<void> ValidateSafePoint(RuntimePhase phase, SaveRuntimeGeneration generation) const;
         /** @brief Resets cadence and observation against a validated baseline. */
         void Reset(const SaveAutosaveClockSample &initial) noexcept;
         /** @brief Reduces nonnegative eligible elapsed time without looping or wrapping. */
@@ -182,6 +184,8 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> CancelOwned();
         /** @brief Releases the owned uncaptured barrier after cancellation, preserving errors for explicit cleanup. */
         [[nodiscard]] Result<void> CancelBarrier(SaveCancellationRequestResult cancelled);
+        /** @brief Retains only exact cancelled barrier evidence after a failed timing sample. */
+        [[nodiscard]] bool RetainCancelledBarrier();
         /** @brief Retires uncaptured terminal work and preserves its exact failure cause. */
         [[nodiscard]] Result<void> RetireCapture();
         /** @brief Checks bounded admission capacity without mutating either shared authority. */

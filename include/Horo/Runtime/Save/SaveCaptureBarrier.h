@@ -163,7 +163,9 @@ namespace Horo::Runtime {
                                                                            SaveParticipantRegistrySnapshot participants,
                                                                            const RuntimeSaveCaptureLimits &limits = {});
         /** @brief Cancels one exact pending request without revoking live mutation tickets.
-         * @param operation Exact current application identity. @return Success or typed invalid/reentrant error.
+         * @param operation Exact current application identity. @return Success or typed invalid/reentrant/clock error.
+         * @post A matched pending request becomes Cancelled even if its clock throws; elapsed retains
+         * the last successful sample. Callers must acknowledge the terminal request after a timing error.
          */
         [[nodiscard]] Result<void> Cancel(OperationId operation);
         /** @brief Permanently closes request and mutation admission; outstanding mutations may finish.

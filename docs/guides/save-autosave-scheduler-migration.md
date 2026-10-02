@@ -13,6 +13,15 @@ preserving its winning reason. Existing `ObserveCancellation` callers retain the
 contract. Hosts may call the new poll only while they own the active work and
 before invoking canonical capture adapters.
 
+Barrier cancellation now makes the exact matched request terminal before sampling
+elapsed time. If the host clock throws, `Cancel` returns the typed timing failure
+with state Cancelled and the last successful elapsed sample; consumers must still
+acknowledge that terminal request. The scheduler retires its barrier and producer
+on this path before returning the error, so destruction cannot orphan a pending
+request under a persistently failing clock. Explicit shutdown preserves the error
+and exact cancelled barrier evidence; no successful timing sample is invented and
+unrelated queued/manual operations and mutation tickets remain intact.
+
 ## Host wiring
 
 Construct one scheduler on the owner thread after composing the existing arbiter,

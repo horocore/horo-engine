@@ -218,13 +218,77 @@ namespace Horo::Runtime {
                 fixture.clock.throws = true;
                 CHECK(fixture.Poll().HasError());
                 CHECK(fixture.Snapshot().blocked);
-                CHECK(fixture.scheduler->Cancel().HasError());
-                CHECK(fixture.arbiter.ActiveOperation() == 91);
+                const auto cancelled = fixture.scheduler->Cancel();
+                REQUIRE(cancelled.HasError());
+                CHECK(cancelled.ErrorValue().code.Value() == SaveErrors::LifecycleCallbackFailed.code.Value());
+                CHECK_FALSE(fixture.arbiter.ActiveOperation());
+                CHECK(fixture.barrier->Snapshot().Value().state == SaveBarrierState::Idle);
+                CHECK(fixture.Snapshot().lastBarrier->state == SaveBarrierState::Cancelled);
                 fixture.clock.throws = false;
                 REQUIRE(fixture.scheduler->Cancel().HasValue());
                 CHECK_FALSE(fixture.arbiter.ActiveOperation());
                 REQUIRE(fixture.barrier->EndMutation(mutation, {.value = 41}).HasValue());
             }
+        }
+
+        TEST_CASE("Autosave teardown retires pending ownership when the host clock permanently fails", "[unit][save][autosave]") {
+            Fixture fixture;
+            fixture.clock.nonstandardException = GENERATE(false, true);
+            const auto mutation = fixture.barrier->BeginMutation(0).Value();
+            fixture.Sample(100);
+            REQUIRE(fixture.Poll().HasValue());
+            fixture.Sample(105);
+            REQUIRE(fixture.Poll().HasValue());
+            REQUIRE(fixture.barrier->Snapshot().Value().elapsed == Ns(5));
+            REQUIRE(fixture.arbiter
+                        .Admit({.operation = fixture.Operation(11),
+                                .address = fixture.Address(),
+                                .priority = SaveArbiterPriority::UserBlocking,
+                                .conflict = SaveArbiterConflictPolicy::Queue})
+                        .HasValue());
+            fixture.clock.throws = true;
+            SECTION("Explicit shutdown preserves a typed timing failure") {
+                const auto closed = fixture.scheduler->BeginShutdown();
+                REQUIRE(closed.HasError());
+                CHECK(closed.ErrorValue().code.Value() == SaveErrors::LifecycleCallbackFailed.code.Value());
+                CHECK(fixture.Snapshot().disposition == SaveAutosaveDisposition::Failed);
+                REQUIRE(fixture.Snapshot().lastBarrier.has_value());
+                CHECK(fixture.Snapshot().lastBarrier->state == SaveBarrierState::Cancelled);
+                CHECK(fixture.Snapshot().lastBarrier->elapsed == Ns(5));
+            }
+            SECTION("Destruction without an explicit close") {
+                fixture.scheduler.reset();
+            }
+            fixture.scheduler.reset();
+            CHECK(fixture.barrier->Snapshot().Value().state == SaveBarrierState::Idle);
+            CHECK_FALSE(fixture.arbiter.ActiveOperation());
+            CHECK(fixture.arbiter.Snapshot(91)->operation.state == SaveOperationState::Cancelled);
+            CHECK(fixture.arbiter.QueuedCount() == 1);
+            CHECK_FALSE(fixture.arbiter.Snapshot(11)->operation.cancellationRequested);
+            CHECK(fixture.captures == 0);
+            REQUIRE(fixture.barrier->EndMutation(mutation, {.value = 41}).HasValue());
+            REQUIRE(fixture.barrier->BeginMutation(0).HasValue());
+            REQUIRE(fixture.arbiter.StartNext()->operation.operation == 11);
+            REQUIRE(fixture.arbiter.Advance(11, SaveArbiterState::WaitingForSafePoint).HasValue());
+            CHECK_FALSE(fixture.arbiter.Snapshot(11)->operation.cancellationRequested);
+        }
+
+        TEST_CASE("Barrier cancellation timing failure releases only the exact pending request", "[unit][save][autosave]") {
+            Fixture fixture;
+            fixture.clock.nonstandardException = GENERATE(false, true);
+            REQUIRE(fixture.barrier->Request(55, fixture.generation).HasValue());
+            fixture.clock.throws = true;
+            CHECK(fixture.barrier->Cancel(11).HasError());
+            CHECK(fixture.barrier->Snapshot().Value().state == SaveBarrierState::Pending);
+            CHECK(fixture.barrier->Snapshot().Value().operation == 55);
+            const auto cancelled = fixture.barrier->Cancel(55);
+            REQUIRE(cancelled.HasError());
+            CHECK(cancelled.ErrorValue().code.Value() == SaveErrors::LifecycleCallbackFailed.code.Value());
+            CHECK(fixture.barrier->Snapshot().Value().state == SaveBarrierState::Cancelled);
+            CHECK(fixture.barrier->Snapshot().Value().elapsed == Duration{});
+            REQUIRE(fixture.barrier->Acknowledge(55).HasValue());
+            CHECK(fixture.barrier->Snapshot().Value().state == SaveBarrierState::Idle);
+            CHECK_FALSE(fixture.arbiter.ActiveOperation());
         }
 
         TEST_CASE("Autosave expired admission never invokes a capture adapter", "[unit][save][autosave]") {
@@ -400,7 +464,7 @@ namespace Horo::Runtime {
             Fixture fixture({.interval = Ns(16'666'667), .cooldown = {}});
             RuntimeLifecycle lifecycle;
             auto host = std::make_unique<AutosaveRuntimeHost>(fixture);
-            auto *view = host.get();
+            const auto *view = host.get();
             REQUIRE(lifecycle.AddParticipant(std::move(host)).HasValue());
             CancellationToken cancellation;
             REQUIRE(lifecycle.Startup(cancellation).HasValue());

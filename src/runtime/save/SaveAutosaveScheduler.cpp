@@ -109,6 +109,17 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    /** @copydoc SaveAutosaveScheduler::ValidateSafePoint */
+    Result<void> SaveAutosaveScheduler::ValidateSafePoint(const RuntimePhase phase, const SaveRuntimeGeneration generation) const {
+        if (const auto valid = ValidateMutation(); valid.HasError())
+            return valid;
+        if (phase != RuntimePhase::CommitDeferredLifecycleChanges)
+            return Result<void>::Failure(MakeError(SaveErrors::SafePointInvalid));
+        if (generation != last_.generation)
+            return Result<void>::Failure(MakeError(SaveErrors::GenerationStale));
+        return Result<void>::Success();
+    }
+
     /** @copydoc SaveAutosaveScheduler::AdvanceTime */
     void SaveAutosaveScheduler::AdvanceTime(const std::int64_t delta) noexcept {
         snapshot_.cooldownRemaining =
