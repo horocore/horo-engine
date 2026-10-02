@@ -10,6 +10,29 @@ namespace Horo::Destruction {
     static_assert(!std::is_default_constructible_v<ChunkCollisionArtifactSet>);
 
     namespace {
+        /** @brief Constructs closed normalized source geometry independently from cook/publication setup. */
+        Assets::PreFracturedSource CollisionSource(std::uint32_t chunkCount) {
+            Assets::PreFracturedSource source;
+            source.sourceName = "normalized tetrahedron";
+            Assets::PreFracturedSourceNode node;
+            node.name = "HoroChunk_731__stone";
+            node.sourcePath = "geometry/tetrahedron";
+            node.geometryToWorld = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+            node.positions = {{{0, 0, 0}, {2, 0, 0}, {0, 3, 0}, {0, 0, 4}}};
+            node.triangleIndices = {0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3};
+            node.triangleMaterials.assign(4, "stone");
+            if (chunkCount == 2) {
+                auto second = node;
+                second.name = "HoroChunk_812__stone";
+                second.sourcePath = "geometry/second";
+                for (auto &position : second.positions)
+                    position[0] += 5;
+                source.nodes.push_back(std::move(second));
+            }
+            source.nodes.push_back(std::move(node));
+            return source;
+        }
+
         struct CollisionFixture final {
             std::shared_ptr<const ChunkMeshArtifact> mesh;
             std::vector<ChunkCollisionMaterial> bindings;
@@ -18,24 +41,7 @@ namespace Horo::Destruction {
             explicit CollisionFixture(std::uint32_t chunkCount = 1) {
                 const auto asset = Assets::AssetId::Parse("64d6b9ce-7e7b-4f68-9dce-5a650c166478").Value();
                 const auto limits = GetDestructionTierProfile(DestructionFeatureTier::High).Value().limits;
-                Assets::PreFracturedSource source;
-                source.sourceName = "normalized tetrahedron";
-                Assets::PreFracturedSourceNode node;
-                node.name = "HoroChunk_731__stone";
-                node.sourcePath = "geometry/tetrahedron";
-                node.geometryToWorld = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
-                node.positions = {{{0, 0, 0}, {2, 0, 0}, {0, 3, 0}, {0, 0, 4}}};
-                node.triangleIndices = {0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3};
-                node.triangleMaterials.assign(4, "stone");
-                if (chunkCount == 2) {
-                    auto second = node;
-                    second.name = "HoroChunk_812__stone";
-                    second.sourcePath = "geometry/second";
-                    for (auto &position : second.positions)
-                        position[0] += 5;
-                    source.nodes.push_back(std::move(second));
-                }
-                source.nodes.push_back(std::move(node));
+                const auto source = CollisionSource(chunkCount);
                 auto normalized = ValidatePreFracturedSource(source, limits, {});
                 REQUIRE(normalized.HasValue());
                 Sha256Digest materialDigest;

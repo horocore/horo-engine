@@ -166,6 +166,35 @@ namespace Horo::Destruction {
             return Result<void>::Success();
         }
 
+        /** @brief Validates one neutral region and cooks a bounded canonical convex leaf through Physics. */
+        [[nodiscard]] Result<Physics::PhysicsConvexHullCookResult> CookLeaf(const ChunkMesh &chunk, const ChunkCollisionPiece &piece,
+                                                                            const ChunkCollisionCookRequest &request, Budget &budget,
+                                                                            const CancellationToken &cancellation) {
+            using namespace Physics;
+            if (auto valid = ValidateRegion(piece, budget, cancellation); valid.HasError())
+                return Result<PhysicsConvexHullCookResult>::Failure(valid.ErrorValue());
+            if (piece.positions.size() > request.convex.limits.maxSourceVertices)
+                return Result<PhysicsConvexHullCookResult>::Failure(MakeError(PhysicsErrors::ShapeCookLimitExceeded));
+            std::vector<Math::Vec3> vertices;
+            vertices.reserve(piece.positions.size());
+            for (const auto &position : piece.positions)
+                vertices.push_back({position[0], position[1], position[2]});
+            std::ranges::sort(vertices, {}, [](Math::Vec3 point) {
+                return std::tuple{point.x, point.y, point.z};
+            });
+            vertices.erase(std::unique(vertices.begin(), vertices.end()), vertices.end());
+            const auto settings = request.convex;
+            // A conservative bounded face/vertex admission precedes all hull work.
+            if (!budget.Charge(0, vertices.size() * settings.limits.maxHullVertices * 8ULL))
+                return Result<PhysicsConvexHullCookResult>::Failure(MakeError(ChunkMeshCookErrors::LimitExceeded));
+            auto hull = CookPhysicsConvexHull({request.content.Asset().Asset(), LeafId(chunk.id, piece.id), vertices, settings,
+                                               request.target, "DFR chunk collision"},
+                                              cancellation);
+            if (hull.HasError())
+                return Result<PhysicsConvexHullCookResult>::Failure(hull.ErrorValue());
+            return hull;
+        }
+
         /** @brief Produces one complete compound, preserving original Physics validation/capability errors. */
         [[nodiscard]] Result<Physics::PhysicsCompoundCookResult> CookChunk(const ChunkMesh &chunk, const ChunkCollisionCookRequest &request,
                                                                            const Sha256Digest &dependency, Budget &budget,
@@ -178,25 +207,7 @@ namespace Horo::Destruction {
             hulls.reserve(chunk.collisionPieces.size());
             std::uint64_t leafBytes = 0;
             for (const auto &piece : chunk.collisionPieces) {
-                if (auto valid = ValidateRegion(piece, budget, cancellation); valid.HasError())
-                    return Result<PhysicsCompoundCookResult>::Failure(valid.ErrorValue());
-                if (piece.positions.size() > request.convex.limits.maxSourceVertices)
-                    return Result<PhysicsCompoundCookResult>::Failure(MakeError(PhysicsErrors::ShapeCookLimitExceeded));
-                std::vector<Math::Vec3> vertices;
-                vertices.reserve(piece.positions.size());
-                for (const auto &position : piece.positions)
-                    vertices.push_back({position[0], position[1], position[2]});
-                std::ranges::sort(vertices, {}, [](Math::Vec3 point) {
-                    return std::tuple{point.x, point.y, point.z};
-                });
-                vertices.erase(std::unique(vertices.begin(), vertices.end()), vertices.end());
-                const auto settings = request.convex;
-                // A conservative bounded face/vertex admission precedes all hull work.
-                if (!budget.Charge(0, vertices.size() * settings.limits.maxHullVertices * 8ULL))
-                    return Result<PhysicsCompoundCookResult>::Failure(MakeError(ChunkMeshCookErrors::LimitExceeded));
-                auto hull = CookPhysicsConvexHull({request.content.Asset().Asset(), LeafId(chunk.id, piece.id), vertices, settings,
-                                                   request.target, "DFR chunk collision"},
-                                                  cancellation);
+                auto hull = CookLeaf(chunk, piece, request, budget, cancellation);
                 if (hull.HasError())
                     return Result<PhysicsCompoundCookResult>::Failure(hull.ErrorValue());
                 if (!budget.Charge(hull.Value().payload.size(), 0))
