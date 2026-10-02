@@ -186,17 +186,24 @@ namespace Horo::Runtime::Ui {
         target.provider = providerIndex;
         target.property = static_cast<std::uint16_t>(propertySlot);
         target.direction = binding.direction;
-        target.draft = *value;
-        if (type == UiBindingValueType::BoundedText || type == UiBindingValueType::LocalizedMessage) {
-            reservedBytes += binding.target.limits.maximumBytes;
-            if (reservedBytes > limits.valueBytes)
-                return Failure(UiErrors::BindingCapacityExceeded);
-        }
-        ReserveValue(target.bound.value, binding.target.limits.maximumBytes);
-        ReserveValue(target.draft, binding.target.limits.maximumBytes);
+        if (const auto prepared = PrepareDraftStorage(target, type, reservedBytes); prepared.HasError())
+            return prepared;
         target.pending = target.categories;
         provider->targets[propertySlot].push_back(targets.size());
         targets.push_back(std::move(target));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiBindingStore::Storage::PrepareDraftStorage */
+    Result<void> UiBindingStore::Storage::PrepareDraftStorage(Target &target, const UiBindingValueType type, std::size_t &reservedBytes) {
+        target.draft = target.bound.value;
+        if (type == UiBindingValueType::BoundedText || type == UiBindingValueType::LocalizedMessage) {
+            reservedBytes += target.limits.maximumBytes;
+            if (reservedBytes > limits.valueBytes)
+                return Failure(UiErrors::BindingCapacityExceeded);
+        }
+        ReserveValue(target.bound.value, target.limits.maximumBytes);
+        ReserveValue(target.draft, target.limits.maximumBytes);
         return Result<void>::Success();
     }
 

@@ -54,7 +54,7 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
             authority->prepareReentry = TypedAuthority::Reentry::Shutdown;
         }
         fixture.Admit(fixture.store, 10, authority);
-        fixture.QueueChange();
+        fixture.QueueCurrentChange();
         const auto before = fixture.store.Current();
         const auto outcome = Process(fixture.store, fixture.tree, fixture.layout);
         CHECK(outcome.disposition == UiBindingWriteDisposition::Rejected);
@@ -77,7 +77,7 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
         authority->reentrantStore = &fixture.store;
         authority->abandonRetires = true;
         fixture.Admit(fixture.store, 10, authority);
-        const auto queued = fixture.QueueChange();
+        const auto queued = fixture.QueueCurrentChange();
         CHECK(Process(fixture.store, fixture.tree, fixture.layout).disposition == UiBindingWriteDisposition::Pending);
         fixture.store.BeginRetirement();
         CHECK(fixture.state->abandons == 1);

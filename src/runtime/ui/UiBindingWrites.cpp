@@ -1,7 +1,5 @@
 #include "UiBindingStoreInternal.h"
 
-#include <exception>
-
 namespace Horo::Runtime::Ui {
     using BindingStoreInternal::Failure;
 
@@ -53,18 +51,6 @@ namespace Horo::Runtime::Ui {
                 else
                     return value == std::get<Value>(right);
             }, left);
-        }
-
-        /** @brief Contains standard and foreign callback exceptions at the explicit provider execution boundary. */
-        [[nodiscard]] Result<UiBindingWriteDisposition> PrepareWrite(UiBindingWriteAuthority &authority,
-                                                                     const UiBindingWriteCommand &command) {
-            try {
-                return authority.Prepare(command);
-            } catch (const std::exception &) {
-                return Failure<UiBindingWriteDisposition>(UiErrors::ActionHandlerFailed);
-            } catch (...) {
-                return Failure<UiBindingWriteDisposition>(UiErrors::ActionHandlerFailed);
-            }
         }
 
         /** @brief Keeps callback reentry fenced through validation, reservation publication and terminal abandonment. */
@@ -237,7 +223,7 @@ namespace Horo::Runtime::Ui {
         if (authority.Fence() != target.command->fence || storage_->providers[target.provider].revision != target.command->expected)
             return finish(UiBindingWriteDisposition::Rejected, MakeError(UiErrors::RevisionStale));
 
-        const auto prepared = PrepareWrite(authority, *target.command);
+        const auto prepared = authority.Prepare(*target.command);
         if (storage_->reentryAttempted)
             return finish(UiBindingWriteDisposition::Rejected, MakeError(UiErrors::ActionHandlerFailed));
         if (prepared.HasError())

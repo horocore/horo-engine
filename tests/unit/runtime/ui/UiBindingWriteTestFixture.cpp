@@ -220,7 +220,8 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
         return Take(store.QueueWrite(tree, edit, Request(router, element, value), UiBindingCommitTrigger::Change));
     }
 
-    UiBindingWriteResult WriteSession::QueueChange(const std::uint8_t binding, const std::uint8_t element, const UiActionValue &value) {
+    UiBindingWriteResult WriteSession::QueueCurrentChange(const std::uint8_t binding, const std::uint8_t element,
+                                                          const UiActionValue &value) {
         return Fixture::QueueChange(store, router, binding, element, value);
     }
 

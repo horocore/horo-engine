@@ -1,6 +1,7 @@
 #include "UiBindingWriteTestFixture.h"
 
 #include <cmath>
+#include <stdexcept>
 
 namespace Horo::Runtime::Ui::BindingWriteTests {
     TypedAuthority::TypedAuthority(const UiBindingWriteFence &permission, std::shared_ptr<ProviderState> owner)
@@ -23,11 +24,21 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
     }
 
     std::optional<Error> TypedAuthority::ValidateValue(const UiBindingWriteCommand &command) const {
+        if (translatePrivateFailure)
+            throw std::invalid_argument{"domain failure"};
         if (const auto &current = state->values[command.fence.property]; command.value.index() != current.index())
             return MakeError(UiErrors::BindingTypeMismatch);
         if (const auto *scalar = std::get_if<double>(&command.value); scalar && (!std::isfinite(*scalar) || *scalar < 0.0 || *scalar > 1.0))
             return MakeError(UiErrors::BindingValueInvalid);
         return std::nullopt;
+    }
+
+    std::optional<Error> TypedAuthority::ValidatePrivateValue(const UiBindingWriteCommand &command) const noexcept {
+        try {
+            return ValidateValue(command);
+        } catch (const std::invalid_argument &) {
+            return failure.value_or(MakeError(UiErrors::BindingValueInvalid));
+        }
     }
 
     void TypedAuthority::ApplyReentry() {
@@ -39,11 +50,11 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
             reentrantStore->Shutdown();
     }
 
-    Result<UiBindingWriteDisposition> TypedAuthority::Prepare(const UiBindingWriteCommand &command) {
+    Result<UiBindingWriteDisposition> TypedAuthority::Prepare(const UiBindingWriteCommand &command) noexcept {
         ++state->prepares;
         if (!FenceMatches(command))
             return Result<UiBindingWriteDisposition>::Failure(MakeError(UiErrors::RevisionStale));
-        if (const auto error = ValidateValue(command))
+        if (const auto error = ValidatePrivateValue(command))
             return Result<UiBindingWriteDisposition>::Failure(*error);
         if (failure)
             return Result<UiBindingWriteDisposition>::Failure(*failure);

@@ -60,6 +60,7 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
         std::shared_ptr<ProviderState> state;
         UiBindingWriteDisposition disposition{UiBindingWriteDisposition::Ready};
         std::optional<Error> failure;
+        bool translatePrivateFailure{};
         std::optional<UiBindingWriteCommand> reservation;
         bool active{true};
         UiBindingStore *reentrantStore{};
@@ -74,7 +75,7 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
         TypedAuthority &operator=(TypedAuthority &&) = delete;
         const UiBindingWriteFence &Fence() const noexcept override;
         bool Active() const noexcept override;
-        Result<UiBindingWriteDisposition> Prepare(const UiBindingWriteCommand &command) override;
+        Result<UiBindingWriteDisposition> Prepare(const UiBindingWriteCommand &command) noexcept override;
         void Commit(const UiBindingWriteCommand &command) noexcept override;
         void Abandon(const UiBindingWriteCommand &command) noexcept override;
         void Revoke() noexcept;
@@ -82,6 +83,7 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
     private:
         bool FenceMatches(const UiBindingWriteCommand &command) const noexcept;
         std::optional<Error> ValidateValue(const UiBindingWriteCommand &command) const;
+        std::optional<Error> ValidatePrivateValue(const UiBindingWriteCommand &command) const noexcept;
         void ApplyReentry();
     };
 
@@ -141,7 +143,7 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
         UiLayoutEngine layout;
         UiActionRouter router;
         explicit WriteSession(std::uint32_t layoutCapacity = 8, std::uint32_t routerCapacity = 4);
-        UiBindingWriteResult QueueChange(std::uint8_t binding = 10, std::uint8_t element = 2, const UiActionValue &value = true);
+        UiBindingWriteResult QueueCurrentChange(std::uint8_t binding = 10, std::uint8_t element = 2, const UiActionValue &value = true);
     };
 
     UiBindingWriteResult Process(UiBindingStore &store, const UiElementTree &tree, UiLayoutEngine &layout);

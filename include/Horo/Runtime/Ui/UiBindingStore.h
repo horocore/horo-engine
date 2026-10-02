@@ -93,6 +93,8 @@ namespace Horo::Runtime::Ui {
      * Prepare must validate the complete fence, expected committed revision, permission and domain rules on every call, including
      * pending polls. It reserves private work without publishing state. Ready promises Commit cannot fail or reenter UI; it commits
      * exactly the command value at expected.Next(). Abandon cancels private work and drains/releases execution leases safely.
+     * Preparation is exception-free: the owned adapter converts private library failures to Error before returning its Result.
+     * Command borrows end when each call returns; asynchronous work copies its typed inputs and retains its execution leases.
      * All authority methods are non-reentrant; Fence/Active are inert queries. Calls are bounded and nonblocking;
      * jobs never capture controls or call back into UI. A retained shared lease delays adapter/image
      * destruction, never revocation. Hosts must not unmap module code while a lease or producer remains alive.
@@ -105,7 +107,7 @@ namespace Horo::Runtime::Ui {
         /** @brief Reports admission after permission loss/unload/shutdown. @return Whether permission remains active. */
         [[nodiscard]] virtual bool Active() const noexcept = 0;
         /** @brief Validates/reserves or polls provider-owned work. @param command Exact command. @return Outcome or original error. */
-        [[nodiscard]] virtual Result<UiBindingWriteDisposition> Prepare(const UiBindingWriteCommand &command) = 0;
+        [[nodiscard]] virtual Result<UiBindingWriteDisposition> Prepare(const UiBindingWriteCommand &command) noexcept = 0;
         /** @brief Publishes a Ready reservation without failure. @param command Same prepared command. */
         virtual void Commit(const UiBindingWriteCommand &command) noexcept = 0;
         /** @brief Idempotently cancels/releases a reservation. @param command Old exact command, including operation correlation. */

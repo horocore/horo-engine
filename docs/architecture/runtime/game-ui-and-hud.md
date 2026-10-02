@@ -916,6 +916,13 @@ rejection/error/cancellation and stale revisions leave committed state unchanged
 The provider cannot reenter UI or publish state during preparation; asynchronous
 work returns private evidence for later owner-thread preparation, never UI callbacks.
 
+The new provider capability's `Prepare` boundary is exception-free (`noexcept`),
+matching the Foundation public engine module policy. The owned adapter converts
+private standard/third-party exceptions into its typed `Result` before returning;
+RuntimeUi preserves that original error rather than translating generic exceptions.
+Async producers copy command inputs before the synchronous borrow ends and retain
+their own execution leases until terminal completion or cancellation drains.
+
 Terminal feedback retains original Foundation error evidence and occupies its bounded
 slot until `DrainWriteResults` acknowledges it. Pending poll evidence is nonterminal.
 The owner calls `ReconcileControl` after an outcome to replace the draft with committed

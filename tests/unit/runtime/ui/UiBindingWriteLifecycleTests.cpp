@@ -1,5 +1,7 @@
 #include "UiBindingWriteTestFixture.h"
 
+#include <catch2/generators/catch_generators.hpp>
+
 namespace Horo::Runtime::Ui::BindingWriteTests {
     TEST_CASE("Provider rejection cancellation and error preserve committed values and exact terminal evidence",
               "[runtime_ui][binding][write][feedback]") {
@@ -14,6 +16,7 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
             authority->disposition = UiBindingWriteDisposition::Cancelled;
         }
         SECTION("original provider error") {
+            authority->translatePrivateFailure = GENERATE(false, true);
             authority->failure = WithCause(MakeError(UiErrors::ActionHandlerFailed, "provider reservation failed"),
                                            MakeError(UiErrors::RevisionStale, "provider transaction moved"));
         }
@@ -41,6 +44,8 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
         }
         CHECK(fixture.state->commits == 0);
         CHECK(fixture.state->revision.Value() == 1);
+        CHECK_FALSE(std::get<bool>(fixture.state->values[0]));
+        CHECK_FALSE(std::get<bool>(fixture.store.Find(fixture.tree, Stable<UiBindingId>(10))->value));
         REQUIRE(fixture.store.ReconcileControl(fixture.tree, Stable<UiBindingId>(10), control).HasValue());
         CHECK_FALSE(std::get<UiToggleControlState>(control.Snapshot().Value()).checked);
         CHECK(std::get<UiToggleControlState>(control.Snapshot().Value()).focused);
@@ -54,7 +59,7 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
         auto authority = fixture.Authority(0);
         authority->disposition = UiBindingWriteDisposition::Pending;
         fixture.Admit(fixture.store, 10, authority);
-        const auto queued = fixture.QueueChange();
+        const auto queued = fixture.QueueCurrentChange();
         CHECK(Process(fixture.store, fixture.tree, fixture.layout).disposition == UiBindingWriteDisposition::Pending);
         CHECK(fixture.state->prepares == 1);
         auto expectedCancellation = UiBindingWriteCancellationReason::Count;
@@ -168,7 +173,7 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
         auto authority = fixture.Authority(0);
         authority->disposition = UiBindingWriteDisposition::Pending;
         fixture.Admit(fixture.store, 10, authority);
-        fixture.QueueChange();
+        fixture.QueueCurrentChange();
         CHECK(Process(fixture.store, fixture.tree, fixture.layout).disposition == UiBindingWriteDisposition::Pending);
         authority->Revoke();
         ErrorIs(fixture.store.Unregister(fixture.tree, fixture.provider, fixture.layout), UiErrors::CapacityExceeded);
