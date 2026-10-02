@@ -5,6 +5,7 @@
 #include "Horo/Assets/AssetCookService.h"
 
 #include "../AssetErrors.h"
+#include "AssetCookOperationScope.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetCookCache.h"
 #include "Horo/Assets/AssetCookOutput.h"
@@ -16,6 +17,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -28,82 +30,7 @@
 namespace Horo::Assets {
     namespace {
 
-        class CookOperationScope {
-        public:
-            CookOperationScope(OperationStore *store, BuildOutputStore *output, const CancellationToken &cancellation,
-                               const BuildOutputSessionId sessionId, const std::optional<OperationId> id)
-                : store_(store), output_(output), cancellation_(&cancellation), sessionId_(sessionId), id_(id) {}
-
-            ~CookOperationScope() {
-                if (completed_)
-                    return;
-                const bool cancelled = cancelledResult_.value_or(cancellation_->IsCancellationRequested());
-                Publish(BuildOutputRecord{.timestampUtc = std::chrono::system_clock::now(),
-                                          .severity = cancelled ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error,
-                                          .result = cancelled ? BuildOutputResult::Cancelled : BuildOutputResult::Failed,
-                                          .stage = "cook",
-                                          .code = DiagnosticCode{cancelled ? "asset.cook.cancelled" : "asset.cook.failed"},
-                                          .message = cancelled ? "Cook cancelled" : "Cook failed"});
-                if (store_ != nullptr && id_.has_value())
-                    static_cast<void>(
-                        store_->Update(*id_, OperationUpdate{.state = cancelled ? OperationState::Cancelled : OperationState::Failed,
-                                                             .phase = "cook",
-                                                             .message = cancelled ? "Cook cancelled" : "Cook failed"}));
-            }
-
-            CookOperationScope(const CookOperationScope &) = delete;
-            CookOperationScope &operator=(const CookOperationScope &) = delete;
-
-            void RecordOutcome(const bool cancelled) {
-                cancelledResult_ = cancelled;
-            }
-
-            void RecordError(const Error &error) {
-                const std::string_view domain = error.domain.Value();
-                cancelledResult_ = error.code.Value() == CookErrors::Cancelled.code.Value() &&
-                                   (domain.empty() || domain == CookErrors::Cancelled.domain.Value());
-            }
-
-            void Update(std::string phase, std::string message, const float progress) {
-                if (store_ != nullptr && id_.has_value())
-                    static_cast<void>(store_->Update(*id_, OperationUpdate{.state = OperationState::Running,
-                                                                           .phase = std::move(phase),
-                                                                           .message = std::move(message),
-                                                                           .progress = progress}));
-            }
-
-            void Succeed(std::string message) {
-                const std::string outputMessage = message;
-                Publish(BuildOutputRecord{.timestampUtc = std::chrono::system_clock::now(),
-                                          .result = BuildOutputResult::Succeeded,
-                                          .stage = "complete",
-                                          .code = DiagnosticCode{"asset.cook.succeeded"},
-                                          .message = outputMessage});
-                if (store_ != nullptr && id_.has_value())
-                    static_cast<void>(store_->Update(*id_, OperationUpdate{.state = OperationState::Succeeded,
-                                                                           .phase = "complete",
-                                                                           .message = std::move(message),
-                                                                           .progress = 1.0F}));
-                completed_ = true;
-            }
-
-            void Publish(BuildOutputRecord record) const {
-                if (output_ == nullptr)
-                    return;
-                record.sessionId = sessionId_;
-                record.operationId = id_;
-                output_->Append(std::move(record));
-            }
-
-        private:
-            OperationStore *store_{};
-            BuildOutputStore *output_{};
-            const CancellationToken *cancellation_{};
-            BuildOutputSessionId sessionId_;
-            std::optional<OperationId> id_;
-            bool completed_{false};
-            std::optional<bool> cancelledResult_;
-        };
+        using Detail::CookOperationScope;
 
         /**
          * @brief Reads source bytes from a project-relative path under sourceRoot.
@@ -147,20 +74,15 @@ namespace Horo::Assets {
             std::optional<Error> cookError;
         };
 
-        /** @brief Publishes an asset-scoped result with a navigable source path. */
+        /** @brief Adds authoritative source navigation to a typed asset-scoped result. */
         void PublishAssetResult(const AssetCookRequest &request, const AssetRecord &record, const CookOperationScope &operation,
-                                const std::string_view stage, const DiagnosticCode &code, const DiagnosticSeverity severity,
-                                const BuildOutputResult result) {
-            operation.Publish(BuildOutputRecord{
-                .timestampUtc = std::chrono::system_clock::now(),
-                .severity = severity,
-                .result = result,
-                .stage = std::string(stage),
-                .code = code,
-                .message = record.sourcePath.String(),
-                .source =
-                    DiagnosticSourceLocation{.absolutePath = (request.sourceRoot / record.sourcePath.String()).lexically_normal().string()},
-            });
+                                BuildOutputRecord result) {
+            result.timestampUtc = std::chrono::system_clock::now();
+            if (result.message.empty())
+                result.message = record.sourcePath.String();
+            result.source =
+                DiagnosticSourceLocation{.absolutePath = (request.sourceRoot / record.sourcePath.String()).lexically_normal().string()};
+            operation.Publish(std::move(result));
         }
 
         Result<AssetCookReport> HandleEmptyCookSnapshot(const AssetCookRequest &request, CookOperationScope &operation) {
@@ -207,6 +129,7 @@ namespace Horo::Assets {
                 .target = target,
                 .sourceDigest = slot.sourceDigest,
                 .bytes = slot.sourceBytes,
+                .sourceContext = slot.record.sourcePath.String(),
             };
 
             auto cookResult = strategy->Cook(sourceView, cancellation);
@@ -234,21 +157,64 @@ namespace Horo::Assets {
             return Result<void>::Success();
         }
 
-        /** @brief Records the result of one cook callback before fail-fast cancellation reaches its siblings. */
-        JobFunction MakeCookWork(CookSlot &slot, const CookerCatalogSnapshot &catalog, const AssetCookTargetId &target) {
-            return [&slot, &catalog, &target](const CancellationToken &jobCancellation) {
-                if (jobCancellation.IsCancellationRequested()) {
-                    slot.cookError = MakeError(CookErrors::Cancelled);
-                    return JobCancelled(*slot.cookError);
-                }
+        /** @brief Retains source-scoped failures before the joined job boundary handles an unexpected exception. */
+        Result<void> ExecuteCookWork(CookSlot &slot, const CookerCatalogSnapshot &catalog, const AssetCookTargetId &target,
+                                     const CancellationToken &jobCancellation) {
+            if (jobCancellation.IsCancellationRequested()) {
+                slot.cookError = MakeError(CookErrors::Cancelled);
+                return JobCancelled(*slot.cookError);
+            }
+            try {
                 Result<void> cooked = CookAndEncodeSlot(catalog, slot, target, jobCancellation);
                 if (cooked.HasError())
                     slot.cookError = cooked.ErrorValue();
-                if (cooked.HasError() && cooked.ErrorValue().code.Value() == CookErrors::Cancelled.code.Value() &&
-                    jobCancellation.IsCancellationRequested())
+                if (cooked.HasError() &&
+                    (IsJobCancelled(cooked.ErrorValue()) ||
+                     (cooked.ErrorValue().code.Value() == CookErrors::Cancelled.code.Value() && jobCancellation.IsCancellationRequested())))
                     return JobCancelled(cooked.ErrorValue());
                 return cooked;
+            } catch (const std::exception &exception) {
+                slot.cookError = MakeError(CookErrors::CookerFailed, exception.what());
+                throw;
+            } catch (...) {
+                slot.cookError = MakeError(CookErrors::CookerFailed);
+                throw;
+            }
+        }
+
+        /** @brief Borrows one slot/catalog until the caller joins all submitted work. */
+        JobFunction MakeCookWork(CookSlot &slot, const CookerCatalogSnapshot &catalog, const AssetCookTargetId &target) {
+            return [&slot, &catalog, &target](const CancellationToken &jobCancellation) {
+                return ExecuteCookWork(slot, catalog, target, jobCancellation);
             };
+        }
+
+        /** @brief Projects owned domain findings and one asset failure without parsing human text. */
+        void PublishAssetFailure(const AssetCookRequest &request, const AssetRecord &record, const CookOperationScope &operation,
+                                 const std::string_view stage, const Error &error) {
+            const bool cancelled = IsJobCancelled(error) || error.code.Value() == CookErrors::Cancelled.code.Value();
+            for (const Diagnostic &finding : error.diagnostics) {
+                operation.Publish(BuildOutputRecord{
+                    .timestampUtc = std::chrono::system_clock::now(),
+                    .severity = finding.severity,
+                    .stage = std::string{stage},
+                    .code = finding.code,
+                    .message = finding.message,
+                    .source = DiagnosticSourceLocation{.absolutePath =
+                                                           (request.sourceRoot / record.sourcePath.String()).lexically_normal().string(),
+                                                       .line = finding.location.line,
+                                                       .column = finding.location.column},
+                });
+            }
+            PublishAssetResult(request, record, operation,
+                               {
+                                   .severity = cancelled ? DiagnosticSeverity::Warning
+                                                         : DiagnosticSeverityForError(error.severity).value_or(DiagnosticSeverity::Error),
+                                   .result = cancelled ? BuildOutputResult::Cancelled : BuildOutputResult::Failed,
+                                   .stage = std::string(stage),
+                                   .code = DiagnosticCode{error.code.Value()},
+                                   .message = error.message,
+                               });
         }
 
         /** @brief Publishes failures for callbacks that ran and siblings cancelled before execution. */
@@ -257,12 +223,8 @@ namespace Horo::Assets {
             for (CookSlot &slot : slots) {
                 if (!slot.cacheHit && groupFailed && !slot.cookError.has_value() && slot.cookedArtifact.empty())
                     slot.cookError = MakeError(CookErrors::Cancelled);
-                if (!slot.cookError.has_value())
-                    continue;
-                const bool cancelled = slot.cookError->code.Value() == CookErrors::Cancelled.code.Value();
-                PublishAssetResult(request, slot.record, operation, "cook", DiagnosticCode{slot.cookError->code.Value()},
-                                   cancelled ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error,
-                                   cancelled ? BuildOutputResult::Cancelled : BuildOutputResult::Failed);
+                if (slot.cookError.has_value())
+                    PublishAssetFailure(request, slot.record, operation, "cook", *slot.cookError);
             }
         }
 
@@ -296,8 +258,11 @@ namespace Horo::Assets {
             if (request.buildOutputStore != nullptr) {
                 for (const auto &slot : slots) {
                     if (!slot.cacheHit) {
-                        PublishAssetResult(request, slot.record, operation, "cook", DiagnosticCode{"asset.cook.asset_cooked"},
-                                           DiagnosticSeverity::Note, BuildOutputResult::Succeeded);
+                        PublishAssetResult(request, slot.record, operation,
+                                           {.severity = DiagnosticSeverity::Note,
+                                            .result = BuildOutputResult::Succeeded,
+                                            .stage = "cook",
+                                            .code = DiagnosticCode{"asset.cook.asset_cooked"}});
                     }
                 }
             }
@@ -347,15 +312,21 @@ namespace Horo::Assets {
             for (const auto &record : records) {
                 const auto *contribution = catalog.FindContribution(record.type, request.target);
                 if (!contribution) {
-                    PublishAssetResult(request, record, operation, "prepare", DiagnosticCode{CookErrors::CookerMissing.code.Value()},
-                                       DiagnosticSeverity::Error, BuildOutputResult::Failed);
+                    PublishAssetResult(request, record, operation,
+                                       {.severity = DiagnosticSeverity::Error,
+                                        .result = BuildOutputResult::Failed,
+                                        .stage = "prepare",
+                                        .code = DiagnosticCode{CookErrors::CookerMissing.code.Value()}});
                     return Result<std::vector<CookSlot>>::Failure(Error{CookErrors::CookerMissing.code});
                 }
 
                 auto readResult = ReadSourceBytes(request.sourceRoot, record.sourcePath.String(), request.limits.maximumSourceBytes);
                 if (readResult.HasError()) {
-                    PublishAssetResult(request, record, operation, "prepare", DiagnosticCode{readResult.ErrorValue().code.Value()},
-                                       DiagnosticSeverity::Error, BuildOutputResult::Failed);
+                    PublishAssetResult(request, record, operation,
+                                       {.severity = DiagnosticSeverity::Error,
+                                        .result = BuildOutputResult::Failed,
+                                        .stage = "prepare",
+                                        .code = DiagnosticCode{readResult.ErrorValue().code.Value()}});
                     return Result<std::vector<CookSlot>>::Failure(readResult.ErrorValue());
                 }
 
@@ -384,34 +355,47 @@ namespace Horo::Assets {
             return Result<std::vector<CookSlot>>::Success(std::move(slots));
         }
 
+        /** @brief Verifies exact generic and domain identity before an existing cache entry can be admitted. */
+        Result<void> ValidateCachedSlot(const AssetCookRequest &request, const CookerCatalogSnapshot &catalog, const CookSlot &slot,
+                                        const std::span<const std::uint8_t> bytes) {
+            auto decoded = DecodeCookedArtifact(bytes, request.limits);
+            if (decoded.HasError())
+                return Result<void>::Failure(decoded.ErrorValue());
+            const auto &artifact = decoded.Value();
+            if (artifact.id != slot.record.id || artifact.type != slot.record.type || artifact.target != request.target ||
+                artifact.sourceDigest != slot.sourceDigest || artifact.cacheKeyDigest != slot.cacheKey.digest)
+                return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
+            const auto *strategy = catalog.Find(slot.record.type, request.target);
+            if (strategy == nullptr)
+                return Result<void>::Failure(MakeError(CookErrors::CookerMissing));
+            const CookSourceView sourceView{
+                .id = slot.record.id,
+                .type = slot.record.type,
+                .target = request.target,
+                .sourceDigest = slot.sourceDigest,
+                .bytes = slot.sourceBytes,
+                .sourceContext = slot.record.sourcePath.String(),
+            };
+            return strategy->ValidateCookedPayload(sourceView, artifact.payload);
+        }
+
         Result<std::size_t> ResolveCacheHits(const AssetCookRequest &request, const CookerCatalogSnapshot &catalog,
                                              const AssetCookCache &cache, std::span<CookSlot> slots, const CancellationToken &cancellation,
                                              CookOperationScope &operation) {
             operation.Update("cache_check", "Checking artifact cache", 0.2F);
             std::size_t cacheHits = 0;
             for (auto &slot : slots) {
+                const auto fail = [&](const Error &error) {
+                    PublishAssetFailure(request, slot.record, operation, "cache_check", error);
+                    return Result<std::size_t>::Failure(error);
+                };
                 auto cacheResult = cache.Load(slot.cacheKey, cancellation);
                 if (cacheResult.HasError())
-                    return Result<std::size_t>::Failure(cacheResult.ErrorValue());
+                    return fail(cacheResult.ErrorValue());
 
                 if (auto cached = std::move(cacheResult).Value(); cached.has_value()) {
-                    auto decoded = DecodeCookedArtifact(*cached, request.limits);
-                    if (decoded.HasError())
-                        return Result<std::size_t>::Failure(decoded.ErrorValue());
-                    const auto &artifact = decoded.Value();
-                    if (artifact.id != slot.record.id || artifact.type != slot.record.type || artifact.target != request.target ||
-                        artifact.sourceDigest != slot.sourceDigest || artifact.cacheKeyDigest != slot.cacheKey.digest)
-                        return Result<std::size_t>::Failure(MakeError(CookErrors::MalformedArtifact));
-                    const auto *strategy = catalog.Find(slot.record.type, request.target);
-                    const CookSourceView sourceView{
-                        .id = slot.record.id,
-                        .type = slot.record.type,
-                        .target = request.target,
-                        .sourceDigest = slot.sourceDigest,
-                        .bytes = slot.sourceBytes,
-                    };
-                    if (auto validated = strategy->ValidateCookedPayload(sourceView, artifact.payload); validated.HasError())
-                        return Result<std::size_t>::Failure(validated.ErrorValue());
+                    if (auto validated = ValidateCachedSlot(request, catalog, slot, *cached); validated.HasError())
+                        return fail(validated.ErrorValue());
                     slot.cacheHit = true;
                     slot.cookedArtifact = std::move(*cached);
                     ++cacheHits;
@@ -430,6 +414,41 @@ namespace Horo::Assets {
                 }
             }
             return Result<std::size_t>::Success(cacheHits);
+        }
+
+        /** @brief Executes captured source/cache work while the caller retains terminal operation ownership. */
+        Result<AssetCookReport> ExecuteCapturedCook(JobSystem &jobs, const CookerCatalogSnapshot &catalog, const AssetCookRequest &request,
+                                                    const std::span<const AssetRecord> records, const CancellationToken &cancellation,
+                                                    CookOperationScope &operation) {
+            AssetCookCache cache(request.cacheRoot, request.limits);
+            auto slotsResult = PrepareCookSlots(request, catalog, records, operation);
+            if (slotsResult.HasError()) {
+                operation.RecordError(slotsResult.ErrorValue());
+                return Result<AssetCookReport>::Failure(slotsResult.ErrorValue());
+            }
+            auto slots = std::move(slotsResult).Value();
+
+            auto cacheHitsResult = ResolveCacheHits(request, catalog, cache, slots, cancellation, operation);
+            if (cacheHitsResult.HasError()) {
+                operation.RecordError(cacheHitsResult.ErrorValue());
+                return Result<AssetCookReport>::Failure(cacheHitsResult.ErrorValue());
+            }
+            const std::size_t cacheHits = cacheHitsResult.Value();
+
+            if (cacheHits < slots.size()) {
+                operation.Update("cook", std::format("Cooking {} assets", slots.size() - cacheHits), 0.4F);
+                if (const auto cooked = CookUncachedSlots(jobs, catalog, request, slots, cancellation, operation); cooked.HasError()) {
+                    const bool cancelled = IsJobCancelled(cooked.ErrorValue());
+                    Error error = cancelled ? WithCause(MakeError(CookErrors::Cancelled), cooked.ErrorValue()) : cooked.ErrorValue();
+                    operation.RecordOutcome(cancelled);
+                    return Result<AssetCookReport>::Failure(std::move(error));
+                }
+            }
+
+            Result<AssetCookReport> published = PublishCookedSlots(request, cache, slots, cacheHits, cancellation, operation);
+            if (published.HasError())
+                operation.RecordError(published.ErrorValue());
+            return published;
         }
 
         /** @brief Allocates the optional build-output identity before admitting an operation row. */
@@ -491,35 +510,7 @@ namespace Horo::Assets {
             return Result<AssetCookReport>::Failure(Error{CookErrors::TooLarge.code});
         }
 
-        AssetCookCache cache(request.cacheRoot, request.limits);
-        auto slotsResult = PrepareCookSlots(request, *catalog_, records, operation);
-        if (slotsResult.HasError()) {
-            operation.RecordError(slotsResult.ErrorValue());
-            return Result<AssetCookReport>::Failure(slotsResult.ErrorValue());
-        }
-        auto slots = std::move(slotsResult).Value();
-
-        auto cacheHitsResult = ResolveCacheHits(request, *catalog_, cache, slots, cancellation, operation);
-        if (cacheHitsResult.HasError()) {
-            operation.RecordError(cacheHitsResult.ErrorValue());
-            return Result<AssetCookReport>::Failure(cacheHitsResult.ErrorValue());
-        }
-        const std::size_t cacheHits = cacheHitsResult.Value();
-
-        if (cacheHits < slots.size()) {
-            operation.Update("cook", std::format("Cooking {} assets", slots.size() - cacheHits), 0.4F);
-            if (const auto cooked = CookUncachedSlots(jobs_, *catalog_, request, slots, cancellation, operation); cooked.HasError()) {
-                const bool cancelled = IsJobCancelled(cooked.ErrorValue());
-                Error error = cancelled ? WithCause(MakeError(CookErrors::Cancelled), cooked.ErrorValue()) : cooked.ErrorValue();
-                operation.RecordOutcome(cancelled);
-                return Result<AssetCookReport>::Failure(std::move(error));
-            }
-        }
-
-        Result<AssetCookReport> published = PublishCookedSlots(request, cache, slots, cacheHits, cancellation, operation);
-        if (published.HasError())
-            operation.RecordError(published.ErrorValue());
-        return published;
+        return ExecuteCapturedCook(jobs_, *catalog_, request, records, cancellation, operation);
     }
 
 }  // namespace Horo::Assets

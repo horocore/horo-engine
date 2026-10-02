@@ -703,6 +703,8 @@ add_library(HoroAssets STATIC
         runtime/assets/cooker/builtin/HeadlessMeshCooker.cpp
         runtime/assets/cache/AssetCookCache.cpp
         runtime/assets/cooker/AssetCookOutput.cpp
+        runtime/assets/cooker/AssetCookOperationScope.cpp
+        runtime/assets/cooker/AssetCookOperationScope.h
         runtime/assets/cooker/AssetCookService.cpp
         runtime/assets/importer/AssetImporterCatalog.cpp
         runtime/assets/importer/AssetImportMetadata.cpp
@@ -890,6 +892,8 @@ add_library(HoroPhysics STATIC
         physics/PhysicsBodyDynamics.cpp
         physics/PhysicsCapabilities.cpp
         physics/PhysicsCollisionSchema.cpp
+        physics/PhysicsCollisionCooker.cpp
+        physics/PhysicsCollisionArtifact.cpp
         physics/PhysicsConstraintDescriptor.cpp
         physics/PhysicsConvexHullCook.cpp
         physics/PhysicsConvexHullArtifact.cpp
