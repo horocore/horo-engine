@@ -836,6 +836,32 @@ on the real-time path and must not allocate, block, log, access files, or invoke
 unbounded user callbacks. Nodes that do not declare this contract at graph
 build time are rejected by the mixer graph validator.
 
+`HoroEngine::AudioDsp` now supplies `Audio/CoreAudioDSPNode.h` on the prepared
+`AudioDSPNode.h` contract: gain, mono/stereo pan, and matched-exponential first-order
+low/high-pass filters. Gain and filters preserve all admitted speaker, discrete,
+and canonical Ambisonic layouts. Pan explicitly accepts Mono/Stereo speaker inputs
+and emits Stereo; it performs equal-power mono pan or stereo balance with unity
+center, without inventing multichannel/spatial routing.
+
+Construction owns immutable descriptors on control; preparation binds the declared
+bounded aligned host state and selected frame bound. Process/Reset allocate no
+storage and never retain block/parameter views. Parameter snapshots carry explicit
+linear segments in descriptor order: the first sample advances one ramp step,
+zero ramp uses the target immediately, and control supplies the next segment's
+start and remaining duration. Filter history survives blocks; reset clears it;
+copy/silence bypass freezes it. Exact corresponding-plane in-place processing is
+admitted, while partial/cross-plane aliases fail before mutation. Nonfinite input
+or output faults clear output/history; finite internal headroom is preserved.
+
+The one-pole coefficient is `exp(-2*pi*cutoff/sampleRate)`; high-pass is the input
+minus the matched low-pass. Cutoff admission is 1 Hz through 0.45 times sample
+rate. Filters declare a conservative 32-time-constant tail at the minimum cutoff;
+the node reports the remaining budget and clears exhausted history, while the
+graph owns explicit silent input and tail scheduling. Numerical fixtures use
+absolute sample tolerance 2e-6 and steady-state frequency-response tolerance 2e-4.
+These baseline primitives do not install a mixer, schedule automation, or deliver
+extension/procedural graph execution.
+
 Graph validation runs whenever a mixer graph is built or modified:
 
 - in the editor when a bus graph or effect chain is authored
@@ -950,6 +976,48 @@ Voice priority and virtualization are core features. A low-priority distant SFX
 may be virtualized or rejected before a high-priority UI or voice line. Policy
 decisions are observable through metrics.
 
+### Scoped concurrency eligibility
+
+`AudioConcurrencyGroup` in `HoroAudioApi` owns the authored group identity,
+global/emitter/owner scope, instance ceiling and sample-frame retrigger window.
+Zero ceiling is unlimited; zero window disables cooldown. Group scope is shared
+by every source using that group. `AudioConcurrencyPolicy` on a sound remains
+its source-local admission action/ceiling; the admission layer must evaluate all
+applicable constraints rather than silently override an authored group.
+
+`MakeAudioConcurrencyKey` partitions buckets by runtime generation and, for
+scoped groups, the complete generation-safe emitter or playback-owner handle.
+Unused dimensions are canonicalized away. Names, addresses and scene entity
+indices are not identities. The Audio control owner assigns these handles and
+owns the group registry and bucket projections; no native backend participates.
+
+`EvaluateAudioConcurrency` is a linear, read-only eligibility primitive with no
+allocation for valid inputs. Typed malformed-input errors are control-thread work. The control owner supplies the complete bucket as unique voice
+snapshots in strictly increasing handle order, bounded by `MaximumAudioVoiceSlots`.
+Created, Ready, Scheduled, Playing and Stopping reserve an instance. Paused and
+Virtual count by default and can each be excluded explicitly. Terminal voices
+never count, even before slot release. Invalid states, terminal reasons, duplicate
+or unsorted records, foreign runtimes and wrong buckets fail with typed errors.
+The registry remains authoritative for handle liveness; callers must refresh the
+projection after transitions and cannot reuse an old snapshot for a new admission.
+
+Cooldown measures elapsed sample frames since the last **successful** admission
+in the exact bucket, including after that voice finishes. Boundary equality is
+eligible; checked subtraction avoids timestamp overflow. A non-reused timeline
+token changes whenever the underlying sample clock resets or becomes discontinuous.
+Mismatched tokens and future history fail explicitly. Paused sample time does not
+advance cooldown. Runtime, emitter and owner retirement discard their buckets;
+shutdown stops admission before projections are released.
+
+The control owner serializes evaluation, voice admission and projection updates.
+It records a successful reservation and its sample time before evaluating the
+next request; rejection or failed reservation never moves the retrigger window.
+Identical projections, sample times and request order therefore yield identical
+eligibility. Instance-limit and cooldown evidence are both retained, with the
+instance-limit reason taking precedence. This contract does not choose a stealing
+victim, change voice state, or implement one-shot variation; those are admission
+and playback policy responsibilities.
+
 ## 2D And 3D Playback
 
 Audio sources support two spatial modes:
@@ -1049,6 +1117,60 @@ SetBusGain(Music, -6 dB, fade = 250 ms)
 SetVoicePitch(voice, 0.8, fade = 100 ms)
 SetLowPassCutoff(SFX, 1200 Hz, fade = 500 ms)
 ```
+
+### AUD-004.8 bounded parameter automation
+
+`HoroEngine::AudioCommands` owns the additive `AudioParameterAutomation.h`
+contract. Control prepares up to 64 immutable parameter bindings and seals the
+engine before transferring exclusive ownership to the callback. Addresses retain
+stable parameter, bus/route/effect identities, the exact runtime, voice handle
+where applicable, and a non-reused binding generation. The host validates actual
+voice/graph liveness and retains physical bindings through callback detachment;
+structural normalization does not establish liveness. No callback registry,
+string lookup, dynamic allocation, lock, or application callback is introduced.
+
+Producers submit `AudioAutomateParameterCommand` and
+`AudioCancelAutomationCommand` through the existing staging/SPSC FIFO and retained
+scheduled-batch path. Automation commands are never coalesced. After normal
+consumption, the host dispatches `Apply`; it must retain or explicitly reconcile
+rejected work rather than silently dropping it. `ApplyBatch` provides bounded
+all-or-nothing admission for automation-only batches at their exact dispatched
+boundary. It rejects mixed host-owned payloads without mutation: aggregate mixed
+batch admission remains the host's responsibility. Batch transactions use one
+fixed engine-sized stack copy, not heap storage. Ordinary queue and engine
+capacity rejection preserve request IDs and all previously accepted state.
+
+Sample targets use the shipping sample-clock mapping, exact epoch, clock and
+discontinuity generations. Late work is rejected. The host advances the engine
+at each rendered sample and copies the corresponding value into its prepared
+voice, bus, send or DSP binding; sampling once per block is insufficient for the
+continuity contract. Block partition does not change interpolation. Pause rejects
+advancement without consuming queued work. Discontinuity, graph/voice replacement
+or reset requires closing/detaching the old engine and preparing new bindings;
+old addresses never rebind by stable-ID coincidence.
+
+Each parameter supplies finite model-unit range, initial value, minimum smoothing
+frames and a positive maximum per-sample delta. Linear and monotone cubic
+smoothstep curves have exact endpoints. Durations conservatively bound the entire
+admitted range divided by the delta (smoothstep multiplies by 1.5 for its maximum
+derivative), including unknown future overlap anchors. Too-short explicit ramps
+are rejected. Immediate intent starts at the earliest admitted boundary and uses
+mandatory linear smoothing with the same range-derived duration; it never means
+an uncontrolled value jump. Floating-point quantization remains bounded by the
+model range's binary32 rounding error; the numeric delta is not a universal
+perceptual audibility threshold. Model owners choose limits appropriate to gain,
+pitch, cutoff or other units.
+
+Up to 128 queued requests execute by start frame, then increasing admitted request
+ID for equal frames. IDs strictly increase within one engine, including cancelled
+requests. A new overlap replaces the older trajectory from its evaluated value at
+the exact start sample, preserving continuity and reaching the latest target.
+Cancellation removes one pending request or holds the active request at the last
+advanced sample; later requests remain queued. Cancellation of a completed or
+replaced request is explicitly `NotFound`. Matching unload/reset barriers close
+admission and discard automation; control still owns transport draining, callback
+detachment and resource reclamation. Existing last-value voice snapshots retain
+their contract; hosts opt into this new explicit automation path.
 
 The core supports simple audio snapshots as named mixer-state presets:
 
@@ -2026,6 +2148,7 @@ without a measured source observation is unavailable, not a fabricated zero.
 Callback underruns count consumed facts; separately measured telemetry drops
 explain records lost under event-queue pressure. Critical retries are not called
 drops, because the caller retains the work.
+
 ### Development callback safety watchdog
 
 The build-tree-only `AudioCallbackWatchdog` instruments each SDL3 Horo render-port
