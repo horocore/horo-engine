@@ -102,8 +102,8 @@ namespace Horo::Runtime {
          * @param barrier Existing session capture authority, borrowed for this object's lifetime.
          * @return Scheduler or typed policy/allocation failure.
          */
-        [[nodiscard]] static Result<std::unique_ptr<SaveAutosaveScheduler>> Create(SaveAutosavePolicy policy,
-                                                                                   SaveAutosaveClockSample initial,
+        [[nodiscard]] static Result<std::unique_ptr<SaveAutosaveScheduler>> Create(const SaveAutosavePolicy &policy,
+                                                                                   const SaveAutosaveClockSample &initial,
                                                                                    SaveOperationArbiter &arbiter,
                                                                                    SaveCaptureBarrier &barrier);
         /** @brief Closes on the owner without waiting; detached producers remain host-owned. */
@@ -111,11 +111,27 @@ namespace Horo::Runtime {
         SaveAutosaveScheduler(const SaveAutosaveScheduler &) = delete;
         SaveAutosaveScheduler &operator=(const SaveAutosaveScheduler &) = delete;
 
+    private:
+        /** @brief Factory-issued construction capability; external callers cannot create a key. */
+        class ConstructionKey {
+            ConstructionKey() = default;
+            friend class SaveAutosaveScheduler;
+        };
+
+    public:
+        /** @brief Factory-only construction after policy, clock and authority validation.
+         * @param policy Validated timing policy. @param initial Validated clock baseline.
+         * @param arbiter Borrowed operation authority. @param barrier Borrowed capture authority.
+         * @param key Private construction capability issued only by Create.
+         */
+        SaveAutosaveScheduler(const SaveAutosavePolicy &policy, const SaveAutosaveClockSample &initial, SaveOperationArbiter &arbiter,
+                              SaveCaptureBarrier &barrier, ConstructionKey key) noexcept;
+
         /** @brief Advances exact cadence, retaining one latest-state intent; no catch-up loop or allocation.
          * @param sample New absolute clocks; both must be nondecreasing even when frozen/unselected.
          * @return Success or typed stale/invalid/affinity/lifecycle error. Rejected samples change nothing.
          */
-        [[nodiscard]] Result<void> Sample(SaveAutosaveClockSample sample);
+        [[nodiscard]] Result<void> Sample(const SaveAutosaveClockSample &sample);
         /** @brief Admits only when Active, cooldown-expired, unblocked and the arbiter and barrier are idle.
          * Manual/queued work takes precedence. Polls an owned pending barrier at subsequent safe points.
          * @param phase Current actual lifecycle phase, never a remembered previous safe point.
@@ -145,7 +161,7 @@ namespace Horo::Runtime {
         /** @brief Cancels old intent, fences old completion and resets cadence for a new session incarnation.
          * @param initial New distinct generation and clock baseline. @return Success or typed validation error.
          */
-        [[nodiscard]] Result<void> ReplaceSession(SaveAutosaveClockSample initial);
+        [[nodiscard]] Result<void> ReplaceSession(const SaveAutosaveClockSample &initial);
         /** @brief Closes scheduling and cancels owned pre-commit work without waiting or closing shared authorities.
          * @return Success or typed affinity/reentrancy error. Idempotent.
          */
@@ -154,18 +170,24 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<SaveAutosaveSchedulerSnapshot> Snapshot() const;
 
     private:
-        SaveAutosaveScheduler(SaveAutosavePolicy policy, SaveAutosaveClockSample initial, SaveOperationArbiter &arbiter,
-                              SaveCaptureBarrier &barrier) noexcept;
         /** @brief Checks owner-thread affinity. */
         [[nodiscard]] Result<void> ValidateOwner() const;
         /** @brief Checks affinity, reentry and closed-admission invariants. */
         [[nodiscard]] Result<void> ValidateMutation() const;
         /** @brief Resets cadence and observation against a validated baseline. */
-        void Reset(SaveAutosaveClockSample initial) noexcept;
+        void Reset(const SaveAutosaveClockSample &initial) noexcept;
         /** @brief Reduces nonnegative eligible elapsed time without looping or wrapping. */
         void AdvanceTime(std::int64_t delta) noexcept;
         /** @brief Cancels only this scheduler's producer and barrier request without waiting. */
         [[nodiscard]] Result<void> CancelOwned();
+        /** @brief Releases the owned uncaptured barrier after cancellation, preserving errors for explicit cleanup. */
+        [[nodiscard]] Result<void> CancelBarrier(SaveCancellationRequestResult cancelled);
+        /** @brief Retires uncaptured terminal work and preserves its exact failure cause. */
+        [[nodiscard]] Result<void> RetireCapture();
+        /** @brief Checks bounded admission capacity without mutating either shared authority. */
+        [[nodiscard]] Result<bool> ReadyForAdmission() const;
+        /** @brief Acknowledges one barrier outcome and transfers only a successful immutable cut. */
+        [[nodiscard]] Result<std::optional<SaveAutosaveCapture>> CompleteCapture(SaveCaptureBarrierOutcome outcome);
         /** @brief Observes the exact retained terminal handle and preserves failure cause. */
         [[nodiscard]] Result<void> ObserveTerminal();
         /** @brief Creates one background arbiter operation and requests its barrier. */

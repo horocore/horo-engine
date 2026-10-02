@@ -1,8 +1,8 @@
 #include "SaveAutosaveTestUtils.h"
 
 #include <catch2/generators/catch_generators.hpp>
-#include <future>
 #include <limits>
+#include <thread>
 
 namespace Horo::Runtime {
     namespace {
@@ -62,11 +62,12 @@ namespace Horo::Runtime {
         }
 
         TEST_CASE("Gameplay domain follows committed simulation time independently of real time", "[unit][save][autosave]") {
+            using enum SaveAutosaveActivity;
             Fixture fixture({.interval = Ns(100), .cooldown = {}, .paused = SaveAutosaveClockPolicy::Accumulate});
-            fixture.Sample(99, 1'000'000, SaveAutosaveActivity::Paused);
-            fixture.Sample(99, 9'000'000, SaveAutosaveActivity::Paused);
+            fixture.Sample(99, 1'000'000, Paused);
+            fixture.Sample(99, 9'000'000, Paused);
             CHECK_FALSE(fixture.Snapshot().pending);
-            fixture.Sample(99, 9'000'000, SaveAutosaveActivity::Active);
+            fixture.Sample(99, 9'000'000, Active);
             fixture.Sample(100, 9'000'001);
             CHECK(fixture.Snapshot().triggers == 1);
         }
@@ -147,12 +148,15 @@ namespace Horo::Runtime {
 
         TEST_CASE("Autosave mutations and diagnostics reject nonowner threads", "[unit][save][autosave]") {
             Fixture fixture;
-            auto worker = std::async(std::launch::async, [&] {
-                return fixture.scheduler->Sample({.generation = fixture.generation}).HasError() &&
-                       fixture.scheduler->Snapshot().HasError() && fixture.scheduler->Cancel().HasError() &&
-                       fixture.scheduler->Resume().HasError() && fixture.scheduler->BeginShutdown().HasError() && fixture.Poll().HasError();
+            bool rejected{};
+            std::jthread worker([&fixture, &rejected] {
+                rejected = fixture.scheduler->Sample({.generation = fixture.generation}).HasError() &&
+                           fixture.scheduler->Snapshot().HasError() && fixture.scheduler->Cancel().HasError() &&
+                           fixture.scheduler->Resume().HasError() && fixture.scheduler->BeginShutdown().HasError() &&
+                           fixture.Poll().HasError();
             });
-            CHECK(worker.get());
+            worker.join();
+            CHECK(rejected);
             CHECK_FALSE(fixture.Snapshot().pending);
         }
     }  // namespace

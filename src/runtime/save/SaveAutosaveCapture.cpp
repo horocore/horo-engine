@@ -9,7 +9,7 @@ namespace Horo::Runtime {
         class ExecutionScope final {
         public:
             explicit ExecutionScope(bool &executing) noexcept : executing_(executing) {
-                executing_ = true;
+                static_cast<void>(std::exchange(executing, true));
             }
 
             ~ExecutionScope() {
@@ -26,7 +26,12 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveAutosaveScheduler::~SaveAutosaveScheduler */
     SaveAutosaveScheduler::~SaveAutosaveScheduler() {
-        static_cast<void>(BeginShutdown());
+        try {
+            static_cast<void>(BeginShutdown());
+        } catch (...) {
+            // Teardown cannot propagate host callbacks or error-allocation failures.
+            // Hosts use explicit BeginShutdown while dependencies live to observe cleanup errors.
+        }
     }
 
     /** @copydoc SaveAutosaveScheduler::ObserveTerminal */
@@ -66,28 +71,40 @@ namespace Horo::Runtime {
         snapshot_.pending = false;
         snapshot_.pendingAge = {};
         snapshot_.cooldownRemaining = policy_.cooldown;
-        const auto selected = arbiter_->StartNext();
-        if (!selected || selected->operation.operation != operation_.Id())
+        if (const auto selected = arbiter_->StartNext(); !selected || selected->operation.operation != operation_.Id())
             return Result<void>::Failure(MakeError(SaveErrors::ArbiterInvalid));
-        auto advanced = arbiter_->Advance(operation_.Id(), SaveArbiterState::WaitingForSafePoint);
-        if (advanced.HasError())
+        if (auto advanced = arbiter_->Advance(operation_.Id(), SaveArbiterState::WaitingForSafePoint); advanced.HasError())
             return advanced;
         if (arbiter_->ActiveOperation() != operation_.Id())
             return ObserveTerminal();
-        const auto requested = [&]() -> Result<void> {
+        if (const auto requested = [this]() {
             try {
                 return barrier_->Request(operation_.Id(), last_.generation);
-            } catch (...) {  // NOSONAR(cpp:S1181, cpp:S2738) - injected host clock containment boundary.
+            } catch (...) {  // Injected host clock containment boundary.
                 return Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
             }
-        }();
-        if (requested.HasError()) {
+        }(); requested.HasError()) {
             static_cast<void>(arbiter_->Fail(operation_.Id(), requested.ErrorValue()));
             return ObserveTerminal();
         }
         awaitingCapture_ = true;
         snapshot_.disposition = SaveAutosaveDisposition::Capturing;
         return arbiter_->Advance(operation_.Id(), SaveArbiterState::Capturing);
+    }
+
+    /** @copydoc SaveAutosaveScheduler::RetireCapture */
+    Result<void> SaveAutosaveScheduler::RetireCapture() {
+        const auto terminal = operation_.Snapshot();
+        if (const auto cancelled = CancelOwned(); cancelled.HasError())
+            return cancelled;
+        if (terminal && terminal->state == SaveOperationState::Failed) {
+            snapshot_.pending = true;
+            snapshot_.blocked = true;
+            snapshot_.disposition = SaveAutosaveDisposition::Failed;
+            return Result<void>::Failure(*terminal->terminalError);
+        }
+        snapshot_.disposition = SaveAutosaveDisposition::Cancelled;
+        return Result<void>::Success();
     }
 
     /** @copydoc SaveAutosaveScheduler::Capture */
@@ -97,17 +114,8 @@ namespace Horo::Runtime {
                                                                               const RuntimeSaveCaptureLimits &limits) {
         using Return = Result<std::optional<SaveAutosaveCapture>>;
         if (arbiter_->ActiveOperation() != operation_.Id()) {
-            const auto terminal = operation_.Snapshot();
-            const auto cancelled = CancelOwned();
-            if (cancelled.HasError())
-                return Return::Failure(cancelled.ErrorValue());
-            if (terminal && terminal->state == SaveOperationState::Failed) {
-                snapshot_.pending = true;
-                snapshot_.blocked = true;
-                snapshot_.disposition = SaveAutosaveDisposition::Failed;
-                return Return::Failure(*terminal->terminalError);
-            }
-            snapshot_.disposition = SaveAutosaveDisposition::Cancelled;
+            if (const auto retired = RetireCapture(); retired.HasError())
+                return Return::Failure(retired.ErrorValue());
             return Return::Success({});
         }
         // Observe parent/deadline/caller cancellation before invoking any capture adapter.
@@ -115,16 +123,14 @@ namespace Horo::Runtime {
         if (cancellation.HasError())
             return Return::Failure(cancellation.ErrorValue());
         if (cancellation.Value()) {
-            const auto cancelled = CancelOwned();
-            if (cancelled.HasError())
-                return Return::Failure(cancelled.ErrorValue());
-            snapshot_.disposition = SaveAutosaveDisposition::Cancelled;
+            if (const auto retired = RetireCapture(); retired.HasError())
+                return Return::Failure(retired.ErrorValue());
             return Return::Success({});
         }
-        auto polled = [&]() -> Result<SaveCaptureBarrierOutcome> {
+        auto polled = [this, phase, &provenance, &participants, &limits]() {
             try {
                 return barrier_->CaptureAtSafePoint(phase, last_.generation, provenance, std::move(participants), limits);
-            } catch (...) {  // NOSONAR(cpp:S1181, cpp:S2738) - injected host clock containment boundary.
+            } catch (...) {  // Injected host clock containment boundary; retain request ownership.
                 snapshot_.blocked = true;
                 snapshot_.pending = true;
                 snapshot_.disposition = SaveAutosaveDisposition::Failed;
@@ -133,18 +139,21 @@ namespace Horo::Runtime {
         }();
         if (polled.HasError())
             return Return::Failure(polled.ErrorValue());
-        auto outcome = std::move(polled).Value();
+        return CompleteCapture(std::move(polled).Value());
+    }
+
+    /** @copydoc SaveAutosaveScheduler::CompleteCapture */
+    Result<std::optional<SaveAutosaveCapture>> SaveAutosaveScheduler::CompleteCapture(SaveCaptureBarrierOutcome outcome) {
+        using Return = Result<std::optional<SaveAutosaveCapture>>;
         snapshot_.lastBarrier = outcome.barrier;
         if (outcome.barrier.state == SaveBarrierState::Pending)
             return Return::Success({});
-        const auto acknowledged = barrier_->Acknowledge(operation_.Id());
-        if (acknowledged.HasError())
+        if (const auto acknowledged = barrier_->Acknowledge(operation_.Id()); acknowledged.HasError())
             return Return::Failure(acknowledged.ErrorValue());
         awaitingCapture_ = false;
         if (!outcome.capture) {
             const Error error = outcome.error.value_or(MakeError(SaveErrors::LifecycleSuspended));
-            const auto failed = arbiter_->Fail(operation_.Id(), error);
-            if (failed.HasError())
+            if (const auto failed = arbiter_->Fail(operation_.Id(), error); failed.HasError())
                 return Return::Failure(failed.ErrorValue());
             operation_ = {};
             snapshot_.pending = true;
@@ -152,8 +161,7 @@ namespace Horo::Runtime {
             snapshot_.disposition = SaveAutosaveDisposition::Failed;
             return Return::Failure(error);
         }
-        const auto advanced = arbiter_->Advance(operation_.Id(), SaveArbiterState::Encoding);
-        if (advanced.HasError())
+        if (const auto advanced = arbiter_->Advance(operation_.Id(), SaveArbiterState::Encoding); advanced.HasError())
             return Return::Failure(advanced.ErrorValue());
         if (arbiter_->ActiveOperation() != operation_.Id()) {
             static_cast<void>(ObserveTerminal());
@@ -161,6 +169,17 @@ namespace Horo::Runtime {
         }
         snapshot_.disposition = SaveAutosaveDisposition::Saving;
         return Return::Success(SaveAutosaveCapture{last_.generation, operation_, std::move(*outcome.capture)});
+    }
+
+    /** @copydoc SaveAutosaveScheduler::ReadyForAdmission */
+    Result<bool> SaveAutosaveScheduler::ReadyForAdmission() const {
+        if (operation_.IsValid() || !snapshot_.pending || snapshot_.cooldownRemaining > Duration{} ||
+            arbiter_->ActiveOperation().has_value() || arbiter_->QueuedCount() != 0)
+            return Result<bool>::Success(false);
+        const auto barrier = barrier_->Snapshot();
+        if (barrier.HasError())
+            return Result<bool>::Failure(barrier.ErrorValue());
+        return Result<bool>::Success(barrier.Value().state == SaveBarrierState::Idle);
     }
 
     /** @copydoc SaveAutosaveScheduler::CommitAtSafePoint */
@@ -182,13 +201,10 @@ namespace Horo::Runtime {
             return Return::Success({});
         if (awaitingCapture_)
             return Capture(phase, provenance, std::move(participants), limits);
-        if (operation_.IsValid() || !snapshot_.pending || snapshot_.cooldownRemaining > Duration{} || arbiter_->ActiveOperation() ||
-            arbiter_->QueuedCount() != 0)
-            return Return::Success({});
-        const auto barrier = barrier_->Snapshot();
-        if (barrier.HasError())
-            return Return::Failure(barrier.ErrorValue());
-        if (barrier.Value().state != SaveBarrierState::Idle)
+        const auto ready = ReadyForAdmission();
+        if (ready.HasError())
+            return Return::Failure(ready.ErrorValue());
+        if (!ready.Value())
             return Return::Success({});
         if (const auto admitted = Admit(std::move(operation), std::move(address)); admitted.HasError())
             return Return::Failure(admitted.ErrorValue());
@@ -201,29 +217,35 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         const auto cancelled = arbiter_->Cancel(operation_.Id());
         if (awaitingCapture_) {
-            const auto barrier = barrier_->Snapshot();
-            if (barrier.HasError())
-                return Result<void>::Failure(barrier.ErrorValue());
-            if (barrier.Value().state == SaveBarrierState::Pending) {
-                const auto result = [&]() -> Result<void> {
-                    try {
-                        return barrier_->Cancel(operation_.Id());
-                    } catch (...) {  // NOSONAR(cpp:S1181, cpp:S2738) - injected host clock containment boundary.
-                        return Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
-                    }
-                }();
-                if (result.HasError())
-                    return result;
-            }
-            if (const auto result = barrier_->Acknowledge(operation_.Id()); result.HasError())
+            if (const auto result = CancelBarrier(cancelled); result.HasError())
                 return result;
-            if (cancelled == SaveCancellationRequestResult::Requested || cancelled == SaveCancellationRequestResult::AlreadyRequested) {
-                if (const auto result = arbiter_->ObserveCancellation(operation_.Id()); result.HasError())
-                    return result;
-            }
-            awaitingCapture_ = false;
         }
         operation_ = {};
+        return Result<void>::Success();
+    }
+
+    /** @copydoc SaveAutosaveScheduler::CancelBarrier */
+    Result<void> SaveAutosaveScheduler::CancelBarrier(const SaveCancellationRequestResult cancelled) {
+        const auto barrier = barrier_->Snapshot();
+        if (barrier.HasError())
+            return Result<void>::Failure(barrier.ErrorValue());
+        if (barrier.Value().state == SaveBarrierState::Pending) {
+            if (const auto result = [this]() {
+                try {
+                    return barrier_->Cancel(operation_.Id());
+                } catch (...) {  // Injected host clock containment boundary; cleanup remains observable.
+                    return Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
+                }
+            }(); result.HasError())
+                return result;
+        }
+        if (const auto result = barrier_->Acknowledge(operation_.Id()); result.HasError())
+            return result;
+        if (cancelled == SaveCancellationRequestResult::Requested || cancelled == SaveCancellationRequestResult::AlreadyRequested) {
+            if (const auto result = arbiter_->ObserveCancellation(operation_.Id()); result.HasError())
+                return result;
+        }
+        awaitingCapture_ = false;
         return Result<void>::Success();
     }
 
@@ -251,7 +273,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SaveAutosaveScheduler::ReplaceSession */
-    Result<void> SaveAutosaveScheduler::ReplaceSession(const SaveAutosaveClockSample initial) {
+    Result<void> SaveAutosaveScheduler::ReplaceSession(const SaveAutosaveClockSample &initial) {
         if (const auto valid = ValidateMutation(); valid.HasError())
             return valid;
         if (!initial.generation.IsValid() || initial.generation == last_.generation || initial.gameplay < Duration{} ||
@@ -270,12 +292,9 @@ namespace Horo::Runtime {
     Result<void> SaveAutosaveScheduler::BeginShutdown() {
         if (const auto owner = ValidateOwner(); owner.HasError())
             return owner;
-        if (executing_)
-            return Result<void>::Failure(MakeError(SaveErrors::LifecycleReentrant));
         if (closed_)
             return Result<void>::Success();
-        const auto cancelled = Cancel();
-        if (cancelled.HasError())
+        if (const auto cancelled = Cancel(); cancelled.HasError())
             return cancelled;
         closed_ = true;
         snapshot_.disposition = SaveAutosaveDisposition::Closed;

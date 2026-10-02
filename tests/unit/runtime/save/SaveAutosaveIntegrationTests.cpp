@@ -2,7 +2,6 @@
 #include "SaveAutosaveTestUtils.h"
 
 #include <catch2/generators/catch_generators.hpp>
-#include <stdexcept>
 
 namespace Horo::Runtime {
     namespace {
@@ -136,7 +135,7 @@ namespace Horo::Runtime {
             }
             SECTION("Arbitrary adapter exception") {
                 fixture.callback = [](const CanonicalCaptureContext &, ICanonicalCaptureSink &) -> Result<CanonicalCaptureDisposition> {
-                    throw std::runtime_error("adapter failure");
+                    throw AdapterFailure{};
                 };
             }
             fixture.Sample(100);
@@ -199,6 +198,7 @@ namespace Horo::Runtime {
 
         TEST_CASE("Autosave contains host clock exceptions and retains owned cleanup", "[unit][save][autosave]") {
             Fixture fixture;
+            fixture.clock.nonstandardException = GENERATE(false, true);
             fixture.Sample(100);
             SECTION("Request boundary") {
                 fixture.clock.throws = true;
@@ -321,7 +321,7 @@ namespace Horo::Runtime {
 
         TEST_CASE("Autosave rejects adapter reentry and permits post-terminal owner observation", "[unit][save][autosave]") {
             Fixture fixture;
-            fixture.callback = [&](const CanonicalCaptureContext &, ICanonicalCaptureSink &sink) {
+            fixture.callback = [&fixture](const CanonicalCaptureContext &, ICanonicalCaptureSink &sink) {
                 CHECK(fixture.Poll(92).HasError());
                 CHECK(fixture.scheduler->Cancel().HasError());
                 CHECK(fixture.scheduler->BeginShutdown().HasError());
@@ -336,7 +336,7 @@ namespace Horo::Runtime {
             CHECK(fixture.captures == 1);
             fixture.Sample(200);
             REQUIRE(captured.operation
-                        .OnCompletion([&](const SaveOperationSnapshot &) {
+                        .OnCompletion([&fixture](const SaveOperationSnapshot &) {
                 CHECK(fixture.Poll(92).HasValue());
                 CHECK(fixture.scheduler->Resume().HasValue());
             }).HasValue());
@@ -349,7 +349,9 @@ namespace Horo::Runtime {
         public:
             explicit AutosaveRuntimeHost(Fixture &fixture) : fixture_(fixture) {}
 
-            std::optional<SaveAutosaveCapture> detached;
+            const std::optional<SaveAutosaveCapture> &Detached() const noexcept {
+                return detached_;
+            }
 
             Result<void> Startup(const CancellationToken &) override {
                 return Result<void>::Success();
@@ -366,9 +368,10 @@ namespace Horo::Runtime {
             Result<void> OnPhase(const RuntimePhase phase, const FrameContext &context) override {
                 if (phase != RuntimePhase::CommitDeferredLifecycleChanges)
                     return Result<void>::Success();
-                const auto sampled = fixture_.scheduler->Sample(
-                    {fixture_.generation, Ns(static_cast<std::int64_t>(context.completedSimulationTick) * 16'666'667), fixture_.clock.now});
-                if (sampled.HasError())
+                if (const auto sampled = fixture_.scheduler->Sample(
+                        {fixture_.generation, Ns(static_cast<std::int64_t>(context.completedSimulationTick) * 16'666'667),
+                         fixture_.clock.now});
+                    sampled.HasError())
                     return sampled;
                 fixture_.provenance.epoch.value = context.completedSimulationTick + 41;
                 for (std::size_t index = 1; index < 4; ++index) {
@@ -380,7 +383,7 @@ namespace Horo::Runtime {
                 if (captured.HasError())
                     return Result<void>::Failure(captured.ErrorValue());
                 if (captured.Value())
-                    detached = std::move(*captured.Value());
+                    detached_ = *std::move(captured).Value();
                 return Result<void>::Success();
             }
 
@@ -390,6 +393,7 @@ namespace Horo::Runtime {
 
         private:
             Fixture &fixture_;
+            std::optional<SaveAutosaveCapture> detached_;
         };
 
         TEST_CASE("Autosave host captures through real lifecycle after fixed simulation and resumes detached", "[unit][save][autosave]") {
@@ -404,13 +408,13 @@ namespace Horo::Runtime {
             REQUIRE(frames->RunFrame(lifecycle, cancellation, false).HasValue());
             fixture.clock.now = Ns(16'666'667);
             REQUIRE(frames->RunFrame(lifecycle, cancellation, false).HasValue());
-            REQUIRE(view->detached);
-            CHECK(view->detached->snapshot.Provenance().epoch.value == 42);
-            CHECK(view->detached->snapshot.Records()[0].Segment(0)[0] == std::byte{1});
+            REQUIRE(view->Detached());
+            CHECK(view->Detached()->snapshot.Provenance().epoch.value == 42);
+            CHECK(view->Detached()->snapshot.Records()[0].Segment(0)[0] == std::byte{1});
             fixture.clock.now = Ns(33'333'334);
             REQUIRE(frames->RunFrame(lifecycle, cancellation, false).HasValue());
             CHECK(fixture.bytes[0] == std::byte{2});
-            CHECK(view->detached->snapshot.Records()[0].Segment(0)[0] == std::byte{1});
+            CHECK(view->Detached()->snapshot.Records()[0].Segment(0)[0] == std::byte{1});
             CHECK(fixture.Snapshot().pending);
             lifecycle.Shutdown();
         }

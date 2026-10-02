@@ -4,10 +4,24 @@
 #include "SaveCaptureSnapshotTestUtils.h"
 
 #include <array>
-#include <stdexcept>
+#include <exception>
 
 namespace Horo::Runtime::AutosaveTestSupport {
-    using namespace CaptureTestSupport;
+    using CaptureTestSupport::CallbackCaptureAdapter;
+    using CaptureTestSupport::CaptureCallback;
+    using CaptureTestSupport::Descriptor;
+    using CaptureTestSupport::Participant;
+    using CaptureTestSupport::Provenance;
+    using CaptureTestSupport::Register;
+
+    class HostClockFailure final : public std::exception {
+    public:
+        const char *what() const noexcept override {
+            return "host clock failed";
+        }
+    };
+
+    struct AdapterFailure final {};
 
     inline Duration Ns(const std::int64_t value) {
         return Duration::FromNanoseconds(value);
@@ -17,10 +31,13 @@ namespace Horo::Runtime::AutosaveTestSupport {
     public:
         Duration now;
         bool throws{};
+        bool nonstandardException{};
 
         [[nodiscard]] Duration MonotonicNow() const override {
+            if (throws && nonstandardException)
+                throw AdapterFailure{};
             if (throws)
-                throw std::runtime_error("host clock failed");
+                throw HostClockFailure{};
             return now;
         }
     };
@@ -38,7 +55,7 @@ namespace Horo::Runtime::AutosaveTestSupport {
         unsigned captures{};
         std::unique_ptr<SaveAutosaveScheduler> scheduler;
 
-        explicit Fixture(const SaveAutosavePolicy policy = {.interval = Ns(100), .cooldown = {}},
+        explicit Fixture(const SaveAutosavePolicy &policy = {.interval = Ns(100), .cooldown = {}},
                          const SaveCaptureBarrierPolicy barrierPolicy = {}) {
             barrier = SaveCaptureBarrier::Create(71, clock, 4, barrierPolicy).Value();
             const std::array names{"project.capture", "horo.jobs", "horo.scene.mutation", "horo.subsystem"};
@@ -51,8 +68,7 @@ namespace Horo::Runtime::AutosaveTestSupport {
                 ++captures;
                 if (callback)
                     return callback(context, sink);
-                const auto copied = sink.WriteCopied(Test::Id<SaveRecordId>(1), bytes);
-                if (copied.HasError())
+                if (const auto copied = sink.WriteCopied(Test::Id<SaveRecordId>(1), bytes); copied.HasError())
                     return Result<CanonicalCaptureDisposition>::Failure(copied.ErrorValue());
                 return Result<CanonicalCaptureDisposition>::Success(CanonicalCaptureDisposition::Captured);
             }, std::make_shared<int>());
@@ -95,7 +111,7 @@ namespace Horo::Runtime::AutosaveTestSupport {
             auto result = Poll(id);
             REQUIRE(result.HasValue());
             REQUIRE(result.Value().has_value());
-            return std::move(*result.Value());
+            return *std::move(result).Value();
         }
 
         void Complete(const OperationId id) {

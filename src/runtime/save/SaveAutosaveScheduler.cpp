@@ -30,15 +30,16 @@ namespace Horo::Runtime {
         /** @brief Chooses whether the just-closed activity interval advances the selected clock. */
         [[nodiscard]] bool Accumulates(const SaveAutosavePolicy &policy, const SaveAutosaveActivity activity) noexcept {
             using enum SaveAutosaveActivity;
+            using enum SaveAutosaveClockPolicy;
             switch (activity) {
                 case Active:
                     return true;
                 case Paused:
-                    return policy.paused == SaveAutosaveClockPolicy::Accumulate;
+                    return policy.paused == Accumulate;
                 case Loading:
-                    return policy.loading == SaveAutosaveClockPolicy::Accumulate;
+                    return policy.loading == Accumulate;
                 case Inactive:
-                    return policy.inactive == SaveAutosaveClockPolicy::Accumulate;
+                    return policy.inactive == Accumulate;
             }
             return false;
         }
@@ -56,29 +57,31 @@ namespace Horo::Runtime {
     }  // namespace
 
     /** @copydoc SaveAutosaveScheduler::Create */
-    Result<std::unique_ptr<SaveAutosaveScheduler>> SaveAutosaveScheduler::Create(const SaveAutosavePolicy policy,
-                                                                                 const SaveAutosaveClockSample initial,
+    Result<std::unique_ptr<SaveAutosaveScheduler>> SaveAutosaveScheduler::Create(const SaveAutosavePolicy &policy,
+                                                                                 const SaveAutosaveClockSample &initial,
                                                                                  SaveOperationArbiter &arbiter,
                                                                                  SaveCaptureBarrier &barrier) {
         if (!ValidPolicy(policy) || !ValidSample(initial))
             return Result<std::unique_ptr<SaveAutosaveScheduler>>::Failure(MakeError(SaveErrors::PolicyInvalid));
         if (const auto owner = barrier.Snapshot(); owner.HasError())
             return Result<std::unique_ptr<SaveAutosaveScheduler>>::Failure(owner.ErrorValue());
-        std::unique_ptr<SaveAutosaveScheduler> scheduler(new (std::nothrow) SaveAutosaveScheduler(policy, initial, arbiter, barrier));
-        if (!scheduler)
+        try {
+            return Result<std::unique_ptr<SaveAutosaveScheduler>>::Success(
+                std::make_unique<SaveAutosaveScheduler>(policy, initial, arbiter, barrier, ConstructionKey{}));
+        } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<SaveAutosaveScheduler>>::Failure(MakeError(SaveErrors::OperationAllocationFailed));
-        return Result<std::unique_ptr<SaveAutosaveScheduler>>::Success(std::move(scheduler));
+        }
     }
 
     /** @copydoc SaveAutosaveScheduler::SaveAutosaveScheduler */
-    SaveAutosaveScheduler::SaveAutosaveScheduler(const SaveAutosavePolicy policy, const SaveAutosaveClockSample initial,
-                                                 SaveOperationArbiter &arbiter, SaveCaptureBarrier &barrier) noexcept
+    SaveAutosaveScheduler::SaveAutosaveScheduler(const SaveAutosavePolicy &policy, const SaveAutosaveClockSample &initial,
+                                                 SaveOperationArbiter &arbiter, SaveCaptureBarrier &barrier, ConstructionKey) noexcept
         : policy_(policy), arbiter_(&arbiter), barrier_(&barrier), owner_(std::this_thread::get_id()) {
         Reset(initial);
     }
 
     /** @copydoc SaveAutosaveScheduler::Reset */
-    void SaveAutosaveScheduler::Reset(const SaveAutosaveClockSample initial) noexcept {
+    void SaveAutosaveScheduler::Reset(const SaveAutosaveClockSample &initial) noexcept {
         last_ = initial;
         const auto width = static_cast<std::uint64_t>(policy_.jitter.ToNanoseconds()) + 1;
         const auto offset = static_cast<std::int64_t>(policy_.jitterSeed % width);
@@ -131,7 +134,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SaveAutosaveScheduler::Sample */
-    Result<void> SaveAutosaveScheduler::Sample(const SaveAutosaveClockSample sample) {
+    Result<void> SaveAutosaveScheduler::Sample(const SaveAutosaveClockSample &sample) {
         if (const auto valid = ValidateMutation(); valid.HasError())
             return valid;
         if (sample.generation != last_.generation)
