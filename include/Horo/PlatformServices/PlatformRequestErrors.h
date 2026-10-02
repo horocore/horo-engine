@@ -20,6 +20,10 @@ namespace Horo::PlatformServices::RequestErrors {
     extern const ErrorCodeDescriptor InvalidTransition;
     /** @brief The frontend request store no longer admits work. */
     extern const ErrorCodeDescriptor FrontendUnavailable;
+    /** @brief Provider evidence drain was called outside the composed engine thread. */
+    extern const ErrorCodeDescriptor WrongThread;
+    /** @brief Provider drain was entered during another drain or observer callback. */
+    extern const ErrorCodeDescriptor ReentrantDrain;
     /** @brief An accepted request reached acknowledged cancellation. */
     extern const ErrorCodeDescriptor Cancelled;
     /** @brief An accepted request reached its frontend-owned monotonic deadline. */
