@@ -15,11 +15,15 @@ namespace Horo::Runtime::Ui {
         }
 
         /** @brief Checks complete focus lineage, bound audience and semantic capacity before copying candidates. */
-        Result<void> ValidateFocusSource(const UiAccessibilitySnapshotDescriptor &semantic, const UiFocusOwnerContext &focus,
-                                         const std::optional<UiFocusScope> &audience, const std::size_t count,
+        Result<void> ValidateFocusSource(const UiElementTree &tree, const UiAccessibilitySnapshotDescriptor &semantic,
+                                         const UiFocusSnapshot &focus, const std::optional<UiFocusScope> &audience, const std::size_t count,
                                          const std::uint32_t capacity) {
-            if (!SameSource(semantic, focus) || (audience && *audience != focus.scope))
+            if (!SameSource(semantic, focus.owner) || (audience && *audience != focus.owner.scope))
                 return Result<void>::Failure(MakeError(UiErrors::AccessibilitySnapshotSourceStale));
+            if (focus.modalRoot) {
+                if (const auto root = tree.Get(focus.modalRoot->element); root.HasError() || root.Value().id != focus.modalRoot->id)
+                    return Result<void>::Failure(MakeError(UiErrors::AccessibilitySnapshotSourceStale));
+            }
             if (count > capacity)
                 return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
             return Result<void>::Success();
@@ -96,7 +100,7 @@ namespace Horo::Runtime::Ui {
         const auto state = focus.Snapshot();
         if (state.HasError())
             return Result<UiAccessibilitySnapshot>::Failure(state.ErrorValue());
-        if (const auto source = ValidateFocusSource(descriptor, state.Value().owner, storage_->focusScope, projection.nodes.size(),
+        if (const auto source = ValidateFocusSource(tree, descriptor, state.Value(), storage_->focusScope, projection.nodes.size(),
                                                     storage_->descriptor.limits.nodes);
             source.HasError())
             return Result<UiAccessibilitySnapshot>::Failure(source.ErrorValue());

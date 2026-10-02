@@ -103,6 +103,17 @@ namespace Horo::Runtime::Ui {
                 RequireError(extractor.Extract(tree, Descriptor(tree, 2), {std::span{fixture.nodes}.first(3)}, graph),
                              UiErrors::AccessibilitySnapshotSourceStale);
             }
+            SECTION("modal root ID disagrees with its retained tree handle without focusable targets") {
+                const auto handle = tree.Find(Stable<UiElementId>(5)).Value();
+                const std::array nodes{
+                    UiFocusNodeDescriptor{handle, Stable<UiElementId>(1), {}, {}, UiFocusBringIntoViewPolicy::Nearest, false, true, true}};
+                auto created = UiFocusGraph::Create({graph.Owner(), {}, UiFocusRecoveryPolicy::Clear, 8, 4, 4}, nodes);
+                REQUIRE(created.HasValue());
+                auto misleading = std::move(created).Value();
+                REQUIRE(misleading.PushModal({handle, Stable<UiElementId>(1), {}}).HasValue());
+                RequireError(extractor.Extract(tree, Descriptor(tree, 2), fixture.View(), misleading),
+                             UiErrors::AccessibilitySnapshotSourceStale);
+            }
             SECTION("stopped graph") {
                 graph.Shutdown();
                 REQUIRE(extractor.Extract(tree, Descriptor(tree, 2), fixture.View(), graph).HasError());
@@ -163,6 +174,24 @@ namespace Horo::Runtime::Ui {
             REQUIRE(publisher.Publish(fourth, std::span{&event, 1}).HasValue());
             REQUIRE(publisher.Announcements().back().id == event.id);
             REQUIRE(publisher.Acknowledge(publisher.Announcements().back().cursor).HasValue());
+            REQUIRE(publisher.Announcements().empty());
+        }
+
+        TEST_CASE("Acknowledgment accepts a cursor borrowed from the retained queue", "[runtime_ui][accessibility][delivery]") {
+            auto tree = MakeTree();
+            auto extractor = MakeExtractor(tree);
+            auto publisher = MakePublisher(tree, {16, 3, 32, 0});
+            ProjectionFixture fixture;
+            const auto snapshot = extractor.Extract(tree, Descriptor(tree), fixture.View()).Value();
+            const std::array events{Status(snapshot, 1, "One"), Status(snapshot, 2, "Two"), Status(snapshot, 3, "Three")};
+            REQUIRE(publisher.Publish(snapshot, events).HasValue());
+            const auto second = publisher.Announcements()[1].cursor;
+            REQUIRE(publisher.Acknowledge(publisher.Announcements().front().cursor).HasValue());
+            REQUIRE(publisher.Announcements().size() == 2);
+            REQUIRE(publisher.Acknowledge(second).HasValue());
+            REQUIRE(publisher.Announcements().size() == 1);
+            REQUIRE(publisher.AnnouncementText(publisher.Announcements().front().cursor) == "Three");
+            REQUIRE(publisher.Acknowledge(publisher.Announcements().front().cursor).HasValue());
             REQUIRE(publisher.Announcements().empty());
         }
 

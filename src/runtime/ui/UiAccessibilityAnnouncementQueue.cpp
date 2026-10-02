@@ -138,13 +138,15 @@ namespace Horo::Runtime::Ui::AccessibilityInternal {
         if (cursor.instance != owner_.instance || cursor.canvas != owner_.canvas || cursor.generation != owner_.generation ||
             cursor.sequence == 0 || cursor.sequence >= nextSequence_)
             return Result<void>::Failure(MakeError(UiErrors::AccessibilitySnapshotSourceStale));
-        if (cursor.sequence <= acknowledged_)
+        // The cursor may belong to a retained record that prefix erasure moves or destroys.
+        const auto sequence = cursor.sequence;
+        if (sequence <= acknowledged_)
             return Result<void>::Success();
         const auto end = std::ranges::find_if(records_, [&](const auto &record) {
-            return record.cursor.sequence > cursor.sequence;
+            return record.cursor.sequence > sequence;
         });
         records_.erase(records_.begin(), end);
-        acknowledged_ = cursor.sequence;
+        acknowledged_ = sequence;
         CompactText();
         return Result<void>::Success();
     }
