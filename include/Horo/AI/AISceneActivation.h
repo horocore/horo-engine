@@ -94,9 +94,23 @@ namespace Horo::AI {
 
     namespace Detail {
         struct AiSceneRuntimeState;
-    }
+        struct AiSceneRestoreState;
+    }  // namespace Detail
 
     class AiSceneRuntime;
+
+    /** @brief Detached complete restore transaction; destruction rolls back without touching live or authored state. */
+    class AiSceneRestoreCandidate final {
+    public:
+        ~AiSceneRestoreCandidate();
+        AiSceneRestoreCandidate(const AiSceneRestoreCandidate &) = delete;
+        AiSceneRestoreCandidate &operator=(const AiSceneRestoreCandidate &) = delete;
+
+    private:
+        friend class AiSceneRuntime;
+        explicit AiSceneRestoreCandidate(std::unique_ptr<Detail::AiSceneRestoreState> state) noexcept;
+        std::unique_ptr<Detail::AiSceneRestoreState> state_;
+    };
 
     /**
      * @brief Detached, transactional AI scene state prepared for aggregate RuntimeScene publication.
@@ -182,6 +196,35 @@ namespace Horo::AI {
         [[nodiscard]] Result<std::unique_ptr<AiSceneActivationCandidate>> PrepareScene(AiSceneActivationBinding binding,
                                                                                        std::span<const AiSceneAgentDescriptor> agents,
                                                                                        std::span<const AiControllerDescriptor> descriptors);
+
+        /**
+         * @brief Captures the only canonical AI population at the aggregate snapshot safe point.
+         * @param scene Current Scene borrow used to revalidate every owner generation and entity-valued key.
+         * @return Complete stable-identity-sorted state or typed lifecycle/storage failure.
+         * @pre Called on the simulation owner; the Scene remains alive for the call.
+         */
+        [[nodiscard]] Result<AiCanonicalState> CaptureCanonicalState(Runtime::RuntimeSceneView scene) const;
+        /**
+         * @brief Validates and stages a complete population restore without changing live or authored state.
+         * @param scene Current destination Scene borrow; its owner must outlive staging through commit or rollback.
+         * @param expectedBinding Exact caller-selected destination AI/Scene incarnation.
+         * @param state Complete canonical source population matching the destination authored agents/controllers.
+         * @param migrations Bounded inert direct schema migration catalog, borrowed only during preparation.
+         * @param cancellation Cooperative cancellation serviced during staging and again before publication.
+         * @return Detached owned transaction or typed malformed, stale, unsupported, migration, or cancellation diagnostic.
+         * @pre Simulation owner thread; restore is load-time work and may allocate bounded staging storage.
+         */
+        [[nodiscard]] Result<std::unique_ptr<AiSceneRestoreCandidate>> PrepareRestoreAtSafePoint(
+            Runtime::RuntimeSceneView scene, AiSceneActivationBinding expectedBinding, const AiCanonicalState &state,
+            std::span<const BlackboardSchemaMigration> migrations = {}, CancellationToken cancellation = {});
+        /**
+         * @brief Revalidates all destination fences then atomically restores canonical state and retires transient work.
+         * @param candidate Transaction prepared by this runtime; consumed on success or failure.
+         * @return Success or typed stale/cancelled failure with all prior state and work preserved.
+         * @pre Simulation owner at the aggregate restore safe point; the borrowed Scene is still alive.
+         * @post Success cancels old tasks and observers before releasing their storage; asynchronous work restarts separately.
+         */
+        [[nodiscard]] Result<void> CommitRestoreAtSafePoint(std::unique_ptr<AiSceneRestoreCandidate> candidate);
 
         /**
          * @brief Starts one owned task at the AI decision safe point.

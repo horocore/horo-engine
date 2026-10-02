@@ -2054,6 +2054,51 @@ struct AIBlackboard {
 Navigation commands (move-to, follow, patrol) are issued from behavior nodes
 and executed by the navigation system.
 
+### Canonical Base State And Internal Restore
+
+`Horo/AI/AICanonicalState.h` is the sole implemented canonical base-state model
+owned by `HoroAI`: `AiCanonicalState` contains stable-identity-sorted agents,
+`AiAgentCanonicalState` retains authored identity/policy and active/disabled lifecycle,
+`AiBaseControllerCanonicalState` retains the authored controller binding, and
+`BlackboardCanonicalState` retains complete schema-keyed owned values, including
+explicit absence for optional keys. Runtime inspection records and worker blackboard
+snapshots remain process-local observations, not persistence alternatives. This base
+slice does not serialize decision execution frames or define decision-plan replacement;
+GAI-003.11 owns that separate lifecycle. No save-slot, file, or container format is added.
+
+`AiSceneRuntime::CaptureCanonicalState` captures this model at the aggregate snapshot
+safe point using a current RuntimeScene borrow. Save, reload and reconstruction consumers
+use `PrepareRestoreAtSafePoint` and `CommitRestoreAtSafePoint` on the same AI owner.
+They explicitly select the destination AI/Scene binding; canonical source state cannot
+select a runtime generation. The complete population must match admitted authored
+agent/controller identities. Restore never modifies Scene components or authoring assets.
+Entity-valued blackboard projections require live destination entity generations;
+reconstruction adapters must resolve/remap their stored projections before staging.
+
+Restore is bounded load-time owner-thread work. Preparation validates the complete source
+layout and stages detached blackboards, including read-only values. A version change
+requires one inert direct forward `BlackboardSchemaMigration` with an admitted source
+schema. Unspecified keys retain stable identity; explicit mappings rename or discard keys;
+added target keys use valid target defaults. Invalid types, collisions, implicit loss,
+newer/unsupported source versions and ambiguous migrations fail with typed diagnostics.
+Type conversion and multi-hop migration are not inferred. Integrations may explicitly
+compose a direct migration for each supported prior schema version.
+
+Commit revalidates the borrowed Scene structural revision, current owner/agent generations,
+AI publication and mutation revisions, schema/instance generations, and cancellation before
+any live change. Failure or candidate destruction preserves all prior canonical values,
+authored bindings and transient work. Success cancels old task generations and invalidates
+blackboard observers/leases before swapping preallocated replacement storage; task slots
+are never reused by restore, and asynchronous work restarts through the existing task API
+only after publication. Task/query/provider handles, callbacks, cancellation tokens and
+runtime fences never enter the canonical model.
+
+The new public model is owned only by `HoroAI`; its header consumer is generated from the
+public-header ownership registry. Existing activation/task/blackboard callers require no
+migration. Future save adapters consume this value model rather than introducing parallel
+AI state storage. The Scene borrow remains alive until commit/rollback, and all capture,
+prepare and commit operations run on the simulation owner thread.
+
 ### Perception Save And Restore
 
 The AI subsystem's ADR-114 canonical adapter contributes its versioned perception
