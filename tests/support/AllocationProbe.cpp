@@ -30,6 +30,8 @@ namespace {
         }
 
         static void Release(void *const storage) noexcept {
+            if (storage != nullptr)
+                freeCount_.fetch_add(1, std::memory_order_relaxed);
             std::free(storage);
         }
 
@@ -57,6 +59,8 @@ namespace {
         }
 
         static void ReleaseAligned(void *const storage) noexcept {
+            if (storage != nullptr)
+                freeCount_.fetch_add(1, std::memory_order_relaxed);
 #ifdef _WIN32
             _aligned_free(storage);
 #else
@@ -66,6 +70,10 @@ namespace {
 
         [[nodiscard]] static std::size_t Count() noexcept {
             return count_.load(std::memory_order_relaxed);
+        }
+
+        [[nodiscard]] static std::size_t FreeCount() noexcept {
+            return freeCount_.load(std::memory_order_relaxed);
         }
 
         static void FailAfter(const std::size_t successfulAllocations) noexcept {
@@ -79,6 +87,7 @@ namespace {
     private:
         static constexpr std::size_t DisabledFailureCountdown = std::numeric_limits<std::size_t>::max();
         static inline std::atomic<std::size_t> count_{};
+        static inline std::atomic<std::size_t> freeCount_{};
         static inline std::atomic<std::size_t> failureCountdown_{DisabledFailureCountdown};
     };
 }  // namespace
@@ -142,5 +151,9 @@ namespace Horo::Tests::AllocationProbe {
 
     std::size_t Count() noexcept {
         return AllocationMeter::Count();
+    }
+
+    std::size_t FreeCount() noexcept {
+        return AllocationMeter::FreeCount();
     }
 }  // namespace Horo::Tests::AllocationProbe

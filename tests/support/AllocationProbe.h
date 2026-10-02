@@ -15,4 +15,6 @@ namespace Horo::Tests::AllocationProbe {
 
     /** @brief Returns the allocation count observed by the test executable. */
     [[nodiscard]] std::size_t Count() noexcept;
+    /** @brief Returns actual nonnull deallocations observed by the test executable. */
+    [[nodiscard]] std::size_t FreeCount() noexcept;
 }  // namespace Horo::Tests::AllocationProbe

@@ -453,6 +453,16 @@ target_include_directories(HoroCoreAudioDspTests PRIVATE ${PROJECT_SOURCE_DIR}/t
 target_compile_features(HoroCoreAudioDspTests PRIVATE cxx_std_20)
 target_link_libraries(HoroCoreAudioDspTests PRIVATE HoroEngine::AudioDsp)
 horo_register_catch_test(HoroCoreAudioDspTests LABELS "unit;audio;headless")
+add_executable(HoroAudioMixerTests
+        unit/runtime/audio/MixerGraphCompilerTests.cpp
+        unit/runtime/audio/MixerGraphRuntimeTests.cpp
+        unit/runtime/audio/MixerRenderPlanTests.cpp
+        unit/runtime/audio/MixerTestFixture.h
+        support/AllocationProbe.cpp)
+target_include_directories(HoroAudioMixerTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_compile_features(HoroAudioMixerTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAudioMixerTests PRIVATE HoroEngine::AudioMixer Threads::Threads)
+horo_register_catch_test(HoroAudioMixerTests LABELS "unit;audio;headless;realtime-safety")
 add_executable(HoroAudioResamplerBenchmark EXCLUDE_FROM_ALL benchmarks/audio/ResamplerBenchmark.cpp)
 target_compile_features(HoroAudioResamplerBenchmark PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioResamplerBenchmark PRIVATE HoroEngine::AudioDsp)
