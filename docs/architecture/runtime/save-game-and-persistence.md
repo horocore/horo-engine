@@ -464,9 +464,20 @@ relative offset, stored/decoded lengths, alignment and decoded SHA-256. Header a
 manifest records are first, followed by manifest-owned chunk records in stable
 record order; their data ranges must be contiguous from the first data byte through
 the exact payload end. v1 rejects extension records and codecs other than raw before
-any decompression or participant decode. The reader verifies the finalized envelope
+any decompression or participant decode. Archive/container v2 retains that exact
+framing and adds codec ID 1 (`Deflate`, zlib-wrapped DEFLATE) for chunk records only;
+header and manifest stay raw. Both version fields must agree. Readers of v1 still
+reject Deflate rather than silently changing old-format interpretation. The built-in
+codec inventory declares supported levels 1–9 and no dictionary capability. Writer
+policy retains metadata and small/ineffective chunks raw, with explicit required
+codec failure rather than silent fallback. Per-chunk stored and decoded lengths,
+expansion ratio and total decode work are checked before output allocation. Unknown
+required codec IDs fail as a typed compatibility error. The reader verifies the finalized envelope
 hash first, then uses the existing metadata and chunk-directory validators and
-returns only an immutable detached view; it owns no filesystem, module callback or
+returns only an immutable detached view. Selected chunks now return owned decoded
+bytes (including v1 raw selections) rather than a borrowed archive span; callers
+must consume or move that owned value, and no selected bytes outlive their own
+result accidentally. The reader owns no filesystem, module callback or
 gameplay activation authority.
 
 | Logical payload entry | Content |
@@ -962,6 +973,35 @@ callbacks can reject expansion before allocating. The executor charges source
 staging, each step's input and declared work, and each bounded output against one
 operation budget.
 
+Participant steps may also register a record callback. A detached participant's
+records are sorted by `SaveRecordId`; each carries its own schema version and the
+verified source participant, record ID, and schema provenance. The executor passes
+only borrowed bytes for one owned record to that callback, checks its output byte
+limit, advances its schema, and retains its identity and provenance. Record callbacks
+may return a field-specific error through `SaveMigrationRecordContext::Fail`, which
+adds step, source/target schema, participant, record, and field context while
+preserving the typed cause. A participant step cannot change another owner's
+payload or records unless its registered definition names that owner in a sorted,
+unique `crossParticipantTransforms` contract bound to the target schema. The contract permits data transforms
+only; target identity, schema, requiredness, record identities and provenance stay
+fixed. An absent optional target is harmless when the callback skips it; a missing
+required target is rejected by compatibility planning. Save-schema steps remain the whole-save composition boundary. Existing
+participant callbacks without record callbacks must advance any populated record
+schemas themselves. Existing payload-only callers need no migration. Failure at any
+record or later validation stage discards the detached candidate and leaves the
+verified source unchanged.
+`RetainVerifiedSaveRecords` stages recognized manifest chunks through the bounded
+archive reader and supplies their initial provenance; it commits to the detached
+source only after every selected chunk succeeds. Callers still use
+`RetainUnknownSaveData` for unsupported optional owners and must finalize and
+verify any durable replacement before the slot commit transaction.
+The catalog and route identity domains advance to v2 because participant step
+identity now includes record-transform presence and exact cross-owner grants. Release
+composition must regenerate its migration-catalog identity; archive wire versions
+and existing source files do not change. Existing payload-only definitions may be
+registered unchanged, while record-aware definitions supply the new callback and
+cross-owner descriptors explicitly.
+
 Compatibility preflight proceeds through framing/limits, archive version, outer
 integrity/signature, save schema, required participant set/schema, then semantic
 dependency identities and decoded hashes. Direct load is allowed only when every
@@ -970,6 +1010,34 @@ is allowed only when every required axis is in a declared migration-source range
 the sealed registry has one complete path to current directly readable writer
 versions. Unknown optional participants may be skipped only when no required
 participant depends on them. Missing/unknown required participants reject.
+
+An unknown participant marked required in the manifest blocks restore before any
+participant callback; the diagnostic names its stable owner so the host can direct
+the user to missing content, DLC, or a module. Unknown required feature bits also
+block restore with the unsupported bit mask. An unknown optional participant is
+preservable by default. A sealed release policy may list stable optional owner IDs
+that are explicitly droppable; the list is sorted, unique, and disjoint from installed
+participants. An absent entry is never permission to discard it. Before migration or
+save-copy publication, the reader verifies every retained chunk and copies its exact
+stored bytes plus codec, lengths, alignment, and decoded digest into bounded detached
+staging. A changed archive may relocate an entry, but must retain those bytes and
+integrity fields. A known optional owner with an unsupported newer participant schema
+is treated as opaque under the same preservation rule. If a required participant
+declares a dependency on either unknown owner or unsupported schema, preflight blocks
+load and names the dependency. The migration executor rejects candidate output that changes a
+preservable unknown participant, and a repack/copy must compare source and candidate
+opaque records before commit. The source remains available on any failure. This
+policy does not grant permission to interpret unknown payload schemas or bypass the
+archive's integrity/signature and size checks.
+
+For callers migrating from the earlier API, empty droppable and dependency lists
+retain the conservative behavior. Code that constructs `SaveMigrationSource` from a
+validated archive must call `RetainUnknownSaveData` before planning; planning now
+rejects an unknown preservable owner without verified chunk evidence. Repack/copy
+callers must carry those records into the destination and use
+`VerifyUnknownDataRoundTrip` before the commit gate. The new policy fields are host
+declarations, not archive-provided permissions, so existing v1/v2 files need no wire
+rewrite.
 
 Any newer archive format, save schema, required participant schema or product
 compatibility version outside the declared range fails with a typed unsupported-newer

@@ -1,7 +1,7 @@
 #pragma once
 
 /** @file PhysicsQueryEventCapability.h
- * @brief World-bound synchronous query and completed-tick event access for Physics clients.
+ * @brief World-bound immediate and queued query access plus completed-tick events for Physics clients.
  */
 
 #include "Horo/Foundation/Result.h"
@@ -12,12 +12,16 @@
 #include <memory>
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace Horo::Physics {
     class PhysicsWorld;
     struct PhysicsQueryEventCapabilityState;
+    struct PhysicsQueryBatchState;
     /** @brief Maximum simultaneously usable client access states issued by one Physics world. */
     inline constexpr std::uint32_t MaximumPhysicsQueryEventCapabilitiesPerWorld = 256;
+    /** @brief Hard aggregate hit-storage limit for one queued batch, independent of the query-count budget. */
+    inline constexpr std::uint32_t MaximumPhysicsQueryBatchHits = 4096;
 
     /** @brief Exact access identity issued by one active Physics world. */
     struct PhysicsQueryEventIdentity final {
@@ -37,6 +41,35 @@ namespace Horo::Physics {
         PhysicsQueryResult result;
         std::uint64_t completedTick{};
         std::uint64_t publicationRevision{};
+    };
+
+    /** @brief One completed query and its owned, ordered, solver-neutral hits. */
+    struct PhysicsQueryBatchEntry final {
+        PhysicsQueryCompletion completion;
+        std::vector<PhysicsQueryHit> hits;
+    };
+
+    /** @brief Immutable all-or-nothing result in request order, independent of world lifetime. */
+    struct PhysicsQueryBatchCompletion final {
+        std::vector<PhysicsQueryBatchEntry> entries;
+    };
+
+    /** @brief Thread-safe terminal observation and cancellation for one admitted owner-thread batch. */
+    class PhysicsQueryBatchHandle final {
+    public:
+        /** @brief Requests cancellation before publication. @return True if this call made the batch terminal. */
+        [[nodiscard]] bool Cancel() const noexcept;
+        /** @brief Reads a terminal result without waiting or accessing PhysicsWorld.
+         * @return Null shared pointer while pending, immutable completed results, or a typed terminal error.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const PhysicsQueryBatchCompletion>> Poll() const;
+
+    private:
+        friend class PhysicsQueryEventCapability;
+
+        explicit PhysicsQueryBatchHandle(std::shared_ptr<PhysicsQueryBatchState> state) noexcept : state_(std::move(state)) {}
+
+        std::shared_ptr<PhysicsQueryBatchState> state_;
     };
 
     /** @brief Request for the latest exact completed tick; older ticks are not readable through this capability. */
@@ -73,6 +106,13 @@ namespace Horo::Physics {
          * @return Completed query or typed stale, revoked, unavailable, affinity or query error.
          */
         [[nodiscard]] Result<PhysicsQueryCompletion> Submit(const PhysicsQueryCommand &command, std::span<PhysicsQueryHit> hits) const;
+        /** @brief Queues owned requests for later bounded owner-thread execution.
+         * @param commands Non-empty exact-publication commands in desired result order.
+         * @return Pollable handle, or a typed affinity, staleness, validation or capacity error.
+         * @pre Physics owner thread outside a fixed tick; one batch may be pending per world.
+         * Request count fits the world's query budgets; the sum of hit bounds fits MaximumPhysicsQueryBatchHits.
+         */
+        [[nodiscard]] Result<PhysicsQueryBatchHandle> SubmitBatch(std::span<const PhysicsQueryCommand> commands) const;
         /** @brief Copies records from exactly one completed tick into caller-owned storage.
          * @param command Exact issued access, latest tick and publication revision, with a non-zero result bound.
          * @param records Caller-owned output; at most maximumRecords entries are written.

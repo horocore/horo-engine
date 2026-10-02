@@ -90,7 +90,9 @@ namespace Horo::Cli {
         REQUIRE(shuttingDown.Reason() == CliStopReason::Shutdown);
 
         CliInvocationStopController timedOut{std::chrono::milliseconds{10}};
-        std::this_thread::sleep_for(std::chrono::milliseconds{30});
+        const auto waitDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+        while (!timedOut.Token().IsCancellationRequested() && std::chrono::steady_clock::now() < waitDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
         REQUIRE(timedOut.Token().IsCancellationRequested());
         REQUIRE(timedOut.Reason() == CliStopReason::TimedOut);
     }

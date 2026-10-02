@@ -63,6 +63,17 @@ namespace Horo::Extensions {
             candidate.createCandidate = descriptor.createCandidate;
             candidate.retireCandidate = descriptor.retireCandidate;
             candidate.destroyCandidate = descriptor.destroyCandidate;
+            if (descriptor.abiVersion == HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION_2) {
+                if (descriptor.operations == nullptr || descriptor.operations->structSize != sizeof(HoroPlatformProviderOperations) ||
+                    descriptor.operations->version != HORO_PLATFORM_SERVICES_PROVIDER_OPERATIONS_VERSION ||
+                    descriptor.operations->initializeServices == nullptr || descriptor.operations->beginSession == nullptr ||
+                    descriptor.operations->openIngress == nullptr || descriptor.operations->submit == nullptr ||
+                    descriptor.operations->cancel == nullptr || descriptor.operations->closeAdmission == nullptr ||
+                    descriptor.operations->closeIngress == nullptr || descriptor.operations->drain == nullptr ||
+                    descriptor.operations->stopSession == nullptr || descriptor.operations->shutdownServices == nullptr)
+                    throw std::invalid_argument("Invalid provider operation profile");
+                candidate.operations = *descriptor.operations;
+            }
             candidate.moduleCodeLease = session.lifetime;
             return candidate;
         }
@@ -75,9 +86,13 @@ namespace Horo::Extensions {
             if (session == nullptr || session->failed)
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
             if (constexpr std::size_t MaximumPermissions = 32;
-                descriptor == nullptr || descriptor->structSize != sizeof(HoroPlatformServicesProviderDescriptor) ||
-                descriptor->abiVersion != HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION || !IsValidBoundedText(descriptor->providerKey) ||
-                descriptor->providerKey.length == 0 || descriptor->permissionCount > MaximumPermissions ||
+                descriptor == nullptr ||
+                !((descriptor->abiVersion == HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION &&
+                   descriptor->structSize == offsetof(HoroPlatformServicesProviderDescriptor, operations)) ||
+                  (descriptor->abiVersion == HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION_2 &&
+                   descriptor->structSize == sizeof(HoroPlatformServicesProviderDescriptor))) ||
+                !IsValidBoundedText(descriptor->providerKey) || descriptor->providerKey.length == 0 ||
+                descriptor->permissionCount > MaximumPermissions ||
                 (descriptor->permissionCount != 0 && descriptor->permissions == nullptr) || descriptor->createCandidate == nullptr ||
                 descriptor->retireCandidate == nullptr || descriptor->destroyCandidate == nullptr || !session->platformProviders.empty()) {
                 session->failed = true;

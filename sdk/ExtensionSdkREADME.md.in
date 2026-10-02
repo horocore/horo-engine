@@ -30,6 +30,38 @@ publishes declarations through ABI
 Extensions declare the exact minimum host minor they require through
 `horo_extension_query`; incompatible hosts reject the module before load.
 
+## Source-free extension author CI
+
+`share/horo/extension-sdk/ci/extension-author-ci.yml` is the versioned GitHub
+Actions template. The SDK scaffolder copies it into each generated project's
+`.github/workflows/extension-ci.yml`, with a bootstrap script and
+`.horo/extension-ci.lock.json`. The lock must stay at that path, and CI writes
+only to the author project's `ci-artifacts/` directory. Authors pin an HTTPS SDK ZIP and its SHA-256 for
+**each** Linux x64, macOS arm64, macOS x64 and Windows x64 job. The ZIP must contain this
+SDK package's `bin/`, `lib/`, `include/` and `share/` directories at its root.
+The bootstrap refuses unpinned, mismatched, oversized or unsafe archives and
+checks the downloaded SDK version against the lock. The author repository needs
+no engine source checkout. The workflow pins action commits, Python and CMake
+versions, uses read-only permissions, and never receives signing credentials.
+The SDK CI runner parses bounded CTest JUnit input with DTD and entity declarations
+disabled; it has no extra Python package dependency.
+
+The SDK's `bin/horo-extension-author-ci.py` then configures and builds the
+project, runs all CTest tests, installs the package root, validates
+`extension.json`, checks every native module's ABI, packs a canonical
+`.horopkg`, and verifies archive integrity. It publishes the package, JUnit
+test output and a provenance JSON containing repository, source commit, SDK
+version and digest, platform and package digest. The CI trust policy permits
+unsigned *integrity* verification only; it does not attest publisher identity,
+grant runtime trust, or sign a release. A release pipeline must separately sign
+with an approved protected key and verify against publisher trust policy. The
+package tool does not yet validate full typed TOML semantics or activation.
+
+Custom projects using this template must install `extension.json`,
+`horo-package.toml`, and every manifest-declared native binary to the package
+root. The scaffold demonstrates that layout. Keep SDK URLs/digests in the
+version-controlled lock, and update them deliberately for an SDK upgrade.
+
 See `share/horo/extension-sdk/extension-sdk.json` for machine-readable package
 metadata. Validate a manifest without loading extension code with:
 
@@ -50,5 +82,35 @@ bin/horo-extension-conformance --json path/to/native-module
 
 The harness reports stable stage-specific codes and exits nonzero for an
 incompatible module. It loads native code in the harness process, so run it only
-against trusted build output. Project scaffolding and distribution tools are
-separate SDK deliverables.
+against trusted build output.
+
+The SDK also includes the versioned `bin/horo-package` author tool. It needs no
+engine source checkout. `--version` reports the command contract version.
+
+```text
+bin/horo-package pack <package-root> <output.horopkg>
+bin/horo-package inspect <output.horopkg>
+bin/horo-package sign <output.horopkg> --publisher com.example.studio --key-id release-1 --key <unencrypted-p256.pem> --output <signature.json>
+bin/horo-package verify <output.horopkg> --package-id com.example.package --trust <trust.json> --signature <signature.json>
+```
+
+`pack` requires `horo-package.toml` in a real directory and creates a canonical
+`files.manifest.json`; it rejects symlinks, noncanonical paths and existing output.
+File order and ZIP metadata are deterministic for identical inputs and this tool
+version. The output must be outside the package root. Keep credentials outside
+the package root: the packer rejects recognized private-key PEM content but
+cannot recognize arbitrary secret content. `sign`
+accepts an unencrypted P-256 PEM private key readable only by its owner on POSIX,
+never writes or prints its contents, and creates a detached v1 JSON envelope.
+Do not pass a private key as a command-line argument. Store it in an approved
+credential system and materialize a short-lived owner-only file when necessary.
+
+`verify` applies the same bounded archive and publisher-signature policy used by
+the current package restore path. The caller supplies the package ID and an
+explicit trust-policy JSON document; no author-declared key becomes trusted by
+itself. Trust JSON v1 has `schemaVersion`, `allowUnsigned`, and `publishers`;
+each publisher has `publisherId`, `keyId`, `algorithm` (`ecdsa-p256-sha256`),
+`publicKeyHex` (uncompressed P-256 point), `expiresAtUnixMilliseconds` (0 means
+no expiry), and `revoked`. Omit `--signature` only when the trust policy explicitly
+allows unsigned packages. The command verifies archive structure and content,
+not yet-unimplemented typed TOML package semantics or extension activation.

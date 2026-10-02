@@ -503,6 +503,22 @@ baseline contains no source path, cache key, native format, decoder pointer or l
 audio handle; import, codec selection, cooking and runtime streaming remain separate
 responsibilities.
 
+The initial `HoroAudioCook` contribution consumes the bounded WAV/Ogg importer
+through an invocation-scoped AST source view and emits a versioned PCM binary32
+payload with an exact-target compatibility manifest. Its resolved profile records
+container/codec, exact binary32 quality, sample rate, semantic layout, compression, resident/stream threshold,
+stream chunk size, encoder delay/padding and target-override provenance. The
+built-in encoder currently supports uncompressed PCM at the decoded source rate
+and layout; requests for another codec, compression or unavailable rate/layout
+conversion fail planning with a typed error rather than silently falling back.
+PCM output has zero encoder delay/padding. The manifest preserves effective
+settings and target-override provenance alongside source container/codec,
+decoder, toolchain and configuration digests. A streamed choice yields bounded
+seekable PCM chunks inside the logical AST payload; it does not create a second
+Audio cache or publication authority. AST owns generic artifact staging and
+publication, while the Audio strategy validates its manifest on both fresh cooks
+and exact cache hits.
+
 ### Loudness And Metering Metadata
 
 Cooked audio assets carry loudness metadata for mixing, normalization, and
@@ -520,6 +536,30 @@ platform compliance:
 The mixer may use this data to auto-level sources or to report loudness to
 platform certification tooling. Loudness values are computed during import/cook,
 not on the real-time path.
+
+The Audio import worker derives a bounded multiresolution min/max waveform,
+unweighted RMS, sample peak, and EBU R128/ITU-R BS.1770 gated integrated and
+terminal-three-second loudness and true peak from the decoded source blocks.
+Unavailable measurements (for example, integrated loudness of silence or a
+short-term window on a clip under three seconds) stay absent; they are not
+manufactured from RMS or sample peak. Normalization gain targets -23 LUFS only
+when integrated loudness is available. The pinned analysis implementation is a
+private AudioImport dependency, never a public or callback dependency.
+
+Cook schema v2 embeds the analysis result alongside the PCM payload in one AST
+artifact. The analysis has its own version and digest; cooked inspection validates
+the bounded waveform pyramid and finite measurements before exposing it to editor
+or runtime callers. Inspection receives only cooked bytes and never opens or
+re-decodes the source. Resident PCM, import decode-block, and waveform storage
+estimates are derived from admitted counts, not observed allocator usage. Existing
+schema v1 artifacts require an ordinary AST recook; there is no parallel Audio
+metadata cache or source-of-truth sidecar.
+
+The importer result now groups its former flat `waveform`, `loudness`, and
+`samplePeak` members under `analysis`, including the waveform pyramid and byte
+estimates. The only in-tree consumer of that result is the Audio cooker; it was
+migrated with the schema change. Downstream source import clients must read the
+new grouped value rather than maintain parallel flat metadata fields.
 
 ### Decoder Plugin Interface
 
@@ -961,6 +1001,27 @@ public:
 The interface is an internal semantic sketch. Package providers use their typed
 ADR-069 acoustic capability and may not expose Physics/native types through Audio.
 
+`AudioAcousticQuery.h` is the implemented AUD-006.1 **control-side contract**,
+not an implementation of the sketch's virtual callback. The host first admits a
+versioned, bounded capability declaration, binds generation-safe source handles,
+and prepares one typed query per source at a permitted control-update cadence.
+It dispatches queries to a selected provider only during scene extraction or a
+non-real-time audio update, never from `RenderPort` or an audio callback. Provider
+results carry the exact query, provider generation, source and listener identity,
+feature, and a terminal value or typed failure. The fixed-capacity ledger rejects
+malformed, late, duplicate, retired-source, reused-slot, and superseded-provider
+results before any numeric value can be staged as an ordinary bounded audio
+command. It retains the highest retired source generation; no same-generation
+rebinding is allowed. The result's smoothing hint comes from the admitted query,
+not from untrusted provider output. The ledger is single-control-owner state and
+has no provider function pointer, callback access, Physics dependency, or native
+API types.
+
+This is an additive Audio API contract with no existing caller migration. Actual
+physics-backed raycasts, zone extraction, deadline/fallback policy, provider
+selection, and host-to-runtime command composition remain later AUD-006 work;
+admitting a provider or query here does not claim those capabilities are active.
+
 The 1.0 baseline ships a null/reference provider plus a qualified basic physics-
 backed raycast provider. It may raycast outside the real-time callback, then feed
 the result back at most one game frame later as ramped gain, filter, or send
@@ -1321,6 +1382,19 @@ an optional Post-1.0 extension.
 
 Streaming uses worker or I/O jobs to fill preallocated ring buffers. The audio
 callback consumes available frames without waiting.
+
+`Horo/Audio/AudioStreamDecoder.h` is the worker-side runtime decode session
+contract, distinct from source import decoding. A host first validates the cooked
+media generation and prepares an exact codec, ADR-063 format, frame count, block
+limit, and scratch budget. It then supplies a provider whose context is owned by
+the accepted session. One worker serializes bounded `Decode` and `Seek` calls into
+caller-owned interleaved output and scratch spans; control may request cooperative
+cancellation concurrently. Provider failure or inconsistent progress discards the
+candidate block and closes admission. The host joins worker work before releasing
+the provider, and only the Audio control owner publishes prepared blocks or ring
+generations at the ADR-062 boundary. This contract neither performs file I/O nor
+invokes a codec from the callback; concrete codec providers and stream-ring
+publication are separate integration work.
 
 Underrun behavior:
 
@@ -1821,6 +1895,44 @@ per-platform profiles for editor preview and packaged games. The same page
 defaults mute-on-minimize on most desktop hosts, pause-gameplay-buses for
 mobile focus loss, and continue-everything for dedicated audio preview windows.
 
+The AUD-007.9 control contract is `AudioFocusController`, owned by
+`HoroAudioCommands`. A host chooses an explicit preview, play-in-editor, or
+packaged-game profile and supplies complete focus, minimize, host-suspend, and
+device-interruption facts on the Audio control thread. The controller prepares
+one FIFO policy transition at a time, closes ordinary admission immediately for
+suspension/interruption, and commits only after exact callback/device-epoch
+acknowledgement. Resume also requires a fresh clock-discontinuity revision;
+an interruption-end fact alone never resumes output. Recovery may adopt a new
+validated device epoch without resuming automatically. This boundary is
+backend-neutral and does not move native pause/resume authority into editor,
+scene, or callback code. Concrete host composition supplies the ordered callback
+work and acknowledgement when the parent Audio Runtime is assembled.
+
+## Typed Failure And Recovery Boundary
+
+`HoroAudioApi` publishes an additive `AudioFailureRecovery` control-side contract.
+It classifies exact declared `horo.audio` codes from assets, codecs, streams,
+queues, voices, mixer candidates, devices, providers, middleware and memory into
+an affected-operation state, a proposed control/host action, and an active-epoch
+disposition. Existing `Result` callers do not change; adapters that need recovery
+policy can adopt the classifier without parsing messages. Foreign or undeclared
+codes fail closed to host policy with retained callback-visible ownership.
+
+Classification is a pure value operation, never an executor. The control caller
+must identify whether a request/candidate or the active epoch failed; even a
+candidate device/backend failure preserves the active epoch. Request and candidate
+failures preserve the active mixer and voice state. Stream underrun may
+render only admitted silence while control refills; ordinary queue saturation
+retains the producer's request and cannot consume the critical reserve. Device
+loss closes device-dependent admission and enters ADR-062 recovery through a
+quiescence barrier. A callback fault always enters the fatal retained-epoch path,
+regardless of the enclosed code. Control reconciles operations and proves native
+detachment before releasing state; the process host alone chooses product-level
+fallback or termination. Optional provider policy is never inferred from an error
+code, and no middleware fallback is automatic. Codes reserved for not-yet-built
+stream, graph, provider and middleware producers define stable output identities,
+not evidence that those producers or recovery executors are implemented.
+
 ## Metrics
 
 [AUD-010](https://github.com/HoroCore/horo-engine/issues/626) delivers the
@@ -1848,6 +1960,97 @@ Audio exposes:
 - variation container selection telemetry (optional)
 
 No ordinary log formatting occurs on the callback thread.
+
+### AUD-010.1 metric bridge
+
+`HoroAudioMetrics` owns the additive `Horo/Audio/AudioMetrics.h` contract. A
+control owner samples the actual `AudioEventQueue::Stats`,
+`AudioCommandStaging::Stats`, and complete set of `AudioMemoryStats`; it classifies
+consumed callback facts and explicit command admission/pump outcomes. The callback
+never registers instruments, formats labels, locks the bridge, or exports data.
+The host registers the fixed `audio.*` catalog once at activation and publishes
+only safe-point snapshot deltas through Foundation Telemetry; editor, headless,
+local sinks and opt-in OTLP consume the same numeric snapshot/descriptor contract.
+One owner generation cannot be reset in place, and a closed owner cannot publish
+new values. Existing audio callers need no migration; hosts adopting this optional
+bridge must retain the source owners through each control safe point.
+Within one owner generation, the host assigns strictly increasing, non-reused
+source generations to event-queue and memory-pool/arena replacements. The bridge
+retains cumulative drop and failure totals after a source retires, rejects stale
+source replay and same-source counter rollback, and bounds simultaneously live
+memory sources to sixteen. Source generations are internal comparison facts,
+never metric labels.
+
+### AUD-010.2 callback extraction
+
+`Horo/Audio/AudioMetricExtraction.h` is the narrow additive callback-to-control
+contract, owned by `HoroAudioMetrics`. Hosts prepare one bounded, exact-epoch
+SPSC queue off-callback and retain it until callback detachment and control
+drain. The callback admits only fixed numeric records: callback/mixer/effect/
+spatial cost or deadline/allocation/lock diagnostics. It calls `Flush` at each
+callback boundary. A fixed per-kind pending slot coalesces repeated observations
+within that boundary, retaining the worst duration and a bounded sample count.
+The callback never allocates, locks, formats a string, invokes an exporter or
+reaches the OBS bridge. Capacity, storage-byte budget and diagnostic frame
+interval are set before callback activation; the ring cannot grow. Full-ring
+source observations increment a cumulative dropped counter; diagnostic records
+filtered by the rate policy increment a separate rate-limited counter. Neither
+is silently interpreted as a zero measurement. There is no dynamic metric label.
+The producer keeps per-observation counters thread-local, publishing cumulative
+atomic snapshots only at `Flush`. Shared ring cursors and snapshots use
+sequentially consistent atomics: a consumer that sees an advanced write cursor
+also sees the completed fixed record, and a producer that sees an advanced read
+cursor may reuse that slot. This stronger order costs shared atomic operations
+per published record and per callback boundary, not per source observation;
+no throughput or deadline improvement is claimed without measurement.
+
+The creating control thread alone drains fixed records and samples queue stats
+at a safe point. `AudioMetrics` projects records and cumulative pressure into
+the same fixed OBS catalog, using a non-reused source generation so replacement
+does not reset lifetime totals. Callback epochs prevent old-device records from
+entering a new queue. The host must call `Close` on the callback, detach/join,
+then drain; queue destruction or movement while either side runs is forbidden.
+Existing `AudioEventQueue` lifecycle facts and the development watchdog remain
+separate; this queue does not replace their critical-delivery semantics.
+
+The catalog has no dynamic dimensions or per-device, bus, voice, asset or user
+labels; each named instrument has one series. Counters include callback underruns,
+command-queue admission rejections and retained retries, actual event-queue
+telemetry drops, allocation and backend failures, voice
+rejections, spatial fallbacks and stable-ID lookup failures. Gauges include queue
+depths, voice counts, stream fill, memory, device format, callback budget,
+occlusion staleness and bus levels. Callback/mixer/effect/spatial costs are
+seconds-valued histograms. Sample rate uses the additive `Hertz` telemetry unit,
+exported as OTLP `Hz`; other units are count, bytes, ratio and seconds. A metric
+without a measured source observation is unavailable, not a fabricated zero.
+Callback underruns count consumed facts; separately measured telemetry drops
+explain records lost under event-queue pressure. Critical retries are not called
+drops, because the caller retains the work.
+### Development callback safety watchdog
+
+The build-tree-only `AudioCallbackWatchdog` instruments each SDL3 Horo render-port
+invocation when `NDEBUG` is not defined. Its deadline is the negotiated block
+period (`callbackFrames / sampleRate`); it measures preparation, Horo render work,
+conversion and SDL stream submission, not downstream device/driver latency. The
+callback publishes only fixed
+epoch/sample-frame facts to a 64-slot SPSC ring, plus lock-free sampled-count and
+latest-duration summaries. Per-kind records are limited to
+one per sample-rate worth of frames; overflow and rate-limited counts remain
+observable. `AudioBackend::DrainSafetyViolations` runs only on audio control and
+returns caller-owned values for subsequent OBS formatting/storage. Callback
+detachment must precede watchdog destruction. NullAudio retains deterministic
+simulated time: it participates in explicit forbidden-operation hooks but has
+no physical deadline samples.
+
+Explicit callback-safety hooks run immediately before heap construction in the
+Horo audio memory pool and scratch arena, and before each ingress staging mutex
+attempt. These are control-only operations under the normal ownership contract;
+if a supplied render port invokes one from a callback, the active backend scope
+records the forbidden attempt. The hooks do not globally interpose C++/C
+allocation or third-party/native locks; such operations require separate platform
+or sanitizer qualification. They are inert outside the instrumented callback
+scope and in `NDEBUG` builds. No callback log, exception, heap fallback, blocking
+wait, or unbounded scan is added by the instrumentation itself.
 
 ## Testing
 

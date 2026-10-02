@@ -246,4 +246,58 @@ namespace Horo::Network {
         envelope.payload.push_back(std::byte{0x5a});
         RequireError(EncodeMessageEnvelope(envelope, registry), NetworkErrors::MessageEnvelopeCapacityExceeded);
     }
+
+    TEST_CASE("Message envelope qualifies the explicit schema compatibility window", "[unit][network][message][qualification]") {
+        const CodecFixture fixture;
+        const auto identities = fixture.Identities();
+        const auto registry = fixture.Registry(identities);
+        for (std::uint16_t minor = 0; minor <= 3; ++minor) {
+            auto envelope = fixture.Envelope();
+            envelope.schemaVersion.minor = minor;
+            const auto encoded = EncodeMessageEnvelope(envelope, registry);
+            if (minor <= 2) {
+                REQUIRE(encoded.HasValue());
+                const auto decoded = DecodeMessageEnvelope(encoded.Value(), registry);
+                REQUIRE(decoded.HasValue());
+                REQUIRE(decoded.Value().schemaVersion == envelope.schemaVersion);
+                REQUIRE(EncodeMessageEnvelope(decoded.Value(), registry).Value() == encoded.Value());
+            } else {
+                RequireError(encoded, NetworkErrors::MessageSchemaIncompatible);
+            }
+        }
+    }
+
+    TEST_CASE("Message envelope rejects every partial or coalesced frame and bounds deterministic hostile mutations",
+              "[unit][network][message][qualification]") {
+        const CodecFixture fixture;
+        const auto identities = fixture.Identities();
+        const auto registry = fixture.Registry(identities);
+        const auto canonical = EncodeMessageEnvelope(fixture.Envelope(), registry).Value();
+
+        for (std::size_t length = 0; length < canonical.size(); ++length)
+            RequireError(DecodeMessageEnvelope(std::span{canonical}.first(length), registry), NetworkErrors::MessageEnvelopeInvalid);
+
+        auto coalesced = canonical;
+        coalesced.insert(coalesced.end(), canonical.begin(), canonical.end());
+        RequireError(DecodeMessageEnvelope(coalesced, registry), NetworkErrors::MessageEnvelopeInvalid);
+
+        // Fixed seed and iteration bound make any corpus failure exactly reproducible in CI.
+        std::uint32_t seed = 0x1119a5c3;
+        for (std::size_t caseIndex = 0; caseIndex < 512; ++caseIndex) {
+            seed ^= seed << 13U;
+            seed ^= seed >> 17U;
+            seed ^= seed << 5U;
+            auto mutated = canonical;
+            const std::size_t offset = seed % mutated.size();
+            mutated[offset] ^= static_cast<std::byte>((seed >> 8U) | 1U);
+            const auto decoded = DecodeMessageEnvelope(mutated, registry);
+            if (decoded.HasValue()) {
+                const auto normalized = EncodeMessageEnvelope(decoded.Value(), registry);
+                REQUIRE(normalized.HasValue());
+                REQUIRE(DecodeMessageEnvelope(normalized.Value(), registry).HasValue());
+            } else {
+                REQUIRE(decoded.ErrorValue().diagnostics.empty());
+            }
+        }
+    }
 }  // namespace Horo::Network

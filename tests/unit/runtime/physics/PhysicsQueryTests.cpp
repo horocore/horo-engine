@@ -7,6 +7,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
+#include <thread>
 #include <type_traits>
 
 namespace Horo::Physics {
@@ -55,6 +56,17 @@ namespace Horo::Physics {
         template <typename Value> void RequireCode(const Result<Value> &result, const ErrorCodeDescriptor &expected) {
             REQUIRE(result.HasError());
             REQUIRE(result.ErrorValue().code.Value() == expected.code.Value());
+        }
+
+        /** @brief Checks compound admission thread ownership without sharing native state across threads. */
+        [[nodiscard]] bool RejectsFixtureOnForeignThread(PhysicsWorld &world, const PhysicsQueryFixtureDescriptor &fixture) {
+            bool rejected = false;
+            std::thread foreign([&] {
+                const auto result = world.CreateQueryFixture(fixture);
+                rejected = result.HasError() && result.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+            });
+            foreign.join();
+            return rejected;
         }
     }  // namespace
 
@@ -161,6 +173,53 @@ namespace Horo::Physics {
         RequireCode(ValidatePhysicsQueryResult({.hitCount = 1}, descriptor), PhysicsErrors::QuerySnapshotStale);
     }
 
+    TEST_CASE("Compound fixture validation protects child identity and metadata", "[physics][query][compound]") {
+        PhysicsQueryFixtureDescriptor fixture;
+        fixture.layer = CollisionLayerId::FromBytes(LayerBytes);
+        fixture.profile = CollisionProfileId::FromBytes(ProfileBytes);
+        fixture.channel = PhysicsQueryChannelId::FromBytes(ChannelBytes);
+        PhysicsCompoundChild child{.geometry = PhysicsBoxShape{{0.5F, 0.5F, 0.5F}},
+                                   .subshape = PhysicsShapeSubresourceId::FromValue(7),
+                                   .layer = fixture.layer,
+                                   .profile = fixture.profile,
+                                   .channel = fixture.channel};
+        fixture.shape = PhysicsCompoundShapeDescriptor{{child}};
+        REQUIRE(ValidatePhysicsQueryFixtureDescriptor(fixture, World()).HasValue());
+        auto &children = std::get<PhysicsCompoundShapeDescriptor>(fixture.shape).children;
+        children.front().subshape = {};
+        RequireCode(ValidatePhysicsQueryFixtureDescriptor(fixture, World()), PhysicsErrors::DescriptorInvalid);
+        children.front().subshape = PhysicsShapeSubresourceId::FromValue(7);
+        children.push_back(child);
+        RequireCode(ValidatePhysicsQueryFixtureDescriptor(fixture, World()), PhysicsErrors::DescriptorInvalid);
+        children.back().subshape = PhysicsShapeSubresourceId::FromValue(8);
+        children.back().localPose.translation.x = std::numeric_limits<float>::quiet_NaN();
+        RequireCode(ValidatePhysicsQueryFixtureDescriptor(fixture, World()), PhysicsErrors::DescriptorInvalid);
+        children.back().localPose.translation.x = 1.0F;
+        children.back().trigger = true;
+        RequireCode(ValidatePhysicsQueryFixtureDescriptor(fixture, World()), PhysicsErrors::OperationUnsupported);
+        children.back().trigger = false;
+        children.back().material = PhysicsQueryMaterial{};
+        RequireCode(ValidatePhysicsQueryFixtureDescriptor(fixture, World()), PhysicsErrors::DescriptorInvalid);
+        children.back().material.reset();
+        children.back().geometry = PhysicsStaticPlaneShape{};
+        RequireCode(ValidatePhysicsQueryFixtureDescriptor(fixture, World()), PhysicsErrors::OperationUnsupported);
+        children.back().geometry = PhysicsBoxShape{};
+        REQUIRE(ValidatePhysicsQueryFixtureDescriptor(fixture, World()).HasValue());
+        children.back().layer = {};
+        RequireCode(ValidatePhysicsQueryFixtureDescriptor(fixture, World()), PhysicsErrors::DescriptorInvalid);
+        children.back().layer = fixture.layer;
+        children.back().response = static_cast<PhysicsQueryFixtureResponse>(255);
+        RequireCode(ValidatePhysicsQueryFixtureDescriptor(fixture, World()), PhysicsErrors::OperationUnsupported);
+        children.back().response = PhysicsQueryFixtureResponse::Block;
+        fixture.material = PhysicsQueryMaterial{};
+        RequireCode(ValidatePhysicsQueryFixtureDescriptor(fixture, World()), PhysicsErrors::DescriptorInvalid);
+        fixture.material.reset();
+        children.resize(257, child);
+        RequireCode(ValidatePhysicsQueryFixtureDescriptor(fixture, World()), PhysicsErrors::CapacityExceeded);
+        children.clear();
+        RequireCode(ValidatePhysicsQueryFixtureDescriptor(fixture, World()), PhysicsErrors::DescriptorInvalid);
+    }
+
 #if HORO_TEST_PHYSICS_NATIVE
     namespace {
         [[nodiscard]] PhysicsQueryFixtureDescriptor QueryFixture(
@@ -259,6 +318,59 @@ namespace Horo::Physics {
         REQUIRE(world->DestroyQueryFixture(first).HasValue());
         REQUIRE(world->Query(descriptor, hits).HasValue());
         REQUIRE(world->DestroyQueryFixture(second).HasValue());
+    }
+
+    TEST_CASE("Canonical compound queries return stable child metadata through local transforms", "[physics][query][compound][native]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        const auto identity = PhysicsWorldId::Create(704).Value();
+        REQUIRE(world->Activate(identity).HasValue());
+
+        auto fixture = QueryFixture({0, 0, 0});
+        fixture.subshape.reset();
+        const auto asset = Assets::AssetId::Parse("b972cfcb-5cce-4c32-b3b5-a9c238057b83").Value();
+        const PhysicsCompoundChild first{.geometry = PhysicsBoxShape{{0.5F, 0.5F, 0.5F}},
+                                         .localPose = {.translation = {0, 0, -5}},
+                                         .subshape = PhysicsShapeSubresourceId::FromValue(101),
+                                         .material = PhysicsQueryMaterial{asset, 3, PhysicsMaterialSlotId::FromValue(7)},
+                                         .layer = fixture.layer,
+                                         .profile = fixture.profile,
+                                         .channel = fixture.channel};
+        PhysicsCompoundChild second = first;
+        second.localPose.translation.z = -10;
+        second.subshape = PhysicsShapeSubresourceId::FromValue(42);
+        second.profile = CollisionProfileId::FromBytes(OtherProfileBytes);
+        second.material = PhysicsQueryMaterial{asset, 4, PhysicsMaterialSlotId::FromValue(8)};
+        fixture.shape = PhysicsCompoundShapeDescriptor{{first, second}};
+        const auto created = world->CreateQueryFixture(fixture);
+        REQUIRE(created.HasValue());
+        std::get<PhysicsCompoundShapeDescriptor>(fixture.shape).children[0].subshape = PhysicsShapeSubresourceId::FromValue(999);
+        REQUIRE(RejectsFixtureOnForeignThread(*world, fixture));
+        AdvanceOneTick(*world);
+
+        auto query = QueryDescriptor(identity, PhysicsRayQuery{{0, 0, 0}, {0, 0, -1}, 20}, PhysicsQueryCollection::All, 2);
+        std::array<PhysicsQueryHit, 2> hits{};
+        const auto all = world->Query(query, hits);
+        REQUIRE(all.HasValue());
+        REQUIRE(all.Value().hitCount == 2);
+        REQUIRE(hits[0].subshape == first.subshape);
+        REQUIRE(hits[0].material->slot == first.material->slot);
+        REQUIRE(hits[1].subshape == second.subshape);
+        REQUIRE(hits[1].profile == second.profile);
+        REQUIRE(hits[1].material->assetGeneration == 4);
+
+        query.filter.requiredProfile = second.profile;
+        query.collection = PhysicsQueryCollection::Any;
+        query.maximumHitCount = 1;
+        const auto filtered = world->Query(query, hits);
+        REQUIRE(filtered.HasValue());
+        REQUIRE(filtered.Value().hitCount == 1);
+        REQUIRE(hits[0].subshape == second.subshape);
+
+        REQUIRE(world->DestroyQueryFixture(created.Value()).HasValue());
+        RequireCode(world->DestroyQueryFixture(created.Value()), PhysicsErrors::HandleStale);
+        world->Shutdown();
+        RequireCode(world->CreateQueryFixture(fixture), PhysicsErrors::InvalidState);
     }
 
     TEST_CASE("Canonical immediate queries apply channel, selector, trigger and exclusion filters", "[physics][query][native]") {

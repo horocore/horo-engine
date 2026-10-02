@@ -282,6 +282,8 @@ namespace Horo::Character::Detail {
                                                  descriptor.collisionProfile,
                                                  descriptor.queryChannel,
                                                  impl.settings.Values().work.maximumMovementIterations};
+        if (input.metrics != nullptr)
+            ++input.metrics->snapshot.queries;
         auto probe = input.query.sweep(input.query.context, request);
         if (impl.state.load() != CharacterWorldState::Active)
             return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
@@ -332,6 +334,10 @@ namespace Horo::Character::Detail {
                                                  descriptor.collisionProfile,
                                                  descriptor.queryChannel,
                                                  iteration};
+        if (input.metrics != nullptr) {
+            ++input.metrics->snapshot.queries;
+            ++input.metrics->snapshot.movementIterations;
+        }
         auto probe = input.query.sweep(input.query.context, request);
         if (impl.state.load() != CharacterWorldState::Active)
             return Result<bool>::Failure(MakeError(CharacterErrors::InvalidState));

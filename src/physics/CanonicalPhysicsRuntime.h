@@ -16,6 +16,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace Horo::Physics::Detail {
     class PhysicsEventProjection;
@@ -76,6 +77,19 @@ namespace Horo::Physics::Detail {
         std::optional<Error> diagnostic;
     };
 
+    /** @brief Bounded Horo-only values projected from resident scene and query-fixture registries. */
+    struct CanonicalDebugProjection final {
+        std::vector<PhysicsDebugRecord> bodies;
+        std::vector<PhysicsDebugRecord> shapes;
+        std::vector<PhysicsDebugRecord> constraints;
+        std::uint64_t truncatedBodies{};
+        std::uint64_t truncatedShapes{};
+        std::uint64_t truncatedConstraints{};
+    };
+
+    /** @brief Copies stable Horo identities from the current owner-thread canonical world after one completed tick. */
+    [[nodiscard]] CanonicalDebugProjection ProjectCanonicalDebug(CanonicalWorldHandle world, const PhysicsDebugBudget &budget);
+
     /** @brief Starts private Jolt process registration or reports omitted/incompatible composition. */
     [[nodiscard]] Result<CanonicalRuntimeHandle> CreateCanonicalRuntime(CanonicalFailurePoint failurePoint = CanonicalFailurePoint::None);
     /** @brief Releases types, factory and allocator hooks after every native world has retired. */
@@ -93,10 +107,18 @@ namespace Horo::Physics::Detail {
      */
     [[nodiscard]] Result<CanonicalStepOutcome> StepCanonicalWorld(CanonicalWorldHandle world, float fixedDeltaSeconds,
                                                                   std::uint64_t simulationTick = 0, CanonicalContactSink contactSink = {});
+
+    /** @brief Synthetic contact conditions retained only for native boundary regression coverage. */
+    struct CanonicalContactTestOptions final {
+        bool sensor{};
+        bool persisted{};
+        std::uint32_t contactPointCount{1};
+    };
+
     /** @brief Invokes the installed contact listener with copied native evidence for boundary regression coverage. */
     [[nodiscard]] bool InvokeCanonicalContactCallbackForTesting(CanonicalWorldHandle world, const PhysicsQueryFixture &first,
                                                                 const PhysicsQueryFixture &second, std::uint64_t simulationTick,
-                                                                bool sensor, bool persisted, CanonicalContactSink contactSink);
+                                                                CanonicalContactSink contactSink, CanonicalContactTestOptions options);
     /** @brief Admits one analytic scene shape into an unpublished owner-thread world. */
     [[nodiscard]] Result<ShapeHandle> CreateCanonicalSceneShape(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                                 const PhysicsShapeDescriptor &descriptor);

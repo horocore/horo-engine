@@ -195,7 +195,16 @@ namespace Horo::Runtime::SaveErrors {
                                                   "Use one canonical entry kind with bounded identity, length, and offset fields."};
     const ErrorCodeDescriptor ArchiveCodecUnsupported{kDomain, ErrorCode{"save.archive.codec_unsupported"}, kError,
                                                       "Save archive entry compression is unsupported by this backend.",
-                                                      "Use the backend-supported raw codec or an explicitly qualified decoder."};
+                                                      "Install a compatible codec or preserve the last-known-good generation."};
+    const ErrorCodeDescriptor ArchiveCompressionPolicyInvalid{kDomain, ErrorCode{"save.archive.compression_policy_invalid"}, kError,
+                                                              "The save compression policy is invalid or cannot be satisfied.",
+                                                              "Select an installed codec and supported level, or permit raw fallback."};
+    const ErrorCodeDescriptor ArchiveCompressionFailed{kDomain, ErrorCode{"save.archive.compression_failed"}, kError,
+                                                       "A supported save compression encoder failed.",
+                                                       "Keep the previous save generation and retry with a qualified codec."};
+    const ErrorCodeDescriptor ArchiveChunkDecodeFailed{kDomain, ErrorCode{"save.archive.chunk_decode_failed"}, kError,
+                                                       "Compressed save chunk bytes are malformed or have the wrong decoded size.",
+                                                       "Reject the archive and retain the last-known-good generation."};
     const ErrorCodeDescriptor ArchiveDecompressionLimitExceeded{kDomain, ErrorCode{"save.archive.decompression_limit_exceeded"}, kError,
                                                                 "Save archive decoded data exceeds its finite expansion budget.",
                                                                 "Reduce decoded size or compression expansion before admission."};

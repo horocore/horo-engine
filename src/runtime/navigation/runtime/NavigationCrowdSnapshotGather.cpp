@@ -91,6 +91,8 @@ namespace Horo::Navigation::Detail {
                     if (++pairChecks > limits.maximumPairChecks)
                         return CapacityExceeded();
                     const auto &other = storage.agents[otherIndex];
+                    if ((agent.avoidance.avoidsLayers & (std::uint64_t{1} << other.avoidance.layerBit)) == 0)
+                        continue;
                     const double dx = static_cast<double>(other.position.x) - agent.position.x;
                     const double dz = static_cast<double>(other.position.z) - agent.position.z;
                     const double distanceSquared = dx * dx + dz * dz;

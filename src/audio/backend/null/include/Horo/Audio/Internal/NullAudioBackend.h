@@ -6,6 +6,7 @@
 
 #include "Horo/Audio/AudioClock.h"
 #include "Horo/Audio/Internal/AudioBackend.h"
+#include "Horo/Audio/Internal/AudioCallbackWatchdog.h"
 
 #include <array>
 #include <memory>
@@ -63,6 +64,8 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] Result<void> AcknowledgeCompletion(const OperationId &operation) override;
         /** @copydoc AudioBackend::DrainEvents */
         [[nodiscard]] std::size_t DrainEvents(std::span<Event> output) noexcept override;
+        /** @copydoc AudioBackend::DrainSafetyViolations */
+        [[nodiscard]] AudioCallbackViolationDrain DrainSafetyViolations(std::span<AudioCallbackViolation> output) noexcept override;
 
         /**
          * @brief Complete one admitted control step without consulting wall time.
@@ -117,6 +120,13 @@ namespace Horo::Audio::Backend {
         static constexpr std::size_t MaximumEvents = 64;
         static constexpr std::size_t MaximumInjectedEvents = 60;
 
+        /** @brief One deterministic callback clock cursor; reset and advanced as a unit per render epoch. */
+        struct ClockCursor final {
+            std::uint64_t sampleFrame{};
+            std::uint64_t nanoseconds{};
+            std::uint64_t remainder{};
+        };
+
         NullAudioBackendConfig config_;
         AudioDeviceId device_;
         NullAudioBackendState state_{NullAudioBackendState::Closed};
@@ -129,10 +139,9 @@ namespace Horo::Audio::Backend {
         std::uint32_t callbackFrames_{};
         std::size_t planeStrideSamples_{};
         RenderPort render_;
+        AudioCallbackWatchdog watchdog_;
         bool ready_{};
-        std::uint64_t sampleFrame_{};
-        std::uint64_t clockNanoseconds_{};
-        std::uint64_t clockRemainder_{};
+        ClockCursor clock_;
         std::vector<AudioSample> samples_;
         std::vector<AudioSample *> planes_;
         std::array<Event, MaximumEvents> events_{};

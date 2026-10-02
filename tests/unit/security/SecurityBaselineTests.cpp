@@ -266,11 +266,14 @@ namespace Horo::Security::Tests {
             return Result<DetachedSignatureEnvelope>::Success(envelope);
         }};
         REQUIRE(gate.Verify(artifactPath).HasValue());
+        REQUIRE(verifier->VerifyFile(artifactPath, fixture.artifact.size(), fixture.envelope).HasValue());
+        CHECK(verifier->VerifyFile(artifactPath, fixture.artifact.size() - 1U, fixture.envelope).HasError());
         {
             std::ofstream changed{artifactPath, std::ios::binary | std::ios::app};
             changed.put('\0');
         }
         CHECK(gate.Verify(artifactPath).ErrorValue().code.Value() == "integrity_mismatch");
+        CHECK(verifier->VerifyFile(artifactPath, fixture.artifact.size(), fixture.envelope).HasError());
 
         DetachedFileArtifactGate missingComposition{nullptr, {}};
         CHECK(missingComposition.Verify(artifactPath).ErrorValue().code.Value() == "missing_evidence");
