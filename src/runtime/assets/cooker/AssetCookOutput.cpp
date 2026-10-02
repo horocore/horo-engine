@@ -7,6 +7,7 @@
 #include "Horo/Foundation/Sha256.h"
 
 #include <algorithm>
+#include <exception>
 #include <format>
 #include <limits>
 #include <optional>
@@ -98,8 +99,8 @@ namespace Horo::Assets::CookStorageDetail {
             const auto privateGeneration = operationRoot / "generation";
             if (!std::filesystem::create_directory(privateGeneration, directoryError) || directoryError)
                 return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
-            const auto existingStatus = std::filesystem::symlink_status(generation.generationRoot, directoryError);
-            if (std::filesystem::exists(existingStatus)) {
+            if (const auto existingStatus = std::filesystem::symlink_status(generation.generationRoot, directoryError);
+                std::filesystem::exists(existingStatus)) {
                 if (directoryError || !std::filesystem::is_directory(existingStatus))
                     return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
                 if (auto verified = VerifyExistingGeneration(generation, payloads, limits); verified.HasError())
@@ -158,6 +159,22 @@ namespace Horo::Assets::CookStorageDetail {
 
             return Result<void>::Success();
         }
+
+        /** @brief Gives the native receipt precedence over an adapter error or exception after replacement. */
+        Result<void> ResolveReplacementOutcome(Result<void> replaced, const AtomicFileReplacementReceipt &receipt,
+                                               std::optional<Error> *postCommitError) {
+            if (postCommitError != nullptr) {
+                if (receipt.WasCommitted()) {
+                    if (replaced.HasError())
+                        *postCommitError = std::move(replaced).ErrorValue();
+                    return Result<void>::Success();
+                }
+                if (replaced.HasValue())
+                    return Result<void>::Failure(
+                        MakeError(CookErrors::MalformedArtifact, "Replacement returned no native commit receipt."));
+            }
+            return replaced;
+        }
     }  // namespace
 
     /** @copydoc ReplaceDurably */
@@ -168,27 +185,21 @@ namespace Horo::Assets::CookStorageDetail {
         try {
             replaced = postCommitError == nullptr ? files->AtomicReplace(prepared, destination)
                                                   : files->AtomicReplaceTracked(prepared, destination, receipt);
+        } catch (const std::exception &) {
+            return ResolveReplacementOutcome(std::move(replaced), receipt, postCommitError);
         } catch (...) {
             // External filesystem adapters cannot erase the true commit point by throwing after replacement.
+            return ResolveReplacementOutcome(std::move(replaced), receipt, postCommitError);
         }
-        if (postCommitError != nullptr) {
-            if (receipt.WasCommitted()) {
-                if (replaced.HasError())
-                    *postCommitError = std::move(replaced).ErrorValue();
-                return Result<void>::Success();
-            }
-            if (replaced.HasValue())
-                return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact, "Replacement returned no native commit receipt."));
-        }
-        return replaced;
+        return ResolveReplacementOutcome(std::move(replaced), receipt, postCommitError);
     }
 
     /** @copydoc WritePrivate */
     Result<void> WritePrivate(const std::filesystem::path &path, const std::span<const std::uint8_t> bytes, DurableFileSystem *files) {
         std::error_code error;
-        const auto status = std::filesystem::symlink_status(path, error);
-        if (!HasPlainPath(path) || status.type() != std::filesystem::file_type::not_found ||
-            (error && error != std::errc::no_such_file_or_directory))
+        if (const auto status = std::filesystem::symlink_status(path, error); !HasPlainPath(path) ||
+                                                                              status.type() != std::filesystem::file_type::not_found ||
+                                                                              (error && error != std::errc::no_such_file_or_directory))
             return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
         return files->WriteDurable(path, std::as_bytes(bytes));
     }

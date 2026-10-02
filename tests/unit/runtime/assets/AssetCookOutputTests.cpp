@@ -1,5 +1,7 @@
 #include "assets/AssetCookOutputFixture.h"
 
+using namespace Horo;
+using namespace Horo::Assets;
 using namespace Horo::Assets::OutputTestSupport;
 
 TEST_CASE("PublishCookGeneration creates current.json and manifest.json", "[native]") {
@@ -302,13 +304,13 @@ TEST_CASE("Pinned generation remains complete across real pointer replacement", 
     auto policy = Policy(files, "10000000-0000-0000-0000-000000000002");
     bool prepared = false;
     bool adopted = false;
-    policy.prepareCommit = [&](const AssetCookGeneration &candidate) {
+    policy.prepareCommit = [&prepared, &oldGeneration, &tmp](const AssetCookGeneration &candidate) {
         prepared = true;
         CHECK(candidate.manifestDigest != oldGeneration.Value().manifestDigest);
         CHECK(ResolveCurrentCookGeneration(tmp.path).Value().manifestDigest == oldGeneration.Value().manifestDigest);
         return Result<void>::Success();
     };
-    policy.afterCommit = [&](const AssetCookGeneration &candidate) {
+    policy.afterCommit = [&adopted, &prepared, &tmp, &files](const AssetCookGeneration &candidate) {
         adopted = true;
         CHECK(prepared);
         CHECK(ResolveCurrentCookGeneration(tmp.path).Value().manifestDigest == candidate.manifestDigest);

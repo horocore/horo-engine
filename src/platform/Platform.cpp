@@ -301,7 +301,7 @@ namespace Horo {
         }
 
         /** @brief Writes diagnostic-only metadata after Windows exclusion has been acquired. */
-        [[nodiscard]] Result<void> WriteExclusiveLockMetadata(ExclusiveFileLock::State &state, const std::filesystem::path &path,
+        [[nodiscard]] Result<void> WriteExclusiveLockMetadata(const ExclusiveFileLock::State &state, const std::filesystem::path &path,
                                                               const std::string_view ownerMetadata) {
             LARGE_INTEGER zero{};
             if (!SetFilePointerEx(state.handle, zero, nullptr, FILE_BEGIN) || !SetEndOfFile(state.handle))
@@ -319,8 +319,8 @@ namespace Horo {
             state.descriptor = open(path.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
             if (state.descriptor < 0)
                 return Result<void>::Failure(FsError(IoFailed, path));
-            struct stat information{};
-            if (fstat(state.descriptor, &information) != 0 || !S_ISREG(information.st_mode) || information.st_nlink != 1)
+            if (struct stat information{};
+                fstat(state.descriptor, &information) != 0 || !S_ISREG(information.st_mode) || information.st_nlink != 1)
                 return Result<void>::Failure(FsError(IoFailed, path));
             struct flock lock = {};
             lock.l_type = F_WRLCK;
@@ -331,7 +331,7 @@ namespace Horo {
         }
 
         /** @brief Writes diagnostic-only metadata after POSIX record-lock authority has been acquired. */
-        [[nodiscard]] Result<void> WriteExclusiveLockMetadata(ExclusiveFileLock::State &state, const std::filesystem::path &path,
+        [[nodiscard]] Result<void> WriteExclusiveLockMetadata(const ExclusiveFileLock::State &state, const std::filesystem::path &path,
                                                               const std::string_view ownerMetadata) {
             if (ftruncate(state.descriptor, 0) != 0)
                 return Result<void>::Failure(FsError(IoFailed, path));
@@ -359,8 +359,7 @@ namespace Horo {
     bool ExclusiveFileLock::ProtectsPath(const std::filesystem::path &path) const {
         if (state_ == nullptr || !path.is_absolute())
             return false;
-        std::error_code error;
-        if (std::filesystem::weakly_canonical(path.parent_path(), error) != path.parent_path() || error)
+        if (std::error_code error; std::filesystem::weakly_canonical(path.parent_path(), error) != path.parent_path() || error)
             return false;
         return state_->processKey == LockKey(path);
     }

@@ -94,8 +94,8 @@ namespace Horo::Application {
             (config.diagnostics && !config.diagnostics->Owns(config.definition)))
             return Result<std::unique_ptr<NavigationBakeService>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         std::error_code error;
-        const auto canonical = std::filesystem::weakly_canonical(config.targetRoot, error);
-        if (error || canonical != config.targetRoot.lexically_normal())
+        if (const auto canonical = std::filesystem::weakly_canonical(config.targetRoot, error);
+            error || canonical != config.targetRoot.lexically_normal())
             return Result<std::unique_ptr<NavigationBakeService>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         auto state = std::make_shared<ServiceState>();
         state->config = std::move(config);
@@ -164,6 +164,7 @@ namespace Horo::Application {
     void NavigationBakeService::Invalidate() noexcept {
         auto desired = state_->desired.load();
         while ((desired & Adopted) == 0 && !state_->desired.compare_exchange_weak(desired, 0)) {
+            // Retry with the observed generation until invalidation succeeds or adoption owns the barrier.
         }
         CancelPending(operations_, pending_);
         pending_.reset();

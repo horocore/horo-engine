@@ -224,8 +224,7 @@ namespace Horo::Application::NavigationBakeDetail {
                 return Failure<void>(NavigationErrors::BakeInputCancelled);
             if (state.desired.load() != attempt.generation)
                 return Failure<void>(NavigationErrors::BakeInputStale);
-            auto current = state.config.sourceAuthority->TryAcquirePublication(*attempt.request.input, cancel);
-            if (current.HasError())
+            if (auto current = state.config.sourceAuthority->TryAcquirePublication(*attempt.request.input, cancel); current.HasError())
                 return Result<void>::Failure(current.ErrorValue());
             return Result<void>::Success();
         }
@@ -264,17 +263,15 @@ namespace Horo::Application::NavigationBakeDetail {
             auto lostDurabilityDiagnostic =
                 MakeError(NavigationErrors::ProviderFailed,
                           "Publication committed; durability is unknown and its diagnostic could not be retained.");
-            const auto eligible = [&attempt, state, cancel]() -> Result<void> {
+            const auto eligible = [&attempt, state, cancel] {
                 return EligiblePublication(*state, attempt, cancel);
             };
             const Assets::AssetCookManifestEntry entry{.assetId = config.definition,
                                                        .assetType = config.artifactType,
                                                        .artifactFile = config.definition.ToString() + ".cooked",
                                                        .artifactHash = ComputeSha256(std::as_bytes(std::span{attempt.envelope}))};
-            auto published = Assets::
-                PublishCookArtifactReplacement(config.targetRoot, config.target, entry, std::move(attempt.envelope),
-                                               config.maximumCandidateBytes, config.cookLimits,
-                                               {.files = config.files.get(), .beforeCommit = [&attempt, &sourceLease, state, cancel] {
+            const Assets::AssetCookPublicationPolicy
+                policy{.files = config.files.get(), .beforeCommit = [&attempt, &sourceLease, state, cancel] {
                 return AcquireAdoption(*state, attempt, cancel, sourceLease);
             }, .waitingForWriter = [eligible, deadline] {
                 if (auto fresh = eligible(); fresh.HasError())
@@ -288,8 +285,11 @@ namespace Horo::Application::NavigationBakeDetail {
                 return Result<void>::Success();
             }, .afterCommit = [&attempt, state, &lostDurabilityDiagnostic](const Assets::AssetCookGeneration &generation) noexcept {
                 AdoptCommitted(*state, attempt, generation, lostDurabilityDiagnostic);
-            }, .newOperationId = config.newOperationId});
-            if (published.HasError()) {
+            }, .newOperationId = config.newOperationId};
+            if (auto published =
+                    Assets::PublishCookArtifactReplacement(config.targetRoot, config.target, entry, std::move(attempt.envelope),
+                                                           config.maximumCandidateBytes, config.cookLimits, policy);
+                published.HasError()) {
                 if (!attempt.publicationReceipt->IsCommitted()) {
                     auto expected = attempt.generation | Adopted;
                     state->desired.compare_exchange_strong(expected, attempt.generation);

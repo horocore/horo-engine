@@ -63,12 +63,12 @@ namespace Horo::Application {
             return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         if (auto normalized = NormalizeSources(sources); normalized.HasError())
             return normalized;
-        std::unique_lock lock(state_->mutex, std::try_to_lock);
-        if (!lock.owns_lock())
-            return Result<void>::Failure(MakeError(NavigationErrors::BakeJobAdmissionRejected));
-        state_->revisions = revisions;
-        state_->sources = std::move(sources);
-        return Result<void>::Success();
+        if (std::unique_lock lock(state_->mutex, std::try_to_lock); lock.owns_lock()) {
+            state_->revisions = revisions;
+            state_->sources = std::move(sources);
+            return Result<void>::Success();
+        }
+        return Result<void>::Failure(MakeError(NavigationErrors::BakeJobAdmissionRejected));
     }
 
     /** @copydoc NavigationBakeSourceAuthority::TryAcquirePublication */

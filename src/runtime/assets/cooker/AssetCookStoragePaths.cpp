@@ -79,8 +79,7 @@ namespace Horo::Assets::CookStorageDetail {
         if (!HasPlainPath(path))
             return false;
         std::error_code error;
-        const auto status = std::filesystem::symlink_status(path, error);
-        if (error || !std::filesystem::is_regular_file(status))
+        if (const auto status = std::filesystem::symlink_status(path, error); error || !std::filesystem::is_regular_file(status))
             return false;
         return std::filesystem::hard_link_count(path, error) == 1U && !error;
     }

@@ -2,6 +2,7 @@
 
 #include "Horo/Foundation/Platform.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cerrno>
 
@@ -15,21 +16,20 @@ namespace Horo::Application::TestSupport {
     class ChildWriterLease final {
     public:
         explicit ChildWriterLease(const std::filesystem::path &lockPath) {
-            REQUIRE(pipe(ready_) == 0);
-            REQUIRE(pipe(release_) == 0);
+            REQUIRE(pipe(ready_.data()) == 0);
+            REQUIRE(pipe(release_.data()) == 0);
             child_ = fork();
             REQUIRE(child_ >= 0);
             if (child_ == 0) {
                 close(ready_[0]);
                 close(release_[1]);
                 NativeDurableFileSystem files;
-                auto lease = files.TryAcquireExclusive(lockPath, "navigation child publication owner");
-                if (lease.HasError())
-                    _exit(4);
-                const char acquired = '1';
-                if (write(ready_[1], &acquired, 1) != 1)
-                    _exit(2);
-                _exit(WaitForPipeEvent(release_[0], POLLHUP, 15000) ? 0 : 3);
+                if (auto lease = files.TryAcquireExclusive(lockPath, "navigation child publication owner"); lease.HasValue()) {
+                    if (const char acquired = '1'; write(ready_[1], &acquired, 1) != 1)
+                        _exit(2);
+                    _exit(WaitForPipeEvent(release_[0], POLLHUP, 15000) ? 0 : 3);
+                }
+                _exit(4);
             }
             close(ready_[1]);
             close(release_[0]);
@@ -53,6 +53,7 @@ namespace Horo::Application::TestSupport {
             close(release_[1]);
             int status{};
             while (waitpid(child_, &status, 0) < 0 && errno == EINTR) {
+                // Interrupted waits must still reap the child after releasing its writer lease.
             }
             child_ = 0;
         }
@@ -63,8 +64,8 @@ namespace Horo::Application::TestSupport {
             return poll(&readiness, 1, timeoutMilliseconds) == 1 && (readiness.revents & event) != 0;
         }
 
-        int ready_[2]{};
-        int release_[2]{};
+        std::array<int, 2> ready_{};
+        std::array<int, 2> release_{};
         pid_t child_{};
     };
 }  // namespace Horo::Application::TestSupport

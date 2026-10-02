@@ -82,6 +82,11 @@ namespace Horo::Assets {
         void Publish(BuildOutputRecord record) const;
 
     private:
+        /** @brief Attempts authoritative success even when output delivery failed and contains optional history failures.
+         * @param message Success description for the operation projection.
+         */
+        void CompleteProjection(std::string message) noexcept;
+
         /** @brief Selects committed success or the recorded precommit outcome when no terminal projection was attempted. */
         void FinalizeProjection();
 

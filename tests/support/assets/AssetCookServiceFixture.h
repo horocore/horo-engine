@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <memory>
 #include <span>
@@ -25,9 +26,10 @@
 #include <vector>
 
 namespace Horo::Assets::ServiceTestSupport {
-    using namespace Horo;
-    using namespace Horo::Assets;
-    using namespace Horo::Assets::CookTestValues;
+    using CookTestValues::Id;
+    using CookTestValues::OwnedCookTestDirectory;
+    using CookTestValues::Target;
+    using CookTestValues::Type;
 
     inline AssetRecord TestMeshRecord() {
         const auto sourcePath = ProjectPath::Parse("assets/test_mesh.fbx");
@@ -52,8 +54,7 @@ namespace Horo::Assets::ServiceTestSupport {
 
     /** @brief Creates a fake .horo sidecar so the registry picks up the file. */
     inline std::string SidecarJson(std::string_view assetId, std::string_view assetType) {
-        return std::string("{\"schemaVersion\":1,\"assetId\":\"") + std::string(assetId) + "\",\"assetType\":\"" + std::string(assetType) +
-               "\"}";
+        return std::format(R"({{"schemaVersion":1,"assetId":"{}","assetType":"{}"}})", assetId, assetType);
     }
 
     /**
@@ -64,12 +65,10 @@ namespace Horo::Assets::ServiceTestSupport {
         std::filesystem::path assetsDir;
         std::filesystem::path sourceFile;
 
-        TestProject() {
-            assetsDir = dir.path / "assets";
+        TestProject() : assetsDir(dir.path / "assets"), sourceFile(assetsDir / "test_mesh.fbx") {
             std::filesystem::create_directories(assetsDir);
 
             // Create a minimal source file
-            sourceFile = assetsDir / "test_mesh.fbx";
             std::vector<std::uint8_t> data = {0x01, 0x02, 0x03, 0x04, 0x05};
             WriteFile(sourceFile, data);
 
@@ -244,8 +243,15 @@ namespace Horo::Assets::ServiceTestSupport {
             ++attempted;
             if (nonstandard)
                 throw 73;
-            throw std::runtime_error("Optional cook history notification failed");
+            throw HistoryNotificationFailure{};
         }
+
+    private:
+        struct HistoryNotificationFailure final : std::exception {
+            [[nodiscard]] const char *what() const noexcept override {
+                return "Optional cook history notification failed";
+            }
+        };
     };
 
     /** @brief Verifies that an empty cook has one successful operation and one consistently attributed terminal output. */

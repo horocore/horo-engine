@@ -46,7 +46,7 @@ namespace Horo::Navigation {
         }
 
         void RequireTerminal(const NavigationBakeJobHandle &handle) {
-            RequireEventually([&] {
+            RequireEventually([&handle] {
                 return handle.Snapshot()->IsTerminal();
             });
         }
@@ -72,7 +72,7 @@ namespace Horo::Navigation {
 
         double priorProgress{};
         std::uint64_t priorRevision{};
-        RequireEventually([&] {
+        RequireEventually([&handle, &priorRevision, &priorProgress] {
             const auto snapshot = handle.Snapshot();
             REQUIRE(snapshot.has_value());
             CHECK(snapshot->revision >= priorRevision);
@@ -112,7 +112,7 @@ namespace Horo::Navigation {
         descriptor.work[2].execute = descriptor.work[1].execute;
 
         auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
-        RequireEventually([&] {
+        RequireEventually([&tileEntered] {
             return tileEntered.load();
         });
         REQUIRE(handle.RequestCancellation());
@@ -186,7 +186,7 @@ namespace Horo::Navigation {
         descriptor.budget.maximumResidentBytes = 100;
         descriptor.budget.maximumConcurrentJobs = 3;
         descriptor.work[1].residentBytes = 60;
-        descriptor.work[1].execute = [&](const CancellationToken &) {
+        descriptor.work[1].execute = [&firstEntered, &releaseFirst, &firstCompleted](const CancellationToken &) {
             firstEntered.store(true);
             while (!releaseFirst.load())
                 std::this_thread::yield();
@@ -194,7 +194,7 @@ namespace Horo::Navigation {
             return Result<void>::Success();
         };
         descriptor.work[2].residentBytes = 60;
-        descriptor.work[2].execute = [&](const CancellationToken &) {
+        descriptor.work[2].execute = [&laterWorkStartedTooEarly, &firstCompleted, &laterWorkCount](const CancellationToken &) {
             laterWorkStartedTooEarly.store(!firstCompleted.load());
             laterWorkCount.fetch_add(1);
             return Result<void>::Success();
@@ -203,7 +203,7 @@ namespace Horo::Navigation {
         descriptor.work[3].execute = descriptor.work[2].execute;
 
         auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
-        RequireEventually([&] {
+        RequireEventually([&firstEntered] {
             return firstEntered.load();
         });
         CHECK(laterWorkCount.load() == 0);
@@ -234,14 +234,14 @@ namespace Horo::Navigation {
         auto descriptor = CompleteDescriptor();
         const auto receipt = std::make_shared<NavigationBakePublicationReceipt>();
         descriptor.publicationReceipt = receipt;
-        descriptor.work.back().execute = [&](const CancellationToken &cancellation) {
+        descriptor.work.back().execute = [&publicationEntered](const CancellationToken &cancellation) {
             publicationEntered.store(true);
             while (!cancellation.IsCancellationRequested())
                 std::this_thread::yield();
             return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
         };
         auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
-        RequireEventually([&] {
+        RequireEventually([&publicationEntered] {
             return publicationEntered.load();
         });
         REQUIRE(handle.RequestCancellation());
@@ -292,7 +292,7 @@ namespace Horo::Navigation {
             return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
         };
         auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
-        RequireEventually([&] {
+        RequireEventually([receipt] {
             return receipt->IsCommitted();
         });
         REQUIRE(operations.RequestCancel(handle.Id()));
@@ -338,12 +338,13 @@ namespace Horo::Navigation {
         std::atomic<bool> childClosed{};
         auto descriptor = CompleteDescriptor();
         descriptor.budget.childDrainTimeout = Duration::FromMilliseconds(100);
-        descriptor.work[1].execute = [&](const CancellationToken &) {
+        descriptor.work[1].execute = [&secondEntered](const CancellationToken &) {
             while (!secondEntered.load())
                 std::this_thread::yield();
             return Result<void>::Success();
         };
-        descriptor.work[2].execute = [&](const CancellationToken &cancellation) {
+        descriptor.work[2].execute = [&secondEntered, &cancellationObserved, &releaseChild,
+                                      &childClosed](const CancellationToken &cancellation) {
             secondEntered.store(true);
             while (!cancellation.IsCancellationRequested())
                 std::this_thread::yield();
@@ -354,7 +355,7 @@ namespace Horo::Navigation {
             return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
         };
         auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
-        RequireEventually([&] {
+        RequireEventually([&cancellationObserved] {
             return cancellationObserved.load();
         });
         CHECK_FALSE(handle.Snapshot()->IsTerminal());
@@ -375,7 +376,7 @@ namespace Horo::Navigation {
         descriptor.budget.maximumConcurrentJobs = 3;
         descriptor.work.insert(descriptor.work.begin() + 3, Work(NavigationBakeJobStage::TileBuild));
         for (std::size_t index = 1; index <= 3; ++index) {
-            descriptor.work[index].execute = [&](const CancellationToken &cancellation) {
+            descriptor.work[index].execute = [&entered](const CancellationToken &cancellation) {
                 entered.fetch_add(1);
                 while (!cancellation.IsCancellationRequested())
                     std::this_thread::yield();
@@ -383,7 +384,7 @@ namespace Horo::Navigation {
             };
         }
         auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
-        RequireEventually([&] {
+        RequireEventually([&entered, &handle] {
             return entered.load() != 0 && handle.Snapshot()->acceptedChildJobs == 4;
         });
         REQUIRE(handle.RequestCancellation());
@@ -429,7 +430,8 @@ namespace Horo::Navigation {
             auto descriptor = CompleteDescriptor();
             const auto receipt = std::make_shared<NavigationBakePublicationReceipt>();
             descriptor.publicationReceipt = receipt;
-            descriptor.work.back().execute = [&](const CancellationToken &cancellation) {
+            descriptor.work.back().execute = [committed, receipt, &publicationEntered,
+                                              &publicationClosed](const CancellationToken &cancellation) {
                 if (committed)
                     receipt->RecordCommitted();
                 publicationEntered.store(true);
@@ -439,7 +441,7 @@ namespace Horo::Navigation {
                 return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
             };
             auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
-            RequireEventually([&] {
+            RequireEventually([&publicationEntered] {
                 return publicationEntered.load();
             });
             jobs.Shutdown(ShutdownPolicy::Cancel);

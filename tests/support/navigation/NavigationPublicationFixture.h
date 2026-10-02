@@ -14,7 +14,9 @@
 #include <thread>
 
 namespace Horo::Application::TestSupport {
-    using namespace Horo::Navigation;
+    using Navigation::CreateRecastDetourNavigationMeshBuilder;
+    using Navigation::DecodeNavigationCookedTileSet;
+    using Navigation::NavigationCookedTileSet;
 
     /** @brief Owns only one freshly created private publication test directory. */
     struct PublicationDirectory {
@@ -68,8 +70,8 @@ namespace Horo::Application::TestSupport {
             if (WriteFails(path))
                 return InjectedFailure();
             auto written = native.WriteDurable(path, bytes);
-            const std::string_view text{reinterpret_cast<const char *>(bytes.data()), bytes.size()};
-            if (written.HasValue() && path.filename().string().starts_with("current.json") &&
+            if (const std::string_view text{reinterpret_cast<const char *>(bytes.data()), bytes.size()};
+                written.HasValue() && path.filename().string().starts_with("current.json") &&
                 text.find("\"generationPath\"") != std::string_view::npos) {
                 beforeCurrentReached.store(true);
                 while (pauseBeforeCurrent.load())
@@ -109,14 +111,15 @@ namespace Horo::Application::TestSupport {
 
     private:
         [[nodiscard]] static Result<void> InjectedFailure() {
-            return Result<void>::Failure(MakeError(NavigationErrors::BakeInputFailed));
+            return Result<void>::Failure(MakeError(Navigation::NavigationErrors::BakeInputFailed));
         }
 
         [[nodiscard]] bool WriteFails(const std::filesystem::path &path) const {
+            using enum PublicationFault;
             const auto name = path.filename().string();
-            return (fault.load() == PublicationFault::ArtifactWrite && name.find(".cooked") != std::string::npos) ||
-                   (fault.load() == PublicationFault::ManifestWrite && name.starts_with("manifest.json")) ||
-                   (fault.load() == PublicationFault::CurrentWrite && name.starts_with("current.json"));
+            return (fault.load() == ArtifactWrite && name.find(".cooked") != std::string::npos) ||
+                   (fault.load() == ManifestWrite && name.starts_with("manifest.json")) ||
+                   (fault.load() == CurrentWrite && name.starts_with("current.json"));
         }
 
         [[nodiscard]] bool RenameFails(const std::filesystem::path &path) const {
@@ -128,6 +131,13 @@ namespace Horo::Application::TestSupport {
     /** @brief Releases a paused native callback even when a test assertion aborts. */
     struct PublicationPause {
         std::shared_ptr<PublicationFiles> files;
+
+        explicit PublicationPause(std::shared_ptr<PublicationFiles> publicationFiles) : files(std::move(publicationFiles)) {}
+
+        PublicationPause(const PublicationPause &) = delete;
+        PublicationPause &operator=(const PublicationPause &) = delete;
+        PublicationPause(PublicationPause &&) = delete;
+        PublicationPause &operator=(PublicationPause &&) = delete;
 
         ~PublicationPause() {
             files->pauseBeforeCurrent.store(false);

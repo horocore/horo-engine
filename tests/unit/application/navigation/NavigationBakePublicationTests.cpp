@@ -3,6 +3,7 @@
 #include "navigation/NavigationPublicationProcess.h"
 
 namespace Horo::Application {
+    using namespace Navigation;
     using namespace TestSupport;
 
     namespace {
@@ -40,7 +41,7 @@ namespace Horo::Application {
         }
 
         /** @brief Publishes another real standard envelope through the sole AssetCook writer authority. */
-        [[nodiscard]] std::vector<std::uint8_t> PublishUnrelated(PublicationHarness &harness) {
+        [[nodiscard]] std::vector<std::uint8_t> PublishUnrelated(const PublicationHarness &harness) {
             const auto id = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000002").Value();
             const auto type = Assets::AssetTypeId::Parse("core.mesh").Value();
             const std::vector<std::uint8_t> payload{4, 5, 6, 7};
@@ -280,7 +281,7 @@ namespace Horo::Application {
         SECTION("bounded source observation count") {
             sources.resize(NavigationSourceGeometryLimits::MaximumContributions + 1, sources.front());
         }
-        CHECK(authority.UpdateCurrent(revisions, std::move(sources)).HasError());
+        CHECK(authority.UpdateCurrent(revisions, sources).HasError());
         CHECK(authority.TryAcquirePublication(*fixture.Input()).HasValue());
     }
 
@@ -303,6 +304,7 @@ namespace Horo::Application {
     }
 
     TEST_CASE("Native navigation publication failures before pointer commit retain the last valid serialized generation") {
+        using enum PublicationFault;
         PublicationDirectory directory;
         PublicationHarness harness(directory.path);
         REQUIRE(harness.Terminal(harness.Submit()).state == OperationState::Succeeded);
@@ -310,22 +312,22 @@ namespace Horo::Application {
         const auto pointer = PublicationBytes(harness.config.targetRoot / "current.json");
         harness.fixture.ExcludeBorder();
         SECTION("artifact durable write") {
-            harness.files->fault.store(PublicationFault::ArtifactWrite);
+            harness.files->fault.store(ArtifactWrite);
         }
         SECTION("manifest durable write") {
-            harness.files->fault.store(PublicationFault::ManifestWrite);
+            harness.files->fault.store(ManifestWrite);
         }
         SECTION("current durable write") {
-            harness.files->fault.store(PublicationFault::CurrentWrite);
+            harness.files->fault.store(CurrentWrite);
         }
         SECTION("generation directory rename") {
-            harness.files->fault.store(PublicationFault::GenerationRename);
+            harness.files->fault.store(GenerationRename);
         }
         SECTION("generation directory sync") {
-            harness.files->fault.store(PublicationFault::DirectorySync);
+            harness.files->fault.store(DirectorySync);
         }
         SECTION("current atomic rename") {
-            harness.files->fault.store(PublicationFault::CurrentRename);
+            harness.files->fault.store(CurrentRename);
         }
         const auto terminal = harness.Terminal(harness.Submit());
         CHECK(terminal.state == OperationState::Failed);
@@ -459,7 +461,9 @@ namespace Horo::Application {
         const std::vector<std::uint8_t> outsideBytes{11, 22, 33};
         WritePublicationBytes(outside, outsideBytes);
         auto link = harness.config.targetRoot / "current.json";
-        SECTION("current selector symlink") {}
+        SECTION("current selector symlink") {
+            // The initialized path already names the current selector.
+        }
         SECTION("generation artifact symlink") {
             link = current.generationRoot / contents.entries.front().artifactFile;
         }
@@ -479,7 +483,9 @@ namespace Horo::Application {
         const auto current = harness.Current();
         const auto contents = harness.Contents(current);
         auto linked = harness.config.targetRoot / "current.json";
-        SECTION("current selector hardlink") {}
+        SECTION("current selector hardlink") {
+            // The initialized path already names the current selector.
+        }
         SECTION("generation artifact hardlink") {
             linked = current.generationRoot / contents.entries.front().artifactFile;
         }

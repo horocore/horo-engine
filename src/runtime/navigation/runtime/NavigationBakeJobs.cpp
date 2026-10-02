@@ -212,7 +212,7 @@ namespace Horo::Navigation {
         };
 
         /** @brief Executes one bake item and translates its typed cancellation into a job acknowledgement. */
-        [[nodiscard]] Result<void> ExecuteBakeWork(const JobFunction &work, const CancellationToken &cancellation) {
+        [[nodiscard]] Result<void> ExecuteBakeWork(const auto &work, const CancellationToken &cancellation) {
             if (cancellation.IsCancellationRequested())
                 return JobCancelled(MakeError(NavigationErrors::BakeInputCancelled));
             Result<void> outcome = work(cancellation);
@@ -411,12 +411,12 @@ namespace Horo::Navigation {
 
     /** @copydoc NavigationBakePublicationReceipt::RecordCommitted */
     void NavigationBakePublicationReceipt::RecordCommitted() noexcept {
-        committed_.store(true, std::memory_order_release);
+        committed_.store(true);
     }
 
     /** @copydoc NavigationBakePublicationReceipt::IsCommitted */
     bool NavigationBakePublicationReceipt::IsCommitted() const noexcept {
-        return committed_.load(std::memory_order_acquire);
+        return committed_.load();
     }
 
     /** @copydoc NavigationBakeJobSnapshot::IsTerminal */

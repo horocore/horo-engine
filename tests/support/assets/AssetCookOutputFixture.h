@@ -17,16 +17,17 @@
 #include <vector>
 
 namespace Horo::Assets::OutputTestSupport {
-    using namespace Horo;
-    using namespace Horo::Assets;
-    using namespace Horo::Assets::CookTestValues;
+    using CookTestValues::Id;
+    using CookTestValues::OwnedCookTestDirectory;
+    using CookTestValues::Target;
+    using CookTestValues::Type;
 
     inline Sha256Digest DigestOf(std::span<const std::uint8_t> bytes) {
         return ComputeSha256(std::as_bytes(bytes));
     }
 
     inline std::vector<std::uint8_t> MakePayload(const AssetId &id, std::size_t size, std::uint8_t fill = 0x42) {
-        const std::vector<std::uint8_t> bytes(size, fill);
+        const std::vector bytes(size, fill);
         auto encoded = EncodeCookedArtifact(AssetCookArtifact{.id = id,
                                                               .type = Type("core.mesh"),
                                                               .target = Target("headless-null"),

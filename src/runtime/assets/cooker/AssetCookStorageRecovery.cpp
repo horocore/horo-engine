@@ -14,7 +14,7 @@
 namespace Horo::Assets::CookStorageDetail {
     namespace {
         /** @brief Durably persists a virgin selector before any immutable promotion, then releases its exact private namespace. */
-        Result<void> PersistUnpublishedSelector(const std::filesystem::path &root, const std::string &baseline,
+        Result<void> PersistUnpublishedSelector(const std::filesystem::path &root, const std::string_view baseline,
                                                 const AssetCookPublicationPolicy &policy) {
             auto operation = CreateOperationRoot(root, policy);
             if (operation.HasError())
@@ -23,8 +23,7 @@ namespace Horo::Assets::CookStorageDetail {
             const auto bytes = std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t *>(baseline.data()), baseline.size()};
             if (auto written = WritePrivate(prepared, bytes, policy.files); written.HasError())
                 return written;
-            auto verified = ReadFile(prepared, bytes.size());
-            if (verified.HasError() || !std::ranges::equal(verified.Value(), bytes))
+            if (auto verified = ReadFile(prepared, bytes.size()); verified.HasError() || !std::ranges::equal(verified.Value(), bytes))
                 return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
             std::optional<Error> durabilityError;
             if (auto replaced = ReplaceDurably(policy.files, prepared, root / "current.json", &durabilityError); replaced.HasError())
@@ -60,8 +59,7 @@ namespace Horo::Assets::CookStorageDetail {
                 const auto path = iterator->path();
                 if (!IsPlainFile(path) || (generation ? !IsPrivateGenerationFile(path) : path.filename() != "current.json"))
                     return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
-                const auto size = std::filesystem::file_size(path, error);
-                if (error || size > limits.maximumArtifactBytes)
+                if (const auto size = std::filesystem::file_size(path, error); error || size > limits.maximumArtifactBytes)
                     return Result<void>::Failure(MakeError(CookErrors::TooLarge));
                 paths.push_back(path);
             }
@@ -105,14 +103,13 @@ namespace Horo::Assets::CookStorageDetail {
                 return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
             };
             std::error_code error;
-            const auto id = AssetId::Parse(operation.filename().string());
-            if (id.HasError() || id.Value().ToString() != operation.filename().string() || !HasPlainPath(operation) ||
+            if (const auto id = AssetId::Parse(operation.filename().string());
+                id.HasError() || id.Value().ToString() != operation.filename().string() || !HasPlainPath(operation) ||
                 !std::filesystem::is_directory(std::filesystem::symlink_status(operation, error)) || error)
                 return invalid();
             // The only nested directory is exactly generation; examine and remove it explicitly.
             const auto generation = operation / "generation";
-            const auto status = std::filesystem::symlink_status(generation, error);
-            if (std::filesystem::exists(status)) {
+            if (const auto status = std::filesystem::symlink_status(generation, error); std::filesystem::exists(status)) {
                 if (error || !HasPlainPath(generation) || !std::filesystem::is_directory(status))
                     return invalid();
                 if (auto collected = CollectPrivateFiles(generation, limits, budget, files, true); collected.HasError())
@@ -172,8 +169,8 @@ namespace Horo::Assets::CookStorageDetail {
             auto pointer = ReadFile(root / "current.json", std::min(limits.maximumArtifactBytes, MaximumSelectorBytes));
             if (pointer.HasError())
                 return Result<std::optional<AssetCookGeneration>>::Failure(pointer.ErrorValue());
-            const std::string_view text(reinterpret_cast<const char *>(pointer.Value().data()), pointer.Value().size());
-            if (text == UnpublishedSelector(target))
+            if (const std::string_view text(reinterpret_cast<const char *>(pointer.Value().data()), pointer.Value().size());
+                text == UnpublishedSelector(target))
                 return Result<std::optional<AssetCookGeneration>>::Success({});
             auto current = ResolveCurrentCookGeneration(root, limits);
             if (current.HasError())
@@ -209,7 +206,9 @@ namespace Horo::Assets::CookStorageDetail {
             return Result<std::filesystem::path>::Failure(MakeError(CookErrors::MalformedArtifact));
         std::error_code error;
         std::filesystem::create_directories(privateRoot, error);
-        if (error || !std::filesystem::create_directory(operationRoot, error) || error)
+        if (error)
+            return Result<std::filesystem::path>::Failure(MakeError(CookErrors::MalformedArtifact));
+        if (!std::filesystem::create_directory(operationRoot, error) || error)
             return Result<std::filesystem::path>::Failure(MakeError(CookErrors::MalformedArtifact));
         return Result<std::filesystem::path>::Success(operationRoot);
     }
@@ -232,8 +231,7 @@ namespace Horo::Assets::CookStorageDetail {
             auto bytes = ReadFile(current, std::min(limits.maximumArtifactBytes, MaximumSelectorBytes));
             if (bytes.HasError())
                 return Result<void>::Failure(bytes.ErrorValue());
-            const std::string_view text(reinterpret_cast<const char *>(bytes.Value().data()), bytes.Value().size());
-            if (text != baseline) {
+            if (const std::string_view text(reinterpret_cast<const char *>(bytes.Value().data()), bytes.Value().size()); text != baseline) {
                 auto active = ResolveCurrentCookGeneration(root, limits);
                 if (active.HasError())
                     return Result<void>::Failure(active.ErrorValue());
@@ -247,9 +245,10 @@ namespace Horo::Assets::CookStorageDetail {
         const auto generations = root / "generations";
         if (!HasPlainPath(generations))
             return invalid();
-        const auto generationStatus = std::filesystem::symlink_status(generations, error);
-        if (std::filesystem::exists(generationStatus)) {
-            if (error || !std::filesystem::is_directory(generationStatus) || !std::filesystem::is_empty(generations, error) || error)
+        if (const auto generationStatus = std::filesystem::symlink_status(generations, error); std::filesystem::exists(generationStatus)) {
+            if (error || !std::filesystem::is_directory(generationStatus))
+                return invalid();
+            if (!std::filesystem::is_empty(generations, error) || error)
                 return invalid();
         } else if (error && error != std::errc::no_such_file_or_directory) {
             return invalid();

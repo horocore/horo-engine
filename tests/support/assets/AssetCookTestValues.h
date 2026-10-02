@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <string>
 #include <string_view>
 
@@ -32,12 +33,16 @@ namespace Horo::Assets::CookTestValues {
         std::filesystem::path path;
 
         OwnedCookTestDirectory(const std::string_view prefix, const bool canonicalRoot) {
-            const auto parent = std::filesystem::temp_directory_path() / prefix;
-            std::filesystem::create_directories(parent);
-            const auto unique = parent / ("test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-            std::filesystem::create_directories(unique);
+            const auto unique = std::filesystem::current_path() /
+                                std::format("{}_test_{}", prefix, std::chrono::steady_clock::now().time_since_epoch().count());
+            REQUIRE(std::filesystem::create_directory(unique));
             path = canonicalRoot ? std::filesystem::canonical(unique) : unique;
         }
+
+        OwnedCookTestDirectory(const OwnedCookTestDirectory &) = delete;
+        OwnedCookTestDirectory &operator=(const OwnedCookTestDirectory &) = delete;
+        OwnedCookTestDirectory(OwnedCookTestDirectory &&) = delete;
+        OwnedCookTestDirectory &operator=(OwnedCookTestDirectory &&) = delete;
 
         ~OwnedCookTestDirectory() {
             std::error_code error;

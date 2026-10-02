@@ -1,5 +1,7 @@
 #include "assets/AssetCookServiceFixture.h"
 
+using namespace Horo;
+using namespace Horo::Assets;
 using namespace Horo::Assets::ServiceTestSupport;
 
 TEST_CASE("AssetCookService empty registry publishes empty generation", "[native]") {

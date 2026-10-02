@@ -69,8 +69,8 @@ namespace Horo::Application {
 
             Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override {
                 auto written = native.WriteDurable(path, bytes);
-                const std::string_view content{reinterpret_cast<const char *>(bytes.data()), bytes.size()};
-                if ((path.filename() == "current.json" || path.filename().string().starts_with("current.json.tmp.")) &&
+                if (const std::string_view content{reinterpret_cast<const char *>(bytes.data()), bytes.size()};
+                    (path.filename() == "current.json" || path.filename().string().starts_with("current.json.tmp.")) &&
                     content.find("generationPath") != std::string_view::npos) {
                     currentStaged.store(true);
                     while (holdCurrent.load())

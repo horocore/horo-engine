@@ -21,8 +21,8 @@ namespace Horo::Assets {
         /** @brief Retries only native lock contention through the host's bounded wait/cancellation policy. */
         [[nodiscard]] Result<ExclusiveFileLock> AcquireWriter(const std::filesystem::path &root, const AssetCookPublicationPolicy &policy) {
             for (;;) {
-                auto lock = policy.files->TryAcquireExclusive(root / ".cook-writer.lock", "asset cook publication");
-                if (lock.HasValue() || !policy.waitingForWriter || lock.ErrorValue().domain.Value() != "horo.platform.filesystem" ||
+                if (auto lock = policy.files->TryAcquireExclusive(root / ".cook-writer.lock", "asset cook publication");
+                    lock.HasValue() || !policy.waitingForWriter || lock.ErrorValue().domain.Value() != "horo.platform.filesystem" ||
                     lock.ErrorValue().code.Value() != "filesystem.lock_busy")
                     return lock;
                 if (auto admitted = policy.waitingForWriter(); admitted.HasError())
@@ -40,8 +40,7 @@ namespace Horo::Assets {
         [[nodiscard]] Result<void> ValidateReplacement(const std::filesystem::path &root, const AssetCookTargetId &target,
                                                        const AssetCookManifestEntry &entry, const std::vector<std::uint8_t> &artifact,
                                                        const AssetCookLimits &limits) {
-            std::error_code pathError;
-            if (std::filesystem::weakly_canonical(root, pathError) != root || pathError)
+            if (std::error_code pathError; std::filesystem::weakly_canonical(root, pathError) != root || pathError)
                 return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
             auto envelope = DecodeCookedArtifact(artifact, limits);
             if (envelope.HasError())

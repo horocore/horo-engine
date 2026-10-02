@@ -25,8 +25,10 @@ namespace Horo::Assets {
             FinalizeProjection();
         } catch (const std::exception &) {
             // Optional notification failure cannot change disk commit truth or escape operation cleanup.
+            return;
         } catch (...) {
             // Foreign history sinks can throw nonstandard exceptions; retain the same cleanup guarantee.
+            return;
         }
     }
 
@@ -66,9 +68,19 @@ namespace Horo::Assets {
                                       .message = message});
         } catch (const std::exception &) {
             // Optional output allocation failure must not suppress the authoritative success projection.
+            CompleteProjection(std::move(message));
+            return;
         } catch (...) {
             // Foreign notification failures cannot reverse a committed generation.
+            CompleteProjection(std::move(message));
+            return;
         }
+        CompleteProjection(std::move(message));
+    }
+
+    /** @copydoc AssetCookOperation::CompleteProjection */
+    void AssetCookOperation::CompleteProjection(std::string message) noexcept {
+        completed_ = true;
         try {
             if (store_ != nullptr && id_.has_value())
                 static_cast<void>(store_->Update(*id_, OperationUpdate{.state = OperationState::Succeeded,
@@ -77,10 +89,11 @@ namespace Horo::Assets {
                                                                        .progress = 1.0F}));
         } catch (const std::exception &) {
             // Terminal history sinks are optional; disk commit remains the cook result's authority.
+            return;
         } catch (...) {
             // Nonstandard sink exceptions receive the same terminal truth guarantee.
+            return;
         }
-        completed_ = true;
     }
 
     /** @copydoc AssetCookOperation::Publish */

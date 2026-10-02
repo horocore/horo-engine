@@ -6,13 +6,13 @@
 #include <unistd.h>
 #endif
 
+using namespace Horo;
+using namespace Horo::Assets;
 using namespace Horo::Assets::OutputTestSupport;
 
 TEST_CASE("Filesystem failure before pointer commit preserves the prior generation and recoverable staging", "[native]") {
-    const PublicationFault faults[] = {PublicationFault::ArtifactWrite,   PublicationFault::ManifestWrite,
-                                       PublicationFault::PointerWrite,    PublicationFault::GenerationRename,
-                                       PublicationFault::GenerationFlush, PublicationFault::RootFlush,
-                                       PublicationFault::PointerRename};
+    using enum PublicationFault;
+    const std::array faults = {ArtifactWrite, ManifestWrite, PointerWrite, GenerationRename, GenerationFlush, RootFlush, PointerRename};
     for (const auto fault : faults) {
         TempDir tmp;
         const auto id = Id("00000000-0000-0000-0000-000000000001");
@@ -31,7 +31,7 @@ TEST_CASE("Filesystem failure before pointer commit preserves the prior generati
         CHECK(result.ErrorValue().code.Value() == "test.publication_io");
         CHECK(ReadText(tmp.path / "current.json") == pointer);
         CHECK(ResolveCurrentCookGeneration(tmp.path).HasValue());
-        files.fault = PublicationFault::None;
+        files.fault = None;
         auto lock = files.native.TryAcquireExclusive(tmp.path / ".cook-writer.lock", "restart");
         REQUIRE(lock.HasValue());
         REQUIRE(RecoverCookPublication(tmp.path, Target("headless-null"), 4096U, {}, {.files = &files, .writerLease = &lock.Value()})
@@ -51,7 +51,7 @@ TEST_CASE("Pointer durability failure and adapter exception retain true committe
         files.fault = fault;
         auto policy = Policy(files, "10000000-0000-0000-0000-000000000001");
         bool adopted = false;
-        policy.afterCommit = [&](const AssetCookGeneration &candidate) {
+        policy.afterCommit = [&adopted](const AssetCookGeneration &candidate) {
             adopted = true;
             CHECK(candidate.durabilityError.has_value());
         };
@@ -96,7 +96,7 @@ TEST_CASE("Final cancellation preserves pointer and cancellation after commit pr
     CHECK(ReadText(tmp.path / "current.json") == pointer);
     policy = Policy(files, "10000000-0000-0000-0000-000000000003");
     bool cancelled = false;
-    policy.afterCommit = [&](const AssetCookGeneration &) {
+    policy.afterCommit = [&cancelled](const AssetCookGeneration &) {
         cancelled = true;
     };
     CHECK(PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, bytes), bytes, 4096U, {}, policy).HasValue());
@@ -116,7 +116,7 @@ TEST_CASE("Writer contention rereads the then-current complete base and checkpoi
     std::optional<ExclusiveFileLock> held{std::move(nativeLease).Value()};
     auto policy = Policy(files, "10000000-0000-0000-0000-000000000002");
     std::size_t waits{};
-    policy.waitingForWriter = [&] {
+    policy.waitingForWriter = [&waits, &held, &tmp, &first, &firstBytes, &files] {
         ++waits;
         held.reset();
         const auto competing = PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(first, firstBytes), firstBytes,
@@ -125,7 +125,7 @@ TEST_CASE("Writer contention rereads the then-current complete base and checkpoi
         return Result<void>::Success();
     };
     bool checked = false;
-    policy.afterWriterAcquired = [&] {
+    policy.afterWriterAcquired = [&checked, &files, &tmp] {
         checked = true;
         CHECK(files.native.TryAcquireExclusive(tmp.path / ".cook-writer.lock", "checkpoint observer").HasError());
         return Result<void>::Success();
@@ -265,7 +265,7 @@ TEST_CASE("First promotion cancellation retains a durable retryable unpublished 
     const auto id = Id("00000000-0000-0000-0000-000000000001");
     const auto oldBytes = MakePayload(id, 8, 1);
     auto policy = Policy(files, "10000000-0000-0000-0000-000000000001");
-    policy.beforeCommit = [&] {
+    policy.beforeCommit = [&tmp] {
         REQUIRE_FALSE(std::filesystem::is_empty(tmp.path / "generations"));
         CHECK(ReadText(tmp.path / "current.json") == R"({"schemaVersion":2,"target":"headless-null","state":"unpublished"})");
         return Result<void>::Failure(Error{.code = ErrorCode{"test.cancelled"}});
@@ -353,14 +353,14 @@ TEST_CASE("Serialized publication and restart recovery support spaces and non-AS
 #if !defined(_WIN32)
 TEST_CASE("Writer contention is enforced by the OS across independent processes", "[native]") {
     TempDir tmp;
-    int wake[2]{};
-    REQUIRE(pipe(wake) == 0);
+    std::array<int, 2> wake{};
+    REQUIRE(pipe(wake.data()) == 0);
     const auto child = fork();
     REQUIRE(child >= 0);
     if (child == 0) {
         close(wake[1]);
-        pollfd wakeSignal{.fd = wake[0], .events = POLLIN | POLLHUP, .revents = 0};
-        if (poll(&wakeSignal, 1, 5000) != 1 || (wakeSignal.revents & POLLHUP) == 0)
+        if (pollfd wakeSignal{.fd = wake[0], .events = POLLIN | POLLHUP, .revents = 0};
+            poll(&wakeSignal, 1, 5000) != 1 || (wakeSignal.revents & POLLHUP) == 0)
             _exit(2);
         close(wake[0]);
         NativeDurableFileSystem childFiles;
