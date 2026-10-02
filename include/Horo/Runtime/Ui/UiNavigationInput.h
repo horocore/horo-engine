@@ -116,6 +116,13 @@ namespace Horo::Runtime::Ui {
             std::optional<Input::ActionSource> meaningful;
         };
 
+        /** @brief Candidate presentation evidence awaiting the finite modality hysteresis deadline. */
+        struct PendingPresentation {
+            Input::InputModality modality{Input::InputModality::Unknown};
+            std::optional<Input::GamepadDeviceId> device;
+            std::uint64_t since{};
+        };
+
         UiNavigationInputDescriptor descriptor_;
         UiFocusOwnerContext owner_;
         const Input::InputRouter *routerIdentity_{};
@@ -130,9 +137,7 @@ namespace Horo::Runtime::Ui {
         std::optional<UiNavigationDirection> repeating_;
         std::optional<UiFocusModalId> modal_;
         std::uint64_t repeatAt_{};
-        Input::InputModality pendingModality_{Input::InputModality::Unknown};
-        std::optional<Input::GamepadDeviceId> pendingDevice_;
-        std::uint64_t pendingSince_{};
+        PendingPresentation pending_;
         Input::FrameNumber frame_{};
         std::uint64_t time_{};
         bool hasFrame_{};
@@ -143,9 +148,11 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> ValidateCall(const Input::InputRouter &router, const Input::InputContextToken &context,
                                                 const UiFocusGraph &focus, const UiActionRouter &actions) const;
         /** @brief Applies ordered frame admission and configuration replacement fencing. */
-        [[nodiscard]] Result<UiNavigationInputStatus> AdmitFrame(const Input::InputRouter &router, std::uint64_t milliseconds);
+        [[nodiscard]] Result<UiNavigationInputStatus> AdmitFrame(const Input::InputRouter &router, const Input::InputRoutingState &routing,
+                                                                 std::uint64_t milliseconds);
         /** @brief Neutralizes modal/assignment/device changes without changing focus or action state. */
-        void ReconcileLifecycle(const Input::InputRouter &router, const UiFocusSnapshot &focus) noexcept;
+        void ReconcileLifecycle(const Input::InputRouter &router, const Input::InputRoutingState &routing,
+                                const UiFocusSnapshot &focus) noexcept;
         /** @brief Copies nine bounded semantic samples and tracks only transitions consumed by this adapter. */
         [[nodiscard]] Result<Samples> ReadSamples(Input::InputRouter &router, const Input::InputContextToken &context);
         /** @brief Resolves one stable direction and one bounded repeat without a catch-up loop. */

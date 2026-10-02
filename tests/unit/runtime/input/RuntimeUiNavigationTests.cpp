@@ -37,7 +37,8 @@ namespace Horo::Runtime::Ui {
                 if (index != 0)
                     node.parent = Stable<UiElementId>(index >= 4 ? 13 : 10);
                 node.focusable = index != 0 && index != 3;
-                const std::uint8_t next = index == 1 ? 12 : index == 2 ? 11 : index == 4 ? 15 : 14;
+                constexpr std::array<std::uint8_t, 6> nextSlots{14, 12, 11, 14, 15, 14};
+                const auto next = nextSlots[index];
                 if (node.focusable)
                     node.links.targets.fill(Stable<UiElementId>(next));
             }
@@ -94,7 +95,7 @@ namespace Horo::Runtime::Ui {
                 return result.Value();
             }
 
-            std::uint32_t FocusSlot() {
+            std::uint32_t FocusSlot() const {
                 return graph.CurrentFocus().Value()->element.slot;
             }
         };
@@ -140,9 +141,8 @@ namespace Horo::Runtime::Ui {
             auto profile = fixture.input.Router().Profile();
             std::vector<Input::InputBinding> bindings;
             for (std::size_t key = static_cast<std::size_t>(Input::Key::A); key < static_cast<std::size_t>(Input::Key::A) + 33; ++key) {
-                Input::InputBinding binding;
+                auto &binding = bindings.emplace_back();
                 binding.key = static_cast<Input::Key>(key);
-                bindings.push_back(binding);
             }
             profile.overrides.push_back({fixture.descriptor.actions[0], bindings});
             REQUIRE(fixture.input.Router().SetProfile(profile).HasValue());
@@ -151,13 +151,13 @@ namespace Horo::Runtime::Ui {
             CHECK(overflow.ErrorValue().code.Value() == UiErrors::CapacityExceeded.code.Value());
             std::vector<Input::InputContextToken> tokens;
             for (std::size_t index = 0; index < 64; ++index)
-                tokens.push_back(fixture.input.Router().PushContext(Input::InputContextId{"extra"}, Input::InputContextKind::Gameplay));
+                tokens.emplace_back(fixture.input.Router().PushContext(Input::InputContextId{"extra"}, Input::InputContextKind::Gameplay));
             CHECK(create(fixture.descriptor).HasError());
         }
 
         TEST_CASE("Canonical glyph vocabulary has stable supported controls and typed missing capabilities", "[runtime_ui][glyph]") {
-            const std::array kinds{Input::BindingControlKind::Key, Input::BindingControlKind::PointerButton,
-                                   Input::BindingControlKind::GamepadButton, Input::BindingControlKind::GamepadAxis};
+            using enum Input::BindingControlKind;
+            const std::array kinds{Key, PointerButton, GamepadButton, GamepadAxis};
             const std::array counts{static_cast<std::size_t>(Input::Key::Count), static_cast<std::size_t>(Input::PointerButton::Count),
                                     static_cast<std::size_t>(Input::GamepadButton::Count),
                                     static_cast<std::size_t>(Input::GamepadAxis::Count)};
@@ -269,7 +269,9 @@ namespace Horo::Runtime::Ui {
                 Result<UiActionResult> Handle(const UiActionRequest &action) override {
                     return UiActionResult::Pending(action.id, {action.id.ownership, UiActionOperationSequence::Create(8).Value()});
                 }
-            } handler;
+            };
+
+            Pending handler;
 
             const auto pending = fixture.actions.Dispatch(*request, handler);
             REQUIRE(pending.HasValue());
@@ -458,64 +460,71 @@ namespace Horo::Runtime::Ui {
             CHECK(Input::CanonicalGlyph({Input::BindingControlKind::Key, 0}).support == Input::InputGlyphSupport::Unsupported);
         }
 
-        TEST_CASE("Exact bounded Input ledger refuses saturation atomically and releases capacity each frame",
-                  "[runtime_ui][navigation][capacity]") {
+        struct LedgerFixture {
             Input::InputRouter router;
             const Input::InputContextId firstId{"first"};
             const Input::InputContextId secondId{"second"};
-            auto context = router.PushContext(firstId, Input::InputContextKind::FocusedGuiWidget);
-            std::vector<Input::InputBinding> bindings;
-            for (std::uint16_t index = 0; index < 256; ++index) {
-                Input::InputBinding binding;
-                binding.kind = Input::BindingControlKind::RawGamepadButton;
-                binding.rawControl = index;
-                bindings.push_back(binding);
-            }
-            auto mixed = bindings;
-            Input::InputBinding key;
-            key.key = Input::Key::Enter;
-            mixed.insert(mixed.begin(), key);
+            Input::InputContextToken context{router.PushContext(firstId, Input::InputContextKind::FocusedGuiWidget)};
             const Input::ActionId rawAction{"raw"};
             const Input::ActionId combined{"combined"};
-            REQUIRE(router
-                        .SetActionMap({{rawAction, Input::ActionValueType::Digital, firstId, true, bindings},
-                                       {combined, Input::ActionValueType::Digital, secondId, true, mixed}})
-                        .HasValue());
             Input::RawInputSnapshot snapshot;
-            snapshot.frame = 1;
-            snapshot.keyboard[static_cast<std::size_t>(Input::Key::Enter)] = {true, true, false};
-            for (std::uint32_t index = 0; index < 17; ++index) {
-                Input::GamepadState pad;
-                pad.id = {index, index + 1};
-                pad.rawButtons.resize(256, {true, true, false});
-                snapshot.gamepads.push_back(std::move(pad));
+
+            LedgerFixture() {
+                std::vector<Input::InputBinding> bindings;
+                for (std::uint16_t index = 0; index < 256; ++index) {
+                    auto &binding = bindings.emplace_back();
+                    binding.kind = Input::BindingControlKind::RawGamepadButton;
+                    binding.rawControl = index;
+                }
+                auto mixed = bindings;
+                Input::InputBinding key;
+                key.key = Input::Key::Enter;
+                mixed.insert(mixed.begin(), key);
+                REQUIRE(router
+                            .SetActionMap({{rawAction, Input::ActionValueType::Digital, firstId, true, bindings},
+                                           {combined, Input::ActionValueType::Digital, secondId, true, mixed}})
+                            .HasValue());
+                snapshot.frame = 1;
+                snapshot.keyboard[static_cast<std::size_t>(Input::Key::Enter)] = {true, true, false};
+                for (std::uint32_t index = 0; index < 17; ++index) {
+                    auto &pad = snapshot.gamepads.emplace_back();
+                    pad.id = {index, index + 1};
+                    pad.rawButtons.resize(256, {true, true, false});
+                }
+                router.BeginFrame(snapshot);
+                for (std::uint8_t player = 0; player < 17; ++player)
+                    REQUIRE(router.AssignGamepad(player, snapshot.gamepads[player].id));
             }
-            router.BeginFrame(snapshot);
-            for (std::uint8_t player = 0; player < 17; ++player)
-                REQUIRE(router.AssignGamepad(player, snapshot.gamepads[player].id));
+        };
+
+        TEST_CASE("Exact bounded Input ledger refuses saturation atomically and releases capacity each frame",
+                  "[runtime_ui][navigation][capacity]") {
+            LedgerFixture fixture;
+            auto &router = fixture.router;
+            const auto &context = fixture.context;
             for (std::uint8_t player = 0; player < 16; ++player) {
                 const auto before = Tests::AllocationProbe::Count();
-                const auto admitted = router.ReadActionEvidence(context, rawAction, player);
+                const auto admitted = router.ReadActionEvidence(context, fixture.rawAction, player);
                 const auto after = Tests::AllocationProbe::Count();
                 CHECK(after == before);
                 REQUIRE(admitted.status == Input::ActionReadStatus::Resolved);
                 CHECK(admitted.value.pressed);
             }
-            const auto refused = router.ReadActionEvidence(context, rawAction, 16);
+            const auto refused = router.ReadActionEvidence(context, fixture.rawAction, 16);
             CHECK(refused.status == Input::ActionReadStatus::CapacityExceeded);
             CHECK_FALSE(refused.value.down);
             CHECK(router.LastActionStatus() == Input::ActionReadStatus::CapacityExceeded);
-            const auto existing = router.ReadActionEvidence(context, rawAction, 0);
+            const auto existing = router.ReadActionEvidence(context, fixture.rawAction, 0);
             CHECK(existing.status == Input::ActionReadStatus::Resolved);
             CHECK(existing.value.down);
             CHECK_FALSE(existing.value.pressed);
-            auto next = router.PushContext(secondId, Input::InputContextKind::FocusedGuiWidget);
-            const auto partial = router.ReadActionEvidence(next, combined, 16);
+            auto next = router.PushContext(fixture.secondId, Input::InputContextKind::FocusedGuiWidget);
+            const auto partial = router.ReadActionEvidence(next, fixture.combined, 16);
             CHECK(partial.status == Input::ActionReadStatus::CapacityExceeded);
             CHECK(router.ConsumeKey(next, Input::Key::Enter));
-            snapshot.frame = 2;
-            router.BeginFrame(snapshot);
-            const auto reused = router.ReadActionEvidence(next, combined, 16);
+            fixture.snapshot.frame = 2;
+            router.BeginFrame(fixture.snapshot);
+            const auto reused = router.ReadActionEvidence(next, fixture.combined, 16);
             CHECK(reused.status == Input::ActionReadStatus::Resolved);
             CHECK(reused.value.pressed);
         }

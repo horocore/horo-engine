@@ -156,9 +156,8 @@ namespace Horo::Input {
             std::size_t count{};
             bool capacityExceeded{};
 
-            bool Consume(const Entry entry) noexcept {
-                const auto used = std::span(entries).first(count);
-                if (std::ranges::find(used, entry) != used.end())
+            bool Consume(const Entry &entry) noexcept {
+                if (const auto used = std::span(entries).first(count); std::ranges::find(used, entry) != used.end())
                     return false;
                 if (count == entries.size()) {
                     capacityExceeded = true;
@@ -255,10 +254,8 @@ namespace Horo::Input {
                     continue;
                 result = EvaluateBindingOnPad(binding, pad, previousSnapshot);
                 result.device = pad.id;
-                if (result.state.pressed) {
-                    if (!consumedGamepadTransitions.Consume({pad.id, binding.kind, GamepadControlId(binding)}))
-                        result.state.pressed = false;
-                }
+                if (result.state.pressed && !consumedGamepadTransitions.Consume({pad.id, binding.kind, GamepadControlId(binding)}))
+                    result.state.pressed = false;
                 if (result.axis != 0.0F || result.state.pressed || result.state.released)
                     break;
             }
@@ -1103,42 +1100,40 @@ namespace Horo::Input {
             return true;
         }
 
+        /** @brief Preserves held state while admitting a digital edge once in the exact frame ledger. */
+        template <std::size_t Size>
+        BindingEvaluationResult EvaluateDigital(ButtonState state, std::bitset<Size> &consumed, const std::size_t index) noexcept {
+            if (state.pressed && !ConsumeControl(consumed, index))
+                state.pressed = false;
+            return {state.down ? 1.0F : 0.0F, state};
+        }
+
+        /** @brief Admits one wheel projection without allocating or replaying a consumed transition. */
+        BindingEvaluationResult EvaluateWheel(const float wheel, bool &consumed) noexcept {
+            const float axis = consumed ? 0.0F : wheel;
+            const bool active = axis != 0.0F;
+            consumed = consumed || active;
+            return {axis, {active, active, false}};
+        }
+
         template <typename ImplType>
         [[nodiscard]] BindingEvaluationResult EvaluateControlBinding(const InputBinding &binding, const RawInputSnapshot &snapshot,
                                                                      const std::optional<PlayerId> player, ImplType &impl) {
-            float axis = 0.0F;
-            ButtonState state;
             switch (binding.kind) {
                 case BindingControlKind::Key:
-                    state = snapshot.State(binding.key);
-                    if (state.pressed && !ConsumeControl(impl.consumedKeys, Index(binding.key)))
-                        state.pressed = false;
-                    axis = state.down ? 1.0F : 0.0F;
-                    break;
+                    return EvaluateDigital(snapshot.State(binding.key), impl.consumedKeys, Index(binding.key));
                 case BindingControlKind::PointerButton:
-                    state = snapshot.State(binding.pointerButton);
-                    if (state.pressed && !ConsumeControl(impl.consumedPointerButtons, Index(binding.pointerButton)))
-                        state.pressed = false;
-                    axis = state.down ? 1.0F : 0.0F;
-                    break;
+                    return EvaluateDigital(snapshot.State(binding.pointerButton), impl.consumedPointerButtons,
+                                           Index(binding.pointerButton));
                 case BindingControlKind::PointerWheelX:
-                    axis = impl.consumedWheelX ? 0.0F : snapshot.pointer.wheelX;
-                    state.pressed = axis != 0.0F;
-                    state.down = state.pressed;
-                    impl.consumedWheelX = impl.consumedWheelX || state.pressed;
-                    break;
+                    return EvaluateWheel(snapshot.pointer.wheelX, impl.consumedWheelX);
                 case BindingControlKind::PointerWheelY:
-                    axis = impl.consumedWheelY ? 0.0F : snapshot.pointer.wheelY;
-                    state.pressed = axis != 0.0F;
-                    state.down = state.pressed;
-                    impl.consumedWheelY = impl.consumedWheelY || state.pressed;
-                    break;
+                    return EvaluateWheel(snapshot.pointer.wheelY, impl.consumedWheelY);
                 default: {
                     return EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments, player,
                                                   impl.consumedGamepadTransitions);
                 }
             }
-            return {axis, state};
         }
 
         void ApplyRadialDeadzone(ActionValue &value, const float radialDeadzone) {
@@ -1169,6 +1164,30 @@ namespace Horo::Input {
             ActionEvidence &evidence;
         };
 
+        /** @brief Selects canonical source evidence from admitted edges with a stable simultaneous-modality order. */
+        void AccumulateSource(const InputBinding &binding, const BindingEvaluationResult &evaluated, ActionEvidence &evidence) noexcept {
+            if (!evaluated.state.down && !evaluated.state.pressed)
+                return;
+            const auto source = CanonicalActionSource(binding, evaluated.device);
+            const bool meaningful = evaluated.state.pressed && source.modality != InputModality::Unknown;
+            if (!evidence.source || (meaningful && !evidence.meaningful) ||
+                (meaningful == evidence.meaningful && source.modality < evidence.source->modality))
+                evidence.source = source;
+            evidence.meaningful = evidence.meaningful || meaningful;
+        }
+
+        /** @brief Finalizes post-deadzone evidence; noise cannot drive presentation switching. */
+        void FinalizeAction(ActionEvidence &evidence, const bool radial2D, const float radialDeadzone) noexcept {
+            auto &value = evidence.value;
+            value.x = std::clamp(value.x, -1.0F, 1.0F);
+            value.y = std::clamp(value.y, -1.0F, 1.0F);
+            if (radial2D)
+                ApplyRadialDeadzone(value, radialDeadzone);
+            if (value.x == 0.0F && value.y == 0.0F)
+                evidence.meaningful = false;
+            evidence.status = ActionReadStatus::Resolved;
+        }
+
         template <typename ImplType>
         void AccumulateBinding(const InputBinding &binding, const ActionDescriptor &descriptor, const RawInputSnapshot &snapshot,
                                const std::optional<PlayerId> player, ImplType &impl, BindingAccumulationTarget &target) {
@@ -1178,14 +1197,7 @@ namespace Horo::Input {
             const auto evaluated = EvaluateControlBinding(binding, snapshot, player, impl);
             const auto state = evaluated.state;
             const float axis = evaluated.axis * binding.scale;
-            if (state.down || state.pressed) {
-                const ActionSource source = CanonicalActionSource(binding, evaluated.device);
-                const bool meaningful = state.pressed && source.modality != InputModality::Unknown;
-                if (!target.evidence.source || (meaningful && !target.evidence.meaningful) ||
-                    (meaningful == target.evidence.meaningful && source.modality < target.evidence.source->modality))
-                    target.evidence.source = source;
-                target.evidence.meaningful = target.evidence.meaningful || meaningful;
-            }
+            AccumulateSource(binding, evaluated, target.evidence);
             target.radial2D =
                 target.radial2D || (descriptor.valueType == ActionValueType::Axis2D && binding.deadzoneKind == DeadzoneKind::Radial);
             target.radialDeadzone = std::max(target.radialDeadzone, binding.deadzone);
@@ -1248,13 +1260,7 @@ namespace Horo::Input {
             impl_->lastActionStatus = evidence.status;
             return evidence;
         }
-        value.x = std::clamp(value.x, -1.0F, 1.0F);
-        value.y = std::clamp(value.y, -1.0F, 1.0F);
-        if (radial2D)
-            ApplyRadialDeadzone(value, radialDeadzone);
-        if (value.x == 0.0F && value.y == 0.0F)
-            evidence.meaningful = false;
-        evidence.status = ActionReadStatus::Resolved;
+        FinalizeAction(evidence, radial2D, radialDeadzone);
         impl_->lastActionStatus = evidence.status;
         return evidence;
     }
@@ -1264,25 +1270,14 @@ namespace Horo::Input {
         return impl_->lastActionStatus;
     }
 
-    /** @copydoc InputRouter::ConfigurationRevision */
-    std::uint64_t InputRouter::ConfigurationRevision() const noexcept {
-        return impl_->configurationRevision;
-    }
-
-    /** @copydoc InputRouter::AssignmentRevision */
-    std::uint64_t InputRouter::AssignmentRevision() const noexcept {
-        return impl_->assignmentRevision;
-    }
-
-    /** @copydoc InputRouter::ContextIdentity */
-    std::uint64_t InputRouter::ContextIdentity(const InputContextToken &context) const noexcept {
-        return context.router_ == this && TokenActive(context.token_) ? context.token_ : 0;
-    }
-
-    /** @copydoc InputRouter::RoutingWithinLimits */
-    bool InputRouter::RoutingWithinLimits(const std::size_t contexts, const std::size_t devices) const noexcept {
-        return impl_->contexts.size() <= contexts && Snapshot().gamepads.size() <= devices &&
-               (!impl_->previousSnapshot || impl_->previousSnapshot->gamepads.size() <= devices);
+    /** @copydoc InputRouter::RoutingState */
+    InputRoutingState InputRouter::RoutingState(const InputContextToken &context) const noexcept {
+        return {context.router_ == this && TokenActive(context.token_) ? context.token_ : 0,
+                impl_->configurationRevision,
+                impl_->assignmentRevision,
+                impl_->contexts.size(),
+                Snapshot().gamepads.size(),
+                impl_->previousSnapshot ? impl_->previousSnapshot->gamepads.size() : 0};
     }
 
     /** @copydoc InputRouter::ContextMatches */

@@ -568,6 +568,22 @@ namespace Horo::Input {
         std::uint64_t token_{0};
     };
 
+    /** @brief Copied routing generation and bounded-scan evidence for one exact context. */
+    struct InputRoutingState final {
+        std::uint64_t contextIdentity{};       /**< Zero for foreign or removed tokens. */
+        std::uint64_t configurationRevision{}; /**< Non-wrapping; zero after exhaustion. */
+        std::uint64_t assignmentRevision{};    /**< Non-wrapping; zero after exhaustion. */
+        std::size_t contexts{};
+        std::size_t gamepads{};
+        std::size_t previousGamepads{};
+
+        /** @brief Checks finite scan bounds. @param maximumContexts Live context bound. @param maximumGamepads Current/previous device
+         * bound. @return Whether routing fits both bounds. */
+        [[nodiscard]] bool WithinLimits(const std::size_t maximumContexts, const std::size_t maximumGamepads) const noexcept {
+            return contexts <= maximumContexts && gamepads <= maximumGamepads && previousGamepads <= maximumGamepads;
+        }
+    };
+
     /** @brief Resolves actions through ordered RAII contexts and owns exclusive pointer capture. */
     class InputRouter {
     public:
@@ -637,16 +653,10 @@ namespace Horo::Input {
         /** @brief Returns the last ReadAction/ReadActionEvidence outcome for legacy value-only consumers. @return Typed
          * unavailable/admission result. */
         [[nodiscard]] ActionReadStatus LastActionStatus() const noexcept;
-        /** @brief Returns the non-wrapping action-map/profile revision. @return Zero only after revision exhaustion. */
-        [[nodiscard]] std::uint64_t ConfigurationRevision() const noexcept;
-        /** @brief Returns the assignment mutation revision. @return Zero only after revision exhaustion. */
-        [[nodiscard]] std::uint64_t AssignmentRevision() const noexcept;
-        /** @brief Returns a matching live token identity. @param context Borrowed token. @return Nonzero exact identity or zero for
-         * foreign/removed tokens. */
-        [[nodiscard]] std::uint64_t ContextIdentity(const InputContextToken &context) const noexcept;
-        /** @brief Checks finite routing scan bounds, including previous axis evidence. @param contexts Maximum live contexts. @param
-         * devices Maximum current/previous gamepads. @return Whether resolution stays within those bounds. */
-        [[nodiscard]] bool RoutingWithinLimits(std::size_t contexts, std::size_t devices) const noexcept;
+        /** @brief Copies context identity, configuration/assignment generations and current/previous scan sizes.
+         * @param context Borrowed token; a foreign/removed token yields zero identity.
+         * @return Routing evidence without retaining a snapshot or context borrow. */
+        [[nodiscard]] InputRoutingState RoutingState(const InputContextToken &context) const noexcept;
         /** @brief Checks an action-map context against an exact live token, including suspended tokens. @param context Live token. @param
          * id Descriptor context identity. @return Whether both name the same Input-owned context. */
         [[nodiscard]] bool ContextMatches(const InputContextToken &context, const InputContextId &id) const noexcept;

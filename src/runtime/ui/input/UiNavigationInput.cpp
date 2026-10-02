@@ -22,16 +22,45 @@ namespace Horo::Runtime::Ui {
         bool BoundedConfiguration(const Input::InputRouter &router) noexcept {
             return router.Actions().size() <= 512 && router.Profile().overrides.size() <= 512;
         }
+
+        /** @brief Checks live focus/action composition and non-exhausted Input generations at admission. */
+        bool LiveOwners(const UiFocusGraph &focus, const UiActionRouter &actions, const Input::InputRoutingState &routing) noexcept {
+            return focus.Owner().IsValid() && focus.State() == UiFocusGraphState::Active &&
+                   actions.State() == UiActionRouterState::Active && actions.Owner() == ActionOwner(focus.Owner()) &&
+                   routing.contextIdentity != 0 && routing.configurationRevision != 0 && routing.assignmentRevision != 0;
+        }
+
+        /** @brief Reloads preserve scope identity and never regress a published revision. */
+        bool CompatibleReload(const UiFocusOwnerContext &current, const UiFocusOwnerContext &next) noexcept {
+            return next.instance == current.instance && next.canvas == current.canvas && next.document == current.document &&
+                   next.scope == current.scope && next.interaction >= current.interaction && next.treeRevision >= current.treeRevision &&
+                   next.documentRevision >= current.documentRevision;
+        }
+
+        /** @brief Held repeats require a press actually consumed by this adapter after its neutral gate. */
+        void GateHeld(Input::ActionEvidence &sample, const bool down, bool &disarmed, bool &owned) noexcept {
+            if (!down) {
+                disarmed = false;
+                owned = false;
+            } else if (sample.value.pressed && !disarmed) {
+                owned = true;
+            }
+            if (disarmed || !owned)
+                sample = {};
+        }
     }  // namespace
 
     /** @copydoc DefaultUiNavigationActions */
     std::vector<Input::ActionDescriptor> DefaultUiNavigationActions(const Input::InputContextId &context) {
         const std::array names{"ui.next", "ui.previous", "ui.up", "ui.down", "ui.left", "ui.right", "ui.submit", "ui.cancel"};
-        const std::array keys{Input::Key::Tab,  Input::Key::Tab,   Input::Key::Up,    Input::Key::Down,
-                              Input::Key::Left, Input::Key::Right, Input::Key::Enter, Input::Key::Escape};
-        const std::array buttons{Input::GamepadButton::RightShoulder, Input::GamepadButton::LeftShoulder, Input::GamepadButton::DPadUp,
-                                 Input::GamepadButton::DPadDown,      Input::GamepadButton::DPadLeft,     Input::GamepadButton::DPadRight,
-                                 Input::GamepadButton::South,         Input::GamepadButton::East};
+        constexpr auto keys = [] {
+            using enum Input::Key;
+            return std::array{Tab, Tab, Up, Down, Left, Right, Enter, Escape};
+        }();
+        constexpr auto buttons = [] {
+            using enum Input::GamepadButton;
+            return std::array{RightShoulder, LeftShoulder, DPadUp, DPadDown, DPadLeft, DPadRight, South, East};
+        }();
         std::vector<Input::ActionDescriptor> actions;
         actions.reserve(UiNavigationActionCount + 1);
         for (std::size_t index = 0; index < UiNavigationActionCount; ++index) {
@@ -80,8 +109,8 @@ namespace Horo::Runtime::Ui {
             const auto found = std::ranges::find(router.Actions(), id, &Input::ActionDescriptor::id);
             if (found == router.Actions().end() || !router.ContextMatches(context, found->context))
                 return Result<Bindings>::Failure(MakeError(UiErrors::NavigationInvalid));
-            const bool scalarAxis = shape == Input::ActionValueType::Digital && found->valueType == Input::ActionValueType::Axis1D;
-            if (found->valueType != shape && !scalarAxis)
+            if (const bool scalarAxis = shape == Input::ActionValueType::Digital && found->valueType == Input::ActionValueType::Axis1D;
+                found->valueType != shape && !scalarAxis)
                 return Result<Bindings>::Failure(MakeError(UiErrors::NavigationCapabilityUnsupported));
             const auto overrides = std::span(router.Profile().overrides);
             const auto replacement = std::ranges::find(overrides, id, &Input::BindingOverride::action);
@@ -127,13 +156,12 @@ namespace Horo::Runtime::Ui {
     Result<UiNavigationInput> UiNavigationInput::Create(const UiNavigationInputDescriptor &descriptor, const Input::InputRouter &router,
                                                         const Input::InputContextToken &context, const UiFocusGraph &focus,
                                                         const UiActionRouter &actions) {
-        if (!BoundedConfiguration(router) || !router.RoutingWithinLimits(64, 16))
+        const auto routing = router.RoutingState(context);
+        if (!BoundedConfiguration(router) || !routing.WithinLimits(64, 16))
             return Result<UiNavigationInput>::Failure(MakeError(UiErrors::CapacityExceeded));
         if (!ValidPolicy(descriptor))
             return Result<UiNavigationInput>::Failure(MakeError(UiErrors::NavigationInvalid));
-        if (!focus.Owner().IsValid() || focus.State() != UiFocusGraphState::Active || actions.State() != UiActionRouterState::Active ||
-            actions.Owner() != ActionOwner(focus.Owner()) || router.ContextIdentity(context) == 0 || router.ConfigurationRevision() == 0 ||
-            router.AssignmentRevision() == 0)
+        if (!LiveOwners(focus, actions, routing))
             return Result<UiNavigationInput>::Failure(MakeError(UiErrors::FocusSourceStale));
         UiNavigationInput candidate;
         try {
@@ -143,9 +171,9 @@ namespace Horo::Runtime::Ui {
         }
         candidate.owner_ = focus.Owner();
         candidate.routerIdentity_ = &router;
-        candidate.contextIdentity_ = router.ContextIdentity(context);
-        candidate.configurationRevision_ = router.ConfigurationRevision();
-        candidate.assignmentRevision_ = router.AssignmentRevision();
+        candidate.contextIdentity_ = routing.contextIdentity;
+        candidate.configurationRevision_ = routing.configurationRevision;
+        candidate.assignmentRevision_ = routing.assignmentRevision;
         candidate.modal_ = focus.Snapshot().Value().activeModal;
         candidate.disarmed_.fill(true);
         for (std::size_t index = 0; index < UiNavigationActionCount; ++index) {
@@ -183,34 +211,31 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiNavigationInput::ObserveModality */
     void UiNavigationInput::ObserveModality(const std::optional<Input::ActionSource> &source, const std::uint64_t milliseconds) noexcept {
+        using enum Input::InputModality;
         if (source) {
             if (source->modality == presentation_.modality && source->gamepad == presentation_.device) {
-                pendingModality_ = Input::InputModality::Unknown;
-                pendingDevice_.reset();
+                pending_ = {};
                 return;
             }
-            if (source->modality != pendingModality_ || source->gamepad != pendingDevice_) {
-                pendingModality_ = source->modality;
-                pendingDevice_ = source->gamepad;
-                pendingSince_ = milliseconds;
+            if (source->modality != pending_.modality || source->gamepad != pending_.device) {
+                pending_ = {source->modality, source->gamepad, milliseconds};
             }
         }
-        if (pendingModality_ != Input::InputModality::Unknown &&
-            (presentation_.modality == Input::InputModality::Unknown ||
-             milliseconds - pendingSince_ >= descriptor_.modalityHysteresisMilliseconds)) {
-            SetPresentation(pendingModality_, pendingDevice_);
-            pendingModality_ = Input::InputModality::Unknown;
-            pendingDevice_.reset();
+        if (pending_.modality != Unknown &&
+            (presentation_.modality == Unknown || milliseconds - pending_.since >= descriptor_.modalityHysteresisMilliseconds)) {
+            SetPresentation(pending_.modality, pending_.device);
+            pending_ = {};
         }
     }
 
     /** @copydoc UiNavigationInput::ValidateCall */
     Result<void> UiNavigationInput::ValidateCall(const Input::InputRouter &router, const Input::InputContextToken &context,
                                                  const UiFocusGraph &focus, const UiActionRouter &actions) const {
-        if (&router != routerIdentity_ || router.ContextIdentity(context) != contextIdentity_ || focus.Owner() != owner_ ||
+        const auto routing = router.RoutingState(context);
+        if (&router != routerIdentity_ || routing.contextIdentity != contextIdentity_ || focus.Owner() != owner_ ||
             actions.Owner() != ActionOwner(owner_))
             return Result<void>::Failure(MakeError(UiErrors::FocusSourceStale));
-        if (!router.RoutingWithinLimits(64, 16))
+        if (!routing.WithinLimits(64, 16))
             return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
         if (focus.State() != UiFocusGraphState::Active)
             return Result<void>::Failure(MakeError(UiErrors::FocusLifecycleUnavailable));
@@ -220,41 +245,42 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiNavigationInput::AdmitFrame */
-    Result<UiNavigationInputStatus> UiNavigationInput::AdmitFrame(const Input::InputRouter &router, const std::uint64_t milliseconds) {
+    Result<UiNavigationInputStatus> UiNavigationInput::AdmitFrame(const Input::InputRouter &router, const Input::InputRoutingState &routing,
+                                                                  const std::uint64_t milliseconds) {
+        using enum UiNavigationInputStatus;
         const auto frame = router.Snapshot().frame;
         if (hasFrame_ && (frame < frame_ || milliseconds < time_))
             return Result<UiNavigationInputStatus>::Failure(MakeError(UiErrors::ControlSequenceInvalid));
         if (hasFrame_ && frame == frame_)
-            return Result<UiNavigationInputStatus>::Success(UiNavigationInputStatus::DuplicateFrame);
+            return Result<UiNavigationInputStatus>::Success(DuplicateFrame);
         frame_ = frame;
         time_ = milliseconds;
         hasFrame_ = true;
-        if (router.ConfigurationRevision() != configurationRevision_ || router.AssignmentRevision() == 0) {
+        if (routing.configurationRevision != configurationRevision_ || routing.assignmentRevision == 0) {
             Suspend();
-            return Result<UiNavigationInputStatus>::Success(UiNavigationInputStatus::NeedsRebind);
+            return Result<UiNavigationInputStatus>::Success(NeedsRebind);
         }
-        return Result<UiNavigationInputStatus>::Success(UiNavigationInputStatus::Active);
+        return Result<UiNavigationInputStatus>::Success(Active);
     }
 
     /** @copydoc UiNavigationInput::ReconcileLifecycle */
-    void UiNavigationInput::ReconcileLifecycle(const Input::InputRouter &router, const UiFocusSnapshot &focus) noexcept {
-        if (focus.activeModal != modal_ || router.AssignmentRevision() != assignmentRevision_) {
+    void UiNavigationInput::ReconcileLifecycle(const Input::InputRouter &router, const Input::InputRoutingState &routing,
+                                               const UiFocusSnapshot &focus) noexcept {
+        if (focus.activeModal != modal_ || routing.assignmentRevision != assignmentRevision_) {
             Suspend();
             modal_ = focus.activeModal;
-            assignmentRevision_ = router.AssignmentRevision();
+            assignmentRevision_ = routing.assignmentRevision;
         }
         const auto eligible = [&](const Input::GamepadDeviceId id) {
             return router.Snapshot().FindGamepad(id) != nullptr &&
-                   (!descriptor_.player || router.PlayerForGamepad(id) == descriptor_.player);
+                   (!descriptor_.player.has_value() || router.PlayerForGamepad(id) == descriptor_.player);
         };
         if (presentation_.device && !eligible(*presentation_.device)) {
             Suspend();
             SetPresentation(Input::InputModality::Unknown, {});
         }
-        if (pendingDevice_ && !eligible(*pendingDevice_)) {
-            pendingModality_ = Input::InputModality::Unknown;
-            pendingDevice_.reset();
-        }
+        if (pending_.device && !eligible(*pending_.device))
+            pending_ = {};
     }
 
     namespace {
@@ -267,6 +293,7 @@ namespace Horo::Runtime::Ui {
         /** @brief Resolves opposing pairs first, then the signed dominant axis with vertical ties. */
         std::optional<UiNavigationDirection> Direction(const std::array<Input::ActionEvidence, UiNavigationActionCount> &digital,
                                                        const Input::ActionValue &axis) noexcept {
+            using enum UiNavigationDirection;
             for (std::size_t pair = 0; pair < 3; ++pair) {
                 const std::size_t first = pair * 2;
                 const bool a = digital[first].value.x >= 0.5F;
@@ -275,9 +302,9 @@ namespace Horo::Runtime::Ui {
                     return static_cast<UiNavigationDirection>(a ? first : first + 1);
             }
             if (std::abs(axis.y) >= 0.5F && std::abs(axis.y) >= std::abs(axis.x))
-                return axis.y < 0.0F ? UiNavigationDirection::Up : UiNavigationDirection::Down;
+                return axis.y < 0.0F ? Up : Down;
             if (std::abs(axis.x) >= 0.5F)
-                return axis.x < 0.0F ? UiNavigationDirection::Left : UiNavigationDirection::Right;
+                return axis.x < 0.0F ? Left : Right;
             return {};
         }
     }  // namespace
@@ -290,27 +317,13 @@ namespace Horo::Runtime::Ui {
             sample = router.ReadActionEvidence(context, descriptor_.actions[index], descriptor_.player);
             if (sample.status == Input::ActionReadStatus::CapacityExceeded)
                 return Result<Samples>::Failure(MakeError(UiErrors::CapacityExceeded));
-            if (sample.value.x < 0.5F) {
-                disarmed_[index] = false;
-                heldOwned_[index] = false;
-            } else if (sample.value.pressed && !disarmed_[index]) {
-                heldOwned_[index] = true;
-            }
-            if (disarmed_[index] || !heldOwned_[index])
-                sample = {};
+            GateHeld(sample, sample.value.x >= 0.5F, disarmed_[index], heldOwned_[index]);
             PreferSource(sample, samples.meaningful);
         }
         samples.axis = router.ReadActionEvidence(context, descriptor_.directionalAxis, descriptor_.player);
         if (samples.axis.status == Input::ActionReadStatus::CapacityExceeded)
             return Result<Samples>::Failure(MakeError(UiErrors::CapacityExceeded));
-        if (!samples.axis.value.down) {
-            axisDisarmed_ = false;
-            axisOwned_ = false;
-        } else if (samples.axis.value.pressed && !axisDisarmed_) {
-            axisOwned_ = true;
-        }
-        if (axisDisarmed_ || !axisOwned_)
-            samples.axis = {};
+        GateHeld(samples.axis, samples.axis.value.down, axisDisarmed_, axisOwned_);
         PreferSource(samples.axis, samples.meaningful);
         return Result<Samples>::Success(samples);
     }
@@ -340,8 +353,7 @@ namespace Horo::Runtime::Ui {
         using Requests = std::array<std::optional<UiActionRequestId>, 2>;
         Requests requests{};
         const std::size_t index = samples.digital[7].value.pressed && samples.digital[7].value.x >= 0.5F ? 1 : 0;
-        const auto &sample = samples.digital[6 + index].value;
-        if (!sample.pressed || sample.x < 0.5F)
+        if (const auto &sample = samples.digital[6 + index].value; !sample.pressed || sample.x < 0.5F)
             return Result<Requests>::Success(requests);
         const auto target = focus.CurrentFocus();
         if (target.HasError())
@@ -370,13 +382,14 @@ namespace Horo::Runtime::Ui {
             Suspend();
             return Result<UiNavigationInputFrame>::Failure(valid.ErrorValue());
         }
-        const auto admitted = AdmitFrame(router, milliseconds);
+        const auto routing = router.RoutingState(context);
+        const auto admitted = AdmitFrame(router, routing, milliseconds);
         if (admitted.HasError())
             return Result<UiNavigationInputFrame>::Failure(admitted.ErrorValue());
         output.status = admitted.Value();
         if (output.status != UiNavigationInputStatus::Active)
             return Result<UiNavigationInputFrame>::Success(output);
-        ReconcileLifecycle(router, focus.Snapshot().Value());
+        ReconcileLifecycle(router, routing, focus.Snapshot().Value());
         if (!router.IsContextActive(context)) {
             Suspend();
             output.status = UiNavigationInputStatus::Blocked;
@@ -404,11 +417,8 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiNavigationInput::Rebind */
     Result<void> UiNavigationInput::Rebind(const Input::InputRouter &router, const Input::InputContextToken &context,
                                            const UiFocusGraph &focus, const UiActionRouter &actions) {
-        const auto &next = focus.Owner();
-        if (stopped_ || &router != routerIdentity_ || router.ContextIdentity(context) != contextIdentity_ ||
-            next.instance != owner_.instance || next.canvas != owner_.canvas || next.document != owner_.document ||
-            next.scope != owner_.scope || next.interaction < owner_.interaction || next.treeRevision < owner_.treeRevision ||
-            next.documentRevision < owner_.documentRevision)
+        if (stopped_ || &router != routerIdentity_ || router.RoutingState(context).contextIdentity != contextIdentity_ ||
+            !CompatibleReload(owner_, focus.Owner()))
             return Result<void>::Failure(MakeError(UiErrors::FocusSourceStale));
         auto replacement = Create(descriptor_, router, context, focus, actions);
         if (replacement.HasError())
@@ -432,8 +442,7 @@ namespace Horo::Runtime::Ui {
         heldOwned_.fill(false);
         axisOwned_ = false;
         repeating_.reset();
-        pendingModality_ = Input::InputModality::Unknown;
-        pendingDevice_.reset();
+        pending_ = {};
     }
 
     /** @copydoc UiNavigationInput::Shutdown */
