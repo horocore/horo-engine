@@ -81,7 +81,9 @@ namespace Horo::Packages {
         if (error || !projectRoot.is_absolute() || canonical != projectRoot.lexically_normal() ||
             !std::filesystem::is_directory(canonical, error) || error)
             return Result<PackageInstallService>::Failure(MakeError(PackageInstallErrors::InvalidInput));
-        if (std::filesystem::is_symlink(canonical / ".horo", error) || error)
+        const auto metadataStatus = std::filesystem::symlink_status(canonical / ".horo", error);
+        if ((error && error != std::errc::no_such_file_or_directory) ||
+            (std::filesystem::exists(metadataStatus) && !std::filesystem::is_directory(metadataStatus)))
             return Result<PackageInstallService>::Failure(MakeError(PackageInstallErrors::InvalidInput));
         return Result<PackageInstallService>::Success(PackageInstallService{std::make_unique<Impl>(files, canonical)});
     }

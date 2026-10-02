@@ -100,7 +100,7 @@ namespace {
 TEST_CASE("Package install atomically retains the previous record on invalid evidence and cancellation", "[packages][install]") {
     TemporaryDirectory project;
     NativeDurableFileSystem files;
-    auto created = PackageInstallService::Create(files, project.Path());
+    auto created = PackageInstallService::Create(files, std::filesystem::canonical(project.Path()));
     REQUIRE(created.HasValue());
     auto service = std::move(created).Value();
     auto first = Graph();
@@ -133,7 +133,7 @@ TEST_CASE("Package install atomically retains the previous record on invalid evi
 TEST_CASE("Package install leaves the previous record active when a durable commit fails", "[packages][install]") {
     TemporaryDirectory project;
     FaultyFiles files;
-    auto created = PackageInstallService::Create(files, project.Path());
+    auto created = PackageInstallService::Create(files, std::filesystem::canonical(project.Path()));
     REQUIRE(created.HasValue());
     auto service = std::move(created).Value();
     auto first = Graph();
@@ -159,7 +159,7 @@ TEST_CASE("Package install rejects noncanonical project roots and incomplete gra
     TemporaryDirectory project;
     NativeDurableFileSystem files;
     CHECK(PackageInstallService::Create(files, "relative/project").HasError());
-    auto created = PackageInstallService::Create(files, project.Path());
+    auto created = PackageInstallService::Create(files, std::filesystem::canonical(project.Path()));
     REQUIRE(created.HasValue());
     auto service = std::move(created).Value();
     CancellationSource running;
@@ -169,3 +169,37 @@ TEST_CASE("Package install rejects noncanonical project roots and incomplete gra
     CHECK_FALSE(service.ActiveGraph());
     CHECK_FALSE(std::filesystem::exists(project.Path() / ".horo/packages.installed.json"));
 }
+
+TEST_CASE("Package install admits a fresh canonical project and rejects metadata files", "[packages][install]") {
+    TemporaryDirectory project;
+    NativeDurableFileSystem files;
+    const auto root = std::filesystem::canonical(project.Path());
+    REQUIRE_FALSE(std::filesystem::exists(root / ".horo"));
+    CHECK(PackageInstallService::Create(files, root).HasValue());
+    CHECK_FALSE(std::filesystem::exists(root / ".horo"));
+
+    {
+        std::ofstream metadata(root / ".horo");
+        REQUIRE(metadata.good());
+        metadata << "not a metadata directory";
+    }
+    auto rejected = PackageInstallService::Create(files, root);
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == PackageInstallErrors::InvalidInput.code.Value());
+}
+
+#if !defined(_WIN32)
+TEST_CASE("Package install rejects existing and dangling metadata symlinks", "[packages][install]") {
+    TemporaryDirectory project;
+    TemporaryDirectory external;
+    NativeDurableFileSystem files;
+    const auto root = std::filesystem::canonical(project.Path());
+    const auto metadata = root / ".horo";
+    std::filesystem::create_directory_symlink(external.Path(), metadata);
+    CHECK(PackageInstallService::Create(files, root).HasError());
+    std::filesystem::remove(metadata);
+    std::filesystem::create_directory_symlink(external.Path() / "missing", metadata);
+    CHECK(PackageInstallService::Create(files, root).HasError());
+    CHECK(std::filesystem::is_empty(external.Path()));
+}
+#endif
