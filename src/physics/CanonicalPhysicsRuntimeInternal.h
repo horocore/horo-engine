@@ -44,6 +44,14 @@
 #include <vector>
 
 namespace Horo::Physics::Detail {
+    /**
+     * @brief Applies the admitted mass policy to native body settings before allocation.
+     * @param settings Native creation settings to update.
+     * @param mass Validated Horo mass policy.
+     * @return Success, or DescriptorInvalid when density cannot derive a finite mass.
+     */
+    [[nodiscard]] Result<void> ApplyCanonicalMassPolicy(JPH::BodyCreationSettings &settings, const PhysicsMassPolicy &mass);
+
     /** @brief Process-owned Jolt registration and resource accounting. */
     struct CanonicalRuntime final {
         CanonicalRuntime() = default;

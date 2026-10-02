@@ -617,6 +617,47 @@ commands are valid and the latter policy never creates an implicit wake transiti
 Unknown modes, stale handles, wrong scene/tick affinity, non-finite inputs and values
 outside the CanonicalV1 command bounds fail before solver mutation.
 
+## Sleeping, Activation And Island Observations
+
+Scene-body creation now defaults moving bodies to `PhysicsInitialBodyActivity::Awake`.
+This corrects the prior implicit dormant creation behavior: existing scene activation
+callers need no new input and dynamic bodies begin responding to gravity on the first
+tick. Callers deliberately preparing dormant moving bodies must explicitly select
+`Sleeping`, with exactly zero linear and angular velocity. Static or unknown initial
+sleep requests fail with `OperationUnsupported`; nonzero sleeping velocities fail
+with `DescriptorInvalid` before native allocation. Sleep-disabled world profiles
+remain unqualified and cannot implicitly admit dormant bodies.
+
+Automatic sleep belongs to the immutable CanonicalV1 solver policy: point motion
+below `0.03 m/s` for `0.5 s`. It is not a scene-unload, entity-removal or persistence
+signal. The existing wake-only `PhysicsBodyMutation` is admitted between ticks and
+applies at the named pre-step safe point. Wake-only requests also support constrained
+moving bodies; the solver propagates activation through connected bodies during the
+joined step. Policy edits on constrained bodies remain unsupported. Static wake
+requests fail; a repeated wake remains safe. Shape/mode/mass/velocity edits retain
+the established wake rules, while damping-only edits preserve sleeping activity.
+Forced live-body sleep, per-body sleep threshold overrides and island-wide commands
+are unsupported rather than approximated by zeroing velocity or deleting bodies.
+
+`PhysicsBodyActivity::Static` distinguishes bodies outside the activation lifecycle
+from sleeping moving bodies. Consumers with exhaustive activity switches must add
+this case; durable authored schemas and existing enum values remain unchanged.
+`ReadSceneBodyReconciliation` returns copied per-body activity. `ReadSceneActivation`
+returns the current exact world generation and static/awake-moving/sleeping-moving
+scene-body counts, excluding query fixtures. Both require the owner thread, a live
+canonical world and a safe point outside stepping; neither retains native resources.
+Counts are bounded by resident bodies and require no successful-path allocation.
+They describe current state, not a historical completed-tick publication. Copies
+remain inert after reset/unload/shutdown, while new reads fail with typed lifecycle
+errors. Null reports `CapabilityUnavailable` rather than inventing an empty solver.
+
+Island counts, membership, stable IDs and lifetime are deliberately unavailable in
+this initial contract. The observation's optional island count is absent, including
+for an empty world; zero must never imply qualified island evidence. Horo exposes no
+native island container or identity, and gameplay cannot infer durable ownership or
+entity retirement from solver connectivity. Origin rebasing remains unsupported and
+must later prove sleep preservation under its own transaction contract.
+
 ## Structural Changes
 
 Creating or removing bodies, changing shapes, and modifying constraints while

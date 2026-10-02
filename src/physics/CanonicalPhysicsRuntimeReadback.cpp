@@ -5,6 +5,14 @@
 
 namespace Horo::Physics::Detail {
     namespace {
+        /** @brief Separates static bodies from the moving-body activation lifecycle. */
+        [[nodiscard]] PhysicsBodyActivity ReadNativeActivity(const JPH::Body &body) noexcept {
+            using enum PhysicsBodyActivity;
+            if (body.IsStatic())
+                return Static;
+            return body.IsActive() ? Awake : Sleeping;
+        }
+
         /** @brief Translates the solver's observed motion mode to the Horo policy enum. */
         [[nodiscard]] Result<PhysicsMotionType> ReadNativeMotion(const JPH::Body &native) {
             switch (native.GetMotionType()) {
@@ -73,13 +81,33 @@ namespace Horo::Physics::Detail {
                                                                          rotation.GetW()}},
                                                    .linearVelocity = {linear.GetX(), linear.GetY(), linear.GetZ()},
                                                    .angularVelocity = {angular.GetX(), angular.GetY(), angular.GetZ()},
-                                                   .activity =
-                                                       native.IsActive() ? PhysicsBodyActivity::Awake : PhysicsBodyActivity::Sleeping},
+                                                   .activity = ReadNativeActivity(native)},
                                          .observedMotion = motion.Value(),
                                          .observedShape = shape->handle,
                                          .observedMassKilograms = mass.Value(),
                                          .observedBoundsExtent = {boundsExtent.GetX(), boundsExtent.GetY(), boundsExtent.GetZ()}};
         return Result<PhysicsBodyReconciliation>::Success(std::move(result));
+    }
+
+    /** @copydoc ReadCanonicalSceneActivation */
+    Result<PhysicsActivationObservation> ReadCanonicalSceneActivation(const CanonicalWorldHandle world, const PhysicsWorldId owner) {
+        if (world.value == nullptr || !owner.IsValid())
+            return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        const auto &canonical = *static_cast<const CanonicalWorld *>(world.value);
+        PhysicsActivationObservation result{.world = owner};
+        for (const auto &record : canonical.scene.bodies) {
+            JPH::BodyLockRead lock(canonical.native.system->GetBodyLockInterfaceNoLock(), record.nativeBody);
+            if (!lock.Succeeded())
+                return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::HandleStale));
+            const auto &body = lock.GetBody();
+            if (body.IsStatic())
+                ++result.staticBodies;
+            else if (body.IsActive())
+                ++result.awakeMovingBodies;
+            else
+                ++result.sleepingMovingBodies;
+        }
+        return Result<PhysicsActivationObservation>::Success(result);
     }
 
     /** @copydoc ReadCanonicalSceneBodyPolicy */

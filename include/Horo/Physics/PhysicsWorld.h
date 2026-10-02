@@ -76,10 +76,27 @@ namespace Horo::Physics {
         PhysicsPose localPose;
     };
 
+    /** @brief Initial moving-body activity; static bodies always remain static. */
+    enum class PhysicsInitialBodyActivity : std::uint8_t {
+        Awake,
+        Sleeping
+    };
+
+    /** @brief Copied owner-thread scene-body counts; query fixtures are excluded. */
+    struct PhysicsActivationObservation final {
+        PhysicsWorldId world;         /**< Exact world generation observed; no lifetime is retained. */
+        std::uint32_t staticBodies{}; /**< Bodies outside the solver activation/sleep lifecycle. */
+        std::uint32_t awakeMovingBodies{};
+        std::uint32_t sleepingMovingBodies{};
+        std::optional<std::uint32_t> islands; /**< Absent: island observations are unsupported, never an available zero. */
+    };
+
     /** @brief Complete body request for scene activation, including the uniform sensor policy admitted by the native body. */
     struct PhysicsSceneBodyDescriptor final {
         PhysicsBodyDescriptor body;
         bool sensor{};
+        PhysicsInitialBodyActivity initialActivity{PhysicsInitialBodyActivity::Awake};
+        /**< Moving bodies start awake by default. Sleeping requires zero velocities and world sleeping enabled. */
     };
 
     /** @brief Owner-thread reconciliation of retained policy against current native body evidence. */
@@ -218,6 +235,15 @@ namespace Horo::Physics {
          * @pre Owner thread, active canonical world, outside a fixed step. This is not a cross-thread snapshot.
          */
         [[nodiscard]] Result<PhysicsBodyReconciliation> ReadSceneBodyReconciliation(BodyHandle body) const;
+        /**
+         * @brief Copies current scene-body activation counts without exposing solver islands or retaining resources.
+         * @return Owned world identity and counts, or a typed lifecycle/affinity/capability/native-consistency error.
+         * @pre Owner thread, active canonical world, outside a fixed step. Counts reflect current state, not a tick snapshot.
+         * @post No activity changes. Island membership, stable island IDs and island counts are unsupported.
+         * Work is bounded by resident scene bodies and performs no successful-path allocation.
+         */
+        [[nodiscard]] Result<PhysicsActivationObservation> ReadSceneActivation() const;
+
         /**
          * @brief Admits one explicit analytic query fixture on the owner thread.
          * @param fixture Complete geometry, pose and stable query-filter evidence.

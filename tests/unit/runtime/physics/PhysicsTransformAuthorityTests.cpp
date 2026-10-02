@@ -227,6 +227,10 @@ namespace Horo::Physics {
         REQUIRE(authority->BodyTransform(body).Value().authoredPose == Pose(1));
 
         auto invalid = Snapshot(body, 2, 9);
+        invalid.state.activity = PhysicsBodyActivity::Static;
+        RequireCode(ValidatePhysicsDynamicTransformSnapshot(invalid, World(), 9, 2), PhysicsErrors::DescriptorInvalid);
+        invalid.state.activity = PhysicsBodyActivity::Sleeping;
+        REQUIRE(ValidatePhysicsDynamicTransformSnapshot(invalid, World(), 9, 2).HasValue());
         invalid.state.pose.translation.x = std::numeric_limits<float>::quiet_NaN();
         RequireCode(ValidatePhysicsDynamicTransformSnapshot(invalid, World(), 9, 2), PhysicsErrors::DescriptorInvalid);
     }

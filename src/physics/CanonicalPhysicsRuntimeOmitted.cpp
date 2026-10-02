@@ -67,6 +67,11 @@ namespace Horo::Physics::Detail {
         return Result<PhysicsBodyReconciliation>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
     }
 
+    /** @copydoc ReadCanonicalSceneActivation */
+    Result<PhysicsActivationObservation> ReadCanonicalSceneActivation(const CanonicalWorldHandle, const PhysicsWorldId) {
+        return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
     /** @copydoc CreateCanonicalSceneConstraint */
     Result<ConstraintHandle> CreateCanonicalSceneConstraint(const CanonicalWorldHandle, const PhysicsWorldId,
                                                             const PhysicsConstraintDescriptor &) {
