@@ -3,6 +3,7 @@
 #include "Horo/Audio/AudioErrors.h"
 #include "Horo/Audio/AudioStreamingService.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -112,13 +113,19 @@ namespace Horo::Audio::StreamingTests {
         fixture.privateCancellationTimedOut.store(!observed);
     }
 
+    /** @brief Checks bounded stereo storage independently of provider progress and cancellation. */
+    inline bool ValidDecodeStorage(const std::span<AudioSample> output, const std::span<std::byte> scratch) {
+        return scratch.size() == 16 && !output.empty() && output.size() <= 4 && output.size() % 2 == 0;
+    }
+
     inline Result<AudioStreamDecodeProgress> Decode(void *opaque, const std::uint64_t firstFrame, const std::span<AudioSample> output,
                                                     const std::span<std::byte> scratch, const std::atomic<bool> &cancelled) {
         auto &context = *static_cast<DecoderContext *>(opaque);
         auto &fixture = *context.fixture;
         fixture.decodes.fetch_add(1);
         AwaitPrivateCancellation(fixture, firstFrame, cancelled);
-        if (firstFrame == context.frameCount - 2) {
+        const auto requestedFrames = output.size() / 2;
+        if (firstFrame + requestedFrames >= context.frameCount) {
             fixture.finalDecodeEntered.store(true);
             while (fixture.holdFinalDecode.load() && (fixture.ignoreCancellation.load() || !cancelled.load()))
                 std::this_thread::yield();
@@ -127,11 +134,12 @@ namespace Horo::Audio::StreamingTests {
             return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioErrors::OperationCancelled));
         if (fixture.decodeFailure)
             return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioErrors::StreamReadFailed));
-        if (scratch.size() != 16 || output.size() != 4)
+        if (!ValidDecodeStorage(output, scratch))
             return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioErrors::StreamReadFailed));
-        for (std::size_t index = 0; index < output.size(); ++index)
+        const auto frames = static_cast<std::uint32_t>(std::min<std::uint64_t>(requestedFrames, context.frameCount - firstFrame));
+        for (std::size_t index = 0; index < frames * 2U; ++index)
             output[index] = static_cast<float>(firstFrame + index / 2 + 1);
-        return Result<AudioStreamDecodeProgress>::Success({2, firstFrame + 2 == context.frameCount});
+        return Result<AudioStreamDecodeProgress>::Success({frames, firstFrame + frames == context.frameCount});
     }
 
     inline void Release(void *opaque) noexcept {
@@ -171,11 +179,20 @@ namespace Horo::Audio::StreamingTests {
     }
 
     inline bool PumpUntil(AudioStreamingService &service, const AudioStreamHandle handle, const std::uint32_t buffered) {
-        return Until([&service, handle, buffered] {
+        const bool reached = Until([&service, handle, buffered] {
             service.Pump();
             const auto snapshot = service.Snapshot(handle);
             return snapshot.HasValue() && snapshot.Value().bufferedFrames >= buffered;
         });
+        if (!reached) {
+            const auto state = service.Snapshot(handle);
+            if (state.HasValue()) {
+                const auto &value = state.Value();
+                WARN("Buffer deadline: frames=" << value.bufferedFrames << " ended=" << value.sourceEnded << " failed=" << value.failed
+                                                << " cancelled=" << value.cancelled << " stopped=" << value.stopped);
+            }
+        }
+        return reached;
     }
 
     /** @brief Reaps a worker failure on control before any test inspects its original error. */

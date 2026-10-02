@@ -1455,6 +1455,22 @@ Streaming memory ownership and ordering audit:
 | Decoder pointer and cancellation | Worker and control | The SC handshake above applies; cooked PCM polls the session's SC private cancellation flag only on the worker, not the callback. |
 | Errors, decoder destruction and source lease | Control after terminal JobSystem synchronization | Rich errors never cross the callback; a missing/nonterminal completion snapshot retains storage. Retire requires host callback detachment and a bounded worker join before decoder release. Shutdown closes admission before stopping all streams and retains failed-join streams for retry. |
 
+Worker/control streaming operations use explicit sequential consistency as a
+conservative policy, independently of the callback's minimum ordering. The
+worker's combined producer/EOF SC store retains release publication to the
+callback's acquire load; its SC consumer-cursor load retains acquisition from
+the callback's release store before ring reuse. The worker's own producer read
+and its stop checks are also SC. Control lookahead selection, stop publication,
+occupancy/diagnostic snapshots and underrun-report reads are SC observations,
+not coherent multi-atomic snapshots or reclamation authority. Their prior
+release/acquire guarantees are strengthened, not replaced by a new protocol.
+All atomics remain subject to the lock-free static assertions. The ten callback
+operations in Render/RecordUnderrun, decoder publication/cancellation handshake,
+single-consumer ownership, exact terminal cursor and bounded join are unchanged.
+This policy does not establish a previously missing happens-before edge or claim
+unchanged timing; SC stores may add worker/control barriers. Callback instruction
+identity alone would not prove unchanged latency under worker contention.
+
 The public source factory remains ownership-taking by value, then moves that
 source through private construction without extra shared-lease copies. Const
 service access returns only const stream state; issuing the sole render port and

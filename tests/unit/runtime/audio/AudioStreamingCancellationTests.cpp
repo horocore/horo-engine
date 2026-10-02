@@ -135,8 +135,8 @@ namespace Horo::Audio::StreamingTests {
         CHECK(output.left[0] == 1.0F);
         CHECK(output.right[3] == 4.0F);
         REQUIRE(PumpUntil(*service, handle, 2));
-        service->Pump();
         REQUIRE(Until([&] {
+            service->Pump();
             return fixture.finalDecodeEntered.load();
         }));
         CHECK(fixture.releases.load() == 0);

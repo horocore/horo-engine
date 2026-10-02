@@ -69,6 +69,36 @@ namespace Horo::Audio::StreamingTests {
         CHECK(service->Snapshot(handle).HasError());
     }
 
+    TEST_CASE("Streaming service refills one free frame without changing exact PCM order", "[unit][audio][streaming]") {
+        JobSystem jobs({.workerCount = 1});
+        PackageFixture fixture;
+        auto service = Service(jobs, fixture);
+        const auto handle = service->Admit(Request()).Value();
+        auto port = std::move(service->RenderPort(handle)).Value();
+        REQUIRE(PumpUntil(*service, handle, 4));
+        CallbackBlock output;
+        REQUIRE(output.Render(port, 1).availableFrames == 1);
+        CHECK(output.left[0] == 1.0F);
+        REQUIRE(PumpUntil(*service, handle, 4));
+        const auto middle = output.Render(port, 4);
+        CHECK(middle.availableFrames == 4);
+        CHECK_FALSE(middle.ended);
+        for (std::size_t frame = 0; frame < 4; ++frame) {
+            CHECK(output.left[frame] == static_cast<float>(frame + 2));
+            CHECK(output.right[frame] == output.left[frame]);
+        }
+        REQUIRE(PumpUntil(*service, handle, 3));
+        const auto final = output.Render(port, 4);
+        CHECK(final.availableFrames == 3);
+        CHECK(final.silentFrames == 1);
+        CHECK(final.ended);
+        CHECK(output.left[0] == 6.0F);
+        CHECK(output.right[2] == 8.0F);
+        CHECK(output.left[3] == 0.0F);
+        REQUIRE(service->Retire(handle).HasValue());
+        CHECK(fixture.releases.load() == 1);
+    }
+
     TEST_CASE("Streaming service terminal publication never hides pending final frames", "[unit][audio][streaming]") {
         JobSystem jobs({.workerCount = 1});
         PackageFixture fixture;

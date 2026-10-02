@@ -168,26 +168,26 @@ namespace Horo::Audio {
                 std::copy_n(state.decodeBuffer.data() + static_cast<std::size_t>(frame) * channels, channels,
                             state.ring.data() + destination);
             }
-            state.produced.store((written + progress.frames) | (progress.endOfStream ? EndMarker : 0), std::memory_order_release);
+            state.produced.store((written + progress.frames) | (progress.endOfStream ? EndMarker : 0), std::memory_order_seq_cst);
         }
 
         /** @brief Performs one cancellable bounded worker fill. */
         [[nodiscard]] Result<void> Fill(AudioStreamState &state, const AudioStreamPackageSource &source,
                                         const CancellationToken &cancellation) {
-            if (cancellation.IsCancellationRequested() || state.stopped.load(std::memory_order_acquire))
+            if (cancellation.IsCancellationRequested() || state.stopped.load(std::memory_order_seq_cst))
                 return JobCancelled();
             if (auto ready = EnsureDecoder(state, source, cancellation); ready.HasError())
                 return ready;
 
-            const std::uint64_t read = state.consumed.load(std::memory_order_acquire);
-            const std::uint64_t written = state.produced.load(std::memory_order_relaxed) & CursorMask;
+            const std::uint64_t read = state.consumed.load(std::memory_order_seq_cst);
+            const std::uint64_t written = state.produced.load(std::memory_order_seq_cst) & CursorMask;
             const auto buffered = written >= read ? std::min<std::uint64_t>(written - read, state.request.ringFrames) : 0;
             const auto freeFrames = static_cast<std::uint32_t>(state.request.ringFrames - buffered);
             const auto frames = std::min(freeFrames, state.request.decoder.maximumFramesPerDecode);
             if (frames == 0)
                 return Result<void>::Success();
             auto decoded = state.decoder->Decode(state.decodeBuffer, state.scratch, frames);
-            if (cancellation.IsCancellationRequested() || state.stopped.load(std::memory_order_acquire))
+            if (cancellation.IsCancellationRequested() || state.stopped.load(std::memory_order_seq_cst))
                 return JobCancelled();
             if (decoded.HasError())
                 return Result<void>::Failure(std::move(decoded).ErrorValue());
@@ -366,13 +366,13 @@ namespace Horo::Audio {
 
     /** @copydoc AudioStreamingService::Slot::NeedsFill */
     bool AudioStreamingService::Slot::NeedsFill() const {
-        if (!state || fill || state->failed || state->cancelled || state->stopped.load(std::memory_order_acquire) ||
+        if (!state || fill || state->failed || state->cancelled || state->stopped.load(std::memory_order_seq_cst) ||
             state->cancellation.Token().IsCancellationRequested())
             return false;
-        if (const auto publication = state->produced.load(std::memory_order_acquire); (publication & EndMarker) != 0)
+        if (const auto publication = state->produced.load(std::memory_order_seq_cst); (publication & EndMarker) != 0)
             return false;
-        const auto read = state->consumed.load(std::memory_order_acquire);
-        const auto written = state->produced.load(std::memory_order_acquire) & CursorMask;
+        const auto read = state->consumed.load(std::memory_order_seq_cst);
+        const auto written = state->produced.load(std::memory_order_seq_cst) & CursorMask;
         const auto buffered = written >= read ? written - read : 0;
         return buffered < state->request.lookaheadFrames && buffered < state->request.ringFrames;
     }
@@ -396,7 +396,7 @@ namespace Horo::Audio {
         std::uint32_t active = 0;
         for (std::uint32_t index = 0; index < limits_.maximumStreams; ++index) {
             auto &slot = slots_[index];
-            if (slot.state && slot.state->stopped.load(std::memory_order_acquire) &&
+            if (slot.state && slot.state->stopped.load(std::memory_order_seq_cst) &&
                 !slot.state->cancellation.Token().IsCancellationRequested())
                 (void)Stop({index + 1, slot.generation});
             if (slot.Reap())
@@ -424,7 +424,7 @@ namespace Horo::Audio {
         auto *state = Find(handle);
         if (state == nullptr)
             return Result<void>::Failure(MakeError(AudioErrors::HandleStale));
-        state->stopped.store(true, std::memory_order_release);
+        state->stopped.store(true, std::memory_order_seq_cst);
         state->cancellation.RequestCancellation();
         if (auto *decoder = state->publishedDecoder.load(std::memory_order_seq_cst); decoder != nullptr)
             decoder->Cancel();
@@ -461,14 +461,14 @@ namespace Horo::Audio {
         const auto *state = Find(handle);
         if (state == nullptr)
             return Result<AudioStreamSnapshot>::Failure(MakeError(AudioErrors::HandleStale));
-        const auto read = state->consumed.load(std::memory_order_acquire);
-        const auto publication = state->produced.load(std::memory_order_acquire);
+        const auto read = state->consumed.load(std::memory_order_seq_cst);
+        const auto publication = state->produced.load(std::memory_order_seq_cst);
         const auto written = publication & CursorMask;
         const auto buffered = written >= read ? std::min<std::uint64_t>(written - read, state->request.ringFrames) : 0;
         return Result<AudioStreamSnapshot>::Success(
-            {static_cast<std::uint32_t>(buffered), state->underrunFrames.load(std::memory_order_acquire),
-             state->underrunCallbacks.load(std::memory_order_acquire), (publication & EndMarker) != 0, state->failed, state->cancelled,
-             state->stopped.load(std::memory_order_acquire), state->failure});
+            {static_cast<std::uint32_t>(buffered), state->underrunFrames.load(std::memory_order_seq_cst),
+             state->underrunCallbacks.load(std::memory_order_seq_cst), (publication & EndMarker) != 0, state->failed, state->cancelled,
+             state->stopped.load(std::memory_order_seq_cst), state->failure});
     }
 
     /** @copydoc AudioStreamingService::TakeUnderrunReport */
@@ -480,12 +480,12 @@ namespace Horo::Audio {
             return Result<std::optional<AudioStreamUnderrunReport>>::Failure(MakeError(AudioErrors::HandleStale));
         if (minimumIntervalFrames == 0)
             return Result<std::optional<AudioStreamUnderrunReport>>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
-        const auto frames = state->underrunFrames.load(std::memory_order_acquire);
+        const auto frames = state->underrunFrames.load(std::memory_order_seq_cst);
         auto &reporting = state->reporting;
         if (frames == reporting.frames ||
             (reporting.reported && sampleFrame >= reporting.sampleFrame && sampleFrame - reporting.sampleFrame < minimumIntervalFrames))
             return Result<std::optional<AudioStreamUnderrunReport>>::Success(std::nullopt);
-        const auto callbacks = state->underrunCallbacks.load(std::memory_order_acquire);
+        const auto callbacks = state->underrunCallbacks.load(std::memory_order_seq_cst);
         AudioStreamUnderrunReport report{frames - reporting.frames, callbacks - reporting.callbacks, sampleFrame};
         reporting.frames = frames;
         reporting.callbacks = callbacks;
