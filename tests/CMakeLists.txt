@@ -802,6 +802,16 @@ add_executable(HoroTerrainTileCookTests
 target_compile_features(HoroTerrainTileCookTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainTileCookTests PRIVATE HoroEngine::TerrainCook)
 horo_register_catch_test(HoroTerrainTileCookTests LABELS "unit;terrain;assets;headless")
+add_executable(HoroTerrainFoliageClusterTests unit/runtime/terrain/FoliageClusterCookTests.cpp)
+target_compile_features(HoroTerrainFoliageClusterTests PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainFoliageClusterTests PRIVATE HoroEngine::TerrainCook)
+horo_register_catch_test(HoroTerrainFoliageClusterTests LABELS "unit;terrain;foliage;headless")
+add_executable(HoroTerrainFoliageClusterPublicHeaderConsumer support/TerrainFoliageClusterPublicHeaderConsumer.cpp)
+target_compile_features(HoroTerrainFoliageClusterPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainFoliageClusterPublicHeaderConsumer PRIVATE HoroEngine::TerrainCook)
+add_test(NAME HoroTerrainFoliageClusterPublicHeaderConsumer COMMAND HoroTerrainFoliageClusterPublicHeaderConsumer)
+set_tests_properties(HoroTerrainFoliageClusterPublicHeaderConsumer PROPERTIES LABELS "unit;terrain;headless")
+
 add_executable(HoroTerrainFoliagePlacementTests
         unit/runtime/terrain/FoliagePlacementCookTests.cpp
 )
