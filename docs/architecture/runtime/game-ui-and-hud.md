@@ -407,8 +407,39 @@ closes admission before releasing focus, modal, and restoration state.
 Focus changes may include typed bring-into-view evidence for the scroll owner,
 but the graph never calls layout or scroll code. Input consumes the graph's
 owner/revision evidence only for the matching last-presented interaction
-generation; spatial search and gameplay action ownership remain separate
-contracts.
+generation; gameplay action ownership remains a separate contract.
+
+`UiFocusGraph::UpdateLayout` copies hit-test rectangles from the matching immutable
+`UiLayoutSnapshot` without retaining a lease or calling layout/scroll services. The
+Runtime UI owner admits only last-presented geometry, with exact instance, canvas,
+document and tree evidence and equal/newer interaction revision. Updates are atomic,
+use preallocated scratch and adopt the accepted interaction revision. Missing exact
+handles, including recycled slots, have no spatial geometry. Reload clears geometry
+until a matching update, and empty graphs are valid focus scopes. Existing callers
+keep their authored links; owners enabling geometry call UpdateLayout after creation
+or replacement and after adopting a newly presented layout. No public header ownership
+or target dependency changes are required: both contracts remain RuntimeUi-owned.
+
+Cardinal Move uses authored links first. Without a link it searches positive-area
+layout boxes inside the active modal, excluding nonfocusable nodes and hidden or
+disabled ancestor paths. In the requested center half-plane it ranks perpendicular
+overlap, forward doubled-center distance, perpendicular interval gap, perpendicular
+doubled-center distance, then stable ID bytes. Integer 1/64-DIP rectangles cannot
+represent nonfinite values; negative extents fail layout publication. Signed 64-bit
+projection preserves ordering at int32 coordinate extremes without squared distances.
+Typed None/Horizontal/Vertical/Both wrap applies only when no forward candidate
+exists, choosing the opposite center edge, then perpendicular gap/distance and stable
+ID. Next/Previous retain their authored semantics. Invalid declared links retain the
+existing recovery policy instead of silently becoming automatic navigation.
+
+Graph creation/reload are bounded owner safe-point preparation operations. Handle
+indices and parent indices are prepared there; layout adoption takes O(N + M log N)
+bounded work and cardinal search O(N * maximum tree depth), without allocation or I/O.
+`SetParticipation` updates focusable/enabled/visible state with exact current owner
+and element-generation evidence, recovering invalid focus immediately without
+allocation. Structural changes use complete transactional Reload candidates. Failed
+updates preserve prior geometry; retirement and shutdown close admission and release
+geometry together with focus, modal and restoration storage.
 
 High-frequency pointer movement does not travel through data buses. The UI input
 router consumes input snapshots during VariableUpdate through one per-player/

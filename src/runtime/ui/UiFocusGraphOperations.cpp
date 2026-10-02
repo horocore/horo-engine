@@ -16,6 +16,7 @@ namespace Horo::Runtime::Ui {
             if (candidate.HasError())
                 return Result<UiFocusGraph>::Failure(candidate.ErrorValue());
             storage->nodes = std::move(candidate).Value();
+            storage->IndexHandles();
             storage->focusedIndex = storage->ResolveInitial();
             return Result<UiFocusGraph>::Success(UiFocusGraph{std::move(storage)});
         } catch (const std::bad_alloc &) {
@@ -104,6 +105,7 @@ namespace Horo::Runtime::Ui {
             const std::uint32_t oldModalDepth = storage_->modalDepth;
 
             storage_->nodes = std::move(candidate).Value();
+            storage_->IndexHandles();
             storage_->descriptor = descriptor;
 
             std::uint32_t retainedModalDepth = oldModalDepth;
@@ -177,8 +179,14 @@ namespace Horo::Runtime::Ui {
         }
 
         const UiElementId targetId = storage_->nodes[currentIndex].descriptor.links.Target(direction);
-        if (!targetId.IsValid())
-            return Result<UiFocusChange>::Success(storage_->NoTarget(UiFocusChangeReason::InvalidTarget));
+        if (!targetId.IsValid()) {
+            const auto spatial = storage_->SpatialTarget(currentIndex, direction);
+            if (!spatial.has_value())
+                return Result<UiFocusChange>::Success(storage_->NoTarget(UiFocusChangeReason::InvalidTarget));
+            const auto previous = storage_->CurrentTarget();
+            storage_->focusedIndex = spatial;
+            return Result<UiFocusChange>::Success(storage_->BuildChange(previous, UiFocusChangeReason::Spatial));
+        }
 
         const auto target = storage_->ResolveAllowed(targetId);
         if (target.has_value()) {
@@ -280,6 +288,8 @@ namespace Horo::Runtime::Ui {
         storage_->modalDepth = 0;
         storage_->restorationDepth = 0;
         storage_->nodes.clear();
+        storage_->layoutScratch.clear();
+        storage_->handleOrder.clear();
         storage_->modalSlots.clear();
         storage_->restorations.clear();
         storage_->lifecycle = UiFocusGraphState::Retiring;
@@ -294,6 +304,8 @@ namespace Horo::Runtime::Ui {
         storage_->modalDepth = 0;
         storage_->restorationDepth = 0;
         storage_->nodes.clear();
+        storage_->layoutScratch.clear();
+        storage_->handleOrder.clear();
         storage_->modalSlots.clear();
         storage_->restorations.clear();
         storage_->lifecycle = UiFocusGraphState::Stopped;
