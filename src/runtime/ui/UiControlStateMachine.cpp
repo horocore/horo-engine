@@ -171,15 +171,14 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiControlStateMachine::SetAvailability */
     Result<void> UiControlStateMachine::SetAvailability(const UiControlAvailability availability) {
+        using enum UiControlAvailability;
         if (!storage_ || storage_->lifecycle != UiControlLifecycleState::Active)
             return Failure(UiErrors::ControlLifecycleUnavailable);
-        if (!IsKnown(availability, UiControlAvailability::Count) || availability == UiControlAvailability::Busy)
+        if (!IsKnown(availability, Count) || availability == Busy)
             return Failure(UiErrors::ControlInputInvalid);
         storage_->configuredAvailability = availability;
-        const auto effective = availability == UiControlAvailability::Enabled && storage_->asyncAction && storage_->asyncAction->Busy()
-                                   ? UiControlAvailability::Busy
-                                   : availability;
-        if (availability == UiControlAvailability::Disabled) {
+        const auto effective = availability == Enabled && storage_->asyncAction && storage_->asyncAction->Busy() ? Busy : availability;
+        if (availability == Disabled) {
             storage_->ClearTransient(true);
             storage_->SetAvailabilityProjection(effective);
         } else {
