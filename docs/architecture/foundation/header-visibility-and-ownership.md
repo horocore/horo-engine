@@ -1318,6 +1318,19 @@ provider context. No codec-specific or native backend type crosses the public
 boundary. The generated `HoroAudioApiPublicHeaderConsumer` and focused
 `HoroAudioApiTests` cover the new headers and lifecycle contract.
 
+## AUD-004.8 Parameter Automation Boundary
+
+`HoroEngine::AudioCommands` solely owns the additive
+`Horo/Audio/AudioParameterAutomation.h` fixed-state contract. Its generated
+standalone public-header consumer compiles through staged AudioCommands headers.
+Existing voice snapshots keep their signatures. Opting-in hosts prepare and seal
+exact scene/runtime/graph bindings off-callback, dispatch the new automation and
+cancel FIFO payloads, and apply sampled values to already prepared physical
+targets. No editor, native backend, mixer implementation or registry type enters
+the header. Hosts must add handling for the two new public command alternatives;
+unhandled payloads must receive explicit rejection/reconciliation, never silent
+discard. Reset/replacement closes and detaches the old engine before reclamation.
+
 ### Audio scoped concurrency model (AUD-003.4)
 
 `Horo/Audio/AudioConcurrencyGroup.h` is an additive `HoroAudioApi` contract.

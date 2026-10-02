@@ -857,6 +857,7 @@ target_link_libraries(HoroAudioMemory PUBLIC HoroEngine::AudioApi PRIVATE HoroAu
 
 add_library(HoroAudioCommands STATIC
         audio/commands/AudioClock.cpp
+        audio/commands/AudioParameterAutomation.cpp
         audio/commands/AudioCommands.cpp
         audio/commands/AudioCommandBuffer.cpp
         audio/commands/AudioCommandStaging.cpp
