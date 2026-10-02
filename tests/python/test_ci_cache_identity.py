@@ -97,8 +97,9 @@ def test_main_appends_validated_outputs_with_spaces_and_unicode(tmp_path: Path) 
 
 def test_invalid_cmake_version_does_not_write_outputs(tmp_path: Path) -> None:
     output = tmp_path / "outputs.txt"
+    arguments = identity_arguments(output, "broken")
     with pytest.raises(ValueError, match="Cannot identify CMake"):
-        cache.main(identity_arguments(output, "broken"))
+        cache.main(arguments)
     assert not output.exists()
 
 
@@ -112,5 +113,6 @@ def test_invalid_compiler_version_does_not_write_partial_outputs(tmp_path: Path)
 
 
 def test_missing_output_parent_reports_failure(tmp_path: Path) -> None:
+    arguments = identity_arguments(tmp_path / "missing" / "outputs.txt")
     with pytest.raises(FileNotFoundError):
-        cache.main(identity_arguments(tmp_path / "missing" / "outputs.txt"))
+        cache.main(arguments)
