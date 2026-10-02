@@ -2,6 +2,7 @@
 
 #include "Horo/Application/NavigationBakeService.h"
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "NativePublicationFiles.h"
 #include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavigationPublicationEntropy.h"
 
@@ -47,9 +48,8 @@ namespace Horo::Application::TestSupport {
     };
 
     /** @brief Delegates all successful actions to the native durable filesystem and pauses at true disk boundaries. */
-    class PublicationFiles final : public DurableFileSystem {
+    class PublicationFiles final : public Horo::TestSupport::NativePublicationFiles {
     public:
-        NativeDurableFileSystem native;
         std::atomic<PublicationFault> fault{PublicationFault::None};
         std::atomic<bool> pauseBeforeCurrent{};
         std::atomic<bool> pauseAfterCurrent{};
@@ -64,10 +64,6 @@ namespace Horo::Application::TestSupport {
             return acquired;
         }
 
-        Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override {
-            return native.AvailableBytes(path);
-        }
-
         Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override {
             if (WriteFails(path))
                 return InjectedFailure();
@@ -80,10 +76,6 @@ namespace Horo::Application::TestSupport {
                     std::this_thread::yield();
             }
             return written;
-        }
-
-        Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override {
-            return native.CopyDurable(source, destination);
         }
 
         Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
@@ -107,10 +99,6 @@ namespace Horo::Application::TestSupport {
                     throw 73;
             }
             return replaced;
-        }
-
-        Result<void> RemoveDurable(const std::filesystem::path &path) override {
-            return native.RemoveDurable(path);
         }
 
         Result<void> SyncDirectory(const std::filesystem::path &path) override {

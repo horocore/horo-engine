@@ -1,6 +1,7 @@
 #include "Horo/Application/NavigationBakeService.h"
 #include "Horo/Assets/AssetCookTransaction.h"
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "NativePublicationFiles.h"
 #include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavigationPublicationEntropy.h"
 
@@ -59,21 +60,12 @@ namespace Horo::Application {
         };
 
         /** @brief Native durable writer with fault injection at the current-pointer barrier. */
-        class ControlledFiles final : public DurableFileSystem {
+        class ControlledFiles final : public Horo::TestSupport::NativePublicationFiles {
         public:
-            NativeDurableFileSystem native;
             std::atomic<bool> failReplacement{};
             std::atomic<bool> failAfterReplacement{};
             std::atomic<bool> holdCurrent{};
             std::atomic<bool> currentStaged{};
-
-            Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path, std::string_view owner) override {
-                return native.TryAcquireExclusive(path, owner);
-            }
-
-            Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override {
-                return native.AvailableBytes(path);
-            }
 
             Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override {
                 auto written = native.WriteDurable(path, bytes);
@@ -87,14 +79,6 @@ namespace Horo::Application {
                 return written;
             }
 
-            Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override {
-                return native.CopyDurable(source, destination);
-            }
-
-            Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
-                return native.AtomicReplace(prepared, destination);
-            }
-
             Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
                                               AtomicFileReplacementReceipt &receipt) override {
                 const bool current = destination.filename() == "current.json";
@@ -104,14 +88,6 @@ namespace Horo::Application {
                 if (current && replaced.HasValue() && failAfterReplacement.load())
                     return Result<void>::Failure(MakeError(NavigationErrors::BakeInputFailed));
                 return replaced;
-            }
-
-            Result<void> RemoveDurable(const std::filesystem::path &path) override {
-                return native.RemoveDurable(path);
-            }
-
-            Result<void> SyncDirectory(const std::filesystem::path &path) override {
-                return native.SyncDirectory(path);
             }
         };
 

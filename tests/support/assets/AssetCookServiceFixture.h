@@ -6,6 +6,7 @@
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Sha256.h"
+#include "NativePublicationFiles.h"
 #include "assets/AssetCookPublicationFixture.h"
 #include "assets/AssetCookTestValues.h"
 
@@ -178,35 +179,18 @@ namespace Horo::Assets::ServiceTestSupport {
     }
 
     /** @brief Owns a real native publication callback so cancellation can be injected on either side of replacement. */
-    class CookPublicationFiles final : public DurableFileSystem {
+    class CookPublicationFiles final : public Horo::TestSupport::NativePublicationFiles {
     public:
-        NativeDurableFileSystem native;
         CancellationSource *cancellation{};
         bool cancelAfterCommit{};
         bool failCommittedSync{};
         bool committed{};
-
-        Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path, const std::string_view owner) override {
-            return native.TryAcquireExclusive(path, owner);
-        }
-
-        Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override {
-            return native.AvailableBytes(path);
-        }
 
         Result<void> WriteDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes) override {
             auto written = native.WriteDurable(path, bytes);
             if (written.HasValue() && cancellation && !cancelAfterCommit && path.filename() == "current.json")
                 cancellation->RequestCancellation();
             return written;
-        }
-
-        Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override {
-            return native.CopyDurable(source, destination);
-        }
-
-        Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
-            return native.AtomicReplace(prepared, destination);
         }
 
         Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
@@ -220,14 +204,6 @@ namespace Horo::Assets::ServiceTestSupport {
                     return Result<void>::Failure(Error{ErrorCode{"test.cook.publication_sync_failed"}});
             }
             return replaced;
-        }
-
-        Result<void> RemoveDurable(const std::filesystem::path &path) override {
-            return native.RemoveDurable(path);
-        }
-
-        Result<void> SyncDirectory(const std::filesystem::path &path) override {
-            return native.SyncDirectory(path);
         }
     };
 

@@ -3,6 +3,7 @@
 #include "Horo/Assets/AssetCookOutput.h"
 #include "Horo/Assets/AssetCookTransaction.h"
 #include "Horo/Foundation/Sha256.h"
+#include "NativePublicationFiles.h"
 #include "assets/AssetCookTestValues.h"
 
 #include <array>
@@ -53,21 +54,12 @@ namespace Horo::Assets::OutputTestSupport {
         BaselineSync
     };
 
-    struct PublicationFiles final : DurableFileSystem {
-        NativeDurableFileSystem native;
+    struct PublicationFiles final : Horo::TestSupport::NativePublicationFiles {
         PublicationFault fault{};
         std::filesystem::path root;
 
         Result<void> Failure() const {
             return Result<void>::Failure(Error{.code = ErrorCode{"test.publication_io"}, .message = "Injected publication I/O failure."});
-        }
-
-        Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path, std::string_view owner) override {
-            return native.TryAcquireExclusive(path, owner);
-        }
-
-        Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override {
-            return native.AvailableBytes(path);
         }
 
         Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override {
@@ -76,10 +68,6 @@ namespace Horo::Assets::OutputTestSupport {
                 (fault == PublicationFault::PointerWrite && path.filename() == "current.json"))
                 return Failure();
             return native.WriteDurable(path, bytes);
-        }
-
-        Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override {
-            return native.CopyDurable(source, destination);
         }
 
         Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
@@ -109,10 +97,6 @@ namespace Horo::Assets::OutputTestSupport {
             if (fault == PublicationFault::PointerException)
                 throw 42;
             return fault == PublicationFault::PointerSync ? Failure() : std::move(result);
-        }
-
-        Result<void> RemoveDurable(const std::filesystem::path &path) override {
-            return native.RemoveDurable(path);
         }
 
         Result<void> SyncDirectory(const std::filesystem::path &path) override {
