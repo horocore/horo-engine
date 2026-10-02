@@ -2,6 +2,7 @@
 
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "UiAccessibilityAnnouncementQueue.h"
 
 #include <algorithm>
 #include <new>
@@ -152,11 +153,25 @@ namespace Horo::Runtime::Ui {
                     source.interactionRevision.Compare(prior.interactionRevision) == Older);
         }
 
+        /** @brief Validates the occurrence's closed identity, policy and speech representation. */
+        bool ValidOccurrence(const UiAccessibilityAnnouncementInput &announcement) noexcept {
+            return announcement.id.value != 0 && announcement.policy <= UiAccessibilityAnnouncementPolicy::Assertive &&
+                   announcement.kind <= UiAccessibilityAnnouncementKind::Status &&
+                   announcement.text.source <= UiAccessibilityTextSource::UserContent && !announcement.text.text.empty() &&
+                   IsValidUtf8ScalarSequence(announcement.text.text);
+        }
+
+        /** @brief Requires validation speech to describe the exact error admitted in the immutable snapshot. */
+        bool MatchesValidation(const UiAccessibilitySnapshot &snapshot, const UiAccessibilityNode &node,
+                               const UiAccessibilityAnnouncementInput &announcement) noexcept {
+            return announcement.kind != UiAccessibilityAnnouncementKind::Validation ||
+                   (node.error.kind != UiAccessibilityErrorKind::None && snapshot.Text(node.error.message) == announcement.text.text &&
+                    node.error.message.source == announcement.text.source);
+        }
+
         /** @brief Validates a live-region declaration and its exact active-node admission. */
         Result<void> ValidateAnnouncement(const UiAccessibilitySnapshot &snapshot, const UiAccessibilityAnnouncementInput &announcement) {
-            if (announcement.id.value == 0 || announcement.policy > UiAccessibilityAnnouncementPolicy::Assertive ||
-                announcement.text.source > UiAccessibilityTextSource::UserContent || announcement.text.text.empty() ||
-                !IsValidUtf8ScalarSequence(announcement.text.text))
+            if (!ValidOccurrence(announcement))
                 return Failure<void>(UiErrors::AccessibilitySchemaInvalid);
             const auto node = snapshot.Get(announcement.node);
             if (node.HasError())
@@ -165,6 +180,8 @@ namespace Horo::Runtime::Ui {
                  node.Value().exposure != UiAccessibilityExposure::Offscreen) ||
                 node.Value().state.Has(UiAccessibilityStateFlag::Disabled))
                 return Failure<void>(UiErrors::AccessibilityActionRejected);
+            if (!MatchesValidation(snapshot, node.Value(), announcement))
+                return Failure<void>(UiErrors::AccessibilitySchemaInvalid);
             return Result<void>::Success();
         }
     }  // namespace
@@ -184,9 +201,10 @@ namespace Horo::Runtime::Ui {
         UiAccessibilitySemanticRevision revision;
         UiAccessibilityChangeStatus status{UiAccessibilityChangeStatus::Complete};
         bool retired{};
+        AccessibilityInternal::AnnouncementQueue delivery;
 
-        Storage(const UiAccessibilityExtractorDescriptor &descriptor, const UiAccessibilityChangeLimits budgets)
-            : owner(descriptor), limits(budgets) {
+        Storage(const UiAccessibilityExtractorDescriptor &descriptor, const UiAccessibilityChangeLimits &budgets)
+            : owner(descriptor), limits(budgets), delivery(descriptor, budgets) {
             oldIndex.reserve(owner.limits.nodes);
             newIndex.reserve(owner.limits.nodes);
             changes.reserve(limits.changes);
@@ -250,7 +268,7 @@ namespace Horo::Runtime::Ui {
                     return Result<void>::Failure(remembered.ErrorValue());
                 admitted.push_back(static_cast<std::uint8_t>(remembered.Value()));
             }
-            return Result<void>::Success();
+            return delivery.Prepare(announcements, admitted);
         }
 
         /** @brief Saturates output into one explicit resync instead of exposing a partial delta or allocating. */
@@ -326,12 +344,12 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAccessibilityChangeLimits::IsValid */
     bool UiAccessibilityChangeLimits::IsValid() const noexcept {
         return changes != 0 && changes <= MaximumUiAccessibilityChanges && announcements <= MaximumUiAccessibilityAnnouncements &&
-               announcementTextBytes <= MaximumUiAccessibilityTextBytes;
+               announcementTextBytes <= MaximumUiAccessibilityTextBytes && deliveryGeneration != 0;
     }
 
     /** @copydoc UiAccessibilityChangePublisher::Create */
     Result<UiAccessibilityChangePublisher> UiAccessibilityChangePublisher::Create(const UiAccessibilityExtractorDescriptor &owner,
-                                                                                  const UiAccessibilityChangeLimits limits) {
+                                                                                  const UiAccessibilityChangeLimits &limits) {
         if (!owner.IsValid() || !limits.IsValid())
             return Failure<UiAccessibilityChangePublisher>(UiErrors::AccessibilitySnapshotInvalid);
         try {
@@ -371,6 +389,7 @@ namespace Horo::Runtime::Ui {
         storage_->Removals();
         storage_->Updates(snapshot);
         storage_->Announcements(announcements);
+        storage_->delivery.Commit(snapshot, announcements, storage_->admitted);
         storage_->history.swap(storage_->candidateHistory);
         storage_->previousRevision = storage_->revision;
         storage_->revision = snapshot.Descriptor().semanticRevision;
@@ -396,6 +415,7 @@ namespace Horo::Runtime::Ui {
         storage_->baseline.reset();
         storage_->history.clear();
         storage_->candidateHistory.clear();
+        storage_->delivery.Retire();
         storage_->retired = true;
         if (storage_->status != UiAccessibilityChangeStatus::Resynchronize)
             storage_->status = UiAccessibilityChangeStatus::Retired;
@@ -431,5 +451,20 @@ namespace Horo::Runtime::Ui {
         if (!storage_ || !text.IsPresent() || text.offset > storage_->text.size() || text.size > storage_->text.size() - text.offset)
             return {};
         return {storage_->text.data() + text.offset, text.size};
+    }
+
+    /** @copydoc UiAccessibilityChangePublisher::Announcements */
+    std::span<const UiAccessibilityAnnouncement> UiAccessibilityChangePublisher::Announcements() const noexcept {
+        return storage_ ? storage_->delivery.Records() : std::span<const UiAccessibilityAnnouncement>{};
+    }
+
+    /** @copydoc UiAccessibilityChangePublisher::AnnouncementText */
+    std::string_view UiAccessibilityChangePublisher::AnnouncementText(const UiAccessibilityAnnouncementCursor &cursor) const noexcept {
+        return storage_ ? storage_->delivery.Text(cursor) : std::string_view{};
+    }
+
+    /** @copydoc UiAccessibilityChangePublisher::Acknowledge */
+    Result<void> UiAccessibilityChangePublisher::Acknowledge(const UiAccessibilityAnnouncementCursor &cursor) {
+        return storage_ ? storage_->delivery.Acknowledge(cursor) : Failure<void>(UiErrors::AccessibilityLifecycleUnavailable);
     }
 }  // namespace Horo::Runtime::Ui

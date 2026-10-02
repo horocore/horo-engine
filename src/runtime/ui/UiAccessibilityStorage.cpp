@@ -90,6 +90,8 @@ namespace Horo::Runtime::Ui {
         relations.reserve(limits.relations);
         actions.reserve(limits.actions);
         text.reserve(limits.textBytes);
+        readingOrder.reserve(limits.nodes);
+        focusOrder.reserve(limits.nodes);
     }
 
     void UiAccessibilitySnapshot::Storage::ResolveParents(const UiElementTree &tree, const AccessibilityInternal::ProjectionLookup lookup) {
@@ -115,9 +117,24 @@ namespace Horo::Runtime::Ui {
         relations.clear();
         actions.clear();
         text.clear();
+        readingOrder.clear();
+        focusOrder.clear();
+        focusState.reset();
         for (const auto &input : projection.nodes)
             AppendPublishedNode(tree, nodes, relations, actions, text, input);
         ResolveParents(tree, lookup);
+        for (const auto &node : nodes)
+            if (node.exposure == UiAccessibilityExposure::Visible || node.exposure == UiAccessibilityExposure::Offscreen)
+                readingOrder.push_back(node.id);
+    }
+
+    /** @copydoc UiAccessibilitySnapshot::Storage::PublishFocus */
+    void UiAccessibilitySnapshot::Storage::PublishFocus(const std::span<const UiFocusTarget> order, const UiFocusSnapshot *state) {
+        if (!state)
+            return;
+        focusState = *state;
+        for (const auto &target : order)
+            focusOrder.emplace_back(target.element.ownership, target.element.slot, target.element.generation);
     }
 
     UiAccessibilityExtractor::Storage::Storage(const UiAccessibilityExtractorDescriptor &source)
@@ -126,6 +143,8 @@ namespace Horo::Runtime::Ui {
         lookupScratch.reserve(source.limits.nodes);
         preorderScratch.resize(MaximumUiTreeElements);
         readingScratch.reserve(source.limits.nodes);
+        focusProjectionScratch.reserve(source.limits.nodes);
+        focusOrderScratch.resize(source.limits.nodes);
         for (std::uint32_t index = 0; index < source.concurrentSnapshots; ++index)
             slots.push_back(std::make_shared<UiAccessibilitySnapshot::Storage>(source.limits));
     }
@@ -216,6 +235,26 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAccessibilitySnapshot::Nodes */
     std::span<const UiAccessibilityNode> UiAccessibilitySnapshot::Nodes() const noexcept {
         return storage_->nodes;
+    }
+
+    /** @copydoc UiAccessibilitySnapshot::ReadingOrder */
+    std::span<const UiAccessibilityNodeId> UiAccessibilitySnapshot::ReadingOrder() const noexcept {
+        return storage_->readingOrder;
+    }
+
+    /** @copydoc UiAccessibilitySnapshot::FocusOrder */
+    std::span<const UiAccessibilityNodeId> UiAccessibilitySnapshot::FocusOrder() const noexcept {
+        return storage_->focusOrder;
+    }
+
+    /** @copydoc UiAccessibilitySnapshot::FocusOwner */
+    const UiFocusOwnerContext *UiAccessibilitySnapshot::FocusOwner() const noexcept {
+        return storage_->focusState ? &storage_->focusState->owner : nullptr;
+    }
+
+    /** @copydoc UiAccessibilitySnapshot::FocusState */
+    const UiFocusSnapshot *UiAccessibilitySnapshot::FocusState() const noexcept {
+        return storage_->focusState ? &*storage_->focusState : nullptr;
     }
 
     /** @copydoc UiAccessibilitySnapshot::Relations */

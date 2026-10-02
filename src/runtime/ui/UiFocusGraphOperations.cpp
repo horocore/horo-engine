@@ -56,8 +56,31 @@ namespace Horo::Runtime::Ui {
             storage_->modalDepth == 0 ? std::nullopt
                                       : std::optional<UiFocusModalId>{{storage_->descriptor.owner.instance.ownership, storage_->modalDepth,
                                                                        storage_->modalSlots[storage_->modalDepth - 1].generation}};
+        const auto root = storage_->modalDepth == 0
+                              ? std::optional<UiFocusTarget>{}
+                              : std::optional<UiFocusTarget>{{storage_->modalSlots[storage_->modalDepth - 1].root,
+                                                              storage_->modalSlots[storage_->modalDepth - 1].rootHandle}};
         return Result<UiFocusSnapshot>::Success(
-            UiFocusSnapshot{storage_->descriptor.owner, storage_->CurrentTarget(), modal, storage_->modalDepth});
+            UiFocusSnapshot{storage_->descriptor.owner, storage_->CurrentTarget(), modal, storage_->modalDepth, root});
+    }
+
+    /** @copydoc UiFocusGraph::Order */
+    Result<std::size_t> UiFocusGraph::Order(const std::span<UiFocusTarget> output) const {
+        if (!storage_ || storage_->lifecycle != UiFocusGraphState::Active)
+            return Failure<std::size_t>(UiErrors::FocusLifecycleUnavailable);
+        std::size_t count{};
+        for (std::size_t index = 0; index < storage_->nodes.size(); ++index)
+            count += static_cast<std::size_t>(storage_->IsAllowed(index));
+        if (count > output.size())
+            return Failure<std::size_t>(UiErrors::FocusCapacityExceeded);
+        std::size_t written{};
+        for (std::size_t index = 0; index < storage_->nodes.size(); ++index) {
+            if (storage_->IsAllowed(index)) {
+                const auto &node = storage_->nodes[index].descriptor;
+                output[written++] = {node.id, node.element};
+            }
+        }
+        return Result<std::size_t>::Success(written);
     }
 
     /** @copydoc UiFocusGraph::Find */

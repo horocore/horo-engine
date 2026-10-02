@@ -234,6 +234,7 @@ namespace Horo::Runtime::Ui {
         std::optional<UiFocusTarget> focused;
         std::optional<UiFocusModalId> activeModal;
         std::uint32_t modalDepth{};
+        std::optional<UiFocusTarget> modalRoot; /**< Inclusive root of the authoritative top modal, when active. */
 
         /** @brief Validates the snapshot representation. @return Whether the snapshot is complete. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -268,6 +269,13 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiFocusGraphState State() const noexcept;
         /** @brief Returns current focus and modal state without allocating. @return Snapshot or lifecycle failure. */
         [[nodiscard]] Result<UiFocusSnapshot> Snapshot() const;
+        /**
+         * @brief Copies eligible targets in the graph's authored order, restricted to the active modal.
+         * @param output Caller-owned fixed storage; undersized output is left unchanged.
+         * @return Number written or typed lifecycle/capacity failure.
+         * @note Navigation links remain authoritative for directional movement; this is the sequential participation order.
+         */
+        [[nodiscard]] Result<std::size_t> Order(std::span<UiFocusTarget> output) const;
         /** @brief Resolves a stable element identity in the active graph. @return Current handle or typed stale failure. */
         [[nodiscard]] Result<UiElementHandle> Find(UiElementId id) const;
         /** @brief Returns current focus, if any, without allocating. @return Optional target or lifecycle failure. */

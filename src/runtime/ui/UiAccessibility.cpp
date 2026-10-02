@@ -425,27 +425,50 @@ namespace Horo::Runtime::Ui {
     Result<UiAccessibilitySnapshot> UiAccessibilityExtractor::Extract(const UiElementTree &tree,
                                                                       const UiAccessibilitySnapshotDescriptor &descriptor,
                                                                       const UiAccessibilityProjection &projection) {
+        return ExtractPrepared(tree, descriptor, projection);
+    }
+
+    /** @copydoc UiAccessibilityExtractor::Storage::PrepareReading */
+    Result<void> UiAccessibilityExtractor::Storage::PrepareReading(const UiElementTree &tree,
+                                                                   const UiAccessibilitySnapshotDescriptor &source,
+                                                                   const UiAccessibilityProjection &projection) {
+        if (const auto validation = ValidateProjection(tree, source, projection, descriptor, lastRevision, cycleScratch, lookupScratch);
+            validation.HasError())
+            return validation;
+        if (const auto reading =
+                AccessibilityInternal::BuildReadingProjection(tree, projection, lookupScratch, preorderScratch, readingScratch);
+            reading.HasError())
+            return reading;
+        const UiAccessibilityProjection reading{readingScratch};
+        if (const auto lookup = BuildProjectionLookup(reading.nodes, lookupScratch); lookup.HasError())
+            return lookup;
+        return ValidateRelations(reading.nodes, lookupScratch);
+    }
+
+    /** @copydoc UiAccessibilityExtractor::ExtractPrepared */
+    Result<UiAccessibilitySnapshot> UiAccessibilityExtractor::ExtractPrepared(const UiElementTree &tree,
+                                                                              const UiAccessibilitySnapshotDescriptor &descriptor,
+                                                                              const UiAccessibilityProjection &projection,
+                                                                              const std::span<const UiFocusTarget> focusOrder,
+                                                                              const UiFocusSnapshot *focusState) {
         if (!storage_ || storage_->lifecycle != UiAccessibilityExtractorState::Active)
             return Failure<UiAccessibilitySnapshot>(UiErrors::AccessibilityLifecycleUnavailable);
-        if (const auto validation = ValidateProjection(tree, descriptor, projection, storage_->descriptor, storage_->lastRevision,
-                                                       storage_->cycleScratch, storage_->lookupScratch);
-            validation.HasError())
+        if (const auto validation = storage_->PrepareReading(tree, descriptor, projection); validation.HasError())
             return Result<UiAccessibilitySnapshot>::Failure(validation.ErrorValue());
-        if (const auto reading = AccessibilityInternal::BuildReadingProjection(tree, projection, storage_->lookupScratch,
-                                                                               storage_->preorderScratch, storage_->readingScratch);
-            reading.HasError())
-            return Result<UiAccessibilitySnapshot>::Failure(reading.ErrorValue());
         const UiAccessibilityProjection reading{storage_->readingScratch};
-        if (const auto lookup = BuildProjectionLookup(reading.nodes, storage_->lookupScratch); lookup.HasError())
-            return Result<UiAccessibilitySnapshot>::Failure(lookup.ErrorValue());
-        if (const auto relations = ValidateRelations(reading.nodes, storage_->lookupScratch); relations.HasError())
-            return Result<UiAccessibilitySnapshot>::Failure(relations.ErrorValue());
         auto slot = storage_->TryAcquire();
         if (!slot)
             return Failure<UiAccessibilitySnapshot>(UiErrors::AccessibilitySnapshotStorageExhausted);
 
         struct PublishLease final {
             UiAccessibilitySnapshot::Storage *storage{};
+
+            explicit PublishLease(UiAccessibilitySnapshot::Storage *value) noexcept : storage(value) {}
+
+            PublishLease(const PublishLease &) = delete;
+            PublishLease &operator=(const PublishLease &) = delete;
+            PublishLease(PublishLease &&) = delete;
+            PublishLease &operator=(PublishLease &&) = delete;
 
             ~PublishLease() {
                 if (storage)
@@ -455,10 +478,13 @@ namespace Horo::Runtime::Ui {
             void Commit() noexcept {
                 storage = nullptr;
             }
-        } lease{slot.get()};
+        };
+
+        PublishLease lease{slot.get()};
 
         try {
             slot->Publish(tree, descriptor, reading, storage_->lookupScratch);
+            slot->PublishFocus(focusOrder, focusState);
         } catch (const std::bad_alloc &) {
             return Failure<UiAccessibilitySnapshot>(UiErrors::CapacityExceeded);
         }

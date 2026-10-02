@@ -5,6 +5,7 @@
  * @brief Typed, bounded Runtime UI accessibility semantics and immutable snapshots.
  */
 
+#include "Horo/Runtime/Ui/UiFocusGraph.h"
 #include "Horo/Runtime/Ui/UiLayout.h"
 
 #include <compare>
@@ -16,6 +17,9 @@
 #include <vector>
 
 namespace Horo::Runtime::Ui {
+    class UiFocusGraph;
+    struct UiFocusOwnerContext;
+    struct UiFocusTarget;
     inline constexpr std::uint32_t CurrentUiAccessibilitySchemaVersion = 1;
     inline constexpr std::uint32_t MaximumUiAccessibilityNodes = 4'096;
     inline constexpr std::uint32_t MaximumUiAccessibilityRelations = 8'192;
@@ -443,6 +447,7 @@ namespace Horo::Runtime::Ui {
      */
     struct UiAccessibilityProjection final {
         std::span<const UiAccessibilityNodeInput> nodes;
+        UiElementHandle modalRoot; /**< Optional exact inclusive modal root; outside semantics become Covered after inheritance. */
     };
 
     /** @brief Load-time owner descriptor for a bounded immutable semantic snapshot store. */
@@ -529,6 +534,22 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValid() const noexcept;
         /** @brief Returns exposed nodes in retained-tree preorder. @return Borrowed immutable nodes. */
         [[nodiscard]] std::span<const UiAccessibilityNode> Nodes() const noexcept;
+        /** @brief Returns readable active node IDs in retained-tree order; disabled nodes remain readable.
+         * @return Snapshot-owned order excluding hidden/inactive scopes.
+         */
+        [[nodiscard]] std::span<const UiAccessibilityNodeId> ReadingOrder() const noexcept;
+        /** @brief Returns eligible semantic targets in the authoritative focus graph's sequential participation order.
+         * @return Snapshot-owned order; empty when extraction did not receive a focus graph.
+         */
+        [[nodiscard]] std::span<const UiAccessibilityNodeId> FocusOrder() const noexcept;
+        /** @brief Returns exact graph audience and presentation evidence, or null for extraction without a graph.
+         * @return Snapshot-owned immutable focus owner.
+         */
+        [[nodiscard]] const UiFocusOwnerContext *FocusOwner() const noexcept;
+        /** @brief Returns captured focus/modal state, or null when no authoritative graph was supplied.
+         * @return Snapshot-owned immutable focus and modal activation evidence.
+         */
+        [[nodiscard]] const UiFocusSnapshot *FocusState() const noexcept;
         /** @brief Returns all flattened relations. @return Borrowed immutable relations. */
         [[nodiscard]] std::span<const UiAccessibilityRelation> Relations() const noexcept;
         /** @brief Returns all flattened action declarations. @return Borrowed immutable actions. */
@@ -589,6 +610,19 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<UiAccessibilitySnapshot> Extract(const UiElementTree &tree,
                                                               const UiAccessibilitySnapshotDescriptor &descriptor,
                                                               const UiAccessibilityProjection &projection);
+        /**
+         * @brief Publishes semantics with focus and modal state derived from the actual interaction focus graph.
+         * @param tree Exact active retained tree.
+         * @param descriptor Exact source and last-presented interaction lineage matching the graph.
+         * @param projection Complete borrowed semantic candidate; caller focus flags are replaced.
+         * @param focus Authoritative per-audience graph, borrowed only during extraction.
+         * @return Immutable ordered snapshot or typed stale, missing/disabled/hidden semantic target, capacity or lifecycle failure.
+         * @details The graph's eligible targets must resolve to current semantic nodes. Its modal root fences reading and
+         *          action exposure; graph shutdown closes admission. No tree/graph pointer survives publication.
+         */
+        [[nodiscard]] Result<UiAccessibilitySnapshot> Extract(const UiElementTree &tree,
+                                                              const UiAccessibilitySnapshotDescriptor &descriptor,
+                                                              const UiAccessibilityProjection &projection, const UiFocusGraph &focus);
         /** @brief Closes new publication admission idempotently. */
         void Close() noexcept;
         /** @brief Reports whether all snapshot leases have drained. @return True when no slot is retained. */
@@ -599,6 +633,12 @@ namespace Horo::Runtime::Ui {
     private:
         struct Storage;
         explicit UiAccessibilityExtractor(std::unique_ptr<Storage> storage) noexcept;
+        /** @brief Publishes only after semantic and optional focus candidates are fully validated. */
+        [[nodiscard]] Result<UiAccessibilitySnapshot> ExtractPrepared(const UiElementTree &tree,
+                                                                      const UiAccessibilitySnapshotDescriptor &descriptor,
+                                                                      const UiAccessibilityProjection &projection,
+                                                                      std::span<const UiFocusTarget> focusOrder = {},
+                                                                      const UiFocusSnapshot *focusState = nullptr);
         std::unique_ptr<Storage> storage_;
     };
 
