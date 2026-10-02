@@ -73,6 +73,14 @@ TEST_CASE("Built-in themes update active style and design tokens", "[unit][edito
 TEST_CASE("Custom theme parsing accepts supported colors and token overrides", "[unit][editor][gui][theme]") {
     using namespace Horo::Editor;
 
+    const auto defaults = DesignSystem::DefaultDesignTokens();
+    REQUIRE(defaults.typography.sansBase == 18.0F);
+    REQUIRE(defaults.typography.sansCompactBase == 18.0F);
+    REQUIRE(defaults.typography.caption == 18.0F);
+    REQUIRE(defaults.typography.label == 18.0F);
+    REQUIRE(Theme::FontPx::SansCompact == 18.0F);
+    REQUIRE(Theme::FontPx::Icon == 20.0F);
+
     Tests::HeadlessEditorGuiFixture imgui;
     ScopedThemeDirectory directory;
     directory.Write("custom.json", R"({
@@ -110,15 +118,16 @@ TEST_CASE("Custom theme parsing accepts supported colors and token overrides", "
     REQUIRE_FALSE(custom.isBuiltIn);
     REQUIRE(custom.colors.contains("WindowBg"));
     REQUIRE(custom.designTokens.typography.sansBase == 16.0F);
-    REQUIRE(custom.designTokens.typography.caption == 14.0F);
-    REQUIRE(custom.designTokens.typography.label == 15.0F);
+    REQUIRE(custom.designTokens.typography.sansCompactBase == 16.0F);
+    REQUIRE(custom.designTokens.typography.caption == 16.0F);
+    REQUIRE(custom.designTokens.typography.label == 16.0F);
     REQUIRE(custom.designTokens.typography.body == 17.0F);
     REQUIRE(custom.designTokens.typography.cardTitle == 18.0F);
     REQUIRE(custom.designTokens.typography.title == 19.0F);
     REQUIRE(custom.designTokens.typography.heading == 23.0F);
     REQUIRE(custom.designTokens.typography.display == 30.0F);
     REQUIRE(Horo::Editor::DesignSystem::MetricsFor(custom.designTokens, Horo::Editor::DesignSystem::ComponentSize::Medium).fontSize ==
-            14.0F);
+            16.0F);
     REQUIRE(custom.designTokens.radii.modal == 11.0F);
     REQUIRE(custom.designTokens.spacing.propertyRowGap == 10.0F);
 

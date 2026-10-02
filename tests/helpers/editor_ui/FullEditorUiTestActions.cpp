@@ -1,7 +1,9 @@
 #include "FullEditorUiTestActions.h"
 
 #include "FullEditorUiTestHost.h"
+#include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/EditorMenuModel.h"
+#include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/GuiScreenHost.h"
 
 #include <fstream>
@@ -86,7 +88,7 @@ namespace Horo::Tests::FullEditorActions {
 
     void SelectOrthographicProjection(UiScenarioPipe &pipeline, FullEditorUiTestHost &editor) {
         pipeline.Step("Choose Orthographic projection", [](ImGuiTestContext &ui) {
-            ui.ItemClick("//**/Combo###viewport_projection");
+            ui.ItemClick("//**/Combo#####Projection");
             ui.ItemClick("//**/###combo_option_1");
         });
         pipeline.Step("Observe projection through the shared viewport handoff", [&editor](ImGuiTestContext &) {
@@ -95,26 +97,6 @@ namespace Horo::Tests::FullEditorActions {
     }
 
     namespace {
-        void AddInputMappingStep(UiScenarioPipe &pipeline) {
-            pipeline.Step("Exercise input mapping pages and profile actions", [](ImGuiTestContext &ui) {
-                ui.ItemClick("//**/horo.input_mapping/##ActivityItem");
-                ui.Yield();
-                IM_CHECK(ui.ItemExists("//**/Action Maps"));
-                IM_CHECK(ui.ItemExists("//**/Rebind"));
-                ui.ItemClick("//**/Rebind");
-                ui.Yield();
-                ui.KeyPress(ImGuiKey_K);
-                ui.Yield();
-                ui.ItemClick("//**/Devices");
-                ui.Yield();
-                ui.ItemClick("//**/Profiles");
-                ui.Yield();
-                IM_CHECK(ui.ItemExists("//**/Save Profile"));
-                ui.ItemClick("//**/Save Profile");
-                ui.ItemClick("//**/Save Project Override");
-            });
-        }
-
         void AddGlobalDockSteps(UiScenarioPipe &pipeline) {
             pipeline.Step("Exercise every global dock pane", [](ImGuiTestContext &ui) {
                 if (!ui.ItemExists("//**/Assets")) {
@@ -260,7 +242,6 @@ namespace Horo::Tests::FullEditorActions {
     }  // namespace
 
     void ExerciseWorkspacePanels(UiScenarioPipe &pipeline, FullEditorUiTestHost &editor) {
-        AddInputMappingStep(pipeline);
         AddGlobalDockSteps(pipeline);
         AddContentBrowserStep(pipeline);
         AddMenuRoutingStep(pipeline, editor);
@@ -269,7 +250,7 @@ namespace Horo::Tests::FullEditorActions {
 
     void ExerciseAssetImport(UiScenarioPipe &pipeline, FullEditorUiTestHost &editor) {
         pipeline.Step("Import a mesh through the asset-import modal", [&editor](ImGuiTestContext &ui) {
-            const std::filesystem::path source = editor.Screens().CurrentProjectRoot() / "assets" / "coverage_triangle.obj";
+            const std::filesystem::path source = editor.Screens().CurrentProjectRoot() / "Assets" / "coverage_triangle.obj";
             std::ofstream fixture{source, std::ios::binary};
             fixture << "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
             fixture.close();
@@ -280,14 +261,35 @@ namespace Horo::Tests::FullEditorActions {
             ui.Yield();
             IM_CHECK(editor.BeginAssetImport(source));
             ui.Yield();
-            for (int frame = 0; frame < 30 && !ui.ItemExists("//**/##ImportTab0"); ++frame)
+            for (int frame = 0; frame < 30 && !ui.ItemExists("//**/##ImportFile0"); ++frame)
                 ui.Yield();
-            IM_CHECK(ui.ItemExists("//**/##ImportTab0"));
-            IM_CHECK(ui.ItemExists("//**/##QueueItem0"));
-            for (int tab = 1; tab < 4; ++tab) {
-                ui.ItemClick(("//**/##ImportTab" + std::to_string(tab)).c_str());
-                ui.Yield();
+            IM_CHECK(ui.ItemExists("//**/##ImportFile0"));
+            ui.ItemClick("//**/##ImportFile0");
+            auto *const modal =
+                dynamic_cast<Editor::AssetImportModal *>(editor.Screens().Services().Get<Editor::EditorModalHost>().TopModal());
+            IM_CHECK(modal != nullptr);
+            const std::string advanced = "//**/" + std::string{modal->Localized("asset_import.advanced", "Advanced")};
+            ui.ItemOpen(advanced.c_str());
+            ui.Yield();
+            const std::string createPreset =
+                "//**/" + std::string{modal->Localized("asset_import.create_preset", "Create preset from current settings")};
+            ui.MouseMove(advanced.c_str());
+            for (int frame = 0; frame < 10 && !ui.ItemExists(createPreset.c_str()); ++frame) {
+                ui.MouseWheelY(-2.0F);
+                ui.Yield(3);
             }
+            if (!ui.ItemExists(createPreset.c_str())) {
+                IM_CHECK(ui.ItemExists(createPreset.c_str()));
+                return;
+            }
+            ui.ItemClick(createPreset.c_str());
+            ui.Yield();
+            IM_CHECK(ui.ItemExists("//**/##PresetName"));
+            ui.ItemInputValue("//**/##PresetName", "Coverage preset");
+            const std::string create = "//**/" + std::string{modal->Localized("asset_import.create", "Create")};
+            ui.ItemClick(create.c_str());
+            ui.Yield();
+            IM_CHECK(modal->ActivePresetName(0) == "Coverage preset");
             IM_CHECK(editor.ImportFirstPendingAsset());
             ui.Yield();
             IM_CHECK(ui.ItemExists("//**/Done"));

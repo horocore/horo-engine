@@ -1,0 +1,167 @@
+{
+  "title": "Console Panel",
+  "subtitle": "Editor Console · session: editor (dev overlays on)",
+  "search": "category:asset level:warn..error",
+  "tabs": [
+    "Console",
+    "Commands",
+    "Variables",
+    "History"
+  ],
+  "records": {
+    "console": [
+      {
+        "time": "14:12:31",
+        "level": "INFO",
+        "source": "runtime.console",
+        "message": "Registered 184 console commands and 92 variables for Editor profile."
+      },
+      {
+        "time": "14:12:35",
+        "level": "WARN",
+        "source": "asset.import",
+        "message": "Texture normal missing.png not found; using default normal asset."
+      },
+      {
+        "time": "14:12:41",
+        "level": "DEBUG",
+        "source": "renderer.vulkan",
+        "message": "Shader permutation cache hit: 842 / 856."
+      },
+      {
+        "time": "14:12:52",
+        "level": "ERROR",
+        "source": "scene.load",
+        "message": "Prefab reference obj door 07 targets deleted asset guid 01H…A2."
+      },
+      {
+        "time": "14:13:05",
+        "level": "INFO",
+        "source": "command",
+        "message": "> profile capture start --seconds 20 --channels cpu,gpu,jobs"
+      },
+      {
+        "time": "14:13:05",
+        "level": "INFO",
+        "source": "profiler",
+        "message": "Capture started: cap 01J8F3K2."
+      }
+    ],
+    "commands": [
+      {
+        "time": "—",
+        "level": "INFO",
+        "source": "console",
+        "message": "Type a command below or use ↑/↓ to browse history."
+      },
+      {
+        "time": "14:18:02",
+        "level": "INFO",
+        "source": "command",
+        "message": "> stat fps → Frame time: 8.2 ms · FPS: 122 · GPU: 6.8 ms · CPU: 2.4 ms"
+      },
+      {
+        "time": "14:18:05",
+        "level": "INFO",
+        "source": "command",
+        "message": "> stat unit → Frame 8.4 ms | Game 2.1 ms | Draw 4.3 ms | GPU 6.8 ms"
+      },
+      {
+        "time": "14:18:12",
+        "level": "WARN",
+        "source": "command",
+        "message": "> obj list → 42 objects in scene Room · last modified 00:02 ago"
+      }
+    ],
+    "history": [
+      {
+        "time": "14:11:02",
+        "level": "INFO",
+        "source": "command",
+        "message": "> stat fps"
+      },
+      {
+        "time": "14:10:48",
+        "level": "INFO",
+        "source": "command",
+        "message": "> log_level renderer warn"
+      },
+      {
+        "time": "14:09:33",
+        "level": "INFO",
+        "source": "command",
+        "message": "> profile capture start --seconds 20 --channels cpu,gpu,jobs"
+      },
+      {
+        "time": "14:08:15",
+        "level": "ERROR",
+        "source": "command",
+        "message": "> delete asset missing_file (invalid operation)"
+      }
+    ]
+  },
+  "variables": [
+    {
+      "label": "r.MaterialQuality",
+      "value": "2 (High)"
+    },
+    {
+      "label": "r.ShadowQuality",
+      "value": "2"
+    },
+    {
+      "label": "r.PostProcessAAQuality",
+      "value": "3"
+    },
+    {
+      "label": "r.VolumetricFog",
+      "value": "1"
+    },
+    {
+      "label": "log_level",
+      "value": "warn"
+    },
+    {
+      "label": "profiler.enabled",
+      "value": "true"
+    },
+    {
+      "label": "game.maxFPS",
+      "value": "144"
+    }
+  ],
+  "detail": [
+    {
+      "label": "time",
+      "value": "14:12:52.441"
+    },
+    {
+      "label": "category",
+      "value": "scene.load"
+    },
+    {
+      "label": "profile",
+      "value": "Editor"
+    },
+    {
+      "label": "operation.id",
+      "value": "op scene reload 42"
+    },
+    {
+      "label": "asset.guid",
+      "value": "01H…A2"
+    },
+    {
+      "label": "action",
+      "value": "Open Asset / Copy / Suppress"
+    }
+  ],
+  "stack": "PrefabResolver::ResolveReference\nSceneDocument::LoadPrefabInstance\nEditorSceneService::ReloadScene\nConsoleAdapter::PublishDiagnostic",
+  "status": [
+    "Profile: Editor (dev overlays on)",
+    "Permissions: full",
+    "buffer 1,247 / 8,192",
+    "dropped 0",
+    "commands queued on main thread"
+  ]
+}

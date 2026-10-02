@@ -20,7 +20,6 @@ namespace Horo::Editor {
         constexpr float kTabHeight = 36.0F;
         constexpr float kToolbarHeight = 42.0F;
         constexpr float kSearchRegionHeight = 30.0F;
-        constexpr float kFooterHeight = 28.0F;
         constexpr float kOuterPadding = 6.0F;
         constexpr float kRowActionsWidth = 48.0F;
 
@@ -56,14 +55,6 @@ namespace Horo::Editor {
                 drawList.AddLine({minimum.x, y}, {minimum.x, yEnd}, color, scale);
                 drawList.AddLine({maximum.x, y}, {maximum.x, yEnd}, color, scale);
             }
-        }
-
-        /** @brief Substitutes the hierarchy object count into one complete localized label. */
-        [[nodiscard]] std::string FormatObjectCount(std::string pattern, const std::size_t count) {
-            constexpr std::string_view token{"{count}"};
-            if (const std::size_t position = pattern.find(token); position != std::string::npos)
-                pattern.replace(position, token.size(), std::to_string(count));
-            return pattern;
         }
 
         /** @brief Draws the reference-height hierarchy tab without changing shared bottom-dock tabs. */
@@ -188,14 +179,14 @@ namespace Horo::Editor {
         }
 
         struct HierarchyIconPresentation {
-            Ui::UiIcon icon{Ui::UiIcon::Package};
+            Ui::UiIcon icon{Ui::UiIcon::SceneObject};
             const char *tooltipKey{nullptr};
             ImVec4 color{};
         };
 
-        /** @brief Builds the temporary Material-symbol presentation shared by scene objects. */
+        /** @brief Builds the shared icon presentation for scene objects. */
         [[nodiscard]] HierarchyIconPresentation SceneObjectIconPresentation(const char *tooltipKey) {
-            return {.icon = Ui::UiIcon::Package, .tooltipKey = tooltipKey, .color = Theme::Muted()};
+            return {.icon = Ui::UiIcon::SceneObject, .tooltipKey = tooltipKey, .color = Theme::Muted()};
         }
 
         [[nodiscard]] HierarchyIconPresentation GetIconPresentation(const HierarchyNodeType type) {
@@ -279,9 +270,18 @@ namespace Horo::Editor {
             return result;
         }
 
-        [[nodiscard]] bool AcceptAssetDrop(const std::optional<SceneObjectId> parent, const AssetSceneDropTarget target,
-                                           const ImVec2 minimum, const ImVec2 maximum, const DocumentRevision revision,
-                                           EditorWorkspaceViewCommandData &command, ImDrawList &drawList) {
+        struct AssetDropRequest {
+            std::optional<SceneObjectId> parent;
+            AssetSceneDropTarget target;
+            ImVec2 minimum;
+            ImVec2 maximum;
+            DocumentRevision revision;
+            EditorWorkspaceViewCommandData &command;
+            ImDrawList &drawList;
+            HierarchyAssetDropZone zone{HierarchyAssetDropZone::Child};
+        };
+
+        [[nodiscard]] bool AcceptAssetDrop(const AssetDropRequest &request) {
             if (!ImGui::BeginDragDropTarget())
                 return false;
             bool delivered = false;
@@ -290,17 +290,24 @@ namespace Horo::Editor {
                                              ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
             if (const std::optional<AssetSceneDragPayload> payload = ReadAssetPayload(accepted); payload.has_value()) {
                 const AssetSceneDropPolicyResult policy = EvaluateAssetSceneDrop(*payload);
-                drawList.AddRect(minimum, maximum, Theme::U32(policy.canInstantiate ? Theme::Accent() : Theme::Err()),
-                                 Theme::Layout::Radius, 0, 2.0F);
-                if (accepted->IsDelivery()) {
+                const ImU32 targetColor = Theme::U32(policy.canInstantiate ? Theme::Accent() : Theme::Err());
+                if (request.zone == HierarchyAssetDropZone::Child) {
+                    request.drawList.AddRect(request.minimum, request.maximum, targetColor, Theme::Layout::Radius, 0, 2.0F);
+                } else {
+                    const float y = request.zone == HierarchyAssetDropZone::BeforeSibling ? request.minimum.y : request.maximum.y;
+                    request.drawList.AddLine({request.minimum.x, y}, {request.maximum.x, y}, targetColor, 3.0F);
+                    request.drawList.AddCircleFilled({request.minimum.x + 2.0F, y}, 3.0F, targetColor);
+                }
+                if (policy.canInstantiate && accepted->IsDelivery()) {
                     delivered = true;
-                    command.command = EditorWorkspaceViewCommand::InstantiateAsset;
-                    command.assetSceneDrop = AssetSceneDropRequest{
+                    request.command.command = EditorWorkspaceViewCommand::InstantiateAsset;
+                    request.command.assetSceneDrop = AssetSceneDropRequest{
                         .assetId = payload->assetId.data(),
                         .assetType = payload->assetType.data(),
-                        .parent = parent,
-                        .target = target,
-                        .documentRevision = revision,
+                        .absoluteAssetPath = payload->absolutePath.data(),
+                        .parent = request.parent,
+                        .target = request.target,
+                        .documentRevision = request.revision,
                     };
                 }
             }
@@ -353,7 +360,28 @@ namespace Horo::Editor {
         ImVec2 nextRowCursor{};
     };
 
+    struct HierarchyRowFrameState {
+        HierarchyRowGeometry geometry;
+        float uiScale{1.0F};
+        float nameFontSize{0.0F};
+        bool rowHovered{false};
+        bool rowFocused{false};
+        bool rowLeftClicked{false};
+        bool rowRightClicked{false};
+        bool selected{false};
+        bool pointerInActions{false};
+        bool assetDropDelivered{false};
+        bool searching{false};
+    };
+
     struct HierarchyPanel::RowFrame {
+        RowFrame(const HierarchyVisibleRow &row, const HierarchyNode &node, ImDrawList &drawList, ImFont &nameFont,
+                 const HierarchyRowFrameState &state)
+            : row(row), node(node), drawList(drawList), nameFont(nameFont), geometry(state.geometry), uiScale(state.uiScale),
+              nameFontSize(state.nameFontSize), rowHovered(state.rowHovered), rowFocused(state.rowFocused),
+              rowLeftClicked(state.rowLeftClicked), rowRightClicked(state.rowRightClicked), selected(state.selected),
+              pointerInActions(state.pointerInActions), assetDropDelivered(state.assetDropDelivered), searching(state.searching) {}
+
         const HierarchyVisibleRow &row;
         const HierarchyNode &node;
         ImDrawList &drawList;
@@ -392,6 +420,34 @@ namespace Horo::Editor {
         bool active{false};
         bool inherited{false};
     };
+
+    namespace {
+        [[nodiscard]] HierarchyRowGeometry BuildRowGeometry(const ImVec2 rowMin, const float listWidth, const std::uint32_t depth,
+                                                            const float uiScale) {
+            const HierarchyRowLayout rowLayout = CalculateHierarchyRowLayout(listWidth, depth, uiScale, kRowActionsWidth * uiScale);
+            const ImVec2 rowMax{rowMin.x + listWidth, rowMin.y + rowLayout.height};
+            const ImVec2 actionsMin{rowMin.x + rowLayout.actions.minimum, rowMin.y};
+            const ImVec2 actionsMax{rowMin.x + rowLayout.actions.maximum, rowMax.y};
+            return {
+                .layout = rowLayout,
+                .rowMin = rowMin,
+                .rowMax = rowMax,
+                .chevronMin = {rowMin.x + rowLayout.chevron.minimum, rowMin.y},
+                .chevronMax = {rowMin.x + rowLayout.chevron.maximum, rowMax.y},
+                .typeIconMin = {rowMin.x + rowLayout.typeIcon.minimum, rowMin.y},
+                .typeIconMax = {rowMin.x + rowLayout.typeIcon.maximum, rowMax.y},
+                .labelMin = {rowMin.x + rowLayout.label.minimum, rowMin.y},
+                .labelMax = {rowMin.x + rowLayout.label.maximum, rowMax.y},
+                .actionsMin = actionsMin,
+                .actionsMax = actionsMax,
+                .visibilityMin = {rowMin.x + rowLayout.visibilityAction.minimum, rowMin.y},
+                .visibilityMax = {rowMin.x + rowLayout.visibilityAction.maximum, rowMax.y},
+                .lockMin = {rowMin.x + rowLayout.lockAction.minimum, rowMin.y},
+                .lockMax = {rowMin.x + rowLayout.lockAction.maximum, rowMax.y},
+                .nextRowCursor = ImVec2{rowMin.x, rowMax.y},
+            };
+        }
+    }  // namespace
 
     void HierarchyPanel::OnAttach(PanelContext &context) {
         inputRouter_ = context.inputRouter;
@@ -730,86 +786,89 @@ namespace Horo::Editor {
         }
     }
 
-    bool HierarchyPanel::DrawRows(const std::vector<HierarchyVisibleRow> &rows, const float listWidth, const float outerPadding,
-                                  const float uiScale, const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+    bool HierarchyPanel::AcceptRowAssetDrop(const HierarchyNodeId nodeId, const float normalizedRowY, const ImVec2 &rowMin,
+                                            const ImVec2 &rowMax, const EditorWorkspaceViewModel &viewModel,
+                                            EditorWorkspaceViewCommandData &command, ImDrawList &drawList) const {
+        const std::optional<HierarchyNodeId> projectedParent = editSession_.ParentId(nodeId);
+        const std::optional<SceneObjectId> nodeParent =
+            projectedParent.has_value() ? std::optional{SceneObjectId{*projectedParent}} : std::nullopt;
+        const HierarchyAssetDropPlacement assetPlacement =
+            ResolveHierarchyAssetDropPlacement(normalizedRowY, SceneObjectId{nodeId}, nodeParent);
+        return AcceptAssetDrop({.parent = assetPlacement.parent,
+                                .target = assetPlacement.target,
+                                .minimum = rowMin,
+                                .maximum = rowMax,
+                                .revision = viewModel.documentRevision,
+                                .command = command,
+                                .drawList = drawList,
+                                .zone = assetPlacement.zone});
+    }
+
+    HierarchyPanel::RowFrame HierarchyPanel::BuildRowFrame(const HierarchyVisibleRow &row, const RowDrawLayout &drawLayout,
+                                                           const EditorWorkspaceViewModel &viewModel,
+                                                           EditorWorkspaceViewCommandData &command, ImDrawList &drawList,
+                                                           const EditorGuiContext &context) const {
+        const HierarchyNode &node = *row.node;
+        ImFont &nameFont = *ResolveFont(node.children.empty() ? context.theme.fonts.sans : context.theme.fonts.sansEmphasis);
+        ImGui::PushID(&node.id);
+        ImGui::SetCursorPosX(drawLayout.outerPadding);
+        const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+        const HierarchyRowGeometry geometry = BuildRowGeometry(rowMin, drawLayout.listWidth, row.depth, drawLayout.uiScale);
+        ImGui::SetNextItemAllowOverlap();
+        ImGui::InvisibleButton("##hierarchy_object_row", {drawLayout.listWidth, geometry.layout.height});
+        const ImVec2 nextRowCursor = ImGui::GetCursorScreenPos();
+        const bool rowHovered = ImGui::IsItemHovered();
+        const bool rowFocused = ImGui::IsItemFocused();
+        const bool rowLeftClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+        const bool rowRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
+        const bool pointerInActions = ImGui::IsMouseHoveringRect(geometry.actionsMin, geometry.actionsMax);
+        const float normalizedRowY = std::clamp((ImGui::GetMousePos().y - geometry.rowMin.y) / geometry.layout.height, 0.0F, 1.0F);
+        const bool assetDropDelivered =
+            AcceptRowAssetDrop(node.id, normalizedRowY, geometry.rowMin, geometry.rowMax, viewModel, command, drawList);
+        HierarchyRowGeometry frameGeometry = geometry;
+        frameGeometry.nextRowCursor = nextRowCursor;
+        return RowFrame{row,
+                        node,
+                        drawList,
+                        nameFont,
+                        {.geometry = frameGeometry,
+                         .uiScale = drawLayout.uiScale,
+                         .nameFontSize = Theme::TextPx::Label(),
+                         .rowHovered = rowHovered,
+                         .rowFocused = rowFocused,
+                         .rowLeftClicked = rowLeftClicked,
+                         .rowRightClicked = rowRightClicked,
+                         .selected = editSession_.IsSelected(node.id),
+                         .pointerInActions = pointerInActions,
+                         .assetDropDelivered = assetDropDelivered,
+                         .searching = searchBuffer_[0] != '\0'}};
+    }
+
+    bool HierarchyPanel::DrawRows(const std::vector<HierarchyVisibleRow> &rows, const RowDrawLayout &layout,
+                                  const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                   const EditorGuiContext &context) {
         bool pendingDelete = false;
         ImDrawList &drawList = *ImGui::GetWindowDrawList();
-        const float nameFontSize = Theme::TextPx::Label();
         const bool workspaceEligible =
             inputRouter_ != nullptr && workspaceInputContext_ != nullptr && inputRouter_->IsContextActive(*workspaceInputContext_);
 
         for (const HierarchyVisibleRow &row : rows) {
-            const HierarchyNode &node = *row.node;
-            ImFont &nameFont = *ResolveFont(node.children.empty() ? context.theme.fonts.sans : context.theme.fonts.sansEmphasis);
-            ImGui::PushID(&node.id);
-            ImGui::SetCursorPosX(outerPadding);
-            const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-            const HierarchyRowLayout layout = CalculateHierarchyRowLayout(listWidth, row.depth, uiScale, kRowActionsWidth * uiScale);
-            const ImVec2 rowMax{rowMin.x + listWidth, rowMin.y + layout.height};
-            const ImVec2 actionsMin{rowMin.x + layout.actions.minimum, rowMin.y};
-            const ImVec2 actionsMax{rowMin.x + layout.actions.maximum, rowMax.y};
-            ImGui::SetNextItemAllowOverlap();
-            ImGui::InvisibleButton("##hierarchy_object_row", {listWidth, layout.height});
-            const ImVec2 nextRowCursor = ImGui::GetCursorScreenPos();
-            const bool rowHovered = ImGui::IsItemHovered();
-            const bool rowFocused = ImGui::IsItemFocused();
-            const bool rowLeftClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-            const bool rowRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
-            const bool pointerInActions = ImGui::IsMouseHoveringRect(actionsMin, actionsMax);
-            const bool assetDropDelivered = AcceptAssetDrop(SceneObjectId{node.id}, AssetSceneDropTarget::HierarchyChild, rowMin, rowMax,
-                                                            viewModel.documentRevision, command, drawList);
-            const RowFrame frame{
-                .row = row,
-                .node = node,
-                .drawList = drawList,
-                .nameFont = nameFont,
-                .geometry =
-                    {
-                        .layout = layout,
-                        .rowMin = rowMin,
-                        .rowMax = rowMax,
-                        .chevronMin = {rowMin.x + layout.chevron.minimum, rowMin.y},
-                        .chevronMax = {rowMin.x + layout.chevron.maximum, rowMax.y},
-                        .typeIconMin = {rowMin.x + layout.typeIcon.minimum, rowMin.y},
-                        .typeIconMax = {rowMin.x + layout.typeIcon.maximum, rowMax.y},
-                        .labelMin = {rowMin.x + layout.label.minimum, rowMin.y},
-                        .labelMax = {rowMin.x + layout.label.maximum, rowMax.y},
-                        .actionsMin = actionsMin,
-                        .actionsMax = actionsMax,
-                        .visibilityMin = {rowMin.x + layout.visibilityAction.minimum, rowMin.y},
-                        .visibilityMax = {rowMin.x + layout.visibilityAction.maximum, rowMax.y},
-                        .lockMin = {rowMin.x + layout.lockAction.minimum, rowMin.y},
-                        .lockMax = {rowMin.x + layout.lockAction.maximum, rowMax.y},
-                        .nextRowCursor = nextRowCursor,
-                    },
-                .uiScale = uiScale,
-                .nameFontSize = nameFontSize,
-                .rowHovered = rowHovered,
-                .rowFocused = rowFocused,
-                .rowLeftClicked = rowLeftClicked,
-                .rowRightClicked = rowRightClicked,
-                .selected = editSession_.IsSelected(node.id),
-                .pointerInActions = pointerInActions,
-                .assetDropDelivered = assetDropDelivered,
-                .searching = searchBuffer_[0] != '\0',
-            };
-
+            const RowFrame frame = BuildRowFrame(row, layout, viewModel, command, drawList, context);
             if (workspaceEligible && frame.rowRightClicked && !frame.pointerInActions && !frame.selected) {
-                editSession_.Select(node.id);
-                command = editSession_.SelectCommand(node.id, HierarchySelectionGesture::Replace);
+                editSession_.Select(frame.node.id);
+                command = editSession_.SelectCommand(frame.node.id, HierarchySelectionGesture::Replace);
             }
             DrawRowContextMenu(frame, workspaceEligible, pendingDelete, command, context);
             const RowControls controls = DrawRowControls(frame, workspaceEligible, context);
             DrawRowPresentation(frame, controls, context);
             ApplyRowInteraction(frame, controls, workspaceEligible, command);
             DrawRowLabel(frame, command);
-            ImGui::SetCursorScreenPos(nextRowCursor);
+            ImGui::SetCursorScreenPos(frame.geometry.nextRowCursor);
             ImGui::PopID();
         }
 
         if (rows.empty()) {
-            ImGui::SetCursorPosX(outerPadding + 8.0F * uiScale);
+            ImGui::SetCursorPosX(layout.outerPadding + 8.0F * layout.uiScale);
             ImGui::PushStyleColor(ImGuiCol_Text, Theme::Dim());
             ImGui::TextUnformatted(
                 context.localization
@@ -850,21 +909,27 @@ namespace Horo::Editor {
         const float outerPadding = kOuterPadding * uiScale;
         const float contentHeight = std::max(1.0F, size.y - tabHeight);
         const float scrollTop = toolbarHeight + kSearchRegionHeight * uiScale;
-        const float scrollHeight = std::max(1.0F, contentHeight - scrollTop - kFooterHeight * uiScale);
+        const float scrollHeight = std::max(1.0F, contentHeight - scrollTop);
         ImGui::SetCursorPos({0.0F, scrollTop});
         ImGui::BeginChild("##HierarchyScroll", {size.x, scrollHeight}, false, ImGuiWindowFlags_NoSavedSettings);
         ImGui::SetCursorPosY(5.0F * uiScale);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, 0.0F));
         const float listWidth = std::max(1.0F, size.x - outerPadding * 2.0F);
         ImDrawList *drawList = ImGui::GetWindowDrawList();
-        bool pendingDelete = DrawRows(visibleRows, listWidth, outerPadding, uiScale, vm, cmd, ctx);
+        bool pendingDelete =
+            DrawRows(visibleRows, RowDrawLayout{.listWidth = listWidth, .outerPadding = outerPadding, .uiScale = uiScale}, vm, cmd, ctx);
 
         const ImVec2 remaining = ImGui::GetContentRegionAvail();
         const ImVec2 rootDropMin = ImGui::GetCursorScreenPos();
         ImGui::InvisibleButton("##HierarchyRootDrop", ImVec2(std::max(1.0F, remaining.x), std::max(32.0F, remaining.y)));
         const ImVec2 rootDropMax{rootDropMin.x + std::max(1.0F, remaining.x), rootDropMin.y + std::max(32.0F, remaining.y)};
-        static_cast<void>(AcceptAssetDrop(std::nullopt, AssetSceneDropTarget::HierarchyRoot, rootDropMin, rootDropMax, vm.documentRevision,
-                                          cmd, *drawList));
+        static_cast<void>(AcceptAssetDrop({.parent = std::nullopt,
+                                           .target = AssetSceneDropTarget::HierarchyRoot,
+                                           .minimum = rootDropMin,
+                                           .maximum = rootDropMax,
+                                           .revision = vm.documentRevision,
+                                           .command = cmd,
+                                           .drawList = *drawList}));
         if (remaining.y >= 64.0F * uiScale) {
             const ImVec2 zoneMin{rootDropMin.x + 12.0F * uiScale, rootDropMax.y - 64.0F * uiScale};
             const ImVec2 zoneMax{rootDropMax.x - 12.0F * uiScale, rootDropMax.y - 10.0F * uiScale};
@@ -889,24 +954,6 @@ namespace Horo::Editor {
         }
         ImGui::PopStyleVar();
         ImGui::EndChild();
-
-        ImGui::SetCursorPos({0.0F, contentHeight - kFooterHeight * uiScale});
-        const ImVec2 footerMin = ImGui::GetCursorScreenPos();
-        ImDrawList &footerDrawList = *ImGui::GetWindowDrawList();
-        footerDrawList.AddRectFilled(footerMin, {footerMin.x + size.x, footerMin.y + kFooterHeight * uiScale}, Theme::U32(Theme::Bg0()));
-        footerDrawList.AddLine(footerMin, {footerMin.x + size.x, footerMin.y}, Theme::U32(Theme::Border()));
-        ImFont *footerFont = ResolveFont(ctx.theme.fonts.sans);
-        const float footerFontSize = Theme::TextPx::Caption();
-        const std::string objectCount =
-            FormatObjectCount(ctx.localization.Get("editor", "workspace.hierarchy.footer.objects"), vm.objects.size());
-        const std::string &footerLabel = ctx.localization.Get("editor", "workspace.hierarchy.footer.label");
-        const ImVec2 footerLabelSize = footerFont->CalcTextSizeA(footerFontSize, 100000.0F, 0.0F, footerLabel.c_str());
-        const float footerTextY = footerMin.y + (kFooterHeight * uiScale - footerLabelSize.y) * 0.5F;
-        footerDrawList.AddText(footerFont, footerFontSize, {footerMin.x + 10.0F * uiScale, footerTextY}, Theme::U32(Theme::Dim()),
-                               objectCount.c_str());
-        footerDrawList.AddText(footerFont, footerFontSize, {footerMin.x + size.x - 10.0F * uiScale - footerLabelSize.x, footerTextY},
-                               Theme::U32(Theme::Dim()), footerLabel.c_str());
-        ImGui::Dummy({size.x, kFooterHeight * uiScale});
 
         if (interaction.workspaceEligible && interaction.panelFocused && !interaction.searchActive && !renamingId_.has_value() &&
             editSession_.SelectedId().has_value()) {

@@ -1,8 +1,11 @@
+#include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/WelcomeController.h"
 #include "support/editor/ScopedTestHome.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <variant>
@@ -85,5 +88,34 @@ namespace {
         REQUIRE((loaded.front().compatibility->status == ProjectCompatibilityStatus::Current));
         REQUIRE((loaded.front().compatibility->projectVersion == current));
         REQUIRE((loaded.front().compatibility->inspectionState == RecentProjectInspectionState::Cached));
+    }
+
+    TEST_CASE("Removing the last recent project persists an empty list", "[unit][editor][welcome]") {
+        const Horo::TestSupport::ScopedTestHome home{"horo-welcome-empty-list"};
+        REQUIRE(Horo::Editor::SaveRecentProjectsToDisk({}));
+        REQUIRE(Horo::Editor::LoadRecentProjectsFromDisk().empty());
+    }
+
+    TEST_CASE("Project deletion requires a project marker", "[unit][editor][welcome]") {
+        const Horo::TestSupport::ScopedTestHome home{"horo-welcome-delete"};
+        const std::filesystem::path root =
+            std::filesystem::temp_directory_path() /
+            ("horo-welcome-delete-project-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        REQUIRE(std::filesystem::create_directories(root / ".horo"));
+        REQUIRE_FALSE(Horo::Editor::DeleteRecentProjectFiles(root));
+        REQUIRE(std::filesystem::exists(root));
+
+        std::ofstream(root / ".horo/project.json") << "{}";
+        REQUIRE(Horo::Editor::DeleteRecentProjectFiles(root));
+        REQUIRE_FALSE(std::filesystem::exists(root));
+    }
+
+    TEST_CASE("Project deletion rejects the user home even with a project marker", "[unit][editor][welcome]") {
+        const Horo::TestSupport::ScopedTestHome home{"horo-welcome-protected-home"};
+        const std::filesystem::path root = Horo::Editor::ResolveEditorSettingsPath().parent_path().parent_path();
+        REQUIRE(std::filesystem::create_directories(root / ".horo"));
+        std::ofstream(root / ".horo/project.json") << "{}";
+        REQUIRE_FALSE(Horo::Editor::DeleteRecentProjectFiles(root));
+        REQUIRE(std::filesystem::exists(root / ".horo/project.json"));
     }
 }  // namespace

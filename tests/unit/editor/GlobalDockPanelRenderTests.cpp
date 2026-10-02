@@ -20,7 +20,6 @@
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
 
 #include <array>
-#include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdint>
@@ -29,6 +28,7 @@
 #include <fstream>
 #include <imgui.h>
 #include <memory>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -83,6 +83,9 @@ namespace {
 
         REQUIRE(Horo::Editor::GlobalDockLabelFontSize() == Horo::Editor::Theme::TextPx::Label());
         REQUIRE(Horo::Editor::AssetBrowserLayout::SecondaryFontSize() == Horo::Editor::Theme::TextPx::Caption());
+        const float secondaryBottom = Horo::Editor::AssetBrowserLayout::CardPreviewHeight + 6.0F + Horo::Editor::GlobalDockLabelFontSize() +
+                                      2.0F + Horo::Editor::AssetBrowserLayout::SecondaryFontSize();
+        REQUIRE(Horo::Editor::AssetBrowserLayout::CardHeight - secondaryBottom >= 12.0F);
 
         const auto wide = ComputeAssetBrowserGridMetrics(580.0F);
         REQUIRE((wide.columns == 3));
@@ -112,17 +115,16 @@ namespace {
         REQUIRE_FALSE(panel.ActivatePane("test.global_dock.missing"));
     }
 
-    TEST_CASE("Global dock layout partitions optional regions without overlap", "[unit][editor][gui]") {
+    TEST_CASE("Global dock layout gives the content all space below the toolbar", "[unit][editor][gui]") {
         using namespace Horo::Editor;
 
         const GlobalDockPaneRegions regions =
-            ResolveGlobalDockPaneRegions({10.0F, 20.0F}, 800.0F, 300.0F, {.hasToolbar = true, .hasFooter = true, .leftRailWidth = 42.0F});
+            ResolveGlobalDockPaneRegions({10.0F, 20.0F}, 800.0F, 300.0F, {.hasToolbar = true, .leftRailWidth = 42.0F});
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         REQUIRE((regions.contentOrigin.x == 52.0F));
         REQUIRE((regions.contentOrigin.y == 20.0F + metrics.toolbarHeight));
         REQUIRE((regions.contentWidth == 758.0F));
-        REQUIRE((regions.contentHeight == 300.0F - metrics.toolbarHeight - metrics.footerHeight));
-        REQUIRE((regions.footerOrigin.y == 20.0F + 300.0F - metrics.footerHeight));
+        REQUIRE((regions.contentHeight == 300.0F - metrics.toolbarHeight));
         REQUIRE((regions.leftRailHeight == regions.contentHeight));
     }
 
@@ -175,6 +177,9 @@ namespace {
         REQUIRE((factoryCalls == 1));
 
         const auto &panels = registry.GetAllPanels();
+        REQUIRE(std::ranges::none_of(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {
+            return panel->GetId() == "horo.input_mapping";
+        }));
         const auto globalDock = std::ranges::find_if(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {
             return panel->GetId() == "horo.global_dock";
         });
@@ -414,7 +419,7 @@ namespace {
         REQUIRE((byDescendingType == std::vector<std::size_t>{0, 2, 3, 1}));
     }
 
-    TEST_CASE("Content browser uses the mesh fallback for topology-free legacy assets", "[unit][editor][gui]") {
+    TEST_CASE("Content browser defers mesh payload preview generation", "[unit][editor][gui]") {
         using namespace Horo;
         using namespace Horo::Editor;
 
@@ -425,27 +430,9 @@ namespace {
         std::filesystem::create_directories(assetRoot);
         const std::filesystem::path assetPath = assetRoot / "legacy.horoasset";
 
-        std::vector<std::uint8_t> payload;
-        const auto writeU32 = [&payload](const std::uint32_t value) {
-            for (unsigned shift = 0; shift < 32; shift += 8)
-                payload.push_back(static_cast<std::uint8_t>((value >> shift) & 0xffU));
-        };
-        const auto writeFloat = [&writeU32](const float value) {
-            writeU32(std::bit_cast<std::uint32_t>(value));
-        };
-        writeU32(1);
-        writeU32(2);
-        writeU32(1);
-        for (const float bound : {-1.0F, -1.0F, -1.0F, 1.0F, 1.0F, 1.0F})
-            writeFloat(bound);
-        writeU32(24);
-        writeU32(0);
-        writeU32(0);
-        for (const float component : {-1.0F, 0.0F, 0.0F, 1.0F, 0.0F, 0.0F})
-            writeFloat(component);
         {
-            std::ofstream output(assetPath, std::ios::binary);
-            output.write(reinterpret_cast<const char *>(payload.data()), static_cast<std::streamsize>(payload.size()));
+            std::ofstream output(assetPath);
+            output << "mesh payload is decoded by the asynchronous preview provider";
         }
         {
             std::ofstream metadata(assetPath.string() + ".meta");

@@ -327,7 +327,7 @@ namespace Horo::Editor {
                                                  "Unable to write project metadata into the staging directory."};
             }
 
-            for (const char *directory : {"assets/models", "assets/textures", "assets/materials", "assets/shaders", "assets/scenes"}) {
+            for (const char *directory : {"Assets/Models", "Assets/Textures", "Assets/Materials", "Assets/Shaders", "Assets/Scenes"}) {
                 std::filesystem::create_directories(staging / directory, error);
                 if (error)
                     return StagingPreparationFailure{ProjectCreationErrorCode::WriteFailed, "Unable to create project asset scaffolding."};

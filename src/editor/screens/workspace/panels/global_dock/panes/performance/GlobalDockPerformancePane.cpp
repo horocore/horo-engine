@@ -51,12 +51,11 @@ namespace Horo::Editor {
     void GlobalDockPerformancePane::Draw(const ImVec2 &contentOrigin, const float contentWidth, const EditorGuiContext &context) {
         const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
         const GlobalDockPaneRegions regions =
-            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true, .hasFooter = true});
+            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
         DrawToolbar(regions.toolbarOrigin, regions.toolbarWidth, context);
         const float metricHeight = DrawMetrics(regions.contentOrigin, regions.contentWidth, context);
         DrawTable({regions.contentOrigin.x, regions.contentOrigin.y + metricHeight}, regions.contentWidth,
                   std::max(1.0F, regions.contentHeight - metricHeight), context);
-        DrawFooter(regions.footerOrigin, regions.footerWidth, context);
     }
 
     void GlobalDockPerformancePane::DrawToolbar(const ImVec2 &contentOrigin, const float contentWidth, const EditorGuiContext &context) {
@@ -65,7 +64,7 @@ namespace Horo::Editor {
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
         const GlobalDockPaneRegions regions =
-            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true, .hasFooter = true});
+            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
         const auto localized = [&](const char *key) -> const std::string & {
             return context.localization.Get("editor", key);
         };
@@ -248,30 +247,4 @@ namespace Horo::Editor {
         ImGui::PopID();
     }
 
-    void GlobalDockPerformancePane::DrawFooter(const ImVec2 &origin, const float width, const EditorGuiContext &context) const {
-        const Theme::Fonts &fonts = context.theme.fonts;
-        const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
-        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
-        const auto localized = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
-        };
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
-        DrawGlobalDockFooterSurface(origin, width, metrics.footerHeight);
-        const float footerY = origin.y + (metrics.footerHeight - Theme::TextPx::Caption()) * 0.5F;
-        const std::string &sampling = localized("workspace.global_dock.performance.footer.sampling");
-        const std::string &misses = localized("workspace.global_dock.performance.footer.misses");
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {origin.x + metrics.contentPadding, footerY},
-                          Theme::U32(Theme::Muted()), sampling.c_str());
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(),
-                          {origin.x + metrics.contentPadding +
-                               MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Caption(), sampling) + 10.0F * scale,
-                           footerY},
-                          Theme::U32(Theme::Muted()), misses.c_str());
-        const std::string &captureAvailable = localized("workspace.global_dock.performance.footer.capture_available");
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(),
-                          {origin.x + width - metrics.contentPadding -
-                               MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Caption(), captureAvailable),
-                           footerY},
-                          Theme::U32(Theme::Muted()), captureAvailable.c_str());
-    }
 }  // namespace Horo::Editor

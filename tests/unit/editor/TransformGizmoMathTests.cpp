@@ -1,12 +1,24 @@
+#include "editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.h"
 #include "editor/screens/workspace/panels/viewport/gizmo/TransformGizmoGeometry.h"
 #include "editor/screens/workspace/panels/viewport/gizmo/TransformGizmoMath.h"
+#include "editor/screens/workspace/panels/viewport/interaction/ViewportInteractionCapture.h"
 
+#include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <limits>
+#include <utility>
+#include <vector>
 
 namespace {
     using namespace Horo;
     using namespace Horo::Editor;
+
+    class TestViewportCaptureSink final : public IViewportCaptureCancellationSink {
+    public:
+        void OnViewportCaptureCancelled(const Input::CaptureCancellationReason) noexcept override {}
+    };
 
     [[nodiscard]] BeginTransformGizmoMathRequest MakeRequest() {
         return BeginTransformGizmoMathRequest{
@@ -20,7 +32,47 @@ namespace {
             .pixelsPerWorldUnit = 50.0F,
         };
     }
+
 }  // namespace
+
+TEST_CASE("Transform gizmo controller resolves selected objects before filtering inactive tools", "[unit][editor][viewport][gizmo]") {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO &io = ImGui::GetIO();
+    io.DisplaySize = {400.0F, 400.0F};
+    io.DeltaTime = 1.0F / 60.0F;
+    io.Fonts->AddFontDefault();
+    static_cast<void>(io.Fonts->Build());
+    ImGui::NewFrame();
+    ImGui::Begin("TransformGizmoControllerTest");
+
+    TestViewportCaptureSink sink;
+    ViewportInteractionCapture capture(sink);
+    TransformGizmoController controller;
+    Input::RawInputSnapshot input;
+    EditorWorkspaceViewModel viewModel;
+    EditorWorkspaceViewCommandData command;
+    viewModel.activeTransformTool = EditorTransformTool::Move;
+    TransformGizmoDrawContext context{.origin = {},
+                                      .width = 400.0F,
+                                      .height = 400.0F,
+                                      .hovered = false,
+                                      .input = input,
+                                      .viewModel = viewModel,
+                                      .command = command};
+
+    CHECK_FALSE(controller.Draw(*ImGui::GetWindowDrawList(), context, capture));
+
+    viewModel.objects.push_back(SceneObject{.id = SceneObjectId{1}, .name = "Selected"});
+    viewModel.primarySelection = SceneObjectId{1};
+    viewModel.activeTransformTool = EditorTransformTool::Select;
+    CHECK_FALSE(controller.Draw(*ImGui::GetWindowDrawList(), context, capture));
+    CHECK_FALSE(controller.IsActive());
+
+    ImGui::End();
+    ImGui::Render();
+    ImGui::DestroyContext();
+}
 
 TEST_CASE("Transform gizmo rejects singular parents before a drag begins", "[unit][editor][viewport][gizmo]") {
     BeginTransformGizmoMathRequest request = MakeRequest();
@@ -72,6 +124,30 @@ TEST_CASE("Move gizmo maps a world displacement through the parent inverse", "[u
     const Math::Vec3 resolvedPosition = Math::TransformPoint(resolvedWorld, {});
     REQUIRE((Math::NearlyEqual(resolvedPosition, session.Value().initialWorldPosition + Math::Vec3{2.0F, 0.0F, 0.0F}, 1e-5F)));
     REQUIRE((Math::NearlyEqual(outcome.Value().worldPosition, resolvedPosition, 1e-5F)));
+}
+
+TEST_CASE("Move gizmo plane drag stays on its plane and maps through the parent", "[unit][editor][viewport][gizmo]") {
+    const Math::Transform parent{
+        .translation = {4.0F, -2.0F, 1.0F},
+        .rotation = Math::Quaternion::FromEulerRadians({0.0F, 0.35F, 0.0F}),
+        .scale = {2.0F, 0.75F, 1.5F},
+    };
+    BeginTransformGizmoMathRequest request = MakeRequest();
+    request.axis = 4;
+    request.worldAxis = {1.0F, 0.0F, 0.0F};
+    request.parentWorldTransform = parent.ToMatrix();
+    request.initialWorldTransform = parent.ToMatrix();
+    const Result<TransformGizmoMathSession> session = BeginTransformGizmoMath(request);
+    REQUIRE(session.HasValue());
+    REQUIRE(EvaluateTransformGizmoMath(session.Value(), {}).HasError());
+
+    const Result<TransformGizmoMathOutcome> outcome =
+        EvaluateTransformGizmoMath(session.Value(), TransformGizmoMathUpdate{.worldTranslation = Math::Vec3{3.0F, 2.0F, -4.0F}});
+    REQUIRE(outcome.HasValue());
+    const Math::Vec3 expected = session.Value().initialWorldPosition + Math::Vec3{0.0F, 2.0F, -4.0F};
+    REQUIRE((Math::NearlyEqual(outcome.Value().worldPosition, expected, 1e-5F)));
+    const Math::Vec3 resolved = Math::TransformPoint(Math::Multiply(parent.ToMatrix(), outcome.Value().localTransform.ToMatrix()), {});
+    REQUIRE((Math::NearlyEqual(resolved, expected, 1e-5F)));
 }
 
 TEST_CASE("World gizmo scale remains representable under a rotated non-uniform parent", "[unit][editor][viewport][gizmo]") {
@@ -190,6 +266,41 @@ TEST_CASE("Transform gizmo rotation projection distinguishes misses from invalid
         {.camera = camera, .center = {}, .normal = {}, .pointer = {50.0F, 50.0F}, .origin = {}, .width = 100.0F, .height = 100.0F});
     REQUIRE((invalid.HasError()));
     REQUIRE((ProjectTransformGizmoRotationVector({.camera = camera, .width = 0.0F, .height = 100.0F}).HasError()));
+}
+
+TEST_CASE("Linear gizmo identifies axes without a stable arrow direction", "[unit][editor][viewport][gizmo]") {
+    EditorViewportCamera camera;
+
+    const Result<bool> xVisible = HasTransformGizmoLinearAxisScreenDirection(camera, {1.0F, 0.0F, 0.0F});
+    const Result<bool> yVisible = HasTransformGizmoLinearAxisScreenDirection(camera, {0.0F, 1.0F, 0.0F});
+    const Result<bool> zVisible = HasTransformGizmoLinearAxisScreenDirection(camera, {0.0F, 0.0F, 1.0F});
+
+    REQUIRE(xVisible.HasValue());
+    REQUIRE(yVisible.HasValue());
+    REQUIRE(zVisible.HasValue());
+    REQUIRE(xVisible.Value());
+    REQUIRE(yVisible.Value());
+    REQUIRE_FALSE(zVisible.Value());
+}
+
+TEST_CASE("Linear gizmo axis visibility is invariant under camera strafe", "[unit][editor][viewport][gizmo]") {
+    EditorViewportCamera camera;
+    const Result<bool> before = HasTransformGizmoLinearAxisScreenDirection(camera, {0.0F, 0.0F, 1.0F});
+    camera.position.x += 3.0F;
+    camera.target.x += 3.0F;
+    const Result<bool> after = HasTransformGizmoLinearAxisScreenDirection(camera, {0.0F, 0.0F, 1.0F});
+
+    REQUIRE(before.HasValue());
+    REQUIRE(after.HasValue());
+    REQUIRE(before.Value() == after.Value());
+    REQUIRE_FALSE(after.Value());
+}
+
+TEST_CASE("Linear gizmo axis visibility validates camera and axis inputs", "[unit][editor][viewport][gizmo]") {
+    EditorViewportCamera camera;
+    REQUIRE(HasTransformGizmoLinearAxisScreenDirection(camera, {}).HasError());
+    camera.target = camera.position;
+    REQUIRE(HasTransformGizmoLinearAxisScreenDirection(camera, {1.0F, 0.0F, 0.0F}).HasError());
 }
 
 TEST_CASE("Transform gizmo rejects non-representable extreme updates", "[unit][editor][viewport][gizmo]") {

@@ -61,12 +61,12 @@ MyGame/
         editor_workspace.json  # last editor layout and UI state
         asset_index.json       # derived asset lookup registry
         local/                 # optional machine-local overrides, ignored
-    assets/                    # source assets
-        models/
-        textures/
-        materials/
-        shaders/
-        scenes/
+    Assets/                    # source assets in newly created projects
+        Models/
+        Textures/
+        Materials/
+        Shaders/
+        Scenes/
     src/                       # optional game code
     CMakeLists.txt             # optional project build file
     build/                     # generated build outputs and asset caches
@@ -74,6 +74,14 @@ MyGame/
 
 The project root is the directory containing `.horo/`. All project-relative
 paths are resolved from this root.
+
+New project templates create `Assets/` with title-cased category folders and
+store default scenes under `Assets/Scenes/`. Existing projects with a lowercase
+`assets/` root retain their on-disk spelling and paths; opening them does not
+rename or duplicate their directories. Asset and scene paths preserve the
+project's actual root spelling, including on case-sensitive filesystems. The
+`assets` JSON property in the derived index is a schema key, not a directory
+name.
 
 Durable portable metadata, machine-local state, and derived output remain
 separate:
@@ -106,7 +114,7 @@ into `.horo/packages.json`; it is not a second package request authority.
     "renderBackend": "opengl",
     "physicsEnabled": true,
     "targetFrameRate": 60,
-    "defaultScene": "assets/scenes/main.horo",
+    "defaultScene": "Assets/Scenes/main.horo",
     "assetCompression": "lz4",
     "textureCompression": "bc7",
     "buildProfile": "desktop-debug",
@@ -281,7 +289,7 @@ durable `trash.json` manifest that records every original absolute path.
 ```json
 {
   "schemaVersion": 1,
-  "scenePath": "assets/scenes/main.horo",
+  "scenePath": "Assets/Scenes/main.horo",
   "selection": ["obj_wall_north"],
   "panelLayout": {
     "schemaVersion": 1,
@@ -410,8 +418,8 @@ stack are transient GUI state and are not stored in the workspace document.
     "a1b2c3d4-e5f6-4890-abcd-ef1234567890": {
       "assetId": "a1b2c3d4-e5f6-4890-abcd-ef1234567890",
       "assetType": "core.mesh",
-      "sourcePath": "assets/models/cube.fbx",
-      "metadataPath": "assets/models/cube.fbx.horo"
+      "sourcePath": "Assets/Models/cube.fbx",
+      "metadataPath": "Assets/Models/cube.fbx.horo"
     }
   }
 }
@@ -461,7 +469,8 @@ manually.
 
 ## Scene Documents
 
-Scene documents live in `assets/scenes/` and are editor-authorable files. They
+Scene documents live in `Assets/Scenes/` for new projects, or the existing
+`assets/scenes/` directory for legacy projects, and are editor-authorable files. They
 store:
 
 - object hierarchy
@@ -715,7 +724,7 @@ Required coverage:
   trusted same-release-line compatibility proof is verified
 - each supported migration fixture upgrades deterministically and atomically
 - failed migration preserves the original portable metadata
-- `defaultScene` resolves from the project root as `assets/scenes/...`
+- `defaultScene` resolves from the project root using the stored spelling, such as `Assets/Scenes/...`
 - settings exist in one canonical location and concurrent saves detect revision
   conflicts
 - read-only validation succeeds without writing an index or workspace state
@@ -736,9 +745,9 @@ Required coverage:
 
 ## Related Documents
 
-- [Project Settings UI Reference](./project-settings.html)
+- [Project Settings UI Reference](../../../mock-studio/designs.md#architecture-editor-project-settings)
 
-- [New Project Wizard](./new-project-wizard.html): HTML reference design for
+- [New Project Wizard](../../../mock-studio/designs.md#architecture-editor-new-project-wizard): React mock design for
   project creation, template selection, path validation, and initial settings.
 - [System Design](../foundation/system-design.md): host and module boundaries.
 - [Asset Pipeline](../runtime/asset-pipeline.md): source to cooked asset flow.

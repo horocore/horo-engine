@@ -124,6 +124,18 @@ namespace Horo::Editor {
                                                                                    DurableFileSystem &files);
 
     /**
+     * @brief Sets the project default scene to a saved, project-relative scene path.
+     * @param absoluteProjectRoot Absolute project root containing `.horo/project.json`.
+     * @param absoluteScenePath Absolute project-contained `.horo` path to make the default.
+     * @param mutations Shared project mutation coordinator.
+     * @param files Durable filesystem implementation used for atomic metadata replacement.
+     * @return Success after metadata is durably updated, or a typed validation/I/O error.
+     */
+    [[nodiscard]] Result<void> SetProjectDefaultScenePath(const std::filesystem::path &absoluteProjectRoot,
+                                                          const std::filesystem::path &absoluteScenePath,
+                                                          const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+
+    /**
      * @brief Captures the bounded byte identity of a canonical scene without parsing or mutation.
      * @param absoluteProjectRoot Absolute project root that owns the scene.
      * @param absoluteScenePath Absolute project-contained canonical scene path.

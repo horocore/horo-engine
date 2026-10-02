@@ -45,7 +45,6 @@ namespace Horo::Editor {
         void DrawEmptyLogState(float height, const EditorGuiContext &context) const;
         void DrawLogRow(const ImVec2 &origin, float width, float height, const Log::StructuredLogRecord &record,
                         const EditorGuiContext &context);
-        void DrawFooter(const ImVec2 &minimum, float width, const EditorGuiContext &context) const;
         [[nodiscard]] bool RefreshSnapshot();
         [[nodiscard]] bool MatchesSearch(const Log::StructuredLogRecord &record, const std::string &source) const;
         [[nodiscard]] bool MatchesLevel(const Log::StructuredLogRecord &record) const noexcept;
