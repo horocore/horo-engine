@@ -514,6 +514,69 @@ def test_gui_flag_propagates_to_cmake_configure(subprocess_calls: list[list[str]
     assert "-DHORO_ENABLE_IMGUI_UI_TESTS=ON" in cmake_cfg
 
 
+@pytest.mark.parametrize("command", ["build", "test", "check"])
+def test_fetchcontent_directory_reaches_cmake_as_one_argument(
+    command: str, subprocess_calls: list[list[str]], tmp_path: Path
+) -> None:
+    dependencies = tmp_path / "dependencies with spaces türkçe"
+    assert dev.main([command, "-B", str(tmp_path), "--fetchcontent-base-dir", str(dependencies)]) == 0
+    assert f"-DFETCHCONTENT_BASE_DIR={dependencies.resolve()}" in subprocess_calls[0]
+
+
+@pytest.mark.parametrize("launcher,debug_format", [(None, None), ("ccache", None), ("sccache", "Embedded")])
+def test_compiler_cache_options_configure_both_languages(launcher: str | None, debug_format: str | None) -> None:
+    arguments = dev._compiler_cache_arguments(launcher, debug_format)
+    expected = []
+    if launcher:
+        expected.extend([
+            f"-DCMAKE_C_COMPILER_LAUNCHER={launcher}", f"-DCMAKE_CXX_COMPILER_LAUNCHER={launcher}",
+        ])
+    if debug_format:
+        expected.append(f"-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT={debug_format}")
+    assert arguments == expected
+
+
+def test_fetchcontent_default_preserves_explicit_cmake_override(
+    subprocess_calls: list[list[str]], tmp_path: Path
+) -> None:
+    override = "-DFETCHCONTENT_BASE_DIR=explicit-override"
+    arguments = [override]
+    assert dev.run_build(build_directory=tmp_path, fetchcontent_base_dir=tmp_path / "default", extra_cmake_args=arguments) == 0
+    configure = subprocess_calls[0]
+    assert configure.index(f"-DFETCHCONTENT_BASE_DIR={(tmp_path / 'default').resolve()}") < configure.index(override)
+    assert arguments == [override]
+
+
+def test_skip_build_preserves_ctest_filters_junit_and_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "CTestTestfile.cmake").touch()
+    junit = tmp_path / "results with spaces" / "ctest.xml"
+    calls: list[list[str]] = []
+
+    def fail_ctest(command: Sequence[str], **_: object) -> int:
+        calls.append(list(command))
+        return 8
+
+    monkeypatch.setattr(dev, "execute_subprocess", fail_ctest)
+    assert dev.main([
+        "test", "--skip-build", "-B", str(tmp_path), "-R", "Audio", "-E", "Slow", "--junit", str(junit)
+    ]) == 8
+    assert calls == [[
+        "ctest", "--test-dir", str(tmp_path), "--output-on-failure", "--no-tests=error",
+        "-LE", "gui", "-R", "Audio", "-E", "Slow", "--output-junit", str(junit),
+    ]]
+    assert junit.parent.is_dir()
+
+
+def test_skip_build_rejects_missing_test_configuration(
+    subprocess_calls: list[list[str]], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert dev.main(["test", "--skip-build", "-B", str(tmp_path)]) == 2
+    assert subprocess_calls == []
+    assert "requires a configured test directory" in capsys.readouterr().err
+
+
 def test_grafana_sync_passes_authorization_header(monkeypatch: pytest.MonkeyPatch) -> None:
     endpoint = dev.validate_grafana_url("http://127.0.0.1:3000")
     source_tag = dev._grafana_source_tag(dev.GRAFANA_DASHBOARD_PATH)
