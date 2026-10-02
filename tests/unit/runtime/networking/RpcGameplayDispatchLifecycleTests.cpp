@@ -93,7 +93,7 @@ namespace Horo::Network {
     }
 
     TEST_CASE("RPC serializer callbacks cannot publish after revocation or bypass the declared type", "[unit][network][rpc]") {
-        for (const int mode : {0, 1, 2, 3}) {
+        for (const int mode : {0, 1, 2, 3, 4}) {
             Fixture fixture(false, RpcTarget::Authority, true, true);
             auto codec = std::make_shared<CallbackSerializer>(fixture.serializer);
             fixture.dispatch->RevokeHandler(fixture.rpc);
@@ -110,10 +110,17 @@ namespace Horo::Network {
                 codec->duringDecode = [&fixture] {
                     fixture.dispatch->Shutdown();
                 };
+            } else if (mode == 4) {
+                codec->duringDecode = [] {
+                    throw std::invalid_argument{"hostile decoder callback"};
+                };
             }
             const std::array<std::shared_ptr<const IReplicationFieldSerializer>, 1> codecs{codec};
             REQUIRE(fixture.dispatch->RegisterHandler(fixture.rpc, fixture.handler, codecs, fixture.moduleLease).HasValue());
-            REQUIRE(fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(1)).HasError());
+            const auto received = fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(1));
+            REQUIRE(received.HasError());
+            if (mode == 2 || mode == 4)
+                TestSupport::RequireError(received, NetworkErrors::GameplayDispatchRejected);
             if (mode == 3)
                 REQUIRE(fixture.dispatch->DrainAtGameplaySafePoint(fixture.Work()).HasError());
             else

@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 
 namespace Horo::Network {
@@ -211,19 +212,58 @@ namespace Horo::Network {
         public:
             Runtime::RuntimeSceneService &scene;
             bool reject{};
+            std::size_t calls{};
+            std::function<void()> afterStaging;
 
             explicit SceneHandler(Runtime::RuntimeSceneService &owner) : scene(owner) {}
 
             Result<void> Execute(const RpcGameplayContext &context, std::span<const ReplicationRuntimeValue>) override {
+                ++calls;
                 if (const auto current = scene.ActiveScene(); !current || current->Get(context.entity).HasError())
                     return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingUnknown));
                 Runtime::SceneCommandBuffer candidate;
                 Math::Transform transform;
                 transform.translation.x = 7.0F;
                 candidate.SetLocalTransform(context.entity, transform);
+                if (afterStaging)
+                    afterStaging();
                 if (reject)
                     return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
                 return scene.QueueStructuralCommands(std::move(candidate));
+            }
+        };
+
+        /** @brief Real Scene owner for transaction rollback tests; callbacks borrow it until dispatch retires. */
+        struct SceneFixture final {
+            CancellationSource cancellation;
+            const Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, cancellation.Token()};
+            Runtime::RuntimeSceneService scene;
+
+            SceneFixture() {
+                REQUIRE(scene.Startup({}).HasValue());
+                Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
+                Runtime::RuntimeEntityDefinition definition;
+                definition.object = Runtime::SceneObjectId{1};
+                builder.Add(definition);
+                REQUIRE(scene.QueuePreparation(std::move(builder).Build().Value()).HasValue());
+                Commit();
+            }
+
+            SceneFixture(const SceneFixture &) = delete;
+            SceneFixture &operator=(const SceneFixture &) = delete;
+            SceneFixture(SceneFixture &&) = delete;
+            SceneFixture &operator=(SceneFixture &&) = delete;
+
+            ~SceneFixture() {
+                scene.Shutdown();
+            }
+
+            void Commit() {
+                REQUIRE(scene.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
+            }
+
+            Runtime::EntityRef Entity() const {
+                return *scene.ActiveScene()->Find(Runtime::SceneObjectId{1});
             }
         };
 

@@ -149,16 +149,61 @@ namespace Horo::Network {
     }
 
     TEST_CASE("RPC failed Gameplay transactions never partially commit or execute again", "[unit][network][rpc]") {
-        for (const bool throws : {false, true}) {
+        for (const int failure : {0, 1, 2}) {
             Fixture fixture;
-            fixture.handler->fail = !throws;
-            fixture.handler->throwFailure = throws;
+            fixture.handler->fail = failure == 0;
+            fixture.handler->throwFailure = failure == 1;
+            if (failure == 2)
+                fixture.handler->duringExecute = [] {
+                    throw std::invalid_argument{"hostile gameplay callback"};
+                };
             REQUIRE(fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(1)).HasValue());
             REQUIRE(fixture.dispatch->DrainAtGameplaySafePoint(fixture.Work()).Value().rejected == 1);
             REQUIRE(fixture.handler->committed == 0);
             REQUIRE(fixture.handler->calls == 1);
             TestSupport::RequireError(fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(1)),
                                       NetworkErrors::MessageDeliveryInvalid);
+        }
+    }
+
+    TEST_CASE("RPC thrown Scene staging rolls back without publication or logical replay", "[unit][network][rpc][scene]") {
+        for (const bool standardException : {false, true}) {
+            RpcDispatchTestSupport::SceneFixture owner;
+            const auto entity = owner.Entity();
+            Fixture fixture(false, RpcTarget::Authority, true, false, {}, {}, entity);
+            auto handler = std::make_shared<SceneHandler>(owner.scene);
+            fixture.dispatch->RevokeHandler(fixture.rpc);
+            REQUIRE(fixture.dispatch->RegisterHandler(fixture.rpc, handler, {}, fixture.moduleLease).HasValue());
+            bool staged = false;
+            handler->afterStaging = [&staged, standardException] {
+                staged = true;
+                if (standardException)
+                    throw std::invalid_argument{"Scene candidate rejected after staging"};
+                throw 42;
+            };
+            REQUIRE(fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(1)).HasValue());
+            const auto rejected = fixture.dispatch->DrainAtGameplaySafePoint(fixture.Work()).Value();
+            REQUIRE(staged);
+            REQUIRE(rejected.consumed == 1);
+            REQUIRE(rejected.rejected == 1);
+            REQUIRE(rejected.invoked == 0);
+            REQUIRE(rejected.lastError.has_value());
+            REQUIRE(rejected.lastError->code.Value() == MakeError(NetworkErrors::GameplayDispatchRejected).code.Value());
+            owner.Commit();
+            REQUIRE_FALSE(owner.scene.TakeStructuralCommitResult().has_value());
+            REQUIRE(owner.scene.ActiveScene()->Get(entity).Value().localTransform->translation.x == 0.0F);
+            TestSupport::RequireError(fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(1)),
+                                      NetworkErrors::MessageDeliveryInvalid);
+            REQUIRE(fixture.dispatch->DrainAtGameplaySafePoint(fixture.Work()).Value().consumed == 0);
+            REQUIRE(handler->calls == 1);
+            handler->afterStaging = {};
+            REQUIRE(fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(2)).HasValue());
+            REQUIRE(fixture.dispatch->DrainAtGameplaySafePoint(fixture.Work()).Value().invoked == 1);
+            REQUIRE(owner.scene.ActiveScene()->Get(entity).Value().localTransform->translation.x == 0.0F);
+            owner.Commit();
+            REQUIRE(owner.scene.TakeStructuralCommitResult().has_value());
+            REQUIRE(owner.scene.ActiveScene()->Get(entity).Value().localTransform->translation.x == 7.0F);
+            REQUIRE(handler->calls == 2);
         }
     }
 
