@@ -757,6 +757,7 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioStreamDecoderErrors.cpp
         audio/api/AudioConcurrencyGroup.cpp
         audio/api/AudioVoiceStateMachine.cpp
+        audio/api/AudioVoiceControls.cpp
         audio/api/AudioHandleRegistry.h
 )
 add_library(HoroEngine::AudioApi ALIAS HoroAudioApi)
@@ -839,6 +840,11 @@ add_library(HoroAudioDsp STATIC
 add_library(HoroEngine::AudioDsp ALIAS HoroAudioDsp)
 target_compile_features(HoroAudioDsp PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioDsp PUBLIC HoroEngine::AudioApi)
+
+add_library(HoroAudioPlayback STATIC audio/playback/AudioVoicePlayback.cpp)
+add_library(HoroEngine::AudioPlayback ALIAS HoroAudioPlayback)
+target_compile_features(HoroAudioPlayback PUBLIC cxx_std_20)
+target_link_libraries(HoroAudioPlayback PUBLIC HoroEngine::AudioDsp HoroEngine::AudioApi)
 
 add_library(HoroAudioMemory STATIC
         audio/memory/AudioMemoryPool.cpp

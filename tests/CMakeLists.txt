@@ -445,6 +445,14 @@ target_include_directories(HoroAudioDspTests PRIVATE ${PROJECT_SOURCE_DIR}/src/a
 target_compile_features(HoroAudioDspTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioDspTests PRIVATE HoroEngine::AudioDsp)
 horo_register_catch_test(HoroAudioDspTests LABELS "unit;audio;headless")
+add_executable(HoroAudioPlaybackTests
+    support/AllocationProbe.cpp
+    unit/runtime/audio/AudioVoicePlaybackTests.cpp
+)
+target_include_directories(HoroAudioPlaybackTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_compile_features(HoroAudioPlaybackTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAudioPlaybackTests PRIVATE HoroEngine::AudioPlayback HoroEngine::AudioCommands HoroEngine::AudioNull)
+horo_register_catch_test(HoroAudioPlaybackTests LABELS "unit;audio;headless")
 add_executable(HoroAudioResamplerBenchmark EXCLUDE_FROM_ALL benchmarks/audio/ResamplerBenchmark.cpp)
 target_compile_features(HoroAudioResamplerBenchmark PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioResamplerBenchmark PRIVATE HoroEngine::AudioDsp)
