@@ -26,6 +26,7 @@ namespace Horo::Cinematic {
             REQUIRE(plan.HasValue());
             REQUIRE(session.Activate({{player, 10}, std::move(plan).Value()}, Cooked(), 0).HasValue());
         }
+
         void RetireModule(std::unique_ptr<Gameplay::LoadedGameModule> &gameModule, CinematicEventDispatcher &dispatcher) {
             // Retirement closes admission while the callback lease still pins the library.
             CHECK(gameModule->PrepareReload().HasError());
