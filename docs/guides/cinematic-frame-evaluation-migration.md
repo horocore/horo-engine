@@ -16,7 +16,7 @@ At a fixed or admitted service boundary:
 4. Reserve the entire event span with `SequenceFrameHooks::eventStage`. This
    replaces the per-occurrence `eventHook`; update existing callback signatures
    to return `Result<void>` and accept `const BorrowedCallbackContext&` plus a span.
-   Construct the context from the concrete borrowed pointer and recover it using
+   Explicitly construct `BorrowedCallbackContext{&owner}` from the concrete borrowed pointer and recover it using
    `Get<T>()`; a null or mismatched type returns null without an unchecked cast. Reservation failure publishes no
    cursor or values. This hook stages data and never invokes gameplay.
 

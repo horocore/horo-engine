@@ -200,22 +200,23 @@ namespace Horo::Cinematic {
 
     TEST_CASE("Cook rejects duplicate keys, skewed versions, missing exports and payload bounds",
               "[unit][cinematic][event][cook][validation]") {
+        using enum EventRuntimeContext;
         auto descriptor = Descriptor();
         const auto source = Authored();
         const auto exports = ExportSnapshot();
         const std::array duplicate{source, source};
-        RequireCode(CookScriptEvents(duplicate, std::span{&descriptor, 1}, exports, EventRuntimeContext::Headless),
+        RequireCode(CookScriptEvents(duplicate, std::span{&descriptor, 1}, exports, Headless),
                     EventTrackErrors::CookInvalid);
         descriptor.exportVersion = {2, 0, 0};
-        RequireCode(CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, EventRuntimeContext::Headless),
+        RequireCode(CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, Headless),
                     EventTrackErrors::SchemaMismatch);
         descriptor = Descriptor();
         descriptor.exportFunctionId = "absent";
-        RequireCode(CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, EventRuntimeContext::Headless),
+        RequireCode(CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, Headless),
                     EventTrackErrors::UnknownName);
         descriptor = Descriptor();
         descriptor.maximumPayloadBytes = 1;
-        RequireCode(CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, EventRuntimeContext::Headless),
+        RequireCode(CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, Headless),
                     EventTrackErrors::CookCapacityExceeded);
     }
 
