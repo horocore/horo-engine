@@ -1746,6 +1746,7 @@ add_executable(HoroPlatformRequestTests
         unit/platform_services/PlatformProjectConfigurationTests.cpp
         unit/platform_services/PlatformProviderManifestCookTests.cpp
         unit/platform_services/PlatformRequestTests.cpp
+        unit/platform_services/PlatformCompletionQueueTests.cpp
         unit/platform_services/PlatformServiceErrorsTests.cpp
         unit/platform_services/PlatformServicesBackendTests.cpp
         unit/platform_services/PlatformServicesFrontendTests.cpp
