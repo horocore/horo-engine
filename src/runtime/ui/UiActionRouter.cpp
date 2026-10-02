@@ -189,8 +189,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiActionRouter::DispatchNext */
     Result<std::optional<UiActionResult>> UiActionRouter::DispatchNext(UiActionHandler &handler) {
-        auto *const storage = StateStorage();
-        if (!storage || storage->state == UiActionRouterState::Stopped || storage->dispatching)
+        if (const auto *const storage = StateStorage(); !storage || storage->state == UiActionRouterState::Stopped || storage->dispatching)
             return Failure<std::optional<UiActionResult>>(UiErrors::ActionLifecycleUnavailable);
         const auto request = TryDequeue();
         if (request.HasError())

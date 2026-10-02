@@ -132,8 +132,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAsyncActionProducer::Abandon */
     void UiAsyncActionProducer::Abandon() noexcept {
-        auto *const record = StateRecord();
-        if (record)
+        if (auto *const record = StateRecord())
             record->Cancel(UiActionCancellationReason::Requested);
         record_.reset();
     }
@@ -222,8 +221,8 @@ namespace Horo::Runtime::Ui {
         /** @brief Borrows the latest read-only record for one exact source. */
         [[nodiscard]] const UiAsyncActionDetail::Record *Latest(const UiActionSource &source) const noexcept {
             const UiAsyncActionDetail::Record *latest{};
-            for (const auto &owner : records) {
-                const auto *const record = owner.get();
+            for (const auto &slot : records) {
+                const auto *const record = slot.get();
                 if (record->retained && record->snapshot.source == source &&
                     (!latest || record->snapshot.request.sequence > latest->snapshot.request.sequence))
                     latest = record;

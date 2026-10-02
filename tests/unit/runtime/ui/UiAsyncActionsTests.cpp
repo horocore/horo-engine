@@ -454,18 +454,21 @@ namespace Horo::Runtime::Ui {
             ExpectError(UiAsyncActionStore::Create(Context(), 0), UiErrors::ActionInvalid);
             ExpectError(UiAsyncActionStore::Create(Context(), MaximumUiActionCommands + 1), UiErrors::ActionInvalid);
             auto source = Store();
+            // A reference borrowed before transfer still refers to the original facade, whose authority must retire.
+            UiAsyncActionStore &sourceView = source;
             auto producer = std::move(source.Start(Request())).Value();
             const auto key = producer.Key();
+            REQUIRE(sourceView.Snapshot(key).HasValue());
             auto destination = Store();
             auto displaced = std::move(destination.Start(Request(7))).Value();
             const auto cancelled = displaced.Cancellation();
             destination = std::move(source);
             CHECK(cancelled.IsCancellationRequested());
-            ExpectError(source.Start(Request(2)), UiErrors::ActionLifecycleUnavailable);
-            ExpectError(source.Snapshot(key), UiErrors::ActionLifecycleUnavailable);
-            ExpectError(source.Project(Source()), UiErrors::ActionLifecycleUnavailable);
-            ExpectError(source.Cancel(key, UiActionCancellationReason::Requested), UiErrors::ActionLifecycleUnavailable);
-            ExpectError(source.Release(key), UiErrors::ActionLifecycleUnavailable);
+            ExpectError(sourceView.Start(Request(2)), UiErrors::ActionLifecycleUnavailable);
+            ExpectError(sourceView.Snapshot(key), UiErrors::ActionLifecycleUnavailable);
+            ExpectError(sourceView.Project(Source()), UiErrors::ActionLifecycleUnavailable);
+            ExpectError(sourceView.Cancel(key, UiActionCancellationReason::Requested), UiErrors::ActionLifecycleUnavailable);
+            ExpectError(sourceView.Release(key), UiErrors::ActionLifecycleUnavailable);
             auto moved = std::move(producer);
             CHECK(producer.Key() == UiAsyncActionKey{});
             CHECK(producer.Cancellation().IsCancellationRequested());
