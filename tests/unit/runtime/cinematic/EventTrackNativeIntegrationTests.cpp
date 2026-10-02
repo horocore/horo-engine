@@ -4,7 +4,7 @@ namespace Horo::Cinematic {
     using namespace EventTestSupport;
 
     namespace {
-        [[nodiscard]] std::unique_ptr<Gameplay::LoadedGameModule> LoadCallback(Gameplay::GameModuleHost &host,
+        [[nodiscard]] std::unique_ptr<Gameplay::LoadedGameModule> LoadCallback(const Gameplay::GameModuleHost &host,
                                                                                CinematicEventDispatcher &dispatcher) {
             auto loaded = host.Load(HORO_TEST_GAME_MODULE_PATH, {"game.tests", Gameplay::CurrentGameplayBuildFingerprint(),
                                                                  Horo::Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)});

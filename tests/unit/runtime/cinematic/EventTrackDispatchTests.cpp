@@ -13,31 +13,29 @@ namespace Horo::Cinematic {
     }
 
     TEST_CASE("Script event cook resolves exact export parameter types and qualified names", "[unit][cinematic][event][cook]") {
+        using enum EventRuntimeContext;
         const auto exports = ExportSnapshot();
         const auto descriptor = Descriptor();
         auto source = Authored();
-        auto cooked = CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, EventRuntimeContext::Headless);
+        auto cooked = CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, Headless);
         REQUIRE(cooked.HasValue());
         CHECK(cooked.Value()->Find(Track, Key)->binding == Binding);
         CHECK_FALSE(cooked.Value()->Find(Track, {12, 1}));
 
         source.qualifiedName = "gameplay.quest.missing";
-        RequireCode(CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, EventRuntimeContext::Headless),
-                    EventTrackErrors::UnknownName);
+        RequireCode(CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, Headless), EventTrackErrors::UnknownName);
         source = Authored();
         source.arguments = {Extensions::ScriptValue::String("wrong type")};
-        const auto mismatch = CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, EventRuntimeContext::Headless);
+        const auto mismatch = CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, Headless);
         REQUIRE(mismatch.HasError());
         CHECK(mismatch.ErrorValue().message.find("quest") != std::string::npos);
         CHECK(mismatch.ErrorValue().message.find("index 0") != std::string::npos);
-        RequireCode(CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, EventRuntimeContext::Headless),
+        RequireCode(CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, Headless),
                     EventTrackErrors::SchemaMismatch);
         source = Authored();
-        RequireCode(CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, EventRuntimeContext::Preview),
-                    EventTrackErrors::SchemaMismatch);
+        RequireCode(CookScriptEvents(std::span{&source, 1}, std::span{&descriptor, 1}, exports, Preview), EventTrackErrors::SchemaMismatch);
         const std::array duplicate{descriptor, descriptor};
-        RequireCode(CookScriptEvents(std::span{&source, 1}, duplicate, exports, EventRuntimeContext::Headless),
-                    EventTrackErrors::CookInvalid);
+        RequireCode(CookScriptEvents(std::span{&source, 1}, duplicate, exports, Headless), EventTrackErrors::CookInvalid);
     }
 
     TEST_CASE("Committed event occurrences invoke a leased gameplay callback once at the owner safe point",
@@ -120,7 +118,7 @@ namespace Horo::Cinematic {
         auto cursor = MakeSequenceFrameCursor(snapshot, SequenceCursorResetPolicy::EmitCurrentBoundary).Value();
         std::array<SequenceFrameEventOccurrence, 4> events{};
         const SequenceFrameScratch scratch{{}, events, {}};
-        const SequenceFrameHooks hooks{&dispatcher, CinematicEventDispatcher::StageHook, nullptr, nullptr};
+        const SequenceFrameHooks hooks{BorrowedCallbackContext{&dispatcher}, CinematicEventDispatcher::StageHook, nullptr, nullptr};
 
         REQUIRE(dispatcher.BeginTick(3).HasValue());
         auto evaluated = evaluation.Evaluate(snapshot, 3, cursor, scratch, hooks);
@@ -334,7 +332,8 @@ namespace Horo::Cinematic {
         std::array<SequenceFrameEventOccurrence, 4> occurrences;
         REQUIRE(dispatcher.BeginTick(1).HasValue());
         REQUIRE(evaluated.Value()
-                    .Evaluate(snapshot, delta, cursor, {{}, occurrences, {}}, {&dispatcher, CinematicEventDispatcher::StageHook})
+                    .Evaluate(snapshot, delta, cursor, {{}, occurrences, {}},
+                              {BorrowedCallbackContext{&dispatcher}, CinematicEventDispatcher::StageHook})
                     .HasValue());
         REQUIRE(dispatcher.CommitTick().HasValue());
         REQUIRE(dispatcher.Drain(4).HasValue());
@@ -375,18 +374,19 @@ namespace Horo::Cinematic {
     }
 
     TEST_CASE("Typed handler failure stops future track effects and contains exceptions", "[unit][cinematic][event][failure]") {
+        using enum EventDispatchOutcome;
+
         struct FailureProbe {
             EventDispatchOutcome outcome;
             std::size_t calls{};
             bool throws{};
         };
 
-        for (const auto outcome : std::array{EventDispatchOutcome::SuppressedByAuthority, EventDispatchOutcome::CapabilityUnavailable,
-                                             EventDispatchOutcome::InvalidTarget, EventDispatchOutcome::Backpressured,
-                                             EventDispatchOutcome::HandlerFailed, EventDispatchOutcome::Count}) {
+        for (const auto outcome :
+             std::array{SuppressedByAuthority, CapabilityUnavailable, InvalidTarget, Backpressured, HandlerFailed, Count}) {
             auto dispatcher = Dispatcher();
             auto probe = std::make_shared<FailureProbe>(outcome);
-            probe->throws = outcome == EventDispatchOutcome::HandlerFailed;
+            probe->throws = outcome == HandlerFailed;
             auto callback = +[](const BorrowedCallbackContext &context, const EventDispatchRequest &) {
                 auto &state = *context.Get<FailureProbe>();
                 ++state.calls;
@@ -394,7 +394,10 @@ namespace Horo::Cinematic {
                     throw 1;
                 return state.outcome;
             };
-            REQUIRE(dispatcher.Register({Binding, Schema, EventRuntimeContext::Headless, 1, probe.get(), callback, probe}).HasValue());
+            REQUIRE(
+                dispatcher
+                    .Register({Binding, Schema, EventRuntimeContext::Headless, 1, BorrowedCallbackContext{probe.get()}, callback, probe})
+                    .HasValue());
             const SequencePlayerHandle player{Session, {1, 1}};
             REQUIRE(dispatcher.Activate(player, Cooked(), Evaluation(), 0).HasValue());
             const auto occurrence = Occurrence();
@@ -402,8 +405,7 @@ namespace Horo::Cinematic {
             REQUIRE(dispatcher.Stage(std::span{&occurrence, 1}).HasValue());
             REQUIRE(dispatcher.CommitTick().HasValue());
             REQUIRE(dispatcher.Drain(4).Value() == 1);
-            CHECK(dispatcher.Results().front().outcome ==
-                  (outcome == EventDispatchOutcome::Count ? EventDispatchOutcome::HandlerFailed : outcome));
+            CHECK(dispatcher.Results().front().outcome == (outcome == Count ? HandlerFailed : outcome));
             dispatcher.ClearResults();
             const auto next = Occurrence(1, 2);
             REQUIRE(dispatcher.BeginTick(2).HasValue());

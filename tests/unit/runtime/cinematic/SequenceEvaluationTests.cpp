@@ -71,7 +71,7 @@ namespace Horo::Cinematic {
         }
 
         [[nodiscard]] SequenceFrameHooks Hooks(HookProbe &probe) {
-            return {&probe, OnEvent, &probe, OnCamera};
+            return {BorrowedCallbackContext{&probe}, OnEvent, &probe, OnCamera};
         }
 
         struct ScratchStorage final {

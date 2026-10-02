@@ -104,7 +104,8 @@ namespace {
     class Module final : public IGameModule {
     public:
         Result<void> Register(GameRegistrationContext &context) override {
-            if (auto registered = context.events.Register({90, 1, 91, 1, this, &CompleteQuest}); registered.HasError())
+            if (auto registered = context.events.Register({90, 1, 91, 1, BorrowedCallbackContext{this}, &CompleteQuest});
+                registered.HasError())
                 return registered;
             const ComponentTypeId movementType = ComponentTypeId::Parse("game.tests.movement_settings").Value();
             ComponentDescriptor descriptor{
@@ -219,12 +220,13 @@ namespace {
 
     private:
         static GameplayEventOutcome CompleteQuest(const BorrowedCallbackContext &context, const GameplayEventRequest &request) {
+            using enum GameplayEventOutcome;
             auto *instance = context.Get<Module>();
             if (instance == nullptr)
-                return GameplayEventOutcome::InvalidTarget;
+                return InvalidTarget;
             auto &gameModule = *instance;
             if (request.payload.size() < sizeof(std::uint64_t) || request.committedTick == 0 || request.traversal == 0)
-                return GameplayEventOutcome::InvalidTarget;
+                return InvalidTarget;
             // The fixture's cooked contract is a one-argument canonical array of signed integers.
             // Inspect its little-endian scalar without requiring a VM or extension runtime in the gameplay SDK.
             std::uint64_t quest{};
@@ -232,9 +234,9 @@ namespace {
             for (std::size_t byte = 0; byte < scalar.size(); ++byte)
                 quest |= static_cast<std::uint64_t>(std::to_integer<unsigned>(scalar[byte])) << (byte * 8U);
             if (quest != 42)
-                return GameplayEventOutcome::InvalidTarget;
+                return InvalidTarget;
             ++gameModule.completedQuests_;
-            return GameplayEventOutcome::Accepted;
+            return Accepted;
         }
 
         std::uint64_t completedQuests_{};

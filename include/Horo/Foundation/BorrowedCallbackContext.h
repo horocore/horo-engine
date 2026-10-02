@@ -17,14 +17,14 @@ namespace Horo {
         constexpr BorrowedCallbackContext() noexcept = default;
 
         /** @brief Creates an empty context from a null callback argument. @param null Null pointer sentinel. */
-        constexpr BorrowedCallbackContext(std::nullptr_t null) noexcept : BorrowedCallbackContext() {
+        explicit constexpr BorrowedCallbackContext(std::nullptr_t null) noexcept : BorrowedCallbackContext() {
             (void)null;
         }
 
         /** @brief Borrows one mutable exact-type object. @param object Object retained by the callback owner. */
         template <class T>
             requires(std::is_object_v<T> && !std::is_const_v<T>)
-        constexpr BorrowedCallbackContext(T *object) noexcept : object_(object), type_(&TypeMarker<T>) {}
+        explicit constexpr BorrowedCallbackContext(T *object) noexcept : object_(object), type_(&TypeMarker<T>) {}
 
         /** @brief Checks whether an object was supplied. @return True for a non-null borrowed object. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {

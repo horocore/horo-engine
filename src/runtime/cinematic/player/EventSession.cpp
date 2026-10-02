@@ -92,7 +92,7 @@ namespace Horo::Cinematic {
             failed_ = true;
             return Result<SequenceFrameEvaluationResult>::Failure(MakeError(EventTrackErrors::DispatchStateInvalid));
         }
-        hooks.eventContext = &dispatcher_;
+        hooks.eventContext = BorrowedCallbackContext{&dispatcher_};
         hooks.eventStage = CinematicEventDispatcher::StageHook;
         auto slot = runtime_.ResolveSlot(player);
         if (slot.HasError()) {

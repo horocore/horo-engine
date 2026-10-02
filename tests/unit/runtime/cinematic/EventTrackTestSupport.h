@@ -141,7 +141,9 @@ namespace Horo::Cinematic {
 
         inline void Register(CinematicEventDispatcher &dispatcher, const std::shared_ptr<HandlerProbe> &probe,
                              const std::uint64_t generation = 1) {
-            REQUIRE(dispatcher.Register({Binding, Schema, EventRuntimeContext::Headless, generation, probe.get(), GameplayCallback, probe})
+            REQUIRE(dispatcher
+                        .Register({Binding, Schema, EventRuntimeContext::Headless, generation, BorrowedCallbackContext{probe.get()},
+                                   GameplayCallback, probe})
                         .HasValue());
         }
 

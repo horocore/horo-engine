@@ -13,6 +13,7 @@ static_assert(!std::is_default_constructible_v<Horo::Cinematic::CookedEventPlan>
 static_assert(!std::is_copy_constructible_v<Horo::Cinematic::CinematicEventSession>);
 
 static_assert(std::is_trivially_copyable_v<Horo::BorrowedCallbackContext>);
+static_assert(!std::is_convertible_v<int *, Horo::BorrowedCallbackContext>);
 
 int main() {
     return 0;

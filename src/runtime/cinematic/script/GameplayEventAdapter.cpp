@@ -54,7 +54,8 @@ namespace Horo::Cinematic {
         if (acquired.HasError())
             return Result<EventHandlerRegistration>::Failure(MakeError(EventTrackErrors::BindingUnavailable));
         auto lease = std::move(acquired).Value();
-        EventHandlerRegistration registration{binding, schema, context, generation, lease.get(), InvokeGameplay, lease};
+        EventHandlerRegistration registration{binding,        schema, context, generation, BorrowedCallbackContext{lease.get()},
+                                              InvokeGameplay, lease};
         return Result<EventHandlerRegistration>::Success(std::move(registration));
     }
 }  // namespace Horo::Cinematic

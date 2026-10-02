@@ -109,7 +109,7 @@ namespace Horo::Cinematic {
         }
 
         [[nodiscard]] SequenceFrameHooks PlaybackHooks(PlaybackProbe &probe) {
-            return {&probe, OnPlaybackEvent, nullptr, nullptr, &probe, OnPlaybackFinished};
+            return {BorrowedCallbackContext{&probe}, OnPlaybackEvent, nullptr, nullptr, &probe, OnPlaybackFinished};
         }
 
         [[nodiscard]] SequenceFrameEvaluationPlan EventPlan(const SequenceLoopMode mode) {

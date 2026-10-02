@@ -122,7 +122,7 @@ namespace Horo::Cinematic {
         registration->active = false;
         registration->handler.lease.reset();
         registration->handler.callback = nullptr;
-        registration->handler.callbackContext = nullptr;
+        registration->handler.callbackContext = {};
         return Result<void>::Success();
     }
 
@@ -219,8 +219,8 @@ namespace Horo::Cinematic {
         if (!key->required)
             return Result<void>::Success();
         const auto fence = std::ranges::find(player->bindings, key->binding, &BindingFence::binding);
-        const Registration *registration = FindRegistration(key->binding);
-        if (fence == player->bindings.end() || registration == nullptr || !registration->active ||
+        if (const Registration *registration = FindRegistration(key->binding);
+            fence == player->bindings.end() || registration == nullptr || !registration->active ||
             registration->handler.generation != fence->generation || registration->handler.schema != key->schema)
             return Failed<void>(EventTrackErrors::StaleBinding);
         return Result<void>::Success();
@@ -317,22 +317,23 @@ namespace Horo::Cinematic {
 
     /** @copydoc CinematicEventDispatcher::InvokePending */
     EventDispatchOutcome CinematicEventDispatcher::InvokePending(const Pending &entry, const CookedEventKey &key) const noexcept {
+        using enum EventDispatchOutcome;
         const Registration *handler = FindRegistration(key.binding);
-        EventDispatchOutcome outcome = EventDispatchOutcome::BindingUnavailable;
+        EventDispatchOutcome outcome = BindingUnavailable;
         const Player *player = FindPlayer(entry.occurrence.player);
         const bool failedTrack =
             player != nullptr && std::ranges::find(player->failedTracks, entry.occurrence.track) != player->failedTracks.end();
         if (handler != nullptr && (!handler->active || handler->handler.generation != entry.handlerGeneration))
-            outcome = EventDispatchOutcome::StaleBinding;
+            outcome = StaleBinding;
         else if (!failedTrack && handler != nullptr && handler->active && handler->handler.schema == key.schema &&
                  handler->handler.callback != nullptr) {
             try {
                 outcome = handler->handler.callback(handler->handler.callbackContext,
                                                     {entry.occurrence, key.binding, key.schema, key.payload, entry.tick});
-                if (outcome >= EventDispatchOutcome::Count)
-                    outcome = EventDispatchOutcome::HandlerFailed;
+                if (outcome >= Count)
+                    outcome = HandlerFailed;
             } catch (...) {
-                outcome = EventDispatchOutcome::HandlerFailed;
+                outcome = HandlerFailed;
             }
         }
 
@@ -342,9 +343,9 @@ namespace Horo::Cinematic {
     /** @copydoc CinematicEventDispatcher::RecordTerminal */
     void CinematicEventDispatcher::RecordTerminal(const Pending &entry, const CookedEventKey &key, const EventDispatchOutcome outcome) {
         Player *player = FindPlayer(entry.occurrence.player);
-        const bool failedTrack =
-            player != nullptr && std::ranges::find(player->failedTracks, entry.occurrence.track) != player->failedTracks.end();
-        if (outcome != EventDispatchOutcome::Accepted && outcome != EventDispatchOutcome::OperationStarted && player != nullptr &&
+        if (const bool failedTrack =
+                player != nullptr && std::ranges::find(player->failedTracks, entry.occurrence.track) != player->failedTracks.end();
+            outcome != EventDispatchOutcome::Accepted && outcome != EventDispatchOutcome::OperationStarted && player != nullptr &&
             !failedTrack)
             player->failedTracks.push_back(entry.occurrence.track);
         results_.emplace_back(entry.occurrence, key.binding, outcome, entry.tick);
