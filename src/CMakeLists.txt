@@ -487,6 +487,8 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiBinding.cpp
         runtime/ui/UiBindingFingerprint.cpp
         runtime/ui/UiBindingValidation.cpp
+        runtime/ui/UiBindingStore.cpp
+        runtime/ui/UiBindingStorePreparation.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiLocalization.cpp
         runtime/ui/UiDocument.cpp

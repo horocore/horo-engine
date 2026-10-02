@@ -884,6 +884,66 @@ pending work and drains snapshot/command/callback/UI-generation leases before a
 scene/player/game/module disappears. Editor preview uses explicit fixture providers
 and schema projections, not live runtime pointers or editor widgets.
 
+### Versioned retained binding publication
+
+`HoroEngine::RuntimeUi` owns `UiBindingStore.h`. A host resolves each descriptor
+to one exact `UiBindingProviderInstanceId` before preparation; it supplies an owned
+schema snapshot, exact provider revision and initial property values. Store creation
+copies metadata and values, resolves stable element IDs to current retained handles,
+builds property-to-target adjacency, and reserves bounded target text storage.
+Required missing values reject preparation; optional missing values use the typed
+fallback. No provider object, module pointer, callback or contributor span is retained.
+
+At the VariableUpdate binding cutoff, `UiBindingStore::Apply(tree, batches, layout)`
+validates the complete ordered provider delta set before any publication. Each
+batch carries exact schema evidence, an expected committed revision and a strictly
+newer snapshot revision. Property slots refer only to that exact identity-sorted
+schema. Reordered/duplicate providers or slots, missing revision ancestry, malformed
+values, stale tree/document/instance evidence and capacity overflow reject the whole
+set. Count and aggregate input-byte limits bound frame work. A producer completing
+after the cutoff submits its delta at the next cutoff; layout/render never poll it.
+
+Only changed properties visit their compiled subscribers. Equal values and empty
+frames produce no dirty work. Text, localized text and visibility changes queue
+exact `Measure` invalidations through `UiLayoutEngine::InvalidateBatch`; provider
+layout flags may add further measure dependencies. That API validates ownership,
+handles, tree revisions and complete queue capacity before replacing its queue.
+The binding store publishes target copies and provider revisions only after queue
+admission succeeds. The normal layout request uses `Current().content`; this revision
+advances only for layout work, so progress, enabled and other paint/action changes
+do not trigger the layout engine's global source-change fallback. Ancestor measure
+and dependent arrange work remains the incremental layout owner's responsibility.
+
+Text/intrinsic and UI-local state consumers read the store's `Find(tree, binding)`
+projection at the same owner phase. It is a synchronous borrow, never a render lease.
+Text, layout, accessibility and render publication copy their derived immutable state
+into their existing snapshot stores before any later binding mutation. `DrainDirty`
+copies accumulated exact binding/element/property work in descriptor order to bounded
+owner storage for paint, accessibility and actions; insufficient capacity acknowledges
+nothing and never truncates notifications. No new focus/accessibility authority is
+introduced by this binding dependency record.
+
+`Unregister` publishes optional fallbacks and removes readable required values,
+reports required unavailability for the owning UI activation policy, and permanently
+closes that provider incarnation in the store. The host stops provider producers
+before unregister and must retry reported layout backpressure or retire the entire
+UI generation before releasing its provider scope. Retirement closes all target
+reads and update admission; shutdown releases only Horo-owned copies. Old downstream
+immutable leases remain with their existing owners. Repeated unregister/retirement/
+shutdown is harmless. Structural/document reload prepares a new store against the
+replacement retained tree and fresh provider evidence; an old store never silently
+rebinds a recycled slot or stable ID.
+
+This is an additive read-publication API. Existing descriptor validation and callers
+remain valid. Direct SourceToTarget and the read half of TwoWay descriptors are
+admitted. TargetToSource needs the separate owner-write capability, and converter
+metadata needs an executable conversion capability; preparation explicitly rejects
+those executable requests rather than calling descriptor metadata. Provider cadence
+is producer-driven for OnChange, EveryVariableUpdate and Manual; none permits a
+getter during layout or extraction. `HoroRuntimeUiPublicHeaderConsumer` covers the
+new header's isolated target ownership, and binding-store regression coverage drives
+the ordinary retained tree, declarative evaluator and incremental layout publisher.
+
 ## Templates And Presets
 
 [ADR-083](../../adr/083-ui-template-identity-schema-and-expansion.md) makes
