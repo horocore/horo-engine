@@ -11,6 +11,22 @@
 namespace Horo::Network {
     using Detail::DispatchFlagGuard;
 
+    namespace {
+        /** @brief Contains arbitrary module exceptions and preserves legitimate Gameplay failure causes. */
+        Result<void> InvokeGameplay(IRpcGameplayHandler &handler, const RpcGameplayContext &context,
+                                    const std::span<const ReplicationRuntimeValue> values) {
+            try {
+                auto executed = handler.Execute(context, values);
+                if (executed.HasError())
+                    return Result<void>::Failure(WrapError(NetworkErrors::RpcGameplayFailed, std::move(executed).ErrorValue()));
+                return executed;
+            } catch (...) {
+                // A non-standard throw is also a terminal Gameplay failure; never retry an accepted logical command.
+                return Result<void>::Failure(MakeError(NetworkErrors::RpcGameplayFailed));
+            }
+        }
+    }  // namespace
+
     /** @copydoc RpcGameplayDispatch::ValidateTarget */
     Result<void> RpcGameplayDispatch::ValidateTarget(const Peer &peer, const RpcDescriptor &descriptor, const ReplicationRoleBinding &role,
                                                      const NetworkPeerId wireRecipient) const {
@@ -49,7 +65,7 @@ namespace Horo::Network {
                     return Result<void>::Success();
                 break;
             case Custom:
-                return Result<void>::Failure(MakeError(NetworkErrors::RpcPermissionUnsupported));
+                return Result<void>::Success();  // The pinned binding's exact host policy is required before queue or execution.
             case Count:
                 break;
         }
@@ -99,8 +115,11 @@ namespace Horo::Network {
         if (request.cancellation.IsCancellationRequested())
             return Result<RpcDispatchReport>::Failure(MakeError(NetworkErrors::ReplicationWorldCancelled));
         const auto active = world_.ActiveDescriptor();
-        if (active.HasError())
+        if (active.HasError()) {
+            terminals_.cancelled += pending_.size();
+            pending_.clear();
             return Result<RpcDispatchReport>::Failure(active.ErrorValue());
+        }
         if (request.scene != active.Value().scene || request.session != active.Value().session)
             return Result<RpcDispatchReport>::Failure(MakeError(NetworkErrors::ReplicationWorldStale));
         if (draining_)
@@ -116,9 +135,14 @@ namespace Horo::Network {
             pending_.erase(pending_.begin());
             ++report.consumed;
             if (const auto executed = ExecutePending(command, request); executed.HasError()) {
+                if (command.cancellation.IsCancellationRequested() || request.cancellation.IsCancellationRequested())
+                    ++terminals_.cancelled;
+                else
+                    ++terminals_.failed;
                 ++report.rejected;
                 report.lastError = executed.ErrorValue();
             } else {
+                ++terminals_.succeeded;
                 ++report.invoked;
             }
         }
@@ -152,9 +176,28 @@ namespace Horo::Network {
         if (!handler || live.Value().IsRevoked() || live.Value().Cancellation().IsCancellationRequested())
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         try {
-            const RpcGameplayContext context{peer->identity,   command.object,        entity, request.scene, request.session,
-                                             command.sequence, request.simulationTick};
-            return handler->Execute(context, command.values);
+            const Binding pinned = binding->Pin();
+            const Peer pinnedPeer = *peer;
+            const Object pinnedObject = *object;
+            const auto revision = revocationRevision_;
+            const auto role = pinnedObject.role->Snapshot();
+            if (role.HasError() || role.Value() != command.role || entity != command.entity)
+                return Result<void>::Failure(MakeError(NetworkErrors::RpcPermissionDenied));
+            if (const auto allowed = AuthorizePolicy(pinned, pinnedPeer, pinnedObject, command.values); allowed.HasError())
+                return allowed;
+            if (stopped_ || revision != revocationRevision_ || command.cancellation.IsCancellationRequested() ||
+                request.cancellation.IsCancellationRequested() || live.Value().IsRevoked())
+                return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+            if (const auto revalidated = ValidateLive(pinnedPeer, pinnedObject, *pinned.descriptor, command.recipient,
+                                                      request.simulationTick, Runtime::RuntimePhase::FixedUpdate, entity);
+                revalidated.HasError())
+                return Result<void>::Failure(revalidated.ErrorValue());
+            const auto currentRole = pinnedObject.role->Snapshot();
+            if (currentRole.HasError() || currentRole.Value() != command.role || entity != command.entity)
+                return Result<void>::Failure(MakeError(NetworkErrors::RpcPermissionDenied));
+            const RpcGameplayContext context{pinnedPeer.identity, command.object,        entity, request.scene, request.session,
+                                             command.sequence,    request.simulationTick};
+            return InvokeGameplay(*handler, context, command.values);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
         } catch (const std::invalid_argument &) {

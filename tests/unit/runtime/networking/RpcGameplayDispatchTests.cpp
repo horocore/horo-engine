@@ -188,7 +188,7 @@ namespace Horo::Network {
             REQUIRE(rejected.rejected == 1);
             REQUIRE(rejected.invoked == 0);
             REQUIRE(rejected.lastError.has_value());
-            REQUIRE(rejected.lastError->code.Value() == MakeError(NetworkErrors::GameplayDispatchRejected).code.Value());
+            REQUIRE(rejected.lastError->code.Value() == MakeError(NetworkErrors::RpcGameplayFailed).code.Value());
             owner.Commit();
             REQUIRE_FALSE(owner.scene.TakeStructuralCommitResult().has_value());
             REQUIRE(owner.scene.ActiveScene()->Get(entity).Value().localTransform->translation.x == 0.0F);
