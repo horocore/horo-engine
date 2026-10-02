@@ -476,6 +476,12 @@ target_compile_features(HoroAudioMetricsTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioMetricsTests PRIVATE HoroEngine::AudioMetrics)
 horo_register_catch_test(HoroAudioMetricsTests LABELS "unit;audio;headless")
 
+add_executable(HoroCharacterSurfacePublicHeaderConsumer support/CharacterSurfacePublicHeaderConsumer.cpp)
+target_compile_features(HoroCharacterSurfacePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroCharacterSurfacePublicHeaderConsumer PRIVATE HoroEngine::Physics)
+add_test(NAME HoroCharacterSurfacePublicHeaderConsumer COMMAND HoroCharacterSurfacePublicHeaderConsumer)
+set_tests_properties(HoroCharacterSurfacePublicHeaderConsumer PROPERTIES LABELS "unit;physics;headless")
+
 add_executable(HoroPhysicsTests
         support/AllocationProbe.cpp
         unit/runtime/physics/CharacterControllerContractsTests.cpp
