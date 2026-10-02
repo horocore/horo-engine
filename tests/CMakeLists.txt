@@ -548,9 +548,9 @@ add_executable(HoroAITests
         unit/runtime/ai/PerceptionSpatialBroadphaseTests.cpp
 )
 target_compile_features(HoroAITests PRIVATE cxx_std_20)
-target_include_directories(HoroAITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneIntegration)
 horo_register_catch_test(HoroAITests LABELS "unit;ai;headless")
+target_include_directories(HoroAITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 
 add_executable(HoroAnimationApiTests
         unit/runtime/animation/AnimationCompressionTests.cpp
