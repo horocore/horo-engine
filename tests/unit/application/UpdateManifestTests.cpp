@@ -237,6 +237,22 @@ TEST_CASE("Release notes and compatibility impacts are bounded signed manifest c
     CHECK(BuildCanonicalUpdatePayload(data).HasError());
 }
 
+TEST_CASE("Delta manifests retain signed presentation fields", "[release][update][delta]") {
+    auto data = DeltaManifestData();
+    data.releaseNotes = "Verified delta update.";
+    data.compatibilityImpacts = {"Plugin compatibility must be checked."};
+    data.minimumAllowedVersion = data.version;
+    const auto manifest = SignedManifest(data);
+    auto parsed = SignedUpdateManifest::ParseCanonical(manifest.CanonicalDocument());
+    REQUIRE(parsed.HasValue());
+    CHECK(parsed.Value().Data().releaseNotes == data.releaseNotes);
+    CHECK(parsed.Value().Data().compatibilityImpacts == data.compatibilityImpacts);
+    CHECK(parsed.Value().Data().deltas.size() == 1U);
+    auto document = nlohmann::json::parse(manifest.CanonicalDocument());
+    document["manifest"]["unknown"] = "rejected";
+    CHECK(SignedUpdateManifest::ParseCanonical(document.dump()).HasError());
+}
+
 TEST_CASE("Update metadata rejects stale, wrong-target and rollback candidates", "[release][update]") {
     const auto manifest = SignedManifest();
     auto roots = Root();
