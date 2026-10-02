@@ -59,7 +59,7 @@ namespace Horo::AI {
                 const auto found = std::ranges::find(nodes, id, &BehaviorTreeExecutionNode::id);
                 return static_cast<std::size_t>(found - nodes.begin());
             };
-            std::vector<std::size_t> parents(nodes.size(), nodes.size());
+            std::vector parents(nodes.size(), nodes.size());
             for (std::size_t index = 0; index < nodes.size(); ++index) {
                 for (const auto child : nodes[index].children) {
                     const std::size_t target = sourceIndex(child);
@@ -121,16 +121,13 @@ namespace Horo::AI {
         if (!bindings->Dependencies().empty())
             return Failure<std::shared_ptr<const BehaviorTreeExecutionPlan>>(AIErrors::DecisionAssetSubtreeIncompatible);
         try {
-            auto plan = std::shared_ptr<BehaviorTreeExecutionPlan>(new BehaviorTreeExecutionPlan);
+            auto plan = std::make_shared<BehaviorTreeExecutionPlan>(ConstructionKey{});
             plan->bindings_ = std::move(bindings);
-            const auto admitted = ValidateIdentities(*plan->bindings_, nodes, services);
-            if (admitted.HasError())
+            if (const auto admitted = ValidateIdentities(*plan->bindings_, nodes, services); admitted.HasError())
                 return PlanResult::Failure(admitted.ErrorValue());
-            const auto topology = plan->BuildTopology(root, nodes, limits);
-            if (topology.HasError())
+            if (const auto topology = plan->BuildTopology(root, nodes, limits); topology.HasError())
                 return PlanResult::Failure(topology.ErrorValue());
-            const auto attached = plan->Attach(services);
-            if (attached.HasError())
+            if (const auto attached = plan->Attach(services); attached.HasError())
                 return PlanResult::Failure(attached.ErrorValue());
             return PlanResult::Success(std::move(plan));
         } catch (const std::bad_alloc &) {
@@ -148,8 +145,7 @@ namespace Horo::AI {
         const std::size_t rootIndex = sourceIndex(root);
         if (rootIndex == nodes.size())
             return Failure<void>(AIErrors::BehaviorTreeTopologyInvalid);
-        const auto parents = ValidateParents(nodes, rootIndex);
-        if (parents.HasError())
+        if (const auto parents = ValidateParents(nodes, rootIndex); parents.HasError())
             return Result<void>::Failure(parents.ErrorValue());
 
         struct CompileFrame {

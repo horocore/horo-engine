@@ -91,7 +91,15 @@ namespace Horo::AI {
 
     /** @brief Immutable executable topology retaining the shared compiler's schema/descriptor admission. */
     class BehaviorTreeExecutionPlan final {
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class BehaviorTreeExecutionPlan;
+        };
+
     public:
+        /** @brief Constructs inert plan storage; the private key restricts admission to Compile. */
+        explicit BehaviorTreeExecutionPlan(ConstructionKey) {}
+
         /**
          * @brief Compiles typed control flow against an admitted decision plan without invoking providers.
          * @param bindings Immutable BehaviorTree decision plan; all control and service identities must occur exactly once.
@@ -139,7 +147,6 @@ namespace Horo::AI {
         BehaviorTreeExecutionPlan &operator=(const BehaviorTreeExecutionPlan &) = delete;
 
     private:
-        BehaviorTreeExecutionPlan() = default;
         /** @brief Builds preorder records after typed identity admission. @param root Stable root.
          * @param nodes Validated typed controls. @param limits Structural limits. @return Topology/depth result.
          */
@@ -207,7 +214,15 @@ namespace Horo::AI {
 
     /** @brief Single-owner allocation-bounded tree instance; scene decision scheduling remains with AIDecisionSystem. */
     class BehaviorTreeInstance final {
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class BehaviorTreeInstance;
+        };
+
     public:
+        /** @brief Constructs inert instance storage; the private key restricts admission to Create. */
+        explicit BehaviorTreeInstance(ConstructionKey);
+
         /** @brief Creates contiguous state/scratch storage before activation.
          * @param plan Admitted executable plan. @param binding Exact owner and exclusively reserved task slots.
          * @param executor Host adapter whose ownership transfers into this instance.
@@ -257,7 +272,6 @@ namespace Horo::AI {
         struct NodeState;
         struct ServiceState;
         struct Frame;
-        BehaviorTreeInstance() = default;
         /** @brief Projects borrowed frozen inputs and the admitted node binding range. */
         [[nodiscard]] BehaviorTreeEvaluationContext Context(DecisionNodeId node, const BlackboardSnapshot &blackboard) const noexcept;
         /** @brief Invokes active due attachments once per declared interval or revision. */
@@ -275,13 +289,15 @@ namespace Horo::AI {
         /** @brief Cancels every running task in one contiguous preorder descendant range. */
         void CancelRange(std::size_t node, AiTaskCancellationReason reason) noexcept;
         /** @brief Clears a retired branch while preserving logical cooldown timers. */
-        void ResetRange(std::size_t node) noexcept;
+        void ResetRange(std::size_t node) const noexcept;
         /** @brief Propagates a completed child through its owning composite/decorator. */
-        void Propagate(std::size_t parent, std::size_t child) noexcept;
+        void Propagate(std::size_t parent, std::size_t child) const noexcept;
         /** @brief Applies parallel policy after the declared-order branch pass. @param node Parallel owner record. */
         void FinishParallel(std::size_t node) noexcept;
         /** @brief Executes a bounded iterative preorder traversal using preallocated depth frames. */
         [[nodiscard]] Result<AiTaskState> Traverse(const BlackboardSnapshot &blackboard);
+        /** @brief Advances the owning frame after child propagation without descending again into a running child. */
+        void AdvanceFrame(Frame &parent, std::size_t completed) const noexcept;
         /** @brief Resolves a stable control identity without exposing transient offsets. */
         [[nodiscard]] std::size_t Find(DecisionNodeId node) const noexcept;
         std::shared_ptr<const BehaviorTreeExecutionPlan> plan_;

@@ -9,7 +9,8 @@ namespace Horo::AI {
     namespace {
         /** @brief Recognizes the shared task/subtree terminal vocabulary. */
         bool Terminal(const AiTaskState state) noexcept {
-            return state == AiTaskState::Succeeded || state == AiTaskState::Failed || state == AiTaskState::Cancelled;
+            using enum AiTaskState;
+            return state == Succeeded || state == Failed || state == Cancelled;
         }
 
         /** @brief Produces a stable input/lifecycle rejection. */
@@ -22,7 +23,7 @@ namespace Horo::AI {
             bool &active;
 
             explicit EvaluationGuard(bool &flag) : active(flag) {
-                active = true;
+                flag = true;
             }
 
             ~EvaluationGuard() {
@@ -65,6 +66,9 @@ namespace Horo::AI {
         bool entered{};
     };
 
+    /** @copydoc BehaviorTreeInstance::BehaviorTreeInstance */
+    BehaviorTreeInstance::BehaviorTreeInstance(ConstructionKey) {}
+
     /** @copydoc BehaviorTreeInstance::Create */
     Result<std::unique_ptr<BehaviorTreeInstance>> BehaviorTreeInstance::Create(std::shared_ptr<const BehaviorTreeExecutionPlan> plan,
                                                                                BehaviorTreeInstanceBinding binding,
@@ -75,7 +79,7 @@ namespace Horo::AI {
             binding.firstTaskSlot > std::numeric_limits<std::uint32_t>::max() - BehaviorTreeExecutionLimits::HardNodes)
             return Failure<std::unique_ptr<BehaviorTreeInstance>>(AIErrors::TaskContextInvalid);
         try {
-            auto instance = std::unique_ptr<BehaviorTreeInstance>(new BehaviorTreeInstance);
+            auto instance = std::make_unique<BehaviorTreeInstance>(ConstructionKey{});
             instance->states_ = std::make_unique<NodeState[]>(plan->Nodes().size());
             instance->services_ = std::make_unique<ServiceState[]>(plan->Services().size());
             instance->frames_ = std::make_unique<Frame[]>(plan->Depth());
@@ -117,16 +121,14 @@ namespace Horo::AI {
         }
         if (blackboard.Binding() != binding_.blackboard)
             return Failure<AiTaskState>(AIErrors::BlackboardInstanceInvalid);
-        const auto revision = blackboard.Revision();
-        if (revision.HasError())
+        if (const auto revision = blackboard.Revision(); revision.HasError())
             return Result<AiTaskState>::Failure(revision.ErrorValue());
         tick_ = tick;
         reason_ = reason;
         ++evaluation_;
         if (Terminal(states_[0].status))
             return Result<AiTaskState>::Success(states_[0].status);
-        const auto observed = ObservePriority(blackboard);
-        if (observed.HasError()) {
+        if (const auto observed = ObservePriority(blackboard); observed.HasError()) {
             CancelRange(0, AiTaskCancellationReason::Requested);
             return Result<AiTaskState>::Failure(observed.ErrorValue());
         }
@@ -145,13 +147,12 @@ namespace Horo::AI {
         for (std::size_t index = record.firstService; index < record.firstService + record.serviceCount; ++index) {
             const auto &service = plan_->Services()[index];
             auto &state = services_[index];
-            const bool due =
-                !state.active || (service.mode == BehaviorTreeServiceMode::Reactive ? state.revision != revision.Value()
-                                                                                    : tick_ - state.tick >= service.intervalTicks);
-            if (!due)
+            if (const bool due =
+                    !state.active || (service.mode == BehaviorTreeServiceMode::Reactive ? state.revision != revision.Value()
+                                                                                        : tick_ - state.tick >= service.intervalTicks);
+                !due)
                 continue;
-            const auto result = executor_->Service(Context(service.id, blackboard));
-            if (result.HasError())
+            if (const auto result = executor_->Service(Context(service.id, blackboard)); result.HasError())
                 return result;
             state = {.tick = tick_, .revision = revision.Value(), .active = true};
         }
@@ -180,8 +181,8 @@ namespace Horo::AI {
                 continue;
             for (std::size_t priority = 0; priority < state.cursor; ++priority) {
                 const std::size_t child = plan_->Children()[selector.firstChild + priority];
-                const auto mode = plan_->Nodes()[child].execution.abort;
-                if (mode != BehaviorTreeAbortMode::LowerPriority && mode != BehaviorTreeAbortMode::Both)
+                if (const auto mode = plan_->Nodes()[child].execution.abort;
+                    mode != BehaviorTreeAbortMode::LowerPriority && mode != BehaviorTreeAbortMode::Both)
                     continue;
                 const auto checked = Check(child, blackboard);
                 if (checked.HasError())
@@ -201,20 +202,21 @@ namespace Horo::AI {
 
     /** @copydoc BehaviorTreeInstance::Enter */
     Result<void> BehaviorTreeInstance::Enter(const std::size_t node, const BlackboardSnapshot &blackboard) {
+        using enum AiTaskState;
         using enum BehaviorTreeOperation;
         const auto &record = plan_->Nodes()[node];
         auto &state = states_[node];
-        const bool entering = state.status == AiTaskState::Idle;
+        const bool entering = state.status == Idle;
         if (entering) {
-            state.status = AiTaskState::Running;
+            state.status = Running;
             state.startedTick = tick_;
         }
         const auto op = record.execution.operation;
         if (op == Cooldown && entering && state.cooldownSet && tick_ - state.completedTick < record.execution.durationTicks)
-            state.status = AiTaskState::Failed;
+            state.status = Failed;
         if (op == TimeLimit && tick_ - state.startedTick >= record.execution.durationTicks) {
             CancelRange(node, AiTaskCancellationReason::Requested);
-            state.status = AiTaskState::Failed;
+            state.status = Failed;
         }
         if (op == BlackboardCheck &&
             (entering || record.execution.abort == BehaviorTreeAbortMode::Self || record.execution.abort == BehaviorTreeAbortMode::Both)) {
@@ -223,12 +225,11 @@ namespace Horo::AI {
                 return Result<void>::Failure(checked.ErrorValue());
             if (!checked.Value()) {
                 CancelRange(node, AiTaskCancellationReason::Requested);
-                state.status = AiTaskState::Failed;
+                state.status = Failed;
             }
         }
-        if (state.status == AiTaskState::Running) {
-            const auto serviced = RunServices(node, blackboard);
-            if (serviced.HasError())
+        if (state.status == Running) {
+            if (const auto serviced = RunServices(node, blackboard); serviced.HasError())
                 return serviced;
             if (op == Task)
                 return RunTask(node, blackboard);
@@ -259,8 +260,8 @@ namespace Horo::AI {
             return Result<void>::Success();
         }
         const auto context = Context(plan_->Nodes()[node].execution.id, blackboard);
-        auto result = starting ? executor_->Start(context, *state.task->Context()) : executor_->Resume(context, *state.task->Context());
-        if (result.HasError()) {
+        if (auto result = starting ? executor_->Start(context, *state.task->Context()) : executor_->Resume(context, *state.task->Context());
+            result.HasError()) {
             const auto completed = state.task->CompleteFailure(binding_.agent, {AiTaskFailureKind::Execution, result.ErrorValue()});
             if (completed.HasError())
                 return Result<void>::Failure(completed.ErrorValue());
@@ -282,8 +283,7 @@ namespace Horo::AI {
         state.status = state.task->State();
         if (!Terminal(state.status))
             return;
-        const auto claim = state.task->ClaimCleanup();
-        if (!claim.HasValue() || !claim.Value())
+        if (const auto claim = state.task->ClaimCleanup(); !claim.HasValue() || !claim.Value())
             return;
         const auto &result = *state.task->TerminalResult();
         if (result.state == AiTaskState::Cancelled)
@@ -308,7 +308,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc BehaviorTreeInstance::ResetRange */
-    void BehaviorTreeInstance::ResetRange(const std::size_t node) noexcept {
+    void BehaviorTreeInstance::ResetRange(const std::size_t node) const noexcept {
         for (std::size_t index = node; index < plan_->Nodes()[node].subtreeEnd; ++index) {
             auto &state = states_[index];
             state.status = AiTaskState::Idle;
@@ -323,7 +323,8 @@ namespace Horo::AI {
     }
 
     /** @copydoc BehaviorTreeInstance::Propagate */
-    void BehaviorTreeInstance::Propagate(const std::size_t parent, const std::size_t child) noexcept {
+    void BehaviorTreeInstance::Propagate(const std::size_t parent, const std::size_t child) const noexcept {
+        using enum AiTaskState;
         using enum BehaviorTreeOperation;
         auto &state = states_[parent];
         const auto &record = plan_->Nodes()[parent];
@@ -331,17 +332,23 @@ namespace Horo::AI {
         const auto op = record.execution.operation;
         if (op == Parallel)
             return;
-        if (outcome == AiTaskState::Cancelled || outcome == AiTaskState::Running) {
+        if (outcome == Cancelled || outcome == Running) {
             state.status = outcome;
         } else if (op == Sequence || op == Selector) {
-            const bool advance = outcome == (op == Sequence ? AiTaskState::Succeeded : AiTaskState::Failed);
-            if (advance && ++state.cursor < record.childCount)
-                return;
+            if (outcome == (op == Sequence ? Succeeded : Failed)) {
+                ++state.cursor;
+                if (state.cursor < record.childCount)
+                    return;
+            }
             state.status = outcome;
         } else if (op == Inverter) {
-            state.status = outcome == AiTaskState::Succeeded ? AiTaskState::Failed : AiTaskState::Succeeded;
-        } else if (op == Loop && outcome == AiTaskState::Succeeded && ++state.iterations < record.execution.iterations) {
-            ResetRange(child);
+            state.status = outcome == Succeeded ? Failed : Succeeded;
+        } else if (op == Loop && outcome == Succeeded) {
+            ++state.iterations;
+            if (state.iterations < record.execution.iterations)
+                ResetRange(child);
+            else
+                state.status = outcome;
         } else {
             state.status = outcome;
         }
@@ -353,6 +360,7 @@ namespace Horo::AI {
 
     /** @copydoc BehaviorTreeInstance::FinishParallel */
     void BehaviorTreeInstance::FinishParallel(const std::size_t nodeIndex) noexcept {
+        using enum AiTaskState;
         const auto &node = plan_->Nodes()[nodeIndex];
         auto &state = states_[nodeIndex];
         std::size_t successes{};
@@ -360,41 +368,46 @@ namespace Horo::AI {
         std::size_t cancelled{};
         for (std::size_t child = node.firstChild; child < node.firstChild + node.childCount; ++child) {
             const auto outcome = states_[plan_->Children()[child]].status;
-            successes += outcome == AiTaskState::Succeeded;
-            failures += outcome == AiTaskState::Failed;
-            cancelled += outcome == AiTaskState::Cancelled;
+            if (outcome == Succeeded)
+                ++successes;
+            if (outcome == Failed)
+                ++failures;
+            if (outcome == Cancelled)
+                ++cancelled;
         }
         const auto policy = node.execution.parallel;
         if (cancelled > 0)
-            state.status = AiTaskState::Cancelled;
+            state.status = Cancelled;
         else if (policy == BehaviorTreeParallelPolicy::RequireOneSuccess && successes > 0)
-            state.status = AiTaskState::Succeeded;
+            state.status = Succeeded;
         else if (policy == BehaviorTreeParallelPolicy::StopOthersOnFailure && failures > 0)
-            state.status = AiTaskState::Failed;
+            state.status = Failed;
         else if (successes + failures == node.childCount)
-            state.status =
-                policy == BehaviorTreeParallelPolicy::RequireAllComplete || failures == 0 ? AiTaskState::Succeeded : AiTaskState::Failed;
+            state.status = policy == BehaviorTreeParallelPolicy::RequireAllComplete || failures == 0 ? Succeeded : Failed;
         if (Terminal(state.status))
             CancelRange(nodeIndex, AiTaskCancellationReason::Requested);
     }
 
     /** @copydoc BehaviorTreeInstance::Traverse */
     Result<AiTaskState> BehaviorTreeInstance::Traverse(const BlackboardSnapshot &blackboard) {
+        using enum BehaviorTreeOperation;
         std::size_t depth = 1;
         frames_[0] = {};
         std::size_t steps{};
-        while (depth > 0 && ++steps <= plan_->Nodes().size() * 2) {
+        while (depth > 0) {
+            ++steps;
+            if (steps > plan_->Nodes().size() * 2)
+                return Failure<AiTaskState>(AIErrors::BehaviorTreeLimitExceeded);
             auto &frame = frames_[depth - 1];
             const auto &node = plan_->Nodes()[frame.node];
-            auto &state = states_[frame.node];
+            const auto &state = states_[frame.node];
             if (!frame.entered && !Terminal(state.status)) {
-                const auto entered = Enter(frame.node, blackboard);
-                if (entered.HasError())
+                if (const auto entered = Enter(frame.node, blackboard); entered.HasError())
                     return Result<AiTaskState>::Failure(entered.ErrorValue());
                 frame.entered = true;
-                frame.nextChild = node.execution.operation == BehaviorTreeOperation::Parallel ? 0 : state.cursor;
+                frame.nextChild = node.execution.operation == Parallel ? 0 : state.cursor;
             }
-            const bool parallel = node.execution.operation == BehaviorTreeOperation::Parallel;
+            const bool parallel = node.execution.operation == Parallel;
             if (!Terminal(state.status) && frame.nextChild < node.childCount) {
                 if (depth == plan_->Depth())
                     return Failure<AiTaskState>(AIErrors::BehaviorTreeLimitExceeded);
@@ -411,17 +424,21 @@ namespace Horo::AI {
                 break;
             auto &parentFrame = frames_[depth - 1];
             Propagate(parentFrame.node, completed);
-            const auto op = plan_->Nodes()[parentFrame.node].execution.operation;
-            if (op != BehaviorTreeOperation::Parallel && states_[parentFrame.node].status == AiTaskState::Running &&
-                (op != BehaviorTreeOperation::Sequence && op != BehaviorTreeOperation::Selector))
-                parentFrame.nextChild = plan_->Nodes()[parentFrame.node].childCount;
-            if ((op == BehaviorTreeOperation::Sequence || op == BehaviorTreeOperation::Selector) &&
-                states_[completed].status == AiTaskState::Running)
-                parentFrame.nextChild = plan_->Nodes()[parentFrame.node].childCount;
+            AdvanceFrame(parentFrame, completed);
         }
-        if (depth != 0)
-            return Failure<AiTaskState>(AIErrors::BehaviorTreeLimitExceeded);
         return Result<AiTaskState>::Success(states_[0].status);
+    }
+
+    /** @copydoc BehaviorTreeInstance::AdvanceFrame */
+    void BehaviorTreeInstance::AdvanceFrame(Frame &parent, const std::size_t completed) const noexcept {
+        using enum BehaviorTreeOperation;
+        const auto &node = plan_->Nodes()[parent.node];
+        const auto op = node.execution.operation;
+        if (op == Parallel)
+            return;
+        const bool composite = op == Sequence || op == Selector;
+        if (composite ? states_[completed].status == AiTaskState::Running : states_[parent.node].status == AiTaskState::Running)
+            parent.nextChild = node.childCount;
     }
 
     /** @copydoc BehaviorTreeInstance::Find */
