@@ -1235,6 +1235,7 @@ target_compile_features(HoroTerrainImport PUBLIC cxx_std_20)
 target_include_directories(HoroTerrainImport PRIVATE ${PROJECT_SOURCE_DIR}/vendor/stb)
 target_link_libraries(HoroTerrainImport PUBLIC HoroEngine::TerrainApi HoroEngine::Assets)
 add_library(HoroTerrainCook STATIC
+        runtime/terrain/cook/FoliagePlacementCook.cpp
         runtime/terrain/cook/TerrainTileCook.cpp
         runtime/terrain/cook/TerrainTileCookCodec.cpp
         runtime/terrain/cook/TerrainTileCookErrors.cpp
