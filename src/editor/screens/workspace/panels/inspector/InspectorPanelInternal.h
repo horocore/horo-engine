@@ -21,26 +21,6 @@
 namespace Horo::Editor::InspectorPanelDetail {
     constexpr float DegreesToRadians = std::numbers::pi_v<float> / 180.0F;
 
-    /** @brief Maps each typed scene-object kind to the shared editor icon registry. */
-    [[nodiscard]] inline Ui::UiIcon KindIcon(const SceneObjectKind kind) noexcept {
-        using enum SceneObjectKind;
-        switch (kind) {
-            case Mesh:
-                return Ui::UiIcon::HierarchyMesh;
-            case Camera:
-                return Ui::UiIcon::Camera;
-            case Light:
-                return Ui::UiIcon::Light;
-            case TriggerVolume:
-                return Ui::UiIcon::TriggerVolume;
-            case AudioSource:
-                return Ui::UiIcon::AudioSource;
-            case GameObject:
-                return Ui::UiIcon::HierarchyGeneric;
-        }
-        return Ui::UiIcon::HierarchyGeneric;
-    }
-
     /** @brief Reports whether the Inspector's degree-based perspective draft is valid. */
     [[nodiscard]] inline bool IsValidFieldOfViewDegrees(const float value) noexcept {
         return std::isfinite(value) && value > 0.0F && value < 180.0F;
@@ -283,55 +263,18 @@ namespace Horo::Editor::InspectorPanelDetail {
     struct ObjectTitleLayout {
         float uiScale;
         float rowHeight;
-        float checkboxSize;
-        float checkboxGap;
         float optionsWidth;
-        float staticFontSize;
         float trailingWidth;
     };
 
-    /** @brief Resolves object-title geometry from localized text and the active UI scale. */
-    [[nodiscard]] inline ObjectTitleLayout ResolveObjectTitleLayout(const char *staticLabel, const Theme::Fonts &fonts) {
+    /** @brief Resolves object-title geometry from the active UI scale. */
+    [[nodiscard]] inline ObjectTitleLayout ResolveObjectTitleLayout() {
         const float uiScale = Theme::GetActiveTokens().sizes.uiScale;
-        const float checkboxSize = 14.0F * uiScale;
-        const float checkboxGap = 4.0F * uiScale;
         const float optionsWidth = 30.0F * uiScale;
-        const float staticFontSize = Theme::TextPx::Label();
-        const float staticTextWidth = fonts.sansCompact->CalcTextSizeA(staticFontSize, 1000.0F, 0.0F, staticLabel).x;
         return {.uiScale = uiScale,
                 .rowHeight = 38.0F * uiScale,
-                .checkboxSize = checkboxSize,
-                .checkboxGap = checkboxGap,
                 .optionsWidth = optionsWidth,
-                .staticFontSize = staticFontSize,
-                .trailingWidth = checkboxSize + checkboxGap + staticTextWidth + 6.0F * uiScale + optionsWidth};
-    }
-
-    /** @brief Draws the read-only static-object indicator beside the object title. */
-    inline void DrawStaticObjectIndicator(const char *label, const Theme::Fonts &fonts, const ObjectTitleLayout &layout,
-                                          const ImVec2 rowOrigin, const float rowWidth) {
-        ImGui::SetCursorScreenPos(
-            {rowOrigin.x + rowWidth - layout.trailingWidth, rowOrigin.y + (layout.rowHeight - layout.checkboxSize) * 0.5F});
-        bool isStatic = true;
-        ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.0F);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {1.5F, 1.5F});
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, {layout.checkboxGap, 0.0F});
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, Theme::GetActiveTokens().radii.control);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0F);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, Theme::Bg3());
-        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Theme::Hover());
-        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, Theme::Hover());
-        ImGui::PushStyleColor(ImGuiCol_Border, Theme::Border());
-        ImGui::PushStyleColor(ImGuiCol_CheckMark, Theme::Accent());
-        ImGui::PushStyleColor(ImGuiCol_Text, Theme::Muted());
-        ImGui::BeginDisabled();
-        {
-            Theme::ScopedTextStyle textStyle(fonts.sansCompact, layout.staticFontSize, Theme::FontPx::SansCompact);
-            static_cast<void>(ImGui::Checkbox(label, &isStatic));
-        }
-        ImGui::EndDisabled();
-        ImGui::PopStyleColor(6);
-        ImGui::PopStyleVar(5);
+                .trailingWidth = optionsWidth + 6.0F * uiScale};
     }
 
     /** @brief Draws the object options trigger and dispatches its contextual commands. */

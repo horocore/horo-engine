@@ -581,3 +581,28 @@ Required tests cover:
 - [Project Model](./project-model.md)
 - [Platform Abstraction](../foundation/platform-abstraction.md)
 - [Concurrency And Job System](../foundation/concurrency-and-jobs.md)
+
+## Native Mock Removal Migration
+
+The native UI preview gallery and simulated build, test, release, and publish
+workflows are removed from the editor. Design references remain in Mock Studio.
+`HoroEditorApp` starts a typed production route through `GuiScreenHost::Start`;
+`--ui-preview`, `StartUiPreview`, and `OpenUiPreview` have no replacement.
+The corresponding `EditorMenuAction` preview values are removed. Build menu
+entries remain disabled until real application capabilities are implemented.
+
+`AssetImportModal` no longer exposes the gallery-only `Catalog`,
+`PresentReadOnlySnapshot`, read-only presentation, canvas inset, initial advanced
+expansion, or initial scroll APIs. Their only native caller was the removed
+preview modal. Production callers continue to use the import operation and its
+snapshot. Menu, host lifecycle, import presentation, and localization tests
+cover the remaining production paths; simulated workflow tests are removed.
+
+The import modal constructor now groups its optional borrowed capabilities in
+`AssetImportModalServices` instead of five positional pointer arguments. The
+composition root and lifecycle/presentation tests use named members; this keeps
+the eight-argument constructor below the quality limit and preserves ownership
+and default behavior. External callers should pass the same pointers in that
+value; no service lookup or registration occurs inside it. The constructor reads
+this aggregate through a const reference and copies its pointers, so a temporary
+aggregate is valid while the pointed-to services must outlive the modal.

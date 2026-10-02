@@ -126,8 +126,8 @@ namespace Horo::Assets {
     };
 
     /** @brief Rebuilds a registry from source files and committed sidecars beneath one project root. @param registry
-     * Owner-thread registry to publish. @param projectRoot Native project root containing assets/. @param mode Controls
-     * whether the derived index may be replaced. @return Rebuild report or a root/I/O failure. */
+     * Owner-thread registry to publish. @param projectRoot Native project root containing an Assets/ or legacy assets/ directory. @param
+     * mode Controls whether the derived index may be replaced. @return Rebuild report or a root/I/O failure. */
     [[nodiscard]] Result<AssetRegistryBuildReport> RebuildAssetRegistry(AssetRegistry &registry, const std::filesystem::path &projectRoot,
                                                                         AssetRegistryOpenMode mode);
 

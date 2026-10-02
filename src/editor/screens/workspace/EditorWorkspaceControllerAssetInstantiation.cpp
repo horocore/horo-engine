@@ -7,6 +7,15 @@
 #include <utility>
 
 namespace Horo::Editor {
+    namespace {
+        [[nodiscard]] std::filesystem::path ResolveAssetSourcePath(const EditorWorkspaceViewModel &viewModel,
+                                                                   const AssetSceneDropRequest &request,
+                                                                   const Assets::AssetRecord &record) {
+            if (const std::filesystem::path draggedPath{request.absoluteAssetPath}; draggedPath.is_absolute())
+                return draggedPath;
+            return std::filesystem::path{viewModel.projectRoot} / record.sourcePath.String();
+        }
+    }  // namespace
 
     void EditorWorkspaceController::HandleCreatePrimitive(const Runtime::PrimitiveId primitive, const std::optional<SceneObjectId> parent) {
         Result<SceneCommandResult> result = m_createSceneObject.Execute(PrimitiveCreationRequest{primitive, parent});
@@ -27,7 +36,7 @@ namespace Horo::Editor {
     }
 
     bool EditorWorkspaceController::ApplyAssetViewportPlacement(const AssetSceneDropRequest &request, const Math::Aabb &localBounds,
-                                                                Math::Transform &localTransform) const {
+                                                                Math::Transform &localTransform, const bool publishFailure) const {
         if (request.target != AssetSceneDropTarget::Viewport)
             return true;
 
@@ -40,9 +49,11 @@ namespace Horo::Editor {
             .localBounds = localBounds,
         });
         if (placement.HasError()) {
-            m_notifications.Publish("asset", NotificationSeverity::Error, placement.ErrorValue().message,
-                                    Localized("workspace.asset_drop.place_failed_title", "Asset could not be placed"),
-                                    "asset_drop_placement_failed");
+            if (publishFailure) {
+                m_notifications.Publish("asset", NotificationSeverity::Error, placement.ErrorValue().message,
+                                        Localized("workspace.asset_drop.place_failed_title", "Asset could not be placed"),
+                                        "asset_drop_placement_failed");
+            }
             return false;
         }
         localTransform.translation = placement.Value().worldPosition;
@@ -51,31 +62,72 @@ namespace Horo::Editor {
 
         const std::optional<Runtime::RuntimeSceneView> active = m_runtimeScene.ActiveScene();
         if (!active.has_value()) {
-            m_notifications.Publish("asset", NotificationSeverity::Warning,
-                                    Localized("workspace.asset_drop.parent_missing", "The hierarchy target no longer exists."),
-                                    Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_parent_runtime_missing");
+            if (publishFailure) {
+                m_notifications.Publish("asset", NotificationSeverity::Warning,
+                                        Localized("workspace.asset_drop.parent_missing", "The hierarchy target no longer exists."),
+                                        Localized("workspace.asset_drop.not_added", "Asset not added"),
+                                        "asset_drop_parent_runtime_missing");
+            }
             return false;
         }
         const Result<SceneObjectWorldTransforms> parentWorld = ResolveSceneObjectWorldTransforms(*active, *request.parent);
         const Result<Math::Mat4> parentInverse = parentWorld.HasValue() ? Math::TryInverseAffine(parentWorld.Value().localToWorld)
                                                                         : Result<Math::Mat4>::Failure(parentWorld.ErrorValue());
         if (parentInverse.HasError()) {
-            m_notifications.Publish("asset", NotificationSeverity::Warning,
-                                    Localized("workspace.asset_drop.parent_missing", "The hierarchy target no longer exists."),
-                                    Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_parent_transform_invalid");
+            if (publishFailure) {
+                m_notifications.Publish("asset", NotificationSeverity::Warning,
+                                        Localized("workspace.asset_drop.parent_missing", "The hierarchy target no longer exists."),
+                                        Localized("workspace.asset_drop.not_added", "Asset not added"),
+                                        "asset_drop_parent_transform_invalid");
+            }
             return false;
         }
         localTransform.translation = Math::TransformAffinePoint(parentInverse.Value(), placement.Value().worldPosition);
         return true;
     }
 
+    void EditorWorkspaceController::PreviewAssetPlacement(const AssetSceneDropRequest &request) {
+        if (request.target != AssetSceneDropTarget::Viewport)
+            return;
+        if (m_assetPlacementPreviewActive) {
+            static_cast<void>(ClearAssetViewportPlacementPreview(m_viewportScene));
+            m_assetPlacementPreviewActive = false;
+        }
+        const Assets::AssetRecord *record = ResolveAssetDropRecord(request, false);
+        if (record == nullptr)
+            return;
+        const std::filesystem::path source = ResolveAssetSourcePath(m_viewModel, request, *record);
+        const auto loaded = m_assetMeshCache.Load(record->id, source);
+        if (loaded.HasError())
+            return;
+        Math::Transform transform;
+        if (!ApplyAssetViewportPlacement(request, loaded.Value().mesh->localBounds, transform, false))
+            return;
+        if (const Result<void> applied = ApplyAssetViewportPlacementPreview(m_viewportScene, loaded.Value(),
+                                                                            AssetViewportPlacement{.worldPosition = transform.translation});
+            applied.HasError()) {
+            LOG_ERROR("editor.viewport", "Asset placement preview failed: %s", applied.ErrorValue().message.c_str());
+            return;
+        }
+        m_assetPlacementPreviewActive = true;
+        ++m_viewportSceneRevision;
+    }
+
+    void EditorWorkspaceController::CancelAssetPlacementPreview() {
+        if (!m_assetPlacementPreviewActive)
+            return;
+        static_cast<void>(ClearAssetViewportPlacementPreview(m_viewportScene));
+        m_assetPlacementPreviewActive = false;
+        ++m_viewportSceneRevision;
+    }
+
     void EditorWorkspaceController::HandleInstantiateAsset(const AssetSceneDropRequest &request) {
+        CancelAssetPlacementPreview();
         const Assets::AssetRecord *record = ResolveAssetDropRecord(request);
         if (record == nullptr)
             return;
 
-        const std::filesystem::path source =
-            (std::filesystem::path{m_viewModel.projectRoot} / record->sourcePath.String()).lexically_normal();
+        const std::filesystem::path source = ResolveAssetSourcePath(m_viewModel, request, *record);
         const auto loaded = m_assetMeshCache.Load(record->id, source);
         if (loaded.HasError()) {
             m_notifications.Publish("asset", NotificationSeverity::Error, loaded.ErrorValue().message,
@@ -95,34 +147,44 @@ namespace Horo::Editor {
         HandleInstantiatedAssetCommand(result);
     }
 
-    const Assets::AssetRecord *EditorWorkspaceController::ResolveAssetDropRecord(const AssetSceneDropRequest &request) const {
+    const Assets::AssetRecord *EditorWorkspaceController::ResolveAssetDropRecord(const AssetSceneDropRequest &request,
+                                                                                 const bool publishFailure) const {
         const auto parsedId = Assets::AssetId::Parse(request.assetId);
         if (parsedId.HasError() || request.documentRevision != m_document.Revision()) {
-            m_notifications.Publish("asset", NotificationSeverity::Warning,
-                                    Localized("workspace.asset_drop.stale",
-                                              "The asset drop was cancelled because the scene or drag reference changed."),
-                                    Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_stale");
+            if (publishFailure) {
+                m_notifications.Publish("asset", NotificationSeverity::Warning,
+                                        Localized("workspace.asset_drop.stale",
+                                                  "The asset drop was cancelled because the scene or drag reference changed."),
+                                        Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_stale");
+            }
             return nullptr;
         }
         const Assets::AssetRecord *record = m_assetRegistry.Find(parsedId.Value());
         if (record == nullptr || record->type.Value() != request.assetType) {
-            m_notifications.Publish("asset", NotificationSeverity::Error,
-                                    Localized("workspace.asset_drop.missing", "The dragged asset is no longer registered in this project."),
-                                    Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_missing");
+            if (publishFailure) {
+                m_notifications.Publish("asset", NotificationSeverity::Error,
+                                        Localized("workspace.asset_drop.missing",
+                                                  "The dragged asset is no longer registered in this project."),
+                                        Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_missing");
+            }
             return nullptr;
         }
         if (!CanInstantiateAssetType(record->type.Value())) {
-            m_notifications.Publish("asset", NotificationSeverity::Info,
-                                    Localized("workspace.asset_drop.unsupported",
-                                              "This asset type cannot be instantiated as a scene object."),
-                                    Localized("workspace.asset_drop.unsupported_title", "Unsupported asset"),
-                                    std::format("asset_drop_unsupported_{}", record->type.Value()));
+            if (publishFailure) {
+                m_notifications.Publish("asset", NotificationSeverity::Info,
+                                        Localized("workspace.asset_drop.unsupported",
+                                                  "This asset type cannot be instantiated as a scene object."),
+                                        Localized("workspace.asset_drop.unsupported_title", "Unsupported asset"),
+                                        std::format("asset_drop_unsupported_{}", record->type.Value()));
+            }
             return nullptr;
         }
         if (request.parent.has_value() && !m_document.Contains(*request.parent)) {
-            m_notifications.Publish("asset", NotificationSeverity::Warning,
-                                    Localized("workspace.asset_drop.parent_missing", "The hierarchy target no longer exists."),
-                                    Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_parent_missing");
+            if (publishFailure) {
+                m_notifications.Publish("asset", NotificationSeverity::Warning,
+                                        Localized("workspace.asset_drop.parent_missing", "The hierarchy target no longer exists."),
+                                        Localized("workspace.asset_drop.not_added", "Asset not added"), "asset_drop_parent_missing");
+            }
             return nullptr;
         }
         return record;

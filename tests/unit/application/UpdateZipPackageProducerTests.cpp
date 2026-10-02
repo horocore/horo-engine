@@ -444,10 +444,11 @@ TEST_CASE("ZIP package producer output stages from a complete durable checkpoint
     const UpdateDownloadPaths paths{directory.root / "first/update.zip", directory.root / "first/update.checkpoint"};
     REQUIRE(SaveUpdateTransferCheckpoint(files, paths.partialFile, paths.checkpointFile, checkpoint.Value()).HasValue());
     const auto stageRoot = directory.root / "first/candidate";
-    const UpdateDownloadLimits downloadLimits{.maximumPackageBytes = 4096U, .reserveBytes = 0U};
-    const UpdateArchiveLimits archiveLimits{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
+    constexpr UpdateDownloadLimits downloadLimits{.maximumPackageBytes = 4096U, .reserveBytes = 0U};
+    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
     const UpdateZipStagingRequest stagingRequest{package, paths, stageRoot, downloadLimits, archiveLimits};
-    auto staged = PrepareZipUpdateStageHttps(stagingRequest, files, Verifier(), {});
+    auto verifier = Verifier();
+    auto staged = PrepareZipUpdateStageHttps(stagingRequest, files, verifier, {});
     REQUIRE(staged.HasValue());
     CHECK(ReadFile(directory.root / "first/candidate/bin/game") == "game");
 }

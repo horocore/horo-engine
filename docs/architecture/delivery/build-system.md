@@ -1087,7 +1087,7 @@ pipeline documented in [Asset Pipeline](../runtime/asset-pipeline.md).
 
 ## Related Documents
 
-- [Build Output UI Reference](../runtime/build-output.html)
+- [Build Output UI Reference](../../../mock-studio/designs.md#architecture-runtime-build-output)
 
 - [System Design](../foundation/system-design.md): module boundaries and ownership.
 - [Gameplay Module](../extensions/gameplay-module.md): public game-module build and

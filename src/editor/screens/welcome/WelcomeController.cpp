@@ -191,6 +191,8 @@ namespace Horo::Editor {
         }
         if (!entries->is_array() || entries->size() > 128)
             return BuildDefaultBootstrapRecentProjects();
+        if (entries->empty())
+            return {};
         for (const Json &value : *entries) {
             if (auto entry = ParseRecentProjectEntry(value); entry && IsDisplayableRecentProject(*entry))
                 results.push_back(std::move(*entry));
@@ -246,6 +248,45 @@ namespace Horo::Editor {
         }
         LOG_INFO("editor.welcome", "Saved %zu recent projects to '%s'", projects.size(), path.string().c_str());
         return true;
+    }
+
+    /** @copydoc DeleteRecentProjectFiles */
+    bool DeleteRecentProjectFiles(const std::filesystem::path &root) {
+        std::error_code error;
+        if (!root.is_absolute() || root == root.root_path())
+            return false;
+        if (std::filesystem::is_symlink(root, error) || error)
+            return false;
+        if (!std::filesystem::is_directory(root, error) || error)
+            return false;
+        if (!std::filesystem::is_regular_file(root / ".horo/project.json", error) || error)
+            return false;
+
+        const std::filesystem::path resolved = std::filesystem::canonical(root, error);
+        if (error)
+            return false;
+        const std::filesystem::path current = std::filesystem::current_path(error);
+        if (error)
+            return false;
+        // Only resolve the shared temporary root to reject its deletion; no files
+        // are created or opened in the publicly writable directory.
+        const std::filesystem::path temporaryRoot = std::filesystem::temp_directory_path(error);  // NOSONAR(cpp:S5443)
+        if (error)
+            return false;
+        const std::filesystem::path temporary = std::filesystem::canonical(temporaryRoot, error);
+        if (error)
+            return false;
+        const std::filesystem::path home = std::filesystem::canonical(ResolveEditorSettingsPath().parent_path().parent_path(), error);
+        if (error)
+            return false;
+        // A malformed recent-project entry must never target a shared directory.
+        for (const std::filesystem::path &protectedPath : {current, temporary, home}) {
+            if (std::ranges::mismatch(resolved, protectedPath).in1 == resolved.end())
+                return false;
+        }
+
+        std::filesystem::remove_all(root, error);
+        return !error;
     }
 
     /** @copydoc WelcomeScreenController::WelcomeScreenController */

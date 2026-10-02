@@ -637,7 +637,7 @@ Runtime variables:
 
 ## Related Documents
 
-- [Character Setup UI Reference](./character-setup.html): capsule, movement parameters, camera, and input bindings panel.
+- [Character Setup UI Reference](../../../mock-studio/designs.md#architecture-runtime-character-setup): capsule, movement parameters, camera, and input bindings panel.
 
 - [Physics Architecture](./physics-architecture.md): collision queries,
   materials, rigid bodies, and fixed-step world.
