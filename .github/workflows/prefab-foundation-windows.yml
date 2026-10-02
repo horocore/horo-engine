@@ -75,8 +75,8 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
-          cmake --build build/prefab-windows --target HoroPrefabTests HoroAssetRegistryTests --parallel 2
-          ctest --test-dir build/prefab-windows -R '^(HoroPrefabTests|HoroAssetRegistryTests)::' --output-on-failure
+          cmake --build build/prefab-windows --target HoroPrefabTests HoroPrefabSceneExpansionTests HoroPrefabSceneExpansionContractConsumer HoroAssetRegistryTests --parallel 2
+          ctest --test-dir build/prefab-windows -R '^(HoroPrefabTests|HoroPrefabSceneExpansionTests|HoroAssetRegistryTests)::|^HoroPrefabSceneExpansionContractConsumer$' --output-on-failure
         env:
           CC: cl
           CXX: cl

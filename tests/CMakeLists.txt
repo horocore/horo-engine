@@ -899,6 +899,17 @@ target_compile_features(HoroWorldStreamingTests PRIVATE cxx_std_20)
 target_link_libraries(HoroWorldStreamingTests PRIVATE HoroEngine::WorldStreaming)
 horo_register_catch_test(HoroWorldStreamingTests LABELS "unit;world_streaming;headless")
 
+add_executable(HoroPrefabSceneExpansionContractConsumer support/PrefabSceneExpansionPublicHeaderConsumer.cpp)
+target_compile_features(HoroPrefabSceneExpansionContractConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabSceneExpansionContractConsumer PRIVATE HoroEngine::PrefabSceneExpansion)
+add_test(NAME HoroPrefabSceneExpansionContractConsumer COMMAND HoroPrefabSceneExpansionContractConsumer)
+set_tests_properties(HoroPrefabSceneExpansionContractConsumer PROPERTIES LABELS "unit;prefab;headless")
+
+add_executable(HoroPrefabSceneExpansionTests unit/runtime/prefab/PrefabSceneExpansionTests.cpp)
+target_compile_features(HoroPrefabSceneExpansionTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabSceneExpansionTests PRIVATE HoroEngine::PrefabSceneExpansion)
+horo_register_catch_test(HoroPrefabSceneExpansionTests LABELS "unit;prefab;headless")
+
 add_executable(HoroPrefabTests
         unit/runtime/prefab/PrefabDependencyGraphTests.cpp
         unit/runtime/prefab/PrefabDiagnosticsTests.cpp
