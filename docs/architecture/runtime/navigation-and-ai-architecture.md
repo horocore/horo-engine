@@ -1797,6 +1797,47 @@ Horo 1.0 standardizes on three complementary decision paradigms:
 - Event-triggered and condition-triggered transitions evaluated against blackboard state.
 - State machines can host Behavior Trees as nested sub-state behaviors.
 
+`Horo/AI/StateMachine.h` implements the GAI-003.5 semantic asset and owner-thread
+kernel. `CookedStateMachinePlan` retains the existing `DecisionAssetPlan` without
+changing its node, dependency or blackboard declaration layout. Its states and
+transitions partition the admitted stable nodes; transition guards must use their
+own compiler-admitted typed key bindings. Gameplay event payloads enter the same
+blackboard at `BlackboardSync`; the runner accepts only bounded typed event IDs.
+The new header is owned by `HoroAI`, with no additional target dependency or
+migration of existing callers. The isolated AI public-header consumer covers it.
+
+Hierarchy is a bounded acyclic parent tree with explicit initial children. Entry
+and update run ancestor-first, exit descendant-first. External transitions use
+the least common ancestor, and a transition whose source remains an ancestor of
+its destination exits and re-enters that source. Leaf-most enabled transitions
+win before ancestor transitions; within a depth, higher priority wins, then
+ascending stable transition identity. The default step commits at most one
+transition. Explicit bounded chaining uses the same frozen input, does not reuse
+events, and stops before revisiting a leaf with `CycleBounded` evidence, or at its
+declared cap with `BudgetBounded` evidence. Repeating/backtracking a tick cannot
+evaluate again. Transition cycles across distinct ticks remain legal behavior.
+
+Actions are synchronous host-composed, step-scoped typed intent adapters. The
+borrowed interface replaces erased callback contexts with compiler-checked
+invocations; it adds no owned allocation or task scheduler. They do not
+retain Scene/blackboard views or create a scheduler; long-running work belongs to
+the existing cancellable task owner. Failed entry, update or exit retains its
+typed cause in the shared `AiTaskLifecycle` Failed result and clears the logical
+active path. This is an explicit terminal policy, not rollback of external
+effects. Cancellation, agent retirement and expired blackboard generations stop
+further actions and logical publication; adapters cannot reenter the runner.
+The host owns any already-enqueued intents and downstream resource cancellation.
+
+`AIDecisionSystem` and `BehaviorExecutionContext` are still architectural contracts,
+not concrete implementations at this boundary. Composition must invoke this
+kernel only on the authorized simulation owner in `AiDecisionEvaluate`, provide
+the exact current generation binding and frozen snapshot, and cancel before
+retirement. This ticket does not claim automatic controller discovery, task-provider
+execution, a behavior-tree interpreter, asset-pipeline persistence, hot-reload
+migration or save-service integration; those are separate decision foundation
+consumers. The semantic source is editor-independent, not a second file codec or
+blackboard store.
+
 #### 3. Simple Utility Scoring
 
 - Evaluates competing actions using consideration response curves (Linear, Polynomial, Logistic, Step).

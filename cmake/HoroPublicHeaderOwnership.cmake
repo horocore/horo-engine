@@ -516,6 +516,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/BlackboardInstance.h
     Horo/AI/BlackboardSchema.h
     Horo/AI/DecisionAssetValidation.h
+    Horo/AI/StateMachine.h
     Horo/AI/EnvironmentQuerySchema.h
     Horo/AI/NullAIRuntime.h
     Horo/AI/PerceptionDescriptorRegistry.h
