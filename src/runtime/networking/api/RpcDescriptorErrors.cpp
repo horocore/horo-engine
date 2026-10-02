@@ -59,4 +59,13 @@ namespace Horo::Network::NetworkErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor RpcPermissionUnsupported{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.rpc.permission_unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The declared RPC caller policy has no admitted implementation.",
+        .remediationHint = "Compose a host-approved caller-policy capability before enabling this RPC.",
+        .retryable = false,
+        .userActionable = true,
+    };
 }  // namespace Horo::Network::NetworkErrors
