@@ -371,7 +371,6 @@ update this inventory in the same change when it changes a production target,
 public include boundary, canonical target status, or first-party dependency
 edge.
 
-
 ### DFR-002.5 Physics Cook Adapter
 
 `HoroDestructionPhysicsCook` (`HoroEngine::DestructionPhysicsCook`) is always built.

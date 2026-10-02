@@ -1273,7 +1273,6 @@ provider context. No codec-specific or native backend type crosses the public
 boundary. The generated `HoroAudioApiPublicHeaderConsumer` and focused
 `HoroAudioApiTests` cover the new headers and lifecycle contract.
 
-
 ## DFR-002.5 Collision Artifact Migration Notes
 
 `HoroEngine::DestructionPhysicsCook` owns `Horo/Destruction/ChunkCollisionCook.h`

@@ -21,7 +21,22 @@ namespace Horo::Destruction {
 
     /** @brief Immutable detached dependency closure; it contains cooked bytes and no source geometry. */
     class ChunkCollisionArtifactSet final {
+        struct CookKey final {
+            CookKey(const CookKey &) = default;
+
+        private:
+            CookKey() = default;
+            friend class ChunkCollisionArtifactSet;
+        };
+
+        static CookKey ConstructionKey() {
+            return {};
+        }
+
     public:
+        /** @brief Constructs an immutable result only for authorized cooks/loaders. @param key Private construction key. */
+        explicit ChunkCollisionArtifactSet([[maybe_unused]] const CookKey &key) {}
+
         /** @brief Exact DFR content consumed by Physics. @return Borrowed immutable identity. */
         [[nodiscard]] const FractureArtifactContentIdentity &Content() const noexcept {
             return content_;
@@ -58,7 +73,6 @@ namespace Horo::Destruction {
         }
 
     private:
-        ChunkCollisionArtifactSet() = default;
         friend class ChunkCollisionCookOwner;
         friend Result<std::shared_ptr<const ChunkCollisionArtifactSet>> LoadChunkCollisionArtifacts(
             const struct ChunkCollisionBundleReference &, std::span<const std::uint8_t>, const DestructionLimits &);

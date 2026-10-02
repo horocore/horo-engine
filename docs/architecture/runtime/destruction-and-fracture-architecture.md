@@ -617,7 +617,6 @@ work, preview isolation, cancellation and repeated shutdown.
   canonical save/network state, server authority, paired Physics motion, late join,
   durable streaming handoff and compatibility
 
-
 ### DFR-002.5 Collision Artifact Integration
 
 The implementation retains neutral collision pieces in `ChunkMeshArtifact` schema 2,

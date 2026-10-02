@@ -1133,7 +1133,6 @@ Required tests cover:
 - [ADR-145: Destruction Source, Chunk Geometry, Collision and Cook Ownership](../../adr/145-destruction-source-chunk-geometry-collision-and-cook-ownership.md)
 - [ADR-146: Destruction Runtime Activation, Physics, Cleanup and Rollback](../../adr/146-destruction-runtime-activation-physics-cleanup-and-rollback.md)
 
-
 ### Flat Convex Compound Artifacts
 
 `PhysicsCompoundCook.h` defines the source-free flat convex compound envelope used by

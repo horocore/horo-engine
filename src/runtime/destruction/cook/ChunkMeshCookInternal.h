@@ -92,7 +92,7 @@ namespace Horo::Destruction::ChunkMeshDetail {
     [[nodiscard]] inline CollisionPieceId PieceIdentity(const ChunkCollisionPiece &piece) {
         auto positions = piece.positions;
         std::ranges::sort(positions);
-        positions.erase(std::unique(positions.begin(), positions.end()), positions.end());
+        positions.erase(std::ranges::unique(positions).begin(), positions.end());
         Sha256Builder hash;
         HashU64(hash, ChunkMeshCookSchemaVersion);
         HashU64(hash, positions.size());
@@ -107,10 +107,10 @@ namespace Horo::Destruction::ChunkMeshDetail {
         return CollisionPieceId::Create(value == 0 ? 1 : value).Value();
     }
 
-    inline void HashChunkMesh(Sha256Builder &hash, const ChunkMesh &chunk) {
-        HashU64(hash, chunk.id.Value());
-        HashU64(hash, chunk.collisionPieces.size());
-        for (const auto &piece : chunk.collisionPieces) {
+    /** @brief Hashes the complete neutral region table without changing canonical field order. */
+    inline void HashCollisionPieces(Sha256Builder &hash, std::span<const ChunkCollisionPiece> pieces) {
+        HashU64(hash, pieces.size());
+        for (const auto &piece : pieces) {
             HashU64(hash, piece.id.Value());
             HashU64(hash, piece.positions.size());
             for (const auto &position : piece.positions)
@@ -122,6 +122,11 @@ namespace Horo::Destruction::ChunkMeshDetail {
                     HashU64(hash, index);
             HashDouble(hash, piece.volume);
         }
+    }
+
+    inline void HashChunkMesh(Sha256Builder &hash, const ChunkMesh &chunk) {
+        HashU64(hash, chunk.id.Value());
+        HashCollisionPieces(hash, chunk.collisionPieces);
         HashU64(hash, chunk.vertices.size());
         for (const auto &vertex : chunk.vertices) {
             for (const float value : vertex.position)

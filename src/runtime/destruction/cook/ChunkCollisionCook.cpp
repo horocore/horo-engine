@@ -97,7 +97,8 @@ namespace Horo::Destruction {
             }))
                 return false;
             const auto &origin = piece.positions[triangle[0]];
-            std::array<double, 3> a{}, b{};
+            std::array<double, 3> a{};
+            std::array<double, 3> b{};
             for (std::size_t axis = 0; axis < 3; ++axis) {
                 a[axis] = static_cast<double>(piece.positions[triangle[1]][axis]) - origin[axis];
                 b[axis] = static_cast<double>(piece.positions[triangle[2]][axis]) - origin[axis];
@@ -118,12 +119,13 @@ namespace Horo::Destruction {
                 piece.triangles.size() > budget.limits.maximumWorkItemsPerTransition / piece.positions.size() ||
                 !budget.Charge(0, piece.triangles.size() * piece.positions.size()))
                 return Result<void>::Failure(MakeError(ChunkMeshCookErrors::LimitExceeded));
-            const bool finite = std::ranges::all_of(piece.positions, [](const auto &position) {
+            if (const bool finite = std::ranges::all_of(piece.positions,
+                                                        [](const auto &position) {
                 return std::ranges::all_of(position, [](float value) {
                     return std::isfinite(value);
                 });
             });
-            if (!finite)
+                !finite)
                 return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInput));
             for (const auto &triangle : piece.triangles) {
                 if (cancellation.IsCancellationRequested())
@@ -141,8 +143,8 @@ namespace Horo::Destruction {
             if (profile.HasError())
                 return Result<void>::Failure(profile.ErrorValue());
             const auto &limits = request.limits;
-            const auto &maximum = profile.Value().limits;
-            if (limits.maximumChunksPerDestructible == 0 || limits.maximumChunksPerDestructible > maximum.maximumChunksPerDestructible ||
+            if (const auto &maximum = profile.Value().limits;
+                limits.maximumChunksPerDestructible == 0 || limits.maximumChunksPerDestructible > maximum.maximumChunksPerDestructible ||
                 limits.maximumArtifactBytes < sizeof(ChunkCollisionArtifactSet) ||
                 limits.maximumArtifactBytes > maximum.maximumArtifactBytes || limits.maximumTransitionBytes < limits.maximumArtifactBytes ||
                 limits.maximumTransitionBytes > maximum.maximumTransitionBytes ||
@@ -182,8 +184,8 @@ namespace Horo::Destruction {
             std::ranges::sort(vertices, {}, [](Math::Vec3 point) {
                 return std::tuple{point.x, point.y, point.z};
             });
-            vertices.erase(std::unique(vertices.begin(), vertices.end()), vertices.end());
-            const auto settings = request.convex;
+            vertices.erase(std::ranges::unique(vertices).begin(), vertices.end());
+            const auto &settings = request.convex;
             // A conservative bounded face/vertex admission precedes all hull work.
             if (!budget.Charge(0, vertices.size() * settings.limits.maxHullVertices * 8ULL))
                 return Result<PhysicsConvexHullCookResult>::Failure(MakeError(ChunkMeshCookErrors::LimitExceeded));
@@ -219,8 +221,8 @@ namespace Horo::Destruction {
             std::vector<PhysicsCompoundCookChild> children;
             children.reserve(hulls.size());
             for (std::size_t i = 0; i < hulls.size(); ++i)
-                children.push_back({PhysicsShapeSubresourceId::FromValue(chunk.collisionPieces[i].id.Value()), material->slot,
-                                    hulls[i].descriptor, hulls[i].payload});
+                children.emplace_back(PhysicsShapeSubresourceId::FromValue(chunk.collisionPieces[i].id.Value()), material->slot,
+                                      hulls[i].descriptor, std::span<const std::uint8_t>{hulls[i].payload});
             auto compound = request.compound;
             compound.maximumPayloadBytes =
                 std::min(compound.maximumPayloadBytes, request.limits.maximumArtifactBytes - budget.bytes + leafBytes);
@@ -245,7 +247,7 @@ namespace Horo::Destruction {
         try {
             if (auto valid = ValidateRequest(mesh, request); valid.HasError())
                 return Output::Failure(valid.ErrorValue());
-            auto candidate = std::shared_ptr<ChunkCollisionArtifactSet>{new ChunkCollisionArtifactSet};
+            auto candidate = std::make_shared<ChunkCollisionArtifactSet>(ChunkCollisionArtifactSet::ConstructionKey());
             candidate->content_ = mesh.content;
             candidate->meshDigest_ = mesh.integrityDigest;
             candidate->target_ = request.target;
@@ -259,7 +261,7 @@ namespace Horo::Destruction {
                 auto shape = CookChunk(chunk, request, candidate->requestDigest_, budget, cancellation);
                 if (shape.HasError())
                     return Output::Failure(shape.ErrorValue());
-                candidate->shapes_.push_back({chunk.id, std::move(shape).Value()});
+                candidate->shapes_.emplace_back(chunk.id, std::move(shape).Value());
             }
             std::ranges::sort(candidate->shapes_, {}, &ChunkCollisionArtifact::chunk);
             if (cancellation.IsCancellationRequested())

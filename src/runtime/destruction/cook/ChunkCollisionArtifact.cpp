@@ -159,8 +159,10 @@ namespace Horo::Destruction {
         /** @brief Verifies one cooked compound with bounded work before returning owned package bytes. */
         [[nodiscard]] Result<ChunkCollisionArtifact> ReadShape(Reader &reader, const Header &header, const DestructionLimits &limits,
                                                                std::uint64_t &work) {
-            std::uint64_t chunk{}, size{};
-            Sha256Digest key, digest;
+            std::uint64_t chunk{};
+            std::uint64_t size{};
+            Sha256Digest key;
+            Sha256Digest digest;
             std::span<const std::uint8_t> payload;
             if (!reader.U64(chunk) || !reader.Bytes(key.bytes) || !reader.Bytes(digest.bytes) || !reader.U64(size) ||
                 !reader.Payload(size, payload))
@@ -236,7 +238,7 @@ namespace Horo::Destruction {
             auto header = ReadHeader(reader, reference, limits, payload.size());
             if (header.HasError())
                 return Output::Failure(header.ErrorValue());
-            auto candidate = std::shared_ptr<ChunkCollisionArtifactSet>{new ChunkCollisionArtifactSet};
+            auto candidate = std::make_shared<ChunkCollisionArtifactSet>(ChunkCollisionArtifactSet::ConstructionKey());
             candidate->content_ = header.Value().content;
             candidate->meshDigest_ = header.Value().mesh;
             candidate->target_ = header.Value().target;

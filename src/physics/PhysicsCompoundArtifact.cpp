@@ -10,9 +10,13 @@ namespace Horo::Physics {
         /** @brief Decodes a bounded child envelope and delegates all convex semantic verification to Physics. */
         [[nodiscard]] Result<LoadedPhysicsCompoundChild> ReadChild(Reader &reader, const PhysicsShapeCookTargetDigest &target,
                                                                    const PhysicsCompoundCookLimits &limits) {
-            std::uint64_t id{}, material{}, subresource{}, size{};
+            std::uint64_t id{};
+            std::uint64_t material{};
+            std::uint64_t subresource{};
+            std::uint64_t size{};
             std::array<std::uint8_t, 16> asset{};
-            Sha256Digest key, digest;
+            Sha256Digest key;
+            Sha256Digest digest;
             if (!reader.U64(id) || !reader.U64(material) || !reader.Bytes(asset) || !reader.U64(subresource) || !reader.Bytes(key.bytes) ||
                 !reader.Bytes(digest.bytes) || !reader.U64(size))
                 return Invalid<LoadedPhysicsCompoundChild>("Truncated compound child header.");
@@ -38,7 +42,8 @@ namespace Horo::Physics {
                                                            std::span<const std::uint8_t> payload, const PhysicsCompoundCookLimits &limits) {
             Reader reader{payload};
             std::array<std::uint8_t, 4> magic{};
-            std::uint32_t schema{}, count{};
+            std::uint32_t schema{};
+            std::uint32_t count{};
             std::array<std::uint8_t, 16> asset{};
             std::uint64_t subresource{};
             PhysicsShapeCookTargetDigest encodedTarget;

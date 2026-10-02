@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 
 namespace Horo::Physics {
     namespace {
@@ -74,7 +75,7 @@ namespace Horo::Physics {
             fixture.request.target.digest.bytes[0]++;
         }
         SECTION("corrupt child") {
-            fixture.hull.payload.back() ^= 1;
+            std::as_writable_bytes(std::span{fixture.hull.payload}).back() ^= std::byte{1};
         }
         SECTION("unsupported child kind") {
             fixture.children[0].descriptor.kind = PhysicsCookedShapeKind::TriangleMesh;
@@ -111,13 +112,13 @@ namespace Horo::Physics {
         REQUIRE(cooked.HasValue());
         auto artifact = std::move(cooked).Value();
         SECTION("magic") {
-            artifact.payload[0] ^= 1;
+            std::as_writable_bytes(std::span{artifact.payload})[0] ^= std::byte{1};
         }
         SECTION("schema") {
             artifact.payload[4] = 2;
         }
         SECTION("target") {
-            artifact.payload[32] ^= 1;
+            std::as_writable_bytes(std::span{artifact.payload})[32] ^= std::byte{1};
         }
         SECTION("count") {
             artifact.payload[96] = 255;
@@ -132,7 +133,7 @@ namespace Horo::Physics {
             std::fill_n(artifact.payload.begin() + 204, 8, 255);
         }
         SECTION("inner payload integrity") {
-            artifact.payload.back() ^= 1;
+            std::as_writable_bytes(std::span{artifact.payload}).back() ^= std::byte{1};
         }
         SECTION("truncated") {
             artifact.payload.pop_back();
@@ -150,10 +151,10 @@ namespace Horo::Physics {
         REQUIRE(cooked.HasValue());
         auto descriptor = cooked.Value().descriptor;
         SECTION("cook key") {
-            descriptor.cacheKeyDigest->bytes[0] ^= 1;
+            std::as_writable_bytes(std::span{descriptor.cacheKeyDigest->bytes})[0] ^= std::byte{1};
         }
         SECTION("payload key") {
-            descriptor.payloadDigest->bytes[0] ^= 1;
+            std::as_writable_bytes(std::span{descriptor.payloadDigest->bytes})[0] ^= std::byte{1};
         }
         SECTION("asset") {
             descriptor.asset = {};

@@ -6,6 +6,7 @@
 #include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -97,9 +98,9 @@ namespace Horo::Destruction {
             for (const auto &triangle : piece.triangles) {
                 for (const auto [from, to] :
                      {std::pair{triangle[0], triangle[1]}, std::pair{triangle[1], triangle[2]}, std::pair{triangle[2], triangle[0]}}) {
-                    auto &edge = edges[std::minmax(from, to)];
-                    ++edge.first;
-                    edge.second += from < to ? 1 : -1;
+                    auto &[count, orientation] = edges[std::minmax(from, to)];
+                    ++count;
+                    orientation += from < to ? 1 : -1;
                 }
             }
             CHECK_FALSE(edges.empty());
@@ -137,7 +138,7 @@ namespace Horo::Destruction {
         CHECK(candidate.chunks[0].neighbors[0] == candidate.chunks[1].id);
         CHECK(candidate.chunks[1].neighbors[0] == candidate.chunks[0].id);
         for (const auto &chunk : candidate.chunks) {
-            const auto interiors = std::count_if(chunk.triangles.begin(), chunk.triangles.end(), [](const auto &triangle) {
+            const auto interiors = std::ranges::count_if(chunk.triangles, [](const auto &triangle) {
                 return triangle.interior && triangle.materialSlot == 17;
             });
             CHECK(interiors >= 2);
@@ -311,7 +312,7 @@ namespace Horo::Destruction {
         source.digest = ComputeOfflineVoronoiSourceDigest(source);
         CheckError(GenerateOfflineVoronoi(source, recipe, CancellationToken{}), OfflineVoronoiErrors::InvalidMesh);
         source = Cube();
-        source.digest.bytes[0] ^= 1;
+        std::as_writable_bytes(std::span{source.digest.bytes})[0] ^= std::byte{1};
         CheckError(GenerateOfflineVoronoi(source, recipe, CancellationToken{}), OfflineVoronoiErrors::InvalidInput);
         source = Cube();
         recipe.sites[1] = recipe.sites[0];

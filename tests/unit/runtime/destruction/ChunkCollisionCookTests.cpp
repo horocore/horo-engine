@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <type_traits>
 
 namespace Horo::Destruction {
@@ -161,7 +162,7 @@ namespace Horo::Destruction {
             encoded[4] = 2;
         }
         SECTION("target") {
-            encoded[96] ^= 1;
+            std::as_writable_bytes(std::span{encoded})[96] ^= std::byte{1};
         }
         SECTION("unknown tier") {
             encoded[128] = 255;
@@ -176,10 +177,10 @@ namespace Horo::Destruction {
             std::fill_n(encoded.begin() + 237, 8, 255);
         }
         SECTION("mixed configuration") {
-            encoded[129] ^= 1;
+            std::as_writable_bytes(std::span{encoded})[129] ^= std::byte{1};
         }
         SECTION("corrupt shape") {
-            encoded.back() ^= 1;
+            std::as_writable_bytes(std::span{encoded}).back() ^= std::byte{1};
         }
         SECTION("truncation") {
             encoded.pop_back();
@@ -188,7 +189,7 @@ namespace Horo::Destruction {
             encoded.push_back(0);
         }
         SECTION("stale mesh reference") {
-            reference.meshDigest.bytes[0] ^= 1;
+            std::as_writable_bytes(std::span{reference.meshDigest.bytes})[0] ^= std::byte{1};
         }
         SECTION("lowered work limit") {
             fixture.request.limits.maximumWorkItemsPerTransition = 1;
@@ -206,7 +207,7 @@ namespace Horo::Destruction {
                     .Value();
         }
         SECTION("mesh revision") {
-            fixture.request.meshIntegrityDigest.bytes[0] ^= 1;
+            std::as_writable_bytes(std::span{fixture.request.meshIntegrityDigest.bytes})[0] ^= std::byte{1};
         }
         SECTION("material missing") {
             fixture.request.materials = {};
