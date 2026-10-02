@@ -410,6 +410,7 @@ def configure_command(
     compiler_launcher: str | None = None,
     msvc_debug_information_format: str | None = None,
     extra_cmake_args: Sequence[str] | None = None,
+    fetchcontent_base_dir: Path | None = None,
 ) -> list[str]:
     """Build the typed, parameterizable CMake configure command."""
     if render_metal is None:
@@ -443,6 +444,8 @@ def configure_command(
         )
     if msvc_debug_information_format:
         command.append(f"-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT={msvc_debug_information_format}")
+    if fetchcontent_base_dir is not None:
+        command.append(f"-DFETCHCONTENT_BASE_DIR={fetchcontent_base_dir.resolve()}")
     if extra_cmake_args:
         command.extend(extra_cmake_args)
     return command
@@ -572,6 +575,7 @@ def run_build(
     compiler_launcher: str | None = None,
     msvc_debug_information_format: str | None = None,
     extra_cmake_args: Sequence[str] | None = None,
+    fetchcontent_base_dir: Path | None = None,
 ) -> int:
     """Configure and build the repository or a specific target."""
     if clean and build_directory.exists():
@@ -592,6 +596,7 @@ def run_build(
         compiler_launcher=compiler_launcher,
         msvc_debug_information_format=msvc_debug_information_format,
         extra_cmake_args=extra_cmake_args,
+        fetchcontent_base_dir=fetchcontent_base_dir,
     )
     configure_code = execute_subprocess(cfg_cmd)
     if configure_code != 0:
@@ -611,21 +616,31 @@ def run_tests(
     compiler_launcher: str | None = None,
     msvc_debug_information_format: str | None = None,
     extra_ctest_args: Sequence[str] | None = None,
+    fetchcontent_base_dir: Path | None = None,
+    skip_build: bool = False,
 ) -> int:
-    """Build all test targets and execute ctest with optional filters."""
-    build_code = run_build(
-        target=None,
-        build_directory=build_directory,
-        build_type=build_type,
-        testing=True,
-        imgui_ui_tests=gui,
-        compiler_launcher=compiler_launcher,
-        msvc_debug_information_format=msvc_debug_information_format,
-    )
-    if build_code != 0:
-        return build_code
+    """Build unless explicitly skipped, then execute CTest with optional filters."""
+    if skip_build:
+        if not (build_directory / "CTestTestfile.cmake").is_file():
+            print(f"error: --skip-build requires a configured test directory: {build_directory}", file=sys.stderr)
+            return 2
+    else:
+        build_code = run_build(
+            target=None,
+            build_directory=build_directory,
+            build_type=build_type,
+            testing=True,
+            imgui_ui_tests=gui,
+            compiler_launcher=compiler_launcher,
+            msvc_debug_information_format=msvc_debug_information_format,
+            fetchcontent_base_dir=fetchcontent_base_dir,
+        )
+        if build_code != 0:
+            return build_code
 
     ctest_command = ["ctest", "--test-dir", str(build_directory), "--output-on-failure"]
+    if skip_build:
+        ctest_command.append("--no-tests=error")
     if not gui:
         ctest_command.extend(["-LE", "gui"])
     if regex:
@@ -649,6 +664,7 @@ def run_check(
     junit: Path | None = None,
     compiler_launcher: str | None = None,
     msvc_debug_information_format: str | None = None,
+    fetchcontent_base_dir: Path | None = None,
 ) -> int:
     """Run full CI-parity check: configure all components, compile all targets, run test suite."""
     print("==================================================", flush=True)
@@ -661,6 +677,7 @@ def run_check(
         junit=junit,
         compiler_launcher=compiler_launcher,
         msvc_debug_information_format=msvc_debug_information_format,
+        fetchcontent_base_dir=fetchcontent_base_dir,
     )
 
 
@@ -1158,7 +1175,13 @@ _EPILOG_EXAMPLES = """examples:
 
 
 def _add_compiler_cache_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add compiler-cache CMake options shared by build-oriented commands."""
+    """Add dependency-directory and compiler-cache options shared by build commands."""
+    parser.add_argument(
+        "--fetchcontent-base-dir",
+        type=Path,
+        default=None,
+        help="directory for CMake FetchContent dependencies",
+    )
     parser.add_argument(
         "--compiler-launcher",
         default=None,
@@ -1208,6 +1231,7 @@ def create_argument_parser() -> argparse.ArgumentParser:
     tst.add_argument("-B", "--dir", type=Path, default=DEFAULT_CI_BUILD_DIRECTORY, help="test build directory")
     tst.add_argument("--type", default="Debug", choices=("Debug", "Release", "RelWithDebInfo"), help="CMake build type")
     tst.add_argument("--junit", type=Path, default=None, help="write CTest results to JUnit XML file")
+    tst.add_argument("--skip-build", action="store_true", help="run CTest against an already built test directory")
     _add_compiler_cache_arguments(tst)
 
     # check command (CI Parity)
@@ -1374,6 +1398,7 @@ def _dispatch_command(parsed: argparse.Namespace, unparsed: Sequence[str], parse
             clean=parsed.clean,
             compiler_launcher=parsed.compiler_launcher,
             msvc_debug_information_format=parsed.msvc_debug_information_format,
+            fetchcontent_base_dir=parsed.fetchcontent_base_dir,
         )
 
     if parsed.command == "test":
@@ -1388,6 +1413,8 @@ def _dispatch_command(parsed: argparse.Namespace, unparsed: Sequence[str], parse
             junit=parsed.junit,
             compiler_launcher=parsed.compiler_launcher,
             msvc_debug_information_format=parsed.msvc_debug_information_format,
+            fetchcontent_base_dir=parsed.fetchcontent_base_dir,
+            skip_build=parsed.skip_build,
         )
 
     if parsed.command == "check":
@@ -1399,6 +1426,7 @@ def _dispatch_command(parsed: argparse.Namespace, unparsed: Sequence[str], parse
             junit=parsed.junit,
             compiler_launcher=parsed.compiler_launcher,
             msvc_debug_information_format=parsed.msvc_debug_information_format,
+            fetchcontent_base_dir=parsed.fetchcontent_base_dir,
         )
 
     # run command
