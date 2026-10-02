@@ -301,6 +301,7 @@ add_executable(HoroNetworkRuntimeTests
         unit/runtime/networking/RpcGameplayDispatchTests.cpp
         unit/runtime/networking/RpcGameplayDispatchLifecycleTests.cpp
         unit/runtime/networking/RpcAuthorizationPolicyTests.cpp
+        unit/runtime/networking/RpcParameterPolicyTests.cpp
 )
 target_compile_features(HoroNetworkRuntimeTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkRuntimeTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)

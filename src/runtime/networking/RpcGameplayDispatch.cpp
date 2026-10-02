@@ -166,29 +166,36 @@ namespace Horo::Network {
                             {serializers.begin(), serializers.end()},
                             {},
                             std::make_shared<const RpcGameplayPolicy>(policy)};
-            binding.metadata.reserve(binding.serializers.size());
-            for (std::size_t index = 0; index < binding.serializers.size(); ++index) {
-                const auto &serializer = binding.serializers[index];
-                if (!serializer)
-                    return Result<void>::Failure(MakeError(NetworkErrors::RpcParameterUnsupported));
-                binding.metadata.push_back(serializer->Descriptor());
-                if (stopped_)
-                    return Result<void>::Failure(MakeError(NetworkErrors::SessionShuttingDown));
-                if (revision != revocationRevision_)
-                    return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
-                const auto &metadata = binding.metadata.back();
-                const auto &parameter = descriptor.parameters[index];
-                if (metadata.valueType != parameter.valueType || metadata.codec != parameter.codec || metadata.owner != descriptor.owner ||
-                    metadata.valueKind >= ReplicationValueKind::Count ||
-                    metadata.maximumEncodedBytes < parameter.limits.maximumEncodedBytes ||
-                    metadata.maximumElementCount < parameter.limits.maximumElementCount)
-                    return Result<void>::Failure(MakeError(NetworkErrors::RpcParameterUnsupported));
-            }
+            if (const auto captured = CaptureSerializerMetadata(binding, revision); captured.HasError())
+                return captured;
             if (const auto valid = ValidatePolicy(binding); valid.HasError())
                 return valid;
             bindings_.push_back(std::move(binding));
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RpcGameplayDispatch::CaptureSerializerMetadata */
+    Result<void> RpcGameplayDispatch::CaptureSerializerMetadata(Binding &binding, const std::uint64_t revision) const {
+        binding.metadata.reserve(binding.serializers.size());
+        for (std::size_t index = 0; index < binding.serializers.size(); ++index) {
+            const auto &serializer = binding.serializers[index];
+            if (!serializer)
+                return Result<void>::Failure(MakeError(NetworkErrors::RpcParameterUnsupported));
+            binding.metadata.push_back(serializer->Descriptor());
+            if (stopped_)
+                return Result<void>::Failure(MakeError(NetworkErrors::SessionShuttingDown));
+            if (revision != revocationRevision_)
+                return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+            const auto &metadata = binding.metadata.back();
+            const auto &parameter = binding.descriptor->parameters[index];
+            if (metadata.valueType != parameter.valueType || metadata.codec != parameter.codec ||
+                metadata.owner != binding.descriptor->owner || metadata.valueKind >= ReplicationValueKind::Count ||
+                metadata.maximumEncodedBytes < parameter.limits.maximumEncodedBytes ||
+                metadata.maximumElementCount < parameter.limits.maximumElementCount)
+                return Result<void>::Failure(MakeError(NetworkErrors::RpcParameterUnsupported));
         }
         return Result<void>::Success();
     }

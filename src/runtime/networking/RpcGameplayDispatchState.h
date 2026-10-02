@@ -131,6 +131,17 @@ namespace Horo::Network {
         std::uint32_t calls{};
     };
 
+    /** @brief Owns exact target and code pins from pre-decoder admission through queue publication. */
+    struct RpcGameplayDispatch::AdmittedInvocation final {
+        Binding binding;
+        Peer peer;
+        Object object;
+        ReplicationWorldReadLease live;
+        Runtime::EntityRef entity;
+        ReplicationRoleBinding role;
+        ReplayScope *replay{}; /**< Reserved ledger entry; callback reentry cannot mutate replay storage. */
+    };
+
     struct RpcGameplayDispatch::WorkScope final {
         ConnectionHandle connection;
         NetworkOperationGeneration generation;

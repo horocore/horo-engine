@@ -254,67 +254,98 @@ namespace Horo::Network {
         if (decoded.HasError())
             return Result<void>::Failure(std::move(decoded).ErrorValue());
         const auto &wire = decoded.Value();
-        const auto binding = std::ranges::find_if(bindings_, [&wire](const Binding &entry) {
-            return entry.id == wire.id;
-        });
-        const auto object = std::ranges::find_if(objects_, [&wire](const Object &entry) {
-            return entry.identity == wire.object;
-        });
-        if (binding == bindings_.end() || object == objects_.end() || binding->handler.expired())
-            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
-        if (const auto envelope = ValidateInvocationEnvelope(*binding->descriptor, message.payload.size(), context.delivery);
-            envelope.HasError())
-            return envelope;
-        Runtime::EntityRef entity;
-        const auto live = ValidateLive(peer, *object, *binding->descriptor, wire.recipient, context.ownerTick,
-                                       Runtime::RuntimePhase::NetworkPoll, entity);
-        if (live.HasError())
-            return Result<void>::Failure(live.ErrorValue());
-        const auto expectedEntity = entity;
-        const auto scope = CheckReplay(peer, wire.object, *binding->descriptor, wire.sequence);
-        if (scope.HasError())
-            return Result<void>::Failure(scope.ErrorValue());
-        if (const auto charged = ChargeRate(peer, *binding->descriptor, context.ownerTick); charged.HasError())
-            return charged;
-        // Adapter callbacks can revoke bindings. Pin their code and storage through decoding.
-        const Binding pinned = binding->Pin();
-        const Peer pinnedPeer = peer;
-        const Object pinnedObject = *object;
-        const auto pinnedRole = pinnedObject.role->Snapshot();
-        if (pinnedRole.HasError())
-            return Result<void>::Failure(pinnedRole.ErrorValue());
-        auto values = DecodeValues(wire, *pinned.descriptor, pinned.serializers, pinned.metadata, limits_.maximumInvocationBytes);
+        auto admitted = AdmitTarget(context, message, peer, wire.id, wire.object, wire.sequence, wire.recipient);
+        if (admitted.HasError())
+            return Result<void>::Failure(std::move(admitted).ErrorValue());
+        const auto &target = admitted.Value();
+        auto values = DecodeValues(wire, *target.binding.descriptor, target.binding.serializers, target.binding.metadata,
+                                   limits_.maximumInvocationBytes);
         if (values.HasError())
             return Result<void>::Failure(std::move(values).ErrorValue());
-        const auto revalidate = [&]() {
-            if (stopped_ || revision != revocationRevision_ || context.cancellation.IsCancellationRequested() || live.Value().IsRevoked())
-                return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
-            if (const auto current = ValidateLive(pinnedPeer, pinnedObject, *pinned.descriptor, wire.recipient, context.ownerTick,
-                                                  Runtime::RuntimePhase::NetworkPoll, entity);
-                current.HasError())
-                return Result<void>::Failure(current.ErrorValue());
-            if (const auto currentRole = pinnedObject.role->Snapshot();
-                currentRole.HasError() || currentRole.Value() != pinnedRole.Value() || entity != expectedEntity)
-                return Result<void>::Failure(MakeError(NetworkErrors::RpcPermissionDenied));
-            return Result<void>::Success();
-        };
-        if (const auto current = revalidate(); current.HasError())
+        Pending candidate{context.connection,
+                          context.generation,
+                          wire.object,
+                          wire.id,
+                          wire.sequence,
+                          wire.recipient,
+                          target.live.Descriptor().scene,
+                          target.live.Descriptor().session,
+                          target.role,
+                          target.entity,
+                          std::move(values).Value(),
+                          context.cancellation};
+        if (const auto current = RevalidateAdmission(candidate, target, context.ownerTick, revision); current.HasError())
             return current;
-        if (const auto allowed = AuthorizePolicy(pinned, pinnedPeer, pinnedObject, values.Value()); allowed.HasError())
+        if (const auto allowed = AuthorizePolicy(target.binding, target.peer, target.object, candidate.values); allowed.HasError())
             return allowed;
-        if (const auto current = revalidate(); current.HasError())
+        if (const auto current = RevalidateAdmission(candidate, target, context.ownerTick, revision); current.HasError())
             return current;
-        pending_.emplace_back(context.connection, context.generation, wire.object, wire.id, wire.sequence, wire.recipient,
-                              live.Value().Descriptor().scene, live.Value().Descriptor().session, pinnedRole.Value(), entity,
-                              std::move(values).Value(), context.cancellation);
-        ++terminals_.accepted;
-        if (pinned.descriptor->delivery == RpcDelivery::ReliableOrdered) {
-            if (!scope.Value())
-                replay_.emplace_back(context.connection, context.generation, wire.object, wire.id, wire.sequence);
-            else
-                scope.Value()->highestAccepted = wire.sequence;
-        }
+        QueueAccepted(std::move(candidate), target.binding.descriptor->delivery, target.replay);
         return Result<void>::Success();
+    }
+
+    /** @copydoc RpcGameplayDispatch::AdmitTarget */
+    Result<RpcGameplayDispatch::AdmittedInvocation> RpcGameplayDispatch::AdmitTarget(const InboundMessageContext &context,
+                                                                                     const MessageEnvelope &message, const Peer &peer,
+                                                                                     const RpcId id, const NetworkObjectId identity,
+                                                                                     const std::uint64_t sequence,
+                                                                                     const NetworkPeerId recipient) {
+        const auto binding = std::ranges::find_if(bindings_, [id](const Binding &entry) {
+            return entry.id == id;
+        });
+        const auto object = std::ranges::find_if(objects_, [identity](const Object &entry) {
+            return entry.identity == identity;
+        });
+        if (binding == bindings_.end() || object == objects_.end() || binding->handler.expired())
+            return Result<AdmittedInvocation>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+        if (const auto envelope = ValidateInvocationEnvelope(*binding->descriptor, message.payload.size(), context.delivery);
+            envelope.HasError())
+            return Result<AdmittedInvocation>::Failure(envelope.ErrorValue());
+        Runtime::EntityRef entity;
+        auto live =
+            ValidateLive(peer, *object, *binding->descriptor, recipient, context.ownerTick, Runtime::RuntimePhase::NetworkPoll, entity);
+        if (live.HasError())
+            return Result<AdmittedInvocation>::Failure(live.ErrorValue());
+        const auto scope = CheckReplay(peer, identity, *binding->descriptor, sequence);
+        if (scope.HasError())
+            return Result<AdmittedInvocation>::Failure(scope.ErrorValue());
+        if (const auto charged = ChargeRate(peer, *binding->descriptor, context.ownerTick); charged.HasError())
+            return Result<AdmittedInvocation>::Failure(charged.ErrorValue());
+        // Adapter callbacks can revoke bindings. Pin their code and storage through decoding.
+        const auto pinnedRole = object->role->Snapshot();
+        if (pinnedRole.HasError())
+            return Result<AdmittedInvocation>::Failure(pinnedRole.ErrorValue());
+        return Result<AdmittedInvocation>::Success(
+            {binding->Pin(), peer, *object, std::move(live).Value(), entity, pinnedRole.Value(), scope.Value()});
+    }
+
+    /** @copydoc RpcGameplayDispatch::RevalidateAdmission */
+    Result<void> RpcGameplayDispatch::RevalidateAdmission(const Pending &command, const AdmittedInvocation &target,
+                                                          const std::uint64_t nowTick, const std::uint64_t revision) const {
+        if (stopped_ || revision != revocationRevision_ || command.cancellation.IsCancellationRequested() || target.live.IsRevoked())
+            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+        Runtime::EntityRef entity;
+        if (const auto current = ValidateLive(target.peer, target.object, *target.binding.descriptor, command.recipient, nowTick,
+                                              Runtime::RuntimePhase::NetworkPoll, entity);
+            current.HasError())
+            return Result<void>::Failure(current.ErrorValue());
+        if (const auto currentRole = target.object.role->Snapshot();
+            currentRole.HasError() || currentRole.Value() != command.role || entity != command.entity)
+            return Result<void>::Failure(MakeError(NetworkErrors::RpcPermissionDenied));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RpcGameplayDispatch::QueueAccepted */
+    void RpcGameplayDispatch::QueueAccepted(Pending command, const RpcDelivery delivery, ReplayScope *const scope) {
+        pending_.emplace_back(std::move(command));
+        const auto &accepted = pending_.back();
+        ++terminals_.accepted;
+        if (delivery == RpcDelivery::ReliableOrdered) {
+            if (!scope)
+                replay_.emplace_back(accepted.connection, accepted.generation, accepted.object, accepted.id, accepted.sequence);
+            else
+                scope->highestAccepted = accepted.sequence;
+        }
     }
 
 }  // namespace Horo::Network

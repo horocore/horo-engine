@@ -235,13 +235,28 @@ namespace Horo::Network {
         struct ReplayScope;
         struct RateScope;
         struct WorkScope;
+        struct AdmittedInvocation;
 
         /** @brief Checks reliable logical replay and ledger capacity without consuming the occurrence. */
         [[nodiscard]] Result<ReplayScope *> CheckReplay(const Peer &peer, NetworkObjectId object, const RpcDescriptor &descriptor,
                                                         std::uint64_t sequence);
         [[nodiscard]] Result<void> ExecutePending(const Pending &command, const ReplicationWorldWorkRequest &request);
+        /** @brief Pins an executable binding and revalidates its queued publication around custom policy. */
+        [[nodiscard]] Result<void> ExecuteBinding(const Pending &command, const ReplicationWorldWorkRequest &request,
+                                                  const Binding &binding, const Peer &peer, const Object &object);
         [[nodiscard]] Result<void> StageAdmitted(const InboundMessageContext &context, const MessageEnvelope &message, const Peer &peer,
                                                  std::uint64_t revision);
+        /** @brief Validates target/session/envelope/rate evidence and pins it before any external decoder runs. */
+        [[nodiscard]] Result<AdmittedInvocation> AdmitTarget(const InboundMessageContext &context, const MessageEnvelope &message,
+                                                             const Peer &peer, RpcId id, NetworkObjectId object, std::uint64_t sequence,
+                                                             NetworkPeerId recipient);
+        /** @brief Rechecks exact admission publication after external callbacks without accepting the command. */
+        [[nodiscard]] Result<void> RevalidateAdmission(const Pending &command, const AdmittedInvocation &target, std::uint64_t nowTick,
+                                                       std::uint64_t revision) const;
+        /** @brief Publishes a completely authorized command and its reliable replay occurrence together. */
+        void QueueAccepted(Pending command, RpcDelivery delivery, ReplayScope *scope);
+        /** @brief Captures exact ordered serializer metadata while guarding retirement during callbacks. */
+        [[nodiscard]] Result<void> CaptureSerializerMetadata(Binding &binding, std::uint64_t revision) const;
         [[nodiscard]] Result<void> CheckOwner() const;
         /** @brief Charges finite caller and global work before parsing; clock regression never refills budgets. */
         [[nodiscard]] Result<void> ChargeWork(const Peer &peer, std::size_t bytes, std::uint64_t nowTick);

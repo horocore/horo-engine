@@ -1,4 +1,4 @@
-#include "RpcGameplayDispatchTestSupport.h"
+#include "RpcAuthorizationPolicyTestSupport.h"
 
 #include <limits>
 
@@ -6,65 +6,10 @@ namespace Horo::Network {
     using RpcDispatchTestSupport::CallbackSerializer;
     using RpcDispatchTestSupport::Fixture;
 
-    namespace {
-        class NumericHandler final : public IRpcGameplayHandler {
-        public:
-            std::size_t calls{};
-            ReplicationRuntimeValue last;
-
-            Result<void> Execute(const RpcGameplayContext &, const std::span<const ReplicationRuntimeValue> parameters) override {
-                ++calls;
-                last = parameters.front();
-                return Result<void>::Success();
-            }
-        };
-
-        class CallerPolicy final : public IRpcCallerPolicy {
-        public:
-            bool allowed{true};
-            bool fail{};
-            bool throwStandard{};
-            bool throwUnknown{};
-            mutable std::size_t calls{};
-            mutable std::optional<RpcCallerContext> last;
-            std::function<void()> duringCall;
-
-            Result<bool> Authorize(const RpcCallerContext &context) const override {
-                ++calls;
-                last = context;
-                if (duringCall)
-                    duringCall();
-                if (throwStandard)
-                    throw std::invalid_argument{"caller policy failure"};
-                if (throwUnknown)
-                    throw 42;
-                if (fail)
-                    return Result<bool>::Failure(MakeError(NetworkErrors::SessionCancelled));
-                return Result<bool>::Success(allowed);
-            }
-        };
-
-        void Install(const Fixture &fixture, const RpcGameplayPolicy &policy) {
-            fixture.dispatch->RevokeHandler(fixture.rpc);
-            const std::vector<std::shared_ptr<const IReplicationFieldSerializer>> codecs =
-                fixture.serializer ? std::vector{fixture.serializer} : std::vector<std::shared_ptr<const IReplicationFieldSerializer>>{};
-            REQUIRE(fixture.dispatch->RegisterHandler(fixture.rpc, fixture.handler, codecs, fixture.moduleLease, policy).HasValue());
-        }
-
-        void Custom(RpcDescriptor &descriptor) {
-            descriptor.permission = RpcCallerPermission::Custom;
-            descriptor.customPermission = RpcPermissionId::Create(1).Value();
-        }
-
-        void PublishRole(const Fixture &fixture, std::optional<NetworkPeerId> owner) {
-            auto next = fixture.role->Snapshot().Value();
-            const auto expected = next.revision;
-            next.revision = ReplicationRoleRevision::Create(expected.Value() + 1).Value();
-            next.autonomousOwner = owner;
-            REQUIRE(fixture.role->Stage({expected, next}).HasValue());
-            REQUIRE(fixture.role->CommitAtSafePoint(next.revision).HasValue());
-        }
-    }  // namespace
+    using RpcAuthorizationPolicyTestSupport::CallerPolicy;
+    using RpcAuthorizationPolicyTestSupport::Custom;
+    using RpcAuthorizationPolicyTestSupport::Install;
+    using RpcAuthorizationPolicyTestSupport::PublishRole;
 
     TEST_CASE("RPC caller policy uses trusted identity and denies safely before Gameplay", "[unit][network][rpc][policy]") {
         Fixture fixture(false, RpcTarget::Authority, true, false, Custom);
@@ -110,142 +55,6 @@ namespace Horo::Network {
             TestSupport::RequireError(fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(1)),
                                       NetworkErrors::RpcPermissionDenied);
         }
-    }
-
-    TEST_CASE("RPC policy declaration rejects mismatched identity, malformed and duplicate typed constraints",
-              "[unit][network][rpc][policy]") {
-        Fixture fixture(false, RpcTarget::Authority, true, true);
-        fixture.dispatch->RevokeHandler(fixture.rpc);
-        const std::array codecs{fixture.serializer};
-        RpcGameplayPolicy policy;
-        SECTION("foreign custom identity") {
-            policy.permission = RpcPermissionId::Create(2).Value();
-            policy.caller = std::make_shared<CallerPolicy>();
-        }
-        SECTION("missing implementation") {
-            policy.permission = RpcPermissionId::Create(1).Value();
-        }
-        SECTION("foreign parameter") {
-            policy.parameters.emplace_back(RpcParameterId::Create(2).Value(), std::int64_t{0}, std::int64_t{10});
-        }
-        SECTION("inverted range") {
-            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::int64_t{10}, std::int64_t{0});
-        }
-        SECTION("wrong numeric representation") {
-            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::uint64_t{0}, std::uint64_t{10});
-        }
-        SECTION("mixed range representation") {
-            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::int64_t{0}, std::uint64_t{10});
-        }
-        SECTION("duplicate constraint") {
-            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::int64_t{0}, std::int64_t{10});
-            policy.parameters.push_back(policy.parameters.front());
-        }
-        SECTION("schema without version") {
-            policy.objectSchema = ReplicationSchemaId::Create(3).Value();
-        }
-        SECTION("version without schema") {
-            policy.objectSchemaVersion = {1, 0};
-        }
-        REQUIRE(fixture.dispatch->RegisterHandler(fixture.rpc, fixture.handler, codecs, fixture.moduleLease, policy).HasError());
-        REQUIRE(fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(1)).HasError());
-        REQUIRE(fixture.handler->calls == 0);
-    }
-
-    TEST_CASE("RPC scalar ranges are inclusive and reject canonical but invalid Gameplay values", "[unit][network][rpc][policy]") {
-        Fixture fixture(false, RpcTarget::Authority, true, true);
-        RpcGameplayPolicy policy;
-        SECTION("exact endpoints") {
-            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::int64_t{7}, std::int64_t{7});
-        }
-        SECTION("below minimum") {
-            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::int64_t{8}, std::int64_t{10});
-        }
-        SECTION("above maximum") {
-            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::int64_t{0}, std::int64_t{6});
-        }
-        Install(fixture, policy);
-        const auto received = fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(1));
-        if (std::get<std::int64_t>(policy.parameters.front().minimum) == 7) {
-            REQUIRE(received.HasValue());
-            REQUIRE(fixture.dispatch->DrainAtGameplaySafePoint(fixture.Work()).Value().invoked == 1);
-        } else {
-            TestSupport::RequireError(received, NetworkErrors::RpcParameterInvalid);
-            REQUIRE(fixture.dispatch->DrainAtGameplaySafePoint(fixture.Work()).Value().consumed == 0);
-            REQUIRE(fixture.handler->calls == 0);
-        }
-    }
-
-    TEST_CASE("RPC numeric constraints preserve unsigned precision and require finite floating endpoints", "[unit][network][rpc][policy]") {
-        Fixture fixture(false, RpcTarget::Authority, true, true);
-        auto message = fixture.Message(1);
-        RpcScalar minimum = 7.0;
-        RpcScalar maximum = 7.0;
-        ReplicationRuntimeValue value = 7.0;
-        bool validPolicy = true;
-        bool inside = true;
-        auto metadata = Fixture::SerializerMetadata();
-        metadata.valueType = ReplicationValueTypeId::Create(2).Value();
-        metadata.codec = ReplicationCodecId::Create(2).Value();
-        metadata.valueKind = ReplicationValueKind::FloatingPoint;
-        SECTION("floating endpoint") {
-            // The unchanged finite endpoints exercise the successful floating representation.
-        }
-        SECTION("unsigned endpoint cannot lose precision through double") {
-            minimum = std::numeric_limits<std::uint64_t>::max();
-            maximum = minimum;
-            value = std::numeric_limits<std::uint64_t>::max();
-            metadata.valueKind = ReplicationValueKind::UnsignedInteger;
-        }
-        SECTION("floating outside range") {
-            value = 8.0;
-            inside = false;
-        }
-        SECTION("NaN endpoint") {
-            minimum = std::numeric_limits<double>::quiet_NaN();
-            validPolicy = false;
-        }
-        SECTION("infinite maximum") {
-            maximum = std::numeric_limits<double>::infinity();
-            validPolicy = false;
-        }
-        SECTION("infinite minimum") {
-            minimum = -std::numeric_limits<double>::infinity();
-            validPolicy = false;
-        }
-        fixture.descriptor.parameters.front().valueType = metadata.valueType;
-        fixture.descriptor.parameters.front().codec = metadata.codec;
-        const std::array declarations{fixture.descriptor};
-        const std::array descriptions{metadata};
-        const auto descriptors = BuildRpcDescriptorSnapshot(declarations, descriptions).Value();
-        auto dispatch = RpcGameplayDispatch::Create(descriptors, fixture.world).Value();
-        REQUIRE(dispatch->RegisterPeer(fixture.session, fixture.connection, fixture.generation, fixture.peer, RpcRemoteRole::Client, 22)
-                    .HasValue());
-        REQUIRE(dispatch->RegisterObject(fixture.object, fixture.role).HasValue());
-        const auto serializer = CanonicalScalarReplicationSerializer::Create(metadata).Value();
-        const std::array<std::shared_ptr<const IReplicationFieldSerializer>, 1> codecs{serializer};
-        auto handler = std::make_shared<NumericHandler>();
-        RpcGameplayPolicy policy;
-        policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), minimum, maximum);
-        const auto installed = dispatch->RegisterHandler(fixture.rpc, handler, codecs, fixture.moduleLease, policy);
-        if (!validPolicy) {
-            TestSupport::RequireError(installed, NetworkErrors::RpcParameterInvalid);
-            return;
-        }
-        REQUIRE(installed.HasValue());
-        const auto bytes = serializer->Encode(value).Value();
-        REQUIRE(bytes.size() == 8);
-        message.payload.resize(58);
-        message.payload.insert(message.payload.end(), bytes.begin(), bytes.end());
-        const auto received = dispatch->HandleAdmitted(fixture.Context(), message);
-        if (!inside) {
-            TestSupport::RequireError(received, NetworkErrors::RpcParameterInvalid);
-            REQUIRE(handler->calls == 0);
-            return;
-        }
-        REQUIRE(received.HasValue());
-        REQUIRE(dispatch->DrainAtGameplaySafePoint(fixture.Work()).Value().invoked == 1);
-        REQUIRE(handler->last == value);
     }
 
     TEST_CASE("RPC rate ledger has finite capacity across exact RPC identities", "[unit][network][rpc][policy]") {
