@@ -120,7 +120,7 @@ horo_allow_target_dependencies(TARGET HoroEditorRenderExtraction
     DEPENDENCIES HoroEditorModel HoroEditorViewportScene)
 horo_allow_target_dependencies(TARGET HoroEditorServices
     DEPENDENCIES
-        HoroFoundation
+        HoroFoundation HoroCinematicRuntime
         HoroNetworkApi
         HoroApplication
         HoroPlatform

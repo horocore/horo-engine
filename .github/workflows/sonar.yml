@@ -152,6 +152,7 @@ jobs:
         id: coverage
         run: |
           xvfb-run -a ctest --test-dir build/sonar --output-on-failure -LE 'gui|editor'
+          build/sonar/tests/HoroCinematicPropertyIntegrationTests
           xvfb-run -a build/sonar/tests/HoroEditorPresentationTests
           xvfb-run -a build/sonar/tests/HoroEditorUiAutomationTests '~[native]'
           xvfb-run -a build/sonar/tests/HoroSourceFileOpenServiceTests
