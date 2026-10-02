@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "UiControlsInternal.h"
 
+#include <cmath>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -108,8 +109,8 @@ namespace Horo::Runtime::Ui {
         return Result<UiControlEventResult>::Success({transition.Value(), storage_->state, storage_->pending});
     }
 
-    /** @copydoc UiControlStateMachine::ApplyDefault */
-    Result<std::optional<UiControlDefaultAction>> UiControlStateMachine::ApplyDefault() {
+    /** @copydoc UiControlStateMachine::PeekDefault */
+    Result<std::optional<UiControlDefaultAction>> UiControlStateMachine::PeekDefault() const {
         if (!storage_ || storage_->lifecycle != UiControlLifecycleState::Active)
             return Failure<std::optional<UiControlDefaultAction>>(UiErrors::ControlLifecycleUnavailable);
         if (!storage_->pending)
@@ -149,6 +150,15 @@ namespace Horo::Runtime::Ui {
         if (!action.IsValid())
             return Failure<std::optional<UiControlDefaultAction>>(UiErrors::ControlDefaultInvalid);
 
+        return Result<std::optional<UiControlDefaultAction>>::Success(std::optional<UiControlDefaultAction>{std::move(action)});
+    }
+
+    /** @copydoc UiControlStateMachine::ApplyDefault */
+    Result<std::optional<UiControlDefaultAction>> UiControlStateMachine::ApplyDefault() {
+        auto action = PeekDefault();
+        if (action.HasError() || !action.Value().has_value())
+            return action;
+
         if (storage_->pendingDefault.kind == UiControlDetail::PendingKind::Toggle)
             std::get<UiToggleControlState>(storage_->state).checked = !std::get<UiToggleControlState>(storage_->state).checked;
         else if (storage_->pendingDefault.kind == UiControlDetail::PendingKind::ValueChanged)
@@ -158,7 +168,7 @@ namespace Horo::Runtime::Ui {
             std::get<UiTextInputControlState>(storage_->state).editing = false;
 
         storage_->pending = false;
-        return Result<std::optional<UiControlDefaultAction>>::Success(std::optional<UiControlDefaultAction>{std::move(action)});
+        return action;
     }
 
     /** @copydoc UiControlStateMachine::SuppressDefault */
@@ -166,6 +176,43 @@ namespace Horo::Runtime::Ui {
         if (!storage_ || storage_->lifecycle != UiControlLifecycleState::Active)
             return Failure(UiErrors::ControlLifecycleUnavailable);
         storage_->pending = false;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiControlStateMachine::ReconcileValue */
+    Result<void> UiControlStateMachine::ReconcileValue(const UiActionValue &value) {
+        if (!storage_ || storage_->lifecycle != UiControlLifecycleState::Active)
+            return Failure(UiErrors::ControlLifecycleUnavailable);
+        switch (Kind()) {
+            case UiControlKind::Toggle: {
+                const auto *checked = std::get_if<bool>(&value);
+                if (!checked)
+                    return Failure(UiErrors::ControlInputInvalid);
+                std::get<UiToggleControlState>(storage_->state).checked = *checked;
+                break;
+            }
+            case UiControlKind::Slider: {
+                const auto *scalar = std::get_if<double>(&value);
+                const auto &descriptor = std::get<UiSliderControlDescriptor>(storage_->descriptor);
+                if (!scalar || !std::isfinite(*scalar) || *scalar < descriptor.minimum || *scalar > descriptor.maximum)
+                    return Failure(UiErrors::ControlInputInvalid);
+                std::get<UiSliderControlState>(storage_->state).value = *scalar;
+                break;
+            }
+            case UiControlKind::TextInput: {
+                const auto *text = std::get_if<UiActionText>(&value);
+                const auto &descriptor = std::get<UiTextInputControlDescriptor>(storage_->descriptor);
+                if (!text || !UiControlDetail::IsValidControlText(*text) || text->size > descriptor.maximumTextBytes)
+                    return Failure(UiErrors::ControlInputInvalid);
+                std::get<UiTextInputControlState>(storage_->state).text = *text;
+                storage_->editStartText = *text;
+                break;
+            }
+            case UiControlKind::Button:
+            case UiControlKind::Count:
+                return Failure(UiErrors::ControlInputInvalid);
+        }
+        storage_->ClearTransient(false);
         return Result<void>::Success();
     }
 

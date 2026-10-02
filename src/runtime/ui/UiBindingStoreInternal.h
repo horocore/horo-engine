@@ -14,6 +14,8 @@ namespace Horo::Runtime::Ui {
             UiBindingSnapshotRevision revision;
             bool active{true};
             std::vector<std::vector<std::size_t>> targets;
+            UiBindingProviderScopeKind scope{UiBindingProviderScopeKind::Count};
+            bool writesRevoked{};
         };
 
         struct Target final {
@@ -22,6 +24,18 @@ namespace Horo::Runtime::Ui {
             std::optional<UiBindingValue> fallback;
             UiBindingDirty categories{UiBindingDirty::None};
             UiBindingDirty pending{UiBindingDirty::None};
+            std::size_t provider{};
+            std::uint16_t property{};
+            UiBindingDirection direction{UiBindingDirection::SourceToTarget};
+            std::optional<UiBindingWriteAdmission> admission;
+            UiBindingWriteFence fence;
+            UiActionSequence lastRequest;
+            UiBindingEditId edit;
+            UiActionSource source;
+            UiBindingSnapshotRevision expected;
+            std::optional<UiBindingWriteCommand> command;
+            std::optional<UiBindingWriteResult> outcome;
+            UiBindingValue draft;
         };
 
         struct Staged final {
@@ -55,11 +69,27 @@ namespace Horo::Runtime::Ui {
         UiRuntimeTreeRevision treeRevision;
         UiBindingStoreLimits limits;
         bool active{true};
+        bool writesAdmitted{};
+        bool processingWrite{};
+        bool reentryAttempted{};
+        std::uint64_t editSequence{};
+        std::size_t writeCursor{};
         UiBindingApplyResult current;
         std::vector<Provider> providers;
         std::vector<Target> targets;
         std::vector<Staged> staged;
         std::vector<UiLayoutInvalidation> invalidations;
+
+        /** @brief Resolves stable binding identity within finite retained storage. */
+        [[nodiscard]] Target *FindTarget(UiBindingId binding) noexcept;
+        /** @brief Selects one pending command in deterministic round-robin order so slow producers cannot starve peers. */
+        [[nodiscard]] Target *NextWrite() noexcept;
+        /** @brief Closes an old command once, retaining outcome evidence until acknowledgement. */
+        void CancelWrite(Target &target, UiBindingWriteCancellationReason reason) noexcept;
+        /** @brief Validates admitted source against exact owner, tree and retained element evidence. */
+        [[nodiscard]] Result<void> ValidateWriteSource(const UiElementTree &tree, const Target &target, UiActionSource source) const;
+        /** @brief Atomically publishes a prepared command through existing delta and invalidation storage. */
+        [[nodiscard]] Result<void> PublishWrite(const UiElementTree &tree, Target &target, UiLayoutEngine &layout);
 
         /** @brief Preallocates lifetime-bounded target and dirty storage before activation. */
         Storage(const UiElementTree &tree, const UiBindingStoreLimits &bounds)
@@ -70,6 +100,12 @@ namespace Horo::Runtime::Ui {
             targets.reserve(bounds.bindings);
             staged.reserve(bounds.bindings);
             invalidations.reserve(bounds.bindings);
+        }
+
+        /** @brief Stops reservations before releasing authority/module leases, including move assignment. */
+        ~Storage() {
+            for (auto &target : targets)
+                CancelWrite(target, UiBindingWriteCancellationReason::Shutdown);
         }
 
         /** @brief Finds only the exact registered provider incarnation; no type/scope fallback occurs. */

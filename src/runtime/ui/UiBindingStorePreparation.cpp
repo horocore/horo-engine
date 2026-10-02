@@ -104,7 +104,7 @@ namespace Horo::Runtime::Ui {
             if (const auto valid = ValidateInitial(registration); valid.HasError())
                 return valid;
             providers.push_back({registration.instance, *registration.schema, registration.revision, true,
-                                 std::vector<std::vector<std::size_t>>(registration.schema->Properties().size())});
+                                 std::vector<std::vector<std::size_t>>(registration.schema->Properties().size()), registration.scope});
         }
         return Result<void>::Success();
     }
@@ -114,8 +114,6 @@ namespace Horo::Runtime::Ui {
                                                                    const UiBindingProviderSchema &schema) const {
         if (const auto valid = ValidateUiBindingDescriptor(binding, schema); valid.HasError())
             return Result<UiElementHandle>::Failure(valid.ErrorValue());
-        if (binding.direction == UiBindingDirection::TargetToSource)
-            return Failure<UiElementHandle>(UiErrors::BindingAccessInvalid);
         if (binding.converter.has_value())
             return Failure<UiElementHandle>(UiErrors::BindingConverterInvalid);
         const auto handle = tree.Find(binding.target.element);
@@ -143,7 +141,15 @@ namespace Horo::Runtime::Ui {
         const auto *property = provider->schema.Find(binding.source.property);
         const auto propertySlot = static_cast<std::size_t>(property - provider->schema.Properties().data());
         const auto providerIndex = static_cast<std::size_t>(provider - providers.data());
-        const auto *value = InitialValue(registrations[providerIndex].values, propertySlot);
+        UiBindingValue local = false;
+        const auto type = *UiBindingTargetValueType(binding.target.property);
+        if (type == UiBindingValueType::BoundedText)
+            local = std::string{};
+        else if (type == UiBindingValueType::FixedScalar)
+            local = binding.target.limits.minimumScalar.value_or(0.0);
+        const auto *value = binding.direction == UiBindingDirection::TargetToSource
+                                ? &local
+                                : InitialValue(registrations[providerIndex].values, propertySlot);
         const auto origin = value ? UiBindingValueOrigin::Provider : UiBindingValueOrigin::Fallback;
         if (!value) {
             if (!binding.fallback)
@@ -160,7 +166,17 @@ namespace Horo::Runtime::Ui {
                       binding.target.limits,
                       binding.fallback,
                       Categories(binding.target.property, property->flags)};
+        target.provider = providerIndex;
+        target.property = static_cast<std::uint16_t>(propertySlot);
+        target.direction = binding.direction;
+        target.draft = *value;
+        if (type == UiBindingValueType::BoundedText || type == UiBindingValueType::LocalizedMessage) {
+            reservedBytes += binding.target.limits.maximumBytes;
+            if (reservedBytes > limits.valueBytes)
+                return Failure(UiErrors::BindingCapacityExceeded);
+        }
         ReserveValue(target.bound.value, binding.target.limits.maximumBytes);
+        ReserveValue(target.draft, binding.target.limits.maximumBytes);
         target.pending = target.categories;
         provider->targets[propertySlot].push_back(targets.size());
         targets.push_back(std::move(target));

@@ -2046,6 +2046,14 @@ add_executable(HoroRuntimeUiBindingTests
 target_compile_features(HoroRuntimeUiBindingTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiBindingTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiBindingStoreTests unit/runtime/ui/UiBindingStoreTests.cpp)
+add_executable(HoroRuntimeUiBindingWriteTests unit/runtime/ui/UiBindingWriteTests.cpp)
+target_compile_features(HoroRuntimeUiBindingWriteTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiBindingWriteTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiBindingWritePublicHeaderConsumer support/RuntimeUiBindingWritePublicHeaderConsumer.cpp)
+target_compile_features(HoroRuntimeUiBindingWritePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiBindingWritePublicHeaderConsumer PRIVATE HoroEngine::RuntimeUi)
+add_test(NAME HoroRuntimeUiBindingWritePublicHeaderConsumer COMMAND HoroRuntimeUiBindingWritePublicHeaderConsumer)
+set_tests_properties(HoroRuntimeUiBindingWritePublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless")
 target_compile_features(HoroRuntimeUiBindingStoreTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiBindingStoreTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiDocumentTests
@@ -2971,6 +2979,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiImageResourceTests
         HoroRuntimeUiBindingTests
         HoroRuntimeUiBindingStoreTests
+        HoroRuntimeUiBindingWriteTests
         HoroRuntimeUiDocumentTests
         HoroRuntimeUiLocalizationTests
         HoroRuntimeUiCanvasSpaceTests

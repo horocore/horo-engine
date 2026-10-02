@@ -456,20 +456,24 @@ namespace Horo::Runtime::Ui {
     }
 
     struct UiActionRouter::Storage final {
-        explicit Storage(const UiActionRouterDescriptor &descriptor) : owner(descriptor.owner), queue(descriptor.maximumQueuedCommands) {}
+        explicit Storage(const UiActionRouterDescriptor &descriptor)
+            : owner(descriptor.owner), queue(descriptor.maximumQueuedCommands), nextSequence(descriptor.previousSequence.Value() + 1),
+              lastIssued(descriptor.previousSequence) {}
 
         UiActionOwnerContext owner;
         std::vector<UiActionRequest> queue;
         std::size_t head{};
         std::size_t count{};
         std::uint64_t nextSequence{1};
+        UiActionSequence lastIssued;
         UiActionRouterState state{UiActionRouterState::Active};
         bool dispatching{};
     };
 
     /** @copydoc UiActionRouterDescriptor::IsValid */
     bool UiActionRouterDescriptor::IsValid() const noexcept {
-        return owner.IsValid() && maximumQueuedCommands > 0 && maximumQueuedCommands <= MaximumUiActionCommands;
+        return owner.IsValid() && maximumQueuedCommands > 0 && maximumQueuedCommands <= MaximumUiActionCommands &&
+               previousSequence.Value() != std::numeric_limits<std::uint64_t>::max();
     }
 
     /** @copydoc UiActionRouter::Create */
@@ -521,6 +525,7 @@ namespace Horo::Runtime::Ui {
             ++storage_->nextSequence;
 
         const UiActionRequestId id{storage_->owner.instance.ownership, sequence.Value()};
+        storage_->lastIssued = sequence.Value();
         const std::size_t slot = (storage_->head + storage_->count) % storage_->queue.size();
         storage_->queue[slot] = UiActionRequest{id, std::move(source), UiActionOriginOf(command), std::move(command)};
         ++storage_->count;
@@ -580,6 +585,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiActionRouter::Owner */
     const UiActionOwnerContext &UiActionRouter::Owner() const noexcept {
         return storage_ ? storage_->owner : InvalidOwnerContext();
+    }
+
+    /** @copydoc UiActionRouter::LastIssuedSequence */
+    UiActionSequence UiActionRouter::LastIssuedSequence() const noexcept {
+        return storage_ ? storage_->lastIssued : UiActionSequence{};
     }
 
     /** @copydoc UiActionRouter::QueuedCount */

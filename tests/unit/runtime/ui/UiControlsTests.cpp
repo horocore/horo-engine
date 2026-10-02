@@ -290,6 +290,147 @@ namespace Horo::Runtime::Ui {
             CHECK_FALSE(button.ApplyDefault().Value().has_value());
         }
 
+        TEST_CASE("Default previews preserve staged values until the owner admits or suppresses the write",
+                  "[runtime_ui][controls][binding_write]") {
+            auto toggle = std::move(UiControlStateMachine::Create(UiToggleControlDescriptor{Base(), false})).Value();
+            CHECK_FALSE(toggle.PeekDefault().Value().has_value());
+            REQUIRE(toggle.Handle(Input(UiControlInputKind::PointerPress, 1, UiControlActivationSource::Pointer)).HasValue());
+            REQUIRE(toggle.Handle(Input(UiControlInputKind::PointerRelease, 2, UiControlActivationSource::Pointer)).HasValue());
+            const auto before = toggle.Snapshot().Value();
+            const auto preview = toggle.PeekDefault();
+            REQUIRE(preview.HasValue());
+            REQUIRE(preview.Value().has_value());
+            CHECK(preview.Value()->kind == UiControlActionKind::Toggle);
+            CHECK(std::get<bool>(preview.Value()->payload.Values().back()));
+            CHECK(toggle.Snapshot().Value() == before);
+            REQUIRE(toggle.PeekDefault().Value().has_value());
+            REQUIRE(toggle.SuppressDefault().HasValue());
+            CHECK(toggle.Snapshot().Value() == before);
+            CHECK_FALSE(toggle.PeekDefault().Value().has_value());
+
+            REQUIRE(toggle.Handle(Input(UiControlInputKind::PointerPress, 3, UiControlActivationSource::Pointer)).HasValue());
+            REQUIRE(toggle.Handle(Input(UiControlInputKind::PointerRelease, 4, UiControlActivationSource::Pointer)).HasValue());
+            const auto admitted = toggle.PeekDefault().Value();
+            const auto applied = toggle.ApplyDefault().Value();
+            REQUIRE(admitted.has_value());
+            REQUIRE(applied.has_value());
+            CHECK(applied->source == admitted->source);
+            CHECK(applied->action == admitted->action);
+            CHECK(applied->eventSequence == admitted->eventSequence);
+            CHECK(std::get<bool>(applied->payload.Values().back()) == std::get<bool>(admitted->payload.Values().back()));
+            CHECK(std::get<UiToggleControlState>(toggle.Snapshot().Value()).checked);
+            REQUIRE(toggle.BeginRetirement().HasValue());
+            ExpectError(toggle.PeekDefault(), UiErrors::ControlLifecycleUnavailable);
+        }
+
+        TEST_CASE("Value reconciliation validates before mutation and preserves focus and availability",
+                  "[runtime_ui][controls][binding_write]") {
+            SECTION("toggle refusal preserves a staged default and authoritative reconciliation clears it") {
+                auto toggle = std::move(UiControlStateMachine::Create(UiToggleControlDescriptor{Base(), false})).Value();
+                REQUIRE(toggle.Handle(Input(UiControlInputKind::PointerPress, 1, UiControlActivationSource::Pointer)).HasValue());
+                REQUIRE(toggle.Handle(Input(UiControlInputKind::PointerRelease, 2, UiControlActivationSource::Pointer)).HasValue());
+                const auto before = toggle.Snapshot().Value();
+                ExpectError(toggle.ReconcileValue(0.5), UiErrors::ControlInputInvalid);
+                CHECK(toggle.Snapshot().Value() == before);
+                CHECK(toggle.PeekDefault().Value().has_value());
+                REQUIRE(toggle.ReconcileValue(true).HasValue());
+                const auto reconciled = std::get<UiToggleControlState>(toggle.Snapshot().Value());
+                CHECK(reconciled.checked);
+                CHECK(reconciled.focused);
+                CHECK(reconciled.availability == UiControlAvailability::Enabled);
+                CHECK_FALSE(reconciled.pressed);
+                CHECK_FALSE(toggle.PeekDefault().Value().has_value());
+                REQUIRE(toggle.SetAvailability(UiControlAvailability::Disabled).HasValue());
+                REQUIRE(toggle.ReconcileValue(false).HasValue());
+                CHECK(std::get<UiToggleControlState>(toggle.Snapshot().Value()).availability == UiControlAvailability::Disabled);
+            }
+
+            SECTION("slider rejects type nonfinite and range failures without losing pending state") {
+                auto slider = std::move(UiControlStateMachine::Create(UiSliderControlDescriptor{Base(), 0.0, 1.0, 0.25, 0.5})).Value();
+                REQUIRE(slider.Handle(Input(UiControlInputKind::FocusGained, 1)).HasValue());
+                REQUIRE(slider
+                            .Handle(Input(UiControlInputKind::AdjustPress, 2, UiControlActivationSource::Keyboard, 0,
+                                          UiControlAdjustment::Increase))
+                            .HasValue());
+                const auto before = slider.Snapshot().Value();
+                const std::array<UiActionValue, 4> invalid{true, -0.1, 1.1, std::numeric_limits<double>::quiet_NaN()};
+                for (const auto &value : invalid) {
+                    ExpectError(slider.ReconcileValue(value), UiErrors::ControlInputInvalid);
+                    CHECK(slider.Snapshot().Value() == before);
+                    CHECK(slider.PeekDefault().Value().has_value());
+                }
+                REQUIRE(slider.ReconcileValue(0.25).HasValue());
+                const auto reconciled = std::get<UiSliderControlState>(slider.Snapshot().Value());
+                CHECK(reconciled.value == 0.25);
+                CHECK(reconciled.focused);
+                CHECK_FALSE(reconciled.pressed);
+                CHECK_FALSE(reconciled.editing);
+                CHECK_FALSE(reconciled.repeating);
+                CHECK_FALSE(slider.PeekDefault().Value().has_value());
+            }
+
+            SECTION("text rejects malformed and oversized values and refreshes the cancel baseline") {
+                auto text = std::move(UiControlStateMachine::Create(UiTextInputControlDescriptor{Base(), Text("old"), 8, true})).Value();
+                REQUIRE(text.Handle(Input(UiControlInputKind::FocusGained, 1)).HasValue());
+                REQUIRE(text.Handle(Input(UiControlInputKind::TextInput, 2, UiControlActivationSource::Keyboard, 0,
+                                          UiControlAdjustment::Count, Text("x")))
+                            .HasValue());
+                const auto before = text.Snapshot().Value();
+                UiActionText malformed;
+                malformed.bytes[0] = static_cast<char>(0xff);
+                malformed.size = 1;
+                UiActionText invalidSize;
+                invalidSize.size = MaximumUiActionTextBytes + 1;
+                const std::array<UiActionValue, 4> invalid{false, malformed, invalidSize, Text("012345678")};
+                for (const auto &value : invalid) {
+                    ExpectError(text.ReconcileValue(value), UiErrors::ControlInputInvalid);
+                    CHECK(text.Snapshot().Value() == before);
+                }
+                REQUIRE(text.ReconcileValue(Text("owner")).HasValue());
+                const auto reconciled = std::get<UiTextInputControlState>(text.Snapshot().Value());
+                CHECK(reconciled.text.View() == "owner");
+                CHECK(reconciled.focused);
+                CHECK_FALSE(reconciled.editing);
+                REQUIRE(text.Handle(Input(UiControlInputKind::SubmitPress, 3, UiControlActivationSource::Keyboard)).HasValue());
+                REQUIRE(text.Handle(Input(UiControlInputKind::TextInput, 4, UiControlActivationSource::Keyboard, 0,
+                                          UiControlAdjustment::Count, Text("x")))
+                            .HasValue());
+                REQUIRE(text.Handle(Input(UiControlInputKind::Cancel, 5)).HasValue());
+                CHECK(std::get<UiTextInputControlState>(text.Snapshot().Value()).text.View() == "owner");
+            }
+
+            SECTION("button and retired owners cannot reconcile values") {
+                auto button = MakeButton();
+                ExpectError(button.ReconcileValue(true), UiErrors::ControlInputInvalid);
+                auto toggle = std::move(UiControlStateMachine::Create(UiToggleControlDescriptor{Base(), false})).Value();
+                REQUIRE(toggle.BeginRetirement().HasValue());
+                ExpectError(toggle.ReconcileValue(true), UiErrors::ControlLifecycleUnavailable);
+                toggle.Shutdown();
+                ExpectError(toggle.ReconcileValue(true), UiErrors::ControlLifecycleUnavailable);
+            }
+        }
+
+        TEST_CASE("Successful default preview application and reconciliation allocate no frame storage",
+                  "[runtime_ui][controls][binding_write][allocation]") {
+            auto slider = std::move(UiControlStateMachine::Create(UiSliderControlDescriptor{Base(), 0.0, 1.0, 0.25, 0.5})).Value();
+            REQUIRE(slider.Handle(Input(UiControlInputKind::FocusGained, 1)).HasValue());
+            REQUIRE(slider
+                        .Handle(Input(UiControlInputKind::AdjustPress, 2, UiControlActivationSource::Keyboard, 0,
+                                      UiControlAdjustment::Increase))
+                        .HasValue());
+            const auto before = ::Horo::Tests::AllocationProbe::Count();
+            const auto preview = slider.PeekDefault();
+            const auto applied = slider.ApplyDefault();
+            const auto reconciled = slider.ReconcileValue(0.5);
+            const auto after = ::Horo::Tests::AllocationProbe::Count();
+            REQUIRE(preview.HasValue());
+            REQUIRE(preview.Value().has_value());
+            REQUIRE(applied.HasValue());
+            REQUIRE(applied.Value().has_value());
+            REQUIRE(reconciled.HasValue());
+            CHECK(after == before);
+        }
+
         TEST_CASE("Control errors use unique actionable descriptors", "[runtime_ui][controls][errors]") {
             const std::array descriptors{&UiErrors::ControlDescriptorInvalid, &UiErrors::ControlInputInvalid,
                                          &UiErrors::ControlSourceStale,       &UiErrors::ControlDefaultPending,
