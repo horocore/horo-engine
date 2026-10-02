@@ -4,6 +4,7 @@
 #include "UiBindingInternal.h"
 
 #include <algorithm>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime::Ui {
@@ -74,7 +75,7 @@ namespace Horo::Runtime::Ui {
         bool reentryAttempted{};
         std::uint64_t editSequence{};
         std::size_t writeCursor{};
-        UiBindingApplyResult current;
+        UiBindingApplyResult current{UiBindingUpdateRevision::Create(1).Value(), UiLayoutContentRevision::Create(1).Value()};
         std::vector<Provider> providers;
         std::vector<Target> targets;
         std::vector<Staged> staged;
@@ -94,8 +95,7 @@ namespace Horo::Runtime::Ui {
         /** @brief Preallocates lifetime-bounded target and dirty storage before activation. */
         Storage(const UiElementTree &tree, const UiBindingStoreLimits &bounds)
             : instance(tree.Instance()), canvas(tree.Canvas()), document(tree.SourceDocument()),
-              documentRevision(tree.SourceDocumentRevision()), treeRevision(tree.Revision()), limits(bounds),
-              current{UiBindingUpdateRevision::Create(1).Value(), UiLayoutContentRevision::Create(1).Value()} {
+              documentRevision(tree.SourceDocumentRevision()), treeRevision(tree.Revision()), limits(bounds) {
             providers.reserve(bounds.providers);
             targets.reserve(bounds.bindings);
             staged.reserve(bounds.bindings);
@@ -135,6 +135,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> Stage(std::size_t target, const UiBindingValue *value, UiBindingValueOrigin origin);
         /** @brief Stages source fanout after complete batch validation, preserving any target failure for atomic rollback. */
         [[nodiscard]] Result<void> StageBatches(std::span<const UiBindingChangeBatch> batches);
+        /** @brief Visits one changed property's subscribers after complete source validation. */
+        [[nodiscard]] Result<void> StageProperty(const Provider &provider, const UiBindingPropertyUpdate &change);
         /** @brief Stages required unavailability and optional fallback for one exact provider. */
         [[nodiscard]] Result<void> StageUnregister(const Provider &provider);
         /** @brief Atomically admits layout work before publishing staged targets and store revisions. */
@@ -160,26 +162,27 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Copies a same-type target into its reserved storage without changing variant alternatives or allocating. */
         inline void CopyValue(UiBindingValue &target, const UiBindingValue &source) noexcept {
-            if (auto *text = std::get_if<std::string>(&target))
-                text->assign(std::get<std::string>(source));
-            else if (auto *message = std::get_if<UiBindingLocalizedMessage>(&target))
-                message->key.assign(std::get<UiBindingLocalizedMessage>(source).key);
-            else if (auto *boolean = std::get_if<bool>(&target))
-                *boolean = std::get<bool>(source);
-            else
-                std::get<double>(target) = std::get<double>(source);
+            std::visit([&target]<typename Value>(const Value &value) {
+                auto &retained = std::get<Value>(target);
+                if constexpr (std::is_same_v<Value, UiBindingLocalizedMessage>)
+                    retained.key.assign(value.key);
+                else
+                    retained = value;
+            }, source);
         }
 
         /** @brief Clears revoked target contents while preserving reserved storage and the admitted type. */
         inline void ClearValue(UiBindingValue &target) noexcept {
-            if (auto *text = std::get_if<std::string>(&target))
-                text->clear();
-            else if (auto *message = std::get_if<UiBindingLocalizedMessage>(&target))
-                message->key.clear();
-            else if (auto *boolean = std::get_if<bool>(&target))
-                *boolean = false;
-            else
-                std::get<double>(target) = 0.0;
+            std::visit([]<typename Value>(Value &value) {
+                if constexpr (std::is_same_v<Value, std::string>)
+                    value.clear();
+                else if constexpr (std::is_same_v<Value, UiBindingLocalizedMessage>)
+                    value.key.clear();
+                else if constexpr (std::is_same_v<Value, UiBindingReference>)
+                    value.value.clear();
+                else
+                    value = {};
+            }, target);
         }
     }  // namespace BindingStoreInternal
 }  // namespace Horo::Runtime::Ui

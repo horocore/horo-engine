@@ -17,33 +17,35 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Identifies target properties that change intrinsic content or visibility. */
         [[nodiscard]] bool LayoutTarget(const UiBindingTargetProperty target) noexcept {
-            return target == UiBindingTargetProperty::Text || target == UiBindingTargetProperty::LocalizedText ||
-                   target == UiBindingTargetProperty::Visible;
+            using enum UiBindingTargetProperty;
+            return target == Text || target == LocalizedText || target == Visible;
         }
 
         /** @brief Identifies target properties that alter interaction availability or control semantics. */
         [[nodiscard]] bool ActionTarget(const UiBindingTargetProperty target) noexcept {
-            return target == UiBindingTargetProperty::Enabled || target == UiBindingTargetProperty::Visible ||
-                   target == UiBindingTargetProperty::BooleanValue || target == UiBindingTargetProperty::ScalarValue ||
-                   target == UiBindingTargetProperty::Selected;
+            using enum UiBindingTargetProperty;
+            return target == Enabled || target == Visible || target == BooleanValue || target == ScalarValue || target == Selected;
         }
 
         /** @brief Derives target work from semantic effects and additional provider-declared dependencies. */
         [[nodiscard]] UiBindingDirty Categories(const UiBindingTargetProperty target, const UiBindingPropertyFlags flags) noexcept {
-            auto result = UiBindingDirty::Paint | UiBindingDirty::Accessibility;
+            using enum UiBindingDirty;
+            auto result = Paint | Accessibility;
             if (LayoutTarget(target) || HasFlag(flags, UiBindingPropertyFlags::AffectsLayout))
-                result = result | UiBindingDirty::Layout;
+                result = result | Layout;
             if (ActionTarget(target) || HasFlag(flags, UiBindingPropertyFlags::AffectsActions))
-                result = result | UiBindingDirty::Actions;
+                result = result | Actions;
             return result;
         }
 
         /** @brief Reserves text capacity during preparation; scalar targets keep value semantics. */
         void ReserveValue(UiBindingValue &value, const std::size_t bytes) {
-            if (auto *text = std::get_if<std::string>(&value))
-                text->reserve(bytes);
-            else if (auto *message = std::get_if<UiBindingLocalizedMessage>(&value))
-                message->key.reserve(bytes);
+            std::visit([bytes]<typename Value>(Value &target) {
+                if constexpr (std::is_same_v<Value, std::string>)
+                    target.reserve(bytes);
+                else if constexpr (std::is_same_v<Value, UiBindingLocalizedMessage>)
+                    target.key.reserve(bytes);
+            }, value);
         }
 
         /** @brief Locates an initial property in a validated sorted snapshot without storing a borrow. */
@@ -58,7 +60,8 @@ namespace Horo::Runtime::Ui {
             if (!registration.instance.IsValid() || !registration.revision.IsValid() || !registration.schema ||
                 registration.scope >= UiBindingProviderScopeKind::Count)
                 return Failure(UiErrors::BindingDescriptorInvalid);
-            if ((registration.schema->AllowedScopes() & UiBindingProviderScopeBit(registration.scope)) == 0)
+            if ((static_cast<unsigned>(registration.schema->AllowedScopes()) &
+                 static_cast<unsigned>(UiBindingProviderScopeBit(registration.scope))) == 0)
                 return Failure(UiErrors::BindingAccessInvalid);
             return Result<void>::Success();
         }
@@ -103,8 +106,8 @@ namespace Horo::Runtime::Ui {
                 return Failure(UiErrors::BindingDescriptorConflict);
             if (const auto valid = ValidateInitial(registration); valid.HasError())
                 return valid;
-            providers.push_back({registration.instance, *registration.schema, registration.revision, true,
-                                 std::vector<std::vector<std::size_t>>(registration.schema->Properties().size()), registration.scope});
+            providers.emplace_back(registration.instance, *registration.schema, registration.revision, true,
+                                   std::vector<std::vector<std::size_t>>(registration.schema->Properties().size()), registration.scope);
         }
         return Result<void>::Success();
     }

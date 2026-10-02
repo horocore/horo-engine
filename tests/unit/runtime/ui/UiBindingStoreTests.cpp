@@ -5,28 +5,33 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <new>
 
 namespace {
-    std::atomic<std::size_t> bindingAllocations{};
-
-    void FreeBindingAllocation(void *memory) noexcept {
-        std::free(memory);
+    std::atomic<std::size_t> &BindingAllocations() {
+        static std::atomic<std::size_t> counter{};
+        return counter;
     }
 }  // namespace
 
 void *operator new(const std::size_t bytes) {
-    bindingAllocations.fetch_add(1, std::memory_order_relaxed);
-    void *memory = std::malloc(bytes == 0 ? 1 : bytes);
-    return memory ? memory : throw std::bad_alloc{};
+    BindingAllocations().fetch_add(1);
+    const auto release = [](std::byte *memory) noexcept {
+        ::operator delete(memory);
+    };
+    std::unique_ptr<std::byte, decltype(release)> memory{static_cast<std::byte *>(std::malloc(bytes == 0 ? 1 : bytes)), release};
+    if (!memory)
+        throw std::bad_alloc{};
+    return memory.release();
 }
 
 void operator delete(void *memory) noexcept {
-    FreeBindingAllocation(memory);
+    std::free(memory);
 }
 
 void operator delete(void *memory, std::size_t) noexcept {
-    FreeBindingAllocation(memory);
+    std::free(memory);
 }
 
 namespace Horo::Runtime::Ui {
@@ -107,11 +112,11 @@ namespace Horo::Runtime::Ui {
             }
 
             std::array<UiResolvedBindingDescriptor, 4> Bindings() const {
-                auto optional = Binding(12, 5, 1, UiBindingTargetProperty::Text);
+                using enum UiBindingTargetProperty;
+                auto optional = Binding(12, 5, 1, Text);
                 optional.binding.requirement = UiBindingRequirement::Optional;
                 optional.binding.fallback = std::string{"missing"};
-                return {Binding(10, 2, 1, UiBindingTargetProperty::Text), Binding(11, 3, 2, UiBindingTargetProperty::Progress), optional,
-                        Binding(13, 4, 0, UiBindingTargetProperty::Enabled)};
+                return {Binding(10, 2, 1, Text), Binding(11, 3, 2, Progress), optional, Binding(13, 4, 0, Enabled)};
             }
 
             UiBindingStore Store(const UiBindingStoreLimits &limits = {}) const {
@@ -418,14 +423,14 @@ namespace Horo::Runtime::Ui {
             const std::array batches{fixture.Batch(changes)};
             std::array<UiBindingTargetDirty, 4> dirty{};
             auto request = Request(fixture.tree, store, evaluator);
-            const auto before = bindingAllocations.load(std::memory_order_relaxed);
+            const auto before = BindingAllocations().load();
             const auto applied = store.Apply(fixture.tree, batches, layout);
             request.sources.content = store.Current().content;
             const auto arranged = layout.Update(fixture.tree, request);
             const auto copied = store.DrainDirty(dirty);
             const auto idle = store.Apply(fixture.tree, {}, layout);
             const auto revoked = store.Unregister(fixture.tree, fixture.provider, layout);
-            const auto after = bindingAllocations.load(std::memory_order_relaxed);
+            const auto after = BindingAllocations().load();
             REQUIRE(applied.HasValue());
             REQUIRE(arranged.HasValue());
             REQUIRE(copied.HasValue());
