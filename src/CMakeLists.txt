@@ -488,6 +488,8 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiBindingFingerprint.cpp
         runtime/ui/UiBindingValidation.cpp
         runtime/ui/UiBindingStore.cpp
+        runtime/ui/UiBindingWrites.cpp
+        runtime/ui/UiBindingWriteAdmission.cpp
         runtime/ui/UiBindingStorePreparation.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiLocalization.cpp
@@ -514,6 +516,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiPointerCapture.cpp
         runtime/ui/UiPointerCaptureErrors.cpp
         runtime/ui/UiActions.cpp
+        runtime/ui/UiActionRouter.cpp
         runtime/ui/UiFeedback.cpp
         runtime/ui/UiFeedbackErrors.cpp
         runtime/ui/UiScreenStack.cpp

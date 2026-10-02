@@ -928,21 +928,104 @@ reports required unavailability for the owning UI activation policy, and permane
 closes that provider incarnation in the store. The host stops provider producers
 before unregister and must retry reported layout backpressure or retire the entire
 UI generation before releasing its provider scope. Retirement closes all target
-reads and update admission; shutdown releases only Horo-owned copies. Old downstream
+reads and update admission; retirement/shutdown abandon pending write reservations
+before releasing authority leases and Horo-owned copies. Old downstream
 immutable leases remain with their existing owners. Repeated unregister/retirement/
 shutdown is harmless. Structural/document reload prepares a new store against the
 replacement retained tree and fresh provider evidence; an old store never silently
 rebinds a recycled slot or stable ID.
 
-This is an additive read-publication API. Existing descriptor validation and callers
-remain valid. Direct SourceToTarget and the read half of TwoWay descriptors are
-admitted. TargetToSource needs the separate owner-write capability, and converter
-metadata needs an executable conversion capability; preparation explicitly rejects
-those executable requests rather than calling descriptor metadata. Provider cadence
+This is an additive publication API. Existing descriptor validation and callers
+remain valid. SourceToTarget and TwoWay retain committed provider projections.
+TargetToSource requires an explicitly authored typed `initialTarget` in the resolved
+descriptor and ignores incoming provider deltas. Store preparation validates this
+value against provider and target limits and reports its origin as `UiLocal` until
+an accepted commit. Missing/invalid values fail preparation atomically. Readable
+directions reject `initialTarget` so the provider projection remains authoritative;
+it requires the same explicit write admission as TwoWay. Converter metadata needs an
+executable conversion capability and preparation still rejects converters. Provider cadence
 is producer-driven for OnChange, EveryVariableUpdate and Manual; none permits a
 getter during layout or extraction. `HoroRuntimeUiPublicHeaderConsumer` covers the
 new header's isolated target ownership, and binding-store regression coverage drives
 the ordinary retained tree, declarative evaluator and incremental layout publisher.
+
+### Two-way write authority and conflict policy
+
+The host explicitly calls `AdmitWrites` with an exact presented owner, authored
+action, binding, Change/Blur/Submit trigger and leased `UiBindingWriteAuthority`.
+Read/write schema access is necessary but never grants permission. Admission checks
+the provider incarnation, semantic scope, complete schema, property slot/signature
+and non-reusable host permission incarnation. Descriptor validation stays inert.
+The API remains owned by `HoroEngine::RuntimeUi`; no gameplay ABI change is required.
+
+Before editing, `BeginEdit` freezes the committed provider revision and exact
+presented element. A routed form/gameplay request supplies bounded typed control
+data to `QueueWrite`. The admitted trigger must match. `QueueControlDefault`
+previews the real control's staged default, verifies the complete action payload,
+admits the write, then applies only its UI-local pending draft. A prevented default
+cannot produce a write. Text change/blur owners route the current bounded text
+projection through the same form action boundary. `CancelEdit` closes an unqueued
+draft; failed admission leaves committed target/provider/layout state untouched.
+
+`RejectStale` is the sole conflict policy. Neither the UI nor the adapter may silently
+retry a stale draft against newer state. A fresh edit requires a new capture and
+request. Commands retain exact provider/schema/property/capability, complete
+document/tree/presented-element evidence, expected revision, request and operation
+correlation. Replayed action requests and recycled elements/providers are rejected.
+
+At the explicit shared provider/UI owner safe point, `ProcessWrite` processes at most
+one command per call in deterministic round-robin binding order, so a pending producer
+cannot starve another binding. The authority validates all fences,
+permission, expected revision and domain rules on each preparation/pending poll.
+The adapter owns authoritative state and structured jobs; Pending does not transfer
+execution to the control. Ready reserves a non-failing commit of exactly the command
+value at the next provider revision. The store stages read subscribers and the
+accepted target, atomically admits precise layout invalidations through the existing
+publisher, then invokes that reserved commit. Capacity, malformed values, provider
+rejection/error/cancellation and stale revisions leave committed state unchanged.
+The provider cannot reenter UI or publish state during preparation; asynchronous
+work returns private evidence for later owner-thread preparation, never UI callbacks.
+
+The new provider capability's `Prepare` boundary is exception-free (`noexcept`),
+matching the Foundation public engine module policy. The owned adapter converts
+private standard/third-party exceptions into its typed `Result` before returning;
+RuntimeUi preserves that original error rather than translating generic exceptions.
+Async producers copy command inputs before the synchronous borrow ends and retain
+their own execution leases until terminal completion or cancellation drains.
+
+Terminal feedback retains original Foundation error evidence and occupies its bounded
+slot until `DrainWriteResults` acknowledges it. Pending poll evidence is nonterminal.
+The owner calls `ReconcileControl` after an outcome to replace the draft with committed
+target state. Reconciliation preserves focus/availability and clears transient edits.
+Revocation closes write admission before cancelling private work; retirement produces
+one cancellation per admitted command. Shutdown/destruction/move replacement abandon
+reservations before releasing authority leases. The adapter retains its provider and
+module image/callback leases until its jobs drain, so old work cannot mutate a newly
+activated owner or outlive mapped code. `UpdateWritePresentation` adopts a newer
+successfully presented interaction without rebuilding read bindings, cancelling old
+edit/reservation evidence first; structural/document replacements still prepare a new
+store. No normal frame waits, provider polling from layout, renderer
+objects, hidden registration, reflection or gameplay ABI mutation is introduced.
+
+Presented action-router replacement passes the old `LastIssuedSequence()` into the
+new descriptor's `previousSequence`. The host retains this high-water mark for the
+whole ownership generation, including periods with no active route, preventing
+request identity reuse while keeping each router's queue bounded and private.
+
+Migration is additive: existing read-only callers keep their API. Write users provide
+explicit host admissions, capture edit sessions before input, route typed commands,
+process them at the documented safe point, acknowledge terminal feedback and reconcile
+controls. Preallocation includes a bounded draft per target; successful supported
+control writes need no heap allocation after preparation. Native module composition,
+list/record editing and general asynchronous UI progress remain separate contracts.
+
+Write entry points borrow large owner/source/edit inputs through const references
+only until return, copying evidence into retained command storage when admitted.
+`UiControlStateMachine::Handle` likewise borrows its input until return; ordinary
+call expressions remain valid, while member-function-pointer aliases must use
+`const UiControlInput&`. This avoids a redundant large input copy without changing
+input ownership or admitting asynchronous borrows. The affected in-tree control
+and binding consumers are covered by the isolated public-header and regression builds.
 
 ## Templates And Presets
 

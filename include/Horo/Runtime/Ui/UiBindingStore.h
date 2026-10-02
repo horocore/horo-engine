@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Runtime/Ui/UiBinding.h"
+#include "Horo/Runtime/Ui/UiControls.h"
 #include "Horo/Runtime/Ui/UiLayout.h"
 
 #include <memory>
@@ -20,6 +21,116 @@ namespace Horo::Runtime::Ui {
     using UiBindingSnapshotRevision = UiRevision<UiBindingSnapshotRevisionTag>;
     /** @brief Monotonic publication revision of one retained binding store. */
     using UiBindingUpdateRevision = UiRevision<UiBindingUpdateRevisionTag>;
+
+    /** @brief Admitted write cutoff; read cadence never selects a commit trigger. */
+    enum class UiBindingCommitTrigger : std::uint8_t {
+        Change,
+        Blur,
+        Submit,
+        Count
+    };
+    /** @brief Deterministic optimistic concurrency policy; conflicts require a fresh edit. */
+    enum class UiBindingConflictPolicy : std::uint8_t {
+        RejectStale,
+        Count
+    };
+
+    /** @brief Exact host-issued permission for one schema property and owner incarnation. */
+    struct UiBindingWriteFence final {
+        UiBindingProviderInstanceId provider;
+        UiBindingProviderScopeKind scope{UiBindingProviderScopeKind::Count};
+        UiBindingSchemaVersion schema;
+        std::uint16_t property{};
+        std::uint64_t signature{};
+        std::uint64_t capability{}; /**< Non-zero host-issued permission incarnation, never reused. */
+        [[nodiscard]] bool operator==(const UiBindingWriteFence &) const noexcept = default;
+    };
+
+    /** @brief Immutable bounded command; no provider, module, control or execution pointer crosses the queue. */
+    struct UiBindingWriteCommand final {
+        UiBindingWriteFence fence;
+        UiBindingId binding;
+        UiActionSource source;
+        UiActionRequestId request;
+        UiActionOperationId operation;
+        UiBindingSnapshotRevision expected;
+        UiBindingCommitTrigger trigger{UiBindingCommitTrigger::Count};
+        UiActionValue value;
+    };
+
+    /** @brief Provider-owned preparation outcome; Pending keeps execution in the provider, never in the control. */
+    enum class UiBindingWriteDisposition : std::uint8_t {
+        Ready,
+        Pending,
+        Rejected,
+        Cancelled,
+        Count
+    };
+
+    /** @brief Exact owner/provider cancellation evidence without allocating a synthetic error. */
+    enum class UiBindingWriteCancellationReason : std::uint8_t {
+        ProviderUnavailable,
+        PresentationChanged,
+        OwnerRetired,
+        Shutdown,
+        ProviderCancelled,
+        Count
+    };
+
+    /** @brief Correlated outcome retaining original Foundation error evidence without exposing property values. */
+    struct UiBindingWriteResult final {
+        UiActionRequestId request;
+        UiActionOperationId operation;
+        UiBindingWriteDisposition disposition{UiBindingWriteDisposition::Count};
+        std::optional<Error> error;
+        UiBindingWriteCancellationReason cancellation{UiBindingWriteCancellationReason::Count};
+    };
+
+    /**
+     * @brief Explicit host-owned provider transaction capability leased through writes and module retirement.
+     * @details All calls run at the provider owner safe point on the Runtime UI owner thread. The adapter owns authoritative state,
+     * jobs and any module callback/image lease. Revoke closes admission and stops producers before host unregister/unload.
+     * Prepare must validate the complete fence, expected committed revision, permission and domain rules on every call, including
+     * pending polls. It reserves private work without publishing state. Ready promises Commit cannot fail or reenter UI; it commits
+     * exactly the command value at expected.Next(). Abandon cancels private work and drains/releases execution leases safely.
+     * Preparation is exception-free: the owned adapter converts private library failures to Error before returning its Result.
+     * Command borrows end when each call returns; asynchronous work copies its typed inputs and retains its execution leases.
+     * All authority methods are non-reentrant; Fence/Active are inert queries. Calls are bounded and nonblocking;
+     * jobs never capture controls or call back into UI. A retained shared lease delays adapter/image
+     * destruction, never revocation. Hosts must not unmap module code while a lease or producer remains alive.
+     */
+    class UiBindingWriteAuthority {
+    public:
+        virtual ~UiBindingWriteAuthority() = default;
+        /** @brief Returns immutable exact permission evidence. @return Borrow valid for the authority lifetime. */
+        [[nodiscard]] virtual const UiBindingWriteFence &Fence() const noexcept = 0;
+        /** @brief Reports admission after permission loss/unload/shutdown. @return Whether permission remains active. */
+        [[nodiscard]] virtual bool Active() const noexcept = 0;
+        /** @brief Validates/reserves or polls provider-owned work. @param command Exact command. @return Outcome or original error. */
+        [[nodiscard]] virtual Result<UiBindingWriteDisposition> Prepare(const UiBindingWriteCommand &command) noexcept = 0;
+        /** @brief Publishes a Ready reservation without failure. @param command Same prepared command. */
+        virtual void Commit(const UiBindingWriteCommand &command) noexcept = 0;
+        /** @brief Idempotently cancels/releases a reservation. @param command Old exact command, including operation correlation. */
+        virtual void Abandon(const UiBindingWriteCommand &command) noexcept = 0;
+    };
+
+    /** @brief Explicit load-time host grant, independent of inert descriptor validation. */
+    struct UiBindingWriteAdmission final {
+        UiBindingId binding;
+        UiActionOwnerContext owner;
+        UiActionId action;
+        UiBindingCommitTrigger trigger{UiBindingCommitTrigger::Submit};
+        UiBindingConflictPolicy conflict{UiBindingConflictPolicy::RejectStale};
+        std::shared_ptr<UiBindingWriteAuthority> authority; /**< Keeps old adapter/module lifetime; grants only this exact property. */
+    };
+
+    /** @brief Store-issued edit session; captures committed revision before input changes the draft. */
+    struct UiBindingEditId final {
+        UiOwnershipGeneration ownership;
+        std::uint64_t sequence{};
+        UiElementHandle element; /**< Disjoint owner-wide retained slot prevents cross-canvas session aliasing. */
+        [[nodiscard]] bool operator==(const UiBindingEditId &) const noexcept = default;
+    };
 
     inline constexpr std::size_t MaximumUiBindingProviders = 64;
     inline constexpr std::size_t MaximumUiBindingChanges = 1'024;
@@ -45,6 +156,7 @@ namespace Horo::Runtime::Ui {
     struct UiResolvedBindingDescriptor final {
         UiBindingProviderInstanceId provider;
         UiBindingDescriptor binding;
+        std::optional<UiBindingValue> initialTarget; /**< Authored UI value required only for TargetToSource; never a provider read. */
     };
 
     /** @brief Delta from one coherent provider revision to a newer revision. */
@@ -89,7 +201,8 @@ namespace Horo::Runtime::Ui {
     enum class UiBindingValueOrigin : std::uint8_t {
         Provider,
         Fallback,
-        Unavailable
+        Unavailable,
+        UiLocal /**< Authored initial value of a write-only target before its first accepted provider commit. */
     };
 
     /** @brief One retained typed target, borrowed only until the next store mutation or destruction. */
@@ -133,11 +246,13 @@ namespace Horo::Runtime::Ui {
      * @details Create is load-time and copies schema, descriptors and initial values. Apply and Unregister run only on the Runtime UI
      * owner thread at the VariableUpdate snapshot cutoff, before layout/input/extraction consumers. They validate the entire transaction,
      * then atomically enqueue precise layout invalidations and copy target values into preallocated storage. No provider callback, I/O,
-     * polling, lock or allocation occurs on successful frame-hot calls. Empty updates do no target work.
+     * polling, lock or allocation occurs on successful Apply calls. Unregister abandons explicitly admitted write reservations at the
+     * shared owner safe point; the authority's cancellation must remain bounded and nonblocking. Empty updates do no target work.
      * Target borrows cannot escape a synchronous owner phase; immutable text/layout/render snapshots own their derived copies.
      * Reload/structural replacement prepares a new store against the replacement tree; stale batches never reconcile by slot alone.
-     * Direct read and TwoWay read projections are supported. TargetToSource and converters require separate write/conversion capability
-     * and fail explicitly at preparation; descriptor metadata never grants execution authority.
+     * SourceToTarget, TwoWay and TargetToSource are supported; converters require separate conversion capability and fail explicitly.
+     * Writes require explicit AdmitWrites. TargetToSource requires a typed authored initialTarget and does not subscribe to provider
+     * deltas.
      */
     class UiBindingStore final {
     public:
@@ -145,7 +260,7 @@ namespace Horo::Runtime::Ui {
          * @brief Prepares complete target state against one active retained tree.
          * @param tree Exact active canvas; no tree pointer is retained.
          * @param providers Exact host-resolved provider registrations; all spans are copied or consumed before return.
-         * @param bindings Conflict-free resolved descriptors; required initial values must be present.
+         * @param bindings Conflict-free resolved descriptors; TargetToSource requires initialTarget, readable directions forbid it.
          * @param limits Hard-bounded lifetime capacities.
          * @return Complete private candidate or typed identity, schema, availability, value or capacity failure.
          */
@@ -153,7 +268,7 @@ namespace Horo::Runtime::Ui {
                                                            std::span<const UiBindingProviderRegistration> providers,
                                                            std::span<const UiResolvedBindingDescriptor> bindings,
                                                            const UiBindingStoreLimits &limits = {});
-        /** @brief Releases all Horo-owned metadata and target storage without calling external owners. */
+        /** @brief Abandons pending reservations before releasing Horo-owned storage and admitted authority leases. */
         ~UiBindingStore();
         /** @brief Transfers unique binding ownership and invalidates other. @param other Store to transfer. */
         UiBindingStore(UiBindingStore &&other) noexcept;
@@ -199,9 +314,60 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<std::size_t> DrainDirty(std::span<UiBindingTargetDirty> output);
         /** @brief Returns current publication/content evidence without polling providers. @return Latest committed summary. */
         [[nodiscard]] UiBindingApplyResult Current() const noexcept;
+        /**
+         * @brief Atomically admits a complete bounded write capability batch at load time, once per store.
+         * @param tree Exact retained tree. @param admissions Exact bindings, presented owners and leased capabilities.
+         * @return Success or schema/access/identity/conflict failure; only immutable authority metadata is inspected.
+         */
+        [[nodiscard]] Result<void> AdmitWrites(const UiElementTree &tree, std::span<const UiBindingWriteAdmission> admissions);
+        /**
+         * @brief Adopts a newer successfully presented interaction without rebuilding read bindings.
+         * @param tree Exact live tree. @param owner New last-presented owner with otherwise identical evidence.
+         * @return Success or stale/lifecycle failure. Old edits/reservations cancel once before the new presentation admits input.
+         */
+        [[nodiscard]] Result<void> UpdateWritePresentation(const UiElementTree &tree, const UiActionOwnerContext &owner);
+        /**
+         * @brief Captures expected committed revision and exact presented source before editing.
+         * @param tree Exact tree. @param binding Admitted writable binding. @param source Last-presented source.
+         * @return Store-issued session or access/stale/busy failure. One edit/write may be outstanding per binding.
+         */
+        [[nodiscard]] Result<UiBindingEditId> BeginEdit(const UiElementTree &tree, UiBindingId binding, const UiActionSource &source);
+        /** @brief Ends an unqueued draft after cancel/rejection. @param edit Exact session. @return Success or stale/lifecycle failure. */
+        [[nodiscard]] Result<void> CancelEdit(const UiBindingEditId &edit);
+        /**
+         * @brief Queues one action-routed draft at its admitted trigger without publishing target/provider/layout state.
+         * @param tree Exact tree. @param edit Captured edit session. @param request Real action-router request.
+         * @param trigger Owner-observed change/blur/submit. @return Pending correlated evidence or original validation failure.
+         * @details The final argument is the control value; only bool, finite double and bounded UTF-8 text are admitted.
+         */
+        [[nodiscard]] Result<UiBindingWriteResult> QueueWrite(const UiElementTree &tree, const UiBindingEditId &edit,
+                                                              const UiActionRequest &request, UiBindingCommitTrigger trigger);
+        /**
+         * @brief Previews an unsuppressed control default, admits its routed write, then applies its UI-local pending projection.
+         * @param tree Exact tree. @param edit Captured session. @param control Exact active control.
+         * @param request Request admitted by the action router from PeekDefault's action/payload/source.
+         * @return Pending write or failure; failed admission suppresses the default and preserves committed control state.
+         */
+        [[nodiscard]] Result<UiBindingWriteResult> QueueControlDefault(const UiElementTree &tree, const UiBindingEditId &edit,
+                                                                       UiControlStateMachine &control, const UiActionRequest &request);
+        /**
+         * @brief Processes at most one queued/pending command at the provider owner safe point in deterministic round-robin binding order.
+         * @param tree Exact tree. @param layout Existing layout owner. @return Empty when idle or correlated provider outcome/error.
+         * @post Ready publication and provider commit are atomic; any failure leaves values, revisions and layout dirties unchanged.
+         * @details Terminal slots remain occupied until DrainWriteResults, preventing result loss and duplicate completion.
+         */
+        [[nodiscard]] Result<std::optional<UiBindingWriteResult>> ProcessWrite(const UiElementTree &tree, UiLayoutEngine &layout);
+        /** @brief Copies/acknowledges terminal outcomes. @param output Bounded caller buffer. @return Count or capacity failure. */
+        [[nodiscard]] Result<std::size_t> DrainWriteResults(std::span<UiBindingWriteResult> output);
+        /**
+         * @brief Restores a control from the committed target after terminal rejection/cancellation or accepted publication.
+         * @param tree Exact tree. @param binding Binding to reconcile. @param control Exact presented control.
+         * @return Success or typed stale/type/lifecycle failure; no provider callback occurs.
+         */
+        [[nodiscard]] Result<void> ReconcileControl(const UiElementTree &tree, UiBindingId binding, UiControlStateMachine &control) const;
         /** @brief Closes admission and target borrows; existing immutable downstream snapshots remain owned by their consumers. */
         void BeginRetirement() noexcept;
-        /** @brief Idempotently releases owned metadata and target storage; no provider or downstream owner is called. */
+        /** @brief Idempotently abandons pending provider reservations before releasing owned storage and authority leases. */
         void Shutdown() noexcept;
 
     private:
@@ -209,5 +375,35 @@ namespace Horo::Runtime::Ui {
         /** @brief Adopts a fully prepared private binding candidate. @param storage Unique candidate ownership. */
         explicit UiBindingStore(std::unique_ptr<Storage> storage) noexcept;
         std::unique_ptr<Storage> storage_;
+    };
+
+    /**
+     * @brief Production action-router adapter over one captured binding edit.
+     * @details Borrows last only through synchronous Dispatch. The router queues values, never this handler or its borrows.
+     * The host drains terminal write feedback and reconciles controls separately; UI does not own provider execution.
+     */
+    class UiBindingWriteActionHandler final : public UiActionHandler {
+    public:
+        /**
+         * @brief Routes a form/change/blur draft through the admitted trigger.
+         * @param store Binding owner. @param tree Exact tree. @param edit Captured session. @param trigger Observed trigger.
+         */
+        UiBindingWriteActionHandler(UiBindingStore &store, const UiElementTree &tree, const UiBindingEditId &edit,
+                                    UiBindingCommitTrigger trigger) noexcept;
+        /**
+         * @brief Routes the real staged control default before applying its pending UI-local value.
+         * @param store Binding owner. @param tree Exact tree. @param edit Captured session. @param control Borrowed exact control.
+         */
+        UiBindingWriteActionHandler(UiBindingStore &store, const UiElementTree &tree, const UiBindingEditId &edit,
+                                    UiControlStateMachine &control) noexcept;
+        /** @brief Admits one routed write. @param request Frozen router request. @return Pending correlation or original failure. */
+        [[nodiscard]] Result<UiActionResult> Handle(const UiActionRequest &request) override;
+
+    private:
+        UiBindingStore &store_;
+        const UiElementTree &tree_;
+        UiBindingEditId edit_;
+        UiBindingCommitTrigger trigger_;
+        UiControlStateMachine *control_{};
     };
 }  // namespace Horo::Runtime::Ui

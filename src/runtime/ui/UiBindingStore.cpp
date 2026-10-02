@@ -110,9 +110,12 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiBindingStore::Storage::StageProperty */
     Result<void> UiBindingStore::Storage::StageProperty(const Provider &provider, const UiBindingPropertyUpdate &change) {
-        for (const auto target : provider.targets[change.property])
+        for (const auto target : provider.targets[change.property]) {
+            if (targets[target].direction == UiBindingDirection::TargetToSource)
+                continue;
             if (const auto result = Stage(target, &change.value, UiBindingValueOrigin::Provider); result.HasError())
                 return result;
+        }
         return Result<void>::Success();
     }
 
@@ -190,7 +193,7 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiBindingStore::Apply */
     Result<UiBindingApplyResult> UiBindingStore::Apply(const UiElementTree &tree, const std::span<const UiBindingChangeBatch> batches,
                                                        UiLayoutEngine &layout) {
-        if (!storage_)
+        if (!storage_ || storage_->processingWrite)
             return Failure<UiBindingApplyResult>(UiErrors::BindingLifecycleUnavailable);
         if (const auto valid = storage_->ValidateTree(tree); valid.HasError())
             return Result<UiBindingApplyResult>::Failure(valid.ErrorValue());
@@ -211,7 +214,7 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiBindingStore::Unregister */
     Result<UiBindingApplyResult> UiBindingStore::Unregister(const UiElementTree &tree, const UiBindingProviderInstanceId providerId,
                                                             UiLayoutEngine &layout) {
-        if (!storage_)
+        if (!storage_ || storage_->processingWrite)
             return Failure<UiBindingApplyResult>(UiErrors::BindingLifecycleUnavailable);
         if (const auto valid = storage_->ValidateTree(tree); valid.HasError())
             return Result<UiBindingApplyResult>::Failure(valid.ErrorValue());
@@ -221,6 +224,10 @@ namespace Horo::Runtime::Ui {
         if (!provider->active)
             return Result<UiBindingApplyResult>::Success({storage_->current.revision, storage_->current.content});
         const Storage::StagingScope staging{*storage_};
+        provider->writesRevoked = true;
+        for (auto &target : storage_->targets)
+            if (target.provider == static_cast<std::size_t>(provider - storage_->providers.data()))
+                storage_->CancelWrite(target, UiBindingWriteCancellationReason::ProviderUnavailable);
         if (const auto staged = storage_->StageUnregister(*provider); staged.HasError())
             return Result<UiBindingApplyResult>::Failure(staged.ErrorValue());
         const auto published = storage_->Publish(tree, layout);
@@ -266,12 +273,28 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiBindingStore::BeginRetirement */
     void UiBindingStore::BeginRetirement() noexcept {
-        if (storage_)
+        if (storage_ && storage_->processingWrite) {
+            storage_->reentryAttempted = true;
+            return;
+        }
+        if (storage_) {
             storage_->active = false;
+            for (auto &target : storage_->targets)
+                storage_->CancelWrite(target, UiBindingWriteCancellationReason::OwnerRetired);
+        }
     }
 
     /** @copydoc UiBindingStore::Shutdown */
     void UiBindingStore::Shutdown() noexcept {
+        if (storage_ && storage_->processingWrite) {
+            storage_->reentryAttempted = true;
+            return;
+        }
+        if (storage_) {
+            storage_->active = false;
+            for (auto &target : storage_->targets)
+                storage_->CancelWrite(target, UiBindingWriteCancellationReason::Shutdown);
+        }
         storage_.reset();
     }
 }  // namespace Horo::Runtime::Ui

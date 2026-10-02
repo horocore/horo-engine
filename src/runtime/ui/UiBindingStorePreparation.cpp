@@ -55,6 +55,22 @@ namespace Horo::Runtime::Ui {
             return found != values.end() && found->property == property ? &found->value : nullptr;
         }
 
+        /** @brief Resolves one authored write-only seed or readable provider/fallback value without retaining its borrow. */
+        [[nodiscard]] Result<const UiBindingValue *> InitialTargetValue(const UiResolvedBindingDescriptor &resolved,
+                                                                        const std::span<const UiBindingPropertyUpdate> values,
+                                                                        const std::size_t property) {
+            const bool writeOnly = resolved.binding.direction == UiBindingDirection::TargetToSource;
+            if (writeOnly != resolved.initialTarget.has_value())
+                return Failure<const UiBindingValue *>(UiErrors::BindingValueInvalid);
+            if (writeOnly)
+                return Result<const UiBindingValue *>::Success(&*resolved.initialTarget);
+            if (const auto *value = InitialValue(values, property))
+                return Result<const UiBindingValue *>::Success(value);
+            if (!resolved.binding.fallback)
+                return Failure<const UiBindingValue *>(UiErrors::BindingProviderUnknown);
+            return Result<const UiBindingValue *>::Success(&*resolved.binding.fallback);
+        }
+
         /** @brief Validates explicit host registration identity and schema-admitted provider scope. */
         [[nodiscard]] Result<void> ValidateRegistration(const UiBindingProviderRegistration &registration) {
             if (!registration.instance.IsValid() || !registration.revision.IsValid() || !registration.schema ||
@@ -107,7 +123,7 @@ namespace Horo::Runtime::Ui {
             if (const auto valid = ValidateInitial(registration); valid.HasError())
                 return valid;
             providers.emplace_back(registration.instance, *registration.schema, registration.revision, true,
-                                   std::vector<std::vector<std::size_t>>(registration.schema->Properties().size()));
+                                   std::vector<std::vector<std::size_t>>(registration.schema->Properties().size()), registration.scope);
         }
         return Result<void>::Success();
     }
@@ -117,8 +133,6 @@ namespace Horo::Runtime::Ui {
                                                                    const UiBindingProviderSchema &schema) const {
         if (const auto valid = ValidateUiBindingDescriptor(binding, schema); valid.HasError())
             return Result<UiElementHandle>::Failure(valid.ErrorValue());
-        if (binding.direction == UiBindingDirection::TargetToSource)
-            return Failure<UiElementHandle>(UiErrors::BindingAccessInvalid);
         if (binding.converter.has_value())
             return Failure<UiElementHandle>(UiErrors::BindingConverterInvalid);
         const auto handle = tree.Find(binding.target.element);
@@ -146,27 +160,51 @@ namespace Horo::Runtime::Ui {
         const auto *property = provider->schema.Find(binding.source.property);
         const auto propertySlot = static_cast<std::size_t>(property - provider->schema.Properties().data());
         const auto providerIndex = static_cast<std::size_t>(provider - providers.data());
-        const auto *value = InitialValue(registrations[providerIndex].values, propertySlot);
-        const auto origin = value ? UiBindingValueOrigin::Provider : UiBindingValueOrigin::Fallback;
-        if (!value) {
-            if (!binding.fallback)
-                return Failure(UiErrors::BindingProviderUnknown);
-            value = &*binding.fallback;
-        }
+        const auto type = *UiBindingTargetValueType(binding.target.property);
+        const bool writeOnly = binding.direction == UiBindingDirection::TargetToSource;
+        const auto initial = InitialTargetValue(resolved, registrations[providerIndex].values, propertySlot);
+        if (initial.HasError())
+            return Result<void>::Failure(initial.ErrorValue());
+        const auto *value = initial.Value();
+        auto origin = UiBindingValueOrigin::UiLocal;
+        if (!writeOnly)
+            origin = InitialValue(registrations[providerIndex].values, propertySlot) ? UiBindingValueOrigin::Provider
+                                                                                     : UiBindingValueOrigin::Fallback;
         if (const auto valid =
                 BindingInternal::ValidateValue(*value, *UiBindingTargetValueType(binding.target.property), binding.target.limits);
             valid.HasError())
             return valid;
+        if (writeOnly)
+            if (const auto valid = BindingInternal::ValidateValue(*value, property->type, property->limits); valid.HasError())
+                return valid;
         if (const auto admitted = AdmitTextStorage(binding, property->type, limits.valueBytes, reservedBytes); admitted.HasError())
             return admitted;
         Target target{{binding.id, handle.Value(), binding.target.property, *value, origin},
                       binding.target.limits,
                       binding.fallback,
                       Categories(binding.target.property, property->flags)};
-        ReserveValue(target.bound.value, binding.target.limits.maximumBytes);
+        target.provider = providerIndex;
+        target.property = static_cast<std::uint16_t>(propertySlot);
+        target.direction = binding.direction;
+        if (const auto prepared = PrepareDraftStorage(target, type, reservedBytes); prepared.HasError())
+            return prepared;
         target.pending = target.categories;
         provider->targets[propertySlot].push_back(targets.size());
         targets.push_back(std::move(target));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiBindingStore::Storage::PrepareDraftStorage */
+    Result<void> UiBindingStore::Storage::PrepareDraftStorage(Target &target, const UiBindingValueType type,
+                                                              std::size_t &reservedBytes) const {
+        target.draft = target.bound.value;
+        if (type == UiBindingValueType::BoundedText || type == UiBindingValueType::LocalizedMessage) {
+            reservedBytes += target.limits.maximumBytes;
+            if (reservedBytes > limits.valueBytes)
+                return Failure(UiErrors::BindingCapacityExceeded);
+        }
+        ReserveValue(target.bound.value, target.limits.maximumBytes);
+        ReserveValue(target.draft, target.limits.maximumBytes);
         return Result<void>::Success();
     }
 
