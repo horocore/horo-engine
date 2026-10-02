@@ -695,6 +695,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/CookedWorldIndexManifest.h
     Horo/WorldStreaming/FallbackStreamingProvider.h
     Horo/WorldStreaming/StreamingBudgetModel.h
+    Horo/WorldStreaming/StreamingFeatureBudgetReservations.h
     Horo/WorldStreaming/SharedAssetResidency.h
     Horo/WorldStreaming/StreamingCellOperation.h
     Horo/WorldStreaming/StreamingCellCandidate.h
