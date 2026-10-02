@@ -164,7 +164,7 @@ namespace Horo::Application::NavigationBakeDetail {
 
         /** @brief Resolves changed subsets into a complete bounded candidate without modifying published leases. */
         [[nodiscard]] Result<void> Build(const ServiceState &state, const Attempt &attempt, const CancellationToken &cancel) {
-            const auto previous = state.published.load();
+            const auto previous = state.Publication();
             std::size_t bytes{};
             for (const auto &prepared : attempt.prepared) {
                 if (cancel.IsCancellationRequested())
@@ -228,7 +228,7 @@ namespace Horo::Application::NavigationBakeDetail {
             if (published.HasError())
                 return Result<void>::Failure(published.ErrorValue());
             attempt.candidate->generation = std::move(published).Value();
-            state->published.store(std::move(attempt.candidate));
+            state->Publish(std::move(attempt.candidate));
             return Result<void>::Success();
         }
     }  // namespace

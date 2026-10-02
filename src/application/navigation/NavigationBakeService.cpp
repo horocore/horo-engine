@@ -153,6 +153,6 @@ namespace Horo::Application {
 
     /** @copydoc NavigationBakeService::Published */
     std::shared_ptr<const NavigationBakePublication> NavigationBakeService::Published() const noexcept {
-        return state_->published.load();
+        return state_->Publication();
     }
 }  // namespace Horo::Application
