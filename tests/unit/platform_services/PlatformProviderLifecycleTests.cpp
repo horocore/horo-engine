@@ -75,9 +75,10 @@ namespace Horo::PlatformServices::Tests {
                     .moduleCodeLease = audit};
         }
 
-        [[nodiscard]] PlatformProjectConfiguration Configuration() {
+        [[nodiscard]] PlatformProjectConfiguration Configuration(
+            const PlatformServicesHostProfile profile = PlatformServicesHostProfile::HeadlessServer) {
             PlatformProjectConfigurationCandidate candidate{.projectId = "example.project",
-                                                            .profile = PlatformServicesHostProfile::HeadlessServer,
+                                                            .profile = profile,
                                                             .provider = {.mode = PlatformProviderSelectionMode::ExactProvider,
                                                                          .providerKey = "example.provider"}};
             candidate.services[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = PlatformServiceRequirement::Optional;
@@ -87,7 +88,8 @@ namespace Horo::PlatformServices::Tests {
                                                             .provider = {41},
                                                             .interfaceVersion = {PlatformServicesBackendInterfaceMajor,
                                                                                  PlatformServicesBackendInterfaceMinor},
-                                                            .allowedProfiles = PlatformServicesHostProfileMask::HeadlessServer};
+                                                            .allowedProfiles = PlatformServicesHostProfileMask::HeadlessServer |
+                                                                               PlatformServicesHostProfileMask::InteractiveDevelopment};
             contribution.supportedServices[static_cast<std::size_t>(PlatformServiceKind::Achievements)] = true;
             contribution.supportedServices[static_cast<std::size_t>(PlatformServiceKind::Session)] = true;
             const std::vector contributions{contribution};
@@ -121,11 +123,12 @@ namespace Horo::PlatformServices::Tests {
                 publication = std::move(result).Value();
             }
 
-            [[nodiscard]] Result<std::unique_ptr<PlatformProviderLifecycleHost>> Start() {
+            [[nodiscard]] Result<std::unique_ptr<PlatformProviderLifecycleHost>> Start(
+                const PlatformServicesHostProfile profile = PlatformServicesHostProfile::HeadlessServer) {
                 auto authority = consumer.Grant({"platform.services.provider"});
                 REQUIRE(authority.HasValue());
                 const Extensions::ApplicationCapabilityVersionRange version{{1, 0, 0}, {1, 0, 0}};
-                const auto configuration = Configuration();
+                const auto configuration = Configuration(profile);
                 return PlatformProviderLifecycleHost::Start(
                     {configuration, admission, identity, authority.Value(), version, "example.consumer", "consumer.module", 1});
             }
@@ -137,6 +140,15 @@ namespace Horo::PlatformServices::Tests {
         rig.Publish();
         rig.identity.providerId = "example.other";
         const auto started = rig.Start();
+        REQUIRE(started.HasError());
+        CHECK(started.ErrorValue().code.Value() == PlatformProviderLifecycleErrors::InvalidSelection.code.Value());
+        CHECK(horo_test_provider_event_count(rig.audit.get()) == 0);
+    }
+
+    TEST_CASE("Configuration cannot reuse a provider admitted under another host profile", "[platform-services][lifecycle]") {
+        Rig rig;
+        rig.Publish();
+        const auto started = rig.Start(PlatformServicesHostProfile::InteractiveDevelopment);
         REQUIRE(started.HasError());
         CHECK(started.ErrorValue().code.Value() == PlatformProviderLifecycleErrors::InvalidSelection.code.Value());
         CHECK(horo_test_provider_event_count(rig.audit.get()) == 0);

@@ -125,6 +125,8 @@ namespace Horo::PlatformServices {
         [[nodiscard]] const std::optional<ModuleId> &SelectedModule() const noexcept;
         /** @brief Returns typed service policy in exhaustive service order. @return Immutable policy span. */
         [[nodiscard]] std::span<const PlatformServiceRequirement> ServiceRequirements() const noexcept;
+        /** @brief Returns the exact selected manifest service claims. @return All false for Null. */
+        [[nodiscard]] std::span<const bool> SelectedServices() const noexcept;
         /** @brief Projects required services into backend activation policy. @return Backend-neutral exact requirements. */
         [[nodiscard]] PlatformServicesBackendConfig BackendConfig() const noexcept;
         /** @brief Returns deterministic policy/contribution provenance. @return Immutable SHA-256 fingerprint. */
@@ -146,6 +148,7 @@ namespace Horo::PlatformServices {
         std::string selectedProviderKey_;
         std::optional<ModuleId> selectedModule_;
         std::array<PlatformServiceRequirement, static_cast<std::size_t>(PlatformServiceKind::Count)> services_{};
+        std::array<bool, static_cast<std::size_t>(PlatformServiceKind::Count)> selectedServices_{};
         Sha256Digest fingerprint_{};
     };
 

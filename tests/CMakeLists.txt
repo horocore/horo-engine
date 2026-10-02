@@ -1737,6 +1737,11 @@ add_executable(HoroPlatformRequestTests
 target_compile_features(HoroPlatformRequestTests PRIVATE cxx_std_20)
 target_include_directories(HoroPlatformRequestTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroPlatformRequestTests PRIVATE HoroEngine::PlatformServices Threads::Threads)
+add_executable(HoroPlatformServicesCompositionTests unit/platform_services/PlatformServicesCompositionTests.cpp)
+target_compile_features(HoroPlatformServicesCompositionTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPlatformServicesCompositionTests PRIVATE HoroEngine::PlatformServices Catch2::Catch2WithMain Threads::Threads)
+add_test(NAME HoroPlatformServicesCompositionTests COMMAND HoroPlatformServicesCompositionTests)
+set_tests_properties(HoroPlatformServicesCompositionTests PROPERTIES LABELS "unit;platform-services;headless")
 add_executable(HoroGameplayBuildServiceTests
         unit/application/CompilerDiagnosticParserTests.cpp
         unit/application/GameplayBuildServiceTests.cpp
