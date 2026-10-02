@@ -445,8 +445,11 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
-          cmake --build build/cinematic-windows --target HoroCinematicModelTests HoroCinematicRuntimeTests --parallel 2
-          ctest --test-dir build/cinematic-windows -R '^HoroCinematic(Model|Runtime)Tests::' --output-on-failure -j 2
+          cmake --build build/cinematic-windows --target \
+            HoroCinematicModelTests HoroCinematicRuntimeTests HoroCinematicPropertyIntegrationTests \
+            HoroCinematicModelPublicHeaderConsumer HoroCinematicRuntimePublicHeaderConsumer HoroEditorServicesPublicHeaderConsumer \
+            --parallel 2
+          ctest --test-dir build/cinematic-windows -R '^HoroCinematic(Model|Runtime|PropertyIntegration)Tests::' --output-on-failure -j 2
         env:
           CC: cl
           CXX: cl
