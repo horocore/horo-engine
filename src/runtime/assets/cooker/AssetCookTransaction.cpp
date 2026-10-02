@@ -22,6 +22,12 @@ namespace Horo::Assets {
                 return Result<AssetCookGenerationContents>::Failure(MakeError(CookErrors::MalformedArtifact));
             return ReadCookGenerationContents(generation.Value(), maximumBytes, limits);
         }
+
+        /** @brief Removes legacy filename aliases before staging; unique asset IDs define unique portable output names. */
+        void CanonicalizeStorageNames(AssetCookGenerationContents &contents) {
+            for (auto &entry : contents.entries)
+                entry.artifactFile = entry.assetId.ToString() + ".cooked";
+        }
     }  // namespace
 
     /** @copydoc PublishCookArtifactReplacement */
@@ -30,6 +36,7 @@ namespace Horo::Assets {
                                                                const std::size_t maximumBytes, const AssetCookLimits &limits,
                                                                const AssetCookPublicationPolicy &policy) {
         if (policy.files == nullptr || root.empty() || !root.is_absolute() || maximumBytes == 0 || artifact.size() > maximumBytes ||
+            entry.artifactFile != entry.assetId.ToString() + ".cooked" ||
             entry.artifactHash != ComputeSha256(std::as_bytes(std::span{artifact})))
             return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::MalformedArtifact));
         auto envelope = DecodeCookedArtifact(artifact, limits);
@@ -44,6 +51,7 @@ namespace Horo::Assets {
             if (base.HasError())
                 return Result<AssetCookGeneration>::Failure(base.ErrorValue());
             auto contents = std::move(base).Value();
+            CanonicalizeStorageNames(contents);
             const auto found = std::ranges::lower_bound(contents.entries, entry.assetId, {}, &AssetCookManifestEntry::assetId);
             const auto index = static_cast<std::size_t>(found - contents.entries.begin());
             if (found != contents.entries.end() && found->assetId == entry.assetId) {

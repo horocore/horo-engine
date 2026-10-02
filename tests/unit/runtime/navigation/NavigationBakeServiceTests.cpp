@@ -138,6 +138,18 @@ namespace Horo::Application {
             }
         };
 
+        /** @brief Seeds a valid existing generation whose portable filename predates canonical asset-ID naming. */
+        void PublishLegacyArtifact(const BakeHarness &harness, const Assets::AssetCookManifestEntry &entry,
+                                   const std::vector<std::uint8_t> &artifact) {
+            const auto lock = harness.config.files->TryAcquireExclusive(harness.config.targetRoot / ".cook-writer.lock", "legacy fixture");
+            REQUIRE(lock.HasValue());
+            const std::array entries{entry};
+            const std::array artifacts{artifact};
+            REQUIRE(Assets::PublishCookGeneration(harness.config.targetRoot, harness.config.target, entries, artifacts,
+                                                  harness.config.cookLimits, {.files = harness.config.files.get()})
+                        .HasValue());
+        }
+
         [[nodiscard]] OperationRecord Terminal(NavigationBakeService &service, const OperationStore &operations, OperationId id) {
             for (std::size_t i = 0; i < 5000; ++i) {
                 service.Pump();
@@ -381,12 +393,11 @@ namespace Horo::Application {
                                   .Value();
         const Assets::AssetCookManifestEntry other{.assetId = otherId,
                                                    .assetType = otherType,
-                                                   .artifactFile = otherId.ToString() + ".cooked",
+                                                   .artifactFile = harness.config.definition.ToString() + ".cooked",
                                                    .artifactHash = ComputeSha256(std::as_bytes(std::span{artifact}))};
-        REQUIRE(Assets::PublishCookArtifactReplacement(harness.config.targetRoot, harness.config.target, other, artifact,
-                                                       harness.config.maximumCandidateBytes, harness.config.cookLimits,
-                                                       {.files = harness.config.files.get()})
-                    .HasValue());
+        PublishLegacyArtifact(harness, other, artifact);
+        const auto legacy = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value();
+        REQUIRE(Assets::ReadCookGenerationContents(legacy, harness.config.maximumCandidateBytes).HasValue());
         REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
                 OperationState::Succeeded);
         const auto before = harness.service->Published();
@@ -403,11 +414,30 @@ namespace Horo::Application {
         REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
                 OperationState::Succeeded);
         const auto current = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value();
-        const auto contents = Assets::ReadCookGenerationContents(current, harness.config.maximumCandidateBytes).Value();
+        const auto read = Assets::ReadCookGenerationContents(current, harness.config.maximumCandidateBytes);
+        REQUIRE(read.HasValue());
+        const auto &contents = read.Value();
         REQUIRE(contents.entries.size() == 2);
         CHECK(contents.entries.back().assetId == otherId);
         CHECK(contents.entries.back().artifactHash == other.artifactHash);
         CHECK(contents.artifacts.back() == artifact);
+        CHECK(contents.entries.back().artifactFile == otherId.ToString() + ".cooked");
+        CHECK(Assets::ReadCookGenerationContents(legacy, harness.config.maximumCandidateBytes).Value().artifacts.front() == artifact);
+    }
+
+    TEST_CASE("Artifact replacement rejects a noncanonical filename without changing the current authority") {
+        BakeHarness harness;
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                OperationState::Succeeded);
+        const auto before = harness.service->Published();
+        const auto contents = Assets::ReadCookGenerationContents(before->generation, harness.config.maximumCandidateBytes).Value();
+        auto entry = contents.entries.front();
+        entry.artifactFile = "foreign.cooked";
+        CHECK(Assets::PublishCookArtifactReplacement(harness.config.targetRoot, harness.config.target, entry, contents.artifacts.front(),
+                                                     harness.config.maximumCandidateBytes, harness.config.cookLimits,
+                                                     {.files = harness.config.files.get()})
+                  .HasError());
+        CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
     }
 
     TEST_CASE("Removing all walkable geometry publishes a complete empty tile closure without retaining old topology") {
