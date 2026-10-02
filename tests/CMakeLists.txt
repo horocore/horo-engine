@@ -705,6 +705,7 @@ add_executable(HoroNavigationApiTests
         unit/runtime/navigation/NavigationCapabilitiesTests.cpp
         unit/runtime/navigation/NavigationIdentityTests.cpp
         unit/runtime/navigation/NavigationLinkValidationTests.cpp
+        unit/runtime/navigation/NavigationLinkValidationGenerationTests.cpp
         unit/runtime/navigation/NavigationOutcomesTests.cpp
         unit/runtime/navigation/NavigationProjectProfileTests.cpp
         unit/runtime/navigation/NavigationProviderTests.cpp

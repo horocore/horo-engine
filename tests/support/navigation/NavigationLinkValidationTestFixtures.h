@@ -117,8 +117,16 @@ namespace Horo::Navigation::TestSupport {
             const INavigationQueryBackend &backend, const std::span<const NavigationBakeLinkInput> authored,
             const std::optional<NavigationLinkGenerationPolicy> &generation = {}, const CancellationToken &token = {},
             const NavigationLinkValidationLimits &limits = {}) const {
-            return NavigationLinkValidationSnapshot::Validate(input, areas, context, backend, authored, descriptors, clearance, generation,
-                                                              token, limits);
+            return NavigationLinkValidationSnapshot::Validate({.input = input,
+                                                               .areas = areas,
+                                                               .backend = backend,
+                                                               .context = context,
+                                                               .authored = authored,
+                                                               .descriptors = descriptors,
+                                                               .clearance = clearance,
+                                                               .generation = generation,
+                                                               .limits = limits},
+                                                              token);
         }
 
         [[nodiscard]] Result<NavigationCookedLinkSet> Cook(const NavigationLinkValidationSnapshot &snapshot,

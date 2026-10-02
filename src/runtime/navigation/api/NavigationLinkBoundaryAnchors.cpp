@@ -84,8 +84,8 @@ namespace Horo::Navigation {
             const auto tile = mesh.ResolveTile(binding.tile);
             if (tile.HasError())
                 return Result<Output>::Failure(tile.ErrorValue());
-            const auto range = tile.Value().descriptor->polygons;
-            if (binding.polygons.count == 0 || binding.polygons.first < range.first ||
+            if (const auto range = tile.Value().descriptor->polygons;
+                binding.polygons.count == 0 || binding.polygons.first < range.first ||
                 static_cast<std::uint64_t>(binding.polygons.first) + binding.polygons.count >
                     static_cast<std::uint64_t>(range.first) + range.count)
                 return Result<Output>::Failure(MakeError(NavigationErrors::BakeInputInvalid));

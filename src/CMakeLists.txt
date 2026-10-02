@@ -1158,6 +1158,7 @@ add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavigationErrorsScene.cpp
         runtime/navigation/api/NavigationIdentity.cpp
         runtime/navigation/api/NavigationLinkValidation.cpp
+        runtime/navigation/api/NavigationLinkValidationSnapshot.cpp
         runtime/navigation/api/NavigationLinkBoundaryAnchors.cpp
         runtime/navigation/api/NavigationOutcomes.cpp
         runtime/navigation/api/NavigationProjectProfiles.cpp

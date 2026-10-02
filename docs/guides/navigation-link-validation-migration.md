@@ -38,7 +38,10 @@ and serialized names are unchanged.
    is not free-space evidence, and navigation does not assume an airborne gap is
    unobstructed. The collision owner remains responsible for measuring the actual
    traversal corridor appropriate to Jump, Ladder, Door or Teleport.
-6. Call `NavigationLinkValidationSnapshot::Validate`. Omit generation to validate
+6. Assemble a `NavigationLinkValidationRequest` containing the pinned input, registry,
+   backend, exact projection context, authored links, descriptors, clearance and limits.
+   Pass it with the cancellation token to `NavigationLinkValidationSnapshot::Validate`.
+   Omit generation to validate
    only authored links. `CaptureNavigationLinkBoundaryAnchors` can derive stable
    edge-midpoint anchors from validated neutral candidate tiles using exact
    polygon-range-to-surface bindings, without publishing an intermediate mesh. Internal

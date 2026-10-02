@@ -15,8 +15,7 @@ namespace Horo::Navigation {
         for (const auto &input : links) {
             if (!input.link)
                 return Result<std::vector<NavigationBakeLinkInput>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
-            const auto valid = Runtime::ValidateNavigationLinkComponent(*input.link);
-            if (valid.HasError())
+            if (const auto valid = Runtime::ValidateNavigationLinkComponent(*input.link); valid.HasError())
                 return Result<std::vector<NavigationBakeLinkInput>>::Failure(valid.ErrorValue());
             const auto &link = *input.link;
             if (!link.enabled || std::ranges::find(link.profiles, profile) == link.profiles.end())

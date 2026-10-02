@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <tuple>
 #include <utility>
 
@@ -86,6 +87,13 @@ namespace Horo::Navigation {
             std::vector<NavigationValidatedLink> suggestions;
             std::vector<NavigationLinkDiagnostic> diagnostics;
 
+            /** @brief Preserves cancellation precedence when owned diagnostic storage cannot be admitted. */
+            [[nodiscard]] bool StorageFailure() {
+                if (!work.failure)
+                    work.failure = MakeError(NavigationErrors::BakeInputCapacityExceeded);
+                return false;
+            }
+
             /** @brief Bounds retained provider error text, diagnostics and cause chains before copying their owned storage. */
             [[nodiscard]] bool AdmitError(const Error &error) {
                 std::uint64_t bytes{};
@@ -99,16 +107,12 @@ namespace Horo::Navigation {
                     if (!work.Charge() || !add(sizeof(Error)) || !add(node->code.Value().size() + 1) ||
                         !add(node->domain.Value().size() + 1) || !add(node->message.size() + 1) ||
                         !add(node->diagnostics.size() * sizeof(Diagnostic))) {
-                        if (!work.failure)
-                            work.failure = MakeError(NavigationErrors::BakeInputCapacityExceeded);
-                        return false;
+                        return StorageFailure();
                     }
                     for (const auto &diagnostic : node->diagnostics) {
                         if (!work.Charge() || !add(diagnostic.code.Value().size() + 1) || !add(diagnostic.message.size() + 1) ||
                             !add(diagnostic.location.source.size() + 1) || !add(diagnostic.path.size() + 1)) {
-                            if (!work.failure)
-                                work.failure = MakeError(NavigationErrors::BakeInputCapacityExceeded);
-                            return false;
+                            return StorageFailure();
                         }
                     }
                 }
@@ -125,7 +129,8 @@ namespace Horo::Navigation {
                 const auto found = std::ranges::lower_bound(partitions, key, {}, [](const auto &partition) {
                     return std::tuple{partition.profile, partition.surface};
                 });
-                return found != partitions.end() && found->profile == context.profile && found->surface == surface ? &*found : nullptr;
+                return found != partitions.end() && found->profile == context.profile && found->surface == surface ? std::to_address(found)
+                                                                                                                   : nullptr;
             }
 
             /** @brief Retains both endpoints and the original provider error for one explicit failing rule. */
@@ -199,102 +204,158 @@ namespace Horo::Navigation {
                        sameEndpoint(candidate.start, existing.end) && sameEndpoint(candidate.end, existing.start);
             }
 
-            /** @brief Validates one complete candidate; rejected suggestions never join the authored acceptance table. */
-            void Candidate(const NavigationBakeLinkInput &link, const NavigationLinkAnchorId startAnchor = {},
-                           const NavigationLinkAnchorId endAnchor = {}, const float maximumDistance = std::numeric_limits<float>::max()) {
+            /** @brief Stack-only state for one ordered candidate, never retained by the snapshot. */
+            struct CandidateState final {
+                const NavigationBakeLinkInput &link;
+                NavigationLinkAnchorId startAnchor;
+                NavigationLinkAnchorId endAnchor;
+                float maximumDistance;
+                const NavigationTileBuildPartition *startPartition{};
+                const NavigationTileBuildPartition *endPartition{};
+                const NavigationTraversalDescriptor *descriptor{};
+                NavigationSurfaceHit start;
+                NavigationSurfaceHit end;
+            };
+
+            /** @brief Records a candidate rejection without changing its authored or generated identity. */
+            void Reject(const CandidateState &candidate, const NavigationLinkValidationRule rule) {
+                Reject(candidate.link, candidate.startAnchor, candidate.endAnchor, rule);
+            }
+
+            /** @brief Resolves payload, profile and available traversal semantics before querying either endpoint. */
+            [[nodiscard]] bool PrepareCandidate(CandidateState &candidate) {
                 using enum NavigationLinkValidationRule;
-                const auto reject = [&](const NavigationLinkValidationRule rule) {
-                    Reject(link, startAnchor, endAnchor, rule);
-                };
-                if (!work.Charge())
-                    return;
+                const auto &link = candidate.link;
                 if (!ValidEndpoint(link.start) || !ValidEndpoint(link.end) || !ValidSemantics(link.kind, link.direction) ||
                     !std::isfinite(link.traversalCost) || link.traversalCost < 0.0F) {
-                    reject(Malformed);
-                    return;
+                    Reject(candidate, Malformed);
+                    return false;
                 }
-                const auto *startPartition = Partition(link.start.surface);
-                const auto *endPartition = Partition(link.end.surface);
-                if (link.profile != context.profile || !startPartition || !endPartition) {
-                    reject(ProfileMismatch);
-                    return;
+                candidate.startPartition = Partition(link.start.surface);
+                candidate.endPartition = Partition(link.end.surface);
+                if (link.profile != context.profile || !candidate.startPartition || !candidate.endPartition) {
+                    Reject(candidate, ProfileMismatch);
+                    return false;
                 }
-                const auto *descriptor = descriptors[static_cast<std::size_t>(link.kind)];
-                if (!descriptor) {
-                    reject(DescriptorUnavailable);
-                    return;
+                candidate.descriptor = descriptors[static_cast<std::size_t>(link.kind)];
+                if (!candidate.descriptor) {
+                    Reject(candidate, DescriptorUnavailable);
+                    return false;
                 }
-                const auto startArea = areas.ResolveTraversal(startPartition->filter, descriptor->area);
-                const auto endArea = areas.ResolveTraversal(endPartition->filter, descriptor->area);
+                const auto startArea = areas.ResolveTraversal(candidate.startPartition->filter, candidate.descriptor->area);
+                const auto endArea = areas.ResolveTraversal(candidate.endPartition->filter, candidate.descriptor->area);
                 if (startArea.HasError() || endArea.HasError() || !startArea.Value().traversable || !endArea.Value().traversable) {
-                    reject(DescriptorUnavailable);
-                    return;
+                    Reject(candidate, DescriptorUnavailable);
+                    return false;
                 }
                 if (startArea.Value().traversalCost != link.traversalCost || endArea.Value().traversalCost != link.traversalCost) {
-                    reject(TraversalCost);
-                    return;
+                    Reject(candidate, TraversalCost);
+                    return false;
                 }
-                if (link.direction == NavigationLinkDirection::Bidirectional && !descriptor->supportsBidirectional) {
-                    reject(Direction);
-                    return;
+                if (link.direction == NavigationLinkDirection::Bidirectional && !candidate.descriptor->supportsBidirectional) {
+                    Reject(candidate, Direction);
+                    return false;
                 }
-                const auto start = Project(link.start, *startPartition);
-                const auto end = Project(link.end, *endPartition);
-                if (work.failure)
-                    return;
-                if ((start.HasError() && !AdmitError(start.ErrorValue())) || (end.HasError() && !AdmitError(end.ErrorValue())))
-                    return;
+                return true;
+            }
+
+            /** @brief Projects both endpoints and retains each failed endpoint's exact typed error. */
+            [[nodiscard]] bool ProjectCandidate(CandidateState &candidate) {
+                const auto start = Project(candidate.link.start, *candidate.startPartition);
+                const auto end = Project(candidate.link.end, *candidate.endPartition);
+                if (work.failure || (start.HasError() && !AdmitError(start.ErrorValue())) ||
+                    (end.HasError() && !AdmitError(end.ErrorValue())))
+                    return false;
                 if (start.HasError())
-                    Reject(link, startAnchor, endAnchor, StartProjection, start.ErrorValue());
+                    Reject(candidate.link, candidate.startAnchor, candidate.endAnchor, NavigationLinkValidationRule::StartProjection,
+                           start.ErrorValue());
                 if (end.HasError())
-                    Reject(link, startAnchor, endAnchor, EndProjection, end.ErrorValue());
+                    Reject(candidate.link, candidate.startAnchor, candidate.endAnchor, NavigationLinkValidationRule::EndProjection,
+                           end.ErrorValue());
                 if (start.HasError() || end.HasError())
-                    return;
-                const double distance = Distance(start.Value().position, end.Value().position);
-                const double rise = static_cast<double>(end.Value().position.y) - start.Value().position.y;
+                    return false;
+                candidate.start = start.Value();
+                candidate.end = end.Value();
+                return true;
+            }
+
+            /** @brief Checks final projected distance and asymmetric rise/drop in every declared direction. */
+            [[nodiscard]] bool CheckTraversal(const CandidateState &candidate) {
+                const auto &descriptor = *candidate.descriptor;
+                const double distance = Distance(candidate.start.position, candidate.end.position);
+                const double rise = static_cast<double>(candidate.end.position.y) - candidate.start.position.y;
                 if (distance <= Math::DefaultEpsilon) {
-                    reject(CoincidentEndpoints);
-                    return;
+                    Reject(candidate, NavigationLinkValidationRule::CoincidentEndpoints);
+                    return false;
                 }
-                const bool forward = distance <= std::min(descriptor->maximumDistanceMeters, maximumDistance) &&
-                                     rise <= descriptor->maximumRiseMeters && -rise <= descriptor->maximumDropMeters;
-                const bool reverse = link.direction != NavigationLinkDirection::Bidirectional ||
-                                     (-rise <= descriptor->maximumRiseMeters && rise <= descriptor->maximumDropMeters);
-                if (!forward || !reverse) {
-                    reject(Direction);
-                    return;
+                const bool forward = distance <= std::min(descriptor.maximumDistanceMeters, candidate.maximumDistance) &&
+                                     rise <= descriptor.maximumRiseMeters && -rise <= descriptor.maximumDropMeters;
+                if (const bool reverse = candidate.link.direction != NavigationLinkDirection::Bidirectional ||
+                                         (-rise <= descriptor.maximumRiseMeters && rise <= descriptor.maximumDropMeters);
+                    !forward || !reverse) {
+                    Reject(candidate, NavigationLinkValidationRule::Direction);
+                    return false;
                 }
-                auto projectedStart = link.start;
-                auto projectedEnd = link.end;
-                projectedStart.position = start.Value().position;
-                projectedEnd.position = end.Value().position;
-                if (link.start.connectionRadiusMeters < profile->buildGeometry.radiusMeters ||
-                    link.end.connectionRadiusMeters < profile->buildGeometry.radiusMeters || !HasClearance(projectedStart, projectedEnd) ||
-                    (link.direction == NavigationLinkDirection::Bidirectional && !HasClearance(projectedEnd, projectedStart))) {
-                    reject(Clearance);
-                    return;
+                return true;
+            }
+
+            /** @brief Requires measured free clearance for the final projected forward and optional reverse corridor. */
+            [[nodiscard]] bool CheckClearance(const CandidateState &candidate) {
+                auto start = candidate.link.start;
+                auto end = candidate.link.end;
+                start.position = candidate.start.position;
+                end.position = candidate.end.position;
+                if (start.connectionRadiusMeters < profile->buildGeometry.radiusMeters ||
+                    end.connectionRadiusMeters < profile->buildGeometry.radiusMeters || !HasClearance(start, end) ||
+                    (candidate.link.direction == NavigationLinkDirection::Bidirectional && !HasClearance(end, start))) {
+                    Reject(candidate, NavigationLinkValidationRule::Clearance);
+                    return false;
                 }
-                NavigationValidatedLink accepted{.authoredLink = link.id,
-                                                 .startAnchor = startAnchor,
-                                                 .endAnchor = endAnchor,
-                                                 .start = start.Value(),
-                                                 .end = end.Value(),
-                                                 .kind = link.kind,
-                                                 .direction = link.direction,
-                                                 .area = descriptor->area,
-                                                 .radiusMeters =
-                                                     std::min(link.start.connectionRadiusMeters, link.end.connectionRadiusMeters)};
+                return true;
+            }
+
+            /** @brief Checks admitted directed duplicates against both independently retained acceptance tables. */
+            [[nodiscard]] bool IsDuplicate(const NavigationValidatedLink &candidate) {
                 for (const auto rows :
                      {std::span<const NavigationValidatedLink>{authored}, std::span<const NavigationValidatedLink>{suggestions}}) {
                     for (const auto &existing : rows) {
                         if (!work.Charge())
-                            return;
-                        if (Duplicates(accepted, existing)) {
-                            reject(DuplicateTraversal);
-                            return;
-                        }
+                            return false;
+                        if (Duplicates(candidate, existing))
+                            return true;
                     }
                 }
+                return false;
+            }
+
+            /** @brief Validates one complete candidate while keeping suggestion ownership separate from authored acceptance. */
+            void Candidate(const NavigationBakeLinkInput &link, const NavigationLinkAnchorId startAnchor = {},
+                           const NavigationLinkAnchorId endAnchor = {}, const float maximumDistance = std::numeric_limits<float>::max()) {
+                if (!work.Charge())
+                    return;
+                CandidateState candidate{.link = link,
+                                         .startAnchor = startAnchor,
+                                         .endAnchor = endAnchor,
+                                         .maximumDistance = maximumDistance};
+                if (!PrepareCandidate(candidate) || !ProjectCandidate(candidate) || !CheckTraversal(candidate) ||
+                    !CheckClearance(candidate))
+                    return;
+                const NavigationValidatedLink accepted{.authoredLink = link.id,
+                                                       .startAnchor = startAnchor,
+                                                       .endAnchor = endAnchor,
+                                                       .start = candidate.start,
+                                                       .end = candidate.end,
+                                                       .kind = link.kind,
+                                                       .direction = link.direction,
+                                                       .area = candidate.descriptor->area,
+                                                       .radiusMeters =
+                                                           std::min(link.start.connectionRadiusMeters, link.end.connectionRadiusMeters)};
+                if (IsDuplicate(accepted)) {
+                    Reject(candidate, NavigationLinkValidationRule::DuplicateTraversal);
+                    return;
+                }
+                if (work.failure)
+                    return;
                 if (link.id.IsValid())
                     authored.push_back(accepted);
                 else if (suggestions.size() < limits.maximumSuggestions)
@@ -344,6 +405,29 @@ namespace Horo::Navigation {
             return Result<void>::Success();
         }
 
+        /** @brief Admits one ordered stable anchor pair before shared candidate validation. */
+        [[nodiscard]] Result<void> ProposePair(Validation &validation, const NavigationLinkGenerationPolicy &policy,
+                                               const NavigationLinkGenerationAnchor &start, const NavigationLinkGenerationAnchor &end,
+                                               std::uint32_t &attempts, const float traversalCost) {
+            if (start.id == end.id || (policy.direction == NavigationLinkDirection::Bidirectional && end.id < start.id))
+                return Result<void>::Success();
+            if (!validation.work.Charge())
+                return Result<void>::Failure(*validation.work.failure);
+            if (++attempts > validation.limits.maximumPairAttempts)
+                return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCapacityExceeded));
+            if (start.endpoint.surface == end.endpoint.surface ||
+                Distance(start.endpoint.position, end.endpoint.position) > policy.maximumDistanceMeters)
+                return Result<void>::Success();
+            validation.Candidate({.profile = validation.context.profile,
+                                  .start = start.endpoint,
+                                  .end = end.endpoint,
+                                  .kind = policy.kind,
+                                  .direction = policy.direction,
+                                  .traversalCost = traversalCost},
+                                 start.id, end.id, policy.maximumDistanceMeters);
+            return validation.work.failure ? Result<void>::Failure(*validation.work.failure) : Result<void>::Success();
+        }
+
         /** @brief Generates all eligible ordered pairs with explicit fail-closed attempt/output/work bounds. */
         [[nodiscard]] Result<void> Generate(Validation &validation, const NavigationLinkGenerationPolicy &policy) {
             if (!ValidSemantics(policy.kind, policy.direction) || !std::isfinite(policy.maximumDistanceMeters) ||
@@ -357,33 +441,13 @@ namespace Horo::Navigation {
             std::ranges::sort(anchors, {}, &NavigationLinkGenerationAnchor::id);
             if (std::ranges::adjacent_find(anchors, {}, &NavigationLinkGenerationAnchor::id) != anchors.end())
                 return Result<void>::Failure(MakeError(NavigationErrors::DescriptorConflict));
+            const auto *descriptor = validation.descriptors[static_cast<std::size_t>(policy.kind)];
+            const float traversalCost = descriptor ? validation.areas.ResolveArea(descriptor->area).Value().traversalCost : 1.0F;
             std::uint32_t attempts{};
-            for (std::size_t start = 0; start < anchors.size(); ++start) {
-                for (std::size_t end = 0; end < anchors.size(); ++end) {
-                    if (start == end || (policy.direction == NavigationLinkDirection::Bidirectional && end < start))
-                        continue;
-                    if (!validation.work.Charge())
-                        return Result<void>::Failure(*validation.work.failure);
-                    if (++attempts > validation.limits.maximumPairAttempts)
-                        return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCapacityExceeded));
-                    if (anchors[start].endpoint.surface == anchors[end].endpoint.surface ||
-                        Distance(anchors[start].endpoint.position, anchors[end].endpoint.position) > policy.maximumDistanceMeters)
-                        continue;
-                    validation.Candidate({.profile = validation.context.profile,
-                                          .start = anchors[start].endpoint,
-                                          .end = anchors[end].endpoint,
-                                          .kind = policy.kind,
-                                          .direction = policy.direction,
-                                          .traversalCost =
-                                              validation.descriptors[static_cast<std::size_t>(policy.kind)]
-                                                  ? validation.areas
-                                                        .ResolveArea(validation.descriptors[static_cast<std::size_t>(policy.kind)]->area)
-                                                        .Value()
-                                                        .traversalCost
-                                                  : 1.0F},
-                                         anchors[start].id, anchors[end].id, policy.maximumDistanceMeters);
-                    if (validation.work.failure)
-                        return Result<void>::Failure(*validation.work.failure);
+            for (const auto &start : anchors) {
+                for (const auto &end : anchors) {
+                    if (const auto proposed = ProposePair(validation, policy, start, end, attempts, traversalCost); proposed.HasError())
+                        return proposed;
                 }
             }
             return Result<void>::Success();
@@ -405,10 +469,10 @@ namespace Horo::Navigation {
             if (ownedBytes > limits.maximumOwnedBytes)
                 return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCapacityExceeded));
             validation.remainingOwnedBytes = limits.maximumOwnedBytes - ownedBytes;
-            const std::uint64_t sortingWork =
-                authoredCount * (2 + std::bit_width(authoredCount)) + clearanceCount * (2 + std::bit_width(clearanceCount)) +
-                anchorCount * (2 + std::bit_width(anchorCount)) + descriptorCount + validation.input.Profiles().size();
-            if (!validation.work.Charge(sortingWork))
+            if (const std::uint64_t sortingWork =
+                    authoredCount * (2 + std::bit_width(authoredCount)) + clearanceCount * (2 + std::bit_width(clearanceCount)) +
+                    anchorCount * (2 + std::bit_width(anchorCount)) + descriptorCount + validation.input.Profiles().size();
+                !validation.work.Charge(sortingWork))
                 return Result<void>::Failure(*validation.work.failure);
             validation.authored.reserve(authoredCount);
             validation.suggestions.reserve(limits.maximumSuggestions);
@@ -417,178 +481,75 @@ namespace Horo::Navigation {
             return Result<void>::Success();
         }
 
-        /** @brief Fixed-width big-endian hashing excludes runtime handles and operation generation from the cook key. */
-        void HashU64(Sha256Builder &hash, const std::uint64_t value) noexcept {
-            std::array<std::byte, 8> bytes{};
-            for (std::size_t index = 0; index < bytes.size(); ++index)
-                bytes[index] = static_cast<std::byte>((value >> ((7 - index) * 8)) & 0xFFU);
-            static_cast<void>(hash.Update(bytes));
+        /** @brief Resolves immutable validation tables after complete count/work/storage admission. */
+        [[nodiscard]] Result<void> PrepareValidation(Validation &validation, const NavigationLinkValidationRequest &request) {
+            if (const auto storage = AdmitStorage(validation, request.authored.size(), request.descriptors.size(), request.clearance.size(),
+                                                  request.generation ? request.generation->anchors.size() : 0);
+                storage.HasError())
+                return storage;
+            const auto profiles = request.input.Profiles();
+            const auto profile = std::ranges::find(profiles, request.context.profile, &NavigationResolvedBakeProfile::id);
+            if (profile == profiles.end())
+                return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+            validation.profile = std::to_address(profile);
+            if (const auto descriptors = CaptureDescriptors(validation, request.descriptors); descriptors.HasError())
+                return descriptors;
+            return CaptureClearance(validation, request.clearance);
         }
 
-        /** @brief Canonical float hashing treats signed zero as one semantic value. */
-        void HashPoint(Sha256Builder &hash, const Math::Vec3 point) noexcept {
-            for (const float value : {point.x, point.y, point.z})
-                HashU64(hash, std::bit_cast<std::uint32_t>(value == 0.0F ? 0.0F : value));
-        }
-
-        /** @brief Adds portable link semantics and stable source identities to the cook dependency key. */
-        void HashLink(Sha256Builder &hash, const NavigationValidatedLink &link) noexcept {
-            HashU64(hash, link.authoredLink.Value());
-            HashU64(hash, link.startAnchor.Value());
-            HashU64(hash, link.endAnchor.Value());
-            HashU64(hash, link.start.surface.Value());
-            HashU64(hash, link.end.surface.Value());
-            HashPoint(hash, link.start.position);
-            HashPoint(hash, link.end.position);
-            HashU64(hash, link.start.provenance.polygonIndex);
-            HashU64(hash, link.end.provenance.polygonIndex);
-            HashU64(hash, static_cast<std::uint8_t>(link.kind));
-            HashU64(hash, static_cast<std::uint8_t>(link.direction));
-            HashU64(hash, link.area.Value());
-            HashU64(hash, std::bit_cast<std::uint32_t>(link.radiusMeters));
+        /** @brief Rejects every ambiguous authored identity and validates the remaining rows in stable identity order. */
+        void ValidateAuthored(Validation &validation, const std::span<const NavigationBakeLinkInput> authored) {
+            std::vector<NavigationBakeLinkInput> links{authored.begin(), authored.end()};
+            std::ranges::sort(links, {}, &NavigationBakeLinkInput::id);
+            for (std::size_t index = 0; index < links.size(); ++index) {
+                const auto &link = links[index];
+                if (!validation.work.Charge())
+                    break;
+                const bool duplicate =
+                    (index > 0 && links[index - 1].id == link.id) || (index + 1 < links.size() && links[index + 1].id == link.id);
+                if (!link.id.IsValid())
+                    validation.Reject(link, {}, {}, NavigationLinkValidationRule::Malformed);
+                else if (duplicate)
+                    validation.Reject(link, {}, {}, NavigationLinkValidationRule::DuplicateIdentity);
+                else
+                    validation.Candidate(link);
+            }
         }
     }  // namespace
 
     /** @copydoc NavigationLinkValidationSnapshot::Validate */
-    Result<NavigationLinkValidationSnapshot> NavigationLinkValidationSnapshot::Validate(
-        const NavigationBakeInputSnapshot &input, const NavigationAreaRegistry &areas, const NavigationLinkProjectionContext &context,
-        const INavigationQueryBackend &backend, const std::span<const NavigationBakeLinkInput> authored,
-        const std::span<const NavigationTraversalDescriptor> descriptors, const std::span<const NavigationLinkClearanceEvidence> clearance,
-        const std::optional<NavigationLinkGenerationPolicy> &generation, const CancellationToken &cancellation,
-        const NavigationLinkValidationLimits &limits) {
-        if (!ValidLimits(limits) || !context.profile.IsValid() || !context.world.IsValid() || !context.topology.IsValid() ||
+    Result<NavigationLinkValidationSnapshot> NavigationLinkValidationSnapshot::Validate(const NavigationLinkValidationRequest &request,
+                                                                                        const CancellationToken &cancellation) {
+        const auto &context = request.context;
+        if (!ValidLimits(request.limits) || !context.profile.IsValid() || !context.world.IsValid() || !context.topology.IsValid() ||
             context.requirement.query != NavigationQueryKind::NearestPoint || context.requirement.limits.maximumResultPoints != 1)
             return Result<NavigationLinkValidationSnapshot>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
-        const auto capabilities = backend.Capabilities();
-        const auto admitted = AdmitNavigationQuery(capabilities, capabilities.revision, context.requirement);
-        if (admitted.HasError())
+        const auto capabilities = request.backend.Capabilities();
+        if (const auto admitted = AdmitNavigationQuery(capabilities, capabilities.revision, context.requirement); admitted.HasError())
             return Result<NavigationLinkValidationSnapshot>::Failure(admitted.ErrorValue());
-        Validation validation{.input = input,
-                              .areas = areas,
+        Validation validation{.input = request.input,
+                              .areas = request.areas,
                               .context = context,
-                              .backend = backend,
-                              .limits = limits,
-                              .work = {.cancellation = cancellation, .remaining = limits.maximumWorkUnits}};
-        const auto storage =
-            AdmitStorage(validation, authored.size(), descriptors.size(), clearance.size(), generation ? generation->anchors.size() : 0);
-        if (storage.HasError())
-            return Result<NavigationLinkValidationSnapshot>::Failure(storage.ErrorValue());
-        const auto profiles = input.Profiles();
-        const auto profile = std::ranges::find(profiles, context.profile, &NavigationResolvedBakeProfile::id);
-        if (profile == profiles.end())
-            return Result<NavigationLinkValidationSnapshot>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
-        validation.profile = &*profile;
-        const auto descriptorCapture = CaptureDescriptors(validation, descriptors);
-        if (descriptorCapture.HasError())
-            return Result<NavigationLinkValidationSnapshot>::Failure(descriptorCapture.ErrorValue());
-        const auto clearanceCapture = CaptureClearance(validation, clearance);
-        if (clearanceCapture.HasError())
-            return Result<NavigationLinkValidationSnapshot>::Failure(clearanceCapture.ErrorValue());
-        std::vector<NavigationBakeLinkInput> links{authored.begin(), authored.end()};
-        std::ranges::sort(links, {}, &NavigationBakeLinkInput::id);
-        for (std::size_t index = 0; index < links.size(); ++index) {
-            const auto &link = links[index];
-            if (!validation.work.Charge())
-                break;
-            const bool duplicate =
-                (index > 0 && links[index - 1].id == link.id) || (index + 1 < links.size() && links[index + 1].id == link.id);
-            if (!link.id.IsValid())
-                validation.Reject(link, {}, {}, NavigationLinkValidationRule::Malformed);
-            else if (duplicate)
-                validation.Reject(link, {}, {}, NavigationLinkValidationRule::DuplicateIdentity);
-            else
-                validation.Candidate(link);
-        }
+                              .backend = request.backend,
+                              .limits = request.limits,
+                              .work = {.cancellation = cancellation, .remaining = request.limits.maximumWorkUnits}};
+        if (const auto prepared = PrepareValidation(validation, request); prepared.HasError())
+            return Result<NavigationLinkValidationSnapshot>::Failure(prepared.ErrorValue());
+        ValidateAuthored(validation, request.authored);
         if (validation.work.failure)
             return Result<NavigationLinkValidationSnapshot>::Failure(*validation.work.failure);
-        if (generation) {
-            const auto generated = Generate(validation, *generation);
-            if (generated.HasError())
+        if (request.generation) {
+            if (const auto generated = Generate(validation, *request.generation); generated.HasError())
                 return Result<NavigationLinkValidationSnapshot>::Failure(generated.ErrorValue());
         }
         if (!validation.work.Charge())
             return Result<NavigationLinkValidationSnapshot>::Failure(*validation.work.failure);
-        if (backend.Capabilities().revision != capabilities.revision)
+        if (request.backend.Capabilities().revision != capabilities.revision)
             return Result<NavigationLinkValidationSnapshot>::Failure(MakeError(NavigationErrors::CapabilityStale));
-        NavigationLinkValidationSnapshot snapshot{input, context};
+        NavigationLinkValidationSnapshot snapshot{request.input, context};
         snapshot.authored_ = std::move(validation.authored);
         snapshot.suggestions_ = std::move(validation.suggestions);
         snapshot.diagnostics_ = std::move(validation.diagnostics);
         return Result<NavigationLinkValidationSnapshot>::Success(std::move(snapshot));
-    }
-
-    NavigationLinkValidationSnapshot::NavigationLinkValidationSnapshot(const NavigationBakeInputSnapshot &input,
-                                                                       const NavigationLinkProjectionContext &context)
-        : revisions_(input.Revisions()), fingerprint_(input.Fingerprint()), context_(context) {}
-
-    /** @copydoc NavigationLinkValidationSnapshot::NavigationLinkValidationSnapshot */
-    NavigationLinkValidationSnapshot::NavigationLinkValidationSnapshot(NavigationLinkValidationSnapshot &&other) noexcept
-        : valid_(std::exchange(other.valid_, false)), revisions_(other.revisions_), fingerprint_(other.fingerprint_),
-          context_(other.context_), authored_(std::move(other.authored_)), suggestions_(std::move(other.suggestions_)),
-          diagnostics_(std::move(other.diagnostics_)) {}
-
-    /** @copydoc NavigationLinkValidationSnapshot::Authored */
-    std::span<const NavigationValidatedLink> NavigationLinkValidationSnapshot::Authored() const noexcept {
-        return authored_;
-    }
-
-    /** @copydoc NavigationLinkValidationSnapshot::Suggestions */
-    std::span<const NavigationValidatedLink> NavigationLinkValidationSnapshot::Suggestions() const noexcept {
-        return suggestions_;
-    }
-
-    /** @copydoc NavigationLinkValidationSnapshot::Diagnostics */
-    std::span<const NavigationLinkDiagnostic> NavigationLinkValidationSnapshot::Diagnostics() const noexcept {
-        return diagnostics_;
-    }
-
-    /** @copydoc NavigationLinkValidationSnapshot::PrepareCookedLinks */
-    Result<NavigationCookedLinkSet> NavigationLinkValidationSnapshot::PrepareCookedLinks(
-        const NavigationGeneratedLinkCookPolicy policy, const NavigationBakeInputSnapshot &input,
-        const NavigationBakeInputRevisions &currentRevisions, const std::span<const NavigationSourceObservation> currentSources,
-        const NavigationLinkProjectionContext &currentContext, const NavigationBakePublicationState state,
-        const CancellationToken &cancellation) const {
-        if (cancellation.IsCancellationRequested())
-            return Result<NavigationCookedLinkSet>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
-        if (!valid_ || policy < NavigationGeneratedLinkCookPolicy::AuthoredOnly || policy >= NavigationGeneratedLinkCookPolicy::Count)
-            return Result<NavigationCookedLinkSet>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
-        if (input.Revisions() != revisions_ || input.Fingerprint() != fingerprint_ || currentContext.profile != context_.profile ||
-            currentContext.world != context_.world || currentContext.topology != context_.topology)
-            return Result<NavigationCookedLinkSet>::Failure(MakeError(NavigationErrors::BakeInputStale));
-        const auto fresh = input.ValidatePublication(revisions_.requestGeneration, currentRevisions, currentSources, state);
-        if (fresh.HasError())
-            return Result<NavigationCookedLinkSet>::Failure(fresh.ErrorValue());
-        if (std::ranges::any_of(diagnostics_, [](const auto &row) {
-            return !row.startAnchor.IsValid();
-        }))
-            return Result<NavigationCookedLinkSet>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
-        NavigationCookedLinkSet output;
-        const bool includeSuggestions = policy == NavigationGeneratedLinkCookPolicy::IncludeValidatedSuggestions;
-        output.links.reserve(authored_.size() + (includeSuggestions ? suggestions_.size() : 0));
-        Sha256Builder hash;
-        HashU64(hash, 0x4e41564c494e4b01ULL);
-        static_cast<void>(hash.Update(std::as_bytes(std::span{fingerprint_.bytes})));
-        HashU64(hash, context_.profile.Value());
-        HashU64(hash, static_cast<std::uint8_t>(policy));
-        HashU64(hash, authored_.size() + (includeSuggestions ? suggestions_.size() : 0));
-        const auto append = [&](const std::span<const NavigationValidatedLink> rows) {
-            for (const auto &row : rows) {
-                output.links.push_back({.start = row.start.position,
-                                        .end = row.end.position,
-                                        .radiusMeters = row.radiusMeters,
-                                        .startPolygon = row.start.provenance.polygonIndex,
-                                        .endPolygon = row.end.provenance.polygonIndex,
-                                        .area = row.area,
-                                        .bidirectional = row.direction == NavigationLinkDirection::Bidirectional});
-                HashLink(hash, row);
-            }
-        };
-        append(authored_);
-        if (includeSuggestions)
-            append(suggestions_);
-        if (cancellation.IsCancellationRequested())
-            return Result<NavigationCookedLinkSet>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
-        output.fingerprint = hash.Finalize();
-        return Result<NavigationCookedLinkSet>::Success(std::move(output));
     }
 }  // namespace Horo::Navigation

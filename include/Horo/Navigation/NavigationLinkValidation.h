@@ -170,6 +170,23 @@ namespace Horo::Navigation {
         NavigationQueryRequirement requirement{.query = NavigationQueryKind::NearestPoint};
     };
 
+    /**
+     * @brief Complete immutable synchronous validation request; all borrows are pinned by the host through Validate.
+     * @details The backend serves the exact profile-specific built topology. The registry belongs to the captured area
+     * revision; authored endpoints are already canonical metres, and clearance observations match projected endpoints.
+     */
+    struct NavigationLinkValidationRequest final {
+        const NavigationBakeInputSnapshot &input; /**< Canonical input and exact source/revision fence. */
+        const NavigationAreaRegistry &areas;      /**< Registry pinned to input.Revisions().areaRegistry. */
+        const INavigationQueryBackend &backend;   /**< Immutable provider for the selected profile's exact built topology. */
+        NavigationLinkProjectionContext context;
+        std::span<const NavigationBakeLinkInput> authored;          /**< Enabled links in canonical metres; capture sorts by identity. */
+        std::span<const NavigationTraversalDescriptor> descriptors; /**< One available descriptor per kind and selected profile. */
+        std::span<const NavigationLinkClearanceEvidence> clearance; /**< Measurements for exact projected pairs and bake fingerprint. */
+        std::optional<NavigationLinkGenerationPolicy> generation;   /**< Omission performs no automatic generation. */
+        NavigationLinkValidationLimits limits;                      /**< Positive qualified count, work and owned-byte ceilings. */
+    };
+
     /** @brief Explicit authorization for generated links at cooked conversion; no implicit/default acceptance exists. */
     enum class NavigationGeneratedLinkCookPolicy : std::uint8_t {
         AuthoredOnly,
@@ -192,24 +209,12 @@ namespace Horo::Navigation {
 
         /**
          * @brief Validates authored links and optionally generates candidates in stable anchor identity order.
-         * @param input Immutable canonical bake input used for exact surface/profile and freshness validation.
-         * @param areas Exact captured area/filter registry; the host pins it to input.Revisions().areaRegistry.
-         * @param context Exact profile, world, topology and bounded projection requirement.
-         * @param backend Host-pinned immutable profile-specific query backend; borrowed only during this call.
-         * @param authored Enabled authored links in arbitrary identity order, already transformed to canonical metres.
-         * @param descriptors Available traversal descriptors; each kind has one authoritative entry for this profile.
-         * @param clearance Exact collision-owner clearance observations tied to input.Fingerprint().
-         * @param generation Optional declared generation policy; omission performs no generation.
+         * @param request Complete host-pinned canonical capture, projection, traversal, clearance and generation policy.
          * @param cancellation Cooperative cancellation, checked around each bounded provider call and work unit.
-         * @param limits Positive qualified count, work and owned-byte ceilings.
          * @return Owned acceptance/suggestion/diagnostic snapshot, or typed invalid, capacity, stale or cancelled error.
          */
-        [[nodiscard]] static Result<NavigationLinkValidationSnapshot> Validate(
-            const NavigationBakeInputSnapshot &input, const NavigationAreaRegistry &areas, const NavigationLinkProjectionContext &context,
-            const INavigationQueryBackend &backend, std::span<const NavigationBakeLinkInput> authored,
-            std::span<const NavigationTraversalDescriptor> descriptors, std::span<const NavigationLinkClearanceEvidence> clearance,
-            const std::optional<NavigationLinkGenerationPolicy> &generation, const CancellationToken &cancellation,
-            const NavigationLinkValidationLimits &limits = {});
+        [[nodiscard]] static Result<NavigationLinkValidationSnapshot> Validate(const NavigationLinkValidationRequest &request,
+                                                                               const CancellationToken &cancellation);
 
         /** @brief Returns accepted authored rows in link identity order. @return Owned immutable inspection view. */
         [[nodiscard]] std::span<const NavigationValidatedLink> Authored() const noexcept;
