@@ -2060,6 +2060,8 @@ add_library(HoroExtensions STATIC
         extensions/script/ScriptInvocationInternal.h
         extensions/script/ScriptInvocationRegistration.cpp
         extensions/script/ScriptInvocation.cpp
+        extensions/script/ScriptCapabilityContext.cpp
+        extensions/script/ScriptCapabilityContextInternal.h
         extensions/registry/ExtensionActivationState.cpp
         extensions/registry/EditorSurfaceContextErrors.cpp
         extensions/registry/EditorCommandErrors.cpp

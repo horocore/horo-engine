@@ -1511,3 +1511,41 @@ snapshot-pinned importer again, and performs an identity-preserving reimport.
 - [ADR-131: Platform Services Closed SDK, Extension ABI, Package and Composition Boundary](../../adr/131-platform-services-closed-sdk-extension-abi-package-and-composition-boundary.md)
 - [MCP Architecture](../interfaces/mcp-architecture.md)
 - [Horo Package System](../packages/package-system.md): game and hybrid packages that may declare editor extensions
+
+## Script Capability Context Implementation
+
+`Horo/Extensions/ScriptCapabilityContext.h` belongs to `Extensions`. Host composition
+creates a shared invocation registry, explicit project/runtime/scene/operation scopes,
+and immutable script context evidence. Context creation intersects the package envelope,
+script approval, project policy and context allowlist with activation-scoped module
+capability grants. Required imports resolve to exact validated descriptor snapshots and
+same-major version ranges before any binding is published. Each import carries an explicit
+approved operation allowlist; an empty list grants no calls. Tooling and gameplay profile
+compatibility is explicit; gameplay requires both runtime and scene scopes.
+
+Runtime adapters receive only `ScriptCapabilityBinding` values. The lower-level
+`ScriptInvocationRegistry` remains a host scheduling primitive and must never be
+published as a script API. Binding calls install the resolved API generation and bounded
+package/module/script/API/policy/operation identity; source, arguments and secrets are
+excluded from that diagnostic record. Controllers retain that identity through progress,
+terminal events and polling snapshots, including cancellation. Provider adapters derive
+`Telemetry::OperationContext` from the invocation diagnostic record and explicitly bind it
+on worker threads with `Telemetry::ScopedOperationContext`; ordinary provider logs then
+inherit only the curated package/module/script/API/policy/operation identity fields.
+
+Bindings also retain a lease to the exact invocation-provider registration; resetting that
+registration cannot be bypassed by reusing its generation number for a replacement.
+Scope teardown and module admission revocation close later binding calls. In-flight
+context-owned work follows the existing cancel policy: host polling, provider progress,
+cancellation observation or completion detects expired authority, requests cooperative
+cancellation and terminalizes once. Context destruction revokes delivery before cancelling
+work. Scope-expired context drains revoke delivery rather than calling a dead runtime.
+The host retains provider code until its cooperative work has joined; cancellation of a
+result alone does not prove native code quiescence. Durable detached operations are not
+admitted by this context-owned boundary.
+
+This is an additive host API. Existing invocation-registry callers keep their scheduling
+contract; module import adapters migrate to `ScriptCapabilityContext::Create`, `Bind`
+and binding `Begin`. No runtime adapter may treat the low-level registration API as an
+alternative permission authority. Public consumer coverage verifies the new header through
+the owning target's staged include boundary.

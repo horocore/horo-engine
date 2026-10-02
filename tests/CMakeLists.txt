@@ -2654,6 +2654,7 @@ add_test(NAME HoroBackendOperationRegistryTests COMMAND HoroBackendOperationRegi
 add_executable(HoroScriptInvocationTests
         unit/extensions/ScriptValueTests.cpp
         unit/extensions/ScriptInvocationTests.cpp
+        unit/extensions/ScriptCapabilityContextTests.cpp
 )
 target_compile_features(HoroScriptInvocationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroScriptInvocationTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
@@ -3055,3 +3056,9 @@ if (HORO_ENABLE_GPU_SMOKE_TESTS)
         )
     endif ()
 endif ()
+
+add_executable(HoroScriptCapabilityPublicHeaderConsumer support/ScriptCapabilityPublicHeaderConsumer.cpp)
+target_compile_features(HoroScriptCapabilityPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroScriptCapabilityPublicHeaderConsumer PRIVATE HoroEngine::Extensions)
+add_test(NAME HoroScriptCapabilityPublicHeaderConsumer COMMAND HoroScriptCapabilityPublicHeaderConsumer)
+set_tests_properties(HoroScriptCapabilityPublicHeaderConsumer PROPERTIES LABELS "unit;extensions;headless")
