@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Horo/Foundation/BorrowedCallbackContext.h"
+
 /**
  * @file SequenceEvaluation.h
  * @brief Deterministic bounded per-frame sequence evaluation pipeline.
@@ -107,16 +109,19 @@ namespace Horo::Cinematic {
         constexpr auto operator<=>(const SequenceFrameCameraCutRequest &) const noexcept = default;
     };
 
-    using SequenceEventOccurrenceHook = void (*)(void *context, const SequenceFrameEventOccurrence &occurrence) noexcept;
+    using SequenceEventStageHook = Result<void> (*)(const BorrowedCallbackContext &context,
+                                                    std::span<const SequenceFrameEventOccurrence> occurrences);
     using SequenceCameraCutHook = void (*)(void *context, const SequenceFrameCameraCutRequest &request) noexcept;
     using SequenceFinishedHook = void (*)(void *context, const SequencePlayerHandle &player) noexcept;
 
-    /** @brief Typed destination hooks injected by the owning runtime composition. The finished hook is invoked by the runtime
+    /** @brief Typed owner hooks injected by runtime composition. The event stage hook reserves the complete batch before
+     * cursor commit; its owner must publish only after the source tick commits and abort staged events on tick failure.
+     * The finished hook is invoked by the runtime
      * service only after a Once player naturally reaches its directional end and becomes Stopped. Infinite Loop and PingPong
      * players never finish; explicit stop, cancellation, failure, and owner shutdown do not invoke it. */
     struct SequenceFrameHooks final {
-        void *eventContext{};
-        SequenceEventOccurrenceHook eventHook{};
+        BorrowedCallbackContext eventContext;
+        SequenceEventStageHook eventStage{};
         void *cameraContext{};
         SequenceCameraCutHook cameraHook{};
         void *finishedContext{};
@@ -214,7 +219,7 @@ namespace Horo::Cinematic {
          * @param sourceDelta Non-negative exact source-clock delta before playback-rate scaling.
          * @param cursor Session-owned cursor synchronized to player.controlRevision.
          * @param scratch Caller-owned output capacity retained until hooks return.
-         * @param hooks Typed event and camera owner seams; required only when corresponding keys cross.
+         * @param hooks Typed event staging and camera owner seams; required only when corresponding keys cross.
          * @return Committed evaluation result or a typed all-or-none failure.
          */
         [[nodiscard]] Result<SequenceFrameEvaluationResult> Evaluate(const SequencePlayerSnapshot &player, SequenceTime sourceDelta,
@@ -229,6 +234,8 @@ namespace Horo::Cinematic {
         [[nodiscard]] SequenceTime Duration() const noexcept;
         /** @brief Returns immutable event-key count. @return Number of compiled event keys. */
         [[nodiscard]] std::size_t EventCount() const noexcept;
+        /** @brief Returns immutable canonical event keys for activation-time binding validation. @return Borrowed keys. */
+        [[nodiscard]] std::span<const SequenceFrameEventKey> EventKeys() const noexcept;
         /** @brief Returns immutable camera-cut count. @return Number of compiled camera keys. */
         [[nodiscard]] std::size_t CameraCutCount() const noexcept;
         /** @brief Returns the activation loop policy. @return Once, Loop, or PingPong. */
@@ -237,6 +244,15 @@ namespace Horo::Cinematic {
         [[nodiscard]] std::size_t MaximumLoopCrossings() const noexcept;
 
     private:
+        friend class CinematicRuntimeService;
+        /** @brief Prepares outputs on a detached cursor; only owner publication applies values and camera requests. */
+        [[nodiscard]] Result<SequenceFrameEvaluationResult> EvaluatePrepared(const SequencePlayerSnapshot &player, SequenceTime sourceDelta,
+                                                                             SequenceFrameCursor &cursor,
+                                                                             const SequenceFrameScratch &scratch,
+                                                                             const SequenceFrameHooks &hooks, bool publish) const;
+        /** @brief Applies previously validated owner outputs at successful aggregate tick commit. */
+        void PublishPrepared(const SequenceFrameScratch &scratch, const SequenceFrameHooks &hooks,
+                             const SequenceFrameEvaluationResult &result) const noexcept;
         SequenceFrameEvaluationPlan(SequenceTime duration, SequenceLoopMode loopMode, std::size_t maximumLoopCrossings,
                                     std::vector<SequenceFrameTrackDescriptor> tracks, std::vector<SequenceFrameEventKey> events,
                                     std::vector<SequenceFrameCameraCutKey> cameraCuts) noexcept;

@@ -30,12 +30,12 @@ namespace Horo::Gameplay {
 
     /** @copydoc LoadedGameModule::Registry */
     const BehaviorRegistry &LoadedGameModule::Registry() const noexcept {
-        return *impl_->registry;
+        return *impl_->registries.registry;
     }
 
     /** @copydoc LoadedGameModule::ContributeBehaviorsTo */
     Result<void> LoadedGameModule::ContributeBehaviorsTo(BehaviorRegistry &destination) const {
-        for (const BehaviorRegistration &registration : impl_->registry->Registrations()) {
+        for (const BehaviorRegistration &registration : impl_->registries.registry->Registrations()) {
             if (Result<void> contributed = destination.Register(registration); contributed.HasError())
                 return contributed;
         }
@@ -45,27 +45,32 @@ namespace Horo::Gameplay {
 
     /** @copydoc LoadedGameModule::Components */
     const ComponentRegistry &LoadedGameModule::Components() const noexcept {
-        return *impl_->components;
+        return *impl_->registries.components;
     }
 
     /** @copydoc LoadedGameModule::AssetTypes */
     const GameAssetTypeRegistry &LoadedGameModule::AssetTypes() const noexcept {
-        return *impl_->assetTypes;
+        return *impl_->registries.assetTypes;
     }
 
     /** @copydoc LoadedGameModule::Services */
     const GameServiceRegistry &LoadedGameModule::Services() const noexcept {
-        return *impl_->services;
+        return *impl_->registries.services;
     }
 
     /** @copydoc LoadedGameModule::Systems */
     const SystemRegistry &LoadedGameModule::Systems() const noexcept {
-        return *impl_->systems;
+        return *impl_->registries.systems;
     }
 
     /** @copydoc LoadedGameModule::Replication */
     const ReplicationRegistrationRegistry &LoadedGameModule::Replication() const noexcept {
-        return *impl_->replication;
+        return *impl_->registries.replication;
+    }
+
+    /** @copydoc LoadedGameModule::Events */
+    const GameEventRegistry &LoadedGameModule::Events() const noexcept {
+        return *impl_->registries.events;
     }
 
     /** @copydoc LoadedGameModule::ActiveServices */

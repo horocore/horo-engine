@@ -57,9 +57,10 @@ namespace Horo::Cinematic {
             return true;
         }
 
-        /** @brief Counts synchronous event delivery during repeated cancellation. */
-        void CountEvent(void *context, const SequenceFrameEventOccurrence &) noexcept {
-            ++*static_cast<std::size_t *>(context);
+        /** @brief Counts event staging during repeated cancellation. */
+        Result<void> CountEvent(const BorrowedCallbackContext &context, const std::span<const SequenceFrameEventOccurrence> events) {
+            *context.Get<std::size_t>() += events.size();
+            return Result<void>::Success();
         }
 
         struct CoordinationProbe final {

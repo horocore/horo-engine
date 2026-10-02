@@ -582,6 +582,15 @@ namespace Horo::Cinematic {
         [[nodiscard]] std::size_t ActivePlayerCount() const noexcept;
 
     private:
+        friend class CinematicEventSession;
+        /** @brief Prepares a detached frame without publishing player state, values, camera, or completion. */
+        [[nodiscard]] Result<SequenceFrameEvaluationResult> PrepareEventFrame(const SequencePlayerHandle &handle, SequenceTime delta,
+                                                                              SequenceFrameCursor &cursor, SequenceFrameScratch &scratch,
+                                                                              const SequenceFrameHooks &hooks);
+        /** @brief Publishes a fence-validated staged frame at successful aggregate commit. */
+        void PublishEventFrame(const SequencePlayerHandle &handle, const SequenceFrameCursor &cursor, const SequenceFrameScratch &scratch,
+                               const SequenceFrameHooks &hooks, const SequenceFrameEvaluationResult &result);
+
         struct Instance final {
             SequencePlayer player;
             SequenceFrameEvaluationPlan plan;

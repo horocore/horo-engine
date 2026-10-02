@@ -313,7 +313,13 @@ namespace Horo::Cinematic {
         auto cursor = MakeSequenceFrameCursor(instance.player.Snapshot(), resetPolicy);
         if (cursor.HasError())
             return Result<void>::Failure(cursor.ErrorValue());
-        instance.cursor = std::move(cursor).Value();
+        auto synchronized = std::move(cursor).Value();
+        if (instance.cursor.eventCursorInitialized || instance.cursor.evaluationRevision > 1) {
+            if (instance.cursor.traversal == std::numeric_limits<std::uint64_t>::max())
+                return Failed<void>(SequencePlaybackRuntimeErrors::RevisionExhausted);
+            synchronized.traversal = instance.cursor.traversal + 1;
+        }
+        instance.cursor = synchronized;
         return Result<void>::Success();
     }
 

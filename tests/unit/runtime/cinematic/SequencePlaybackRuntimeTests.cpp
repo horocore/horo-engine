@@ -93,9 +93,11 @@ namespace Horo::Cinematic {
             SequencePlaybackState stateAtFinish{SequencePlaybackState::Ready};
         };
 
-        void OnPlaybackEvent(void *context, const SequenceFrameEventOccurrence &event) noexcept {
-            auto &probe = *static_cast<PlaybackProbe *>(context);
-            probe.events[probe.eventCount++] = event;
+        Result<void> OnPlaybackEvent(const BorrowedCallbackContext &context, const std::span<const SequenceFrameEventOccurrence> events) {
+            auto &probe = *context.Get<PlaybackProbe>();
+            for (const SequenceFrameEventOccurrence &event : events)
+                probe.events[probe.eventCount++] = event;
+            return Result<void>::Success();
         }
 
         void OnPlaybackFinished(void *context, const SequencePlayerHandle &handle) noexcept {
