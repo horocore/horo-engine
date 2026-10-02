@@ -542,11 +542,12 @@ add_executable(HoroAITests
         unit/runtime/ai/EnvironmentQueryContextTests.cpp
         unit/runtime/ai/NullAIRuntimeTests.cpp
         unit/runtime/ai/PerceptionDescriptorRegistryTests.cpp
+        unit/runtime/ai/PerceptionEventRoutingTests.cpp
         unit/runtime/ai/PerceptionMemoryTests.cpp
         unit/runtime/ai/PerceptionSpatialBroadphaseTests.cpp
 )
 target_compile_features(HoroAITests PRIVATE cxx_std_20)
-target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneIntegration)
+target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneIntegration HoroEngine::GameplayPerceptionIntegration)
 horo_register_catch_test(HoroAITests LABELS "unit;ai;headless")
 
 add_executable(HoroAnimationApiTests

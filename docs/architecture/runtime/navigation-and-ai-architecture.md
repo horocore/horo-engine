@@ -912,7 +912,7 @@ query seam:
 | **Hearing** | Periodic time-sliced / stimulus queue drain | `PerceptionManager` + `AudioStimulusEmitter` | Distance attenuation + optional `PhysicsWorld` acoustic obstruction raycast | Acoustic detection of footsteps, gunshots, explosions, and environmental noise |
 | **Damage** | Event-driven (immediate on hit) | `HealthSystem` / `CombatSystem` | Direct gameplay event carrying instigator entity, damage amount, and hit direction | Detection of inflicted harm, alerting agent to attacker identity/direction |
 | **Touch** | Event-driven (fixed physics tick) | `PhysicsWorld` collision dispatcher | Contact manifolds and trigger overlap events | Immediate awareness of physical contact, collisions, and proximity penetration |
-| **Team** | Event-driven affiliation/distress updates plus periodic awareness broadcast | `TeamPerceptionRelay` | Squad/faction registry and communication radius or radio channel | Shared squad awareness, target spotting distribution, and distress alerts |
+| **Team** | Event-driven, after Gameplay authorizes one delivery | Gameplay/squad system | Exact recipient, sender and subject generations plus disclosure and perception-filter admission | Transient per-agent memory of an already delivered message |
 
 ```cpp
 enum class AISense : uint8_t {
@@ -978,11 +978,37 @@ struct StimulusEvent {
      sensory range before detailed LOS physics traces, avoiding all-entity scans
      per listener; a future shared Scene spatial index may supply the same seam.
 3. **Team Dispatch Split**:
-   - Membership, faction, direct distress, and explicit target-spot events wake or
-     invalidate affected agents immediately.
-   - Periodic relay ticks share selected, already-committed perception facts among
-     eligible teammates under bounded range/fan-out budgets. They do not read
-     another agent's mutable in-progress sense evaluation.
+   - Gameplay/squad systems own team membership, communication topology, recipient
+     selection, delivery permission, network disclosure and durable squad knowledge.
+   - The host-composed `Gameplay::PerceptionEventSource` copies a bounded batch of
+     committed producer deliveries and their exact recipient/filter decisions.
+     It obtains the world role from the live `NetworkModeComposition`, never an
+     event field, and admits only Standalone or AuthorityServer worlds under
+     ADR-022. Every delivery revalidates that host role, the active AI publication,
+     the recipient's Perception capability, and current source/sender generations.
+     AI and RuntimeScene incarnations remain separate domains. Only this source
+     can create the synchronous proof used by `RouteGameplayPerceptionEvent`.
+     Neither the source nor the route discovers teammates or relays memory.
+   - Memory retains only transient position and weak, generation-fenced subject
+     and sender provenance. The source system remains read-only to senses.
+
+The value records and route belong to `HoroAI`; the host adapter belongs to the
+separate `HoroGameplayPerceptionIntegration` target, depending one-way on
+`HoroAISceneIntegration` and `HoroNetworkRuntime`. Its bounded capture allocates
+only for the owned producer batch; delivery does not allocate or invoke source
+system callbacks. Borrowed Scene, AI, host and registry owners outlive the sensing
+window, which must close before replacement or teardown. Producer filters are
+frozen for that window; policy changes close it and capture a new producer batch.
+Durable squad knowledge never enters this adapter or its transient memories.
+
+Migration: `AIPerceptionMemory::Observe` remains available for sight, hearing and
+other sense kernels, but rejects the built-in Team sense or Team stimulus identity.
+Team producers use the captured Gameplay delivery path. The caller audit found
+only memory regression tests and the new route using `Observe`, with no existing
+production team producer to migrate. Health/combat and squad producer systems and
+a complete PerceptionManager do not yet exist in this checkout; this integration
+consumes their typed committed output at the explicit host boundary, without
+implementing gameplay communication, topology or network transport.
 
 ### Update Policies And Time-Sliced Budgets
 
