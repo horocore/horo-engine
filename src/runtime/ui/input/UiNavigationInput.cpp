@@ -137,6 +137,16 @@ namespace Horo::Runtime::Ui {
             return Result<Glyphs>::Success(glyphs);
         }
 
+        /** @brief Resolves the complete effective digital-action glyph capability at composition time. */
+        Result<std::array<std::optional<Input::InputGlyphId>, 2>> EffectiveDigitalGlyphs(const Input::InputRouter &router,
+                                                                                         const Input::InputContextToken &context,
+                                                                                         const Input::ActionId &id) {
+            const auto bindings = EffectiveBindings(router, context, id, Input::ActionValueType::Digital);
+            if (bindings.HasError())
+                return Result<std::array<std::optional<Input::InputGlyphId>, 2>>::Failure(bindings.ErrorValue());
+            return DigitalGlyphs(bindings.Value());
+        }
+
         /** @brief Requires post-noise-filter signed canonical evidence for both navigation axis components. */
         Result<void> ValidateAxisBindings(const std::span<const Input::InputBinding> bindings) {
             std::array<bool, 2> components{};
@@ -177,10 +187,7 @@ namespace Horo::Runtime::Ui {
         candidate.modal_ = focus.Snapshot().Value().activeModal;
         candidate.disarmed_.fill(true);
         for (std::size_t index = 0; index < UiNavigationActionCount; ++index) {
-            const auto bindings = EffectiveBindings(router, context, descriptor.actions[index], Input::ActionValueType::Digital);
-            if (bindings.HasError())
-                return Result<UiNavigationInput>::Failure(bindings.ErrorValue());
-            const auto glyphs = DigitalGlyphs(bindings.Value());
+            const auto glyphs = EffectiveDigitalGlyphs(router, context, descriptor.actions[index]);
             if (glyphs.HasError())
                 return Result<UiNavigationInput>::Failure(glyphs.ErrorValue());
             candidate.glyphs_[index] = glyphs.Value();

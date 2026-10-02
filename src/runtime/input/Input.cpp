@@ -1119,15 +1119,16 @@ namespace Horo::Input {
         template <typename ImplType>
         [[nodiscard]] BindingEvaluationResult EvaluateControlBinding(const InputBinding &binding, const RawInputSnapshot &snapshot,
                                                                      const std::optional<PlayerId> player, ImplType &impl) {
+            using enum BindingControlKind;
             switch (binding.kind) {
-                case BindingControlKind::Key:
+                case Key:
                     return EvaluateDigital(snapshot.State(binding.key), impl.consumedKeys, Index(binding.key));
-                case BindingControlKind::PointerButton:
+                case PointerButton:
                     return EvaluateDigital(snapshot.State(binding.pointerButton), impl.consumedPointerButtons,
                                            Index(binding.pointerButton));
-                case BindingControlKind::PointerWheelX:
+                case PointerWheelX:
                     return EvaluateWheel(snapshot.pointer.wheelX, impl.consumedWheelX);
-                case BindingControlKind::PointerWheelY:
+                case PointerWheelY:
                     return EvaluateWheel(snapshot.pointer.wheelY, impl.consumedWheelY);
                 default: {
                     return EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments, player,

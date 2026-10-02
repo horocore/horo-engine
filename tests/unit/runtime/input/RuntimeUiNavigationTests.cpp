@@ -140,11 +140,11 @@ namespace Horo::Runtime::Ui {
             CHECK(create(descriptor).HasError());
             auto profile = fixture.input.Router().Profile();
             std::vector<Input::InputBinding> bindings;
-            for (std::size_t key = static_cast<std::size_t>(Input::Key::A); key < static_cast<std::size_t>(Input::Key::A) + 33; ++key) {
+            for (auto key = static_cast<std::size_t>(Input::Key::A); key < static_cast<std::size_t>(Input::Key::A) + 33; ++key) {
                 auto &binding = bindings.emplace_back();
                 binding.key = static_cast<Input::Key>(key);
             }
-            profile.overrides.push_back({fixture.descriptor.actions[0], bindings});
+            profile.overrides.emplace_back(fixture.descriptor.actions[0], bindings);
             REQUIRE(fixture.input.Router().SetProfile(profile).HasValue());
             const auto overflow = create(fixture.descriptor);
             REQUIRE(overflow.HasError());
