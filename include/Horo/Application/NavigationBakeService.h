@@ -4,6 +4,7 @@
  * @brief Host-composed incremental navigation cooking with bounded latest-request ownership.
  */
 
+#include "Horo/Application/NavigationBakeDiagnostics.h"
 #include "Horo/Assets/AssetCookOutput.h"
 #include "Horo/Navigation/NavigationBakeJobs.h"
 #include "Horo/Navigation/NavigationTileArtifact.h"
@@ -23,6 +24,8 @@ namespace Horo::Application {
         Assets::AssetCookLimits cookLimits;
         std::size_t maximumTiles{1024};
         std::size_t maximumCandidateBytes{64U * 1024U * 1024U};
+        std::shared_ptr<NavigationBakeDiagnostics>
+            diagnostics; /**< Project-owned retained output/history consumer shared by bake entry points. */
     };
 
     /** @brief Complete owned capture; each submission replaces the entire definition tile closure. */
@@ -32,6 +35,8 @@ namespace Horo::Application {
         std::vector<Navigation::NavigationBakeTile> tiles;
         std::vector<Navigation::NavigationSourceObservation> sources; /**< Complete current authoritative source observations. */
         CancellationToken cancellation;
+        std::vector<NavigationDiagnosticSource>
+            diagnosticSources; /**< Host-resolved authored ownership for the captured source observations. */
     };
 
     /** @brief Last successfully published immutable generation; retained readers survive subsequent submissions. */

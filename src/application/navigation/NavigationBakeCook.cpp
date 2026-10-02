@@ -169,8 +169,10 @@ namespace Horo::Application::NavigationBakeDetail {
                 if (cancel.IsCancellationRequested())
                     return Failure<void>(NavigationErrors::BakeInputCancelled);
                 auto resolved = ResolveTile(state.config, previous, prepared, cancel, *attempt.candidate);
-                if (resolved.HasError())
+                if (resolved.HasError()) {
+                    ReportTileFailure(state, attempt, prepared, resolved.ErrorValue());
                     return Result<void>::Failure(resolved.ErrorValue());
+                }
                 auto tile = std::move(resolved).Value();
                 if (tile->Bytes().size() > state.config.maximumCandidateBytes - bytes ||
                     !TopologyWithinLimits(tile->Topology(), state.config.tileLimits))
@@ -240,7 +242,10 @@ namespace Horo::Application::NavigationBakeDetail {
         NavigationBakeJobDescriptor descriptor{.title = "Incremental navigation bake",
                                                .budget = state->config.budget,
                                                .parentCancellation = attempt->cancellation->Token(),
-                                               .queuedOperation = attempt->operation};
+                                               .queuedOperation = attempt->operation,
+                                               .observe = [diagnostics = state->config.diagnostics](const auto &snapshot) noexcept {
+            ObserveBake(diagnostics, snapshot);
+        }};
         descriptor.work = {{.stage = NavigationBakeJobStage::PartitionGather,
                             .workUnits = gathering,
                             .residentBytes = resident,
