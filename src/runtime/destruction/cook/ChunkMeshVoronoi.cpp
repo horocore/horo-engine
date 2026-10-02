@@ -74,6 +74,8 @@ namespace Horo::Destruction {
             }
             if (output.vertices.empty())
                 return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInput));
+            if (auto collision = AppendCollisionPieces(chunk.collisionPieces, context.budget, output); collision.HasError())
+                return collision;
             SetMeshBounds(output);
             artifact.chunks.push_back(std::move(output));
             return Result<void>::Success();

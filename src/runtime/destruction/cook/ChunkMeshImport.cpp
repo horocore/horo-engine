@@ -136,6 +136,19 @@ namespace Horo::Destruction {
                 return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInput));
             for (std::size_t axis = 0; axis < 3; ++axis)
                 output.mass.firstMoment[axis] = mass.weightedCenter[axis] / 24.0;
+            if (!context.budget.Charge(sizeof(ChunkCollisionPiece) + chunk.positions.size() * sizeof(chunk.positions.front()) +
+                                           triangleCount * sizeof(std::array<std::uint32_t, 3>),
+                                       chunk.positions.size() + triangleCount))
+                return Result<void>::Failure(MakeError(ChunkMeshCookErrors::LimitExceeded));
+            ChunkCollisionPiece piece;
+            piece.positions = chunk.positions;
+            piece.volume = output.mass.volume;
+            piece.triangles.reserve(triangleCount);
+            for (std::size_t offset = 0; offset < chunk.triangleIndices.size(); offset += 3)
+                piece.triangles.push_back(
+                    {chunk.triangleIndices[offset], chunk.triangleIndices[offset + 1], chunk.triangleIndices[offset + 2]});
+            piece.id = PieceIdentity(piece);
+            output.collisionPieces.push_back(std::move(piece));
             SetMeshBounds(output);
             artifact.chunks.push_back(std::move(output));
             return Result<void>::Success();
