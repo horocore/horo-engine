@@ -122,6 +122,56 @@ manifest and may produce delta packages. Delta packages are optimization only:
 the updater must be able to fall back to the full package when delta validation
 or application fails.
 
+Signed update manifest schema v2 adds delta ZIP records separately from the
+standalone full packages. Each delta record identifies its allowed full package
+and binds the exact base, patch, and full target file inventories by digest.
+Schema v1 remains the canonical encoding when no deltas are present. The
+`DeltaZipArchive` format is admitted on supported update hosts only as a delta
+record; full-package discovery and installation activation reject it as a
+standalone product. `SelectUpdatePackageCandidates` authenticates the manifest
+and returns the allowed full package together with an optional delta matching
+the verified installed base inventory. An unknown base yields the full package.
+`PlanUpdatePackageAttempt` bounds delivery to an applicable delta attempt followed
+by its signed full-package fallback; a failed full package ends the sequence.
+
+`PlanUpdateFileDelta` compares the complete base, candidate, and delta file
+inventories against their authenticated canonical digests. The patch inventory
+contains exactly the changed and new files plus the required executable
+entrypoint when its bytes are unchanged; deleted files are absent from the
+candidate inventory. Executable mode and entrypoint role are part of file
+identity. `StageVerifiedDeltaZipUpdate` verifies the signed
+download and extracts the patch into a private tree without publishing a ready
+marker. `ReconstructUpdateFileDeltaStage` revalidates the
+plan, verifies both quiescent source trees, copies into a new private directory,
+and verifies its exact full target inventory. Failure or cancellation removes
+only that newly created directory. It does not publish a ready marker or grant
+activation authority. For a ZIP target produced by the deterministic full-ZIP
+producer, `RepackVerifiedDeltaAsFullZip` recreates the complete package from
+that verified tree. It compares the exact resulting size and digest with the
+allowed signed full package, verifies its publisher signature, and only then
+publishes the existing complete-package ready marker. Existing activation,
+rollback, and retention use this normal full-package evidence. A byte mismatch
+cannot be re-signed locally; `PrepareSelectedZipUpdateStageHttps` discards its
+owned reconstruction and downloads the signed allowed full ZIP instead. The
+same worker falls back after an inapplicable or failed delta, but cancellation
+and uncertain cleanup stop the attempt. Its target inventory must match the
+digest in authenticated delta metadata. Other full-package formats retain their
+ordinary complete-package delivery path. No partial delta ZIP may be activated.
+Schema-v1 readers must not reinterpret v2 delta metadata as v1.
+
+`ResolveAssetChunkMountOrder` checks an exact optional/DLC selection against a
+verified base-manifest digest, dependency closure, and dependency-first mount
+priority. `PlanAssetChunkRemoval` rejects removal that would strand an installed
+dependent. Both are admission plans; the package lifecycle owns verified
+archive leases, mount/unmount, and transactional removal under its update
+contract. `AssetArchiveProvider::OpenSelected` checks that every encoded chunk
+definition matches the authenticated release plan and exposes assets from only
+the selected, dependency-closed chunks. It rejects wrong base identity, missing
+dependencies, modified archive bytes, or plan drift before exposing any asset.
+The host verifies package signatures first and owns provider replacement and
+unmount; none of these admission operations grants package trust or mutates
+project files.
+
 A DLC or optional content package must never replace base-game files implicitly.
 It is mounted through the runtime asset-provider contract and validated against
 the same manifest, signature, compatibility, and chunk dependency rules as the
@@ -345,6 +395,12 @@ exclusive maintenance gate on the installation's `.product-launch.lock` file.
 On POSIX, a lease closes its descriptor without an explicit `LOCK_UN`: descriptors
 inherited through `fork` or duplicated for a bounded probe share one lock, and
 closing one reference must not release the remaining process's gate.
+The platform process runner accepts a borrowed exclusive maintenance lease for
+one bounded probe. It transfers only a duplicate of that OS capability, using
+an explicit Windows handle allowlist or one POSIX descriptor action. The child
+may adopt it only after matching the native file identity to the installation
+lock; the environment carries the descriptor number, never authority by itself.
+The ordinary product launch path must still obtain a shared lease.
 An installed product launcher retains a shared lease for its entire process
 lifetime. Bootstrap, repair, uninstall, and update activation retain the
 exclusive gate after requesting product shutdown and before mutating the active

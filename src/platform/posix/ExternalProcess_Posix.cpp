@@ -2,6 +2,7 @@
 #define _GNU_SOURCE
 #endif
 
+#include "Horo/Foundation/Platform.h"
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Platform/PlatformErrors.h"
 
@@ -12,6 +13,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <map>
+#include <optional>
 #include <poll.h>
 #include <span>
 #include <spawn.h>
@@ -70,7 +72,7 @@ namespace Horo {
             bool truncated_{false};
         };
 
-        [[nodiscard]] std::vector<std::string> BuildEnvironment(const ProcessEnvironment &overlay) {
+        [[nodiscard]] std::vector<std::string> BuildEnvironment(const ProcessEnvironment &overlay, const bool probeLease) {
             std::map<std::string, std::string, std::less<>> values;
             if (overlay.base == ProcessEnvironmentBase::InheritWithOverrides) {
                 for (char **entry = environ; entry != nullptr && *entry != nullptr; ++entry) {
@@ -84,6 +86,9 @@ namespace Horo {
                 values.erase(name);
             for (const ProcessEnvironmentAssignment &assignment : overlay.set)
                 values[assignment.name] = assignment.value;
+            values.erase("HORO_PRODUCT_PROBE_LEASE");
+            if (probeLease)
+                values["HORO_PRODUCT_PROBE_LEASE"] = "3";
             std::vector<std::string> result;
             result.reserve(values.size());
             for (const auto &[name, value] : values)
@@ -113,8 +118,29 @@ namespace Horo {
             }
         }
 
+        /** @brief Adds the sole maintenance descriptor to the child file actions. */
+        void AddProbeFileAction(posix_spawn_file_actions_t &actions, const int probeSource) {
+            if (probeSource < 0)
+                return;
+            posix_spawn_file_actions_adddup2(&actions, probeSource, 3);
+            posix_spawn_file_actions_addclose(&actions, probeSource);
+        }
+
+        /** @brief Keeps argv pointers backed by owned storage until posix_spawnp returns. */
+        void BuildSpawnArguments(const ExternalProcessRequest &request, std::vector<std::string> &storage, std::vector<char *> &arguments) {
+            storage.reserve(request.arguments.size() + 1U);
+            storage.push_back(request.executable);
+            storage.insert(storage.end(), request.arguments.begin(), request.arguments.end());
+            for (std::string &argument : storage)
+                arguments.push_back(argument.data());
+            arguments.push_back(nullptr);
+        }
+
         Result<pid_t> SpawnProcess(const ExternalProcessRequest &request, const std::array<int, 2> &stdoutPipe,
-                                   const std::array<int, 2> &stderrPipe) {
+                                   const std::array<int, 2> &stderrPipe, const std::optional<int> maintenanceDescriptor) {
+            const int probeSource = maintenanceDescriptor.has_value() ? fcntl(*maintenanceDescriptor, F_DUPFD_CLOEXEC, 64) : -1;
+            if (maintenanceDescriptor.has_value() && probeSource < 0)
+                return Result<pid_t>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed));
             posix_spawn_file_actions_t actions;
             posix_spawn_file_actions_init(&actions);
             posix_spawn_file_actions_adddup2(&actions, stdoutPipe[1], STDOUT_FILENO);
@@ -123,12 +149,15 @@ namespace Horo {
             posix_spawn_file_actions_addclose(&actions, stderrPipe[0]);
             posix_spawn_file_actions_addclose(&actions, stdoutPipe[1]);
             posix_spawn_file_actions_addclose(&actions, stderrPipe[1]);
+            AddProbeFileAction(actions, probeSource);
 #if defined(__APPLE__) || defined(__GLIBC__)
             if (!request.workingDirectory.empty())
                 posix_spawn_file_actions_addchdir_np(&actions, request.workingDirectory.c_str());
 #else
             if (!request.workingDirectory.empty()) {
                 posix_spawn_file_actions_destroy(&actions);
+                if (probeSource >= 0)
+                    close(probeSource);
                 return Result<pid_t>::Failure(
                     MakeError(PlatformErrors::ProcessLaunchFailed, "Working directories are unavailable on this POSIX host."));
             }
@@ -140,15 +169,10 @@ namespace Horo {
             posix_spawnattr_setpgroup(&attributes, 0);
 
             std::vector<std::string> argumentStorage;
-            argumentStorage.reserve(request.arguments.size() + 1U);
-            argumentStorage.push_back(request.executable);
-            argumentStorage.insert(argumentStorage.end(), request.arguments.begin(), request.arguments.end());
             std::vector<char *> arguments;
-            for (std::string &argument : argumentStorage)
-                arguments.push_back(argument.data());
-            arguments.push_back(nullptr);
+            BuildSpawnArguments(request, argumentStorage, arguments);
 
-            std::vector<std::string> environmentStorage = BuildEnvironment(request.environment);
+            std::vector<std::string> environmentStorage = BuildEnvironment(request.environment, probeSource >= 0);
             std::vector<char *> environment;
             for (std::string &entry : environmentStorage)
                 environment.push_back(entry.data());
@@ -159,13 +183,15 @@ namespace Horo {
                 posix_spawnp(&process, request.executable.c_str(), &actions, &attributes, arguments.data(), environment.data());
             posix_spawnattr_destroy(&attributes);
             posix_spawn_file_actions_destroy(&actions);
+            if (probeSource >= 0)
+                close(probeSource);
             if (spawned != 0)
                 return Result<pid_t>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed, std::strerror(spawned)));
             return Result<pid_t>::Success(process);
         }
 
         [[nodiscard]] Result<pid_t> SpawnCapturedProcess(const ExternalProcessRequest &request, std::array<int, 2> &stdoutPipe,
-                                                         std::array<int, 2> &stderrPipe) {
+                                                         std::array<int, 2> &stderrPipe, const std::optional<int> maintenanceDescriptor) {
             if (pipe(stdoutPipe.data()) != 0 || pipe(stderrPipe.data()) != 0) {
                 const int failure = errno;
                 for (const int descriptor : {stdoutPipe[0], stdoutPipe[1], stderrPipe[0], stderrPipe[1]})
@@ -174,7 +200,7 @@ namespace Horo {
                 return Result<pid_t>::Failure(MakeError(PlatformErrors::ProcessIoFailed, std::strerror(failure)));
             }
 
-            auto spawned = SpawnProcess(request, stdoutPipe, stderrPipe);
+            auto spawned = SpawnProcess(request, stdoutPipe, stderrPipe, maintenanceDescriptor);
             close(stdoutPipe[1]);
             close(stderrPipe[1]);
             if (spawned.HasError()) {
@@ -257,9 +283,16 @@ namespace Horo {
         if (request.executable.empty())
             return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed, "Executable is empty."));
 
+        std::optional<int> maintenanceDescriptor;
+        if (request.maintenanceLease != nullptr) {
+            if (!request.maintenanceLease->IsMaintenance())
+                return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed));
+            maintenanceDescriptor = static_cast<int>(request.maintenanceLease->NativeHandle());
+        }
+
         std::array<int, 2> stdoutPipe{-1, -1};
         std::array<int, 2> stderrPipe{-1, -1};
-        auto spawnedResult = SpawnCapturedProcess(request, stdoutPipe, stderrPipe);
+        auto spawnedResult = SpawnCapturedProcess(request, stdoutPipe, stderrPipe, maintenanceDescriptor);
         if (spawnedResult.HasError()) {
             return Result<ExternalProcessResult>::Failure(spawnedResult.ErrorValue());
         }

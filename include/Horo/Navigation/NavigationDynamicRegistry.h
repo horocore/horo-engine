@@ -152,6 +152,7 @@ namespace Horo::Navigation {
         static constexpr std::size_t Modifiers = 4096;
         static constexpr std::size_t PendingCommands = 8192;
         static constexpr std::size_t MutationsPerCommit = 2048;
+        static constexpr std::uint16_t CoalescedObstacleUpdates = 64;
         static constexpr std::uint64_t MaximumUpdateIntervalTicks = 1'000'000;
     };
 
@@ -295,11 +296,12 @@ namespace Horo::Navigation {
          * @return Reserved generation-safe handle or a typed invalid/conflict/capacity/shutdown error.
          */
         [[nodiscard]] Result<NavigationModifierHandle> StageRegisterModifier(const NavigationModifierDescriptor &descriptor);
-        /** @brief Stages an exact-generation obstacle replacement.
+        /** @brief Stages an exact-generation obstacle replacement, coalescing newer same-handle motion before commit.
          * @param handle Active obstacle handle to replace.
          * @param expectedRevision Revision observed by the caller.
          * @param descriptor Detached replacement value with newer source evidence.
-         * @return Success or a typed invalid, stale, conflict, rate, capacity, or shutdown error.
+         * @return Success or a typed invalid, stale, conflict, rate, capacity, or shutdown error. At most
+         * NavigationDynamicRegistryHardLimits::CoalescedObstacleUpdates updates may occupy one staged command.
          */
         [[nodiscard]] Result<void> StageUpdateObstacle(NavigationObstacleHandle handle, NavigationDynamicRecordRevision expectedRevision,
                                                        const NavigationObstacleDescriptor &descriptor);

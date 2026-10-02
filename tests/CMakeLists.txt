@@ -457,6 +457,7 @@ add_executable(HoroAudioCommandTests
     unit/runtime/audio/AudioCommandBufferTests.cpp
     unit/runtime/audio/AudioCommandStagingTests.cpp
     unit/runtime/audio/AudioEventQueueTests.cpp
+    unit/runtime/audio/AudioFocusPolicyTests.cpp
     unit/runtime/audio/AudioLifecycleReconcilerTests.cpp
     unit/runtime/audio/ScheduledAudioCommandBatchTests.cpp
 )
@@ -718,6 +719,7 @@ add_executable(HoroNavigationRuntimeTests
         unit/runtime/navigation/NavigationBakeJobsTests.cpp
         unit/runtime/navigation/NavigationCrowdSnapshotTests.cpp
         unit/runtime/navigation/NavigationDynamicRegistryTests.cpp
+        unit/runtime/navigation/NavigationObstacleOverlayTests.cpp
         unit/runtime/navigation/NavigationAgentRegistryTests.cpp
         unit/runtime/navigation/NavigationPathPolicyTests.cpp
         unit/runtime/navigation/NavigationFoundationQualificationTests.cpp
@@ -1154,11 +1156,11 @@ target_compile_features(HoroUpdateDiscoveryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateDiscoveryTests PRIVATE HoroEngine::UpdateDiscovery)
 horo_register_catch_test(HoroUpdateDiscoveryTests LABELS "release;update;headless")
 
-add_executable(HoroUpdateTransferTests unit/application/UpdateTransferTests.cpp)
+add_executable(HoroUpdateTransferTests unit/application/UpdateTransferTests.cpp unit/application/UpdateFileDeltaTests.cpp)
 target_compile_features(HoroUpdateTransferTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateTransferTests PRIVATE HoroEngine::UpdateTransfer HoroEngine::Platform)
 horo_register_catch_test(HoroUpdateTransferTests LABELS "release;update;headless")
-add_executable(HoroUpdateDownloadTests unit/application/UpdateDownloadTests.cpp)
+add_executable(HoroUpdateDownloadTests unit/application/UpdateDownloadTests.cpp unit/application/UpdateDeltaStagingTests.cpp)
 target_compile_features(HoroUpdateDownloadTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUpdateDownloadTests PRIVATE HoroEngine::UpdateDownload miniz)
 horo_register_catch_test(HoroUpdateDownloadTests LABELS "release;update;headless")
@@ -1688,6 +1690,7 @@ add_executable(HoroPlatformTests
 
 add_executable(HoroProcessTestChild helpers/platform/ProcessTreeChild.cpp)
 target_compile_features(HoroProcessTestChild PRIVATE cxx_std_20)
+target_link_libraries(HoroProcessTestChild PRIVATE HoroEngine::Platform)
 add_dependencies(HoroPlatformTests HoroProcessTestChild)
 target_compile_definitions(HoroPlatformTests PRIVATE HORO_PROCESS_TEST_CHILD="$<TARGET_FILE:HoroProcessTestChild>")
 

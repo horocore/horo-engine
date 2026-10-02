@@ -328,6 +328,11 @@ obeys the renderer's render-capable-thread contract.
 The platform layer does not dispatch arbitrary callbacks while holding native
 or internal locks.
 
+Windows subprocesses inherit only the explicitly listed standard-stream handles.
+Callers that previously relied on ambient inheritable handles must pass a typed
+capability through a dedicated process contract; they must not set process-wide
+inheritance flags to transfer a release or installation lease.
+
 ## Testing
 
 Required tests cover:

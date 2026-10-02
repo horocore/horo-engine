@@ -1895,6 +1895,19 @@ per-platform profiles for editor preview and packaged games. The same page
 defaults mute-on-minimize on most desktop hosts, pause-gameplay-buses for
 mobile focus loss, and continue-everything for dedicated audio preview windows.
 
+The AUD-007.9 control contract is `AudioFocusController`, owned by
+`HoroAudioCommands`. A host chooses an explicit preview, play-in-editor, or
+packaged-game profile and supplies complete focus, minimize, host-suspend, and
+device-interruption facts on the Audio control thread. The controller prepares
+one FIFO policy transition at a time, closes ordinary admission immediately for
+suspension/interruption, and commits only after exact callback/device-epoch
+acknowledgement. Resume also requires a fresh clock-discontinuity revision;
+an interruption-end fact alone never resumes output. Recovery may adopt a new
+validated device epoch without resuming automatically. This boundary is
+backend-neutral and does not move native pause/resume authority into editor,
+scene, or callback code. Concrete host composition supplies the ordered callback
+work and acknowledgement when the parent Audio Runtime is assembled.
+
 ## Typed Failure And Recovery Boundary
 
 `HoroAudioApi` publishes an additive `AudioFailureRecovery` control-side contract.

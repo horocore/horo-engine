@@ -14,7 +14,10 @@
 #include <thread>
 #include <vector>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -251,6 +254,51 @@ namespace {
     }
 #endif
 
+    TEST_CASE("Probe lease transfer preserves the maintenance gate and checks installation identity", "[unit][platform][release]") {
+        const auto root = std::filesystem::temp_directory_path() /
+                          ("horo-probe-lease-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const auto other = root / "other";
+        std::error_code ignored;
+        REQUIRE(std::filesystem::create_directories(other));
+        Horo::NativeDurableFileSystem files;
+        Horo::NativeExternalProcessRunner runner;
+        const Horo::ExternalProcessRequest scrubbed{.executable = HORO_PROCESS_TEST_CHILD,
+                                                    .arguments = {"probe-lease-env-absent"},
+                                                    .environment = {.set = {{"HORO_PRODUCT_PROBE_LEASE", "123"}}}};
+        const auto absent = runner.Run(scrubbed, {});
+        REQUIRE(absent.HasValue());
+        CHECK(absent.Value().exitCode == 0);
+        {
+            auto shared = files.TryAcquireProductLaunch(root);
+            REQUIRE(shared.HasValue());
+            const Horo::ExternalProcessRequest denied{.executable = HORO_PROCESS_TEST_CHILD,
+                                                      .arguments = {"adopt-probe-lease", root.string()},
+                                                      .maintenanceLease = &shared.Value()};
+            CHECK(runner.Run(denied, {}).HasError());
+        }
+        {
+            auto maintenance = files.TryAcquireProductMaintenance(root);
+            REQUIRE(maintenance.HasValue());
+            const Horo::ExternalProcessRequest valid{.executable = HORO_PROCESS_TEST_CHILD,
+                                                     .arguments = {"adopt-probe-lease", root.string()},
+                                                     .maintenanceLease = &maintenance.Value()};
+            const auto accepted = runner.Run(valid, {});
+            REQUIRE(accepted.HasValue());
+            CHECK(accepted.Value().reason == Horo::ProcessTerminationReason::Exited);
+            CHECK(accepted.Value().exitCode == 0);
+            CHECK(files.TryAcquireProductLaunch(root).HasError());
+
+            const Horo::ExternalProcessRequest wrongRoot{.executable = HORO_PROCESS_TEST_CHILD,
+                                                         .arguments = {"adopt-probe-lease", other.string()},
+                                                         .maintenanceLease = &maintenance.Value()};
+            const auto rejected = runner.Run(wrongRoot, {});
+            REQUIRE(rejected.HasValue());
+            CHECK(rejected.Value().exitCode == 4);
+        }
+        CHECK(files.TryAcquireProductLaunch(root).HasValue());
+        std::filesystem::remove_all(root, ignored);
+    }
+
     TEST_CASE("Native Durable Filesystem Serializes Locks And Replaces Files", "[unit][foundation]") {
         const auto root = std::filesystem::temp_directory_path() / "horo-platform-durable-test";
         std::error_code ignored;
@@ -478,6 +526,24 @@ namespace {
             REQUIRE(line.truncated);
         }
     }
+
+#if defined(_WIN32)
+    TEST_CASE("External process does not inherit unrelated Windows handles", "[unit][platform][process]") {
+        SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+        const HANDLE unrelated = CreateEventW(&security, TRUE, TRUE, nullptr);
+        REQUIRE(unrelated != nullptr);
+        Horo::NativeExternalProcessRunner runner;
+        const Horo::ExternalProcessRequest request{
+            .executable = HORO_PROCESS_TEST_CHILD,
+            .arguments = {"handle-unavailable", std::to_string(reinterpret_cast<std::uintptr_t>(unrelated))},
+        };
+        const auto result = runner.Run(request, {});
+        CloseHandle(unrelated);
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value().reason == Horo::ProcessTerminationReason::Exited);
+        REQUIRE(result.Value().exitCode == 0);
+    }
+#endif
 
     TEST_CASE("External process launch failure leaves the runner usable", "[unit][platform][process]") {
         Horo::NativeExternalProcessRunner runner;

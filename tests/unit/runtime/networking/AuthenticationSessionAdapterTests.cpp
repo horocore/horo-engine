@@ -300,6 +300,32 @@ namespace Horo::Network {
         REQUIRE_FALSE(ContainsBytes(objectBytes, std::as_bytes(std::span{originalProof})));
     }
 
+    TEST_CASE("Authentication provider failure matrix never publishes a partial session or private detail",
+              "[unit][network][authentication][qualification]") {
+        for (std::size_t failedStage = 0; failedStage < 4; ++failedStage) {
+            Fixture fixture;
+            fixture.certificates.reject = failedStage == 0;
+            fixture.peers.reject = failedStage == 1;
+            fixture.credentials.reject = failedStage == 2;
+            fixture.privateKeys.reject = failedStage == 3;
+            auto adapter = fixture.Adapter();
+            const auto result = adapter.Authenticate(Connection(), Session(), fixture.Response(), fixture.Evidence(), 20);
+
+            RequireError(result, NetworkErrors::AuthenticationRejected);
+            REQUIRE(result.ErrorValue().message.find("AUTH_SECRET_SENTINEL") == std::string::npos);
+            REQUIRE(result.ErrorValue().diagnostics.empty());
+            REQUIRE(adapter.State() == AuthenticationState::Rejected);
+            REQUIRE(adapter.Accepted() == nullptr);
+            REQUIRE(adapter.Diagnostics().failure == AuthenticationFailureClass::Rejected);
+            REQUIRE(fixture.certificates.calls == 1);
+            REQUIRE(fixture.peers.calls == (failedStage >= 1 ? 1 : 0));
+            REQUIRE(fixture.credentials.calls == (failedStage >= 2 ? 1 : 0));
+            REQUIRE(fixture.privateKeys.calls == (failedStage >= 3 ? 1 : 0));
+            RequireError(adapter.Authenticate(Connection(), Session(), fixture.Response(), fixture.Evidence(), 21),
+                         NetworkErrors::AuthenticationStateInvalid);
+        }
+    }
+
     TEST_CASE("Authentication timeout cancellation shutdown and replacement generations are terminal", "[unit][network][authentication]") {
         Fixture fixture;
         auto stale = fixture.Adapter();

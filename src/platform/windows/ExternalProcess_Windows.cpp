@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Platform.h"
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Platform/PlatformErrors.h"
 
@@ -8,6 +9,7 @@
 #include <cwchar>
 #include <functional>
 #include <map>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <thread>
@@ -131,7 +133,8 @@ namespace Horo {
             }
         };
 
-        [[nodiscard]] Result<std::vector<wchar_t>> BuildEnvironment(const ProcessEnvironment &overlay) {
+        [[nodiscard]] Result<std::vector<wchar_t>> BuildEnvironment(const ProcessEnvironment &overlay,
+                                                                    const std::optional<std::uintptr_t> probeHandle) {
             std::map<std::wstring, std::wstring, CaseInsensitiveWideLess> values;
             if (overlay.base == ProcessEnvironmentBase::InheritWithOverrides) {
                 wchar_t *block = GetEnvironmentStringsW();
@@ -158,6 +161,9 @@ namespace Horo {
                     return Result<std::vector<wchar_t>>::Failure(name.HasError() ? name.ErrorValue() : value.ErrorValue());
                 values[std::move(name).Value()] = std::move(value).Value();
             }
+            values.erase(L"HORO_PRODUCT_PROBE_LEASE");
+            if (probeHandle)
+                values[L"HORO_PRODUCT_PROBE_LEASE"] = std::to_wstring(*probeHandle);
             std::vector<wchar_t> block;
             for (const auto &[name, value] : values) {
                 block.insert(block.end(), name.begin(), name.end());
@@ -222,6 +228,41 @@ namespace Horo {
             DWORD processId{};
         };
 
+        /** @brief Limits inherited handles to the standard streams and one explicit probe lease. */
+        class ChildHandleAllowlist final {
+        public:
+            explicit ChildHandleAllowlist(std::vector<HANDLE> handles) : handles_(std::move(handles)) {
+                SIZE_T bytes = 0;
+                static_cast<void>(InitializeProcThreadAttributeList(nullptr, 1, 0, &bytes));
+                storage_.resize(bytes);
+                list_ = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage_.data());
+                if (!InitializeProcThreadAttributeList(list_, 1, 0, &bytes)) {
+                    list_ = nullptr;
+                    return;
+                }
+                valid_ = UpdateProcThreadAttribute(list_, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles_.data(),
+                                                   handles_.size() * sizeof(HANDLE), nullptr, nullptr) != 0;
+            }
+
+            ChildHandleAllowlist(const ChildHandleAllowlist &) = delete;
+            ChildHandleAllowlist &operator=(const ChildHandleAllowlist &) = delete;
+
+            ~ChildHandleAllowlist() {
+                if (list_ != nullptr)
+                    DeleteProcThreadAttributeList(list_);
+            }
+
+            [[nodiscard]] LPPROC_THREAD_ATTRIBUTE_LIST Get() const noexcept {
+                return valid_ ? list_ : nullptr;
+            }
+
+        private:
+            std::vector<HANDLE> handles_;
+            std::vector<std::byte> storage_;
+            LPPROC_THREAD_ATTRIBUTE_LIST list_{};
+            bool valid_{};
+        };
+
         /** @brief Preserves Windows quoting and UTF-8 validation before any child is created. */
         [[nodiscard]] Result<std::wstring> BuildCommandLine(const ExternalProcessRequest &request) {
             Result<std::wstring> executable = ToWide(request.executable);
@@ -238,44 +279,8 @@ namespace Horo {
             return Result<std::wstring>::Success(std::move(commandLine));
         }
 
-        /** @brief Creates a suspended child and admits it to a kill-on-close Job before resuming. */
-        [[nodiscard]] Result<CapturedProcess> LaunchCapturedProcess(const ExternalProcessRequest &request) {
-            CapturedProcess captured;
-            Handle stdoutWrite;
-            Handle stderrWrite;
-            SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
-            if (!CreatePipe(&captured.stdoutRead.value, &stdoutWrite.value, &security, 0) ||
-                !CreatePipe(&captured.stderrRead.value, &stderrWrite.value, &security, 0) ||
-                !SetHandleInformation(captured.stdoutRead.value, HANDLE_FLAG_INHERIT, 0) ||
-                !SetHandleInformation(captured.stderrRead.value, HANDLE_FLAG_INHERIT, 0))
-                return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
-
-            auto commandLine = BuildCommandLine(request);
-            if (commandLine.HasError())
-                return Result<CapturedProcess>::Failure(commandLine.ErrorValue());
-            std::wstring commandLineBuffer = std::move(commandLine).Value();
-            auto environment = BuildEnvironment(request.environment);
-            if (environment.HasError())
-                return Result<CapturedProcess>::Failure(environment.ErrorValue());
-            std::vector<wchar_t> environmentBlock = std::move(environment).Value();
-            const std::wstring workingDirectory = request.workingDirectory.native();
-            STARTUPINFOW startup{};
-            startup.cb = sizeof(startup);
-            startup.dwFlags = STARTF_USESTDHANDLES;
-            startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-            startup.hStdOutput = stdoutWrite.value;
-            startup.hStdError = stderrWrite.value;
-            PROCESS_INFORMATION process{};
-            const DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED;
-            if (!CreateProcessW(nullptr, commandLineBuffer.data(), nullptr, nullptr, TRUE, flags, environmentBlock.data(),
-                                workingDirectory.empty() ? nullptr : workingDirectory.c_str(), &startup, &process))
-                return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed));
-            captured.process = Handle{process.hProcess};
-            captured.thread = Handle{process.hThread};
-            captured.processId = process.dwProcessId;
-            stdoutWrite = {};
-            stderrWrite = {};
-
+        /** @brief Admits the suspended child before any product code can run. */
+        [[nodiscard]] Result<void> AdmitCapturedProcess(CapturedProcess &captured) {
             captured.job = Handle{CreateJobObjectW(nullptr, nullptr)};
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -283,9 +288,93 @@ namespace Horo {
                 !SetInformationJobObject(captured.job.value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) ||
                 !AssignProcessToJobObject(captured.job.value, captured.process.value)) {
                 TerminateProcess(captured.process.value, 1);
-                return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed));
+                return Result<void>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed));
             }
             ResumeThread(captured.thread.value);
+            return Result<void>::Success();
+        }
+
+        /** @brief Connects the child's three standard handles through the explicit allowlist. */
+        [[nodiscard]] STARTUPINFOEXW ChildStartup(const ChildHandleAllowlist &allowlist, const HANDLE stdinRead, const HANDLE stdoutWrite,
+                                                  const HANDLE stderrWrite) {
+            STARTUPINFOEXW startup{};
+            startup.StartupInfo.cb = sizeof(startup);
+            startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+            startup.StartupInfo.hStdInput = stdinRead;
+            startup.StartupInfo.hStdOutput = stdoutWrite;
+            startup.StartupInfo.hStdError = stderrWrite;
+            startup.lpAttributeList = allowlist.Get();
+            return startup;
+        }
+
+        /** @brief Exposes only the duplicated probe handle through the child's fresh environment. */
+        [[nodiscard]] Result<std::vector<wchar_t>> ChildEnvironment(const ExternalProcessRequest &request,
+                                                                    const std::optional<std::uintptr_t> maintenanceHandle,
+                                                                    const Handle &probeTransfer) {
+            std::optional<std::uintptr_t> childProbeHandle;
+            if (maintenanceHandle)
+                childProbeHandle = reinterpret_cast<std::uintptr_t>(probeTransfer.value);
+            return BuildEnvironment(request.environment, childProbeHandle);
+        }
+
+        /** @brief Lists exactly the handles admitted to the child. */
+        [[nodiscard]] std::vector<HANDLE> ChildHandles(const Handle &stdinRead, const Handle &stdoutWrite, const Handle &stderrWrite,
+                                                       const Handle &probeTransfer, const bool includeProbe) {
+            std::vector<HANDLE> inherited{stdinRead.value, stdoutWrite.value, stderrWrite.value};
+            if (includeProbe)
+                inherited.push_back(probeTransfer.value);
+            return inherited;
+        }
+
+        /** @brief Creates a suspended child and admits it to a kill-on-close Job before resuming. */
+        [[nodiscard]] Result<CapturedProcess> LaunchCapturedProcess(const ExternalProcessRequest &request,
+                                                                    const std::optional<std::uintptr_t> maintenanceHandle) {
+            CapturedProcess captured;
+            Handle stdoutWrite;
+            Handle stderrWrite;
+            SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+            Handle stdinRead{CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING,
+                                         FILE_ATTRIBUTE_NORMAL, nullptr)};
+            if (stdinRead.value == INVALID_HANDLE_VALUE)
+                return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
+            if (!CreatePipe(&captured.stdoutRead.value, &stdoutWrite.value, &security, 0) ||
+                !CreatePipe(&captured.stderrRead.value, &stderrWrite.value, &security, 0) ||
+                !SetHandleInformation(captured.stdoutRead.value, HANDLE_FLAG_INHERIT, 0) ||
+                !SetHandleInformation(captured.stderrRead.value, HANDLE_FLAG_INHERIT, 0))
+                return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
+
+            Handle probeTransfer;
+            if (maintenanceHandle && !DuplicateHandle(GetCurrentProcess(), reinterpret_cast<HANDLE>(*maintenanceHandle),
+                                                      GetCurrentProcess(), &probeTransfer.value, 0, TRUE, DUPLICATE_SAME_ACCESS))
+                return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
+
+            auto commandLine = BuildCommandLine(request);
+            if (commandLine.HasError())
+                return Result<CapturedProcess>::Failure(commandLine.ErrorValue());
+            std::wstring commandLineBuffer = std::move(commandLine).Value();
+            auto environment = ChildEnvironment(request, maintenanceHandle, probeTransfer);
+            if (environment.HasError())
+                return Result<CapturedProcess>::Failure(environment.ErrorValue());
+            std::vector<wchar_t> environmentBlock = std::move(environment).Value();
+            const std::wstring workingDirectory = request.workingDirectory.native();
+            ChildHandleAllowlist allowlist{ChildHandles(stdinRead, stdoutWrite, stderrWrite, probeTransfer, maintenanceHandle.has_value())};
+            if (allowlist.Get() == nullptr)
+                return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
+            STARTUPINFOEXW startup = ChildStartup(allowlist, stdinRead.value, stdoutWrite.value, stderrWrite.value);
+            PROCESS_INFORMATION process{};
+            const DWORD flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT;
+            if (!CreateProcessW(nullptr, commandLineBuffer.data(), nullptr, nullptr, TRUE, flags, environmentBlock.data(),
+                                workingDirectory.empty() ? nullptr : workingDirectory.c_str(), &startup.StartupInfo, &process))
+                return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed));
+            captured.process = Handle{process.hProcess};
+            captured.thread = Handle{process.hThread};
+            captured.processId = process.dwProcessId;
+            stdoutWrite = {};
+            stderrWrite = {};
+
+            auto admitted = AdmitCapturedProcess(captured);
+            if (admitted.HasError())
+                return Result<CapturedProcess>::Failure(admitted.ErrorValue());
             return Result<CapturedProcess>::Success(std::move(captured));
         }
 
@@ -410,7 +499,13 @@ namespace Horo {
                                                                    const CancellationToken &cancellation) {
         if (request.executable.empty())
             return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed, "Executable is empty."));
-        auto captured = LaunchCapturedProcess(request);
+        std::optional<std::uintptr_t> maintenanceHandle;
+        if (request.maintenanceLease != nullptr) {
+            if (!request.maintenanceLease->IsMaintenance())
+                return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessLaunchFailed));
+            maintenanceHandle = request.maintenanceLease->NativeHandle();
+        }
+        auto captured = LaunchCapturedProcess(request, maintenanceHandle);
         if (captured.HasError())
             return Result<ExternalProcessResult>::Failure(captured.ErrorValue());
         const ProcessMonitorState state = MonitorProcess(request, cancellation, captured.Value());

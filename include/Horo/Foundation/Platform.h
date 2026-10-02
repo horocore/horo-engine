@@ -20,6 +20,8 @@ namespace Horo {
      * @brief Narrow operating-system service contracts selected by a host composition root.
      */
 
+    class NativeExternalProcessRunner;
+
     /** @brief Reports availability of optional platform facilities for a composed host. */
     struct PlatformCapabilities {
         bool supportsProcessExecution{false}; /**< Whether the host permits process execution. */
@@ -75,7 +77,11 @@ namespace Horo {
 
     private:
         friend class NativeDurableFileSystem;
+        friend class NativeExternalProcessRunner;
         explicit ProductLaunchLease(std::unique_ptr<State> state) noexcept;
+        [[nodiscard]] bool IsMaintenance() const noexcept;
+        [[nodiscard]] std::uintptr_t NativeHandle() const noexcept;
+        [[nodiscard]] static ProductLaunchLease AdoptMaintenanceNative(std::uintptr_t native);
         std::unique_ptr<State> state_;
     };
 
@@ -117,6 +123,12 @@ namespace Horo {
         [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductLaunch(const std::filesystem::path &installationRoot) const;
         /** @brief Holds an exclusive maintenance gate; fails while any product launch lease is active. */
         [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductMaintenance(const std::filesystem::path &installationRoot) const;
+        /**
+         * @brief Adopts an OS-inherited exclusive lease only after matching its native file identity to this installation.
+         * @param installationRoot Exact absolute installation root selected by the trusted product host.
+         * @return Owned lease or an I/O failure when the inherited capability is absent, malformed, or for another installation.
+         */
+        [[nodiscard]] Result<ProductLaunchLease> AdoptInheritedProductMaintenance(const std::filesystem::path &installationRoot) const;
         [[nodiscard]] Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override;
         [[nodiscard]] Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override;
         /**

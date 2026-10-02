@@ -160,11 +160,13 @@ horo_configure_target_header_boundary(HoroUpdateDiscovery PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroUpdateTransfer PUBLIC_HEADERS
     Horo/Release/UpdateArchiveIndex.h
     Horo/Release/UpdateStagedTree.h
+    Horo/Release/UpdateFileDelta.h
     Horo/Release/UpdateTransferCheckpointStore.h
     Horo/Release/UpdateTransfer.h
     Horo/Release/UpdateTransferErrors.h
 )
 horo_configure_target_header_boundary(HoroUpdateDownload PUBLIC_HEADERS
+    Horo/Release/UpdateDeltaStaging.h
     Horo/Release/UpdateDownloadSession.h
     Horo/Release/UpdateHttpDownload.h
     Horo/Release/UpdateStageReady.h
@@ -439,6 +441,7 @@ horo_configure_target_header_boundary(HoroAudioCommands PUBLIC_HEADERS
     Horo/Audio/AudioCommandBuffer.h
     Horo/Audio/AudioCommandStaging.h
     Horo/Audio/AudioEventQueue.h
+    Horo/Audio/AudioFocusPolicy.h
     Horo/Audio/AudioLifecycleReconciler.h
     Horo/Audio/ScheduledAudioCommandBatch.h
 )
@@ -614,6 +617,7 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationCrowdSnapshot.h
     Horo/Navigation/NavigationCrowdAvoidance.h
     Horo/Navigation/NavigationDynamicRegistry.h
+    Horo/Navigation/NavigationObstacleOverlay.h
     Horo/Navigation/NavigationAgentRegistry.h
     Horo/Navigation/NavigationPathPolicy.h
     Horo/Navigation/NavigationRuntimeQueues.h

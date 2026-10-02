@@ -263,56 +263,109 @@ namespace Horo::Release {
                 }
             }
         };
+
+        struct ExtractedZipStage final {
+            std::vector<UpdateStagedFile> inventory;
+            std::filesystem::path readyMarker;
+        };
+
+        /** @brief Clears stale full-stage evidence or rejects any marker beside a private delta. */
+        [[nodiscard]] Result<void> PrepareStageMarkers(const std::filesystem::path &packageFile, const std::filesystem::path &stageRoot,
+                                                       NativeDurableFileSystem &files, const bool publishReady) {
+            auto ready = stageRoot;
+            ready += ".ready";
+            auto prepared = ready;
+            prepared += ".prepared";
+            const auto mismatch = [] {
+                return Result<void>::Failure(MakeError(UpdateTransferErrors::StageMismatch));
+            };
+            if (packageFile == ready || packageFile == prepared)
+                return mismatch();
+            if (publishReady) {
+                if (auto cleared = files.RemoveDurable(ready); cleared.HasError())
+                    return cleared;
+                if (auto cleared = files.RemoveDurable(prepared); cleared.HasError())
+                    return cleared;
+            } else {
+                for (const auto &marker : {ready, prepared}) {
+                    std::error_code error;
+                    const auto status = std::filesystem::symlink_status(marker, error);
+                    if (status.type() != std::filesystem::file_type::not_found || (error && error != std::errc::no_such_file_or_directory))
+                        return mismatch();
+                }
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Authenticates and extracts a ZIP, publishing ready only for a complete package. */
+        [[nodiscard]] Result<ExtractedZipStage> StageZipArchive(const VerifiedZipUpdateRequest &request, NativeDurableFileSystem &files,
+                                                                const Security::ArtifactVerifier &verifier,
+                                                                const CancellationToken cancellation, const bool publishReady) {
+            const auto &[package, checkpoint, packageFile, stageRoot, limits] = request;
+            const auto failed = [](const ErrorCodeDescriptor &code) {
+                return Result<ExtractedZipStage>::Failure(MakeError(code));
+            };
+            if (const auto expectedFormat =
+                    publishReady ? DistributionPackageFormat::ZipArchive : DistributionPackageFormat::DeltaZipArchive;
+                package.selection.format != expectedFormat)
+                return failed(UpdateTransferErrors::InvalidArchive);
+            if (!Detail::ValidStagePaths(packageFile, stageRoot))
+                return failed(UpdateTransferErrors::StageMismatch);
+            if (auto marker = PrepareStageMarkers(packageFile, stageRoot, files, publishReady); marker.HasError())
+                return Result<ExtractedZipStage>::Failure(marker.ErrorValue());
+            if (cancellation.IsCancellationRequested())
+                return failed(UpdateTransferErrors::Cancelled);
+            if (auto verified = VerifyCompletedUpdateTransfer(package, checkpoint, packageFile, verifier); verified.HasError())
+                return Result<ExtractedZipStage>::Failure(verified.ErrorValue());
+            ZipReader reader(packageFile);
+            if (auto opened = OpenReader(reader, packageFile); opened.HasError())
+                return Result<ExtractedZipStage>::Failure(opened.ErrorValue());
+            auto index = ReadIndex(reader.archive, limits, cancellation);
+            if (index.HasError())
+                return Result<ExtractedZipStage>::Failure(index.ErrorValue());
+            auto declared = ReadDeclaredFiles(reader.archive, index.Value(), limits);
+            if (declared.HasError())
+                return Result<ExtractedZipStage>::Failure(declared.ErrorValue());
+            if (auto capacity = CheckStageCapacity(index.Value(), stageRoot, limits, files); capacity.HasError())
+                return Result<ExtractedZipStage>::Failure(capacity.ErrorValue());
+            if (std::error_code error; !std::filesystem::create_directory(stageRoot, error) || error)
+                return failed(UpdateTransferErrors::StageMismatch);
+            StageCleanup cleanup{stageRoot};
+            auto inventory = ExtractEntries(reader.archive, index.Value(), declared.Value(), stageRoot, files, cancellation);
+            if (inventory.HasError())
+                return Result<ExtractedZipStage>::Failure(inventory.ErrorValue());
+            if (auto synced = Detail::SyncStageDirectories(stageRoot, files); synced.HasError())
+                return Result<ExtractedZipStage>::Failure(synced.ErrorValue());
+            std::filesystem::path readyMarker;
+            if (publishReady) {
+                auto published = PublishVerifiedUpdateStage({package, checkpoint, packageFile, stageRoot, inventory.Value(), limits}, files,
+                                                            verifier, cancellation);
+                if (published.HasError())
+                    return Result<ExtractedZipStage>::Failure(published.ErrorValue());
+                readyMarker = std::move(published).Value();
+            }
+            cleanup.active = false;
+            return Result<ExtractedZipStage>::Success({std::move(inventory).Value(), std::move(readyMarker)});
+        }
     }  // namespace
 
     /** @copydoc StageVerifiedZipUpdate */
     Result<std::filesystem::path> StageVerifiedZipUpdate(const VerifiedZipUpdateRequest &request, NativeDurableFileSystem &files,
                                                          const Security::ArtifactVerifier &verifier, CancellationToken cancellation) {
-        const auto &[package, checkpoint, packageFile, stageRoot, limits] = request;
-        const auto failed = [](const ErrorCodeDescriptor &code) {
-            return Result<std::filesystem::path>::Failure(MakeError(code));
-        };
-        if (package.selection.format != DistributionPackageFormat::ZipArchive)
-            return failed(UpdateTransferErrors::InvalidArchive);
-        if (!Detail::ValidStagePaths(packageFile, stageRoot))
-            return failed(UpdateTransferErrors::StageMismatch);
-        auto ready = stageRoot;
-        ready += ".ready";
-        auto prepared = ready;
-        prepared += ".prepared";
-        if (packageFile == ready || packageFile == prepared)
-            return failed(UpdateTransferErrors::StageMismatch);
-        if (auto cleared = files.RemoveDurable(ready); cleared.HasError())
-            return Result<std::filesystem::path>::Failure(cleared.ErrorValue());
-        if (auto cleared = files.RemoveDurable(prepared); cleared.HasError())
-            return Result<std::filesystem::path>::Failure(cleared.ErrorValue());
-        if (cancellation.IsCancellationRequested())
-            return failed(UpdateTransferErrors::Cancelled);
-        if (auto verified = VerifyCompletedUpdateTransfer(package, checkpoint, packageFile, verifier); verified.HasError())
-            return Result<std::filesystem::path>::Failure(verified.ErrorValue());
-        ZipReader reader(packageFile);
-        if (auto opened = OpenReader(reader, packageFile); opened.HasError())
-            return Result<std::filesystem::path>::Failure(opened.ErrorValue());
-        auto index = ReadIndex(reader.archive, limits, cancellation);
-        if (index.HasError())
-            return Result<std::filesystem::path>::Failure(index.ErrorValue());
-        auto declared = ReadDeclaredFiles(reader.archive, index.Value(), limits);
-        if (declared.HasError())
-            return Result<std::filesystem::path>::Failure(declared.ErrorValue());
-        if (auto capacity = CheckStageCapacity(index.Value(), stageRoot, limits, files); capacity.HasError())
-            return Result<std::filesystem::path>::Failure(capacity.ErrorValue());
-        if (std::error_code error; !std::filesystem::create_directory(stageRoot, error) || error)
-            return failed(UpdateTransferErrors::StageMismatch);
-        StageCleanup cleanup{stageRoot};
-        auto inventory = ExtractEntries(reader.archive, index.Value(), declared.Value(), stageRoot, files, cancellation);
-        if (inventory.HasError())
-            return Result<std::filesystem::path>::Failure(inventory.ErrorValue());
-        if (auto synced = Detail::SyncStageDirectories(stageRoot, files); synced.HasError())
-            return Result<std::filesystem::path>::Failure(synced.ErrorValue());
-        auto published = PublishVerifiedUpdateStage({package, checkpoint, packageFile, stageRoot, inventory.Value(), limits}, files,
-                                                    verifier, cancellation);
-        if (published.HasValue())
-            cleanup.active = false;
-        return published;
+        auto staged = StageZipArchive(request, files, verifier, cancellation, true);
+        if (staged.HasError())
+            return Result<std::filesystem::path>::Failure(staged.ErrorValue());
+        return Result<std::filesystem::path>::Success(std::move(staged).Value().readyMarker);
+    }
+
+    /** @copydoc StageVerifiedDeltaZipUpdate */
+    Result<std::vector<UpdateStagedFile>> StageVerifiedDeltaZipUpdate(const VerifiedZipUpdateRequest &request,
+                                                                      NativeDurableFileSystem &files,
+                                                                      const Security::ArtifactVerifier &verifier,
+                                                                      CancellationToken cancellation) {
+        auto staged = StageZipArchive(request, files, verifier, cancellation, false);
+        if (staged.HasError())
+            return Result<std::vector<UpdateStagedFile>>::Failure(staged.ErrorValue());
+        return Result<std::vector<UpdateStagedFile>>::Success(std::move(staged).Value().inventory);
     }
 }  // namespace Horo::Release

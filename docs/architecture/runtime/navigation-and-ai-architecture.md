@@ -790,6 +790,30 @@ each have separate queue/work/memory/staging/retired budgets and typed outcomes;
 graphics tiers never choose them. Paths intersecting a changed dependency are
 invalidated and re-requested under ADR-107 consistency policy.
 
+NAV-005.3 exposes the provider-neutral logical blocker overlay over an immutable
+`NavigationDynamicRegistrySnapshot`, not as a mutable copy of cooked tiles. The
+topology owner supplies each stable authored `SurfaceId`, exact world/topology
+generation, and finite extent in the
+canonical Scene-local metre frame already used by grounded surface/profile bake
+partitions. Bounded projection preserves enabled box/cylinder shapes and layer
+facts per surface, clips conservative footprints to its extent, and carries the
+exact Scene binding and dynamic publication revision even when empty. Bounded
+surface-constrained segment probes report surface identity and revision even when
+clear; cross-surface paths must be split by topology ownership. Character/Physics remains
+the final collision authority. The owner can project old/new obstacle bounds
+into complete surface-keyed, identity-ordered changed regions, including surfaces
+crossed by a conservative swept move even when neither endpoint shape occupies
+them, before invalidating
+intersecting held paths. A held path without exact evidence of independence is
+still invalidated by `NavigationPathPolicy` when the obstacle revision advances.
+Insufficient caller output capacity fails without a partial region list or surface
+projection. Multiple generation-safe motion updates to one
+active obstacle coalesce latest-wins in one staged command within the declared
+64-update bound; stale or excess input is rejected, and one safe-point commit
+advances the immutable revision once. This adds a NavigationRuntime-owned public
+header and target-private implementation, with no new backend dependency or
+change to the cooked NavMesh artifact format.
+
 ## AI Perception
 
 ### Gameplay Truth vs Presentation Separation

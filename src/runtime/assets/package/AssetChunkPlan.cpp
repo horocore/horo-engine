@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <deque>
+#include <memory>
 #include <numeric>
 #include <ranges>
 #include <utility>
@@ -18,6 +19,9 @@ namespace Horo::Assets {
                                                 "Release chunk plan exceeds its finite bounds.", "Reduce the chunk graph."};
         const ErrorCodeDescriptor DependencyInvalid{Domain, ErrorCode{"asset.chunk.dependency_invalid"}, ErrorSeverity::Error,
                                                     "Release chunk dependency graph is invalid.", "Remove missing or cyclic edges."};
+        const ErrorCodeDescriptor SelectionInvalid{Domain, ErrorCode{"asset.chunk.selection_invalid"}, ErrorSeverity::Error,
+                                                   "Installed chunk selection is invalid.",
+                                                   "Check base version, dependencies, mount priorities, and pending removal."};
 
         [[nodiscard]] bool IsChunkId(const std::string_view text) noexcept {
             if (text.empty() || text.size() > 64U || text.front() < 'a' || text.front() > 'z')
@@ -85,6 +89,44 @@ namespace Horo::Assets {
                         return true;
             return false;
         }
+
+        /** @brief Finds a chunk in the canonical release plan without accepting unknown IDs. */
+        [[nodiscard]] const AssetChunkDefinition *FindChunk(const AssetChunkPlan &plan, const AssetChunkId &id) {
+            const auto chunks = plan.Chunks();
+            const auto found = std::ranges::lower_bound(chunks, id, {}, &AssetChunkDefinition::id);
+            return found != chunks.end() && found->id == id ? std::to_address(found) : nullptr;
+        }
+
+        /** @brief Tests exact ID membership without relying on caller order. */
+        [[nodiscard]] bool ContainsId(const std::span<const AssetChunkId> ids, const AssetChunkId &id) {
+            return std::ranges::find(ids, id) != ids.end();
+        }
+
+        /** @brief Resolves only unique, known chunks bound to the verified base identity. */
+        [[nodiscard]] bool AppendSelectedChunks(const AssetChunkPlan &plan, const std::span<const AssetChunkId> selected,
+                                                const Sha256Digest &baseManifest, std::vector<const AssetChunkDefinition *> &pending) {
+            for (const auto &id : selected) {
+                const auto *chunk = FindChunk(plan, id);
+                if (chunk == nullptr ||
+                    std::ranges::find_if(pending,
+                                         [&id](const auto *entry) {
+                    return entry->id == id;
+                }) != pending.end() ||
+                    (chunk->requiredBaseManifest && chunk->requiredBaseManifest != baseManifest))
+                    return false;
+                pending.push_back(chunk);
+            }
+            return true;
+        }
+
+        /** @brief Requires every declared dependency to be selected and mounted no later than its dependent. */
+        [[nodiscard]] bool DependenciesCanMount(const AssetChunkPlan &plan, const std::span<const AssetChunkId> selected,
+                                                const AssetChunkDefinition &chunk) {
+            return std::ranges::all_of(chunk.dependencies, [&](const auto &dependency) {
+                const auto *required = FindChunk(plan, dependency);
+                return required != nullptr && ContainsId(selected, dependency) && required->mountPriority <= chunk.mountPriority;
+            });
+        }
     }  // namespace
 
     /** @copydoc AssetChunkId::AssetChunkId */
@@ -118,7 +160,9 @@ namespace Horo::Assets {
         std::vector<AssetId> allAssets;
         for (auto &chunk : chunks) {
             if (!IsChunkId(chunk.id.Value()) || !IsKnownKind(chunk.kind) ||
-                (chunk.kind == AssetChunkKind::Dlc) != chunk.requiredBaseManifest.has_value() ||
+                (chunk.kind == AssetChunkKind::Dlc && !chunk.requiredBaseManifest.has_value()) ||
+                ((chunk.kind == AssetChunkKind::Base || chunk.kind == AssetChunkKind::DedicatedServer) &&
+                 chunk.requiredBaseManifest.has_value()) ||
                 (chunk.requiredBaseManifest.has_value() && IsZeroDigest(*chunk.requiredBaseManifest)) || chunk.assets.empty())
                 return Result<AssetChunkPlan>::Failure(MakeError(InvalidPlan));
             if (chunk.assets.size() > limits.maximumAssets - allAssets.size() ||
@@ -149,5 +193,71 @@ namespace Horo::Assets {
     /** @copydoc AssetChunkPlan::Chunks */
     std::span<const AssetChunkDefinition> AssetChunkPlan::Chunks() const noexcept {
         return chunks_;
+    }
+
+    /** @copydoc ResolveAssetChunkMountOrder */
+    Result<std::vector<AssetChunkId>> ResolveAssetChunkMountOrder(const AssetChunkPlan &plan, const std::span<const AssetChunkId> selected,
+                                                                  const Sha256Digest &baseManifest) {
+        const auto invalid = [] {
+            return Result<std::vector<AssetChunkId>>::Failure(MakeError(SelectionInvalid));
+        };
+        if (selected.empty() || IsZeroDigest(baseManifest) || selected.size() > plan.Chunks().size())
+            return invalid();
+
+        std::vector<const AssetChunkDefinition *> pending;
+        pending.reserve(selected.size());
+        if (!AppendSelectedChunks(plan, selected, baseManifest, pending))
+            return invalid();
+
+        const AssetChunkDefinition *base = nullptr;
+        for (const auto *chunk : pending) {
+            if (chunk->kind == AssetChunkKind::Base) {
+                if (base != nullptr)
+                    return invalid();
+                base = chunk;
+            }
+            if (!DependenciesCanMount(plan, selected, *chunk))
+                return invalid();
+        }
+        if (base == nullptr || std::ranges::any_of(pending, [base](const auto *chunk) {
+            return chunk->mountPriority < base->mountPriority;
+        }))
+            return invalid();
+
+        std::vector<AssetChunkId> order;
+        order.reserve(pending.size());
+        while (!pending.empty()) {
+            auto best = pending.end();
+            for (auto entry = pending.begin(); entry != pending.end(); ++entry) {
+                if (!std::ranges::all_of((*entry)->dependencies, [&order](const auto &dependency) {
+                    return ContainsId(std::span<const AssetChunkId>{order}, dependency);
+                }))
+                    continue;
+                if (best == pending.end() ||
+                    std::pair{(*entry)->mountPriority, (*entry)->id} < std::pair{(*best)->mountPriority, (*best)->id})
+                    best = entry;
+            }
+            if (best == pending.end())
+                return invalid();
+            order.push_back((*best)->id);
+            pending.erase(best);
+        }
+        return Result<std::vector<AssetChunkId>>::Success(std::move(order));
+    }
+
+    /** @copydoc PlanAssetChunkRemoval */
+    Result<std::vector<AssetChunkId>> PlanAssetChunkRemoval(const AssetChunkPlan &plan, const std::span<const AssetChunkId> installed,
+                                                            const AssetChunkId &removed, const Sha256Digest &baseManifest) {
+        if (const auto current = ResolveAssetChunkMountOrder(plan, installed, baseManifest);
+            current.HasError() || !ContainsId(installed, removed))
+            return Result<std::vector<AssetChunkId>>::Failure(MakeError(SelectionInvalid));
+        std::vector<AssetChunkId> remaining;
+        remaining.reserve(installed.size() - 1U);
+        for (const auto &id : installed)
+            if (id != removed)
+                remaining.push_back(id);
+        if (remaining.empty())
+            return Result<std::vector<AssetChunkId>>::Success({});
+        return ResolveAssetChunkMountOrder(plan, remaining, baseManifest);
     }
 }  // namespace Horo::Assets

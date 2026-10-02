@@ -67,7 +67,8 @@ namespace Horo::Release {
         TarGzip,
         LinuxDeb,
         LinuxRpm,
-        StorePackage
+        StorePackage,
+        DeltaZipArchive /**< Signed partial file inventory; never a standalone installable package. */
     };
 
     /** @brief Install layout behavior exposed without native installer types. */
