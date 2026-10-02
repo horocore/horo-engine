@@ -315,7 +315,7 @@ namespace Horo::Runtime::Ui {
          * @return Transition and state projection, or typed stale, disabled, ordering, capacity or lifecycle failure.
          * @post A successful DefaultPending result must be resolved by ApplyDefault or SuppressDefault before another input.
          */
-        [[nodiscard]] Result<UiControlEventResult> Handle(UiControlInput input);
+        [[nodiscard]] Result<UiControlEventResult> Handle(const UiControlInput &input);
 
         /**
          * @brief Copies the staged default action without changing the control value or pending decision.

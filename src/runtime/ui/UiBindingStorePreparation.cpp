@@ -55,6 +55,22 @@ namespace Horo::Runtime::Ui {
             return found != values.end() && found->property == property ? &found->value : nullptr;
         }
 
+        /** @brief Resolves one authored write-only seed or readable provider/fallback value without retaining its borrow. */
+        [[nodiscard]] Result<const UiBindingValue *> InitialTargetValue(const UiResolvedBindingDescriptor &resolved,
+                                                                        const std::span<const UiBindingPropertyUpdate> values,
+                                                                        const std::size_t property) {
+            const bool writeOnly = resolved.binding.direction == UiBindingDirection::TargetToSource;
+            if (writeOnly != resolved.initialTarget.has_value())
+                return Failure<const UiBindingValue *>(UiErrors::BindingValueInvalid);
+            if (writeOnly)
+                return Result<const UiBindingValue *>::Success(&*resolved.initialTarget);
+            if (const auto *value = InitialValue(values, property))
+                return Result<const UiBindingValue *>::Success(value);
+            if (!resolved.binding.fallback)
+                return Failure<const UiBindingValue *>(UiErrors::BindingProviderUnknown);
+            return Result<const UiBindingValue *>::Success(&*resolved.binding.fallback);
+        }
+
         /** @brief Validates explicit host registration identity and schema-admitted provider scope. */
         [[nodiscard]] Result<void> ValidateRegistration(const UiBindingProviderRegistration &registration) {
             if (!registration.instance.IsValid() || !registration.revision.IsValid() || !registration.schema ||
@@ -146,17 +162,14 @@ namespace Horo::Runtime::Ui {
         const auto providerIndex = static_cast<std::size_t>(provider - providers.data());
         const auto type = *UiBindingTargetValueType(binding.target.property);
         const bool writeOnly = binding.direction == UiBindingDirection::TargetToSource;
-        if (writeOnly != resolved.initialTarget.has_value())
-            return Failure(UiErrors::BindingValueInvalid);
-        const auto *value = writeOnly ? &*resolved.initialTarget : InitialValue(registrations[providerIndex].values, propertySlot);
+        const auto initial = InitialTargetValue(resolved, registrations[providerIndex].values, propertySlot);
+        if (initial.HasError())
+            return Result<void>::Failure(initial.ErrorValue());
+        const auto *value = initial.Value();
         auto origin = UiBindingValueOrigin::UiLocal;
         if (!writeOnly)
-            origin = value ? UiBindingValueOrigin::Provider : UiBindingValueOrigin::Fallback;
-        if (!value) {
-            if (!binding.fallback)
-                return Failure(UiErrors::BindingProviderUnknown);
-            value = &*binding.fallback;
-        }
+            origin = InitialValue(registrations[providerIndex].values, propertySlot) ? UiBindingValueOrigin::Provider
+                                                                                     : UiBindingValueOrigin::Fallback;
         if (const auto valid =
                 BindingInternal::ValidateValue(*value, *UiBindingTargetValueType(binding.target.property), binding.target.limits);
             valid.HasError())

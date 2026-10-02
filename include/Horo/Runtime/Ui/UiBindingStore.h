@@ -256,7 +256,7 @@ namespace Horo::Runtime::Ui {
                                                            std::span<const UiBindingProviderRegistration> providers,
                                                            std::span<const UiResolvedBindingDescriptor> bindings,
                                                            const UiBindingStoreLimits &limits = {});
-        /** @brief Releases all Horo-owned metadata and target storage without calling external owners. */
+        /** @brief Abandons pending reservations before releasing Horo-owned storage and admitted authority leases. */
         ~UiBindingStore();
         /** @brief Transfers unique binding ownership and invalidates other. @param other Store to transfer. */
         UiBindingStore(UiBindingStore &&) noexcept;
@@ -313,22 +313,22 @@ namespace Horo::Runtime::Ui {
          * @param tree Exact live tree. @param owner New last-presented owner with otherwise identical evidence.
          * @return Success or stale/lifecycle failure. Old edits/reservations cancel once before the new presentation admits input.
          */
-        [[nodiscard]] Result<void> UpdateWritePresentation(const UiElementTree &tree, UiActionOwnerContext owner);
+        [[nodiscard]] Result<void> UpdateWritePresentation(const UiElementTree &tree, const UiActionOwnerContext &owner);
         /**
          * @brief Captures expected committed revision and exact presented source before editing.
          * @param tree Exact tree. @param binding Admitted writable binding. @param source Last-presented source.
          * @return Store-issued session or access/stale/busy failure. One edit/write may be outstanding per binding.
          */
-        [[nodiscard]] Result<UiBindingEditId> BeginEdit(const UiElementTree &tree, UiBindingId binding, UiActionSource source);
+        [[nodiscard]] Result<UiBindingEditId> BeginEdit(const UiElementTree &tree, UiBindingId binding, const UiActionSource &source);
         /** @brief Ends an unqueued draft after cancel/rejection. @param edit Exact session. @return Success or stale/lifecycle failure. */
-        [[nodiscard]] Result<void> CancelEdit(UiBindingEditId edit);
+        [[nodiscard]] Result<void> CancelEdit(const UiBindingEditId &edit);
         /**
          * @brief Queues one action-routed draft at its admitted trigger without publishing target/provider/layout state.
          * @param tree Exact tree. @param edit Captured edit session. @param request Real action-router request.
          * @param trigger Owner-observed change/blur/submit. @return Pending correlated evidence or original validation failure.
          * @details The final argument is the control value; only bool, finite double and bounded UTF-8 text are admitted.
          */
-        [[nodiscard]] Result<UiBindingWriteResult> QueueWrite(const UiElementTree &tree, UiBindingEditId edit,
+        [[nodiscard]] Result<UiBindingWriteResult> QueueWrite(const UiElementTree &tree, const UiBindingEditId &edit,
                                                               const UiActionRequest &request, UiBindingCommitTrigger trigger);
         /**
          * @brief Previews an unsuppressed control default, admits its routed write, then applies its UI-local pending projection.
@@ -336,7 +336,7 @@ namespace Horo::Runtime::Ui {
          * @param request Request admitted by the action router from PeekDefault's action/payload/source.
          * @return Pending write or failure; failed admission suppresses the default and preserves committed control state.
          */
-        [[nodiscard]] Result<UiBindingWriteResult> QueueControlDefault(const UiElementTree &tree, UiBindingEditId edit,
+        [[nodiscard]] Result<UiBindingWriteResult> QueueControlDefault(const UiElementTree &tree, const UiBindingEditId &edit,
                                                                        UiControlStateMachine &control, const UiActionRequest &request);
         /**
          * @brief Processes at most one queued/pending command at the provider owner safe point in deterministic round-robin binding order.
@@ -376,13 +376,13 @@ namespace Horo::Runtime::Ui {
          * @brief Routes a form/change/blur draft through the admitted trigger.
          * @param store Binding owner. @param tree Exact tree. @param edit Captured session. @param trigger Observed trigger.
          */
-        UiBindingWriteActionHandler(UiBindingStore &store, const UiElementTree &tree, UiBindingEditId edit,
+        UiBindingWriteActionHandler(UiBindingStore &store, const UiElementTree &tree, const UiBindingEditId &edit,
                                     UiBindingCommitTrigger trigger) noexcept;
         /**
          * @brief Routes the real staged control default before applying its pending UI-local value.
          * @param store Binding owner. @param tree Exact tree. @param edit Captured session. @param control Borrowed exact control.
          */
-        UiBindingWriteActionHandler(UiBindingStore &store, const UiElementTree &tree, UiBindingEditId edit,
+        UiBindingWriteActionHandler(UiBindingStore &store, const UiElementTree &tree, const UiBindingEditId &edit,
                                     UiControlStateMachine &control) noexcept;
         /** @brief Admits one routed write. @param request Frozen router request. @return Pending correlation or original failure. */
         [[nodiscard]] Result<UiActionResult> Handle(const UiActionRequest &request) override;

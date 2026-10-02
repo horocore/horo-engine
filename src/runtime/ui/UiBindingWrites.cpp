@@ -1,6 +1,6 @@
 #include "UiBindingStoreInternal.h"
 
-#include <limits>
+#include <exception>
 
 namespace Horo::Runtime::Ui {
     using BindingStoreInternal::Failure;
@@ -8,27 +8,24 @@ namespace Horo::Runtime::Ui {
     namespace {
         /** @brief Copies the supported control vocabulary into already reserved target storage. */
         [[nodiscard]] Result<void> CopyDraft(UiBindingValue &draft, const UiActionValue &value) {
-            if (auto *boolean = std::get_if<bool>(&draft)) {
-                const auto *input = std::get_if<bool>(&value);
-                if (!input)
+            return std::visit([&value]<typename Value>(Value &stored) {
+                if constexpr (std::is_same_v<Value, bool> || std::is_same_v<Value, double>) {
+                    const auto *input = std::get_if<Value>(&value);
+                    if (!input)
+                        return Failure(UiErrors::BindingTypeMismatch);
+                    stored = *input;
+                } else if constexpr (std::is_same_v<Value, std::string>) {
+                    const auto *input = std::get_if<UiActionText>(&value);
+                    if (!input || !input->IsValid())
+                        return Failure(UiErrors::BindingTypeMismatch);
+                    if (input->size > stored.capacity())
+                        return Failure(UiErrors::BindingValueInvalid);
+                    stored.assign(input->View());
+                } else {
                     return Failure(UiErrors::BindingTypeMismatch);
-                *boolean = *input;
-            } else if (auto *scalar = std::get_if<double>(&draft)) {
-                const auto *input = std::get_if<double>(&value);
-                if (!input)
-                    return Failure(UiErrors::BindingTypeMismatch);
-                *scalar = *input;
-            } else if (auto *text = std::get_if<std::string>(&draft)) {
-                const auto *input = std::get_if<UiActionText>(&value);
-                if (!input || !input->IsValid())
-                    return Failure(UiErrors::BindingTypeMismatch);
-                if (input->size > text->capacity())
-                    return Failure(UiErrors::BindingValueInvalid);
-                text->assign(input->View());
-            } else {
-                return Failure(UiErrors::BindingTypeMismatch);
-            }
-            return Result<void>::Success();
+                }
+                return Result<void>::Success();
+            }, draft);
         }
 
         /** @brief Reads typed action identity/payload without reflection or provider lookup. */
@@ -50,23 +47,43 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool EqualValue(const UiActionValue &left, const UiActionValue &right) noexcept {
             if (left.index() != right.index())
                 return false;
-            return std::visit([&right](const auto &value) {
-                using Value = std::decay_t<decltype(value)>;
+            return std::visit([&right]<typename Value>(const Value &value) {
                 if constexpr (std::is_same_v<Value, UiActionText>)
                     return value.View() == std::get<Value>(right).View();
                 else
                     return value == std::get<Value>(right);
             }, left);
         }
-    }  // namespace
 
-    /** @copydoc UiBindingStore::Storage::FindTarget */
-    UiBindingStore::Storage::Target *UiBindingStore::Storage::FindTarget(const UiBindingId binding) noexcept {
-        const auto found = std::ranges::find(targets, binding, [](const Target &target) {
-            return target.bound.binding;
-        });
-        return found == targets.end() ? nullptr : &*found;
-    }
+        /** @brief Contains standard and foreign callback exceptions at the explicit provider execution boundary. */
+        [[nodiscard]] Result<UiBindingWriteDisposition> PrepareWrite(UiBindingWriteAuthority &authority,
+                                                                     const UiBindingWriteCommand &command) {
+            try {
+                return authority.Prepare(command);
+            } catch (const std::exception &) {
+                return Failure<UiBindingWriteDisposition>(UiErrors::ActionHandlerFailed);
+            } catch (...) {
+                return Failure<UiBindingWriteDisposition>(UiErrors::ActionHandlerFailed);
+            }
+        }
+
+        /** @brief Keeps callback reentry fenced through validation, reservation publication and terminal abandonment. */
+        struct ProcessingScope final {
+            bool &processing;
+            bool previous;
+
+            explicit ProcessingScope(bool &value) noexcept : processing(value), previous(std::exchange(value, true)) {}
+
+            ~ProcessingScope() {
+                processing = previous;
+            }
+
+            ProcessingScope(const ProcessingScope &) = delete;
+            ProcessingScope &operator=(const ProcessingScope &) = delete;
+            ProcessingScope(ProcessingScope &&) = delete;
+            ProcessingScope &operator=(ProcessingScope &&) = delete;
+        };
+    }  // namespace
 
     /** @copydoc UiBindingStore::Storage::NextWrite */
     UiBindingStore::Storage::Target *UiBindingStore::Storage::NextWrite() noexcept {
@@ -94,120 +111,8 @@ namespace Horo::Runtime::Ui {
         target.edit = {};
     }
 
-    /** @copydoc UiBindingStore::Storage::ValidateWriteSource */
-    Result<void> UiBindingStore::Storage::ValidateWriteSource(const UiElementTree &tree, const Target &target,
-                                                              const UiActionSource source) const {
-        if (const auto valid = ValidateTree(tree); valid.HasError())
-            return valid;
-        if (!target.admission || !source.IsValid() || source.owner != target.admission->owner || source.element != target.bound.element)
-            return Failure(UiErrors::RevisionStale);
-        const auto &owner = source.owner;
-        if (owner.instance != instance || owner.canvas != canvas || owner.document != document ||
-            owner.documentRevision != documentRevision || owner.treeRevision != treeRevision)
-            return Failure(UiErrors::RevisionStale);
-        if (!tree.Get(source.element).HasValue())
-            return Failure(UiErrors::HandleStale);
-        return Result<void>::Success();
-    }
-
-    /** @copydoc UiBindingStore::AdmitWrites */
-    Result<void> UiBindingStore::AdmitWrites(const UiElementTree &tree, const std::span<const UiBindingWriteAdmission> admissions) {
-        if (!storage_)
-            return Failure(UiErrors::BindingLifecycleUnavailable);
-        if (const auto valid = storage_->ValidateTree(tree); valid.HasError())
-            return valid;
-        if (storage_->writesAdmitted || admissions.size() > storage_->targets.size())
-            return Failure(UiErrors::BindingDescriptorConflict);
-        for (std::size_t index = 0; index < admissions.size(); ++index) {
-            const auto &admission = admissions[index];
-            const auto *target = storage_->FindTarget(admission.binding);
-            if (!target || !admission.authority || !admission.action.IsValid() || !admission.owner.IsValid() ||
-                admission.trigger >= UiBindingCommitTrigger::Count || admission.conflict != UiBindingConflictPolicy::RejectStale)
-                return Failure(UiErrors::BindingAccessInvalid);
-            const auto &provider = storage_->providers[target->provider];
-            const auto &property = provider.schema.Properties()[target->property];
-            if (property.type != UiBindingValueType::Boolean && property.type != UiBindingValueType::FixedScalar &&
-                property.type != UiBindingValueType::BoundedText)
-                return Failure(UiErrors::BindingTypeMismatch);
-            const auto &fence = admission.authority->Fence();
-            if (target->direction == UiBindingDirection::SourceToTarget || property.access == UiBindingAccess::Read ||
-                HasFlag(provider.schema.Flags(), UiBindingProviderFlags::Immutable) || fence.capability == 0 ||
-                fence.provider != provider.instance || fence.scope != provider.scope || fence.schema != provider.schema.Version() ||
-                fence.property != target->property || fence.signature != property.signatureFingerprint)
-                return Failure(UiErrors::BindingAccessInvalid);
-            const auto &owner = admission.owner;
-            if (owner.instance != tree.Instance() || owner.canvas != tree.Canvas() || owner.document != tree.SourceDocument() ||
-                owner.documentRevision != tree.SourceDocumentRevision() || owner.treeRevision != tree.Revision())
-                return Failure(UiErrors::RevisionStale);
-            for (std::size_t previous = 0; previous < index; ++previous)
-                if (admissions[previous].binding == admission.binding)
-                    return Failure(UiErrors::BindingDescriptorConflict);
-        }
-        for (const auto &admission : admissions) {
-            auto *target = storage_->FindTarget(admission.binding);
-            target->admission = admission;
-            target->fence = admission.authority->Fence();
-        }
-        storage_->writesAdmitted = true;
-        return Result<void>::Success();
-    }
-
-    /** @copydoc UiBindingStore::UpdateWritePresentation */
-    Result<void> UiBindingStore::UpdateWritePresentation(const UiElementTree &tree, const UiActionOwnerContext owner) {
-        if (!storage_ || storage_->processingWrite)
-            return Failure(UiErrors::BindingLifecycleUnavailable);
-        if (const auto valid = storage_->ValidateTree(tree); valid.HasError())
-            return valid;
-        if (!owner.IsValid() || owner.instance != tree.Instance() || owner.canvas != tree.Canvas() ||
-            owner.document != tree.SourceDocument() || owner.documentRevision != tree.SourceDocumentRevision() ||
-            owner.treeRevision != tree.Revision())
-            return Failure(UiErrors::RevisionStale);
-        for (const auto &target : storage_->targets)
-            if (target.admission && owner.interaction <= target.admission->owner.interaction)
-                return Failure(UiErrors::RevisionStale);
-        for (auto &target : storage_->targets)
-            if (target.admission) {
-                storage_->CancelWrite(target, UiBindingWriteCancellationReason::PresentationChanged);
-                target.admission->owner = owner;
-            }
-        return Result<void>::Success();
-    }
-
-    /** @copydoc UiBindingStore::BeginEdit */
-    Result<UiBindingEditId> UiBindingStore::BeginEdit(const UiElementTree &tree, const UiBindingId binding, const UiActionSource source) {
-        if (!storage_ || !storage_->active)
-            return Failure<UiBindingEditId>(UiErrors::BindingLifecycleUnavailable);
-        auto *target = storage_->FindTarget(binding);
-        if (!target || !target->admission)
-            return Failure<UiBindingEditId>(UiErrors::BindingAccessInvalid);
-        if (const auto valid = storage_->ValidateWriteSource(tree, *target, source); valid.HasError())
-            return Result<UiBindingEditId>::Failure(valid.ErrorValue());
-        if (!storage_->providers[target->provider].active || storage_->providers[target->provider].writesRevoked ||
-            !target->admission->authority->Active())
-            return Failure<UiBindingEditId>(UiErrors::BindingLifecycleUnavailable);
-        if (target->command || target->edit.sequence != 0 || storage_->processingWrite)
-            return Failure<UiBindingEditId>(UiErrors::BindingDescriptorConflict);
-        if (storage_->editSequence == std::numeric_limits<std::uint64_t>::max())
-            return Failure<UiBindingEditId>(UiErrors::RevisionInvalid);
-        target->edit = {tree.Instance().ownership, ++storage_->editSequence, target->bound.element};
-        target->source = source;
-        target->expected = storage_->providers[target->provider].revision;
-        return Result<UiBindingEditId>::Success(target->edit);
-    }
-
-    /** @copydoc UiBindingStore::CancelEdit */
-    Result<void> UiBindingStore::CancelEdit(const UiBindingEditId edit) {
-        if (!storage_ || storage_->processingWrite)
-            return Failure(UiErrors::BindingLifecycleUnavailable);
-        const auto found = std::ranges::find(storage_->targets, edit, &Storage::Target::edit);
-        if (edit.sequence == 0 || found == storage_->targets.end())
-            return Failure(UiErrors::RevisionStale);
-        found->edit = {};
-        return Result<void>::Success();
-    }
-
     /** @copydoc UiBindingStore::QueueWrite */
-    Result<UiBindingWriteResult> UiBindingStore::QueueWrite(const UiElementTree &tree, const UiBindingEditId edit,
+    Result<UiBindingWriteResult> UiBindingStore::QueueWrite(const UiElementTree &tree, const UiBindingEditId &edit,
                                                             const UiActionRequest &request, const UiBindingCommitTrigger trigger) {
         if (!storage_ || !storage_->active || storage_->processingWrite)
             return Failure<UiBindingWriteResult>(UiErrors::BindingLifecycleUnavailable);
@@ -247,7 +152,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiBindingStore::QueueControlDefault */
-    Result<UiBindingWriteResult> UiBindingStore::QueueControlDefault(const UiElementTree &tree, const UiBindingEditId edit,
+    Result<UiBindingWriteResult> UiBindingStore::QueueControlDefault(const UiElementTree &tree, const UiBindingEditId &edit,
                                                                      UiControlStateMachine &control, const UiActionRequest &request) {
         const auto preview = control.PeekDefault();
         if (preview.HasError())
@@ -276,8 +181,7 @@ namespace Horo::Runtime::Ui {
             (void)suppressed;
             return queued;
         }
-        const auto applied = control.ApplyDefault();
-        if (applied.HasError())
+        if (const auto applied = control.ApplyDefault(); applied.HasError())
             return Result<UiBindingWriteResult>::Failure(applied.ErrorValue());
         return queued;
     }
@@ -296,8 +200,7 @@ namespace Horo::Runtime::Ui {
             if (const auto result = Stage(index, &target.draft, UiBindingValueOrigin::Provider); result.HasError())
                 return result;
         }
-        const auto published = Publish(tree, layout);
-        if (published.HasError())
+        if (const auto published = Publish(tree, layout); published.HasError())
             return Result<void>::Failure(published.ErrorValue());
         target.admission->authority->Commit(*target.command);
         provider.revision = next.Value();
@@ -314,17 +217,7 @@ namespace Horo::Runtime::Ui {
         auto &target = *found;
         auto &authority = *target.admission->authority;
 
-        struct ProcessingScope final {
-            bool &processing;
-
-            explicit ProcessingScope(bool &value) noexcept : processing(value) {
-                processing = true;
-            }
-
-            ~ProcessingScope() {
-                processing = false;
-            }
-        } processing{storage_->processingWrite};
+        const ProcessingScope processing{storage_->processingWrite};
 
         storage_->reentryAttempted = false;
         const auto finish = [&](const UiBindingWriteDisposition disposition, std::optional<Error> error = {},
@@ -344,13 +237,7 @@ namespace Horo::Runtime::Ui {
         if (authority.Fence() != target.command->fence || storage_->providers[target.provider].revision != target.command->expected)
             return finish(UiBindingWriteDisposition::Rejected, MakeError(UiErrors::RevisionStale));
 
-        const auto prepared = [&]() -> Result<UiBindingWriteDisposition> {
-            try {
-                return authority.Prepare(*target.command);
-            } catch (...) {
-                return Failure<UiBindingWriteDisposition>(UiErrors::ActionHandlerFailed);
-            }
-        }();
+        const auto prepared = PrepareWrite(authority, *target.command);
         if (storage_->reentryAttempted)
             return finish(UiBindingWriteDisposition::Rejected, MakeError(UiErrors::ActionHandlerFailed));
         if (prepared.HasError())
@@ -413,12 +300,12 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiBindingWriteActionHandler::UiBindingWriteActionHandler */
-    UiBindingWriteActionHandler::UiBindingWriteActionHandler(UiBindingStore &store, const UiElementTree &tree, const UiBindingEditId edit,
+    UiBindingWriteActionHandler::UiBindingWriteActionHandler(UiBindingStore &store, const UiElementTree &tree, const UiBindingEditId &edit,
                                                              const UiBindingCommitTrigger trigger) noexcept
         : store_(store), tree_(tree), edit_(edit), trigger_(trigger) {}
 
     /** @copydoc UiBindingWriteActionHandler::UiBindingWriteActionHandler */
-    UiBindingWriteActionHandler::UiBindingWriteActionHandler(UiBindingStore &store, const UiElementTree &tree, const UiBindingEditId edit,
+    UiBindingWriteActionHandler::UiBindingWriteActionHandler(UiBindingStore &store, const UiElementTree &tree, const UiBindingEditId &edit,
                                                              UiControlStateMachine &control) noexcept
         : store_(store), tree_(tree), edit_(edit), trigger_(UiBindingCommitTrigger::Count), control_(&control) {}
 

@@ -942,6 +942,14 @@ controls. Preallocation includes a bounded draft per target; successful supporte
 control writes need no heap allocation after preparation. Native module composition,
 list/record editing and general asynchronous UI progress remain separate contracts.
 
+Write entry points borrow large owner/source/edit inputs through const references
+only until return, copying evidence into retained command storage when admitted.
+`UiControlStateMachine::Handle` likewise borrows its input until return; ordinary
+call expressions remain valid, while member-function-pointer aliases must use
+`const UiControlInput&`. This avoids a redundant large input copy without changing
+input ownership or admitting asynchronous borrows. The affected in-tree control
+and binding consumers are covered by the isolated public-header and regression builds.
+
 ## Templates And Presets
 
 [ADR-083](../../adr/083-ui-template-identity-schema-and-expansion.md) makes

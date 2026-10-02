@@ -88,7 +88,7 @@ namespace Horo::Runtime::Ui {
         /** @brief Closes an old command once, retaining outcome evidence until acknowledgement. */
         void CancelWrite(Target &target, UiBindingWriteCancellationReason reason) noexcept;
         /** @brief Validates admitted source against exact owner, tree and retained element evidence. */
-        [[nodiscard]] Result<void> ValidateWriteSource(const UiElementTree &tree, const Target &target, UiActionSource source) const;
+        [[nodiscard]] Result<void> ValidateWriteSource(const UiElementTree &tree, const Target &target, const UiActionSource &source) const;
         /** @brief Atomically publishes a prepared command through existing delta and invalidation storage. */
         [[nodiscard]] Result<void> PublishWrite(const UiElementTree &tree, Target &target, UiLayoutEngine &layout);
 
@@ -107,6 +107,11 @@ namespace Horo::Runtime::Ui {
             for (auto &target : targets)
                 CancelWrite(target, UiBindingWriteCancellationReason::Shutdown);
         }
+
+        Storage(const Storage &) = delete;
+        Storage &operator=(const Storage &) = delete;
+        Storage(Storage &&) = delete;
+        Storage &operator=(Storage &&) = delete;
 
         /** @brief Finds only the exact registered provider incarnation; no type/scope fallback occurs. */
         [[nodiscard]] Provider *FindProvider(const UiBindingProviderInstanceId id) noexcept {

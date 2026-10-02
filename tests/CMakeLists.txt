@@ -2046,7 +2046,15 @@ add_executable(HoroRuntimeUiBindingTests
 target_compile_features(HoroRuntimeUiBindingTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiBindingTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiBindingStoreTests unit/runtime/ui/UiBindingStoreTests.cpp)
-add_executable(HoroRuntimeUiBindingWriteTests unit/runtime/ui/UiBindingWriteTests.cpp)
+add_executable(HoroRuntimeUiBindingWriteTests
+        unit/runtime/ui/UiBindingWriteTests.cpp
+        unit/runtime/ui/UiBindingWriteConflictTests.cpp
+        unit/runtime/ui/UiBindingWriteLifecycleTests.cpp
+        unit/runtime/ui/UiBindingWritePublicationTests.cpp
+        unit/runtime/ui/UiBindingWriteTestFixture.cpp
+        unit/runtime/ui/UiBindingWriteTestAuthority.cpp
+        unit/runtime/ui/UiBindingWriteTestAllocations.cpp
+)
 target_compile_features(HoroRuntimeUiBindingWriteTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiBindingWriteTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiBindingWritePublicHeaderConsumer support/RuntimeUiBindingWritePublicHeaderConsumer.cpp)
