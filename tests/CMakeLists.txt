@@ -2575,6 +2575,16 @@ foreach(abi_cleanup_fixture_mode RANGE 0 2)
             HORO_ABI_CLEANUP_FIXTURE_${abi_cleanup_fixture_mode}="$<TARGET_FILE:${abi_cleanup_fixture_target}>")
 endforeach()
 add_dependencies(HoroExtensionManagerTests horo-extension-conformance)
+foreach(abi_hostile_fixture_mode RANGE 0 7)
+    set(abi_hostile_fixture_target HoroExtensionAbiHostileFixture${abi_hostile_fixture_mode})
+    add_library(${abi_hostile_fixture_target} MODULE fixtures/extensions/AbiHostileModule.cpp)
+    target_compile_features(${abi_hostile_fixture_target} PRIVATE cxx_std_20)
+    target_link_libraries(${abi_hostile_fixture_target} PRIVATE HoroEngine::Extensions)
+    target_compile_definitions(${abi_hostile_fixture_target} PRIVATE HORO_ABI_HOSTILE_FIXTURE_MODE=${abi_hostile_fixture_mode})
+    add_dependencies(HoroExtensionManagerTests ${abi_hostile_fixture_target})
+    target_compile_definitions(HoroExtensionManagerTests PRIVATE
+            HORO_ABI_HOSTILE_FIXTURE_${abi_hostile_fixture_mode}="$<TARGET_FILE:${abi_hostile_fixture_target}>")
+endforeach()
 add_test(NAME HoroExtensionAbiConformanceCliSupported
     COMMAND "$<TARGET_FILE:horo-extension-conformance>" --json "$<TARGET_FILE:HoroExtensionAbiFixture1>")
 set_tests_properties(HoroExtensionAbiConformanceCliSupported PROPERTIES
