@@ -20,7 +20,7 @@ void *operator new(const std::size_t bytes) {
     const auto release = [](std::byte *memory) noexcept {
         ::operator delete(memory);
     };
-    std::unique_ptr<std::byte[], decltype(release)> memory{static_cast<std::byte *>(std::malloc(bytes == 0 ? 1 : bytes)), release};
+    std::unique_ptr<std::byte, decltype(release)> memory{static_cast<std::byte *>(std::malloc(bytes == 0 ? 1 : bytes)), release};
     if (!memory)
         throw std::bad_alloc{};
     return memory.release();
