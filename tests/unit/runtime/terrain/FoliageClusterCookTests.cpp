@@ -407,6 +407,14 @@ namespace Horo::Terrain {
         CHECK(owner.Publish(first.Value(), std::nullopt).HasValue());
         auto next = CookFoliageClusters(fixture.Request(2, owner.Current()), {});
         REQUIRE(next.HasValue());
+        auto limits = fixture.profile.configuration.Data().limits;
+        limits.maximumRetiringBytes = retained.Footprint().residentFoliageBytes - 1;
+        fixture.Limits(limits);
+        auto withoutPredecessor = CookFoliageClusters(fixture.Request(2), {});
+        REQUIRE(withoutPredecessor.HasValue());
+        CHECK(withoutPredecessor.Value().Footprint().retiringBytes == 0);
+        ErrorIs(owner.Publish(withoutPredecessor.Value(), Rev<TerrainContentRevision>(1)), FoliageClusterCookErrors::LimitExceeded);
+        CHECK(owner.Current()->ManifestDigest() == retained.ManifestDigest());
         CancellationSource cancellation;
         cancellation.RequestCancellation();
         ErrorIs(CookFoliageClusters(fixture.Request(), cancellation.Token()), FoliageClusterCookErrors::Cancelled);
@@ -453,7 +461,6 @@ namespace Horo::Terrain {
         auto moved = std::move(retained);
         FoliageClusterCookOwner owner;
         ErrorIs(CookFoliageClusters(fixture.Request(2, &retained), {}), FoliageClusterCookErrors::InvalidInput);
-        ErrorIs(owner.Publish(std::move(retained), std::nullopt), FoliageClusterCookErrors::InvalidInput);
         CHECK(owner.Current() == nullptr);
         CHECK(owner.Publish(moved, std::nullopt).HasValue());
         ErrorIs(owner.Publish(moved, std::nullopt), FoliageClusterCookErrors::Stale);
