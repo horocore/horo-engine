@@ -11,6 +11,12 @@ namespace Horo::Application {
     using namespace DiagnosticsTestSupport;
 
     namespace {
+        /** @brief Private source adapter failure normalized by its owning adapter. */
+        class AdapterFailure final : public std::logic_error {
+        public:
+            AdapterFailure() : std::logic_error{"private source adapter failure"} {}
+        };
+
         /** @brief Owned host adapter normalizing its private library failure before the public result boundary. */
         class FailingNavigator final : public INavigationDiagnosticNavigator {
         public:
@@ -21,8 +27,8 @@ namespace Horo::Application {
                 if (!privateException)
                     return Result<bool>::Failure(failure);
                 try {
-                    throw std::logic_error{"private source adapter failure"};
-                } catch (const std::logic_error &error) {
+                    throw AdapterFailure{};
+                } catch (const AdapterFailure &error) {
                     auto normalized = failure;
                     normalized.message = error.what();
                     return Result<bool>::Failure(std::move(normalized));
@@ -191,12 +197,9 @@ namespace Horo::Application {
     }
 
     TEST_CASE("Even matching source identities cannot route malicious or symlinked paths", "[navigation][diagnostics][security]") {
-        Directory directory;
-        auto config = DiagnosticConfig(directory);
-        auto journal = NavigationBakeDiagnostics::Create(config).Value();
-        TelemetryOwner telemetry(journal);
-        IncrementalBakeFixture fixture;
-        auto source = Source(fixture);
+        RoutingFixture routing;
+        auto &source = routing.source;
+        const auto &directory = routing.directory;
         SECTION("parent traversal") {
             source.target.relativePath = "../escape.scene";
         }
@@ -226,18 +229,14 @@ namespace Horo::Application {
             std::filesystem::create_symlink(directory.root / "real.scene", directory.root / "link.scene");
             source.target.relativePath = "link.scene";
         }
-        REQUIRE(journal->Record({.operation = 1,
-                                 .event = NavigationBakeDiagnosticEvent::TileFailed,
-                                 .stage = "tile_build",
-                                 .message = "failed",
-                                 .source = source}));
+        const auto sequence = routing.Record();
         std::size_t callbacks{};
         Navigator navigator{[&callbacks](const auto &, const auto &) noexcept {
             ++callbacks;
             return true;
         }};
-        auto routed = journal->Navigate(journal->Snapshot().records.back().sequence, config.project, config.definition,
-                                        std::span{&source, 1}, navigator);
+        auto routed =
+            routing.journal->Navigate(sequence, routing.config.project, routing.config.definition, std::span{&source, 1}, navigator);
         REQUIRE(routed.HasError());
         REQUIRE(callbacks == 0);
     }
