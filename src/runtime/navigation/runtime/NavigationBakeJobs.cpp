@@ -351,8 +351,8 @@ namespace Horo::Navigation {
         [[nodiscard]] std::optional<OperationId> AdmitOperation(OperationStore &operations, const NavigationBakeJobDescriptor &descriptor,
                                                                 const std::shared_ptr<CancellationSource> &cancellation) {
             if (descriptor.queuedOperation.has_value()) {
-                const auto snapshot = operations.SnapshotIfChanged(0);
-                if (!snapshot || !std::ranges::any_of(snapshot->operations, [&descriptor](const auto &record) {
+                if (const auto snapshot = operations.SnapshotIfChanged(0);
+                    !snapshot || !std::ranges::any_of(snapshot->operations, [&descriptor](const auto &record) {
                     return record.id == *descriptor.queuedOperation &&
                            (record.state == OperationState::Queued || record.state == OperationState::Cancelling);
                 }))

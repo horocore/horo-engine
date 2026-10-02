@@ -256,6 +256,8 @@ namespace Horo::Navigation {
     Result<std::shared_ptr<const NavigationCookedTile>> NavigationCookedTile::Decode(const std::span<const std::uint8_t> bytes,
                                                                                      const std::size_t maximumBytes) {
         using namespace TileArtifactInternal;
+        if (maximumBytes == 0 || maximumBytes > NavigationTileBuildLimits::MaximumOwnedBytes)
+            return Failure<std::shared_ptr<const NavigationCookedTile>>(NavigationErrors::BakeInputInvalid);
         if (bytes.size() > maximumBytes)
             return Failure<std::shared_ptr<const NavigationCookedTile>>(NavigationErrors::CapacityExceeded);
         try {
@@ -273,6 +275,16 @@ namespace Horo::Navigation {
         } catch (const std::bad_alloc &) {
             return Failure<std::shared_ptr<const NavigationCookedTile>>(NavigationErrors::CapacityExceeded);
         }
+    }
+
+    /** @copydoc NavigationCookedTile::StorageBytes */
+    std::size_t NavigationCookedTile::StorageBytes() const noexcept {
+        return sizeof(*this) + bytes_.capacity() + topology_.vertices.capacity() * sizeof(Math::Vec3) +
+               topology_.polygons.capacity() * sizeof(NavMeshPolygon) + topology_.polygonVertexIndices.capacity() * sizeof(std::uint32_t) +
+               topology_.polygonAdjacencies.capacity() * sizeof(std::uint32_t) +
+               topology_.offMeshLinks.capacity() * sizeof(NavMeshOffMeshLink) +
+               topology_.provenance.capacity() * sizeof(NavMeshSourceProvenance) +
+               topology_.warnings.capacity() * sizeof(NavigationTileBuildWarning);
     }
 
     /** @copydoc NavigationCookedTile::NavigationCookedTile */

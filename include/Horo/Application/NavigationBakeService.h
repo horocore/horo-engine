@@ -65,7 +65,10 @@ namespace Horo::Application {
         };
 
     public:
-        /** @brief Internal factory-only construction; the private key prevents bypassing Create validation. */
+        /** @brief Internal factory-only construction; the private key prevents bypassing Create validation.
+         * @param state Validated worker-owned service composition. @param operations Process operation authority.
+         * @param jobs Process scheduler that outlives accepted work.
+         */
         NavigationBakeService(ConstructionKey, std::shared_ptr<NavigationBakeDetail::ServiceState> state, OperationStore &operations,
                               JobSystem &jobs);
         /** @brief Creates an explicit composition; no backend is discovered or selected.

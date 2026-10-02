@@ -9,7 +9,7 @@ namespace Horo::Application {
 
     namespace {
         /** @brief Validates complete sorted tile coverage and immutable capture freshness before admission. */
-        [[nodiscard]] Result<void> ValidateRequest(const NavigationBakeRequest &request, const std::uint32_t maximumTiles) {
+        [[nodiscard]] Result<void> ValidateRequest(const NavigationBakeRequest &request, const std::size_t maximumTiles) {
             if (!request.input || request.tiles.empty() || request.tiles.size() > maximumTiles ||
                 !std::ranges::is_sorted(request.tiles, {}, &NavigationBakeTile::key) ||
                 std::ranges::adjacent_find(request.tiles, {}, &NavigationBakeTile::key) != request.tiles.end())

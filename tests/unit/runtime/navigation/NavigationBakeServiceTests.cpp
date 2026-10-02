@@ -162,8 +162,7 @@ namespace Horo::Application {
 
         /** @brief Reuses exact shared portal vertices when feeding cooked polygons to the production query provider. */
         [[nodiscard]] std::uint32_t WeldVertex(std::vector<Math::Vec3> &vertices, const Math::Vec3 vertex) {
-            const auto found = std::ranges::find(vertices, vertex);
-            if (found != vertices.end())
+            if (const auto found = std::ranges::find(vertices, vertex); found != vertices.end())
                 return static_cast<std::uint32_t>(found - vertices.begin());
             vertices.push_back(vertex);
             return static_cast<std::uint32_t>(vertices.size() - 1);
