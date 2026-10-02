@@ -129,6 +129,17 @@ The cook produces independently hashed neutral tile payloads and a complete sort
 manifest, without a cache root, runtime state, native handle or global registry.
 Generated public-header consumer coverage checks the staged target boundary.
 
+## TRF-004.3 Foliage Placement Cook Boundary
+
+`HoroEngine::TerrainCook` also owns the additive
+`Horo/Terrain/FoliagePlacementCook.h` contract. Existing tile-cook callers do not
+change. The host supplies an exact integer placement source, validated foliage
+definition, capability set, finite limits and target/toolchain envelope. Terrain
+Cook returns a detached generation; the owner publishes it against an exact
+content revision, and no renderer or runtime-native handle crosses this header.
+The standalone public-header consumer checks the owning target's staged include
+view.
+
 ## REL-002.4 Update Transfer Boundary
 
 `HoroEngine::UpdateTransfer` owns the additive `Horo/Release/UpdateTransfer.h`
