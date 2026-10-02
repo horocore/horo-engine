@@ -26,7 +26,34 @@ runs:
     - name: Identify compiler and dependency inputs
       id: identity
       shell: bash
-      run: python3 scripts/ci_cache_identity.py --github-output "$GITHUB_OUTPUT"
+      run: |
+        # Only the tools selected by our CI matrix can be queried. Never execute
+        # CC/CXX as commands: their values select fixed, argument-free probes.
+        compiler_version() {
+          case "$1" in
+            gcc) gcc -dumpfullversion -dumpversion ;;
+            g++) g++ -dumpfullversion -dumpversion ;;
+            clang) clang --version ;;
+            clang++) clang++ --version ;;
+            cl)
+              # MSVC prints its version to stderr and exits 2 without inputs.
+              local banner status=0
+              banner=$(cl 2>&1) || status=$?
+              if [[ "$status" != 0 && "$status" != 2 ]]; then
+                printf '%s\n' "$banner" >&2
+                return "$status"
+              fi
+              printf '%s\n' "$banner"
+              ;;
+            *) echo "Unsupported CI compiler: $1" >&2; return 1 ;;
+          esac
+        }
+        cc_version=$(compiler_version "$CC")
+        cxx_version=$(compiler_version "$CXX")
+        cmake_version=$(cmake --version)
+        python3 scripts/ci_cache_identity.py --github-output "$GITHUB_OUTPUT" \
+          --cc "$CC" --cxx "$CXX" --cc-version "$cc_version" \
+          --cxx-version "$cxx_version" --cmake-version "$cmake_version"
 
     - name: Install and configure ccache
       if: runner.os != 'Windows'

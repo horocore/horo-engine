@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 from pathlib import Path
 import re
-import subprocess
 
 
 def dependency_fingerprint(root: Path) -> str:
@@ -26,45 +24,41 @@ def dependency_fingerprint(root: Path) -> str:
     return digest.hexdigest()
 
 
-def compiler_identity(compiler: str) -> str:
-    """Read the active GCC, Clang or MSVC version after toolchain setup."""
-    msvc = Path(compiler).stem.lower() == "cl"
-    result = subprocess.run(
-        [compiler] if msvc else [compiler, "--version"],
-        capture_output=True,
-        text=True,
-        errors="replace",
-        check=False,
-    )
-    text = result.stdout + result.stderr
-    if msvc:
+def compiler_identity(compiler: str, text: str) -> str:
+    """Validate version output from the composite action's fixed tool probes."""
+    if compiler == "cl":
         match = re.search(r"Compiler Version (\d+(?:\.\d+)+)", text)
         family = "msvc"
-    elif "clang" in text.lower():
+    elif compiler in {"clang", "clang++"}:
         match = re.search(r"clang version (\d+(?:\.\d+)+)", text)
         family = "appleclang" if "Apple clang" in text else "clang"
-    else:
-        version = subprocess.check_output([compiler, "-dumpfullversion", "-dumpversion"], text=True).strip()
-        match = re.fullmatch(r"(\d+(?:\.\d+)+)", version)
+    elif compiler in {"gcc", "g++"}:
+        match = re.fullmatch(r"(\d+(?:\.\d+)+)", text.strip())
         family = "gcc"
-    if match is None or (not msvc and result.returncode != 0):
+    else:
+        raise ValueError(f"Unsupported CI compiler {compiler}")
+    if match is None:
         raise ValueError(f"Cannot identify compiler {compiler}")
     return f"{family}-{match.group(1)}"
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Write validated toolchain and dependency identities to GitHub step outputs."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--github-output", type=Path, required=True)
-    args = parser.parse_args()
+    parser.add_argument("--cc", required=True)
+    parser.add_argument("--cxx", required=True)
+    parser.add_argument("--cc-version", required=True)
+    parser.add_argument("--cxx-version", required=True)
+    parser.add_argument("--cmake-version", required=True)
+    args = parser.parse_args(argv)
     root = Path(__file__).resolve().parents[1]
-    cmake_version = subprocess.check_output(["cmake", "--version"], text=True)
-    match = re.search(r"cmake version (\d+\.\d+)\.", cmake_version)
+    match = re.search(r"cmake version (\d+\.\d+)\.", args.cmake_version)
     if match is None:
         raise ValueError("Cannot identify CMake version")
     identities = {
-        "compiler": compiler_identity(os.environ["CXX"]),
-        "c-compiler": compiler_identity(os.environ["CC"]),
+        "compiler": compiler_identity(args.cxx, args.cxx_version),
+        "c-compiler": compiler_identity(args.cc, args.cc_version),
         "cmake": match.group(1),
         "dependencies": dependency_fingerprint(root),
     }

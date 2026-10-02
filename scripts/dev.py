@@ -396,6 +396,22 @@ def sync_grafana_dashboard(
     return "unavailable"
 
 
+def _compiler_cache_arguments(
+    compiler_launcher: str | None,
+    msvc_debug_information_format: str | None,
+) -> list[str]:
+    """Configure both language launchers and cache-compatible MSVC debug output."""
+    arguments = []
+    if compiler_launcher:
+        arguments.extend([
+            f"-DCMAKE_C_COMPILER_LAUNCHER={compiler_launcher}",
+            f"-DCMAKE_CXX_COMPILER_LAUNCHER={compiler_launcher}",
+        ])
+    if msvc_debug_information_format:
+        arguments.append(f"-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT={msvc_debug_information_format}")
+    return arguments
+
+
 def configure_command(
     settings: DeveloperSettings | None = None,
     build_directory: Path = DEFAULT_BUILD_DIRECTORY,
@@ -410,7 +426,6 @@ def configure_command(
     compiler_launcher: str | None = None,
     msvc_debug_information_format: str | None = None,
     extra_cmake_args: Sequence[str] | None = None,
-    fetchcontent_base_dir: Path | None = None,
 ) -> list[str]:
     """Build the typed, parameterizable CMake configure command."""
     if render_metal is None:
@@ -435,17 +450,7 @@ def configure_command(
         f"-DHORO_ENABLE_OPENTELEMETRY={'ON' if opentelemetry else 'OFF'}",
         f"-DHORO_ENABLE_IMGUI_UI_TESTS={'ON' if imgui_ui_tests else 'OFF'}",
     ]
-    if compiler_launcher:
-        command.extend(
-            [
-                f"-DCMAKE_C_COMPILER_LAUNCHER={compiler_launcher}",
-                f"-DCMAKE_CXX_COMPILER_LAUNCHER={compiler_launcher}",
-            ]
-        )
-    if msvc_debug_information_format:
-        command.append(f"-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT={msvc_debug_information_format}")
-    if fetchcontent_base_dir is not None:
-        command.append(f"-DFETCHCONTENT_BASE_DIR={fetchcontent_base_dir.resolve()}")
+    command.extend(_compiler_cache_arguments(compiler_launcher, msvc_debug_information_format))
     if extra_cmake_args:
         command.extend(extra_cmake_args)
     return command
@@ -583,6 +588,9 @@ def run_build(
         shutil.rmtree(build_directory, ignore_errors=True)
 
     print(f"Configuring project in {build_directory}...", flush=True)
+    cmake_arguments = list(extra_cmake_args or ())
+    if fetchcontent_base_dir is not None:
+        cmake_arguments.insert(0, f"-DFETCHCONTENT_BASE_DIR={fetchcontent_base_dir.resolve()}")
     cfg_cmd = configure_command(
         build_directory=build_directory,
         build_type=build_type,
@@ -595,8 +603,7 @@ def run_build(
         imgui_ui_tests=imgui_ui_tests,
         compiler_launcher=compiler_launcher,
         msvc_debug_information_format=msvc_debug_information_format,
-        extra_cmake_args=extra_cmake_args,
-        fetchcontent_base_dir=fetchcontent_base_dir,
+        extra_cmake_args=cmake_arguments,
     )
     configure_code = execute_subprocess(cfg_cmd)
     if configure_code != 0:

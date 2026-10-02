@@ -140,7 +140,11 @@ explicit CMake compositions; it does not assume the target preset/profile tools
 described below already exist.
 
 - Compiler snapshots are isolated by OS, architecture, full C and C++ compiler
-  versions, build profile, and Debug/Release mode. An immutable run-ID/attempt
+  versions, build profile, and Debug/Release mode. The composite action probes
+  fixed GCC, Clang, or MSVC commands selected by the CI matrix; the Python
+  identity helper validates their version output without launching processes.
+  Unsupported tool names and malformed versions fail before cache restore.
+  An immutable run-ID/attempt
   suffix permits every successful build to publish an updated snapshot. Restore
   first selects the latest accessible snapshot for the same PR/ref, then main.
   A running main workflow is never awaited: only an already saved checkpoint is
