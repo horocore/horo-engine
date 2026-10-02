@@ -686,6 +686,7 @@ add_executable(HoroCinematicRuntimeTests
         unit/runtime/cinematic/SequencePlaybackRuntimeCoverageTests.cpp
         unit/runtime/cinematic/SequencePlaybackRuntimeTests.cpp
         unit/runtime/cinematic/EventTrackDispatchTests.cpp
+        unit/runtime/cinematic/EventTrackNativeIntegrationTests.cpp
 )
 target_compile_features(HoroCinematicRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroCinematicRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
