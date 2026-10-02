@@ -65,8 +65,8 @@ namespace Horo::Runtime::Ui {
 
     private:
         friend class UiAsyncActionProducer;
-        explicit UiAsyncActionCancellation(std::shared_ptr<UiAsyncActionDetail::Record> record) noexcept;
-        std::shared_ptr<UiAsyncActionDetail::Record> record_;
+        explicit UiAsyncActionCancellation(std::shared_ptr<const UiAsyncActionDetail::Record> record) noexcept;
+        std::shared_ptr<const UiAsyncActionDetail::Record> record_;
     };
 
     /**
@@ -104,6 +104,10 @@ namespace Horo::Runtime::Ui {
     private:
         friend class UiAsyncActionStore;
         explicit UiAsyncActionProducer(std::shared_ptr<UiAsyncActionDetail::Record> record) noexcept;
+        /** @brief Borrows mutable operation state. @return Null after move; unavailable on const leases. */
+        [[nodiscard]] UiAsyncActionDetail::Record *StateRecord() noexcept;
+        /** @brief Borrows read-only operation state. @return Null after move. */
+        [[nodiscard]] const UiAsyncActionDetail::Record *StateRecord() const noexcept;
         void Abandon() noexcept;
         std::shared_ptr<UiAsyncActionDetail::Record> record_;
     };
@@ -146,6 +150,10 @@ namespace Horo::Runtime::Ui {
     private:
         struct Storage;
         explicit UiAsyncActionStore(std::unique_ptr<Storage> storage) noexcept;
+        /** @brief Borrows mutable owner state. @return Null after move; unavailable on const stores. */
+        [[nodiscard]] Storage *StateStorage() noexcept;
+        /** @brief Borrows read-only owner state. @return Null after move. */
+        [[nodiscard]] const Storage *StateStorage() const noexcept;
         std::unique_ptr<Storage> storage_;
     };
 

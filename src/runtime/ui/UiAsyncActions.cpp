@@ -91,7 +91,7 @@ namespace Horo::Runtime::Ui {
     }  // namespace UiAsyncActionDetail
 
     /** @copydoc UiAsyncActionCancellation::UiAsyncActionCancellation */
-    UiAsyncActionCancellation::UiAsyncActionCancellation(std::shared_ptr<UiAsyncActionDetail::Record> record) noexcept
+    UiAsyncActionCancellation::UiAsyncActionCancellation(std::shared_ptr<const UiAsyncActionDetail::Record> record) noexcept
         : record_(std::move(record)) {}
 
     /** @copydoc UiAsyncActionCancellation::IsCancellationRequested */
@@ -102,6 +102,16 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAsyncActionProducer::UiAsyncActionProducer */
     UiAsyncActionProducer::UiAsyncActionProducer(std::shared_ptr<UiAsyncActionDetail::Record> record) noexcept
         : record_(std::move(record)) {}
+
+    /** @copydoc UiAsyncActionProducer::StateRecord */
+    UiAsyncActionDetail::Record *UiAsyncActionProducer::StateRecord() noexcept {
+        return record_.get();
+    }
+
+    /** @copydoc UiAsyncActionProducer::StateRecord */
+    const UiAsyncActionDetail::Record *UiAsyncActionProducer::StateRecord() const noexcept {
+        return record_.get();
+    }
 
     /** @copydoc UiAsyncActionProducer::~UiAsyncActionProducer */
     UiAsyncActionProducer::~UiAsyncActionProducer() {
@@ -122,14 +132,16 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAsyncActionProducer::Abandon */
     void UiAsyncActionProducer::Abandon() noexcept {
-        if (record_)
-            record_->Cancel(UiActionCancellationReason::Requested);
+        auto *const record = StateRecord();
+        if (record)
+            record->Cancel(UiActionCancellationReason::Requested);
         record_.reset();
     }
 
     /** @copydoc UiAsyncActionProducer::Key */
     UiAsyncActionKey UiAsyncActionProducer::Key() const noexcept {
-        return record_ ? record_->Key() : UiAsyncActionKey{};
+        auto *const record = StateRecord();
+        return record ? record->Key() : UiAsyncActionKey{};
     }
 
     /** @copydoc UiAsyncActionProducer::Cancellation */
@@ -139,41 +151,44 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAsyncActionProducer::PublishProgress */
     Result<void> UiAsyncActionProducer::PublishProgress(const UiAsyncActionProgress progress) {
-        if (!record_)
+        auto *const record = StateRecord();
+        if (!record)
             return Failure(UiErrors::ActionResultStale);
-        if (const auto writable = record_->Writable(); writable.HasError())
+        if (const auto writable = record->Writable(); writable.HasError())
             return writable;
-        if (const auto previous = record_->snapshot.progress;
+        if (const auto previous = record->snapshot.progress;
             progress.permille > 1000 || (!progress.determinate && progress.permille != 0) || progress.phase < previous.phase ||
             (progress.phase == previous.phase && previous.determinate && (!progress.determinate || progress.permille < previous.permille)))
             return Failure(UiErrors::AsyncActionProgressInvalid);
-        record_->snapshot.progress = progress;
+        record->snapshot.progress = progress;
         return Result<void>::Success();
     }
 
     /** @copydoc UiAsyncActionProducer::Complete */
     Result<void> UiAsyncActionProducer::Complete(UiActionPayload payload) {
-        if (!record_)
+        auto *const record = StateRecord();
+        if (!record)
             return Failure(UiErrors::ActionResultStale);
-        if (const auto writable = record_->Writable(); writable.HasError())
+        if (const auto writable = record->Writable(); writable.HasError())
             return writable;
         if (const auto valid = payload.Validate(); valid.HasError())
             return valid;
-        record_->snapshot.payload = std::move(payload);
-        record_->snapshot.state = UiAsyncActionState::Completed;
+        record->snapshot.payload = std::move(payload);
+        record->snapshot.state = UiAsyncActionState::Completed;
         return Result<void>::Success();
     }
 
     /** @copydoc UiAsyncActionProducer::Fail */
     Result<void> UiAsyncActionProducer::Fail(std::shared_ptr<const Error> error) {
-        if (!record_)
+        auto *const record = StateRecord();
+        if (!record)
             return Failure(UiErrors::ActionResultStale);
-        if (const auto writable = record_->Writable(); writable.HasError())
+        if (const auto writable = record->Writable(); writable.HasError())
             return writable;
         if (!ValidFailure(error.get()))
             return Failure(UiErrors::AsyncActionFailureInvalid);
-        record_->snapshot.error = std::move(error);
-        record_->snapshot.state = UiAsyncActionState::Failed;
+        record->snapshot.error = std::move(error);
+        record->snapshot.state = UiAsyncActionState::Failed;
         return Result<void>::Success();
     }
 
@@ -184,11 +199,36 @@ namespace Horo::Runtime::Ui {
                 records.push_back(std::make_shared<UiAsyncActionDetail::Record>());
         }
 
-        [[nodiscard]] auto Find(const UiAsyncActionKey &key) const noexcept {
-            for (const auto &record : records)
-                if (record->retained && record->Key() == key)
-                    return record;
-            return std::shared_ptr<UiAsyncActionDetail::Record>{};
+        /** @brief Finds retained correlation without granting mutation authority. */
+        [[nodiscard]] std::optional<std::size_t> FindIndex(const UiAsyncActionKey &key) const noexcept {
+            for (std::size_t index = 0; index < records.size(); ++index)
+                if (records[index]->retained && records[index]->Key() == key)
+                    return index;
+            return std::nullopt;
+        }
+
+        /** @brief Borrows exact mutable state only from a mutable owner. */
+        [[nodiscard]] UiAsyncActionDetail::Record *Find(const UiAsyncActionKey &key) noexcept {
+            const auto index = FindIndex(key);
+            return index ? records[*index].get() : nullptr;
+        }
+
+        /** @brief Borrows exact read-only state from a const owner. */
+        [[nodiscard]] const UiAsyncActionDetail::Record *Find(const UiAsyncActionKey &key) const noexcept {
+            const auto index = FindIndex(key);
+            return index ? records[*index].get() : nullptr;
+        }
+
+        /** @brief Borrows the latest read-only record for one exact source. */
+        [[nodiscard]] const UiAsyncActionDetail::Record *Latest(const UiActionSource &source) const noexcept {
+            const UiAsyncActionDetail::Record *latest{};
+            for (const auto &owner : records) {
+                const auto *const record = owner.get();
+                if (record->retained && record->snapshot.source == source &&
+                    (!latest || record->snapshot.request.sequence > latest->snapshot.request.sequence))
+                    latest = record;
+            }
+            return latest;
         }
 
         UiActionOwnerContext owner;
@@ -212,6 +252,16 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAsyncActionStore::UiAsyncActionStore */
     UiAsyncActionStore::UiAsyncActionStore(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
 
+    /** @copydoc UiAsyncActionStore::StateStorage */
+    UiAsyncActionStore::Storage *UiAsyncActionStore::StateStorage() noexcept {
+        return storage_.get();
+    }
+
+    /** @copydoc UiAsyncActionStore::StateStorage */
+    const UiAsyncActionStore::Storage *UiAsyncActionStore::StateStorage() const noexcept {
+        return storage_.get();
+    }
+
     /** @copydoc UiAsyncActionStore::~UiAsyncActionStore */
     UiAsyncActionStore::~UiAsyncActionStore() {
         Retire(UiActionCancellationReason::Shutdown);
@@ -231,15 +281,16 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAsyncActionStore::Start */
     Result<UiAsyncActionProducer> UiAsyncActionStore::Start(const UiActionRequest &request) {
-        if (!storage_ || !storage_->active || storage_->ownerThread != std::this_thread::get_id())
+        auto *const storage = StateStorage();
+        if (!storage || !storage->active || storage->ownerThread != std::this_thread::get_id())
             return Failure<UiAsyncActionProducer>(UiErrors::ActionLifecycleUnavailable);
         if (const auto valid = request.Validate(); valid.HasError())
             return Result<UiAsyncActionProducer>::Failure(valid.ErrorValue());
-        if (request.source.owner != storage_->owner || request.id.ownership != storage_->owner.instance.ownership ||
-            request.id.sequence.Value() <= storage_->lastRequestSequence)
+        if (request.source.owner != storage->owner || request.id.ownership != storage->owner.instance.ownership ||
+            request.id.sequence.Value() <= storage->lastRequestSequence)
             return Failure<UiAsyncActionProducer>(UiErrors::ActionSourceStale);
         std::shared_ptr<UiAsyncActionDetail::Record> free;
-        for (const auto &record : storage_->records) {
+        for (const auto &record : storage->records) {
             if (record->retained && record->snapshot.Busy() && record->snapshot.source == request.source)
                 return Failure<UiAsyncActionProducer>(UiErrors::AsyncActionBusy);
             if (!record->retained && record.use_count() == 1 && !free)
@@ -251,15 +302,16 @@ namespace Horo::Runtime::Ui {
         free->snapshot = {request.source, request.id, operation};
         free->cancelled.store(false);
         free->retained = true;
-        storage_->lastRequestSequence = request.id.sequence.Value();
+        storage->lastRequestSequence = request.id.sequence.Value();
         return Result<UiAsyncActionProducer>::Success(UiAsyncActionProducer{std::move(free)});
     }
 
     /** @copydoc UiAsyncActionStore::Snapshot */
     Result<UiAsyncActionSnapshot> UiAsyncActionStore::Snapshot(const UiAsyncActionKey &operation) const {
-        if (!storage_ || storage_->ownerThread != std::this_thread::get_id())
+        auto *const storage = StateStorage();
+        if (!storage || storage->ownerThread != std::this_thread::get_id())
             return Failure<UiAsyncActionSnapshot>(UiErrors::ActionLifecycleUnavailable);
-        const auto record = storage_->Find(operation);
+        const auto record = storage->Find(operation);
         if (!record)
             return Failure<UiAsyncActionSnapshot>(UiErrors::ActionResultStale);
         return Result<UiAsyncActionSnapshot>::Success(record->snapshot);
@@ -267,25 +319,23 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAsyncActionStore::Project */
     Result<std::optional<UiAsyncActionSnapshot>> UiAsyncActionStore::Project(const UiActionSource &source) const {
-        if (!storage_ || storage_->ownerThread != std::this_thread::get_id())
+        auto *const storage = StateStorage();
+        if (!storage || storage->ownerThread != std::this_thread::get_id())
             return Failure<std::optional<UiAsyncActionSnapshot>>(UiErrors::ActionLifecycleUnavailable);
-        if (!source.IsValid() || source.owner != storage_->owner)
+        if (!source.IsValid() || source.owner != storage->owner)
             return Failure<std::optional<UiAsyncActionSnapshot>>(UiErrors::ActionSourceStale);
-        const UiAsyncActionSnapshot *latest{};
-        for (const auto &record : storage_->records)
-            if (record->retained && record->snapshot.source == source &&
-                (!latest || record->snapshot.request.sequence > latest->request.sequence))
-                latest = &record->snapshot;
-        return Result<std::optional<UiAsyncActionSnapshot>>::Success(latest ? std::optional{*latest} : std::nullopt);
+        const auto *const latest = storage->Latest(source);
+        return Result<std::optional<UiAsyncActionSnapshot>>::Success(latest ? std::optional{latest->snapshot} : std::nullopt);
     }
 
     /** @copydoc UiAsyncActionStore::Cancel */
     Result<void> UiAsyncActionStore::Cancel(const UiAsyncActionKey &operation, const UiActionCancellationReason reason) {
-        if (!storage_ || storage_->ownerThread != std::this_thread::get_id())
+        auto *const storage = StateStorage();
+        if (!storage || storage->ownerThread != std::this_thread::get_id())
             return Failure(UiErrors::ActionLifecycleUnavailable);
         if (!ValidReason(reason))
             return Failure(UiErrors::ActionResultInvalid);
-        const auto record = storage_->Find(operation);
+        const auto record = storage->Find(operation);
         if (!record)
             return Failure(UiErrors::ActionResultStale);
         record->Cancel(reason);
@@ -294,9 +344,10 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAsyncActionStore::Release */
     Result<void> UiAsyncActionStore::Release(const UiAsyncActionKey &operation) {
-        if (!storage_ || storage_->ownerThread != std::this_thread::get_id())
+        auto *const storage = StateStorage();
+        if (!storage || storage->ownerThread != std::this_thread::get_id())
             return Failure(UiErrors::ActionLifecycleUnavailable);
-        const auto record = storage_->Find(operation);
+        const auto record = storage->Find(operation);
         if (!record)
             return Failure(UiErrors::ActionResultStale);
         if (record->snapshot.Busy())
@@ -307,10 +358,11 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAsyncActionStore::Retire */
     void UiAsyncActionStore::Retire(const UiActionCancellationReason reason) noexcept {
-        if (!storage_ || !storage_->active || !ValidReason(reason))
+        auto *const storage = StateStorage();
+        if (!storage || !storage->active || !ValidReason(reason))
             return;
-        storage_->active = false;
-        for (const auto &record : storage_->records)
+        storage->active = false;
+        for (const auto &record : storage->records)
             if (record->retained)
                 record->Cancel(reason);
     }

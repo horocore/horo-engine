@@ -13,6 +13,10 @@ explicit function-pointer declarations must be rebuilt against these headers.
 The screen-stack regression suite and RuntimeUi public-header consumer cover
 the affected calls. Mutation methods remain non-const: const ownership handles
 do not grant permission to mutate a router, operation or route lifecycle.
+Private state access pairs mutable and const read-only views, including record
+lookup. Cancellation observers retain const records. Dispatch independently pins
+storage lifetime across callbacks; a state view does not provide ownership or
+extend the lifetime of a borrowed router.
 
 ## Provider and route composition
 

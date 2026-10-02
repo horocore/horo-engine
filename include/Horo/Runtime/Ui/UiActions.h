@@ -448,6 +448,10 @@ namespace Horo::Runtime::Ui {
     private:
         struct Storage;
         explicit UiActionRouter(std::shared_ptr<Storage> storage) noexcept;
+        /** @brief Borrows mutable owner state. @return Null after move; unavailable on const owners. */
+        [[nodiscard]] Storage *StateStorage() noexcept;
+        /** @brief Borrows read-only owner state. @return Null after move. */
+        [[nodiscard]] const Storage *StateStorage() const noexcept;
         std::shared_ptr<Storage> storage_;
     };
 }  // namespace Horo::Runtime::Ui
