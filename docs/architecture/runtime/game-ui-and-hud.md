@@ -127,6 +127,45 @@ ECS, renderer, asset or scheduler state directly. Failed or skipped presentation
 suppresses interaction for that viewport until a matching layout is presented, so
 the player cannot click geometry that was never visible.
 
+## Accessibility projection and change publication
+
+`UiAccessibilityExtractor` copies the existing typed core/contributed semantics
+against the exact retained tree. Snapshot nodes now follow retained preorder,
+regardless of contributor input order; parents are the nearest exposed semantic
+ancestor. Hidden nodes remove their entire subtree. Offscreen propagates to visible
+descendants, while covered/suppressed/suspended ancestors prevent descendants from
+remaining actionable or focused. Disabled controls remain readable. An exposed
+relation targeting an omitted node fails transactionally instead of dangling.
+
+`UiAccessibilityChangePublisher` is an optional Runtime UI owner-thread companion
+to that extractor, owned by the same instance/canvas/document composition. It
+retains one latest immutable snapshot lease, publishes generation-fenced removals,
+insertions, reparent/reorder records, coalesced property masks, authoritative focus
+changes and owned polite/assertive announcements. It never consults render nodes,
+Platform, gameplay or mutable widget pointers. Consumers correlate PreviousRevision
+and Revision with the complete snapshot descriptor; only matching successful
+presentation evidence may authorize native exposure. Model-only recording needs
+no renderer. Traversal/navigation policy and native adapters are separate work.
+
+Create preallocates node indexes, delta output, text and deduplication history.
+Delta overflow discards partial output and publishes one Resynchronize record;
+consumers must adopt the complete latest snapshot before further deltas. Suppressed
+announcements are remembered and never replayed during resync. Event IDs are scoped
+to exact node generations and an inclusive, explicit semantic-revision window.
+Unexpired history exhaustion, invalid/stale announcements and source regressions
+return typed failures while preserving prior output and the last-good baseline.
+Retire publishes final reverse-preorder removals and focus release, closes admission
+idempotently and releases its lease; other snapshot leases remain readable.
+
+Migration: former extraction callers must consume snapshot-owned node order rather
+than assuming candidate order, and must not refer to hidden nodes from exposed
+relations. The new changes header belongs only to HoroRuntimeUi. Existing extractors
+and their slot budgets are unchanged; a composed publisher occupies one slot lease,
+so at least two concurrent slots are needed for subsequent successful publication.
+Reload within the same semantic owner uses the publisher; owner/canvas/document
+replacement retires the old publisher and creates a new one. Output borrows last
+until successful publication, retirement, owner replacement or destruction.
+
 ## Pause, Suspension And Teardown
 
 Gameplay pause stops fixed simulation, not Runtime UI lifecycle, input, layout or
@@ -407,8 +446,39 @@ closes admission before releasing focus, modal, and restoration state.
 Focus changes may include typed bring-into-view evidence for the scroll owner,
 but the graph never calls layout or scroll code. Input consumes the graph's
 owner/revision evidence only for the matching last-presented interaction
-generation; spatial search and gameplay action ownership remain separate
-contracts.
+generation; gameplay action ownership remains a separate contract.
+
+`UiFocusGraph::UpdateLayout` copies hit-test rectangles from the matching immutable
+`UiLayoutSnapshot` without retaining a lease or calling layout/scroll services. The
+Runtime UI owner admits only last-presented geometry, with exact instance, canvas,
+document and tree evidence and equal/newer interaction revision. Updates are atomic,
+use preallocated scratch and adopt the accepted interaction revision. Missing exact
+handles, including recycled slots, have no spatial geometry. Reload clears geometry
+until a matching update, and empty graphs are valid focus scopes. Existing callers
+keep their authored links; owners enabling geometry call UpdateLayout after creation
+or replacement and after adopting a newly presented layout. No public header ownership
+or target dependency changes are required: both contracts remain RuntimeUi-owned.
+
+Cardinal Move uses authored links first. Without a link it searches positive-area
+layout boxes inside the active modal, excluding nonfocusable nodes and hidden or
+disabled ancestor paths. In the requested center half-plane it ranks perpendicular
+overlap, forward doubled-center distance, perpendicular interval gap, perpendicular
+doubled-center distance, then stable ID bytes. Integer 1/64-DIP rectangles cannot
+represent nonfinite values; negative extents fail layout publication. Signed 64-bit
+projection preserves ordering at int32 coordinate extremes without squared distances.
+Typed None/Horizontal/Vertical/Both wrap applies only when no forward candidate
+exists, choosing the opposite center edge, then perpendicular gap/distance and stable
+ID. Next/Previous retain their authored semantics. Invalid declared links retain the
+existing recovery policy instead of silently becoming automatic navigation.
+
+Graph creation/reload are bounded owner safe-point preparation operations. Handle
+indices and parent indices are prepared there; layout adoption takes O(N + M log N)
+bounded work and cardinal search O(N * maximum tree depth), without allocation or I/O.
+`SetParticipation` updates focusable/enabled/visible state with exact current owner
+and element-generation evidence, recovering invalid focus immediately without
+allocation. Structural changes use complete transactional Reload candidates. Failed
+updates preserve prior geometry; retirement and shutdown close admission and release
+geometry together with focus, modal and restoration storage.
 
 High-frequency pointer movement does not travel through data buses. The UI input
 router consumes input snapshots during VariableUpdate through one per-player/

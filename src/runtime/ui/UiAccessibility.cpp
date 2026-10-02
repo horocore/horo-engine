@@ -3,6 +3,7 @@
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "UiAccessibilityPolicy.h"
+#include "UiAccessibilityReading.h"
 #include "UiAccessibilityStorage.h"
 
 #include <algorithm>
@@ -281,7 +282,10 @@ namespace Horo::Runtime::Ui {
         };
 
         [[nodiscard]] Result<ProjectionTotals> ValidateAndMeasureNodes(const UiElementTree &tree,
-                                                                       const UiAccessibilityProjection &projection) {
+                                                                       const UiAccessibilityProjection &projection,
+                                                                       const UiAccessibilityLimits &limits) {
+            if (const auto bounds = AccessibilityInternal::ValidateInputBounds(projection, limits); bounds.HasError())
+                return Result<ProjectionTotals>::Failure(bounds.ErrorValue());
             ProjectionTotals totals;
             for (const auto &node : projection.nodes) {
                 if (const auto validation = ValidateNode(node); validation.HasError())
@@ -324,7 +328,7 @@ namespace Horo::Runtime::Ui {
 
             if (const auto lookup = BuildProjectionLookup(projection.nodes, lookupScratch); lookup.HasError())
                 return lookup;
-            const auto totalsResult = ValidateAndMeasureNodes(tree, projection);
+            const auto totalsResult = ValidateAndMeasureNodes(tree, projection, descriptor.limits);
             if (totalsResult.HasError())
                 return Result<void>::Failure(totalsResult.ErrorValue());
             const auto &totals = totalsResult.Value();
@@ -427,6 +431,15 @@ namespace Horo::Runtime::Ui {
                                                        storage_->cycleScratch, storage_->lookupScratch);
             validation.HasError())
             return Result<UiAccessibilitySnapshot>::Failure(validation.ErrorValue());
+        if (const auto reading = AccessibilityInternal::BuildReadingProjection(tree, projection, storage_->lookupScratch,
+                                                                               storage_->preorderScratch, storage_->readingScratch);
+            reading.HasError())
+            return Result<UiAccessibilitySnapshot>::Failure(reading.ErrorValue());
+        const UiAccessibilityProjection reading{storage_->readingScratch};
+        if (const auto lookup = BuildProjectionLookup(reading.nodes, storage_->lookupScratch); lookup.HasError())
+            return Result<UiAccessibilitySnapshot>::Failure(lookup.ErrorValue());
+        if (const auto relations = ValidateRelations(reading.nodes, storage_->lookupScratch); relations.HasError())
+            return Result<UiAccessibilitySnapshot>::Failure(relations.ErrorValue());
         auto slot = storage_->TryAcquire();
         if (!slot)
             return Failure<UiAccessibilitySnapshot>(UiErrors::AccessibilitySnapshotStorageExhausted);
@@ -445,7 +458,7 @@ namespace Horo::Runtime::Ui {
         } lease{slot.get()};
 
         try {
-            slot->Publish(tree, descriptor, projection, storage_->lookupScratch);
+            slot->Publish(tree, descriptor, reading, storage_->lookupScratch);
         } catch (const std::bad_alloc &) {
             return Failure<UiAccessibilitySnapshot>(UiErrors::CapacityExceeded);
         }

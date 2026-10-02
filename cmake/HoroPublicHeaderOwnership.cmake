@@ -261,6 +261,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiAssetDependency.h
     Horo/Runtime/Ui/UiImageResource.h
     Horo/Runtime/Ui/UiAccessibility.h
+    Horo/Runtime/Ui/UiAccessibilityChanges.h
     Horo/Runtime/Ui/UiIdentity.h
     Horo/Runtime/Ui/UiBinding.h
     Horo/Runtime/Ui/UiCanvasSpace.h
@@ -369,6 +370,9 @@ horo_configure_target_header_boundary(HoroGameplayRuntime PUBLIC_HEADERS
     Horo/Gameplay/BehaviorRuntime.h
     Horo/Gameplay/GameplayRegistrationRuntime.h
 )
+horo_configure_target_header_boundary(HoroGameplayPerceptionIntegration PUBLIC_HEADERS
+    Horo/Gameplay/PerceptionEventSource.h
+)
 horo_configure_target_header_boundary(HoroGameplayModuleHost PUBLIC_HEADERS
     Horo/Gameplay/GameModuleHost.h
 )
@@ -416,6 +420,7 @@ horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
     Horo/Audio/AudioFailureRecovery.h
     Horo/Audio/AudioIdentity.h
     Horo/Audio/MixerAssetSchema.h
+    Horo/Audio/AudioConcurrencyGroup.h
     Horo/Audio/AudioVoiceStateMachine.h
     Horo/Audio/AudioResamplerPlan.h
     Horo/Audio/AudioPlaybackRequest.h
@@ -433,6 +438,7 @@ horo_configure_target_header_boundary(HoroAudioCook PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroAudioDsp PUBLIC_HEADERS
     Horo/Audio/AudioDSPNode.h
+    Horo/Audio/CoreAudioDSPNode.h
     Horo/Audio/AudioResampler.h
 )
 horo_configure_target_header_boundary(HoroAudioMemory PUBLIC_HEADERS
@@ -512,9 +518,11 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/BlackboardInstance.h
     Horo/AI/BlackboardSchema.h
     Horo/AI/DecisionAssetValidation.h
+    Horo/AI/StateMachine.h
     Horo/AI/EnvironmentQuerySchema.h
     Horo/AI/NullAIRuntime.h
     Horo/AI/PerceptionDescriptorRegistry.h
+    Horo/AI/PerceptionEventRouting.h
     Horo/AI/PerceptionMemory.h
 )
 horo_configure_target_header_boundary(HoroAISceneIntegration PUBLIC_HEADERS
@@ -611,6 +619,8 @@ horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
     Horo/Navigation/NavigationDataSerialization.h
     Horo/Navigation/NavigationErrors.h
     Horo/Navigation/NavigationIdentity.h
+    Horo/Navigation/NavigationLinkTypes.h
+    Horo/Navigation/NavigationLinkValidation.h
     Horo/Navigation/NavigationMeshBuilder.h
     Horo/Navigation/NavigationOutcomes.h
     Horo/Navigation/NavigationProjectProfiles.h
@@ -629,6 +639,7 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNavigationSceneIntegration PUBLIC_HEADERS
     Horo/Navigation/NavigationSceneActivation.h
+    Horo/Navigation/NavigationSceneLinkCapture.h
 )
 horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRCapabilities.h
@@ -658,6 +669,8 @@ horo_configure_target_header_boundary(HoroTerrainImport PUBLIC_HEADERS
     Horo/Terrain/TerrainSourceImport.h
 )
 horo_configure_target_header_boundary(HoroTerrainCook PUBLIC_HEADERS
+    Horo/Terrain/FoliageClusterCook.h
+    Horo/Terrain/FoliagePlacementCook.h
     Horo/Terrain/TerrainTileCook.h
 )
 horo_configure_target_header_boundary(HoroTerrainRuntime PUBLIC_HEADERS
@@ -695,6 +708,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/StreamingDesiredState.h
     Horo/WorldStreaming/StreamingDesiredStateReduction.h
     Horo/WorldStreaming/StreamingPriorityPolicy.h
+    Horo/WorldStreaming/StreamingFairQueue.h
     Horo/WorldStreaming/StreamingSourceDescriptor.h
     Horo/WorldStreaming/StreamingSourcePrefetch.h
     Horo/WorldStreaming/StreamingSourceRange.h

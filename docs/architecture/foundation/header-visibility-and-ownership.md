@@ -129,6 +129,51 @@ The cook produces independently hashed neutral tile payloads and a complete sort
 manifest, without a cache root, runtime state, native handle or global registry.
 Generated public-header consumer coverage checks the staged target boundary.
 
+## TRF-004.3 Foliage Placement Cook Boundary
+
+`HoroEngine::TerrainCook` also owns the additive
+`Horo/Terrain/FoliagePlacementCook.h` contract. Existing tile-cook callers do not
+change. The host supplies an exact integer placement source, validated foliage
+definition, capability set, finite limits and target/toolchain envelope. Terrain
+Cook returns a detached generation; the owner publishes it against an exact
+content revision, and no renderer or runtime-native handle crosses this header.
+The standalone public-header consumer checks the owning target's staged include
+view.
+
+## TRF-004.4 Foliage Cluster Cook Boundary
+
+`HoroEngine::TerrainCook` owns the additive `Horo/Terrain/FoliageClusterCook.h`
+contract. Existing placement and tile callers retain their signatures. Cluster
+hosts supply a complete borrowed snapshot of cook-issued placements, verified
+geometry artifact digests and conservative unscaled geometry radii enclosing every
+admitted LOD and wind envelope. The synchronous cook owns all returned records and
+canonical bytes; it never retains those input pointers. A narrowly declared friend
+lets the cluster cook recheck placement integrity without exposing mutable placement
+storage or changing placement identity/PRNG semantics.
+Placement adds read-only target/toolchain/tier evidence, captured from the existing
+request, so downstream cook rejects incompatible provenance rather than treating an
+opaque placement fingerprint as proof of a matching target. Existing callers keep
+their signatures and canonical placement output identities.
+
+Schema-v1 payloads use network-order fixed-width integers, stable typed identities,
+source/definition/capability/content provenance, conservative integer bounds and
+canonical stable-instance-ID order. They are neutral source artifacts, not native
+instance buffers, GPU offsets, selected LODs or draw commands. Complete replacement
+membership is explicit; unchanged sources retain their exact cluster IDs and bytes,
+while the aggregate revision advances independently. Assets remains the storage,
+cache and publication authority. Runtime decoding/consumer activation is not claimed
+by this cook slice. Hosts verify independently loaded bytes against a trusted cluster
+entry before consuming them, and retain detached roots across owner replacement or
+close. The explicit cluster consumer plus generated TerrainCook header consumers
+exercise the same staged owning-target boundary.
+
+Count and byte admission uses the captured Terrain tier limits. Byte accounting is
+a conservative owned-capacity estimate including neutral records, canonical bytes,
+cluster objects and sorting workspace; allocator bookkeeping is not a portable payload
+format. Work units count source/record visits, merge outputs and cluster visits.
+Geometry bounds use a scaled sphere with outward integer rounding on every axis.
+No geometry/capability absence selects a renderer, drops instances or invents fallback.
+
 ## REL-002.4 Update Transfer Boundary
 
 `HoroEngine::UpdateTransfer` owns the additive `Horo/Release/UpdateTransfer.h`
@@ -1285,3 +1330,14 @@ targets. No editor, native backend, mixer implementation or registry type enters
 the header. Hosts must add handling for the two new public command alternatives;
 unhandled payloads must receive explicit rejection/reconciliation, never silent
 discard. Reset/replacement closes and detaches the old engine before reclamation.
+
+### Audio scoped concurrency model (AUD-003.4)
+
+`Horo/Audio/AudioConcurrencyGroup.h` is an additive `HoroAudioApi` contract.
+Its identities, group descriptors and eligibility projections remain backend
+neutral and use existing Audio voice snapshots. Existing sound defaults and
+voice registry callers require no migration. Admission callers explicitly build
+scoped projections and evaluate group constraints before reserving voices; no
+implicit group registry or source-policy override is introduced. The ownership
+registry stages this header and the generated `HoroAudioApi` public-header
+consumer compiles it using only declared Foundation/Assets dependencies.

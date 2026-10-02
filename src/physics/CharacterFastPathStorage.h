@@ -110,8 +110,31 @@ namespace Horo::Character::Detail {
         return left.slot < right.slot;
     }
 
+    /** @brief Orders optional copied physical evidence with absence before an exact asset generation and slot. */
+    [[nodiscard]] inline bool CharacterFastPathOptionalMaterialLess(const std::optional<Physics::PhysicsQueryMaterial> &left,
+                                                                    const std::optional<Physics::PhysicsQueryMaterial> &right) noexcept {
+        if (left.has_value() && right.has_value())
+            return CharacterFastPathMaterialLess(*left, *right);
+        return !left.has_value() && right.has_value();
+    }
+
     [[nodiscard]] inline bool CharacterFastPathMaterialIsValid(const Physics::PhysicsQueryMaterial &material) noexcept {
         return material.asset.IsValid() && material.assetGeneration != 0 && material.slot.IsValid();
+    }
+
+    /** @brief Checks the retained contact's finite geometry independently of Physics provenance. */
+    [[nodiscard]] inline bool CharacterFastPathIsValidContactGeometry(const CharacterSurfaceContact &contact,
+                                                                      const bool normalIsUnit) noexcept {
+        if (!Math::IsFinite(contact.point) || !normalIsUnit)
+            return false;
+        return std::isfinite(contact.penetrationDepthMeters) && contact.penetrationDepthMeters >= 0.0F;
+    }
+
+    /** @brief Checks the bounded contact's optional Physics child and explicit material provenance. */
+    [[nodiscard]] inline bool CharacterFastPathIsValidContactProvenance(const CharacterSurfaceContact &contact) noexcept {
+        return (!contact.subshape.has_value() || contact.subshape->IsValid()) &&
+               (contact.materialSource == CharacterMaterialSource::Query ||
+                contact.materialSource == CharacterMaterialSource::DescriptorFallback);
     }
 
     /**
@@ -358,9 +381,9 @@ namespace Horo::Character::Detail {
 
         [[nodiscard]] static bool IsValidContact(const CharacterSurfaceContact &contact) noexcept {
             return contact.shape.IsValid() && (!contact.body.has_value() || contact.body->IsValid()) &&
-                   (!contact.body.has_value() || contact.body->world == contact.shape.world) && Math::IsFinite(contact.point) &&
-                   IsUnit(contact.normal) && CharacterFastPathMaterialIsValid(contact.material) &&
-                   std::isfinite(contact.penetrationDepthMeters) && contact.penetrationDepthMeters >= 0.0F;
+                   (!contact.body.has_value() || contact.body->world == contact.shape.world) &&
+                   CharacterFastPathIsValidContactGeometry(contact, IsUnit(contact.normal)) &&
+                   CharacterFastPathMaterialIsValid(contact.material) && CharacterFastPathIsValidContactProvenance(contact);
         }
 
         [[nodiscard]] static bool IsValidHit(const Physics::PhysicsQueryHit &hit) noexcept {
@@ -401,6 +424,10 @@ namespace Horo::Character::Detail {
                 return left.point < right.point;
             if (left.normal != right.normal)
                 return left.normal < right.normal;
+            if (const auto order = left.subshape <=> right.subshape; order != 0)
+                return order < 0;
+            if (left.materialSource != right.materialSource)
+                return left.materialSource < right.materialSource;
             return CharacterFastPathMaterialLess(left.material, right.material);
         }
 

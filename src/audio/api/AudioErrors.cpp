@@ -383,6 +383,24 @@ namespace Horo::Audio::AudioErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor ConcurrencyInvalid{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.concurrency.invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The sound concurrency group or scoped state is invalid.",
+        .remediationHint = "Validate the group and project a complete ordered bucket from the voice registry.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor ConcurrencyTimelineStale{
+        .domain = AudioDomain,
+        .code = ErrorCode{"audio.concurrency.timeline_stale"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The concurrency cooldown history does not match the current sample timeline.",
+        .remediationHint = "Retire cooldown history at a clock discontinuity and rebuild the control-owned projection.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor VoiceInvalidTransition{
         .domain = AudioDomain,
         .code = ErrorCode{"audio.voice.invalid_transition"},

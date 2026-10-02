@@ -912,7 +912,7 @@ query seam:
 | **Hearing** | Periodic time-sliced / stimulus queue drain | `PerceptionManager` + `AudioStimulusEmitter` | Distance attenuation + optional `PhysicsWorld` acoustic obstruction raycast | Acoustic detection of footsteps, gunshots, explosions, and environmental noise |
 | **Damage** | Event-driven (immediate on hit) | `HealthSystem` / `CombatSystem` | Direct gameplay event carrying instigator entity, damage amount, and hit direction | Detection of inflicted harm, alerting agent to attacker identity/direction |
 | **Touch** | Event-driven (fixed physics tick) | `PhysicsWorld` collision dispatcher | Contact manifolds and trigger overlap events | Immediate awareness of physical contact, collisions, and proximity penetration |
-| **Team** | Event-driven affiliation/distress updates plus periodic awareness broadcast | `TeamPerceptionRelay` | Squad/faction registry and communication radius or radio channel | Shared squad awareness, target spotting distribution, and distress alerts |
+| **Team** | Event-driven, after Gameplay authorizes one delivery | Gameplay/squad system | Exact recipient, sender and subject generations plus disclosure and perception-filter admission | Transient per-agent memory of an already delivered message |
 
 ```cpp
 enum class AISense : uint8_t {
@@ -978,11 +978,37 @@ struct StimulusEvent {
      sensory range before detailed LOS physics traces, avoiding all-entity scans
      per listener; a future shared Scene spatial index may supply the same seam.
 3. **Team Dispatch Split**:
-   - Membership, faction, direct distress, and explicit target-spot events wake or
-     invalidate affected agents immediately.
-   - Periodic relay ticks share selected, already-committed perception facts among
-     eligible teammates under bounded range/fan-out budgets. They do not read
-     another agent's mutable in-progress sense evaluation.
+   - Gameplay/squad systems own team membership, communication topology, recipient
+     selection, delivery permission, network disclosure and durable squad knowledge.
+   - The host-composed `Gameplay::PerceptionEventSource` copies a bounded batch of
+     committed producer deliveries and their exact recipient/filter decisions.
+     It obtains the world role from the live `NetworkModeComposition`, never an
+     event field, and admits only Standalone or AuthorityServer worlds under
+     ADR-022. Every delivery revalidates that host role, the active AI publication,
+     the recipient's Perception capability, and current source/sender generations.
+     AI and RuntimeScene incarnations remain separate domains. Only this source
+     can create the synchronous proof used by `RouteGameplayPerceptionEvent`.
+     Neither the source nor the route discovers teammates or relays memory.
+   - Memory retains only transient position and weak, generation-fenced subject
+     and sender provenance. The source system remains read-only to senses.
+
+The value records and route belong to `HoroAI`; the host adapter belongs to the
+separate `HoroGameplayPerceptionIntegration` target, depending one-way on
+`HoroAISceneIntegration` and `HoroNetworkRuntime`. Its bounded capture allocates
+only for the owned producer batch; delivery does not allocate or invoke source
+system callbacks. Borrowed Scene, AI, host and registry owners outlive the sensing
+window, which must close before replacement or teardown. Producer filters are
+frozen for that window; policy changes close it and capture a new producer batch.
+Durable squad knowledge never enters this adapter or its transient memories.
+
+Migration: `AIPerceptionMemory::Observe` remains available for sight, hearing and
+other sense kernels, but rejects the built-in Team sense or Team stimulus identity.
+Team producers use the captured Gameplay delivery path. The caller audit found
+only memory regression tests and the new route using `Observe`, with no existing
+production team producer to migrate. Health/combat and squad producer systems and
+a complete PerceptionManager do not yet exist in this checkout; this integration
+consumes their typed committed output at the explicit host boundary, without
+implementing gameplay communication, topology or network transport.
 
 ### Update Policies And Time-Sliced Budgets
 
@@ -1770,6 +1796,47 @@ Horo 1.0 standardizes on three complementary decision paradigms:
 - Explicit entry actions, update actions, and exit actions.
 - Event-triggered and condition-triggered transitions evaluated against blackboard state.
 - State machines can host Behavior Trees as nested sub-state behaviors.
+
+`Horo/AI/StateMachine.h` implements the GAI-003.5 semantic asset and owner-thread
+kernel. `CookedStateMachinePlan` retains the existing `DecisionAssetPlan` without
+changing its node, dependency or blackboard declaration layout. Its states and
+transitions partition the admitted stable nodes; transition guards must use their
+own compiler-admitted typed key bindings. Gameplay event payloads enter the same
+blackboard at `BlackboardSync`; the runner accepts only bounded typed event IDs.
+The new header is owned by `HoroAI`, with no additional target dependency or
+migration of existing callers. The isolated AI public-header consumer covers it.
+
+Hierarchy is a bounded acyclic parent tree with explicit initial children. Entry
+and update run ancestor-first, exit descendant-first. External transitions use
+the least common ancestor, and a transition whose source remains an ancestor of
+its destination exits and re-enters that source. Leaf-most enabled transitions
+win before ancestor transitions; within a depth, higher priority wins, then
+ascending stable transition identity. The default step commits at most one
+transition. Explicit bounded chaining uses the same frozen input, does not reuse
+events, and stops before revisiting a leaf with `CycleBounded` evidence, or at its
+declared cap with `BudgetBounded` evidence. Repeating/backtracking a tick cannot
+evaluate again. Transition cycles across distinct ticks remain legal behavior.
+
+Actions are synchronous host-composed, step-scoped typed intent adapters. The
+borrowed interface replaces erased callback contexts with compiler-checked
+invocations; it adds no owned allocation or task scheduler. They do not
+retain Scene/blackboard views or create a scheduler; long-running work belongs to
+the existing cancellable task owner. Failed entry, update or exit retains its
+typed cause in the shared `AiTaskLifecycle` Failed result and clears the logical
+active path. This is an explicit terminal policy, not rollback of external
+effects. Cancellation, agent retirement and expired blackboard generations stop
+further actions and logical publication; adapters cannot reenter the runner.
+The host owns any already-enqueued intents and downstream resource cancellation.
+
+`AIDecisionSystem` and `BehaviorExecutionContext` are still architectural contracts,
+not concrete implementations at this boundary. Composition must invoke this
+kernel only on the authorized simulation owner in `AiDecisionEvaluate`, provide
+the exact current generation binding and frozen snapshot, and cancel before
+retirement. This ticket does not claim automatic controller discovery, task-provider
+execution, a behavior-tree interpreter, asset-pipeline persistence, hot-reload
+migration or save-service integration; those are separate decision foundation
+consumers. The semantic source is editor-independent, not a second file codec or
+blackboard store.
 
 #### 3. Simple Utility Scoring
 

@@ -124,6 +124,8 @@ namespace Horo::Runtime::Ui {
         : descriptor(source), cycleScratch(source.limits.nodes) {
         slots.reserve(source.concurrentSnapshots);
         lookupScratch.reserve(source.limits.nodes);
+        preorderScratch.resize(MaximumUiTreeElements);
+        readingScratch.reserve(source.limits.nodes);
         for (std::uint32_t index = 0; index < source.concurrentSnapshots; ++index)
             slots.push_back(std::make_shared<UiAccessibilitySnapshot::Storage>(source.limits));
     }
@@ -204,6 +206,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiAccessibilitySnapshot::Descriptor */
     const UiAccessibilitySnapshotDescriptor &UiAccessibilitySnapshot::Descriptor() const noexcept {
         return storage_->descriptor;
+    }
+
+    /** @copydoc UiAccessibilitySnapshot::IsValid */
+    bool UiAccessibilitySnapshot::IsValid() const noexcept {
+        return static_cast<bool>(storage_);
     }
 
     /** @copydoc UiAccessibilitySnapshot::Nodes */

@@ -54,8 +54,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiFocusGraphDescriptor::IsValid */
     bool UiFocusGraphDescriptor::IsValid() const noexcept {
-        return owner.IsValid() && IsKnown(recovery, UiFocusRecoveryPolicy::Count) && nodeCapacity > 0 &&
-               nodeCapacity <= MaximumUiFocusNodes && modalCapacity > 0 && modalCapacity <= MaximumUiFocusModalDepth &&
+        return owner.IsValid() && IsKnown(recovery, UiFocusRecoveryPolicy::Count) && IsKnown(wrap, UiFocusWrapPolicy::Count) &&
+               nodeCapacity > 0 && nodeCapacity <= MaximumUiFocusNodes && modalCapacity > 0 && modalCapacity <= MaximumUiFocusModalDepth &&
                restorationCapacity > 0 && restorationCapacity <= MaximumUiFocusRestorationDepth && restorationCapacity >= modalCapacity;
     }
 

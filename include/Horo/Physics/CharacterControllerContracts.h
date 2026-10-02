@@ -178,7 +178,8 @@ namespace Horo::Character {
         std::optional<Physics::PhysicsQueryMaterial> material;
         Physics::PhysicsQueryResponse response{Physics::PhysicsQueryResponse::Block};
         float distanceMeters{};
-        Math::Vec3 relativeVelocityMetersPerSecond{}; /**< Surface velocity relative to the queried Character frame. */
+        Math::Vec3 relativeVelocityMetersPerSecond{};               /**< Surface velocity relative to the queried Character frame. */
+        std::optional<Physics::PhysicsShapeSubresourceId> subshape; /**< Exact authored child; absent for primitive support. */
     };
 
     /** @brief Read-only capsule sweep request for one bounded movement iteration. */
@@ -340,6 +341,12 @@ namespace Horo::Character {
         CharacterStanceIntent stance{CharacterStanceIntent::Keep};
     };
 
+    /** @brief Whether physical identity was supplied by Physics or by the explicit controller fallback. */
+    enum class CharacterMaterialSource : std::uint8_t {
+        Query,
+        DescriptorFallback,
+    };
+
     /** @brief One owned solver-neutral surface contact retained in deterministic result order. */
     struct CharacterSurfaceContact final {
         std::optional<Physics::BodyHandle> body;
@@ -348,6 +355,8 @@ namespace Horo::Character {
         Math::Vec3 normal{0, 1, 0};
         Physics::PhysicsQueryMaterial material;
         float penetrationDepthMeters{};
+        std::optional<Physics::PhysicsShapeSubresourceId> subshape; /**< Copied Physics provenance, never a native child index. */
+        CharacterMaterialSource materialSource{CharacterMaterialSource::Query}; /**< Fallback does not claim a collider binding. */
     };
 
     /**
@@ -378,6 +387,9 @@ namespace Horo::Character {
         bool truncated{};
         bool platformAttached{};
         bool groundingRevalidationRequired{};
+        std::optional<Physics::PhysicsShapeSubresourceId> groundSubshape;             /**< Selected support's authored child identity. */
+        CharacterMaterialSource groundMaterialSource{CharacterMaterialSource::Query}; /**< Origin of the effective physical material. */
+        Math::Vec3 groundPoint{}; /**< Selected support point; independent of retained contact capacity. */
     };
 
     /**
@@ -394,6 +406,35 @@ namespace Horo::Character {
         CharacterMovementResult movement;
         CharacterTransformPublication transform;
     };
+
+    /**
+     * @brief Bounded owned ground-surface fact for a post-commit consumer or event adapter.
+     *
+     * Physical asset/generation/slot and body/shape/subshape values remain Physics-owned references,
+     * not leases or semantic surface IDs. A removed asset or world cannot reinterpret this copy.
+     * Consumers must match every correlation field to their captured binding/marker snapshot;
+     * missing/deleted mappings and absent/shutting-down consumers suppress presentation only.
+     * This is support evidence, not an Animation footstep or a Character transition event.
+     */
+    struct CharacterGroundSurfaceFact final {
+        CharacterControllerHandle controller;
+        std::uint64_t tick{};
+        std::uint64_t sequence{};
+        std::uint64_t stateRevision{};
+        std::uint64_t publicationRevision{};
+        CharacterSurfaceContact support;
+        Math::Vec3 achievedVelocityMetersPerSecond{};
+    };
+
+    /**
+     * @brief Projects copied Physics support into bounded post-commit event evidence without live lookup.
+     * @param snapshot Committed locomotion copy, including exact tick, command and publication identity.
+     * @param descriptor Captured controller policy from the same world generation.
+     * @return Owned fact when grounded, an absent fact when airborne, or the original validation error.
+     * @post No registry, material, catalog, Audio or VFX access occurs; simulation state is unchanged.
+     */
+    [[nodiscard]] Result<std::optional<CharacterGroundSurfaceFact>> BuildCharacterGroundSurfaceFact(
+        const CharacterLocomotionSnapshot &snapshot, const CharacterControllerDescriptor &descriptor);
 
     /**
      * @brief Validates controller identity ownership without resolving a registry slot.
