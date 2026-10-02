@@ -390,6 +390,8 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/AssetDependency.h
     Horo/Assets/AssetCook.h
     Horo/Assets/AssetCookCache.h
+    Horo/Assets/AssetPayloadCache.h
+    Horo/Assets/NavMeshAssetType.h
     Horo/Assets/AssetCookOutput.h
     Horo/Assets/AssetCookService.h
     Horo/Assets/AssetId.h
@@ -610,6 +612,7 @@ horo_configure_target_header_boundary(HoroCinematicRuntime PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
     Horo/Navigation/NavMeshData.h
+    Horo/Navigation/NavMeshCodec.h
     Horo/Navigation/NavigationBakeInput.h
     Horo/Navigation/NavigationAreas.h
     Horo/Navigation/NavigationAgentProfiles.h
@@ -639,6 +642,8 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroNavigationSceneIntegration PUBLIC_HEADERS
     Horo/Navigation/NavigationSceneActivation.h
     Horo/Navigation/NavigationSceneLinkCapture.h
+    Horo/Navigation/NavMeshAssetLoading.h
+    Horo/Navigation/NavigationAssetSceneActivation.h
 )
 horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRCapabilities.h
