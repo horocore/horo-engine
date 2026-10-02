@@ -67,10 +67,11 @@ namespace Horo::Editor {
 
         void DrawSetting(AssetImportModal &modal, const Assets::ImportSettingDescriptor &setting, const std::size_t itemIndex,
                          const Fonts &fonts) {
+            using enum Assets::ImportSettingKind;
             const auto label = Copy(modal.Localized(setting.labelKey, setting.labelKey));
             const std::string id = "##Setting_" + setting.id;
             const auto current = modal.SettingValue(itemIndex, setting);
-            if (setting.kind == Assets::ImportSettingKind::Boolean) {
+            if (setting.kind == Boolean) {
                 if (bool value = std::get_if<bool>(&current) ? std::get<bool>(current) : false;
                     DrawBooleanSettingRow(modal, label, id.c_str(), &value, fonts))
                     modal.SetSettingValue(itemIndex, setting, value);
@@ -79,18 +80,18 @@ namespace Horo::Editor {
             }
             BeginImportField(label.c_str(), fonts);
             switch (setting.kind) {
-                case Assets::ImportSettingKind::Choice: {
+                case Choice: {
                     DrawChoiceSetting(modal, setting, itemIndex, current, id, fonts);
                     break;
                 }
-                case Assets::ImportSettingKind::Float: {
+                case Float: {
                     const auto *typed = std::get_if<double>(&current);
                     if (float value = typed ? static_cast<float>(*typed) : 0.0f;
                         InputFloatStepperControl(id.c_str(), &value, fonts, 0.1F, false))
                         modal.SetSettingValue(itemIndex, setting, static_cast<double>(value));
                     break;
                 }
-                case Assets::ImportSettingKind::Integer: {
+                case Integer: {
                     const auto *typed = std::get_if<std::int64_t>(&current);
                     int value = typed ? static_cast<int>(*typed) : 0;
                     const int previous = value;
@@ -99,13 +100,13 @@ namespace Horo::Editor {
                         modal.SetSettingValue(itemIndex, setting, static_cast<std::int64_t>(value));
                     break;
                 }
-                case Assets::ImportSettingKind::Text: {
+                case Text: {
                     const auto *typed = std::get_if<std::string>(&current);
                     if (std::string value = typed ? *typed : std::string{}; InputTextControl(id.c_str(), value, 256, fonts))
                         modal.SetSettingValue(itemIndex, setting, value);
                     break;
                 }
-                case Assets::ImportSettingKind::Boolean:
+                case Boolean:
                     break;
             }
             EndImportField();

@@ -186,10 +186,9 @@ TEST_CASE("Asset import settings round trip typed values and reject malformed or
     snapshot.items = {MakeItem()};
     const auto settings = MakeCatalogSettings();
     const std::array<ImportSettingValue, 7> values{false, true, true, std::int64_t{8}, 2.5, std::string{"custom"}, std::size_t{1}};
-    REQUIRE(settings.size() == values.size());
     for (std::size_t index = 0; index < settings.size(); ++index) {
-        fixture.modal.SetSettingValue(0, settings[index], values[index]);
-        REQUIRE(fixture.modal.SettingValue(0, settings[index]) == values[index]);
+        fixture.modal.SetSettingValue(0, settings[index], values.at(index));
+        REQUIRE(fixture.modal.SettingValue(0, settings[index]) == values.at(index));
     }
 
     SECTION("malformed numbers restore defaults") {

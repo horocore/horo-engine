@@ -603,4 +603,6 @@ The import modal constructor now groups its optional borrowed capabilities in
 composition root and lifecycle/presentation tests use named members; this keeps
 the eight-argument constructor below the quality limit and preserves ownership
 and default behavior. External callers should pass the same pointers in that
-value; no service lookup or registration occurs inside it.
+value; no service lookup or registration occurs inside it. The constructor reads
+this aggregate through a const reference and copies its pointers, so a temporary
+aggregate is valid while the pointed-to services must outlive the modal.

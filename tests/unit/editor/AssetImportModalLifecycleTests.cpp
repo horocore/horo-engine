@@ -387,6 +387,21 @@ TEST_CASE("AssetImportModal does not duplicate an already selected type folder",
     REQUIRE((!std::filesystem::exists(projectRoot / "assets/Meshes/Meshes")));
 }
 
+TEST_CASE("AssetImportModal accepts asset destinations and rejects folders outside assets", "[native]") {
+    const Theme::Fonts fonts{};
+    JobSystem jobs;
+    const ScopedTempDirectory project{"horo-import-default-destination"};
+    TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution())};
+    modal.SetProjectRoot(project.Path());
+    std::filesystem::create_directories(project.Path() / "assets/Imported");
+    modal.SetDefaultDestination(project.Path() / "assets/Imported");
+    CHECK(modal.DefaultDestinationFolder() == "assets/Imported");
+    modal.SetDefaultDestination(project.Path() / "outside");
+    CHECK(modal.DefaultDestinationFolder() == "assets/Imported");
+    modal.SetDefaultDestination("assets/Imported");
+    CHECK(modal.DefaultDestinationFolder() == "assets/Imported");
+}
+
 TEST_CASE("AssetImportModal tracks included queue items and appends files safely", "[native]") {
     const Theme::Fonts fonts{};
     JobSystem jobs;
@@ -402,14 +417,6 @@ TEST_CASE("AssetImportModal tracks included queue items and appends files safely
     }
 
     TestAssetImportModal modal{fonts, jobs, PublishCatalog(BasicContribution()), AssetImportModalServices{.operationStore = &operations}};
-    modal.SetProjectRoot(project.Path());
-    std::filesystem::create_directories(project.Path() / "assets/Imported");
-    modal.SetDefaultDestination(project.Path() / "assets/Imported");
-    CHECK(modal.DefaultDestinationFolder() == "assets/Imported");
-    modal.SetDefaultDestination(project.Path() / "outside");
-    CHECK(modal.DefaultDestinationFolder() == "assets/Imported");
-    modal.SetDefaultDestination("assets/Imported");
-    CHECK(modal.DefaultDestinationFolder() == "assets/Imported");
 
     CancellationToken cancellation;
     REQUIRE((modal.BeginImport({firstSource}, project.Path(), cancellation).HasValue()));

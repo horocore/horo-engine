@@ -71,10 +71,10 @@ namespace Horo::Editor {
          * @param fonts Theme fonts reference (valid for modal lifetime).
          * @param jobs Job system for background import work.
          * @param catalog Published immutable importer catalog snapshot.
-         * @param services Optional borrowed import capabilities, valid for the modal lifetime.
+         * @param services Optional capabilities copied at construction; pointed-to services must outlive the modal.
          */
         AssetImportModal(const Theme::Fonts &fonts, JobSystem &jobs, std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> catalog,
-                         AssetImportModalServices services = {}) noexcept;
+                         const AssetImportModalServices &services = {}) noexcept;
 
         /** @brief Destroys the modal and its target-private project committer. */
         ~AssetImportModal() override;

@@ -268,6 +268,8 @@ namespace Horo::Editor {
         void HandleViewportPick(const ViewportPickRequest &request);
         void ApplyViewportPickSelection(const EditorViewportPickResult &picked, const ViewportPickRequest &request);
         [[nodiscard]] bool ProcessViewportCommand(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Logs a rejected camera change or publishes its accepted projection to the workspace. */
+        void ApplyViewportCameraChange(const Result<void> &result, const char *action);
         [[nodiscard]] bool ProcessViewportCameraCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessViewportEditCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessComponentCommand(const EditorWorkspaceViewCommandData &cmd);

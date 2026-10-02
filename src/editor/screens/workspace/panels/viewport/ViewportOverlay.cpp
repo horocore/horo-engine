@@ -83,7 +83,7 @@ namespace Horo::Editor {
                 case OverlayGlyph::Focus:
                     for (const float x : {-1.0F, 1.0F}) {
                         for (const float y : {-1.0F, 1.0F}) {
-                            const ImVec2 corner{center.x + static_cast<float>(x) * 8.0F, center.y + static_cast<float>(y) * 8.0F};
+                            const ImVec2 corner{center.x + x * 8.0F, center.y + y * 8.0F};
                             drawList.AddLine(corner, {corner.x - x * 5.0F, corner.y}, color, stroke);
                             drawList.AddLine(corner, {corner.x, corner.y - y * 5.0F}, color, stroke);
                         }

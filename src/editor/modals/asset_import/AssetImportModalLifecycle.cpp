@@ -158,7 +158,7 @@ namespace Horo::Editor {
 
     AssetImportModal::AssetImportModal(const Theme::Fonts &fonts, JobSystem &jobs,
                                        std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> catalog,
-                                       const AssetImportModalServices services) noexcept
+                                       const AssetImportModalServices &services) noexcept
         : m_fonts(fonts), m_jobs(jobs), m_catalog(std::move(catalog)), m_assetRegistry(services.assetRegistry),
           m_operationStore(services.operationStore), m_localization(services.localization), m_nativeDialogs(services.nativeDialogs),
           m_inputRouter(services.inputRouter) {}
