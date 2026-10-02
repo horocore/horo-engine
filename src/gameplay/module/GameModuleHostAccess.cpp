@@ -1,5 +1,6 @@
 #include "GameModuleHostDetail.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <utility>
 
@@ -65,7 +66,21 @@ namespace Horo::Gameplay {
 
     /** @copydoc LoadedGameModule::Replication */
     const ReplicationRegistrationRegistry &LoadedGameModule::Replication() const noexcept {
-        return *impl_->replication;
+        return *impl_->stateRegistrations.replication;
+    }
+
+    /** @copydoc LoadedGameModule::AcquirePersistence */
+    Result<std::shared_ptr<Runtime::GameplayPersistenceAdapter>> LoadedGameModule::AcquirePersistence(
+        const Runtime::SaveParticipantId &participant) const {
+        if (!impl_->runtimeLeaseAdmission.load(std::memory_order_acquire))
+            return Result<std::shared_ptr<Runtime::GameplayPersistenceAdapter>>::Failure(
+                MakeError(GameplayErrors::GameplayReloadRestartRequired));
+        for (const auto &registration : impl_->stateRegistrations.persistence->registrations_) {
+            if (registration.descriptor.participant.participant == participant)
+                return Runtime::GameplayPersistenceAdapter::Create(registration.descriptor, registration.source, impl_);
+        }
+        return Result<std::shared_ptr<Runtime::GameplayPersistenceAdapter>>::Failure(
+            MakeError(Runtime::SaveErrors::ParticipantAdapterMissing));
     }
 
     /** @copydoc LoadedGameModule::ActiveServices */

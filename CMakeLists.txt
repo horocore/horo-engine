@@ -103,8 +103,9 @@ set(HORO_GAMEPLAY_SDK_PACKAGE_DIR "${CMAKE_BINARY_DIR}/sdk/gameplay" CACHE INTER
 file(MAKE_DIRECTORY "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}")
 set_target_properties(HoroFoundation PROPERTIES EXPORT_NAME Foundation POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroNetworkApi PROPERTIES EXPORT_NAME NetworkApi POSITION_INDEPENDENT_CODE ON)
+set_target_properties(HoroSaveApi PROPERTIES EXPORT_NAME SaveApi POSITION_INDEPENDENT_CODE ON)
 set_target_properties(HoroGameplayApi PROPERTIES EXPORT_NAME GameplayApi POSITION_INDEPENDENT_CODE ON)
-export(TARGETS HoroFoundation HoroNetworkApi HoroGameplayApi
+export(TARGETS HoroFoundation HoroNetworkApi HoroSaveApi HoroGameplayApi
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayTargets.cmake")
 configure_package_config_file(

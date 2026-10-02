@@ -203,6 +203,24 @@ registry snapshots continue to pin their exact adapter leases until detached wor
 retires. Retaining a client across reload therefore grants neither stale callbacks
 nor registry authority.
 
+`Horo/Gameplay/PersistenceSource.h` is the project SDK callback contract;
+`Horo/Gameplay/SaveGameplayPersistence.h` supplies the explicit runtime-only
+behavior-instance, module-global, service and session binding. Each owner declares
+one stable canonical participant/record, schema, module version and bounded payload.
+The binding captures owned bytes at the safe point and creates an inactive staged
+restore receipt. Exact compatibility is checked before publication; the receipt
+pins its module generation through retirement. See the
+[gameplay persistence migration guide](../../guides/gameplay-persistence-migration.md).
+Native module registration exposes this opt-in declaration through
+`GameRegistrationContext::persistence`; freeze resolves generated behavior and
+service identities before module startup. Explicit host composition acquires an
+adapter from `LoadedGameModule::AcquirePersistence` and registers it through the
+participation client. Adapter acquisition closes with native reload admission;
+retained registry snapshots and staged receipts prevent code unload. The exported
+SDK's canonical identity/error/participant declarations belong to Foundation-only
+`SaveApi`; archive and restore execution remain in Runtime, with gameplay adapters
+in GameplayRuntime.
+
 Gameplay save/load requests contain only an opaque `SaveGameSlotId` and typed policy
 mode. The injected application operation host resolves the active namespace, project
 policy, operation identity, safe point and storage adapter. The public request cannot

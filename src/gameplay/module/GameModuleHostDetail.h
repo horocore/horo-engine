@@ -42,6 +42,12 @@ namespace Horo::Gameplay {
         };
     }  // namespace Detail
 
+    /** @brief Inert state declarations owned by the same native module generation. */
+    struct ModuleStateRegistrations final {
+        std::unique_ptr<ReplicationRegistrationRegistry> replication;
+        std::unique_ptr<PersistenceRegistrationRegistry> persistence;
+    };
+
     struct LoadedGameModule::Impl : std::enable_shared_from_this<LoadedGameModule::Impl> {
         ~Impl();
 
@@ -56,7 +62,7 @@ namespace Horo::Gameplay {
         std::unique_ptr<GameAssetTypeRegistry> assetTypes;
         std::unique_ptr<GameServiceRegistry> services;
         std::unique_ptr<SystemRegistry> systems;
-        std::unique_ptr<ReplicationRegistrationRegistry> replication;
+        ModuleStateRegistrations stateRegistrations;
         std::unique_ptr<GameplayServiceRuntime> projectServices;
         GameRuntimeContext runtimeContext;
         IGameModule *gameplayModule{};
