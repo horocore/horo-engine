@@ -52,8 +52,10 @@ namespace Horo::Audio::StreamingTests {
         REQUIRE(lowHandle.HasValue());
         REQUIRE(highHandle.HasValue());
         service->Pump();
+        // The open counter advances before the fixture records the selected asset.
+        // Wait for that identity, then assert priority rather than waiting for the expected ID.
         REQUIRE(Until([&] {
-            return fixture.opens.load() != 0;
+            return fixture.firstOpenedAsset.load() != 0;
         }));
         CHECK(fixture.firstOpenedAsset.load() == 2);
         CHECK(service->Snapshot(lowHandle.Value()).Value().bufferedFrames == 0);
