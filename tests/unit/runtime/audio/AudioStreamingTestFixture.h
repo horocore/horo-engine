@@ -1,0 +1,153 @@
+#pragma once
+
+#include "Horo/Audio/AudioErrors.h"
+#include "Horo/Audio/AudioStreamingService.h"
+
+#include <array>
+#include <atomic>
+#include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <thread>
+#include <utility>
+
+// Shared deterministic package/decoder fixture; no production behavior is replaced here.
+namespace Horo::Audio::StreamingTests {
+    struct PackageFixture final {
+        std::atomic<std::uint32_t> opens{};
+        std::atomic<std::uint32_t> releases{};
+        std::atomic<std::uint32_t> decodes{};
+        std::atomic<std::uint32_t> firstOpenedAsset{};
+        std::atomic<bool> opening{};
+        std::atomic<bool> holdOpen{};
+        std::atomic<bool> finalDecodeEntered{};
+        std::atomic<bool> holdFinalDecode{};
+        std::atomic<bool> ignoreCancellation{};
+        std::atomic<bool> holdFirstDecode{};
+        std::atomic<bool> firstDecodeEntered{};
+        std::atomic<bool> privateCancellationObserved{};
+        std::atomic<bool> privateCancellationTimedOut{};
+        bool openAfterCancellation{};
+        bool decodeFailure{};
+        bool wrongSpec{};
+    };
+
+    /** @brief Stable stereo callback storage shared by ring and cancellation regressions. */
+    struct CallbackBlock final {
+        std::array<AudioSample, 4> left{};
+        std::array<AudioSample, 4> right{};
+        std::array<AudioSample *, 2> planes{left.data(), right.data()};
+
+        AudioStreamRenderResult Render(const AudioStreamRenderPort &port, const std::uint32_t frames) {
+            return port.Render(planes, frames);
+        }
+    };
+
+    struct DecoderContext final {
+        PackageFixture *fixture{};
+        std::uint64_t frameCount{};
+    };
+
+    inline Assets::AssetId Asset(const std::uint8_t suffix) {
+        std::array<std::uint8_t, 16> bytes{};
+        bytes.back() = suffix;
+        return Assets::AssetId::FromBytes(bytes);
+    }
+
+    inline AudioStreamRequest Request(const std::uint8_t assetSuffix = 1) {
+        AudioStreamRequest request;
+        request.asset = Asset(assetSuffix);
+        request.decoder = {AudioCodecIds::Pcm, {48'000, MakeAudioSpeakerLayout(AudioSpeakerPreset::Stereo)}, 8, 2, 16, false};
+        request.ringFrames = 4;
+        request.lookaheadFrames = 4;
+        request.maximumPackageBytes = 1'024;
+        return request;
+    }
+
+    inline bool Until(const auto &condition) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!condition()) {
+            if (std::chrono::steady_clock::now() >= deadline)
+                return false;
+            std::this_thread::yield();
+        }
+        return true;
+    }
+
+    /** @brief Models a provider blocked on only its private decoder cancellation, never the parent token. */
+    inline void AwaitPrivateCancellation(PackageFixture &fixture, const std::uint64_t firstFrame, const std::atomic<bool> &cancelled) {
+        if (firstFrame != 0 || !fixture.holdFirstDecode.load())
+            return;
+        fixture.firstDecodeEntered.store(true);
+        const bool observed = Until([&cancelled] {
+            return cancelled.load();
+        });
+        fixture.privateCancellationObserved.store(observed);
+        fixture.privateCancellationTimedOut.store(!observed);
+    }
+
+    inline Result<AudioStreamDecodeProgress> Decode(void *opaque, const std::uint64_t firstFrame, const std::span<AudioSample> output,
+                                                    const std::span<std::byte> scratch, const std::atomic<bool> &cancelled) {
+        auto &context = *static_cast<DecoderContext *>(opaque);
+        auto &fixture = *context.fixture;
+        fixture.decodes.fetch_add(1);
+        AwaitPrivateCancellation(fixture, firstFrame, cancelled);
+        if (firstFrame == context.frameCount - 2) {
+            fixture.finalDecodeEntered.store(true);
+            while (fixture.holdFinalDecode.load() && (fixture.ignoreCancellation.load() || !cancelled.load()))
+                std::this_thread::yield();
+        }
+        if (cancelled.load())
+            return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioErrors::OperationCancelled));
+        if (fixture.decodeFailure)
+            return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioErrors::StreamReadFailed));
+        if (scratch.size() != 16 || output.size() != 4)
+            return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioErrors::StreamReadFailed));
+        for (std::size_t index = 0; index < output.size(); ++index)
+            output[index] = static_cast<float>(firstFrame + index / 2 + 1);
+        return Result<AudioStreamDecodeProgress>::Success({2, firstFrame + 2 == context.frameCount});
+    }
+
+    inline void Release(void *opaque) noexcept {
+        const std::unique_ptr<DecoderContext> context(static_cast<DecoderContext *>(opaque));
+        context->fixture->releases.fetch_add(1);
+    }
+
+    inline Result<AudioStreamDecoder> Open(void *opaque, const Assets::AssetId asset, const AudioStreamDecoderSpec &expected,
+                                           const std::size_t maximumPackageBytes, const CancellationToken &cancelled) {
+        auto &fixture = *static_cast<PackageFixture *>(opaque);
+        fixture.opening.store(true);
+        while (fixture.holdOpen.load() && (fixture.ignoreCancellation.load() || !cancelled.IsCancellationRequested()))
+            std::this_thread::yield();
+        if (cancelled.IsCancellationRequested() && !fixture.openAfterCancellation)
+            return Result<AudioStreamDecoder>::Failure(MakeError(AudioErrors::OperationCancelled));
+        if (maximumPackageBytes < 32)
+            return Result<AudioStreamDecoder>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
+        fixture.opens.fetch_add(1);
+        std::uint32_t firstExpected = 0;
+        (void)fixture.firstOpenedAsset.compare_exchange_strong(firstExpected, asset.Bytes().back());
+        auto spec = expected;
+        if (fixture.wrongSpec)
+            ++spec.frameCount;
+        auto context = std::make_unique<DecoderContext>(DecoderContext{&fixture, spec.frameCount});
+        auto opened = AudioStreamDecoder::Create(spec, {context.get(), &Decode, nullptr, &Release});
+        if (opened.HasValue())
+            (void)context.release();
+        return opened;
+    }
+
+    inline std::unique_ptr<AudioStreamingService> Service(JobSystem &jobs, PackageFixture &fixture,
+                                                          AudioStreamingLimits limits = {2, 1, 1U << 20U}) {
+        auto created = AudioStreamingService::Create(jobs, {&fixture, &Open}, limits);
+        REQUIRE(created.HasValue());
+        return std::move(created).Value();
+    }
+
+    inline bool PumpUntil(AudioStreamingService &service, const AudioStreamHandle handle, const std::uint32_t buffered) {
+        return Until([&service, handle, buffered] {
+            service.Pump();
+            const auto snapshot = service.Snapshot(handle);
+            return snapshot.HasValue() && snapshot.Value().bufferedFrames >= buffered;
+        });
+    }
+
+}  // namespace Horo::Audio::StreamingTests
