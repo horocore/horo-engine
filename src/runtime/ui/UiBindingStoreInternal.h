@@ -129,7 +129,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> PrepareTargets(const UiElementTree &tree, std::span<const UiBindingProviderRegistration> registrations,
                                                   std::span<const UiResolvedBindingDescriptor> bindings);
         /** @brief Admits a bounded draft budget and reserves both owned target/draft values during load-time preparation. */
-        [[nodiscard]] Result<void> PrepareDraftStorage(Target &target, UiBindingValueType type, std::size_t &reservedBytes);
+        [[nodiscard]] Result<void> PrepareDraftStorage(Target &target, UiBindingValueType type, std::size_t &reservedBytes) const;
         /** @brief Resolves one validated conflict-free current target handle before value storage is prepared. */
         [[nodiscard]] Result<UiElementHandle> ResolveTarget(const UiElementTree &tree, const UiBindingDescriptor &binding,
                                                             const UiBindingProviderSchema &schema) const;

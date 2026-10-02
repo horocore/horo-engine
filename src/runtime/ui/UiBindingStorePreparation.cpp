@@ -195,7 +195,8 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiBindingStore::Storage::PrepareDraftStorage */
-    Result<void> UiBindingStore::Storage::PrepareDraftStorage(Target &target, const UiBindingValueType type, std::size_t &reservedBytes) {
+    Result<void> UiBindingStore::Storage::PrepareDraftStorage(Target &target, const UiBindingValueType type,
+                                                              std::size_t &reservedBytes) const {
         target.draft = target.bound.value;
         if (type == UiBindingValueType::BoundedText || type == UiBindingValueType::LocalizedMessage) {
             reservedBytes += target.limits.maximumBytes;

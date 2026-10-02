@@ -53,6 +53,43 @@ namespace Horo::Runtime::Ui::BindingWriteTests {
         CHECK_FALSE(Take(fixture.store.ProcessWrite(fixture.tree, fixture.layout)).has_value());
     }
 
+    TEST_CASE("Private provider failures cancel an existing pending reservation without publishing committed state",
+              "[runtime_ui][binding][write][feedback][lifecycle]") {
+        WriteSession fixture;
+        auto authority = fixture.Authority(0);
+        authority->disposition = UiBindingWriteDisposition::Pending;
+        fixture.Admit(fixture.store, 10, authority);
+        const auto queued = fixture.QueueCurrentChange();
+        CHECK(Process(fixture.store, fixture.tree, fixture.layout).disposition == UiBindingWriteDisposition::Pending);
+        REQUIRE(authority->reservation);
+        authority->translatePrivateFailure = true;
+        authority->failure = WithCause(MakeError(UiErrors::ActionHandlerFailed, "private pending work failed"),
+                                       MakeError(UiErrors::RevisionStale, "private transaction moved"));
+        const auto outcome = Process(fixture.store, fixture.tree, fixture.layout);
+        CHECK(outcome.request == queued.request);
+        CHECK(outcome.operation == queued.operation);
+        CHECK(outcome.disposition == UiBindingWriteDisposition::Rejected);
+        REQUIRE(outcome.error);
+        CHECK(outcome.error->code.Value() == authority->failure->code.Value());
+        CHECK(outcome.error->domain.Value() == authority->failure->domain.Value());
+        CHECK(outcome.error->message == authority->failure->message);
+        CHECK(outcome.error->severity == authority->failure->severity);
+        CHECK(outcome.error->cause.Get() == authority->failure->cause.Get());
+        CHECK(fixture.state->commits == 0);
+        CHECK(fixture.state->revision.Value() == 1);
+        CHECK_FALSE(std::get<bool>(fixture.state->values[0]));
+        CHECK_FALSE(std::get<bool>(fixture.store.Find(fixture.tree, Stable<UiBindingId>(10))->value));
+        CHECK(fixture.state->abandons == 1);
+        CHECK_FALSE(authority->reservation);
+        CHECK_FALSE(Take(fixture.store.ProcessWrite(fixture.tree, fixture.layout)).has_value());
+        const std::weak_ptr<TypedAuthority> lease = authority;
+        authority.reset();
+        fixture.store.Shutdown();
+        CHECK(lease.expired());
+        CHECK(fixture.state->destroyed == 1);
+        CHECK(fixture.state->abandons == 1);
+    }
+
     TEST_CASE("Pending producer writes are fenced by revocation reload retirement and shutdown exactly once",
               "[runtime_ui][binding][write][lifecycle]") {
         WriteSession fixture;
