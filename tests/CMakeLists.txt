@@ -376,6 +376,7 @@ add_executable(HoroAudioApiTests
         unit/runtime/audio/AudioResamplerPlanTests.cpp
         unit/runtime/audio/AudioPlaybackRequestTests.cpp
         unit/runtime/audio/AudioPlanarBlockTests.cpp
+        unit/runtime/audio/AudioConcurrencyGroupTests.cpp
         unit/runtime/audio/AudioVoiceStateMachineTests.cpp
 )
 target_include_directories(HoroAudioApiTests PRIVATE

@@ -1317,3 +1317,14 @@ into the separate session and supply caller-owned output/scratch and an owned
 provider context. No codec-specific or native backend type crosses the public
 boundary. The generated `HoroAudioApiPublicHeaderConsumer` and focused
 `HoroAudioApiTests` cover the new headers and lifecycle contract.
+
+### Audio scoped concurrency model (AUD-003.4)
+
+`Horo/Audio/AudioConcurrencyGroup.h` is an additive `HoroAudioApi` contract.
+Its identities, group descriptors and eligibility projections remain backend
+neutral and use existing Audio voice snapshots. Existing sound defaults and
+voice registry callers require no migration. Admission callers explicitly build
+scoped projections and evaluate group constraints before reserving voices; no
+implicit group registry or source-policy override is introduced. The ownership
+registry stages this header and the generated `HoroAudioApi` public-header
+consumer compiles it using only declared Foundation/Assets dependencies.
