@@ -160,6 +160,8 @@ namespace Horo::WorldStreaming {
         if (!state_)
             return Internal::Failure<void>(WorldStreamingErrors::CellAssetRequestLifecycleUnavailable);
         std::scoped_lock lock{state_->mutex};
+        if (state_->consumed)
+            return Internal::Failure<void>(WorldStreamingErrors::CellAssetRequestConsumed);
         state_->CancelChildren();
         return Result<void>::Success();
     }
@@ -185,6 +187,8 @@ namespace Horo::WorldStreaming {
             auto value = std::move(loaded).Value();
             batch.assets.emplace_back(state_->assets[index], std::move(value.bytes));
         }
+        if (state_->cancellationRequested)
+            return Internal::Failure<StreamingCellAssetBatch>(WorldStreamingErrors::CellAssetRequestCancelled);
         return Result<StreamingCellAssetBatch>::Success(std::move(batch));
     }
 

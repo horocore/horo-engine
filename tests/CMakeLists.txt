@@ -824,6 +824,7 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/StreamingCellCandidateTests.cpp
         unit/runtime/world_streaming/StreamingCellAssetRequestTests.cpp
         unit/runtime/world_streaming/StreamingCellActivationTests.cpp
+        unit/runtime/world_streaming/StreamingCellDirectionTests.cpp
         unit/runtime/world_streaming/StreamingCellStateTests.cpp
         unit/runtime/world_streaming/StreamingCellStabilityTests.cpp
         unit/runtime/world_streaming/StreamingSchedulerAdmissionTests.cpp
