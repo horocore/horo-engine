@@ -2,9 +2,9 @@
 #include "RpcGameplayDispatchState.h"
 
 #include <algorithm>
-#include <exception>
 #include <new>
 #include <ranges>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -157,7 +157,9 @@ namespace Horo::Network {
             return handler->Execute(context, command.values);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
-        } catch (const std::exception &) {
+        } catch (const std::runtime_error &) {
+            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+        } catch (const std::logic_error &) {
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         } catch (...) {
             // Module callbacks may throw non-standard values; no exception may cross the host Gameplay boundary.

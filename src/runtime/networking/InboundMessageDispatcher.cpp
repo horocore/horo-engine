@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <new>
+#include <stdexcept>
 #include <utility>
 
 namespace Horo::Network {
@@ -282,7 +283,9 @@ namespace Horo::Network {
             });
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkIoServiceCapacityExceeded));
-        } catch (const std::exception &) {
+        } catch (const std::runtime_error &) {
+            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+        } catch (const std::logic_error &) {
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         } catch (...) {
             // Untrusted handlers may throw non-standard values; none may cross the admitted owner boundary.

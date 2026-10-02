@@ -2,9 +2,9 @@
 #include "RpcGameplayDispatchState.h"
 
 #include <algorithm>
-#include <exception>
 #include <new>
 #include <ranges>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -25,6 +25,18 @@ namespace Horo::Network {
             NetworkPeerId recipient;
             std::vector<WireParameter> parameters;
         };
+
+        /** @brief Admits only the descriptor's bounded payload and exact supported delivery semantics. */
+        Result<void> ValidateInvocationEnvelope(const RpcDescriptor &descriptor, const std::size_t payloadBytes,
+                                                const DeliveryPolicy delivery) {
+            if (payloadBytes > descriptor.maximumPayloadBytes)
+                return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
+            if ((descriptor.delivery == RpcDelivery::ReliableOrdered && delivery != DeliveryPolicy::ReliableOrdered) ||
+                (descriptor.delivery == RpcDelivery::Unreliable && delivery != DeliveryPolicy::UnreliableUnordered &&
+                 delivery != DeliveryPolicy::UnreliableSequenced))
+                return Result<void>::Failure(MakeError(NetworkErrors::TransportDeliveryUnsupported));
+            return Result<void>::Success();
+        }
 
         /** @brief Reads fixed little-endian integers from bounded untrusted bytes. */
         template <typename Integer> bool Read(std::span<const std::byte> bytes, std::size_t &offset, Integer &value) noexcept {
@@ -190,12 +202,34 @@ namespace Horo::Network {
             return StageAdmitted(context, message, *peer, revision);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
-        } catch (const std::exception &) {
+        } catch (const std::runtime_error &) {
+            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+        } catch (const std::logic_error &) {
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         } catch (...) {
             // Non-standard adapter exceptions are terminal receipt failures, never queued work.
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         }
+    }
+
+    /** @copydoc RpcGameplayDispatch::CheckReplay */
+    Result<RpcGameplayDispatch::ReplayScope *> RpcGameplayDispatch::CheckReplay(const Peer &peer, const NetworkObjectId object,
+                                                                                const RpcDescriptor &descriptor,
+                                                                                const std::uint64_t sequence) {
+        if (descriptor.delivery != RpcDelivery::ReliableOrdered)
+            return Result<ReplayScope *>::Success(nullptr);
+        const auto scope = std::ranges::find_if(replay_, [&peer, object, &descriptor](const ReplayScope &entry) {
+            return entry.connection == peer.connection && entry.generation == peer.generation && entry.object == object &&
+                   entry.id == descriptor.id;
+        });
+        if (scope != replay_.end()) {
+            if (sequence <= scope->highestAccepted)
+                return Result<ReplayScope *>::Failure(MakeError(NetworkErrors::MessageDeliveryInvalid));
+            return Result<ReplayScope *>::Success(&*scope);
+        }
+        if (replay_.size() == limits_.maximumReplayScopes)
+            return Result<ReplayScope *>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
+        return Result<ReplayScope *>::Success(nullptr);
     }
 
     /** @copydoc RpcGameplayDispatch::StageAdmitted */
@@ -213,27 +247,17 @@ namespace Horo::Network {
         });
         if (binding == bindings_.end() || object == objects_.end() || binding->handler.expired())
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
-        if (message.payload.size() > binding->descriptor->maximumPayloadBytes)
-            return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
-        if ((binding->descriptor->delivery == RpcDelivery::ReliableOrdered && context.delivery != DeliveryPolicy::ReliableOrdered) ||
-            (binding->descriptor->delivery == RpcDelivery::Unreliable && context.delivery != DeliveryPolicy::UnreliableUnordered &&
-             context.delivery != DeliveryPolicy::UnreliableSequenced))
-            return Result<void>::Failure(MakeError(NetworkErrors::TransportDeliveryUnsupported));
+        if (const auto envelope = ValidateInvocationEnvelope(*binding->descriptor, message.payload.size(), context.delivery);
+            envelope.HasError())
+            return envelope;
         Runtime::EntityRef entity;
         const auto live = ValidateLive(peer, *object, *binding->descriptor, wire.recipient, context.ownerTick,
                                        Runtime::RuntimePhase::NetworkPoll, entity);
         if (live.HasError())
             return Result<void>::Failure(live.ErrorValue());
-        const auto scope = std::ranges::find_if(replay_, [&](const ReplayScope &entry) {
-            return entry.connection == context.connection && entry.generation == context.generation && entry.object == wire.object &&
-                   entry.id == wire.id;
-        });
-        if (binding->descriptor->delivery == RpcDelivery::ReliableOrdered && scope != replay_.end() &&
-            wire.sequence <= scope->highestAccepted)
-            return Result<void>::Failure(MakeError(NetworkErrors::MessageDeliveryInvalid));
-        if (binding->descriptor->delivery == RpcDelivery::ReliableOrdered && scope == replay_.end() &&
-            replay_.size() == limits_.maximumReplayScopes)
-            return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
+        const auto scope = CheckReplay(peer, wire.object, *binding->descriptor, wire.sequence);
+        if (scope.HasError())
+            return Result<void>::Failure(scope.ErrorValue());
         // Adapter callbacks can revoke bindings. Pin their code and storage through decoding.
         const Binding pinned = binding->Pin();
         const Peer pinnedPeer = peer;
@@ -251,10 +275,10 @@ namespace Horo::Network {
                               live.Value().Descriptor().scene, live.Value().Descriptor().session, std::move(values).Value(),
                               context.cancellation);
         if (pinned.descriptor->delivery == RpcDelivery::ReliableOrdered) {
-            if (scope == replay_.end())
+            if (!scope.Value())
                 replay_.emplace_back(context.connection, context.generation, wire.object, wire.id, wire.sequence);
             else
-                scope->highestAccepted = wire.sequence;
+                scope.Value()->highestAccepted = wire.sequence;
         }
         return Result<void>::Success();
     }

@@ -60,7 +60,11 @@ namespace Horo::Network {
 
         Binding(const Binding &) = delete;
         Binding &operator=(const Binding &) = delete;
-        Binding(Binding &&) noexcept = default;
+
+        /** @brief Transfers adapters together with the lease that keeps their module code executable. */
+        Binding(Binding &&other) noexcept
+            : id(other.id), descriptor(std::exchange(other.descriptor, nullptr)), moduleLease(std::move(other.moduleLease)),
+              handler(std::move(other.handler)), serializers(std::move(other.serializers)), metadata(std::move(other.metadata)) {}
 
         /** @brief Pins callback adapters and code without permitting unsafe memberwise assignment. */
         [[nodiscard]] Binding Pin() const {

@@ -173,6 +173,9 @@ namespace Horo::Network {
         struct Pending;
         struct ReplayScope;
 
+        /** @brief Checks reliable logical replay and ledger capacity without consuming the occurrence. */
+        [[nodiscard]] Result<ReplayScope *> CheckReplay(const Peer &peer, NetworkObjectId object, const RpcDescriptor &descriptor,
+                                                        std::uint64_t sequence);
         [[nodiscard]] Result<void> ExecutePending(const Pending &command, const ReplicationWorldWorkRequest &request);
         [[nodiscard]] Result<void> StageAdmitted(const InboundMessageContext &context, const MessageEnvelope &message, const Peer &peer,
                                                  std::uint64_t revision);
