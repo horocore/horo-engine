@@ -127,14 +127,21 @@ namespace Horo::PackageCommand {
                 bytes[offset + shift / 8] = static_cast<std::byte>((value >> shift) & 0xffU);
         }
 
-        [[nodiscard]] bool SetMode(std::vector<std::byte> &bytes, const File &file, mz_zip_archive &reader, const mz_uint index) {
+        /** @brief Writes canonical DOS timestamps and permissions without using the clock or local timezone. */
+        [[nodiscard]] bool SetMetadata(std::vector<std::byte> &bytes, const bool executable, mz_zip_archive &reader, const mz_uint index) {
             mz_zip_archive_file_stat stat{};
             if (!mz_zip_reader_file_stat(&reader, index, &stat))
                 return false;
             const auto offset = static_cast<std::size_t>(reader.m_central_directory_file_ofs + stat.m_central_dir_ofs + 38U);
-            if (offset > bytes.size() || bytes.size() - offset < 4U)
+            const auto centralTime = static_cast<std::size_t>(reader.m_central_directory_file_ofs + stat.m_central_dir_ofs + 12U);
+            const auto localTime = static_cast<std::size_t>(stat.m_local_header_ofs + 10U);
+            if (offset > bytes.size() || bytes.size() - offset < 4U || centralTime > bytes.size() || bytes.size() - centralTime < 4U ||
+                localTime > bytes.size() || bytes.size() - localTime < 4U)
                 return false;
-            Write32(bytes, offset, (file.executable ? 0100755U : 0100644U) << 16U);
+            constexpr std::uint32_t CanonicalDosTimestamp = 0x00210000U;  // 1980-01-01 00:00:00.
+            Write32(bytes, centralTime, CanonicalDosTimestamp);
+            Write32(bytes, localTime, CanonicalDosTimestamp);
+            Write32(bytes, offset, (executable ? 0100755U : 0100644U) << 16U);
             return true;
         }
 
@@ -144,8 +151,9 @@ namespace Horo::PackageCommand {
                 return Failure("package.archive_invalid", "Packed archive could not be inspected.");
             bool valid = mz_zip_reader_get_num_files(&reader) == files.size() + 1;
             if (valid) {
-                for (mz_uint index = 0; index < files.size(); ++index) {
-                    if (!SetMode(bytes, files[index], reader, index)) {
+                for (mz_uint index = 0; index < files.size() + 1; ++index) {
+                    const bool executable = index < files.size() && files[index].executable;
+                    if (!SetMetadata(bytes, executable, reader, index)) {
                         valid = false;
                         break;
                     }

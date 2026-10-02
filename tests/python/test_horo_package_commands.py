@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+import zipfile
 
 
 class PackageCommands(unittest.TestCase):
@@ -82,6 +83,12 @@ class PackageCommands(unittest.TestCase):
 
     def test_pack_reproducible_and_source_free_distribution(self):
         first = self.pack("first.horopkg")
+        with zipfile.ZipFile(first) as archive:
+            for entry in archive.infolist():
+                self.assertEqual(entry.date_time, (1980, 1, 1, 0, 0, 0), entry.filename)
+                with first.open("rb") as raw:
+                    raw.seek(entry.header_offset + 10)
+                    self.assertEqual(raw.read(4), b"\x00\x00\x21\x00", entry.filename)
         os.utime(self.source / "assets" / "payload.txt", (time.time() + 60, time.time() + 60))
         second = self.pack("second.horopkg")
         self.assertEqual(first.read_bytes(), second.read_bytes())
