@@ -2,6 +2,7 @@
 #include "RpcGameplayDispatchState.h"
 
 #include <algorithm>
+#include <memory>
 #include <new>
 #include <ranges>
 #include <stdexcept>
@@ -202,9 +203,9 @@ namespace Horo::Network {
             return StageAdmitted(context, message, *peer, revision);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
-        } catch (const std::runtime_error &) {
+        } catch (const std::invalid_argument &) {
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
-        } catch (const std::logic_error &) {
+        } catch (const std::out_of_range &) {
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         } catch (...) {
             // Non-standard adapter exceptions are terminal receipt failures, never queued work.
@@ -218,14 +219,15 @@ namespace Horo::Network {
                                                                                 const std::uint64_t sequence) {
         if (descriptor.delivery != RpcDelivery::ReliableOrdered)
             return Result<ReplayScope *>::Success(nullptr);
-        const auto scope = std::ranges::find_if(replay_, [&peer, object, &descriptor](const ReplayScope &entry) {
+        if (const auto scope = std::ranges::find_if(replay_,
+                                                    [&peer, object, &descriptor](const ReplayScope &entry) {
             return entry.connection == peer.connection && entry.generation == peer.generation && entry.object == object &&
                    entry.id == descriptor.id;
         });
-        if (scope != replay_.end()) {
+            scope != replay_.end()) {
             if (sequence <= scope->highestAccepted)
                 return Result<ReplayScope *>::Failure(MakeError(NetworkErrors::MessageDeliveryInvalid));
-            return Result<ReplayScope *>::Success(&*scope);
+            return Result<ReplayScope *>::Success(std::to_address(scope));
         }
         if (replay_.size() == limits_.maximumReplayScopes)
             return Result<ReplayScope *>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));

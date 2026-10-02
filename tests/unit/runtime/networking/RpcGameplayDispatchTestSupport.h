@@ -16,7 +16,7 @@
 #include <utility>
 
 namespace Horo::Network {
-    namespace {
+    namespace RpcDispatchTestSupport {
         template <typename Integer> void Append(std::vector<std::byte> &bytes, Integer value) {
             for (std::size_t index = 0; index < sizeof(Integer); ++index)
                 bytes.push_back(static_cast<std::byte>((value >> (index * 8U)) & 0xffU));
@@ -272,7 +272,7 @@ namespace Horo::Network {
             }
         };
 
-        RpcDescriptor Descriptor(const RpcId rpc, const bool outbound, const RpcTarget target, const bool withParameter) {
+        inline RpcDescriptor Descriptor(const RpcId rpc, const bool outbound, const RpcTarget target, const bool withParameter) {
             RpcDescriptor descriptor{
                 .id = rpc,
                 .version = {1, 0},
@@ -306,18 +306,22 @@ namespace Horo::Network {
             NetworkObjectId object = NetworkObjectId::Create(epoch, 7, 1).Value();
             Runtime::EntityRef entity{Runtime::SceneRuntimeId{9}, Runtime::EntityId{7, 1}};
             RpcDescriptor descriptor;
-            ReplicationSerializerDescriptor serializerDescriptor{
-                .valueType = ReplicationValueTypeId::Create(1).Value(),
-                .codec = ReplicationCodecId::Create(1).Value(),
-                .owner = ModuleId{"game.rpc"},
-                .valueKind = ReplicationValueKind::SignedInteger,
-                .maximumEncodedBytes = 64,
-                .maximumElementCount = 1,
-            };
+
+            static ReplicationSerializerDescriptor SerializerMetadata() {
+                return {
+                    .valueType = ReplicationValueTypeId::Create(1).Value(),
+                    .codec = ReplicationCodecId::Create(1).Value(),
+                    .owner = ModuleId{"game.rpc"},
+                    .valueKind = ReplicationValueKind::SignedInteger,
+                    .maximumEncodedBytes = 64,
+                    .maximumElementCount = 1,
+                };
+            }
+
             RpcDescriptorSnapshotPtr descriptors = [this] {
                 const std::array all{descriptor};
                 if (!descriptor.parameters.empty()) {
-                    const std::array serializers{serializerDescriptor};
+                    const std::array serializers{SerializerMetadata()};
                     return BuildRpcDescriptorSnapshot(all, serializers).Value();
                 }
                 return BuildRpcDescriptorSnapshot(all, {}).Value();
@@ -329,6 +333,7 @@ namespace Horo::Network {
             std::shared_ptr<const IReplicationFieldSerializer> serializer;
             std::shared_ptr<const void> moduleLease = std::make_shared<int>(1);
             std::shared_ptr<RpcGameplayDispatch> dispatch;
+            std::optional<MessageCodecRegistry> envelopeCodecs;
 
             template <typename Configure = decltype([](RpcDescriptor &) {
                           // Default fixtures leave the declared RPC metadata unchanged.
@@ -370,7 +375,7 @@ namespace Horo::Network {
                             .HasValue());
                 REQUIRE(dispatch->RegisterObject(object, role).HasValue());
                 if (!descriptor.parameters.empty()) {
-                    serializer = CanonicalScalarReplicationSerializer::Create(serializerDescriptor).Value();
+                    serializer = CanonicalScalarReplicationSerializer::Create(SerializerMetadata()).Value();
                     const std::array codecs{serializer};
                     REQUIRE(dispatch->RegisterHandler(rpc, handler, codecs, moduleLease).HasValue());
                     handler->expectsParameter = true;
@@ -448,8 +453,9 @@ namespace Horo::Network {
                 return message;
             }
 
-            /** @brief Composes an admitted envelope router without weakening transport impairment. */
-            std::unique_ptr<InboundMessageDispatcher> Router(ImpairedTransport &transport) const {
+            /** @brief Composes a router borrowing the fixture's stable registry; the router must retire before this fixture. */
+            std::unique_ptr<InboundMessageDispatcher> Router(ImpairedTransport &transport) {
+                REQUIRE_FALSE(envelopeCodecs.has_value());
                 const auto protocol = TestSupport::WireIdentity<ProtocolId>(1);
                 const auto messageId = TestSupport::WireIdentity<MessageTypeId>(2);
                 const auto schema = TestSupport::WireIdentity<MessageSchemaId>(3);
@@ -457,8 +463,8 @@ namespace Horo::Network {
                 const std::array messages{MessageIdentityDescriptor{protocol, messageId, schema, {1, 1}, false}};
                 const auto identities = ProtocolIdentityRegistry::Create({protocols, messages, {}, {}}).Value();
                 const std::array codecDescriptors{MessageCodecDescriptor{protocol, messageId, schema, {{1, 0}, {1, 2}}, 256}};
-                const auto codecs = MessageCodecRegistry::Create({codecDescriptors, {}}, identities).Value();
-                auto router = std::move(InboundMessageDispatcher::Create(transport, codecs)).Value();
+                envelopeCodecs.emplace(MessageCodecRegistry::Create({codecDescriptors, {}}, identities).Value());
+                auto router = std::move(InboundMessageDispatcher::Create(transport, *envelopeCodecs)).Value();
                 REQUIRE(router
                             ->RegisterHandler({protocol, messageId, MessageTrafficClass::Command, Runtime::RuntimePhase::NetworkPoll, 16},
                                               dispatch)
@@ -484,6 +490,6 @@ namespace Horo::Network {
                 return {entity.runtime, worldSession, Runtime::RuntimePhase::FixedUpdate, 23, {}};
             }
         };
-    }  // namespace
+    }  // namespace RpcDispatchTestSupport
 
 }  // namespace Horo::Network

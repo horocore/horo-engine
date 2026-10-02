@@ -157,9 +157,9 @@ namespace Horo::Network {
             return handler->Execute(context, command.values);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
-        } catch (const std::runtime_error &) {
+        } catch (const std::invalid_argument &) {
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
-        } catch (const std::logic_error &) {
+        } catch (const std::out_of_range &) {
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         } catch (...) {
             // Module callbacks may throw non-standard values; no exception may cross the host Gameplay boundary.

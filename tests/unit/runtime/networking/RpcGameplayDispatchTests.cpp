@@ -1,6 +1,10 @@
 #include "RpcGameplayDispatchTestSupport.h"
 
 namespace Horo::Network {
+    using RpcDispatchTestSupport::Fixture;
+    using RpcDispatchTestSupport::ImpairedTransport;
+    using RpcDispatchTestSupport::SceneHandler;
+
     TEST_CASE("RPC receipt resolves an admitted object then executes once at the Gameplay safe point", "[unit][network][rpc]") {
         Fixture fixture;
         REQUIRE(fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(1)).HasValue());
@@ -166,6 +170,7 @@ namespace Horo::Network {
             const auto schema = TestSupport::WireIdentity<MessageSchemaId>(3);
             ImpairedTransport transport(lost);
             auto router = fixture.Router(transport);
+            const auto &codecs = *fixture.envelopeCodecs;
             auto envelope = fixture.Message(1);
             envelope.protocol = protocol;
             envelope.message = messageId;

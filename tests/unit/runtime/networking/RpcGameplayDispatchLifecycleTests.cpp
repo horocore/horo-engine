@@ -1,6 +1,10 @@
 #include "RpcGameplayDispatchTestSupport.h"
 
 namespace Horo::Network {
+    using RpcDispatchTestSupport::CallbackSerializer;
+    using RpcDispatchTestSupport::Fixture;
+    using RpcDispatchTestSupport::Handler;
+
     TEST_CASE("RPC receipt and drain reject stale identity, revocation, cancellation and shutdown", "[unit][network][rpc]") {
         Fixture fixture;
         const auto stale = NetworkObjectId::Create(fixture.epoch, 7, 2).Value();
@@ -228,7 +232,7 @@ namespace Horo::Network {
         RpcDescriptor second = fixture.descriptor;
         second.id = RpcId::Create(99).Value();
         const std::array declarations{fixture.descriptor, second};
-        const std::array metadata{fixture.serializerDescriptor};
+        const std::array metadata{Fixture::SerializerMetadata()};
         auto descriptors = BuildRpcDescriptorSnapshot(declarations, metadata).Value();
         auto dispatch = RpcGameplayDispatch::Create(descriptors, fixture.world).Value();
         auto firstLease = std::make_shared<int>(1);

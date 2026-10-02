@@ -283,9 +283,9 @@ namespace Horo::Network {
             });
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkIoServiceCapacityExceeded));
-        } catch (const std::runtime_error &) {
+        } catch (const std::invalid_argument &) {
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
-        } catch (const std::logic_error &) {
+        } catch (const std::out_of_range &) {
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         } catch (...) {
             // Untrusted handlers may throw non-standard values; none may cross the admitted owner boundary.
