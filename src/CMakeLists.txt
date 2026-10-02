@@ -1188,6 +1188,11 @@ add_library(HoroEngine::NavigationRuntime ALIAS HoroNavigationRuntime)
 target_compile_features(HoroNavigationRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationRuntime PUBLIC HoroEngine::NavigationApi)
 
+add_library(HoroNavigationSceneIntegration STATIC runtime/navigation/integration/NavigationSceneActivation.cpp)
+add_library(HoroEngine::NavigationSceneIntegration ALIAS HoroNavigationSceneIntegration)
+target_compile_features(HoroNavigationSceneIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::RuntimeScene)
+
 add_library(HoroNavigationBakeService STATIC
         application/navigation/NavigationBakeService.cpp
         application/navigation/NavigationBakeCook.cpp
@@ -1195,11 +1200,6 @@ add_library(HoroNavigationBakeService STATIC
 add_library(HoroEngine::NavigationBakeService ALIAS HoroNavigationBakeService)
 target_compile_features(HoroNavigationBakeService PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationBakeService PUBLIC HoroEngine::NavigationRuntime HoroEngine::Assets HoroEngine::Platform)
-
-add_library(HoroNavigationSceneIntegration STATIC runtime/navigation/integration/NavigationSceneActivation.cpp)
-add_library(HoroEngine::NavigationSceneIntegration ALIAS HoroNavigationSceneIntegration)
-target_compile_features(HoroNavigationSceneIntegration PUBLIC cxx_std_20)
-target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::RuntimeScene)
 
 add_library(HoroXRApi STATIC
         runtime/xr/api/XRCapabilities.cpp
