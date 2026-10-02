@@ -85,7 +85,10 @@ class PackageCommands(unittest.TestCase):
         first = self.pack("first.horopkg")
         with zipfile.ZipFile(first) as archive:
             for entry in archive.infolist():
-                self.assertEqual(entry.date_time, (1980, 1, 1, 0, 0, 0))
+                self.assertEqual(entry.date_time, (1980, 1, 1, 0, 0, 0), entry.filename)
+                with first.open("rb") as raw:
+                    raw.seek(entry.header_offset + 10)
+                    self.assertEqual(raw.read(4), b"\x00\x00\x21\x00", entry.filename)
         os.utime(self.source / "assets" / "payload.txt", (time.time() + 60, time.time() + 60))
         second = self.root / "second.horopkg"
         self.run_tool("pack", self.source, second, env={**os.environ, "TZ": "Pacific/Honolulu"})
