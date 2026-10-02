@@ -1,8 +1,13 @@
 #pragma once
 
+/** @file NotificationService.h
+ * @brief Editor-session notifications and registry-backed application error presentation. */
+
 #include "Horo/Editor/EditorDataBus.h"
+#include "Horo/Hosts/ErrorTranslation.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,6 +40,8 @@ namespace Horo::Editor {
         float durationSeconds{5.0f};
         bool dismissible{true};
         std::vector<NotificationAction> actions;
+        std::optional<Hosts::TranslatedError>
+            errorDetail; /**< Owned canonical application detail, independent of localized display copy. */
     };
 
     /**
@@ -60,6 +67,17 @@ namespace Horo::Editor {
 
         /** @brief Helper to publish a full NotificationEvent structure. */
         void Publish(NotificationEvent event) const;
+
+        /**
+         * @brief Publishes a translated application failure using existing editor notification controls.
+         * @param error Registry-validated application presentation retained for details consumers.
+         * @param localizedMessage Display copy resolved by the caller's localization service.
+         * @param localizedTitle Optional localized heading.
+         * @note Critical errors are sticky; the owning workflow also presents the fatal-dialog GUI model.
+         *       This adapter does not change the operation result, log, retry, or invoke workflow actions.
+         */
+        void PublishApplicationError(const Hosts::TranslatedError &error, std::string localizedMessage,
+                                     std::string localizedTitle = {}) const;
 
     private:
         EditorDataBus *events_;

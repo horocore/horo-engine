@@ -1609,6 +1609,20 @@ add_executable(HoroFoundationResultTests
 target_compile_features(HoroFoundationResultTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationResultTests PRIVATE HoroEngine::Foundation)
 target_include_directories(HoroFoundationResultTests PRIVATE "${PROJECT_SOURCE_DIR}/src/foundation/assertions")
+add_executable(HoroHostErrorTranslationTests unit/hosts/ErrorTranslationTests.cpp)
+target_link_libraries(HoroHostErrorTranslationTests PRIVATE HoroEngine::HostErrors nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroHostErrorTranslationTests LABELS "unit;hosts;headless")
+add_executable(HoroHostErrorFixture unit/hosts/HostErrorFixture.cpp)
+target_link_libraries(HoroHostErrorFixture PRIVATE HoroEngine::HostErrors nlohmann_json::nlohmann_json)
+add_test(NAME HoroHostErrorPythonParity
+    COMMAND "${CMAKE_COMMAND}"
+            "-DHOST_ERROR_FIXTURE=$<TARGET_FILE:HoroHostErrorFixture>"
+            "-DHOST_ERROR_PYTHON=${Python3_EXECUTABLE}"
+            "-DHOST_ERROR_TEST=${PROJECT_SOURCE_DIR}/tests/python/host_error_parity.py"
+            -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunHostErrorPythonParity.cmake")
+set_tests_properties(HoroHostErrorPythonParity PROPERTIES LABELS "integration;hosts;python;headless" TIMEOUT 45
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;PYTHONUTF8=1")
+
 add_executable(HoroCliCommandRegistryTests
         unit/cli/CliCommandRegistryTests.cpp
         unit/cli/CliDispatcherTests.cpp
