@@ -145,11 +145,17 @@ namespace Horo::Navigation {
                                        .cause = std::move(cause)});
             }
 
+            /** @brief Explicit ordered projected corridor, including reverse traversal when declared. */
+            struct OrderedEndpoints final {
+                NavigationBakeLinkEndpoint start;
+                NavigationBakeLinkEndpoint end;
+            };
+
             /** @brief Requires exact collision-owner evidence for each admitted traversal direction. */
-            [[nodiscard]] bool HasClearance(const NavigationBakeLinkEndpoint &start, const NavigationBakeLinkEndpoint &end) {
+            [[nodiscard]] bool HasClearance(const OrderedEndpoints &traversal) {
                 if (!work.Charge(1 + std::bit_width(clearance.size())))
                     return false;
-                const auto key = std::tuple{context.profile, EndpointKey(start), EndpointKey(end)};
+                const auto key = std::tuple{context.profile, EndpointKey(traversal.start), EndpointKey(traversal.end)};
                 const auto found = std::ranges::lower_bound(clearance, key, {}, [](const auto *evidence) {
                     return ClearanceKey(*evidence);
                 });
@@ -306,8 +312,8 @@ namespace Horo::Navigation {
                 start.position = candidate.start.position;
                 end.position = candidate.end.position;
                 if (start.connectionRadiusMeters < profile->buildGeometry.radiusMeters ||
-                    end.connectionRadiusMeters < profile->buildGeometry.radiusMeters || !HasClearance(start, end) ||
-                    (candidate.link.direction == NavigationLinkDirection::Bidirectional && !HasClearance(end, start))) {
+                    end.connectionRadiusMeters < profile->buildGeometry.radiusMeters || !HasClearance({.start = start, .end = end}) ||
+                    (candidate.link.direction == NavigationLinkDirection::Bidirectional && !HasClearance({.start = end, .end = start}))) {
                     Reject(candidate, NavigationLinkValidationRule::Clearance);
                     return false;
                 }
