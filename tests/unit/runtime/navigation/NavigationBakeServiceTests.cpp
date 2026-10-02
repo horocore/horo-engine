@@ -11,6 +11,7 @@
 #include <format>
 #include <fstream>
 #include <limits>
+#include <string_view>
 #include <thread>
 
 namespace Horo::Application {
@@ -76,7 +77,9 @@ namespace Horo::Application {
 
             Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override {
                 auto written = native.WriteDurable(path, bytes);
-                if (path.filename() == "current.json" || path.filename().string().starts_with("current.json.tmp.")) {
+                const std::string_view content{reinterpret_cast<const char *>(bytes.data()), bytes.size()};
+                if ((path.filename() == "current.json" || path.filename().string().starts_with("current.json.tmp.")) &&
+                    content.find("generationPath") != std::string_view::npos) {
                     currentStaged.store(true);
                     while (holdCurrent.load())
                         std::this_thread::yield();
@@ -89,10 +92,15 @@ namespace Horo::Application {
             }
 
             Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
+                return native.AtomicReplace(prepared, destination);
+            }
+
+            Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                              AtomicFileReplacementReceipt &receipt) override {
                 const bool current = destination.filename() == "current.json";
                 if (current && failReplacement.load())
                     return Result<void>::Failure(MakeError(NavigationErrors::BakeInputFailed));
-                auto replaced = native.AtomicReplace(prepared, destination);
+                auto replaced = native.AtomicReplaceTracked(prepared, destination, receipt);
                 if (current && replaced.HasValue() && failAfterReplacement.load())
                     return Result<void>::Failure(MakeError(NavigationErrors::BakeInputFailed));
                 return replaced;

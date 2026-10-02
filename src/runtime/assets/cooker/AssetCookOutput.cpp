@@ -27,6 +27,7 @@
 namespace Horo::Assets {
     namespace {
         constexpr std::size_t MaximumGenerationBytes = 1024U * 1024U * 1024U;
+        constexpr std::size_t MaximumSelectorBytes = MaximumAssetCookTargetIdBytes + 512U;
 
         /** @brief Caller limits may tighten the built-in ceilings, never expand parsing or recovery work. */
         bool AdmittedLimits(const AssetCookLimits &limits) {
@@ -218,26 +219,26 @@ namespace Horo::Assets {
             return Result<std::vector<std::uint8_t>>::Success(std::move(bytes));
         }
 
-        /** @brief Reconciles a post-rename durability error against the consumed source and bytes observed under the writer lease. */
+        /** @brief Uses the native rename receipt as commit authority; no fallible read is needed after pointer commitment. */
         Result<void> ReplaceDurably(DurableFileSystem *files, const std::filesystem::path &prepared,
-                                    const std::filesystem::path &destination, const std::span<const std::uint8_t> bytes,
-                                    std::optional<Error> *postCommitError) {
+                                    const std::filesystem::path &destination, std::optional<Error> *postCommitError) {
+            AtomicFileReplacementReceipt receipt;
             auto replaced = Result<void>::Failure(MakeError(CookErrors::MalformedArtifact, "Filesystem replacement raised an exception."));
             try {
-                replaced = files->AtomicReplace(prepared, destination);
+                replaced = postCommitError == nullptr ? files->AtomicReplace(prepared, destination)
+                                                      : files->AtomicReplaceTracked(prepared, destination, receipt);
             } catch (...) {
                 // External filesystem adapters cannot erase the true commit point by throwing after replacement.
             }
-            if (replaced.HasError() && postCommitError != nullptr) {
-                std::error_code error;
-                const auto preparedStatus = std::filesystem::symlink_status(prepared, error);
-                const bool consumed = preparedStatus.type() == std::filesystem::file_type::not_found &&
-                                      (!error || error == std::errc::no_such_file_or_directory);
-                if (auto observed = ReadFile(destination, bytes.size());
-                    consumed && observed.HasValue() && std::ranges::equal(observed.Value(), bytes)) {
-                    *postCommitError = replaced.ErrorValue();
+            if (postCommitError != nullptr) {
+                if (receipt.WasCommitted()) {
+                    if (replaced.HasError())
+                        *postCommitError = std::move(replaced).ErrorValue();
                     return Result<void>::Success();
                 }
+                if (replaced.HasValue())
+                    return Result<void>::Failure(
+                        MakeError(CookErrors::MalformedArtifact, "Replacement returned no native commit receipt."));
             }
             return replaced;
         }
@@ -277,6 +278,11 @@ namespace Horo::Assets {
                 return {};
 
             return std::string(json.substr(pos, end - pos));
+        }
+
+        /** @brief Encodes the sole selector's explicit empty bootstrap state, never an active generation or second authority. */
+        std::string UnpublishedSelector(const AssetCookTargetId &target) {
+            return std::format(R"({{"schemaVersion":2,"target":"{}","state":"unpublished"}})", target.Value());
         }
 
         /** @brief Confirms that a resolved generation directory still holds the exact pinned manifest bytes. */
@@ -390,7 +396,7 @@ namespace Horo::Assets {
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
         }
 
-        auto bytesResult = ReadFile(currentPath, std::min(limits.maximumArtifactBytes, std::size_t{4096}));
+        auto bytesResult = ReadFile(currentPath, std::min(limits.maximumArtifactBytes, MaximumSelectorBytes));
         if (bytesResult.HasError())
             return Result<AssetCookGeneration>::Failure(bytesResult.ErrorValue());
 
@@ -402,13 +408,17 @@ namespace Horo::Assets {
         std::filesystem::path relPath = JsonStringValue(json, "generationPath");
         auto countStr = JsonStringValue(json, "artifactCount");
 
-        if (targetStr.empty() || manifestHex.empty() || relPath.empty() || countStr.empty()) {
+        if (targetStr.empty()) {
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
         }
 
         auto target = AssetCookTargetId::Parse(targetStr);
         if (target.HasError())
             return Result<AssetCookGeneration>::Failure(target.ErrorValue());
+        if (json == UnpublishedSelector(target.Value()))
+            return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::NotPublished));
+        if (manifestHex.empty() || relPath.empty() || countStr.empty())
+            return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::MalformedArtifact));
 
         auto digest = ParseSha256("sha256:" + manifestHex);
         if (digest.HasError() || relPath.generic_string() != "generations/" + manifestHex)
@@ -528,6 +538,8 @@ namespace Horo::Assets {
                                                const AssetCookTargetId &target, const AssetCookLimits &limits) {
             if (!AdmittedLimits(limits))
                 return Result<void>::Failure(MakeError(CookErrors::TooLarge));
+            if (!target.IsValid())
+                return Result<void>::Failure(MakeError(AssetCookTargetErrors::Invalid));
             if (entries.size() != artifactPayloads.size()) {
                 return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
             }
@@ -590,6 +602,64 @@ namespace Horo::Assets {
             if (error || !std::filesystem::create_directory(operationRoot, error) || error)
                 return Result<std::filesystem::path>::Failure(MakeError(CookErrors::MalformedArtifact));
             return Result<std::filesystem::path>::Success(operationRoot);
+        }
+
+        /** @brief Initializes only a virgin selector; valid unpublished state permits recook of inactive first-attempt orphans. */
+        Result<void> EnsurePublicationBaseline(const std::filesystem::path &root, const AssetCookTargetId &target,
+                                               const AssetCookLimits &limits, const AssetCookPublicationPolicy &policy) {
+            const auto invalid = [] {
+                return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
+            };
+            const auto current = root / "current.json";
+            if (!HasPlainPath(current))
+                return invalid();
+            std::error_code error;
+            const auto status = std::filesystem::symlink_status(current, error);
+            const auto baseline = UnpublishedSelector(target);
+            if (baseline.size() > std::min(limits.maximumArtifactBytes, MaximumSelectorBytes))
+                return Result<void>::Failure(MakeError(CookErrors::TooLarge));
+            if (std::filesystem::exists(status)) {
+                auto bytes = ReadFile(current, std::min(limits.maximumArtifactBytes, MaximumSelectorBytes));
+                if (bytes.HasError())
+                    return Result<void>::Failure(bytes.ErrorValue());
+                const std::string_view text(reinterpret_cast<const char *>(bytes.Value().data()), bytes.Value().size());
+                if (text != baseline) {
+                    auto active = ResolveCurrentCookGeneration(root, limits);
+                    if (active.HasError())
+                        return Result<void>::Failure(active.ErrorValue());
+                    if (active.Value().target != target)
+                        return invalid();
+                }
+                return policy.files->SyncDirectory(root);
+            }
+            if (error && error != std::errc::no_such_file_or_directory)
+                return invalid();
+            const auto generations = root / "generations";
+            if (!HasPlainPath(generations))
+                return invalid();
+            const auto generationStatus = std::filesystem::symlink_status(generations, error);
+            if (std::filesystem::exists(generationStatus)) {
+                if (error || !std::filesystem::is_directory(generationStatus) || !std::filesystem::is_empty(generations, error) || error)
+                    return invalid();
+            } else if (error && error != std::errc::no_such_file_or_directory) {
+                return invalid();
+            }
+            auto operation = CreateOperationRoot(root, policy);
+            if (operation.HasError())
+                return Result<void>::Failure(operation.ErrorValue());
+            const auto prepared = operation.Value() / "unpublished.current.json";
+            const auto bytes = std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t *>(baseline.data()), baseline.size()};
+            if (auto written = WritePrivate(prepared, bytes, policy.files); written.HasError())
+                return written;
+            auto verified = ReadFile(prepared, bytes.size());
+            if (verified.HasError() || !std::ranges::equal(verified.Value(), bytes))
+                return invalid();
+            std::optional<Error> durabilityError;
+            if (auto replaced = ReplaceDurably(policy.files, prepared, current, &durabilityError); replaced.HasError())
+                return replaced;
+            if (durabilityError)
+                return Result<void>::Failure(std::move(*durabilityError));
+            return policy.files->RemoveDurable(operation.Value());
         }
 
         /** @brief Verifies every immutable existing byte before reusing a deterministic generation. */
@@ -699,10 +769,11 @@ namespace Horo::Assets {
                     const auto path = operationIterator->path();
                     if (path.filename() == "generation")
                         continue;
-                    if (budget == 0U || path.filename() != "current.json" || !IsPlainFile(path))
+                    if (budget == 0U || (path.filename() != "current.json" && path.filename() != "unpublished.current.json") ||
+                        !IsPlainFile(path))
                         return invalid();
                     --budget;
-                    if (std::filesystem::file_size(path, error) > 4096U || error)
+                    if (std::filesystem::file_size(path, error) > MaximumSelectorBytes || error)
                         return invalid();
                     files.push_back(path);
                 }
@@ -727,34 +798,35 @@ namespace Horo::Assets {
         };
         if (!AdmittedLimits(limits) || maximumTotalBytes > MaximumGenerationBytes)
             return Result<std::optional<AssetCookGeneration>>::Failure(MakeError(CookErrors::TooLarge));
+        if (!target.IsValid())
+            return Result<std::optional<AssetCookGeneration>>::Failure(MakeError(AssetCookTargetErrors::Invalid));
         if (policy.files == nullptr || policy.writerLease == nullptr ||
             !policy.writerLease->ProtectsPath(targetRoot / ".cook-writer.lock") || maximumTotalBytes == 0U || !HasPlainPath(targetRoot))
             return invalid();
         std::optional<AssetCookGeneration> current;
         std::optional<Error> authorityError;
-        std::error_code error;
-        const auto status = std::filesystem::symlink_status(targetRoot / "current.json", error);
-        if (status.type() == std::filesystem::file_type::not_found && (!error || error == std::errc::no_such_file_or_directory)) {
-            const auto generations = targetRoot / "generations";
-            if (!HasPlainPath(generations))
-                return invalid();
-            const auto generationStatus = std::filesystem::symlink_status(generations, error);
-            if (std::filesystem::exists(generationStatus)) {
-                if (error || !std::filesystem::is_directory(generationStatus) || !std::filesystem::is_empty(generations, error) || error)
-                    authorityError = MakeError(CookErrors::MalformedArtifact);
-            } else if (error && error != std::errc::no_such_file_or_directory) {
-                authorityError = MakeError(CookErrors::MalformedArtifact);
-            }
+        auto initialized = EnsurePublicationBaseline(targetRoot, target, limits, policy);
+        if (initialized.HasError()) {
+            authorityError = initialized.ErrorValue();
         } else {
-            auto resolved = ResolveCurrentCookGeneration(targetRoot, limits);
-            if (error || resolved.HasError()) {
-                authorityError = resolved.HasError() ? resolved.ErrorValue() : MakeError(CookErrors::MalformedArtifact);
-            } else if (resolved.Value().target != target) {
-                authorityError = MakeError(CookErrors::MalformedArtifact);
-            } else if (auto contents = ReadCookGenerationContents(resolved.Value(), maximumTotalBytes, limits); contents.HasError()) {
-                authorityError = contents.ErrorValue();
+            auto pointer = ReadFile(targetRoot / "current.json", std::min(limits.maximumArtifactBytes, MaximumSelectorBytes));
+            if (pointer.HasError()) {
+                authorityError = pointer.ErrorValue();
             } else {
-                current = std::move(resolved).Value();
+                const std::string_view text(reinterpret_cast<const char *>(pointer.Value().data()), pointer.Value().size());
+                if (text != UnpublishedSelector(target)) {
+                    auto resolved = ResolveCurrentCookGeneration(targetRoot, limits);
+                    if (resolved.HasError()) {
+                        authorityError = resolved.ErrorValue();
+                    } else if (resolved.Value().target != target) {
+                        authorityError = MakeError(CookErrors::MalformedArtifact);
+                    } else if (auto contents = ReadCookGenerationContents(resolved.Value(), maximumTotalBytes, limits);
+                               contents.HasError()) {
+                        authorityError = contents.ErrorValue();
+                    } else {
+                        current = std::move(resolved).Value();
+                    }
+                }
             }
         }
         auto abandoned = CollectAbandonedStaging(targetRoot, limits);
@@ -784,6 +856,8 @@ namespace Horo::Assets {
             return Result<AssetCookGeneration>::Failure(valid.ErrorValue());
         if (!HasPlainPath(targetRoot))
             return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::MalformedArtifact));
+        if (auto initialized = EnsurePublicationBaseline(targetRoot, target, limits, policy); initialized.HasError())
+            return Result<AssetCookGeneration>::Failure(initialized.ErrorValue());
 
         // Build manifest JSON
         auto manifestJson = BuildManifestJson(target.Value(), entries);
@@ -830,7 +904,7 @@ namespace Horo::Assets {
                 return Result<AssetCookGeneration>::Failure(verified.ErrorValue());
             if (auto synced = SyncIfRequested(policy.files, privateGeneration); synced.HasError())
                 return Result<AssetCookGeneration>::Failure(synced.ErrorValue());
-            if (auto promoted = ReplaceDurably(policy.files, privateGeneration, genRoot, {}, nullptr); promoted.HasError())
+            if (auto promoted = ReplaceDurably(policy.files, privateGeneration, genRoot, nullptr); promoted.HasError())
                 return Result<AssetCookGeneration>::Failure(promoted.ErrorValue());
             if (auto synced = SyncIfRequested(policy.files, operation.Value()); synced.HasError())
                 return Result<AssetCookGeneration>::Failure(synced.ErrorValue());
@@ -858,8 +932,7 @@ namespace Horo::Assets {
             if (auto accepted = policy.beforeCommit(); accepted.HasError())
                 return Result<AssetCookGeneration>::Failure(accepted.ErrorValue());
         }
-        if (auto replaced =
-                ReplaceDurably(policy.files, preparedCurrent, targetRoot / "current.json", currentBytes, &generation.durabilityError);
+        if (auto replaced = ReplaceDurably(policy.files, preparedCurrent, targetRoot / "current.json", &generation.durabilityError);
             replaced.HasError())
             return Result<AssetCookGeneration>::Failure(replaced.ErrorValue());
         if (policy.afterCommit)

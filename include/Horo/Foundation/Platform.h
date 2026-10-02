@@ -94,6 +94,31 @@ namespace Horo {
         std::unique_ptr<State> state_;
     };
 
+    /**
+     * @brief Caller-owned receipt for one irreversible native atomic replacement.
+     * @note The invoking thread owns mutation and observation; cross-thread use requires caller synchronization.
+     * The receipt starts uncommitted, never resets, and outlives the replacement call including any exception.
+     */
+    class AtomicFileReplacementReceipt final {
+    public:
+        AtomicFileReplacementReceipt() noexcept = default;
+        AtomicFileReplacementReceipt(const AtomicFileReplacementReceipt &) = delete;
+        AtomicFileReplacementReceipt &operator=(const AtomicFileReplacementReceipt &) = delete;
+
+        /** @brief Reports successful native replacement independently of later durability failure. @return True after commit. */
+        [[nodiscard]] bool WasCommitted() const noexcept {
+            return committed_;
+        }
+
+        /** @brief Records native replacement immediately after its successful OS return, without allocation or exceptions. */
+        void RecordCommitted() noexcept {
+            committed_ = true;
+        }
+
+    private:
+        bool committed_{};
+    };
+
     /** @brief Cross-platform durable filesystem primitives for user-data transactions. */
     class DurableFileSystem {
     public:
@@ -118,6 +143,20 @@ namespace Horo {
          * file. @param destination Published destination. @return Success after directory durability, or typed I/O failure. */
         [[nodiscard]] virtual Result<void> AtomicReplace(const std::filesystem::path &prepared,
                                                          const std::filesystem::path &destination) = 0;
+        /**
+         * @brief Replaces a prepared file and records the irreversible native commit separately from durability confirmation.
+         * @param prepared Same-filesystem complete prepared file.
+         * @param destination Published destination whose namespace is protected by the caller's writer authority.
+         * @param receipt Fresh caller-owned receipt, retained even when the call fails or throws.
+         * @return Success after directory durability, typed failure before commit, or a durability failure after commit.
+         * @pre receipt.WasCommitted() is false and the invoking thread exclusively owns the receipt.
+         * @post Overrides record commit immediately after successful native replacement, before sync, error allocation or callbacks.
+         * A true receipt stays true across subsequent errors and exceptions; callers must not report rollback in that case.
+         * @details The default rejects unsupported tracking before any write and never delegates the ambiguous AtomicReplace primitive.
+         */
+        [[nodiscard]] virtual Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared,
+                                                                const std::filesystem::path &destination,
+                                                                AtomicFileReplacementReceipt &receipt);
         /** @brief Durably removes a file. @param path File to remove. @return Success after directory durability, or typed I/O failure. */
         [[nodiscard]] virtual Result<void> RemoveDurable(const std::filesystem::path &path) = 0;
         /** @brief Synchronizes directory metadata. @param path Directory to synchronize. @return Success or typed I/O failure. */
@@ -152,6 +191,9 @@ namespace Horo {
                                                         std::span<const std::byte> bytes);
         [[nodiscard]] Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override;
         [[nodiscard]] Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override;
+        /** @copydoc DurableFileSystem::AtomicReplaceTracked */
+        [[nodiscard]] Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                                        AtomicFileReplacementReceipt &receipt) override;
         [[nodiscard]] Result<void> RemoveDurable(const std::filesystem::path &path) override;
         [[nodiscard]] Result<void> SyncDirectory(const std::filesystem::path &path) override;
 
@@ -159,6 +201,19 @@ namespace Horo {
         [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductLease(const std::filesystem::path &installationRoot,
                                                                         bool maintenance) const;
     };
+
+    /** @copydoc DurableFileSystem::AtomicReplaceTracked */
+    inline Result<void> DurableFileSystem::AtomicReplaceTracked(const std::filesystem::path &, const std::filesystem::path &,
+                                                                AtomicFileReplacementReceipt &) {
+        const ErrorCodeDescriptor unsupported{.domain = ErrorDomainId{"horo.platform.filesystem"},
+                                              .code = ErrorCode{"filesystem.atomic_tracking_unsupported"},
+                                              .defaultSeverity = ErrorSeverity::Error,
+                                              .summary = "The filesystem does not support tracked atomic replacement.",
+                                              .remediationHint = "Compose a filesystem implementation with native commit tracking.",
+                                              .retryable = false,
+                                              .userActionable = false};
+        return Result<void>::Failure(MakeError(unsupported));
+    }
 
     /** @brief Provides monotonic time for scheduling without exposing wall-clock time. */
     class Clock {

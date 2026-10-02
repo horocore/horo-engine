@@ -78,8 +78,12 @@ Changes ordered after adoption affect the next attempt; they cannot relabel
 the committed attempt as cancelled. Failure preserves the last published lease.
 If atomic replacement succeeds but directory durability confirmation fails,
 the published generation carries durabilityError and remains a succeeded
-operation. The writer verifies the exact current bytes before reporting this
-committed outcome; a failure before replacement preserves the prior pointer.
+operation. `AtomicReplaceTracked` records the native rename in a caller-owned
+`AtomicFileReplacementReceipt` before directory synchronization or any subsequent
+failure. Storage uses that receipt even if an adapter throws; commit detection
+does not depend on opening the pointer after the rename. Custom durable writers
+must implement the tracked primitive; its default refuses to write. A failure
+before replacement preserves the prior pointer.
 Invalid current authority fails closed; no older generation is silently selected.
 Immutable cache writes may survive cancelled attempts without activating them.
 
@@ -87,8 +91,13 @@ All publishers use the common `.cook-writer.lock`, including unrelated artifact
 writers. Navigation waits only on a background worker, observes cancellation and
 current source revisions while waiting, and stops at `writerWaitTimeout`. After
 acquisition, AssetCook verifies the then-current inventory before carrying it
-forward. A fresh empty output root can bootstrap; a missing current pointer with
-existing immutable generations requires explicit repair/recook intent.
+forward. A fresh empty output root durably initializes a schema-2 `unpublished`
+state in the sole `current.json` selector before promoting any immutable content.
+This baseline has no active manifest. A first cancelled or failed attempt leaves
+that explicit state, so restart can clean private staging and retry without
+selecting an orphan. Committed manifests retain schema 1. A missing selector with
+existing immutable generations fails closed and requires explicit repair; it is
+never mistaken for an unpublished baseline.
 
 AssetCook owns `.cook-staging/<operation-token>` and publishes a complete verified
 directory before the selector. Restart recovery runs under the same native lock,

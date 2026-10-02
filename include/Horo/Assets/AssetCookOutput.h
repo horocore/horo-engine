@@ -69,7 +69,8 @@ namespace Horo::Assets {
      * @brief Resolves the current active generation from a target root's current.json.
      * @param targetRoot Root directory for this target's cooked output (e.g., build/cooked/headless-null).
      * @param limits Size bounds for validation.
-     * @return The active generation, or a typed error if current.json is missing/malformed.
+     * @return The active generation, asset.cook.not_published for the verified unpublished bootstrap state,
+     *         or a typed error if current.json is missing/malformed.
      */
     [[nodiscard]] Result<AssetCookGeneration> ResolveCurrentCookGeneration(const std::filesystem::path &targetRoot,
                                                                            const AssetCookLimits &limits = {});
@@ -92,10 +93,12 @@ namespace Horo::Assets {
      * @param maximumTotalBytes Aggregate ceiling for verifying the active generation.
      * @param limits Per-file, inventory and recovery-work bounds.
      * @param policy Required durable filesystem; callbacks are not invoked by recovery.
-     * @return Verified current generation, empty only for a fresh root with no immutable generations, or a typed error.
+     * @return Verified current generation, empty for a verified unpublished bootstrap selector, or a typed error.
      * @pre Every cooperating writer creates and accesses .cook-staging only while holding the same native writer lock.
      * @details Recovery prevalidates every exact private file before removal. It never follows links, recursively deletes,
      *          selects an orphan, removes an immutable generation or repairs a malformed/missing established pointer.
+     *          A virgin root first receives a durable schemaVersion 2 unpublished current.json; inactive first-attempt
+     *          generations may be recooked only while that exact target's unpublished selector remains valid.
      */
     [[nodiscard]] Result<std::optional<AssetCookGeneration>> RecoverCookPublication(const std::filesystem::path &targetRoot,
                                                                                     const AssetCookTargetId &target,
@@ -108,6 +111,7 @@ namespace Horo::Assets {
      * @details Writes complete private .cook-staging/<operation-id> files, verifies existing digest-named
      *          generations or promotes the complete immutable directory, then atomically replaces current.json last.
      *          Existing immutable generations are never rewritten or removed. A value with durabilityError is committed.
+     *          First publication durably initializes the same selector's unpublished state before immutable promotion.
      * @pre The caller serializes writers using .cook-writer.lock through pointer replacement and live adoption.
      *
      * @param targetRoot Root directory for this target's cooked output.

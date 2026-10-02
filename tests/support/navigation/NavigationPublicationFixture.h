@@ -72,7 +72,9 @@ namespace Horo::Application::TestSupport {
             if (WriteFails(path))
                 return InjectedFailure();
             auto written = native.WriteDurable(path, bytes);
-            if (written.HasValue() && path.filename().string().starts_with("current.json")) {
+            const std::string_view text{reinterpret_cast<const char *>(bytes.data()), bytes.size()};
+            if (written.HasValue() && path.filename().string().starts_with("current.json") &&
+                text.find("\"generationPath\"") != std::string_view::npos) {
                 beforeCurrentReached.store(true);
                 while (pauseBeforeCurrent.load())
                     std::this_thread::yield();
@@ -85,10 +87,15 @@ namespace Horo::Application::TestSupport {
         }
 
         Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
+            return native.AtomicReplace(prepared, destination);
+        }
+
+        Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                          AtomicFileReplacementReceipt &receipt) override {
             if (RenameFails(destination))
                 return InjectedFailure();
-            auto replaced = native.AtomicReplace(prepared, destination);
-            if (replaced.HasValue() && destination.filename() == "current.json") {
+            auto replaced = native.AtomicReplaceTracked(prepared, destination, receipt);
+            if (receipt.WasCommitted() && destination.filename() == "current.json") {
                 afterCurrentReached.store(true);
                 while (pauseAfterCurrent.load())
                     std::this_thread::yield();

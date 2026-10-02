@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -511,6 +512,16 @@ namespace Horo {
 
     /** @copydoc DurableFileSystem::AtomicReplace */
     Result<void> NativeDurableFileSystem::AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) {
+        AtomicFileReplacementReceipt receipt;
+        return AtomicReplaceTracked(prepared, destination, receipt);
+    }
+
+    /** @copydoc NativeDurableFileSystem::AtomicReplaceTracked */
+    Result<void> NativeDurableFileSystem::AtomicReplaceTracked(const std::filesystem::path &prepared,
+                                                               const std::filesystem::path &destination,
+                                                               AtomicFileReplacementReceipt &receipt) {
+        if (receipt.WasCommitted())
+            return Result<void>::Failure(FsError(IoFailed, destination));
         std::error_code error;
         std::filesystem::create_directories(destination.parent_path(), error);
         if (error)
@@ -519,10 +530,10 @@ namespace Horo {
         if (const BOOL ok = MoveFileExW(prepared.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH); !ok)
             return Result<void>::Failure(FsError(IoFailed, destination));
 #else
-        std::filesystem::rename(prepared, destination, error);
-        if (error)
+        if (::rename(prepared.c_str(), destination.c_str()) != 0)
             return Result<void>::Failure(FsError(IoFailed, destination));
 #endif
+        receipt.RecordCommitted();
         return SyncDirectory(destination.parent_path());
     }
 

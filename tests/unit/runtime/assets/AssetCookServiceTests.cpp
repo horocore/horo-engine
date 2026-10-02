@@ -236,11 +236,18 @@ namespace {
         }
 
         Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
-            auto replaced = native.AtomicReplace(prepared, destination);
-            if (replaced.HasValue() && destination.filename() == "current.json") {
+            return native.AtomicReplace(prepared, destination);
+        }
+
+        Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                          AtomicFileReplacementReceipt &receipt) override {
+            auto replaced = native.AtomicReplaceTracked(prepared, destination, receipt);
+            if (receipt.WasCommitted() && destination.filename() == "current.json" && prepared.filename() != "unpublished.current.json") {
                 committed = true;
                 if (cancellation && cancelAfterCommit)
                     cancellation->RequestCancellation();
+                if (failCommittedSync)
+                    return Result<void>::Failure(Error{ErrorCode{"test.cook.publication_sync_failed"}});
             }
             return replaced;
         }
@@ -250,8 +257,6 @@ namespace {
         }
 
         Result<void> SyncDirectory(const std::filesystem::path &path) override {
-            if (committed && failCommittedSync)
-                return Result<void>::Failure(Error{ErrorCode{"test.cook.publication_sync_failed"}});
             return native.SyncDirectory(path);
         }
     };
@@ -692,7 +697,7 @@ TEST_CASE("AssetCookService publication cancellation preserves true commit outco
         } else {
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == "asset.cook.cancelled");
-            CHECK_FALSE(std::filesystem::exists(fixture.cooked.path / "current.json"));
+            CHECK(ResolveCurrentCookGeneration(fixture.cooked.path).HasError());
         }
     }
 }

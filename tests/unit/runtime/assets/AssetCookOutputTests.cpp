@@ -82,7 +82,8 @@ namespace {
         RootFlush,
         PointerRename,
         PointerSync,
-        PointerException
+        PointerException,
+        BaselineSync
     };
 
     struct PublicationFiles final : DurableFileSystem {
@@ -126,6 +127,21 @@ namespace {
             if (pointer && fault == PublicationFault::PointerSync)
                 return Failure();
             return result;
+        }
+
+        Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                          AtomicFileReplacementReceipt &receipt) override {
+            const bool baseline = prepared.filename() == "unpublished.current.json";
+            if (!baseline && fault == PublicationFault::PointerRename)
+                return Failure();
+            auto result = native.AtomicReplaceTracked(prepared, destination, receipt);
+            if (result.HasError())
+                return result;
+            if (baseline)
+                return fault == PublicationFault::BaselineSync ? Failure() : std::move(result);
+            if (fault == PublicationFault::PointerException)
+                throw 42;
+            return fault == PublicationFault::PointerSync ? Failure() : std::move(result);
         }
 
         Result<void> RemoveDurable(const std::filesystem::path &path) override {
@@ -742,6 +758,65 @@ TEST_CASE("Publication has no unlocked filesystem fallback", "[native]") {
               .HasError());
     CHECK(RecoverCookPublication(tmp.path, Target("headless-null"), 4096U, {}, {.files = &files, .writerLease = &unrelated.Value()})
               .HasError());
+    CHECK_FALSE(std::filesystem::exists(tmp.path / "generations"));
+}
+
+TEST_CASE("First promotion cancellation retains a durable retryable unpublished selector", "[native]") {
+    TempDir tmp;
+    PublicationFiles files;
+    const auto id = Id("00000000-0000-0000-0000-000000000001");
+    const auto oldBytes = MakePayload(id, 8, 1);
+    auto policy = Policy(files, "10000000-0000-0000-0000-000000000001");
+    policy.beforeCommit = [&] {
+        REQUIRE_FALSE(std::filesystem::is_empty(tmp.path / "generations"));
+        CHECK(ReadText(tmp.path / "current.json") == R"({"schemaVersion":2,"target":"headless-null","state":"unpublished"})");
+        return Result<void>::Failure(Error{.code = ErrorCode{"test.cancelled"}});
+    };
+    const auto cancelled =
+        PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, oldBytes), oldBytes, 4096U, {}, policy);
+    REQUIRE(cancelled.HasError());
+    REQUIRE(ResolveCurrentCookGeneration(tmp.path).HasError());
+    CHECK(ResolveCurrentCookGeneration(tmp.path).ErrorValue().code.Value() == "asset.cook.not_published");
+    const auto orphan = std::filesystem::directory_iterator(tmp.path / "generations")->path();
+    {
+        auto lease = files.native.TryAcquireExclusive(tmp.path / ".cook-writer.lock", "restart");
+        REQUIRE(lease.HasValue());
+        auto recovery =
+            RecoverCookPublication(tmp.path, Target("headless-null"), 4096U, {}, {.files = &files, .writerLease = &lease.Value()});
+        REQUIRE(recovery.HasValue());
+        CHECK_FALSE(recovery.Value().has_value());
+        CHECK(std::filesystem::is_empty(tmp.path / ".cook-staging"));
+    }
+    const auto newBytes = MakePayload(id, 8, 2);
+    auto replacement = PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, newBytes), newBytes, 4096U, {},
+                                                      Policy(files, "10000000-0000-0000-0000-000000000002"));
+    REQUIRE(replacement.HasValue());
+    CHECK(std::filesystem::exists(orphan));
+    CHECK(ReadCookGenerationContents(ResolveCurrentCookGeneration(tmp.path).Value(), 4096U).Value().artifacts.front() == newBytes);
+}
+
+TEST_CASE("Unconfirmed unpublished baseline durability aborts before first immutable promotion and safely retries", "[native]") {
+    TempDir tmp;
+    PublicationFiles files;
+    files.fault = PublicationFault::BaselineSync;
+    const auto id = Id("00000000-0000-0000-0000-000000000001");
+    const auto bytes = MakePayload(id, 8);
+    const auto result = PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, bytes), bytes, 4096U, {},
+                                                       Policy(files, "10000000-0000-0000-0000-000000000001"));
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == "test.publication_io");
+    CHECK_FALSE(std::filesystem::exists(tmp.path / "generations"));
+    CHECK(ResolveCurrentCookGeneration(tmp.path).ErrorValue().code.Value() == "asset.cook.not_published");
+    files.fault = PublicationFault::None;
+    REQUIRE(PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, bytes), bytes, 4096U, {},
+                                           Policy(files, "10000000-0000-0000-0000-000000000002"))
+                .HasValue());
+}
+
+TEST_CASE("Invalid empty target cannot create a selector or generation", "[native]") {
+    TempDir tmp;
+    CHECK(PublishFixture(tmp.path, AssetCookTargetId{}, {}, {}).HasError());
+    CHECK_FALSE(std::filesystem::exists(tmp.path / "current.json"));
     CHECK_FALSE(std::filesystem::exists(tmp.path / "generations"));
 }
 

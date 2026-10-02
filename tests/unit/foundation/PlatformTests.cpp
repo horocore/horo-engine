@@ -322,6 +322,20 @@ namespace {
             std::ifstream input(root / "published", std::ios::binary);
             REQUIRE((std::string(std::istreambuf_iterator<char>(input), {}) == text));
         }
+        Horo::AtomicFileReplacementReceipt tracked;
+        CHECK_FALSE(tracked.WasCommitted());
+        REQUIRE(files.WriteDurable(root / "prepared", bytes).HasValue());
+        REQUIRE(files.AtomicReplaceTracked(root / "prepared", root / "published", tracked).HasValue());
+        CHECK(tracked.WasCommitted());
+        CHECK_FALSE(std::filesystem::exists(root / "prepared"));
+        Horo::AtomicFileReplacementReceipt failed;
+        REQUIRE(files.AtomicReplaceTracked(root / "missing", root / "published", failed).HasError());
+        CHECK_FALSE(failed.WasCommitted());
+        REQUIRE(files.WriteDurable(root / "prepared", bytes).HasValue());
+        CHECK(files.AtomicReplaceTracked(root / "prepared", root / "published", tracked).HasError());
+        CHECK(tracked.WasCommitted());
+        CHECK(std::filesystem::exists(root / "prepared"));
+        REQUIRE(files.RemoveDurable(root / "prepared").HasValue());
         REQUIRE((files.CopyDurable(root / "published", root / "copied").HasValue()));
         {
             std::ifstream input(root / "copied", std::ios::binary);
@@ -423,6 +437,18 @@ namespace {
         std::filesystem::create_symlink(root / "missing", partial, linkError);
         if (!linkError)
             CHECK(files.AppendPrivateDurable(partial, 0U, std::as_bytes(std::span{first})).HasError());
+    }
+
+    TEST_CASE("Filesystem without tracked replacement support rejects before invoking its legacy writer", "[unit][foundation]") {
+        FaultingDurableFileSystem files;
+        Horo::AtomicFileReplacementReceipt receipt;
+        const auto result = files.AtomicReplaceTracked("prepared", "published", receipt);
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().domain.Value() == "horo.platform.filesystem");
+        CHECK(result.ErrorValue().code.Value() == "filesystem.atomic_tracking_unsupported");
+        CHECK_FALSE(receipt.WasCommitted());
+        CHECK(files.operations.empty());
+        CHECK(files.published == "last-valid");
     }
 
     TEST_CASE("Configuration File Store Publishes Deterministic Versioned Documents", "[unit][foundation][configuration]") {

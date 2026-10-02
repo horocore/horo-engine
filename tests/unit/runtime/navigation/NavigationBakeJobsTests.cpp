@@ -150,7 +150,7 @@ namespace Horo::Navigation {
         REQUIRE(terminal.has_value());
         CHECK(terminal->state == NavigationBakeJobState::Cancelled);
         REQUIRE(terminal->terminalError.has_value());
-        CHECK(terminal->terminalError->code == NavigationErrors::BakeInputCancelled.code);
+        CHECK(terminal->terminalError->code.Value() == NavigationErrors::BakeInputCancelled.code.Value());
         CHECK(terminal->acceptedChildJobs == 0);
         CHECK(terminal->terminalChildJobs == 0);
     }
@@ -265,7 +265,7 @@ namespace Horo::Navigation {
             const auto terminal = handle.Snapshot();
             CHECK(terminal->state == NavigationBakeJobState::Cancelled);
             REQUIRE(terminal->terminalError.has_value());
-            CHECK(terminal->terminalError->code == NavigationErrors::ProviderFailed.code);
+            CHECK(terminal->terminalError->code.Value() == NavigationErrors::ProviderFailed.code.Value());
             CHECK(ErrorChainContains(*terminal->terminalError, cause->domain, cause->code));
             CHECK(terminal->terminalChildJobs == terminal->acceptedChildJobs);
             const auto projected = operations.SnapshotIfChanged(0);
@@ -363,7 +363,7 @@ namespace Horo::Navigation {
         CHECK(childClosed.load());
         CHECK(handle.Snapshot()->state == NavigationBakeJobState::Failed);
         REQUIRE(handle.Snapshot()->terminalError.has_value());
-        CHECK(handle.Snapshot()->terminalError->code == JobErrors::WaitTimedOut.code);
+        CHECK(handle.Snapshot()->terminalError->code.Value() == JobErrors::WaitTimedOut.code.Value());
         CHECK(handle.Snapshot()->terminalChildJobs == handle.Snapshot()->acceptedChildJobs);
     }
 
@@ -415,7 +415,7 @@ namespace Horo::Navigation {
         auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
         RequireTerminal(handle);
         CHECK(handle.Snapshot()->state == NavigationBakeJobState::Failed);
-        CHECK(handle.Snapshot()->terminalError->code == NavigationErrors::BakeJobInvalid.code);
+        CHECK(handle.Snapshot()->terminalError->code.Value() == NavigationErrors::BakeJobInvalid.code.Value());
     }
 
     TEST_CASE("Navigation bake scheduler shutdown drains publication and preserves its commit truth") {

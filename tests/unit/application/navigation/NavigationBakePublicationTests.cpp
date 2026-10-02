@@ -195,6 +195,41 @@ namespace Horo::Application {
         CheckCompletePublication(harness, harness.Current(), *prior);
     }
 
+    TEST_CASE("First navigation cancellation or stale staging remains unpublished and allows a fresh operation after restart") {
+        PublicationDirectory directory;
+        PublicationHarness harness(directory.path);
+        harness.files->pauseBeforeCurrent.store(true);
+        PublicationPause pause{harness.files};
+        const auto operation = harness.Submit();
+        REQUIRE(WaitFor(harness.files->beforeCurrentReached));
+        const auto unpublished = PublicationBytes(harness.config.targetRoot / "current.json");
+        CHECK_FALSE(harness.service->Published());
+        CHECK(ResolveNavigationBakePublication(harness.config).HasError());
+        REQUIRE(std::filesystem::is_directory(harness.config.targetRoot / "generations"));
+        CHECK_FALSE(std::filesystem::is_empty(harness.config.targetRoot / "generations"));
+        SECTION("first operation explicitly cancelled after generation promotion") {
+            REQUIRE(harness.operations.RequestCancel(operation));
+        }
+        SECTION("first capture becomes stale after generation promotion") {
+            harness.fixture.ExcludeBorder();
+            REQUIRE(harness.config.sourceAuthority->UpdateCurrent(harness.fixture.revisions, harness.fixture.Observations()).HasValue());
+        }
+        harness.files->pauseBeforeCurrent.store(false);
+        CHECK(harness.Terminal(operation).state == OperationState::Cancelled);
+        CHECK_FALSE(harness.service->Published());
+        CHECK(PublicationBytes(harness.config.targetRoot / "current.json") == unpublished);
+        CHECK(ResolveNavigationBakePublication(harness.config).HasError());
+        harness.service->Close();
+        auto restarted = NavigationBakeService::Create(harness.config, harness.operations, harness.jobs);
+        REQUIRE(restarted.HasValue());
+        harness.service = std::move(restarted).Value();
+        REQUIRE(harness.Terminal(harness.Submit()).state == OperationState::Succeeded);
+        const auto published = harness.service->Published();
+        REQUIRE(published);
+        CHECK(published->tiles.inputFingerprint == harness.fixture.Input()->Fingerprint());
+        CheckCompletePublication(harness, harness.Current(), *published);
+    }
+
     TEST_CASE("Cancellation after true current rename retains committed success and the same disk live receipt") {
         PublicationDirectory directory;
         PublicationHarness harness(directory.path);
