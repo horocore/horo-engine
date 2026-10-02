@@ -190,38 +190,66 @@ namespace Horo::Audio {
 
     /** @copydoc AudioVoiceStateMachine::Transition */
     Result<void> AudioVoiceStateMachine::Transition(const AudioVoiceHandle &voice, const AudioVoiceState state) const {
-        const auto resolved = ResolveSlot(voice);
-        if (resolved.HasError())
+        if (const auto resolved = ResolveSlot(voice); resolved.HasError())
             return Result<void>::Failure(resolved.ErrorValue());
-        if (!IsKnownState(state))
-            return Failure<void>(AudioErrors::VoiceInvalidTransition);
+        if (const auto *error = TryTransition(voice, state))
+            return Failure<void>(*error);
+        return Result<void>::Success();
+    }
 
-        VoiceSlot &slot = implementation_->slots[resolved.Value()];
+    /** @copydoc AudioVoiceStateMachine::CheckState */
+    const ErrorCodeDescriptor *AudioVoiceStateMachine::CheckState(const AudioVoiceHandle &voice, AudioVoiceState &state) const noexcept {
+        if (!implementation_)
+            return &AudioErrors::RuntimeInactive;
+        if (const auto *error = implementation_->registry.Check(voice))
+            return error;
+        state = implementation_->slots[voice.slot].state;
+        return nullptr;
+    }
+
+    /** @copydoc AudioVoiceStateMachine::TryTransition */
+    const ErrorCodeDescriptor *AudioVoiceStateMachine::TryTransition(const AudioVoiceHandle &voice,
+                                                                     const AudioVoiceState state) const noexcept {
+        AudioVoiceState current{};
+        if (const auto *error = CheckState(voice, current))
+            return error;
+        if (!IsKnownState(state))
+            return &AudioErrors::VoiceInvalidTransition;
+
+        VoiceSlot &slot = implementation_->slots[voice.slot];
         if (IsTerminalAudioVoiceState(slot.state))
-            return Failure<void>(AudioErrors::VoiceInvalidTransition);
+            return &AudioErrors::VoiceInvalidTransition;
         if (!implementation_->admissionOpen)
-            return Failure<void>(AudioErrors::VoiceAdmissionClosed);
+            return &AudioErrors::VoiceAdmissionClosed;
         if (!IsLegalTransition(slot.state, state))
-            return Failure<void>(AudioErrors::VoiceInvalidTransition);
+            return &AudioErrors::VoiceInvalidTransition;
 
         slot.state = state;
-        return Result<void>::Success();
+        return nullptr;
     }
 
     /** @copydoc AudioVoiceStateMachine::Cancel */
     Result<void> AudioVoiceStateMachine::Cancel(const AudioVoiceHandle &voice) const {
-        const auto resolved = ResolveSlot(voice);
-        if (resolved.HasError())
+        if (const auto resolved = ResolveSlot(voice); resolved.HasError())
             return Result<void>::Failure(resolved.ErrorValue());
+        if (const auto *error = TryCancel(voice))
+            return Failure<void>(*error);
+        return Result<void>::Success();
+    }
 
-        VoiceSlot &slot = implementation_->slots[resolved.Value()];
+    /** @copydoc AudioVoiceStateMachine::TryCancel */
+    const ErrorCodeDescriptor *AudioVoiceStateMachine::TryCancel(const AudioVoiceHandle &voice) const noexcept {
+        AudioVoiceState current{};
+        if (const auto *error = CheckState(voice, current))
+            return error;
+        VoiceSlot &slot = implementation_->slots[voice.slot];
         if (IsTerminalAudioVoiceState(slot.state))
-            return Failure<void>(AudioErrors::VoiceInvalidTransition);
+            return &AudioErrors::VoiceInvalidTransition;
         if (!implementation_->admissionOpen)
-            return Failure<void>(AudioErrors::VoiceAdmissionClosed);
+            return &AudioErrors::VoiceAdmissionClosed;
 
         slot.state = AudioVoiceState::Cancelled;
-        return Result<void>::Success();
+        return nullptr;
     }
 
     /** @copydoc AudioVoiceStateMachine::Release */

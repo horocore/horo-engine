@@ -84,6 +84,10 @@ namespace Horo::Audio {
         [[nodiscard]] AudioResamplerProgress Process(AudioResamplerInput input, AudioResamplerOutput output) noexcept;
         /** @brief Clear history, phase and end state without allocation; moved-from objects remain inert. */
         void Reset() noexcept;
+        /** @brief Read the immutable admitted plan on the exclusive owner. @return Plan or null for a moved owner. */
+        [[nodiscard]] const AudioResamplerPlan *Plan() const noexcept;
+        /** @brief Check whether no input/end marker has been consumed since preparation/reset. @return Fresh processing state. */
+        [[nodiscard]] bool IsFresh() const noexcept;
 
     private:
         struct State;

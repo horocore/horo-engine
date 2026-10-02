@@ -204,6 +204,16 @@ namespace Horo::Audio {
         }
     }
 
+    /** @copydoc AudioResampler::Plan */
+    const AudioResamplerPlan *AudioResampler::Plan() const noexcept {
+        return state_ ? &state_->plan : nullptr;
+    }
+
+    /** @copydoc AudioResampler::IsFresh */
+    bool AudioResampler::IsFresh() const noexcept {
+        return state_ && !state_->seenInput && !state_->draining;
+    }
+
     /** @copydoc AudioResampler::Process */
     AudioResamplerProgress AudioResampler::Process(const AudioResamplerInput input, const AudioResamplerOutput output) noexcept {
         using enum AudioResamplerStatus;

@@ -85,10 +85,14 @@ namespace Horo::Audio {
     /**
      * @brief Owns a fixed-capacity generation-checked voice registry and its lifecycle states.
      *
-     * This value is a control-owner primitive. Create performs all storage allocation;
+     * This value is an exclusive-owner primitive. Create performs all storage allocation;
      * successful steady-state calls do not grow or allocate storage. Handles are
      * process-local and cannot be serialized or used across runtime owners. Release
-     * is admitted only after a voice has reached exactly one terminal state.
+     * is admitted only after a voice has reached exactly one terminal state. Control
+     * may transfer the registry and prepared playback owners to one processing thread
+     * at a quiescent boundary. Only CheckState, TryTransition and TryCancel are
+     * callback-safe, including rejection. All other calls, moves and destruction
+     * require control ownership after callback detachment; access is never concurrent.
      */
     class AudioVoiceStateMachine final {
     public:
@@ -128,6 +132,29 @@ namespace Horo::Audio {
          * @return Immutable snapshot, or a typed malformed, foreign-owner or stale-handle failure.
          */
         [[nodiscard]] Result<AudioVoiceSnapshot> Snapshot(const AudioVoiceHandle &voice) const;
+
+        /**
+         * @brief Read an exact generation without allocating even on rejection.
+         * @param voice Owner-issued identity.
+         * @param state Output assigned only on success.
+         * @return Null on success, otherwise a static stable error descriptor for control-side translation.
+         */
+        [[nodiscard]] const ErrorCodeDescriptor *CheckState(const AudioVoiceHandle &voice, AudioVoiceState &state) const noexcept;
+
+        /**
+         * @brief Apply the same legal transitions as Transition without constructing an Error.
+         * @param voice Owner-issued identity.
+         * @param state Requested successor.
+         * @return Null on success or a stable error descriptor; failure leaves state unchanged.
+         */
+        [[nodiscard]] const ErrorCodeDescriptor *TryTransition(const AudioVoiceHandle &voice, AudioVoiceState state) const noexcept;
+
+        /**
+         * @brief Cancel once without allocating or reclaiming storage.
+         * @param voice Owner-issued identity.
+         * @return Null on success or a stable handle, admission or transition error descriptor.
+         */
+        [[nodiscard]] const ErrorCodeDescriptor *TryCancel(const AudioVoiceHandle &voice) const noexcept;
 
         /**
          * @brief Applies one legal non-cancellation state transition.

@@ -51,6 +51,11 @@ namespace Horo::Audio {
                 return Handle(command.voice);
             }
 
+            /** @brief Validate typed playback intent while leaving state/PCM bounds to the playback owner. */
+            bool operator()(const AudioVoiceControlRequest &command) const noexcept {
+                return Handle(command.voice) && ValidateAudioVoiceControlRequest(command);
+            }
+
             /** @brief Reject malformed parameter targets and nonfinite model values. */
             bool operator()(const AudioSetParameterCommand &command) const noexcept {
                 return Handle(command.voice) && command.parameter.IsValid() && std::isfinite(command.value);
@@ -110,6 +115,9 @@ namespace Horo::Audio {
     /** @copydoc ClassifyAudioCommand */
     AudioCommandClass ClassifyAudioCommand(const AudioCommand &command) noexcept {
         const bool critical = std::holds_alternative<AudioStopVoiceCommand>(command.payload) ||
+                              (std::holds_alternative<AudioVoiceControlRequest>(command.payload) &&
+                               (std::get<AudioVoiceControlRequest>(command.payload).control == AudioVoiceControl::Stop ||
+                                std::get<AudioVoiceControlRequest>(command.payload).control == AudioVoiceControl::Cancel)) ||
                               std::holds_alternative<AudioReleaseResourceCommand>(command.payload) ||
                               std::holds_alternative<AudioSceneUnloadCommand>(command.payload) ||
                               std::holds_alternative<AudioResetCommand>(command.payload) ||

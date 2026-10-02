@@ -57,14 +57,22 @@ namespace Horo::Audio::Detail {
         [[nodiscard]] Result<std::uint32_t> Resolve(const Handle &handle) const {
             if (!handle.IsValid())
                 return Result<std::uint32_t>::Failure(MakeError(AudioErrors::HandleMalformed));
-            if (handle.owner != owner_)
-                return Result<std::uint32_t>::Failure(HandleError(AudioErrors::HandleOwnerMismatch, handle));
-            if (handle.slot >= entries_.size())
-                return Result<std::uint32_t>::Failure(HandleError(AudioErrors::HandleStale, handle));
-            const Entry &entry = entries_[handle.slot];
-            if (!entry.active || entry.generation != handle.generation)
-                return Result<std::uint32_t>::Failure(HandleError(AudioErrors::HandleStale, handle));
+            if (const auto *error = Check(handle))
+                return Result<std::uint32_t>::Failure(HandleError(*error, handle));
             return Result<std::uint32_t>::Success(handle.slot);
+        }
+
+        /** @brief Validate identity without formatting or allocating on a processing owner. */
+        [[nodiscard]] const ErrorCodeDescriptor *Check(const Handle &handle) const noexcept {
+            if (!handle.IsValid())
+                return &AudioErrors::HandleMalformed;
+            if (handle.owner != owner_)
+                return &AudioErrors::HandleOwnerMismatch;
+            if (handle.slot >= entries_.size())
+                return &AudioErrors::HandleStale;
+            if (const Entry &entry = entries_[handle.slot]; !entry.active || entry.generation != handle.generation)
+                return &AudioErrors::HandleStale;
+            return nullptr;
         }
 
         [[nodiscard]] Result<void> Release(const Handle &handle) {
