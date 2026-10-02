@@ -513,6 +513,8 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiScreenStack.cpp
         runtime/ui/UiFocusGraph.cpp
         runtime/ui/UiFocusGraphOperations.cpp
+        runtime/ui/UiFocusGraphParticipation.cpp
+        runtime/ui/UiFocusSpatialNavigation.cpp
         runtime/ui/UiControls.cpp
         runtime/ui/UiControlStateMachine.cpp
         runtime/ui/UiControlStateMachineInput.cpp

@@ -2194,6 +2194,7 @@ target_include_directories(HoroRuntimeUiScreenStackTests PRIVATE ${CMAKE_CURRENT
 target_link_libraries(HoroRuntimeUiScreenStackTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiFocusGraphTests
         unit/runtime/ui/UiFocusGraphTests.cpp
+        unit/runtime/ui/UiFocusSpatialNavigationTests.cpp
         support/AllocationProbe.cpp
 )
 target_compile_features(HoroRuntimeUiFocusGraphTests PRIVATE cxx_std_20)
