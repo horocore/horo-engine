@@ -126,8 +126,7 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Copies a same-type target into its reserved storage without changing variant alternatives or allocating. */
         inline void CopyValue(UiBindingValue &target, const UiBindingValue &source) noexcept {
-            std::visit([&target](const auto &value) {
-                using Value = std::decay_t<decltype(value)>;
+            std::visit([&target]<typename Value>(const Value &value) {
                 auto &retained = std::get<Value>(target);
                 if constexpr (std::is_same_v<Value, UiBindingLocalizedMessage>)
                     retained.key.assign(value.key);
@@ -138,8 +137,7 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Clears revoked target contents while preserving reserved storage and the admitted type. */
         inline void ClearValue(UiBindingValue &target) noexcept {
-            std::visit([](auto &value) {
-                using Value = std::decay_t<decltype(value)>;
+            std::visit([]<typename Value>(Value &value) {
                 if constexpr (std::is_same_v<Value, std::string>)
                     value.clear();
                 else if constexpr (std::is_same_v<Value, UiBindingLocalizedMessage>)

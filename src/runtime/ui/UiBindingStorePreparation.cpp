@@ -40,8 +40,7 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Reserves text capacity during preparation; scalar targets keep value semantics. */
         void ReserveValue(UiBindingValue &value, const std::size_t bytes) {
-            std::visit([bytes](auto &target) {
-                using Value = std::decay_t<decltype(target)>;
+            std::visit([bytes]<typename Value>(Value &target) {
                 if constexpr (std::is_same_v<Value, std::string>)
                     target.reserve(bytes);
                 else if constexpr (std::is_same_v<Value, UiBindingLocalizedMessage>)

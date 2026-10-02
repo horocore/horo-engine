@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <new>
 
 namespace {
@@ -16,8 +17,10 @@ namespace {
 
 void *operator new(const std::size_t bytes) {
     BindingAllocations().fetch_add(1);
-    void *const memory = std::malloc(bytes == 0 ? 1 : bytes);
-    return memory ? memory : throw std::bad_alloc{};
+    std::unique_ptr<void, decltype(&std::free)> memory{std::malloc(bytes == 0 ? 1 : bytes), &std::free};
+    if (!memory)
+        throw std::bad_alloc{};
+    return memory.release();
 }
 
 void operator delete(void *memory) noexcept {
