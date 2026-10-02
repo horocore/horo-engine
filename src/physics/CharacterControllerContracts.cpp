@@ -91,6 +91,21 @@ namespace Horo::Character {
             return Result<void>::Failure(MakeError(CharacterErrors::OperationUnsupported));
         }
 
+        /** @brief Validates copied child provenance and the effective material's declared source. */
+        [[nodiscard]] bool IsSurfaceProvenanceValid(const std::optional<Physics::PhysicsShapeSubresourceId> &subshape,
+                                                    const CharacterMaterialSource source) noexcept {
+            return (!subshape.has_value() || subshape->IsValid()) &&
+                   (source == CharacterMaterialSource::Query || source == CharacterMaterialSource::DescriptorFallback);
+        }
+
+        /** @brief Checks that fallback evidence names the captured descriptor's exact physical material. */
+        [[nodiscard]] bool MatchesFallback(const Physics::PhysicsQueryMaterial &material, const CharacterMaterialSource source,
+                                           const Physics::PhysicsQueryMaterial &fallback) noexcept {
+            return source != CharacterMaterialSource::DescriptorFallback ||
+                   (material.asset == fallback.asset && material.assetGeneration == fallback.assetGeneration &&
+                    material.slot == fallback.slot);
+        }
+
         /** @brief Checks movement metadata before flags, capacities and surface evidence. */
         [[nodiscard]] Result<void> ValidateResultMetadata(const CharacterMovementResult &result) {
             if (result.tick == 0 || result.sequence == 0 || !Math::IsFinite(result.finalPosition) || !IsUnit(result.finalHeading) ||
@@ -120,16 +135,41 @@ namespace Horo::Character {
             return std::acos(cosine) * 180.0F / Math::Pi;
         }
 
+        /** @brief Checks copied support provenance before any material dereference. */
+        [[nodiscard]] bool IsGroundSurfaceValid(const CharacterMovementResult &result,
+                                                const CharacterControllerDescriptor &descriptor) noexcept {
+            return IsUnit(result.groundNormal) && result.groundMaterial.has_value() && IsMaterialValid(*result.groundMaterial) &&
+                   result.groundShape.IsValid() && result.groundShape.world == descriptor.physicsWorld &&
+                   IsSurfaceProvenanceValid(result.groundSubshape, result.groundMaterialSource) && Math::IsFinite(result.groundPoint) &&
+                   MatchesFallback(*result.groundMaterial, result.groundMaterialSource, descriptor.defaultMaterial);
+        }
+
+        /** @brief Checks support separation and relative velocity independently of physical identity. */
+        [[nodiscard]] bool IsGroundMotionValid(const CharacterMovementResult &result) noexcept {
+            return Math::IsFinite(result.groundRelativeVelocityMetersPerSecond) && std::isfinite(result.groundDistanceMeters) &&
+                   result.groundDistanceMeters >= 0.0F;
+        }
+
+        /** @brief Checks that no copied ground reference survives an airborne publication. */
+        [[nodiscard]] bool HasNoGroundReference(const CharacterMovementResult &result) noexcept {
+            return !result.groundMaterial.has_value() && !result.groundBody.has_value() && !result.groundShape.IsValid() &&
+                   !result.groundSubshape.has_value() && result.groundMaterialSource == CharacterMaterialSource::Query &&
+                   result.groundPoint == Math::Vec3{};
+        }
+
+        /** @brief Validates contact geometry independently of material and owner evidence. */
+        [[nodiscard]] bool IsContactGeometryValid(const CharacterSurfaceContact &contact) noexcept {
+            return Math::IsFinite(contact.point) && IsUnit(contact.normal) && std::isfinite(contact.penetrationDepthMeters) &&
+                   contact.penetrationDepthMeters >= 0.0F;
+        }
+
         /** @brief Checks the support identity, motion and slope evidence of a grounded result. */
         [[nodiscard]] Result<void> ValidateGroundedState(const CharacterMovementResult &result,
                                                          const CharacterControllerDescriptor &descriptor) {
             using FlagValue = std::underlying_type_t<CharacterCollisionFlags>;
             const bool hasGroundCollision =
                 (static_cast<FlagValue>(result.collisions) & static_cast<FlagValue>(CharacterCollisionFlags::Ground)) != 0;
-            if (!IsUnit(result.groundNormal) || !result.groundMaterial.has_value() || !IsMaterialValid(*result.groundMaterial) ||
-                !result.groundShape.IsValid() || result.groundShape.world != descriptor.physicsWorld ||
-                !Math::IsFinite(result.groundRelativeVelocityMetersPerSecond) || !std::isfinite(result.groundDistanceMeters) ||
-                result.groundDistanceMeters < 0.0F)
+            if (!IsGroundSurfaceValid(result, descriptor) || !IsGroundMotionValid(result))
                 return Result<void>::Failure(
                     MakeError(CharacterErrors::DescriptorInvalid, "Grounded result lacks valid surface evidence."));
             if (result.groundBody.has_value()) {
@@ -150,8 +190,8 @@ namespace Horo::Character {
 
         /** @brief Checks that an airborne result does not retain stale support evidence. */
         [[nodiscard]] Result<void> ValidateAirborneState(const CharacterMovementResult &result) {
-            if (result.groundMaterial.has_value() || result.groundBody.has_value() || result.groundShape.IsValid() ||
-                !std::isfinite(result.groundDistanceMeters) || std::abs(result.groundDistanceMeters) > GroundDistanceToleranceMeters ||
+            if (!HasNoGroundReference(result) || !std::isfinite(result.groundDistanceMeters) ||
+                std::abs(result.groundDistanceMeters) > GroundDistanceToleranceMeters ||
                 !Math::IsFinite(result.groundRelativeVelocityMetersPerSecond) ||
                 Math::LengthSquared(result.groundRelativeVelocityMetersPerSecond) >
                     GroundDistanceToleranceMeters * GroundDistanceToleranceMeters)
@@ -179,7 +219,9 @@ namespace Horo::Character {
         }
 
         /** @brief Validates one active contact against the descriptor's Physics world. */
-        [[nodiscard]] Result<void> ValidateContact(const CharacterSurfaceContact &contact, const Physics::PhysicsWorldId expectedWorld) {
+        [[nodiscard]] Result<void> ValidateContact(const CharacterSurfaceContact &contact,
+                                                   const CharacterControllerDescriptor &descriptor) {
+            const auto expectedWorld = descriptor.physicsWorld;
             if (!contact.shape.IsValid() || contact.shape.world != expectedWorld)
                 return Result<void>::Failure(
                     MakeError(CharacterErrors::DescriptorInvalid, "Contact shape does not belong to the descriptor world."));
@@ -189,8 +231,9 @@ namespace Horo::Character {
                     return Result<void>::Failure(
                         MakeError(CharacterErrors::DescriptorInvalid, "Contact body does not belong to the descriptor world."));
             }
-            if (!Math::IsFinite(contact.point) || !IsUnit(contact.normal) || !IsMaterialValid(contact.material) ||
-                !std::isfinite(contact.penetrationDepthMeters) || contact.penetrationDepthMeters < 0.0F)
+            if (!IsContactGeometryValid(contact) || !IsMaterialValid(contact.material) ||
+                !IsSurfaceProvenanceValid(contact.subshape, contact.materialSource) ||
+                !MatchesFallback(contact.material, contact.materialSource, descriptor.defaultMaterial))
                 return Result<void>::Failure(
                     MakeError(CharacterErrors::DescriptorInvalid, "Contact evidence contains invalid numeric or material data."));
             return Result<void>::Success();
@@ -217,6 +260,13 @@ namespace Horo::Character {
             return Result<void>::Success();
         }
 
+        /** @brief Checks bounded copied sweep geometry without inspecting any owner or material. */
+        [[nodiscard]] bool IsSweepGeometryValid(const CharacterSweepHit &hit, const float maximumDistance) noexcept {
+            return IsSweepResponseSupported(hit.response) && Math::IsFinite(hit.point) && IsUnit(hit.normal) &&
+                   Math::IsFinite(hit.relativeVelocityMetersPerSecond) && std::isfinite(hit.distanceMeters) && hit.distanceMeters >= 0.0F &&
+                   hit.distanceMeters <= maximumDistance;
+        }
+
         /** @brief Validates one copied hit against the request's exact world and travel bound. */
         [[nodiscard]] Result<void> ValidateSweepHit(const CharacterSweepHit &hit, const CharacterSweepProbeRequest &request) {
             if (!hit.shape.IsValid() || hit.shape.world != request.physicsWorld)
@@ -227,12 +277,11 @@ namespace Horo::Character {
                     return Result<void>::Failure(
                         MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit body does not belong to the request world."));
             }
-            if (!IsSweepResponseSupported(hit.response) || !Math::IsFinite(hit.point) || !IsUnit(hit.normal) ||
-                !Math::IsFinite(hit.relativeVelocityMetersPerSecond) || !std::isfinite(hit.distanceMeters) || hit.distanceMeters < 0.0F ||
-                hit.distanceMeters > request.maximumDistanceMeters)
+            if (!IsSweepGeometryValid(hit, request.maximumDistanceMeters))
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit evidence is malformed."));
-            if (hit.material.has_value() && !IsMaterialValid(*hit.material))
-                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit material is malformed."));
+            if ((hit.subshape.has_value() && !hit.subshape->IsValid()) || (hit.material.has_value() && !IsMaterialValid(*hit.material)))
+                return Result<void>::Failure(
+                    MakeError(CharacterErrors::DescriptorInvalid, "Character sweep hit material or authored child is malformed."));
             return Result<void>::Success();
         }
     }  // namespace
@@ -386,7 +435,7 @@ namespace Horo::Character {
         if (const auto ground = ValidateGroundEvidence(result, descriptor); ground.HasError())
             return ground;
         for (std::uint32_t index = 0; index < result.contactCount; ++index) {
-            const auto contact = ValidateContact(result.contacts[index], descriptor.physicsWorld);
+            const auto contact = ValidateContact(result.contacts[index], descriptor);
             if (contact.HasError())
                 return contact;
         }
@@ -420,5 +469,31 @@ namespace Horo::Character {
             return Result<void>::Failure(
                 MakeError(CharacterErrors::PlacementInvalid, "Locomotion state and transform publication do not match."));
         return Result<void>::Success();
+    }
+
+    /** @copydoc BuildCharacterGroundSurfaceFact */
+    Result<std::optional<CharacterGroundSurfaceFact>> BuildCharacterGroundSurfaceFact(const CharacterLocomotionSnapshot &snapshot,
+                                                                                      const CharacterControllerDescriptor &descriptor) {
+        if (const auto valid = ValidateCharacterLocomotionSnapshot(snapshot, descriptor); valid.HasError())
+            return Result<std::optional<CharacterGroundSurfaceFact>>::Failure(valid.ErrorValue());
+        const auto &movement = snapshot.movement;
+        if (!movement.grounded)
+            return Result<std::optional<CharacterGroundSurfaceFact>>::Success(std::nullopt);
+        CharacterGroundSurfaceFact fact{.controller = snapshot.controller,
+                                        .tick = snapshot.tick,
+                                        .sequence = movement.sequence,
+                                        .stateRevision = snapshot.stateRevision,
+                                        .publicationRevision = snapshot.transform.publicationRevision,
+                                        .support = {.body = movement.groundBody,
+                                                    .shape = movement.groundShape,
+                                                    .point = movement.groundPoint,
+                                                    .normal = movement.groundNormal,
+                                                    .material = *movement.groundMaterial,
+                                                    .penetrationDepthMeters =
+                                                        std::max(0.0F, descriptor.skinWidthMeters - movement.groundDistanceMeters),
+                                                    .subshape = movement.groundSubshape,
+                                                    .materialSource = movement.groundMaterialSource},
+                                        .achievedVelocityMetersPerSecond = movement.achievedVelocityMetersPerSecond};
+        return Result<std::optional<CharacterGroundSurfaceFact>>::Success(fact);
     }
 }  // namespace Horo::Character

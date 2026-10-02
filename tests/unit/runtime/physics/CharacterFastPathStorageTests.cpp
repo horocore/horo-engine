@@ -146,3 +146,24 @@ namespace Horo::Character::Detail {
         REQUIRE(storage.Snapshot().queuedEvents == 0);
     }
 }  // namespace Horo::Character::Detail
+
+namespace Horo::Character::Detail {
+    TEST_CASE("Character event storage retains copied surface provenance and rejects invalid child evidence",
+              "[physics][character][fast-path][surface]") {
+        CharacterFastPathStorage storage{Settings()};
+        auto event = Event(1, 1);
+        event.contact = Contact(3, 0.0F);
+        event.contact->subshape = Physics::PhysicsShapeSubresourceId::FromValue(7);
+        event.contact->materialSource = CharacterMaterialSource::DescriptorFallback;
+        REQUIRE(storage.TryAppendEvent(event) == CharacterFastPathAppendStatus::Appended);
+        event.contact->material.assetGeneration = 20;
+        REQUIRE(storage.Events()[0].contact->material.assetGeneration == 1);
+        REQUIRE(storage.Events()[0].contact->subshape->Value() == 7);
+        REQUIRE(storage.Events()[0].contact->materialSource == CharacterMaterialSource::DescriptorFallback);
+        event.contact->subshape = Physics::PhysicsShapeSubresourceId{};
+        REQUIRE(storage.TryAppendEvent(event) == CharacterFastPathAppendStatus::RejectedInvalid);
+        event.contact->subshape.reset();
+        event.contact->materialSource = static_cast<CharacterMaterialSource>(255);
+        REQUIRE(storage.TryAppendEvent(event) == CharacterFastPathAppendStatus::RejectedInvalid);
+    }
+}  // namespace Horo::Character::Detail
