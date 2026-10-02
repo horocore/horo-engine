@@ -180,8 +180,8 @@ namespace Horo::Network {
             const Peer pinnedPeer = *peer;
             const Object pinnedObject = *object;
             const auto revision = revocationRevision_;
-            const auto role = pinnedObject.role->Snapshot();
-            if (role.HasError() || role.Value() != command.role || entity != command.entity)
+            if (const auto role = pinnedObject.role->Snapshot();
+                role.HasError() || role.Value() != command.role || entity != command.entity)
                 return Result<void>::Failure(MakeError(NetworkErrors::RpcPermissionDenied));
             if (const auto allowed = AuthorizePolicy(pinned, pinnedPeer, pinnedObject, command.values); allowed.HasError())
                 return allowed;
@@ -192,8 +192,8 @@ namespace Horo::Network {
                                                       request.simulationTick, Runtime::RuntimePhase::FixedUpdate, entity);
                 revalidated.HasError())
                 return Result<void>::Failure(revalidated.ErrorValue());
-            const auto currentRole = pinnedObject.role->Snapshot();
-            if (currentRole.HasError() || currentRole.Value() != command.role || entity != command.entity)
+            if (const auto currentRole = pinnedObject.role->Snapshot();
+                currentRole.HasError() || currentRole.Value() != command.role || entity != command.entity)
                 return Result<void>::Failure(MakeError(NetworkErrors::RpcPermissionDenied));
             const RpcGameplayContext context{pinnedPeer.identity, command.object,        entity, request.scene, request.session,
                                              command.sequence,    request.simulationTick};

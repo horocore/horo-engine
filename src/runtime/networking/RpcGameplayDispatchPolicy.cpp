@@ -7,6 +7,20 @@
 #include <type_traits>
 
 namespace Horo::Network {
+    namespace {
+        /** @brief Checks ordered inclusive endpoints without converting exact integer values to floating point. */
+        bool ValidScalarRange(const RpcParameterConstraint &constraint) {
+            return std::visit([&constraint]<typename T>(const T minimum) {
+                const auto maximum = std::get<T>(constraint.maximum);
+                if constexpr (std::is_same_v<T, double>) {
+                    if (!std::isfinite(minimum) || !std::isfinite(maximum))
+                        return false;
+                }
+                return minimum <= maximum;
+            }, constraint.minimum);
+        }
+    }  // namespace
+
     /** @copydoc RpcGameplayDispatch::ChargeWork */
     Result<void> RpcGameplayDispatch::ChargeWork(const Peer &peer, const std::size_t bytes, const std::uint64_t nowTick) {
         if (nowTick < lastAdmissionTick_)
@@ -84,19 +98,11 @@ namespace Horo::Network {
             const auto parameter = std::ranges::find(descriptor.parameters, constraint.parameter, &RpcParameterDescriptor::id);
             if (parameter == descriptor.parameters.end() || constraint.minimum.index() != constraint.maximum.index())
                 return Result<void>::Failure(MakeError(NetworkErrors::RpcParameterUnsupported));
-            const auto offset = static_cast<std::size_t>(parameter - descriptor.parameters.begin());
-            if (static_cast<std::size_t>(binding.metadata[offset].valueKind) != constraint.minimum.index() + 1)
+            if (const auto offset = static_cast<std::size_t>(parameter - descriptor.parameters.begin());
+                static_cast<std::size_t>(binding.metadata[offset].valueKind) != constraint.minimum.index() + 1)
                 return Result<void>::Failure(MakeError(NetworkErrors::RpcParameterUnsupported));
-            const bool valid = std::visit([&constraint]<typename T>(const T minimum) {
-                const auto maximum = std::get<T>(constraint.maximum);
-                if constexpr (std::is_same_v<T, double>) {
-                    if (!std::isfinite(minimum) || !std::isfinite(maximum))
-                        return false;
-                }
-                return minimum <= maximum;
-            }, constraint.minimum);
-            if (!valid || std::ranges::any_of(policy.parameters.begin(), policy.parameters.begin() + index,
-                                              [&constraint](const RpcParameterConstraint &other) {
+            if (!ValidScalarRange(constraint) || std::ranges::any_of(policy.parameters.begin(), policy.parameters.begin() + index,
+                                                                     [&constraint](const RpcParameterConstraint &other) {
                 return other.parameter == constraint.parameter;
             }))
                 return Result<void>::Failure(MakeError(NetworkErrors::RpcParameterInvalid));

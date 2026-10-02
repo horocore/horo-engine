@@ -44,7 +44,7 @@ namespace Horo::Network {
             }
         };
 
-        void Install(Fixture &fixture, const RpcGameplayPolicy &policy) {
+        void Install(const Fixture &fixture, const RpcGameplayPolicy &policy) {
             fixture.dispatch->RevokeHandler(fixture.rpc);
             const std::vector<std::shared_ptr<const IReplicationFieldSerializer>> codecs =
                 fixture.serializer ? std::vector{fixture.serializer} : std::vector<std::shared_ptr<const IReplicationFieldSerializer>>{};
@@ -56,7 +56,7 @@ namespace Horo::Network {
             descriptor.customPermission = RpcPermissionId::Create(1).Value();
         }
 
-        void PublishRole(Fixture &fixture, std::optional<NetworkPeerId> owner) {
+        void PublishRole(const Fixture &fixture, std::optional<NetworkPeerId> owner) {
             auto next = fixture.role->Snapshot().Value();
             const auto expected = next.revision;
             next.revision = ReplicationRoleRevision::Create(expected.Value() + 1).Value();
@@ -126,19 +126,19 @@ namespace Horo::Network {
             policy.permission = RpcPermissionId::Create(1).Value();
         }
         SECTION("foreign parameter") {
-            policy.parameters.push_back({RpcParameterId::Create(2).Value(), std::int64_t{0}, std::int64_t{10}});
+            policy.parameters.emplace_back(RpcParameterId::Create(2).Value(), std::int64_t{0}, std::int64_t{10});
         }
         SECTION("inverted range") {
-            policy.parameters.push_back({RpcParameterId::Create(1).Value(), std::int64_t{10}, std::int64_t{0}});
+            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::int64_t{10}, std::int64_t{0});
         }
         SECTION("wrong numeric representation") {
-            policy.parameters.push_back({RpcParameterId::Create(1).Value(), std::uint64_t{0}, std::uint64_t{10}});
+            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::uint64_t{0}, std::uint64_t{10});
         }
         SECTION("mixed range representation") {
-            policy.parameters.push_back({RpcParameterId::Create(1).Value(), std::int64_t{0}, std::uint64_t{10}});
+            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::int64_t{0}, std::uint64_t{10});
         }
         SECTION("duplicate constraint") {
-            policy.parameters.push_back({RpcParameterId::Create(1).Value(), std::int64_t{0}, std::int64_t{10}});
+            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::int64_t{0}, std::int64_t{10});
             policy.parameters.push_back(policy.parameters.front());
         }
         SECTION("schema without version") {
@@ -156,13 +156,13 @@ namespace Horo::Network {
         Fixture fixture(false, RpcTarget::Authority, true, true);
         RpcGameplayPolicy policy;
         SECTION("exact endpoints") {
-            policy.parameters.push_back({RpcParameterId::Create(1).Value(), std::int64_t{7}, std::int64_t{7}});
+            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::int64_t{7}, std::int64_t{7});
         }
         SECTION("below minimum") {
-            policy.parameters.push_back({RpcParameterId::Create(1).Value(), std::int64_t{8}, std::int64_t{10}});
+            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::int64_t{8}, std::int64_t{10});
         }
         SECTION("above maximum") {
-            policy.parameters.push_back({RpcParameterId::Create(1).Value(), std::int64_t{0}, std::int64_t{6}});
+            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::int64_t{0}, std::int64_t{6});
         }
         Install(fixture, policy);
         const auto received = fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(1));
@@ -188,7 +188,9 @@ namespace Horo::Network {
         metadata.valueType = ReplicationValueTypeId::Create(2).Value();
         metadata.codec = ReplicationCodecId::Create(2).Value();
         metadata.valueKind = ReplicationValueKind::FloatingPoint;
-        SECTION("floating endpoint") {}
+        SECTION("floating endpoint") {
+            // The unchanged finite endpoints exercise the successful floating representation.
+        }
         SECTION("unsigned endpoint cannot lose precision through double") {
             minimum = std::numeric_limits<std::uint64_t>::max();
             maximum = minimum;
@@ -224,7 +226,7 @@ namespace Horo::Network {
         const std::array<std::shared_ptr<const IReplicationFieldSerializer>, 1> codecs{serializer};
         auto handler = std::make_shared<NumericHandler>();
         RpcGameplayPolicy policy;
-        policy.parameters.push_back({RpcParameterId::Create(1).Value(), minimum, maximum});
+        policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), minimum, maximum);
         const auto installed = dispatch->RegisterHandler(fixture.rpc, handler, codecs, fixture.moduleLease, policy);
         if (!validPolicy) {
             TestSupport::RequireError(installed, NetworkErrors::RpcParameterInvalid);
@@ -592,7 +594,7 @@ namespace Horo::Network {
         SECTION("typed constraint snapshot") {
             Fixture fixture(false, RpcTarget::Authority, true, true);
             RpcGameplayPolicy policy;
-            policy.parameters.push_back({RpcParameterId::Create(1).Value(), std::int64_t{0}, std::int64_t{6}});
+            policy.parameters.emplace_back(RpcParameterId::Create(1).Value(), std::int64_t{0}, std::int64_t{6});
             Install(fixture, policy);
             policy.parameters.front().maximum = std::int64_t{100};
             TestSupport::RequireError(fixture.dispatch->HandleAdmitted(fixture.Context(), fixture.Message(1)),

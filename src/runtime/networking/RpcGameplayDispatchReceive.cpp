@@ -203,10 +203,11 @@ namespace Horo::Network {
             return admitted;
         if (const auto charged = ChargeWork(*peer, message.payload.size(), context.ownerTick); charged.HasError())
             return charged;
-        const auto queued = std::ranges::count_if(pending_, [&context](const Pending &command) {
+        if (const auto queued = std::ranges::count_if(pending_,
+                                                      [&context](const Pending &command) {
             return command.connection == context.connection && command.generation == context.generation;
         });
-        if (static_cast<std::size_t>(queued) >= std::min(limits_.maximumPending, limits_.maximumPendingPerPeer))
+            static_cast<std::size_t>(queued) >= std::min(limits_.maximumPending, limits_.maximumPendingPerPeer))
             return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
         [[maybe_unused]] const auto self = shared_from_this();
         const DispatchFlagGuard guard{receiving_};
@@ -285,15 +286,15 @@ namespace Horo::Network {
         auto values = DecodeValues(wire, *pinned.descriptor, pinned.serializers, pinned.metadata, limits_.maximumInvocationBytes);
         if (values.HasError())
             return Result<void>::Failure(std::move(values).ErrorValue());
-        const auto revalidate = [&]() -> Result<void> {
+        const auto revalidate = [&]() {
             if (stopped_ || revision != revocationRevision_ || context.cancellation.IsCancellationRequested() || live.Value().IsRevoked())
                 return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
             if (const auto current = ValidateLive(pinnedPeer, pinnedObject, *pinned.descriptor, wire.recipient, context.ownerTick,
                                                   Runtime::RuntimePhase::NetworkPoll, entity);
                 current.HasError())
                 return Result<void>::Failure(current.ErrorValue());
-            const auto currentRole = pinnedObject.role->Snapshot();
-            if (currentRole.HasError() || currentRole.Value() != pinnedRole.Value() || entity != expectedEntity)
+            if (const auto currentRole = pinnedObject.role->Snapshot();
+                currentRole.HasError() || currentRole.Value() != pinnedRole.Value() || entity != expectedEntity)
                 return Result<void>::Failure(MakeError(NetworkErrors::RpcPermissionDenied));
             return Result<void>::Success();
         };
