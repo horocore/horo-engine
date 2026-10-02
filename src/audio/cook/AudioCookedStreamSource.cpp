@@ -60,7 +60,8 @@ namespace Horo::Audio {
 
         /** @brief Releases the immutable payload only after serialized worker use ends. */
         void ReleasePcm(void *opaque) noexcept {
-            const std::unique_ptr<CookedDecoder> state(static_cast<CookedDecoder *>(opaque));
+            std::unique_ptr<CookedDecoder> state(static_cast<CookedDecoder *>(opaque));
+            state.reset();
         }
 
         /** @brief Loads a provider-bounded artifact and validates its exact envelope identity. */
