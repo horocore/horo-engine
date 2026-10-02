@@ -45,7 +45,7 @@ artifact. Generated tiles are internal partitions and receive no authoring
 AssetIds. Publication takes the OS-held .cook-writer.lock under the canonical
 target root, pins and verifies the current generation there, carries unrelated
 artifacts forward and stages through the injected durable filesystem.
-Replacement entries require the canonical <AssetId>.cooked filename. Carried
+Replacement entries require the canonical `<AssetId>.cooked` filename. Carried
 entries are written under their own canonical asset-ID filenames in the new
 generation, preserving encoded bytes and hashes. This prevents valid older
 filename aliases from colliding with the navigation replacement, including on
