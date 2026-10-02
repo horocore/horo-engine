@@ -80,20 +80,48 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Validates the exact tree and binding admission before any borrowed inputs are inspected. */
         [[nodiscard]] Result<void> ValidateTree(const UiElementTree &tree) const;
+        /** @brief Checks readable exact tree generation without constructing an error or allocating. */
+        [[nodiscard]] bool MatchesTree(const UiElementTree &tree) const noexcept;
         /** @brief Copies provider schemas and validates initial snapshot shape and values at load time. */
         [[nodiscard]] Result<void> PrepareProviders(std::span<const UiBindingProviderRegistration> registrations);
         /** @brief Resolves target handles, builds source adjacency and preallocates typed target values at load time. */
         [[nodiscard]] Result<void> PrepareTargets(const UiElementTree &tree, std::span<const UiBindingProviderRegistration> registrations,
                                                   std::span<const UiResolvedBindingDescriptor> bindings);
+        /** @brief Resolves one validated conflict-free current target handle before value storage is prepared. */
+        [[nodiscard]] Result<UiElementHandle> ResolveTarget(const UiElementTree &tree, const UiBindingDescriptor &binding,
+                                                            const UiBindingProviderSchema &schema) const;
+        /** @brief Prepares one target's owned typed value and source adjacency within the aggregate text budget. */
+        [[nodiscard]] Result<void> PrepareTarget(const UiElementTree &tree, const UiResolvedBindingDescriptor &resolved,
+                                                 std::span<const UiBindingProviderRegistration> registrations, std::size_t &reservedBytes);
         /** @brief Validates an entire bounded ordered update before staging any target changes. */
         [[nodiscard]] Result<void> ValidateBatches(std::span<const UiBindingChangeBatch> batches);
         /** @brief Stages only targets subscribed to the changed source property; equal values produce no dirty work. */
         [[nodiscard]] Result<void> Stage(std::size_t target, const UiBindingValue *value, UiBindingValueOrigin origin);
+        /** @brief Stages source fanout after complete batch validation, preserving any target failure for atomic rollback. */
+        [[nodiscard]] Result<void> StageBatches(std::span<const UiBindingChangeBatch> batches);
+        /** @brief Stages required unavailability and optional fallback for one exact provider. */
+        [[nodiscard]] Result<void> StageUnregister(const Provider &provider);
         /** @brief Atomically admits layout work before publishing staged targets and store revisions. */
         [[nodiscard]] Result<UiBindingApplyResult> Publish(const UiElementTree &tree, UiLayoutEngine &layout);
     };
 
     namespace BindingStoreInternal {
+        /** @brief Constructs typed boundary failure without copying provider data or exposing bound values. */
+        template <typename T = void> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &error) {
+            return Result<T>::Failure(MakeError(error));
+        }
+
+        /** @brief Counts variable-sized input before validation can scan text or identifiers. */
+        [[nodiscard]] inline std::size_t ValueBytes(const UiBindingValue &value) noexcept {
+            if (const auto *text = std::get_if<std::string>(&value))
+                return text->size();
+            if (const auto *message = std::get_if<UiBindingLocalizedMessage>(&value))
+                return message->key.size();
+            if (const auto *reference = std::get_if<UiBindingReference>(&value))
+                return reference->value.size();
+            return 0;
+        }
+
         /** @brief Copies a same-type target into its reserved storage without changing variant alternatives or allocating. */
         inline void CopyValue(UiBindingValue &target, const UiBindingValue &source) noexcept {
             if (auto *text = std::get_if<std::string>(&target))

@@ -1,10 +1,9 @@
 #include "UiBindingStoreInternal.h"
 
 namespace Horo::Runtime::Ui {
+    using BindingStoreInternal::Failure;
+
     namespace {
-        template <typename T = void> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
-            return Result<T>::Failure(MakeError(descriptor));
-        }
 
         /** @brief Checks exact snapshot lineage and immutable-provider admission without invoking producer code. */
         [[nodiscard]] Result<void> ValidateLineage(const UiBindingChangeBatch &batch, const UiBindingProviderSchema &schema,
@@ -37,15 +36,28 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Success();
         }
 
-        /** @brief Counts variable-sized input before validation can scan text or identifiers. */
-        [[nodiscard]] std::size_t ValueBytes(const UiBindingValue &value) noexcept {
-            if (const auto *text = std::get_if<std::string>(&value))
-                return text->size();
-            if (const auto *message = std::get_if<UiBindingLocalizedMessage>(&value))
-                return message->key.size();
-            if (const auto *reference = std::get_if<UiBindingReference>(&value))
-                return reference->value.size();
-            return 0;
+        /** @brief Checks complete transaction ordering and aggregate count/byte budgets before provider validation. */
+        [[nodiscard]] Result<void> ValidateEnvelope(const std::span<const UiBindingChangeBatch> batches,
+                                                    const UiBindingStoreLimits &limits) {
+            if (batches.size() > limits.providers)
+                return Failure(UiErrors::BindingCapacityExceeded);
+            std::size_t changeCount = 0;
+            std::size_t changeBytes = 0;
+            for (std::size_t index = 0; index < batches.size(); ++index) {
+                const auto &batch = batches[index];
+                if (batch.changes.size() > limits.changes - changeCount)
+                    return Failure(UiErrors::BindingCapacityExceeded);
+                changeCount += batch.changes.size();
+                for (const auto &change : batch.changes) {
+                    const auto bytes = BindingStoreInternal::ValueBytes(change.value);
+                    if (bytes > limits.changeBytes - changeBytes)
+                        return Failure(UiErrors::BindingCapacityExceeded);
+                    changeBytes += bytes;
+                }
+                if (index != 0 && !(batches[index - 1].provider < batch.provider))
+                    return Failure(UiErrors::BindingDescriptorConflict);
+            }
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -60,26 +72,17 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
+    /** @copydoc UiBindingStore::Storage::MatchesTree */
+    bool UiBindingStore::Storage::MatchesTree(const UiElementTree &tree) const noexcept {
+        const bool identity = tree.Instance() == instance && tree.Canvas() == canvas && tree.SourceDocument() == document;
+        const bool revision = tree.SourceDocumentRevision() == documentRevision && tree.Revision() == treeRevision;
+        return active && tree.State() == UiElementTreeState::Active && identity && revision;
+    }
+
     /** @copydoc UiBindingStore::Storage::ValidateBatches */
     Result<void> UiBindingStore::Storage::ValidateBatches(const std::span<const UiBindingChangeBatch> batches) {
-        if (batches.size() > limits.providers)
-            return Failure(UiErrors::BindingCapacityExceeded);
-        std::size_t changeCount = 0;
-        std::size_t changeBytes = 0;
-        for (std::size_t index = 0; index < batches.size(); ++index) {
-            const auto &batch = batches[index];
-            if (batch.changes.size() > limits.changes - changeCount)
-                return Failure(UiErrors::BindingCapacityExceeded);
-            changeCount += batch.changes.size();
-            for (const auto &change : batch.changes) {
-                const auto bytes = ValueBytes(change.value);
-                if (bytes > limits.changeBytes - changeBytes)
-                    return Failure(UiErrors::BindingCapacityExceeded);
-                changeBytes += bytes;
-            }
-            if (index != 0 && !(batches[index - 1].provider < batch.provider))
-                return Failure(UiErrors::BindingDescriptorConflict);
-        }
+        if (const auto valid = ValidateEnvelope(batches, limits); valid.HasError())
+            return valid;
         for (const auto &batch : batches) {
             auto *provider = FindProvider(batch.provider);
             if (!provider)
@@ -91,6 +94,30 @@ namespace Horo::Runtime::Ui {
             if (const auto valid = ValidateChanges(batch.changes, provider->schema); valid.HasError())
                 return valid;
         }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiBindingStore::Storage::StageBatches */
+    Result<void> UiBindingStore::Storage::StageBatches(const std::span<const UiBindingChangeBatch> batches) {
+        for (const auto &batch : batches) {
+            const auto *provider = FindProvider(batch.provider);
+            for (const auto &change : batch.changes)
+                for (const auto target : provider->targets[change.property])
+                    if (const auto result = Stage(target, &change.value, UiBindingValueOrigin::Provider); result.HasError())
+                        return result;
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiBindingStore::Storage::StageUnregister */
+    Result<void> UiBindingStore::Storage::StageUnregister(const Provider &provider) {
+        for (const auto &subscribers : provider.targets)
+            for (const auto index : subscribers) {
+                const auto &fallback = targets[index].fallback;
+                const auto origin = fallback ? UiBindingValueOrigin::Fallback : UiBindingValueOrigin::Unavailable;
+                if (const auto result = Stage(index, fallback ? &*fallback : nullptr, origin); result.HasError())
+                    return result;
+            }
         return Result<void>::Success();
     }
 
@@ -165,13 +192,8 @@ namespace Horo::Runtime::Ui {
         if (const auto valid = storage_->ValidateBatches(batches); valid.HasError())
             return Result<UiBindingApplyResult>::Failure(valid.ErrorValue());
         const Storage::StagingScope staging{*storage_};
-        for (const auto &batch : batches) {
-            const auto *provider = storage_->FindProvider(batch.provider);
-            for (const auto &change : batch.changes)
-                for (const auto target : provider->targets[change.property])
-                    if (const auto staged = storage_->Stage(target, &change.value, UiBindingValueOrigin::Provider); staged.HasError())
-                        return Result<UiBindingApplyResult>::Failure(staged.ErrorValue());
-        }
+        if (const auto staged = storage_->StageBatches(batches); staged.HasError())
+            return Result<UiBindingApplyResult>::Failure(staged.ErrorValue());
         const auto published = storage_->Publish(tree, layout);
         if (published.HasValue())
             for (const auto &batch : batches)
@@ -192,14 +214,8 @@ namespace Horo::Runtime::Ui {
         if (!provider->active)
             return Result<UiBindingApplyResult>::Success({storage_->current.revision, storage_->current.content});
         const Storage::StagingScope staging{*storage_};
-        for (const auto &subscribers : provider->targets)
-            for (const auto index : subscribers) {
-                const auto &fallback = storage_->targets[index].fallback;
-                if (const auto staged = storage_->Stage(index, fallback ? &*fallback : nullptr,
-                                                        fallback ? UiBindingValueOrigin::Fallback : UiBindingValueOrigin::Unavailable);
-                    staged.HasError())
-                    return Result<UiBindingApplyResult>::Failure(staged.ErrorValue());
-            }
+        if (const auto staged = storage_->StageUnregister(*provider); staged.HasError())
+            return Result<UiBindingApplyResult>::Failure(staged.ErrorValue());
         const auto published = storage_->Publish(tree, layout);
         if (published.HasValue())
             provider->active = false;
@@ -208,9 +224,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiBindingStore::Find */
     const UiBoundTarget *UiBindingStore::Find(const UiElementTree &tree, const UiBindingId binding) const noexcept {
-        if (!storage_ || !storage_->active || tree.State() != UiElementTreeState::Active || tree.Instance() != storage_->instance ||
-            tree.Canvas() != storage_->canvas || tree.SourceDocument() != storage_->document ||
-            tree.SourceDocumentRevision() != storage_->documentRevision || tree.Revision() != storage_->treeRevision)
+        if (!storage_ || !storage_->MatchesTree(tree))
             return nullptr;
         const auto found = std::ranges::find_if(storage_->targets, [binding](const Storage::Target &target) {
             return target.bound.binding == binding && target.bound.origin != UiBindingValueOrigin::Unavailable;

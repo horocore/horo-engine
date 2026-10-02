@@ -3,10 +3,9 @@
 #include <new>
 
 namespace Horo::Runtime::Ui {
+    using BindingStoreInternal::Failure;
+
     namespace {
-        template <typename T = void> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
-            return Result<T>::Failure(MakeError(descriptor));
-        }
 
         /** @brief Checks caller bounds against finite repository ceilings. */
         [[nodiscard]] bool ValidLimits(const UiBindingStoreLimits &limits) noexcept {
@@ -16,15 +15,25 @@ namespace Horo::Runtime::Ui {
                    limits.changeBytes <= MaximumUiBindingChangeBytes;
         }
 
+        /** @brief Identifies target properties that change intrinsic content or visibility. */
+        [[nodiscard]] bool LayoutTarget(const UiBindingTargetProperty target) noexcept {
+            return target == UiBindingTargetProperty::Text || target == UiBindingTargetProperty::LocalizedText ||
+                   target == UiBindingTargetProperty::Visible;
+        }
+
+        /** @brief Identifies target properties that alter interaction availability or control semantics. */
+        [[nodiscard]] bool ActionTarget(const UiBindingTargetProperty target) noexcept {
+            return target == UiBindingTargetProperty::Enabled || target == UiBindingTargetProperty::Visible ||
+                   target == UiBindingTargetProperty::BooleanValue || target == UiBindingTargetProperty::ScalarValue ||
+                   target == UiBindingTargetProperty::Selected;
+        }
+
         /** @brief Derives target work from semantic effects and additional provider-declared dependencies. */
         [[nodiscard]] UiBindingDirty Categories(const UiBindingTargetProperty target, const UiBindingPropertyFlags flags) noexcept {
             auto result = UiBindingDirty::Paint | UiBindingDirty::Accessibility;
-            if (target == UiBindingTargetProperty::Text || target == UiBindingTargetProperty::LocalizedText ||
-                target == UiBindingTargetProperty::Visible || HasFlag(flags, UiBindingPropertyFlags::AffectsLayout))
+            if (LayoutTarget(target) || HasFlag(flags, UiBindingPropertyFlags::AffectsLayout))
                 result = result | UiBindingDirty::Layout;
-            if (target == UiBindingTargetProperty::Enabled || target == UiBindingTargetProperty::Visible ||
-                target == UiBindingTargetProperty::BooleanValue || target == UiBindingTargetProperty::ScalarValue ||
-                target == UiBindingTargetProperty::Selected || HasFlag(flags, UiBindingPropertyFlags::AffectsActions))
+            if (ActionTarget(target) || HasFlag(flags, UiBindingPropertyFlags::AffectsActions))
                 result = result | UiBindingDirty::Actions;
             return result;
         }
@@ -43,35 +52,118 @@ namespace Horo::Runtime::Ui {
             const auto found = std::ranges::lower_bound(values, property, {}, &UiBindingPropertyUpdate::property);
             return found != values.end() && found->property == property ? &found->value : nullptr;
         }
+
+        /** @brief Validates explicit host registration identity and schema-admitted provider scope. */
+        [[nodiscard]] Result<void> ValidateRegistration(const UiBindingProviderRegistration &registration) {
+            if (!registration.instance.IsValid() || !registration.revision.IsValid() || !registration.schema ||
+                registration.scope >= UiBindingProviderScopeKind::Count)
+                return Failure(UiErrors::BindingDescriptorInvalid);
+            if ((registration.schema->AllowedScopes() & UiBindingProviderScopeBit(registration.scope)) == 0)
+                return Failure(UiErrors::BindingAccessInvalid);
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks initial snapshot ordering and value contracts before provider metadata is copied. */
+        [[nodiscard]] Result<void> ValidateInitial(const UiBindingProviderRegistration &registration) {
+            const auto properties = registration.schema->Properties();
+            if (registration.values.size() > properties.size())
+                return Failure(UiErrors::BindingCapacityExceeded);
+            for (std::size_t index = 0; index < registration.values.size(); ++index) {
+                const auto &value = registration.values[index];
+                if (value.property >= properties.size())
+                    return Failure(UiErrors::BindingPropertyUnknown);
+                if (index != 0 && registration.values[index - 1].property >= value.property)
+                    return Failure(UiErrors::BindingDescriptorConflict);
+                const auto &property = properties[value.property];
+                if (const auto valid = BindingInternal::ValidateValue(value.value, property.type, property.limits); valid.HasError())
+                    return valid;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Admits the worst-case target/fallback text storage before constructing the owned target. */
+        [[nodiscard]] Result<void> AdmitTextStorage(const UiBindingDescriptor &binding, const UiBindingValueType type,
+                                                    const std::size_t capacity, std::size_t &reservedBytes) {
+            if (type == UiBindingValueType::BoundedText || type == UiBindingValueType::LocalizedMessage) {
+                reservedBytes += binding.target.limits.maximumBytes * (binding.fallback ? 2U : 1U);
+                if (reservedBytes > capacity)
+                    return Failure(UiErrors::BindingCapacityExceeded);
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc UiBindingStore::Storage::PrepareProviders */
     Result<void> UiBindingStore::Storage::PrepareProviders(const std::span<const UiBindingProviderRegistration> registrations) {
         for (std::size_t index = 0; index < registrations.size(); ++index) {
             const auto &registration = registrations[index];
-            if (!registration.instance.IsValid() || !registration.revision.IsValid() || !registration.schema ||
-                registration.scope >= UiBindingProviderScopeKind::Count)
-                return Failure(UiErrors::BindingDescriptorInvalid);
+            if (const auto valid = ValidateRegistration(registration); valid.HasError())
+                return valid;
             if (index != 0 && !(registrations[index - 1].instance < registration.instance))
                 return Failure(UiErrors::BindingDescriptorConflict);
-            if ((registration.schema->AllowedScopes() & UiBindingProviderScopeBit(registration.scope)) == 0)
-                return Failure(UiErrors::BindingAccessInvalid);
-            const auto properties = registration.schema->Properties();
-            if (registration.values.size() > properties.size())
-                return Failure(UiErrors::BindingCapacityExceeded);
-            for (std::size_t valueIndex = 0; valueIndex < registration.values.size(); ++valueIndex) {
-                const auto &value = registration.values[valueIndex];
-                if (value.property >= properties.size())
-                    return Failure(UiErrors::BindingPropertyUnknown);
-                if (valueIndex != 0 && registration.values[valueIndex - 1].property >= value.property)
-                    return Failure(UiErrors::BindingDescriptorConflict);
-                const auto &property = properties[value.property];
-                if (const auto valid = BindingInternal::ValidateValue(value.value, property.type, property.limits); valid.HasError())
-                    return valid;
-            }
+            if (const auto valid = ValidateInitial(registration); valid.HasError())
+                return valid;
             providers.push_back({registration.instance, *registration.schema, registration.revision, true,
-                                 std::vector<std::vector<std::size_t>>(properties.size())});
+                                 std::vector<std::vector<std::size_t>>(registration.schema->Properties().size())});
         }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiBindingStore::Storage::ResolveTarget */
+    Result<UiElementHandle> UiBindingStore::Storage::ResolveTarget(const UiElementTree &tree, const UiBindingDescriptor &binding,
+                                                                   const UiBindingProviderSchema &schema) const {
+        if (const auto valid = ValidateUiBindingDescriptor(binding, schema); valid.HasError())
+            return Result<UiElementHandle>::Failure(valid.ErrorValue());
+        if (binding.direction == UiBindingDirection::TargetToSource)
+            return Failure<UiElementHandle>(UiErrors::BindingAccessInvalid);
+        if (binding.converter.has_value())
+            return Failure<UiElementHandle>(UiErrors::BindingConverterInvalid);
+        const auto handle = tree.Find(binding.target.element);
+        if (handle.HasError())
+            return handle;
+        if (std::ranges::any_of(targets, [&binding, &handle](const Target &target) {
+            return target.bound.binding == binding.id ||
+                   (target.bound.element == handle.Value() && target.bound.property == binding.target.property);
+        }))
+            return Failure<UiElementHandle>(UiErrors::BindingDescriptorConflict);
+        return handle;
+    }
+
+    /** @copydoc UiBindingStore::Storage::PrepareTarget */
+    Result<void> UiBindingStore::Storage::PrepareTarget(const UiElementTree &tree, const UiResolvedBindingDescriptor &resolved,
+                                                        const std::span<const UiBindingProviderRegistration> registrations,
+                                                        std::size_t &reservedBytes) {
+        auto *provider = FindProvider(resolved.provider);
+        if (!provider)
+            return Failure(UiErrors::BindingProviderUnknown);
+        const auto &binding = resolved.binding;
+        const auto handle = ResolveTarget(tree, binding, provider->schema);
+        if (handle.HasError())
+            return Result<void>::Failure(handle.ErrorValue());
+        const auto *property = provider->schema.Find(binding.source.property);
+        const auto propertySlot = static_cast<std::size_t>(property - provider->schema.Properties().data());
+        const auto providerIndex = static_cast<std::size_t>(provider - providers.data());
+        const auto *value = InitialValue(registrations[providerIndex].values, propertySlot);
+        const auto origin = value ? UiBindingValueOrigin::Provider : UiBindingValueOrigin::Fallback;
+        if (!value) {
+            if (!binding.fallback)
+                return Failure(UiErrors::BindingProviderUnknown);
+            value = &*binding.fallback;
+        }
+        if (const auto valid =
+                BindingInternal::ValidateValue(*value, *UiBindingTargetValueType(binding.target.property), binding.target.limits);
+            valid.HasError())
+            return valid;
+        if (const auto admitted = AdmitTextStorage(binding, property->type, limits.valueBytes, reservedBytes); admitted.HasError())
+            return admitted;
+        Target target{{binding.id, handle.Value(), binding.target.property, *value, origin},
+                      binding.target.limits,
+                      binding.fallback,
+                      Categories(binding.target.property, property->flags)};
+        ReserveValue(target.bound.value, binding.target.limits.maximumBytes);
+        target.pending = target.categories;
+        provider->targets[propertySlot].push_back(targets.size());
+        targets.push_back(std::move(target));
         return Result<void>::Success();
     }
 
@@ -80,57 +172,9 @@ namespace Horo::Runtime::Ui {
                                                          const std::span<const UiBindingProviderRegistration> registrations,
                                                          const std::span<const UiResolvedBindingDescriptor> bindings) {
         std::size_t reservedBytes = 0;
-        for (const auto &resolved : bindings) {
-            auto *provider = FindProvider(resolved.provider);
-            if (!provider)
-                return Failure(UiErrors::BindingProviderUnknown);
-            const auto &binding = resolved.binding;
-            if (const auto valid = ValidateUiBindingDescriptor(binding, provider->schema); valid.HasError())
-                return valid;
-            if (binding.direction == UiBindingDirection::TargetToSource)
-                return Failure(UiErrors::BindingAccessInvalid);
-            if (binding.converter.has_value())
-                return Failure(UiErrors::BindingConverterInvalid);
-            if (std::ranges::any_of(targets, [&binding](const Target &target) {
-                return target.bound.binding == binding.id;
-            }))
-                return Failure(UiErrors::BindingDescriptorConflict);
-            const auto handle = tree.Find(binding.target.element);
-            if (handle.HasError())
-                return Result<void>::Failure(handle.ErrorValue());
-            if (std::ranges::any_of(targets, [&binding, &handle](const Target &target) {
-                return target.bound.element == handle.Value() && target.bound.property == binding.target.property;
-            }))
-                return Failure(UiErrors::BindingDescriptorConflict);
-            const auto *property = provider->schema.Find(binding.source.property);
-            const auto propertySlot = static_cast<std::size_t>(property - provider->schema.Properties().data());
-            const auto providerIndex = static_cast<std::size_t>(provider - providers.data());
-            const auto *value = InitialValue(registrations[providerIndex].values, propertySlot);
-            const auto origin = value ? UiBindingValueOrigin::Provider : UiBindingValueOrigin::Fallback;
-            if (!value) {
-                if (!binding.fallback)
-                    return Failure(UiErrors::BindingProviderUnknown);
-                value = &*binding.fallback;
-            }
-            if (const auto valid =
-                    BindingInternal::ValidateValue(*value, *UiBindingTargetValueType(binding.target.property), binding.target.limits);
-                valid.HasError())
-                return valid;
-            const bool text = property->type == UiBindingValueType::BoundedText || property->type == UiBindingValueType::LocalizedMessage;
-            if (text) {
-                reservedBytes += binding.target.limits.maximumBytes * (binding.fallback ? 2U : 1U);
-                if (reservedBytes > limits.valueBytes)
-                    return Failure(UiErrors::BindingCapacityExceeded);
-            }
-            Target target{{binding.id, handle.Value(), binding.target.property, *value, origin},
-                          binding.target.limits,
-                          binding.fallback,
-                          Categories(binding.target.property, property->flags)};
-            ReserveValue(target.bound.value, binding.target.limits.maximumBytes);
-            target.pending = target.categories;
-            provider->targets[propertySlot].push_back(targets.size());
-            targets.push_back(std::move(target));
-        }
+        for (const auto &binding : bindings)
+            if (const auto prepared = PrepareTarget(tree, binding, registrations, reservedBytes); prepared.HasError())
+                return prepared;
         return Result<void>::Success();
     }
 
