@@ -17,6 +17,9 @@
 #include <vector>
 
 namespace Horo::Terrain {
+    struct FoliageClusterCookRequest;
+    class CookedFoliageClusterSet;
+
     namespace FoliagePlacementCookErrors {
         extern const ErrorCodeDescriptor InvalidInput;  /**< Invalid source, rule, revision, or geometry. */
         extern const ErrorCodeDescriptor LimitExceeded; /**< Work or output exceeds an explicit finite ceiling. */
@@ -156,6 +159,21 @@ namespace Horo::Terrain {
             return contentRevision_;
         }
 
+        /** @brief Returns the exact generic cook target. @return Captured target/envelope digest. */
+        [[nodiscard]] const Sha256Digest &TargetDigest() const noexcept {
+            return targetDigest_;
+        }
+
+        /** @brief Returns the exact pinned cook toolchain. @return Captured toolchain digest. */
+        [[nodiscard]] const Sha256Digest &ToolchainDigest() const noexcept {
+            return toolchainDigest_;
+        }
+
+        /** @brief Returns the exact captured feature tier. @return Provider-neutral tier, never an inferred fallback. */
+        [[nodiscard]] TerrainFeatureTier Tier() const noexcept {
+            return tier_;
+        }
+
         /** @brief Returns the complete canonical input fingerprint. */
         [[nodiscard]] const Sha256Digest &Fingerprint() const noexcept {
             return fingerprint_;
@@ -174,8 +192,9 @@ namespace Horo::Terrain {
     private:
         friend Result<CookedFoliagePlacement> CookFoliagePlacement(const FoliagePlacementCookRequest &, const CancellationToken &);
         friend class FoliagePlacementCookOwner;
+        friend Result<CookedFoliageClusterSet> CookFoliageClusters(const FoliageClusterCookRequest &, const CancellationToken &);
         CookedFoliagePlacement() = default;
-        [[nodiscard]] bool IsWellFormed() const noexcept;
+        [[nodiscard]] bool IsWellFormed(const CancellationToken &cancellation = {}) const noexcept;
 
         TerrainTileId tile_{};
         TerrainSourceRevision sourceRevision_{};
@@ -183,6 +202,9 @@ namespace Horo::Terrain {
         FoliageTypeId type_{};
         FoliageDefinitionRevision definitionRevision_{};
         TerrainContentRevision contentRevision_{};
+        Sha256Digest targetDigest_{};
+        Sha256Digest toolchainDigest_{};
+        TerrainFeatureTier tier_{TerrainFeatureTier::Baseline};
         Sha256Digest fingerprint_{};
         Sha256Digest resultDigest_{};
         std::vector<CookedFoliageInstance> instances_{};

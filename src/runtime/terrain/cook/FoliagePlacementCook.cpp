@@ -274,12 +274,15 @@ namespace Horo::Terrain {
         }
 
         /** @brief Hashes canonical output fields for byte-independent result equality. */
-        [[nodiscard]] Sha256Digest DigestInstances(const std::span<const CookedFoliageInstance> instances) noexcept {
+        [[nodiscard]] Sha256Digest DigestInstances(const std::span<const CookedFoliageInstance> instances,
+                                                   const CancellationToken *cancellation = nullptr) noexcept {
             Sha256Builder hash;
             constexpr std::string_view domain{"horo.foliage.placement.result.v1"};
             static_cast<void>(hash.Update(std::as_bytes(std::span{domain.data(), domain.size()})));
             HashInteger(hash, instances.size());
             for (const auto &instance : instances) {
+                if (cancellation && cancellation->IsCancellationRequested())
+                    return {};
                 static_cast<void>(hash.Update(std::as_bytes(std::span{instance.id.Bytes()})));
                 static_cast<void>(hash.Update(std::as_bytes(std::span{instance.cluster.Bytes()})));
                 static_cast<void>(hash.Update(std::as_bytes(std::span{instance.type.Bytes()})));
@@ -529,6 +532,9 @@ namespace Horo::Terrain {
         output.type_ = request.definition.Data().type;
         output.definitionRevision_ = request.definition.Data().revision;
         output.contentRevision_ = request.contentRevision;
+        output.targetDigest_ = request.targetDigest;
+        output.toolchainDigest_ = request.toolchainDigest;
+        output.tier_ = request.tier;
         output.fingerprint_ = fingerprint;
         output.instances_ = std::move(work.instances);
         output.resultDigest_ = DigestInstances(output.instances_);
@@ -536,9 +542,10 @@ namespace Horo::Terrain {
     }
 
     /** @brief Rechecks detached candidate integrity before owner publication. */
-    bool CookedFoliagePlacement::IsWellFormed() const noexcept {
+    bool CookedFoliagePlacement::IsWellFormed(const CancellationToken &cancellation) const noexcept {
         return tile_.IsValid() && type_.IsValid() && contentRevision_.IsValid() && sourceRevision_.IsValid() && capability_.IsValid() &&
-               definitionRevision_.IsValid() && resultDigest_ == DigestInstances(instances_);
+               definitionRevision_.IsValid() && !cancellation.IsCancellationRequested() &&
+               resultDigest_ == DigestInstances(instances_, &cancellation);
     }
 
     /** @copydoc FoliagePlacementCookOwner::Publish */
