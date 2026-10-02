@@ -434,7 +434,13 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValid() const noexcept;
     };
 
-    /** @brief Non-owning complete candidate projection copied transactionally into one snapshot slot. */
+    /**
+     * @brief Non-owning complete candidate semantics copied transactionally into one snapshot slot.
+     * @details Input order does not define reading order: publication uses retained-tree preorder and the nearest
+     *          exposed semantic ancestor. Hidden nodes and their descendants are omitted. Ancestor Covered, Suppressed
+     *          or Suspended exposure dominates descendants; Offscreen propagates to otherwise Visible descendants.
+     *          Relations from exposed nodes to omitted nodes reject publication. Disabled controls remain readable.
+     */
     struct UiAccessibilityProjection final {
         std::span<const UiAccessibilityNodeInput> nodes;
     };
@@ -519,7 +525,9 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Returns exact source and publication evidence. @return Borrowed immutable descriptor. */
         [[nodiscard]] const UiAccessibilitySnapshotDescriptor &Descriptor() const noexcept;
-        /** @brief Returns all nodes in supplied deterministic projection order. @return Borrowed immutable nodes. */
+        /** @brief Checks whether this value retains a live immutable slot. @return False only after move. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        /** @brief Returns exposed nodes in retained-tree preorder. @return Borrowed immutable nodes. */
         [[nodiscard]] std::span<const UiAccessibilityNode> Nodes() const noexcept;
         /** @brief Returns all flattened relations. @return Borrowed immutable relations. */
         [[nodiscard]] std::span<const UiAccessibilityRelation> Relations() const noexcept;
