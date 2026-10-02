@@ -333,7 +333,7 @@ namespace Horo::Runtime::Ui {
 
         /**
          * @brief Changes availability at an owner safe point and cancels transient interaction state when disabling.
-         * @param availability New explicit availability.
+         * @param availability Enabled or Disabled; Busy is derived exclusively from the action owner projection.
          * @return Success or typed lifecycle/state failure.
          */
         [[nodiscard]] Result<void> SetAvailability(UiControlAvailability availability);

@@ -4,6 +4,16 @@ HORO-752 adds `UiAsyncActions.h` to the existing `HoroEngine::RuntimeUi` public
 header owner. No new dependency edge or backend is introduced. Existing
 synchronous `UiActionHandler` callers retain their typed dispatch contract.
 
+Typed route request/result validation and router execution now have separate
+implementation files. Router and screen state each remain private to one
+implementation owner. Route factory/navigation guards and asynchronous query keys
+are borrowed by const reference to avoid repeatedly copying large correlation
+carriers. Existing call expressions remain valid; downstream binaries and any
+explicit function-pointer declarations must be rebuilt against these headers.
+The screen-stack regression suite and RuntimeUi public-header consumer cover
+the affected calls. Mutation methods remain non-const: const ownership handles
+do not grant permission to mutate a router, operation or route lifecycle.
+
 ## Provider and route composition
 
 An asynchronous provider implements `UiAsyncActionHandler::Start`. The router

@@ -434,7 +434,11 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] const UiActionOwnerContext &Owner() const noexcept;
         /** @brief Returns current queued request count. @return Bounded count. */
         [[nodiscard]] std::size_t QueuedCount() const noexcept;
-        /** @brief Closes admission while allowing already queued values to be drained or discarded. */
+        /**
+         * @brief Closes admission while allowing already queued values to be drained or discarded.
+         * @param reason First cancellation reason published to pending asynchronous operations.
+         * @return Success or typed lifecycle/invalid-reason failure.
+         */
         [[nodiscard]] Result<void> BeginRetirement(UiActionCancellationReason reason = UiActionCancellationReason::OwnerRetired);
         /** @brief Idempotently stops dispatch and releases queued requests. */
         void Shutdown() noexcept;

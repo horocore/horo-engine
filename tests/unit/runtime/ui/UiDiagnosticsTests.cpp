@@ -40,7 +40,7 @@ namespace Horo::Runtime::Ui {
 
         TEST_CASE("Runtime UI diagnostic records map every canonical error and reject invented sources", "[runtime_ui][diagnostics]") {
             const auto descriptors = UiDiagnosticErrorDescriptors();
-            REQUIRE(descriptors.size() == 187);
+            REQUIRE(descriptors.size() == 192);
             const std::array newlyRegistered{
                 &UiErrors::CookedFormatUnsupported, &UiErrors::CookedPayloadMalformed, &UiErrors::AssetMissing,
                 &UiErrors::AssetTypeMismatch,       &UiErrors::AssetIdentityMismatch,  &UiErrors::AssetTargetMismatch,

@@ -3,7 +3,6 @@
 #include "Horo/Runtime/Ui/UiErrors.h"
 
 #include <atomic>
-#include <limits>
 #include <new>
 #include <thread>
 #include <utility>
@@ -20,28 +19,41 @@ namespace Horo::Runtime::Ui {
             return reason < UiActionCancellationReason::Count;
         }
 
-        /** @brief Bounds immutable error traversal and text without flattening original evidence. */
+        /** @brief Consumes a finite text budget without copying provider-owned strings. */
+        bool AddFailureText(const std::string_view text, std::size_t &bytes) noexcept {
+            if (text.size() > 4096 - bytes)
+                return false;
+            bytes += text.size();
+            return true;
+        }
+
+        /** @brief Validates one diagnostic identity and its share of the total failure text bound. */
+        bool ValidFailureDiagnostic(const Diagnostic &diagnostic, std::size_t &bytes) noexcept {
+            return !diagnostic.code.Value().empty() && diagnostic.severity <= DiagnosticSeverity::Fatal &&
+                   AddFailureText(diagnostic.code.Value(), bytes) && AddFailureText(diagnostic.message, bytes) &&
+                   AddFailureText(diagnostic.location.source, bytes) && AddFailureText(diagnostic.path, bytes);
+        }
+
+        /** @brief Validates one typed error node and its bounded diagnostic collection. */
+        bool ValidFailureNode(const Error &error, std::size_t &bytes) noexcept {
+            if (error.code.Value().empty() || error.domain.Value().empty() || error.severity > ErrorSeverity::Critical ||
+                error.diagnostics.size() > 16 || !AddFailureText(error.code.Value(), bytes) ||
+                !AddFailureText(error.domain.Value(), bytes) || !AddFailureText(error.message, bytes))
+                return false;
+            for (const auto &diagnostic : error.diagnostics)
+                if (!ValidFailureDiagnostic(diagnostic, bytes))
+                    return false;
+            return true;
+        }
+
+        /** @brief Bounds immutable error traversal without flattening original evidence. */
         bool ValidFailure(const Error *error) noexcept {
             std::size_t bytes{};
-            std::size_t causes{};
-            for (; error != nullptr; error = error->cause.Get()) {
-                if (++causes > 8 || error->code.Value().empty() || error->domain.Value().empty() ||
-                    error->severity > ErrorSeverity::Critical || error->diagnostics.size() > 16)
+            std::size_t nodes{};
+            for (; error != nullptr; error = error->cause.Get())
+                if (++nodes > 8 || !ValidFailureNode(*error, bytes))
                     return false;
-                const auto add = [&bytes](const std::string &text) {
-                    if (text.size() > 4096 - bytes)
-                        return false;
-                    bytes += text.size();
-                    return true;
-                };
-                if (!add(error->code.Value()) || !add(error->domain.Value()) || !add(error->message))
-                    return false;
-                for (const auto &diagnostic : error->diagnostics)
-                    if (diagnostic.severity > DiagnosticSeverity::Fatal || !add(diagnostic.code.Value()) || !add(diagnostic.message) ||
-                        !add(diagnostic.location.source) || !add(diagnostic.path))
-                        return false;
-            }
-            return causes != 0;
+            return nodes != 0;
         }
     }  // namespace
 
@@ -71,7 +83,7 @@ namespace Horo::Runtime::Ui {
                     return;
                 snapshot.state = UiAsyncActionState::Cancelled;
                 snapshot.cancellation = reason;
-                cancelled.store(true, std::memory_order_release);
+                cancelled.store(true);
             }
         };
 
@@ -84,7 +96,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAsyncActionCancellation::IsCancellationRequested */
     bool UiAsyncActionCancellation::IsCancellationRequested() const noexcept {
-        return !record_ || record_->cancelled.load(std::memory_order_acquire);
+        return !record_ || record_->cancelled.load();
     }
 
     /** @copydoc UiAsyncActionProducer::UiAsyncActionProducer */
@@ -131,8 +143,8 @@ namespace Horo::Runtime::Ui {
             return Failure(UiErrors::ActionResultStale);
         if (const auto writable = record_->Writable(); writable.HasError())
             return writable;
-        const auto previous = record_->snapshot.progress;
-        if (progress.permille > 1000 || (!progress.determinate && progress.permille != 0) || progress.phase < previous.phase ||
+        if (const auto previous = record_->snapshot.progress;
+            progress.permille > 1000 || (!progress.determinate && progress.permille != 0) || progress.phase < previous.phase ||
             (progress.phase == previous.phase && previous.determinate && (!progress.determinate || progress.permille < previous.permille)))
             return Failure(UiErrors::AsyncActionProgressInvalid);
         record_->snapshot.progress = progress;
@@ -166,13 +178,13 @@ namespace Horo::Runtime::Ui {
     }
 
     struct UiAsyncActionStore::Storage final {
-        Storage(const UiActionOwnerContext source, const std::uint32_t capacity) : owner(source) {
+        Storage(const UiActionOwnerContext &source, const std::uint32_t capacity) : owner(source) {
             records.reserve(capacity);
             for (std::uint32_t index = 0; index < capacity; ++index)
                 records.push_back(std::make_shared<UiAsyncActionDetail::Record>());
         }
 
-        [[nodiscard]] auto Find(const UiAsyncActionKey key) const noexcept {
+        [[nodiscard]] auto Find(const UiAsyncActionKey &key) const noexcept {
             for (const auto &record : records)
                 if (record->retained && record->Key() == key)
                     return record;
@@ -187,7 +199,7 @@ namespace Horo::Runtime::Ui {
     };
 
     /** @copydoc UiAsyncActionStore::Create */
-    Result<UiAsyncActionStore> UiAsyncActionStore::Create(const UiActionOwnerContext owner, const std::uint32_t capacity) {
+    Result<UiAsyncActionStore> UiAsyncActionStore::Create(const UiActionOwnerContext &owner, const std::uint32_t capacity) {
         if (!owner.IsValid() || capacity == 0 || capacity > MaximumUiActionCommands)
             return Failure<UiAsyncActionStore>(UiErrors::ActionInvalid);
         try {
@@ -237,14 +249,14 @@ namespace Horo::Runtime::Ui {
             return Failure<UiAsyncActionProducer>(UiErrors::AsyncActionCapacityExceeded);
         const UiActionOperationId operation{request.id.ownership, UiActionOperationSequence::Create(request.id.sequence.Value()).Value()};
         free->snapshot = {request.source, request.id, operation};
-        free->cancelled.store(false, std::memory_order_release);
+        free->cancelled.store(false);
         free->retained = true;
         storage_->lastRequestSequence = request.id.sequence.Value();
         return Result<UiAsyncActionProducer>::Success(UiAsyncActionProducer{std::move(free)});
     }
 
     /** @copydoc UiAsyncActionStore::Snapshot */
-    Result<UiAsyncActionSnapshot> UiAsyncActionStore::Snapshot(const UiAsyncActionKey operation) const {
+    Result<UiAsyncActionSnapshot> UiAsyncActionStore::Snapshot(const UiAsyncActionKey &operation) const {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id())
             return Failure<UiAsyncActionSnapshot>(UiErrors::ActionLifecycleUnavailable);
         const auto record = storage_->Find(operation);
@@ -254,7 +266,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiAsyncActionStore::Project */
-    Result<std::optional<UiAsyncActionSnapshot>> UiAsyncActionStore::Project(const UiActionSource source) const {
+    Result<std::optional<UiAsyncActionSnapshot>> UiAsyncActionStore::Project(const UiActionSource &source) const {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id())
             return Failure<std::optional<UiAsyncActionSnapshot>>(UiErrors::ActionLifecycleUnavailable);
         if (!source.IsValid() || source.owner != storage_->owner)
@@ -268,7 +280,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiAsyncActionStore::Cancel */
-    Result<void> UiAsyncActionStore::Cancel(const UiAsyncActionKey operation, const UiActionCancellationReason reason) {
+    Result<void> UiAsyncActionStore::Cancel(const UiAsyncActionKey &operation, const UiActionCancellationReason reason) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id())
             return Failure(UiErrors::ActionLifecycleUnavailable);
         if (!ValidReason(reason))
@@ -281,7 +293,7 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiAsyncActionStore::Release */
-    Result<void> UiAsyncActionStore::Release(const UiAsyncActionKey operation) {
+    Result<void> UiAsyncActionStore::Release(const UiAsyncActionKey &operation) {
         if (!storage_ || storage_->ownerThread != std::this_thread::get_id())
             return Failure(UiErrors::ActionLifecycleUnavailable);
         const auto record = storage_->Find(operation);

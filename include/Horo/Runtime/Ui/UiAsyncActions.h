@@ -95,8 +95,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> Complete(UiActionPayload payload = {});
         /**
          * @brief Publishes an original immutable typed failure once, without copying its strings.
-         * @param error Provider-owned immutable error prepared outside frame-hot code; at most eight causes,
-         * sixteen diagnostics per cause and 4096 total text bytes are admitted.
+         * @param error Provider-owned immutable error prepared outside frame-hot code; at most eight error nodes
+         * including the outer error, sixteen diagnostics per node and 4096 total text bytes are admitted.
          * @return Success or typed stale/invalid-error failure; rejected input leaves the operation pending.
          */
         [[nodiscard]] Result<void> Fail(std::shared_ptr<const Error> error);
@@ -114,12 +114,13 @@ namespace Horo::Runtime::Ui {
      * cancellation allocate nothing, poll no jobs, perform no I/O and wait on nothing. Only the cancellation
      * signal crosses threads; it protects cooperative worker observation until the last token retires.
      * Terminal records remain queryable until Release. Pinned slots apply backpressure instead of reuse.
+     * A moved-from store has no authority: operations return ActionLifecycleUnavailable and retirement is harmless.
      */
     class UiAsyncActionStore final {
     public:
         /** @brief Reserves finite operation storage. @param owner Exact router owner. @param capacity Bound in [1,
          * MaximumUiActionCommands]. @return Store or typed failure. */
-        [[nodiscard]] static Result<UiAsyncActionStore> Create(UiActionOwnerContext owner, std::uint32_t capacity);
+        [[nodiscard]] static Result<UiAsyncActionStore> Create(const UiActionOwnerContext &owner, std::uint32_t capacity);
         ~UiAsyncActionStore();
         UiAsyncActionStore(UiAsyncActionStore &&) noexcept;
         UiAsyncActionStore &operator=(UiAsyncActionStore &&) noexcept;
@@ -128,16 +129,16 @@ namespace Horo::Runtime::Ui {
         /** @brief Admits one frozen router request. @param request Typed exact source. @return Lease or stale/busy/capacity failure. */
         [[nodiscard]] Result<UiAsyncActionProducer> Start(const UiActionRequest &request);
         /** @brief Copies exact operation state. @param operation Identity to query. @return Projection or stale failure. */
-        [[nodiscard]] Result<UiAsyncActionSnapshot> Snapshot(UiAsyncActionKey operation) const;
+        [[nodiscard]] Result<UiAsyncActionSnapshot> Snapshot(const UiAsyncActionKey &operation) const;
         /** @brief Projects the latest action for an exact control source. @param source Current source. @return Optional projection or
          * stale-source failure. */
-        [[nodiscard]] Result<std::optional<UiAsyncActionSnapshot>> Project(UiActionSource source) const;
+        [[nodiscard]] Result<std::optional<UiAsyncActionSnapshot>> Project(const UiActionSource &source) const;
         /** @brief Cancels a pending operation once; terminal results remain unchanged. @param operation Exact identity. @param reason
          * Closed cancellation reason. @return Success or typed invalid/stale failure. */
-        [[nodiscard]] Result<void> Cancel(UiAsyncActionKey operation, UiActionCancellationReason reason);
+        [[nodiscard]] Result<void> Cancel(const UiAsyncActionKey &operation, UiActionCancellationReason reason);
         /** @brief Releases terminal retention; outstanding leases still pin the slot. @param operation Exact identity. @return Success or
          * typed busy/stale failure. */
-        [[nodiscard]] Result<void> Release(UiAsyncActionKey operation);
+        [[nodiscard]] Result<void> Release(const UiAsyncActionKey &operation);
         /** @brief Idempotently closes admission and cancels every pending operation. @param reason First lifecycle cancellation reason
          * wins. */
         void Retire(UiActionCancellationReason reason) noexcept;

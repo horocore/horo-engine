@@ -8,9 +8,9 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
-#include <chrono>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 
 namespace Horo::Runtime::Ui {
@@ -31,18 +31,18 @@ namespace Horo::Runtime::Ui {
                     UiInteractionRevision::Create(revision).Value()};
         }
 
-        UiActionSource Source(const UiActionOwnerContext context = Context(), const std::uint32_t slot = 3) {
+        UiActionSource Source(const UiActionOwnerContext &context = Context(), const std::uint32_t slot = 3) {
             return {context, {context.instance.ownership, slot, 1}};
         }
 
-        UiActionRequest Request(const std::uint64_t sequence = 1, const UiActionSource source = Source()) {
+        UiActionRequest Request(const std::uint64_t sequence = 1, const UiActionSource &source = Source()) {
             return {{source.owner.instance.ownership, UiActionSequence::Create(sequence).Value()},
                     source,
                     UiActionOrigin::Button,
                     UiButtonActionCommand{AuthoredId<UiActionId>(), {}}};
         }
 
-        UiActionRouter Router(const std::uint32_t capacity = 2, const UiActionOwnerContext context = Context()) {
+        UiActionRouter Router(const std::uint32_t capacity = 2, const UiActionOwnerContext &context = Context()) {
             return std::move(UiActionRouter::Create({context, capacity})).Value();
         }
 
@@ -50,7 +50,7 @@ namespace Horo::Runtime::Ui {
             return std::move(UiAsyncActionStore::Create(Context(), capacity)).Value();
         }
 
-        UiControlStateMachine Control(const bool enabled = true, const UiActionOwnerContext context = Context()) {
+        UiControlStateMachine Control(const bool enabled = true, const UiActionOwnerContext &context = Context()) {
             UiControlDescriptorBase base;
             base.owner = context;
             base.element = Source(context).element;
@@ -144,7 +144,7 @@ namespace Horo::Runtime::Ui {
             auto producer = std::move(store.Start(Request())).Value();
             REQUIRE(producer.PublishProgress({1, 700, true}).HasValue());
             for (const auto progress :
-                 std::array{UiAsyncActionProgress{1, 699, true}, {0, 900, true}, {1, 0, false}, {2, 1001, true}, {2, 1, false}}) {
+                 std::array<UiAsyncActionProgress, 5>{{{1, 699, true}, {0, 900, true}, {1, 0, false}, {2, 1001, true}, {2, 1, false}}}) {
                 ExpectError(producer.PublishProgress(progress), UiErrors::AsyncActionProgressInvalid);
                 CHECK(store.Snapshot(producer.Key()).Value().progress == UiAsyncActionProgress{1, 700, true});
             }
@@ -270,10 +270,13 @@ namespace Horo::Runtime::Ui {
                 stack.Shutdown();
                 stack.Shutdown();
             } else {
-                const auto request = kind == UiRouteOperationKind::ReplaceTop ? UiRouteOperationRequest::Replace(AuthoredId<UiRouteId>(2))
-                                     : kind == UiRouteOperationKind::Clear    ? UiRouteOperationRequest::Clear()
-                                     : kind == UiRouteOperationKind::Back     ? UiRouteOperationRequest::Back()
-                                                                              : UiRouteOperationRequest::Pop();
+                auto request = UiRouteOperationRequest::Pop();
+                if (kind == UiRouteOperationKind::ReplaceTop)
+                    request = UiRouteOperationRequest::Replace(AuthoredId<UiRouteId>(2));
+                else if (kind == UiRouteOperationKind::Clear)
+                    request = UiRouteOperationRequest::Clear();
+                else if (kind == UiRouteOperationKind::Back)
+                    request = UiRouteOperationRequest::Back();
                 REQUIRE(stack.Navigate(request).Value().IsCommitted());
             }
             CHECK(stack.Actions(route) == nullptr);
@@ -295,7 +298,8 @@ namespace Horo::Runtime::Ui {
             CHECK_FALSE(token.IsCancellationRequested());
             auto prepared = stack.Prepare(UiRouteOperationRequest::Pop());
             REQUIRE(prepared.HasValue());
-            REQUIRE(prepared.Value().Cancel().HasValue());
+            auto transaction = std::move(prepared).Value();
+            REQUIRE(transaction.Cancel().HasValue());
             CHECK_FALSE(token.IsCancellationRequested());
             CHECK(stack.Actions(route)->AsyncActions()->Snapshot(key).Value().Busy());
             REQUIRE(handler.producer->Complete().HasValue());
@@ -317,7 +321,6 @@ namespace Horo::Runtime::Ui {
 
                 UiAsyncActionCancellation token;
 
-            private:
                 UiScreenStack &stack_;
             };
 
@@ -373,6 +376,139 @@ namespace Horo::Runtime::Ui {
             CHECK(after == before);
         }
 
+        TEST_CASE("Async scheduling rejection exceptions and abandonment release admission safely", "[runtime_ui][async_actions]") {
+            class SubmissionFailure final : public std::runtime_error {
+            public:
+                SubmissionFailure() : std::runtime_error("provider submission failed") {}
+            };
+
+            class RejectingHandler final : public UiAsyncActionHandler {
+            public:
+                explicit RejectingHandler(const int outcome) : outcome_(outcome) {}
+
+                Result<void> Start(const UiActionRequest &, UiAsyncActionProducer producer) override {
+                    key = producer.Key();
+                    token = producer.Cancellation();
+                    if (outcome_ == 0)
+                        return Result<void>::Failure(MakeError(UiErrors::PayloadInvalid));
+                    if (outcome_ == 1)
+                        throw SubmissionFailure{};
+                    return Result<void>::Success();
+                }
+
+                UiAsyncActionKey key;
+                UiAsyncActionCancellation token;
+
+                int outcome_;
+            };
+
+            const auto outcome = GENERATE(0, 1, 2);
+            auto router = Router(1);
+            RejectingHandler handler{outcome};
+            REQUIRE(router.Enqueue(Source(), UiButtonActionCommand{AuthoredId<UiActionId>(), {}}).HasValue());
+            const auto dispatched = router.DispatchNext(handler);
+            if (outcome == 2) {
+                REQUIRE(dispatched.HasValue());
+                CHECK(router.AsyncActions()->Snapshot(handler.key).Value().state == UiAsyncActionState::Cancelled);
+                REQUIRE(router.AsyncActions()->Release(handler.key).HasValue());
+            } else {
+                ExpectError(dispatched, outcome == 0 ? UiErrors::PayloadInvalid : UiErrors::ActionHandlerFailed);
+                ExpectError(router.AsyncActions()->Snapshot(handler.key), UiErrors::ActionResultStale);
+            }
+            CHECK(handler.token.IsCancellationRequested());
+            CHECK(router.QueuedCount() == 0);
+            handler.token = {};
+            RetainingHandler replacement;
+            Dispatch(router, replacement);
+            REQUIRE(replacement.producer->Complete().HasValue());
+        }
+
+        TEST_CASE("Async error validation rejects malformed and oversized evidence without consuming the lease",
+                  "[runtime_ui][async_actions]") {
+            auto store = Store();
+            auto producer = std::move(store.Start(Request())).Value();
+            const auto kind = GENERATE(0, 1, 2, 3, 4);
+            auto error = MakeError(UiErrors::ActionHandlerFailed);
+            if (kind == 0)
+                error.domain = ErrorDomainId{};
+            else if (kind == 1)
+                error.severity = static_cast<ErrorSeverity>(255);
+            else if (kind == 2)
+                error.diagnostics.resize(17);
+            else if (kind == 3)
+                error.diagnostics.push_back({DiagnosticCode{"provider.invalid"}, static_cast<DiagnosticSeverity>(255), {}, {}, {}});
+            else
+                for (int node = 0; node < 8; ++node)
+                    error = WrapError(UiErrors::ActionHandlerFailed, std::move(error));
+            ExpectError(producer.Fail(std::make_shared<const Error>(std::move(error))), UiErrors::AsyncActionFailureInvalid);
+            CHECK(store.Snapshot(producer.Key()).Value().Busy());
+            auto valid = MakeError(UiErrors::ActionHandlerFailed);
+            valid.diagnostics.push_back(
+                {DiagnosticCode{"provider.failure"}, DiagnosticSeverity::Error, "detail", {"input", 1, 1}, "/task"});
+            REQUIRE(producer.Fail(std::make_shared<const Error>(std::move(valid))).HasValue());
+            ExpectError(producer.Fail({}), UiErrors::AsyncActionAlreadyTerminal);
+        }
+
+        TEST_CASE("Async moved stores and producers preserve authority and retire displaced work", "[runtime_ui][async_actions]") {
+            ExpectError(UiAsyncActionStore::Create({}, 1), UiErrors::ActionInvalid);
+            ExpectError(UiAsyncActionStore::Create(Context(), 0), UiErrors::ActionInvalid);
+            ExpectError(UiAsyncActionStore::Create(Context(), MaximumUiActionCommands + 1), UiErrors::ActionInvalid);
+            auto source = Store();
+            auto producer = std::move(source.Start(Request())).Value();
+            const auto key = producer.Key();
+            auto destination = Store();
+            auto displaced = std::move(destination.Start(Request(7))).Value();
+            const auto cancelled = displaced.Cancellation();
+            destination = std::move(source);
+            CHECK(cancelled.IsCancellationRequested());
+            ExpectError(source.Start(Request(2)), UiErrors::ActionLifecycleUnavailable);
+            ExpectError(source.Snapshot(key), UiErrors::ActionLifecycleUnavailable);
+            ExpectError(source.Project(Source()), UiErrors::ActionLifecycleUnavailable);
+            ExpectError(source.Cancel(key, UiActionCancellationReason::Requested), UiErrors::ActionLifecycleUnavailable);
+            ExpectError(source.Release(key), UiErrors::ActionLifecycleUnavailable);
+            auto moved = std::move(producer);
+            CHECK(producer.Key() == UiAsyncActionKey{});
+            CHECK(producer.Cancellation().IsCancellationRequested());
+            ExpectError(producer.PublishProgress({}), UiErrors::ActionResultStale);
+            ExpectError(producer.Complete(), UiErrors::ActionResultStale);
+            ExpectError(producer.Fail({}), UiErrors::ActionResultStale);
+            ExpectError(destination.Cancel(key, UiActionCancellationReason::Count), UiErrors::ActionResultInvalid);
+            ExpectError(destination.Release(displaced.Key()), UiErrors::ActionResultStale);
+            ExpectError(destination.Project(Source(Context(2))), UiErrors::ActionSourceStale);
+            destination.Retire(UiActionCancellationReason::Count);
+            CHECK(destination.Snapshot(key).Value().Busy());
+            REQUIRE(moved.Complete().HasValue());
+            REQUIRE(destination.Release(key).HasValue());
+        }
+
+        TEST_CASE("Async owner-thread guards reject worker writes while cancellation remains observable",
+                  "[runtime_ui][async_actions][jobs]") {
+            auto store = Store();
+            auto producer = std::move(store.Start(Request())).Value();
+            const auto key = producer.Key();
+            const auto token = producer.Cancellation();
+            std::array<bool, 8> rejected{};
+            // Deliberately invoke forbidden operations to verify they return before reading owner-mutated state.
+            std::jthread worker{[&store, &producer, &rejected, &key] {
+                rejected = {store.Start(Request(2)).HasError(), store.Snapshot(key).HasError(),
+                            store.Project(Source()).HasError(), store.Cancel(key, UiActionCancellationReason::Requested).HasError(),
+                            store.Release(key).HasError(),      producer.PublishProgress({1, 500, true}).HasError(),
+                            producer.Complete().HasError(),     producer.Fail({}).HasError()};
+            }};
+            worker.join();
+            for (const auto result : rejected)
+                CHECK(result);
+            CHECK_FALSE(token.IsCancellationRequested());
+            CHECK(store.Snapshot(key).Value().Busy());
+            REQUIRE(store.Cancel(key, UiActionCancellationReason::Requested).HasValue());
+            bool observed{};
+            std::jthread observer{[&observed, &token] {
+                observed = token.IsCancellationRequested();
+            }};
+            observer.join();
+            CHECK(observed);
+        }
+
         TEST_CASE("Provider-owned structured jobs observe cancellation after their screen retires", "[runtime_ui][async_actions][jobs]") {
             Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
             Horo::TaskGroup group{jobs};
@@ -388,7 +524,7 @@ namespace Horo::Runtime::Ui {
                 router.Shutdown();
             }
             // Explicit bounded test drain executes the queued job; ordinary owner frames never wait.
-            REQUIRE(group.Join({Horo::WaitPolicy::MainThreadPumpAllowed, std::chrono::seconds(1)}).HasError());
+            REQUIRE(group.Join({Horo::WaitPolicy::MainThreadPumpAllowed, Horo::Duration::FromMilliseconds(1000)}).HasError());
             CHECK(group.Outcome() == Horo::TaskGroupOutcome::Cancelled);
             ExpectError(handler.producer->Complete(), UiErrors::AsyncActionAlreadyTerminal);
             jobs.Shutdown(Horo::ShutdownPolicy::Drain);
