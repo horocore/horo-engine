@@ -21,9 +21,9 @@ namespace Horo::Runtime::Ui::AccessibilityInternal {
         /** @brief Copies no data; returns call-duration retained delivery records. */
         [[nodiscard]] std::span<const UiAccessibilityAnnouncement> Records() const noexcept;
         /** @brief Returns speech only while the exact occurrence is pending. */
-        [[nodiscard]] std::string_view Text(UiAccessibilityAnnouncementCursor cursor) const noexcept;
+        [[nodiscard]] std::string_view Text(const UiAccessibilityAnnouncementCursor &cursor) const noexcept;
         /** @brief Releases an acknowledged prefix and compacts owned bytes in bounded storage. */
-        [[nodiscard]] Result<void> Acknowledge(UiAccessibilityAnnouncementCursor cursor);
+        [[nodiscard]] Result<void> Acknowledge(const UiAccessibilityAnnouncementCursor &cursor);
 
     private:
         /** @brief Closes pending speech when document/tree, audience or modal activation changes. */

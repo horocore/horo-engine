@@ -156,7 +156,7 @@ namespace Horo::Runtime::Ui {
          * @return Publisher or typed descriptor/capacity failure.
          */
         [[nodiscard]] static Result<UiAccessibilityChangePublisher> Create(const UiAccessibilityExtractorDescriptor &owner,
-                                                                           UiAccessibilityChangeLimits limits = {});
+                                                                           const UiAccessibilityChangeLimits &limits = {});
         /** @brief Releases the retained snapshot and owned output. */
         ~UiAccessibilityChangePublisher();
         /** @brief Transfers publisher state and invalidates the source. @param other Owner to transfer. */
@@ -201,13 +201,13 @@ namespace Horo::Runtime::Ui {
         /** @brief Resolves retained speech text only for an exact currently pending cursor.
          * @param cursor Cursor from Announcements(). @return Owned borrowed text, or empty for stale/cancelled/acknowledged cursors.
          */
-        [[nodiscard]] std::string_view AnnouncementText(UiAccessibilityAnnouncementCursor cursor) const noexcept;
+        [[nodiscard]] std::string_view AnnouncementText(const UiAccessibilityAnnouncementCursor &cursor) const noexcept;
         /** @brief Cumulatively acknowledges accepted delivery, releasing its prefix and bytes without replay.
          * @param cursor Exact owner/session and accepted sequence; already acknowledged cursors are idempotent.
          * @return Success or stale/foreign/future cursor failure; valid acknowledgments remain permitted after retirement.
          * @note Acknowledge only after copying/delivering or observing cancellation. Resync never implies acknowledgment.
          */
-        [[nodiscard]] Result<void> Acknowledge(UiAccessibilityAnnouncementCursor cursor);
+        [[nodiscard]] Result<void> Acknowledge(const UiAccessibilityAnnouncementCursor &cursor);
 
     private:
         struct Storage;

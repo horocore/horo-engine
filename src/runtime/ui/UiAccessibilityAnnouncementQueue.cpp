@@ -43,8 +43,8 @@ namespace Horo::Runtime::Ui::AccessibilityInternal {
     bool AnnouncementQueue::OwnerChanged(const UiAccessibilitySnapshot &snapshot) const noexcept {
         if (!source_)
             return false;
-        const auto &next = snapshot.Descriptor();
-        if (source_->documentRevision != next.documentRevision || source_->treeRevision != next.treeRevision)
+        if (const auto &next = snapshot.Descriptor();
+            source_->documentRevision != next.documentRevision || source_->treeRevision != next.treeRevision)
             return true;
         const auto state = snapshot.FocusState();
         if (focus_.has_value() != (state != nullptr))
@@ -113,7 +113,7 @@ namespace Horo::Runtime::Ui::AccessibilityInternal {
     }
 
     /** @copydoc AnnouncementQueue::Text */
-    std::string_view AnnouncementQueue::Text(const UiAccessibilityAnnouncementCursor cursor) const noexcept {
+    std::string_view AnnouncementQueue::Text(const UiAccessibilityAnnouncementCursor &cursor) const noexcept {
         const auto record = std::ranges::find(records_, cursor, &UiAccessibilityAnnouncement::cursor);
         if (record == records_.end() || record->state != UiAccessibilityAnnouncementState::Pending)
             return {};
@@ -134,7 +134,7 @@ namespace Horo::Runtime::Ui::AccessibilityInternal {
     }
 
     /** @copydoc AnnouncementQueue::Acknowledge */
-    Result<void> AnnouncementQueue::Acknowledge(const UiAccessibilityAnnouncementCursor cursor) {
+    Result<void> AnnouncementQueue::Acknowledge(const UiAccessibilityAnnouncementCursor &cursor) {
         if (cursor.instance != owner_.instance || cursor.canvas != owner_.canvas || cursor.generation != owner_.generation ||
             cursor.sequence == 0 || cursor.sequence >= nextSequence_)
             return Result<void>::Failure(MakeError(UiErrors::AccessibilitySnapshotSourceStale));

@@ -241,16 +241,16 @@ namespace Horo::Runtime::Ui {
             const auto first = extractor.Extract(tree, Descriptor(tree), fixture.View()).Value();
             const std::array announcement{
                 UiAccessibilityAnnouncementInput{{1}, first.Nodes()[0].id, UiAccessibilityAnnouncementPolicy::Polite, {"Ready", {}}}};
-            accessibilityAllocations.store(0, std::memory_order_relaxed);
+            accessibilityAllocations.store(0);
             const auto result = publisher.Publish(first, announcement);
-            const auto allocations = accessibilityAllocations.load(std::memory_order_relaxed);
+            const auto allocations = accessibilityAllocations.load();
             REQUIRE(result.HasValue());
             REQUIRE(allocations == 0);
             fixture.nodes[0].description = {"Accessible description", {}};
             const auto second = extractor.Extract(tree, Descriptor(tree, 2), fixture.View()).Value();
-            accessibilityAllocations.store(0, std::memory_order_relaxed);
+            accessibilityAllocations.store(0);
             const auto update = publisher.Publish(second);
-            const auto updateAllocations = accessibilityAllocations.load(std::memory_order_relaxed);
+            const auto updateAllocations = accessibilityAllocations.load();
             REQUIRE(update.HasValue());
             REQUIRE(updateAllocations == 0);
         }

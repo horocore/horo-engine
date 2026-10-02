@@ -4,6 +4,10 @@
 single target ownership and staged include boundary. No dependency or native
 accessibility adapter is introduced.
 
+Publisher budgets and announcement cursors now pass by const reference to avoid
+copying enlarged owner evidence. Ordinary call syntax remains compatible; clients
+taking method pointers must update their signatures and recompile.
+
 ## Order and focus migration
 
 Interactive publication calls `UiAccessibilityExtractor::Extract` with the actual

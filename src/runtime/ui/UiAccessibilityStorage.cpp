@@ -128,6 +128,15 @@ namespace Horo::Runtime::Ui {
                 readingOrder.push_back(node.id);
     }
 
+    /** @copydoc UiAccessibilitySnapshot::Storage::PublishFocus */
+    void UiAccessibilitySnapshot::Storage::PublishFocus(const std::span<const UiFocusTarget> order, const UiFocusSnapshot *state) {
+        if (!state)
+            return;
+        focusState = *state;
+        for (const auto &target : order)
+            focusOrder.emplace_back(target.element.ownership, target.element.slot, target.element.generation);
+    }
+
     UiAccessibilityExtractor::Storage::Storage(const UiAccessibilityExtractorDescriptor &source)
         : descriptor(source), cycleScratch(source.limits.nodes) {
         slots.reserve(source.concurrentSnapshots);

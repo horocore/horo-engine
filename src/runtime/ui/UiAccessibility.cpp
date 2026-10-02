@@ -456,6 +456,13 @@ namespace Horo::Runtime::Ui {
         struct PublishLease final {
             UiAccessibilitySnapshot::Storage *storage{};
 
+            explicit PublishLease(UiAccessibilitySnapshot::Storage *value) noexcept : storage(value) {}
+
+            PublishLease(const PublishLease &) = delete;
+            PublishLease &operator=(const PublishLease &) = delete;
+            PublishLease(PublishLease &&) = delete;
+            PublishLease &operator=(PublishLease &&) = delete;
+
             ~PublishLease() {
                 if (storage)
                     storage->leases.store(0);
@@ -464,15 +471,13 @@ namespace Horo::Runtime::Ui {
             void Commit() noexcept {
                 storage = nullptr;
             }
-        } lease{slot.get()};
+        };
+
+        PublishLease lease{slot.get()};
 
         try {
             slot->Publish(tree, descriptor, reading, storage_->lookupScratch);
-            if (focusState) {
-                slot->focusState = *focusState;
-                for (const auto &target : focusOrder)
-                    slot->focusOrder.push_back({target.element.ownership, target.element.slot, target.element.generation});
-            }
+            slot->PublishFocus(focusOrder, focusState);
         } catch (const std::bad_alloc &) {
             return Failure<UiAccessibilitySnapshot>(UiErrors::CapacityExceeded);
         }

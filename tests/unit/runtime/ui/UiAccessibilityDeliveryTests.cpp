@@ -13,7 +13,8 @@ namespace Horo::Runtime::Ui {
                 auto &node = nodes[index];
                 node.id = Stable<UiElementId>(order[index]);
                 node.element = tree.Find(node.id).Value();
-                node.parent = order[index] == 1 ? UiElementId{} : Stable<UiElementId>(order[index] == 4 ? 5 : 1);
+                const auto parent = Stable<UiElementId>(order[index] == 4 ? 5 : 1);
+                node.parent = order[index] == 1 ? UiElementId{} : parent;
                 node.focusable = order[index] == 3 || order[index] == 4;
             }
             nodes[2].links.targets[0] = nodes[3].id;
@@ -40,9 +41,9 @@ namespace Horo::Runtime::Ui {
             auto extractor = MakeExtractor(tree, 3);
             ProjectionFixture fixture;
             fixture.nodes[2].state = UiAccessibilityStateFlag::Focusable | UiAccessibilityStateFlag::Focused;
-            accessibilityAllocations.store(0, std::memory_order_relaxed);
+            accessibilityAllocations.store(0);
             const auto result = extractor.Extract(tree, Descriptor(tree), fixture.View(), graph);
-            const auto allocations = accessibilityAllocations.load(std::memory_order_relaxed);
+            const auto allocations = accessibilityAllocations.load();
             REQUIRE(result.HasValue());
             REQUIRE(allocations == 0);
             const auto first = result.Value();
@@ -224,9 +225,9 @@ namespace Horo::Runtime::Ui {
             REQUIRE(reopened.modal != opened.modal);
             const auto second = extractor.Extract(tree, Descriptor(tree, 2), fixture.View(), graph).Value();
             event.id = {2};
-            accessibilityAllocations.store(0, std::memory_order_relaxed);
+            accessibilityAllocations.store(0);
             const auto update = publisher.Publish(second, std::span{&event, 1});
-            const auto allocations = accessibilityAllocations.load(std::memory_order_relaxed);
+            const auto allocations = accessibilityAllocations.load();
             REQUIRE(update.HasValue());
             REQUIRE(allocations == 0);
             REQUIRE(publisher.Announcements()[0].cancellation == UiAccessibilityAnnouncementCancellation::OwnerChanged);
@@ -235,10 +236,10 @@ namespace Horo::Runtime::Ui {
             REQUIRE(first.FocusState()->activeModal == opened.modal);
             REQUIRE(second.FocusState()->activeModal == reopened.modal);
             const auto last = publisher.Announcements().back().cursor;
-            accessibilityAllocations.store(0, std::memory_order_relaxed);
+            accessibilityAllocations.store(0);
             publisher.Retire();
             const auto ack = publisher.Acknowledge(last);
-            const auto retiredAllocations = accessibilityAllocations.load(std::memory_order_relaxed);
+            const auto retiredAllocations = accessibilityAllocations.load();
             REQUIRE(ack.HasValue());
             REQUIRE(retiredAllocations == 0);
         }

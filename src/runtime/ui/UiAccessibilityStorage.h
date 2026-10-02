@@ -38,6 +38,8 @@ namespace Horo::Runtime::Ui {
         void ResolveParents(const UiElementTree &tree, AccessibilityInternal::ProjectionLookup lookup);
         void Publish(const UiElementTree &tree, const UiAccessibilitySnapshotDescriptor &sourceDescriptor,
                      const UiAccessibilityProjection &projection, AccessibilityInternal::ProjectionLookup lookup);
+        /** @brief Copies bounded authoritative focus evidence into the unpublished snapshot slot. */
+        void PublishFocus(std::span<const UiFocusTarget> order, const UiFocusSnapshot *state);
     };
 
     struct UiAccessibilityExtractor::Storage final {
