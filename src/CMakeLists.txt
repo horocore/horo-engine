@@ -201,6 +201,8 @@ target_compile_features(HoroPackages PUBLIC cxx_std_20)
 target_link_libraries(HoroPackages PUBLIC HoroEngine::Foundation PRIVATE utf8proc nlohmann_json::nlohmann_json miniz)
 
 add_library(HoroPackageSecurity STATIC
+        packages/restore/PackageInstall.cpp
+        packages/restore/PackageInstallErrors.cpp
         packages/restore/PackageRestore.cpp
         packages/restore/PackageRestoreService.cpp
         packages/restore/PackageRestoreErrors.cpp
@@ -209,7 +211,7 @@ add_library(HoroPackageSecurity STATIC
 )
 add_library(HoroEngine::PackageSecurity ALIAS HoroPackageSecurity)
 target_compile_features(HoroPackageSecurity PUBLIC cxx_std_20)
-target_link_libraries(HoroPackageSecurity PUBLIC HoroEngine::Foundation HoroPackages HoroEngine::Security)
+target_link_libraries(HoroPackageSecurity PUBLIC HoroEngine::Foundation HoroPackages HoroEngine::Security PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroApplication STATIC
         application/observability/HostObservability.cpp
