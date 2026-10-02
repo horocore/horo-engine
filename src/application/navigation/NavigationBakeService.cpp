@@ -57,7 +57,7 @@ namespace Horo::Application {
             !config.files || config.cacheRoot.empty() || !config.cacheRoot.is_absolute() || config.targetRoot.empty() ||
             !config.targetRoot.is_absolute() || config.maximumTiles == 0 || config.maximumTiles > NavMeshArtifactLimits::MaximumTiles ||
             config.maximumCandidateBytes == 0 || config.maximumCandidateBytes > config.cookLimits.maximumArtifactBytes ||
-            config.maximumCandidateBytes > NavMeshArtifactLimits::MaximumOwnedBytes)
+            config.maximumCandidateBytes > NavMeshArtifactLimits::MaximumOwnedBytes || !config.tileLimits.IsValid())
             return Result<std::unique_ptr<NavigationBakeService>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         std::error_code error;
         config.targetRoot = std::filesystem::weakly_canonical(config.targetRoot, error);

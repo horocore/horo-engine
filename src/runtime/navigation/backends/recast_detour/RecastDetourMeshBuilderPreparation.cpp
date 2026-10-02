@@ -64,16 +64,6 @@ namespace Horo::Navigation::RecastDetourMeshBuilderInternal {
                    NearlyEqual(request.bounds.maximum.z, expectedMinimumZ + request.tileSizeMeters);
         }
 
-        [[nodiscard]] bool IsValidLimits(const NavigationTileBuildLimits &limits) noexcept {
-            return limits.maximumVertices > 0 && limits.maximumVertices <= NavigationTileBuildLimits::MaximumVertices &&
-                   limits.maximumPolygons > 0 && limits.maximumPolygons <= NavigationTileBuildLimits::MaximumPolygons &&
-                   limits.maximumOffMeshLinks > 0 && limits.maximumOffMeshLinks <= NavigationTileBuildLimits::MaximumOffMeshLinks &&
-                   limits.maximumVerticesPerPolygon >= 3 &&
-                   limits.maximumVerticesPerPolygon <= NavigationTileBuildLimits::MaximumVerticesPerPolygon &&
-                   limits.maximumOwnedBytes > 0 && limits.maximumOwnedBytes <= NavigationTileBuildLimits::MaximumOwnedBytes &&
-                   limits.maximumWorkUnits > 0 && limits.maximumWorkUnits <= NavigationTileBuildLimits::MaximumWorkUnits;
-        }
-
         [[nodiscard]] auto TriangleSortKey(const NavigationTileBuildTriangle &triangle) {
             return std::tuple{triangle.provenance,    triangle.area.Value(),  triangle.materialSlot.value, triangle.vertices[0].x,
                               triangle.vertices[0].y, triangle.vertices[0].z, triangle.vertices[1].x,      triangle.vertices[1].y,
@@ -179,7 +169,7 @@ namespace Horo::Navigation::RecastDetourMeshBuilderInternal {
 
     /** @copydoc ValidateRequest */
     Result<void> ValidateRequest(const NavigationTileBuildRequest &request) {
-        if (!IsValidTileBounds(request) || !IsValidLimits(request.limits) ||
+        if (!IsValidTileBounds(request) || !request.limits.IsValid() ||
             ValidateNavigationAgentBuildGeometry(request.buildGeometry).HasError())
             return Failure<void>(NavigationErrors::BakeInputInvalid);
 

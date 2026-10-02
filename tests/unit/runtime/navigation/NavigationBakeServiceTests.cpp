@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <thread>
 
 namespace Horo::Application {
@@ -228,6 +230,38 @@ namespace Horo::Application {
                                               {});
         }
     }  // namespace
+
+    TEST_CASE("Incremental admission rejects invalid native ceilings before scheduling with either cold or warm cache") {
+        BakeHarness harness;
+        if (GENERATE(false, true))
+            REQUIRE(Terminal(*harness.service, harness.operations, Submit(*harness.service, harness.fixture)).state ==
+                    OperationState::Succeeded);
+        const auto before = harness.service->Published();
+        const auto reject = [&harness](auto field, const auto value) {
+            auto config = harness.config;
+            config.tileLimits.*field = value;
+            const auto created = NavigationBakeService::Create(std::move(config), harness.operations, harness.jobs);
+            REQUIRE(created.HasError());
+            CHECK(created.ErrorValue().domain.Value() == NavigationErrors::BakeInputInvalid.domain.Value());
+            CHECK(created.ErrorValue().code.Value() == NavigationErrors::BakeInputInvalid.code.Value());
+        };
+        using Limits = NavigationTileBuildLimits;
+        reject(&Limits::maximumWorkUnits, std::numeric_limits<std::uint64_t>::max() / 4 + 2);
+        reject(&Limits::maximumOwnedBytes, std::numeric_limits<std::uint64_t>::max());
+        reject(&Limits::maximumVertices, 0U);
+        reject(&Limits::maximumVertices, Limits::MaximumVertices + 1);
+        reject(&Limits::maximumPolygons, 0U);
+        reject(&Limits::maximumPolygons, Limits::MaximumPolygons + 1);
+        reject(&Limits::maximumOffMeshLinks, 0U);
+        reject(&Limits::maximumOffMeshLinks, Limits::MaximumOffMeshLinks + 1);
+        reject(&Limits::maximumVerticesPerPolygon, 2U);
+        reject(&Limits::maximumVerticesPerPolygon, Limits::MaximumVerticesPerPolygon + 1);
+        reject(&Limits::maximumOwnedBytes, std::uint64_t{0});
+        reject(&Limits::maximumOwnedBytes, Limits::MaximumOwnedBytes + 1);
+        reject(&Limits::maximumWorkUnits, std::uint64_t{0});
+        reject(&Limits::maximumWorkUnits, Limits::MaximumWorkUnits + 1);
+        CHECK(harness.service->Published() == before);
+    }
 
     TEST_CASE("Incremental production cook rebuilds both sides of an edited border and reuses remote content identities") {
         BakeHarness harness;

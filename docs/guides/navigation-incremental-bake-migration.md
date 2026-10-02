@@ -1,9 +1,10 @@
 # Incremental navigation tile baking
 
 NAV-003.4 adds halo-aware dependency keys and immutable tile payloads to
-HoroEngine::NavigationApi. Every new public header belongs to that target
-or to the narrow HoroEngine::NavigationBakeService application target;
-generated public-header consumers compile each header independently.
+HoroEngine::NavigationApi. Navigation headers belong to that target, the service
+contract belongs to HoroEngine::NavigationBakeService, and Assets owns the narrow
+cooked-generation replacement contract. Generated public-header consumers
+compile each header independently.
 Navigation targets retain their Foundation-only API dependency direction.
 The application service explicitly composes NavigationRuntime, Assets and
 Platform and does not select or discover a provider.
@@ -14,6 +15,14 @@ borderSizeCells to the builder. The tile size must be an integral horizontal
 voxel count. The sampling halo is the rounded-up agent radius plus three cells,
 matching Recast region border treatment. Native portal flags become neutral
 boundary edges; they never become invalid local polygon references.
+
+NavigationTileBuildLimits::IsValid is the shared native-budget contract used by
+Recast and NavigationBakeService::Create. The service now rejects zero,
+undersized polygon corner limits and above-hard-limit values with BakeInputInvalid
+before scheduler estimates or cache lookup. Previously such host configurations
+could be accepted even though the native provider rejected them. Hosts must keep
+all six ceilings within the documented ranges; this also prevents unsigned work
+and resident-byte estimate overflow. Valid configurations retain their behavior.
 
 Dependency keys include selected source provenance and actual triangle values,
 intersecting modifier identity/mode/area/bounds, referenced area semantics,
