@@ -21,6 +21,10 @@ namespace Horo::Audio {
             std::atomic<bool> finalDecodeEntered{};
             std::atomic<bool> holdFinalDecode{};
             std::atomic<bool> ignoreCancellation{};
+            std::atomic<bool> holdFirstDecode{};
+            std::atomic<bool> firstDecodeEntered{};
+            std::atomic<bool> privateCancellationObserved{};
+            std::atomic<bool> privateCancellationTimedOut{};
             bool openAfterCancellation{};
             bool decodeFailure{};
             bool wrongSpec{};
@@ -68,11 +72,24 @@ namespace Horo::Audio {
             return true;
         }
 
+        /** @brief Models a provider blocked on only its private decoder cancellation, never the parent token. */
+        void AwaitPrivateCancellation(PackageFixture &fixture, const std::uint64_t firstFrame, const std::atomic<bool> &cancelled) {
+            if (firstFrame != 0 || !fixture.holdFirstDecode.load())
+                return;
+            fixture.firstDecodeEntered.store(true);
+            const bool observed = Until([&cancelled] {
+                return cancelled.load();
+            });
+            fixture.privateCancellationObserved.store(observed);
+            fixture.privateCancellationTimedOut.store(!observed);
+        }
+
         Result<AudioStreamDecodeProgress> Decode(void *opaque, const std::uint64_t firstFrame, const std::span<AudioSample> output,
                                                  const std::span<std::byte> scratch, const std::atomic<bool> &cancelled) {
             auto &context = *static_cast<DecoderContext *>(opaque);
             auto &fixture = *context.fixture;
             fixture.decodes.fetch_add(1);
+            AwaitPrivateCancellation(fixture, firstFrame, cancelled);
             if (firstFrame == context.frameCount - 2) {
                 fixture.finalDecodeEntered.store(true);
                 while (fixture.holdFinalDecode.load() && (fixture.ignoreCancellation.load() || !cancelled.load()))
@@ -341,6 +358,59 @@ namespace Horo::Audio {
         CHECK(fixture.opens.load() == 1);
         CHECK(fixture.releases.load() == 1);
         CHECK(fixture.decodes.load() == 0);
+    }
+
+    TEST_CASE("Streaming stop cancels a published decoder blocked on its private flag", "[unit][audio][streaming]") {
+        JobSystem jobs({.workerCount = 1});
+        PackageFixture fixture;
+        fixture.holdFirstDecode.store(true);
+        auto service = Service(jobs, fixture);
+        const auto handle = service->Admit(Request()).Value();
+        auto port = std::move(service->RenderPort(handle)).Value();
+        service->Pump();
+        REQUIRE(Until([&fixture] {
+            return fixture.firstDecodeEntered.load();
+        }));
+        REQUIRE(service->Stop(handle).HasValue());
+        CallbackBlock output;
+        CHECK(output.Render(port, 4).silentFrames == 4);
+        REQUIRE(Until([&fixture] {
+            return fixture.privateCancellationObserved.load();
+        }));
+        REQUIRE(service->Retire(handle).HasValue());
+        CHECK_FALSE(fixture.privateCancellationTimedOut.load());
+        CHECK(fixture.decodes.load() == 1);
+        CHECK(fixture.releases.load() == 1);
+    }
+
+    TEST_CASE("Streaming concurrent late open and stop cannot strand a private decoder cancellation", "[unit][audio][streaming]") {
+        JobSystem jobs({.workerCount = 1});
+        for (std::uint32_t iteration = 0; iteration < 32; ++iteration) {
+            PackageFixture fixture;
+            fixture.holdOpen.store(true);
+            fixture.ignoreCancellation.store(true);
+            fixture.openAfterCancellation = true;
+            fixture.holdFirstDecode.store(true);
+            auto service = Service(jobs, fixture);
+            const auto handle = service->Admit(Request()).Value();
+            service->Pump();
+            REQUIRE(Until([&fixture] {
+                return fixture.opening.load();
+            }));
+            std::atomic<bool> race{};
+            std::jthread opener([&fixture, &race] {
+                while (!race.load())
+                    std::this_thread::yield();
+                fixture.holdOpen.store(false);
+            });
+            race.store(true);
+            REQUIRE(service->Stop(handle).HasValue());
+            opener.join();
+            REQUIRE(service->Retire(handle).HasValue());
+            CHECK_FALSE(fixture.privateCancellationTimedOut.load());
+            CHECK(fixture.releases.load() == 1);
+            CHECK((fixture.decodes.load() == 0 || fixture.privateCancellationObserved.load()));
+        }
     }
 
     TEST_CASE("Streaming shutdown timeout retains storage and closes new admission until retry", "[unit][audio][streaming]") {

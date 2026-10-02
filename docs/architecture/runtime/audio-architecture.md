@@ -1429,6 +1429,22 @@ owner lease through decoder destruction. Fixed owner/slot metadata and allocator
 overhead are outside payload byte reservations; no wall-time deadline qualification
 is implied by the deterministic storage and frame limits.
 
+Decoder publication and cancellation use a separate cross-atomic SC handshake;
+the ring's release/acquire publication is unchanged. Let P be the worker's SC
+`publishedDecoder` store, A its subsequent SC parent-token load, C control's SC
+cancellation request, and L control's subsequent SC decoder-pointer load. The
+Foundation token walks the job's immutable parent chain using SC loads. If A
+missed C and L missed P, the SC total order would require P < A < C < L < P,
+which is impossible. An already-cancelled child token also takes the worker's
+Cancel branch. Consequently either control calls the published decoder's Cancel,
+or the worker calls Cancel before entering Decode. A provider already blocked in
+Decode observes the decoder's private cancellation flag; it need not poll the
+parent token. These pointer operations happen only on control/worker lanes and
+remain lock-free. The pointer and decoder are retained until worker join, and
+callback ports must already be detached before reclamation. This proof relies on
+Foundation's SC cancellation contract; changing it requires reviewing this
+handshake, not just stress-testing one architecture.
+
 Underrun behavior:
 
 - output silence for missing frames

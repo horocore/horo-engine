@@ -137,8 +137,10 @@ namespace Horo::Audio {
                 if (!MatchesSpec(candidate->Spec(), state.request.decoder))
                     return Result<void>::Failure(MakeError(AudioErrors::StreamReadFailed));
                 state.decoder = std::move(candidate);
-                state.publishedDecoder.store(state.decoder.get(), std::memory_order_release);
-                // Stop either sees the published decoder or this check sees its cancellation request.
+                state.publishedDecoder.store(state.decoder.get(), std::memory_order_seq_cst);
+                // Together with Stop's SC pointer load and Foundation's SC cancellation operations,
+                // both misses would require publish < check < request < load < publish in SC order.
+                // Thus Stop cancels this decoder, or this check does so before provider Decode.
                 if (cancellation.IsCancellationRequested()) {
                     state.decoder->Cancel();
                     return JobCancelled();
@@ -415,7 +417,7 @@ namespace Horo::Audio {
             return Result<void>::Failure(MakeError(AudioErrors::HandleStale));
         state->stopped.store(true, std::memory_order_release);
         state->cancellation.RequestCancellation();
-        if (auto *decoder = state->publishedDecoder.load(std::memory_order_acquire); decoder != nullptr)
+        if (auto *decoder = state->publishedDecoder.load(std::memory_order_seq_cst); decoder != nullptr)
             decoder->Cancel();
         if (auto &fill = slots_[handle.slot - 1].fill; fill)
             (void)fill->RequestCancel();
