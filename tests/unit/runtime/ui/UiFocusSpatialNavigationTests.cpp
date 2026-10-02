@@ -150,7 +150,7 @@ namespace Horo::Runtime::Ui {
             CHECK(graph.Owner().interaction == Revision<UiInteractionRevision>(2));
             const auto stale = graph.UpdateLayout(old.Value());
             REQUIRE(stale.HasError());
-            CHECK(stale.ErrorValue().code == UiErrors::FocusSourceStale.code);
+            CHECK(stale.ErrorValue().code.Value() == UiErrors::FocusSourceStale.code.Value());
             REQUIRE(graph.SetFocus(f.nodes[1].element).HasValue());
             const auto moved = graph.Move(UiNavigationDirection::Right).Value();
             REQUIRE(moved.bringIntoView.has_value());
@@ -229,9 +229,9 @@ namespace Horo::Runtime::Ui {
             auto snapshot = foreign.Publish();
             REQUIRE(snapshot.HasValue());
             REQUIRE(foreignGraph.UpdateLayout(snapshot.Value()).HasError());
-            CHECK(foreignGraph.UpdateLayout(snapshot.Value()).ErrorValue().code == UiErrors::FocusScopeMismatch.code);
+            CHECK(foreignGraph.UpdateLayout(snapshot.Value()).ErrorValue().code.Value() == UiErrors::FocusScopeMismatch.code.Value());
             graph.Shutdown();
-            CHECK(graph.UpdateLayout(snapshot.Value()).ErrorValue().code == UiErrors::FocusLifecycleUnavailable.code);
+            CHECK(graph.UpdateLayout(snapshot.Value()).ErrorValue().code.Value() == UiErrors::FocusLifecycleUnavailable.code.Value());
             CHECK(graph.Move(UiNavigationDirection::Right).HasError());
         }
 
@@ -273,18 +273,20 @@ namespace Horo::Runtime::Ui {
             CHECK(graph.Move(UiNavigationDirection::Right).Value().kind == UiFocusChangeKind::NoTarget);
             auto stale = graph.Owner();
             f.Apply(graph, 2);
-            CHECK(graph.SetParticipation(stale, {f.nodes[2].element}).ErrorValue().code == UiErrors::FocusSourceStale.code);
+            CHECK(graph.SetParticipation(stale, {f.nodes[2].element}).ErrorValue().code.Value() == UiErrors::FocusSourceStale.code.Value());
             auto foreign = graph.Owner();
             foreign.scope.presentationLayer.generation = 2;
-            CHECK(graph.SetParticipation(foreign, {f.nodes[2].element}).ErrorValue().code == UiErrors::FocusScopeMismatch.code);
+            CHECK(graph.SetParticipation(foreign, {f.nodes[2].element}).ErrorValue().code.Value() ==
+                  UiErrors::FocusScopeMismatch.code.Value());
             auto recycled = f.nodes[2].element;
             ++recycled.generation;
-            CHECK(graph.SetParticipation(graph.Owner(), {recycled}).ErrorValue().code == UiErrors::FocusTargetUnavailable.code);
+            CHECK(graph.SetParticipation(graph.Owner(), {recycled}).ErrorValue().code.Value() ==
+                  UiErrors::FocusTargetUnavailable.code.Value());
             REQUIRE(graph.SetParticipation(graph.Owner(), {f.nodes[2].element, false, true, true}).HasValue());
             CHECK(graph.Move(UiNavigationDirection::Right).Value().kind == UiFocusChangeKind::NoTarget);
             REQUIRE(graph.BeginRetirement().HasValue());
-            CHECK(graph.SetParticipation(graph.Owner(), {f.nodes[2].element}).ErrorValue().code ==
-                  UiErrors::FocusLifecycleUnavailable.code);
+            CHECK(graph.SetParticipation(graph.Owner(), {f.nodes[2].element}).ErrorValue().code.Value() ==
+                  UiErrors::FocusLifecycleUnavailable.code.Value());
         }
 
         TEST_CASE("Spatial focus covers vertical directions and preserves unavailable override behavior", "[runtime_ui][focus][spatial]") {
@@ -321,11 +323,11 @@ namespace Horo::Runtime::Ui {
             auto wrong = f.descriptor;
             wrong.owner.documentRevision = Revision<UiDocumentRevision>(2);
             auto wrongDocument = std::move(UiFocusGraph::Create(wrong, f.nodes)).Value();
-            CHECK(wrongDocument.UpdateLayout(snapshot.Value()).ErrorValue().code == UiErrors::FocusSourceStale.code);
+            CHECK(wrongDocument.UpdateLayout(snapshot.Value()).ErrorValue().code.Value() == UiErrors::FocusSourceStale.code.Value());
             wrong = f.descriptor;
             wrong.owner.treeRevision = Revision<UiRuntimeTreeRevision>(2);
             auto wrongTree = std::move(UiFocusGraph::Create(wrong, f.nodes)).Value();
-            CHECK(wrongTree.UpdateLayout(snapshot.Value()).ErrorValue().code == UiErrors::FocusSourceStale.code);
+            CHECK(wrongTree.UpdateLayout(snapshot.Value()).ErrorValue().code.Value() == UiErrors::FocusSourceStale.code.Value());
             auto invalid = f.nodes;
             invalid[2].id = invalid[1].id;
             wrong = f.descriptor;

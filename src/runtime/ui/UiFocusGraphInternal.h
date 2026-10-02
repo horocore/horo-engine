@@ -338,11 +338,12 @@ namespace Horo::Runtime::Ui {
             const auto topology = ValidateTopology(candidate.Value());
             if (topology.HasError())
                 return Result<std::vector<Node>>::Failure(topology.ErrorValue());
-            for (Node &node : candidate.Value()) {
+            auto validated = std::move(candidate).Value();
+            for (Node &node : validated) {
                 if (node.descriptor.parent.IsValid())
-                    node.parentIndex = FindCandidateNode(candidate.Value(), node.descriptor.parent);
+                    node.parentIndex = FindCandidateNode(validated, node.descriptor.parent);
             }
-            return candidate;
+            return Result<std::vector<Node>>::Success(std::move(validated));
         }
 
         /** @brief Prepares handle lookup in already reserved storage after candidate commit. */
