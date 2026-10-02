@@ -836,6 +836,32 @@ on the real-time path and must not allocate, block, log, access files, or invoke
 unbounded user callbacks. Nodes that do not declare this contract at graph
 build time are rejected by the mixer graph validator.
 
+`HoroEngine::AudioDsp` now supplies `Audio/CoreAudioDSPNode.h` on the prepared
+`AudioDSPNode.h` contract: gain, mono/stereo pan, and matched-exponential first-order
+low/high-pass filters. Gain and filters preserve all admitted speaker, discrete,
+and canonical Ambisonic layouts. Pan explicitly accepts Mono/Stereo speaker inputs
+and emits Stereo; it performs equal-power mono pan or stereo balance with unity
+center, without inventing multichannel/spatial routing.
+
+Construction owns immutable descriptors on control; preparation binds the declared
+bounded aligned host state and selected frame bound. Process/Reset allocate no
+storage and never retain block/parameter views. Parameter snapshots carry explicit
+linear segments in descriptor order: the first sample advances one ramp step,
+zero ramp uses the target immediately, and control supplies the next segment's
+start and remaining duration. Filter history survives blocks; reset clears it;
+copy/silence bypass freezes it. Exact corresponding-plane in-place processing is
+admitted, while partial/cross-plane aliases fail before mutation. Nonfinite input
+or output faults clear output/history; finite internal headroom is preserved.
+
+The one-pole coefficient is `exp(-2*pi*cutoff/sampleRate)`; high-pass is the input
+minus the matched low-pass. Cutoff admission is 1 Hz through 0.45 times sample
+rate. Filters declare a conservative 32-time-constant tail at the minimum cutoff;
+the node reports the remaining budget and clears exhausted history, while the
+graph owns explicit silent input and tail scheduling. Numerical fixtures use
+absolute sample tolerance 2e-6 and steady-state frequency-response tolerance 2e-4.
+These baseline primitives do not install a mixer, schedule automation, or deliver
+extension/procedural graph execution.
+
 Graph validation runs whenever a mixer graph is built or modified:
 
 - in the editor when a bus graph or effect chain is authored
