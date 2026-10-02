@@ -47,7 +47,7 @@ namespace Horo::Audio {
             const auto &descriptor = config.plan.Descriptor();
             return descriptor.stage == AudioResamplerStage::ClipToMix && source.planes.size() == descriptor.channels &&
                    ValidLoop(config.loop, source.frames) && config.rampFrames > 0 && config.rampFrames <= 16384 &&
-                   std::ranges::all_of(source.planes, [source](const auto plane) {
+                   std::isfinite(config.gain) && config.gain >= 0.0F && std::ranges::all_of(source.planes, [source](const auto plane) {
                 return plane.size() >= source.frames && (source.frames == 0 || plane.data() != nullptr);
             });
         }
@@ -104,6 +104,7 @@ namespace Horo::Audio {
         std::uint32_t rampFrames{};
         std::uint32_t remaining{};
         std::uint32_t fadeIn{};
+        float gain{1.0F};
         AudioVoiceControl pending{AudioVoiceControl::Start};
         PendingTarget target;
         bool terminalReported{};
@@ -118,7 +119,7 @@ namespace Horo::Audio {
               const AudioResamplerInput source)
             : registry(owner), converter(std::move(prepared)), plan(config.plan),
               pcm(static_cast<std::size_t>(source.frames) * plan.Descriptor().channels), sourceFrames(source.frames), loop(config.loop),
-              rampFrames(config.rampFrames) {
+              rampFrames(config.rampFrames), gain(config.gain) {
             for (std::uint32_t channel = 0; channel < plan.Descriptor().channels; ++channel) {
                 std::ranges::copy(source.planes[channel].first(source.frames),
                                   pcm.begin() + static_cast<std::size_t>(channel) * source.frames);
@@ -170,6 +171,15 @@ namespace Horo::Audio {
             }
             if (pending == Seek)
                 cursor.frame = target.frame;
+            if (pending == Restart) {
+                cursor.frame = 0;
+                AudioVoiceState current{};
+                (void)registry.CheckState(voice, current);
+                if (current == AudioVoiceState::Paused)
+                    (void)registry.TryTransition(voice, AudioVoiceState::Playing);
+                if (current == AudioVoiceState::Ready)
+                    (void)StartOrResume(AudioVoiceControl::Start, current);
+            }
             if (pending == SetLoop)
                 loop = target.loop;
             Reset();
@@ -315,7 +325,7 @@ namespace Horo::Audio {
         void RenderPcm(const AudioResamplerOutput output, const std::uint32_t frame) noexcept {
             const float gain = fadeIn == 0 ? 1.0F : static_cast<float>(rampFrames - --fadeIn) / static_cast<float>(rampFrames);
             for (std::size_t channel = 0; channel < output.planes.size(); ++channel) {
-                amplitudes.last[channel] = ApplyGain(outputCells[channel].samples[0], gain);
+                amplitudes.last[channel] = ApplyGain(ApplyGain(outputCells[channel].samples[0], this->gain), gain);
                 output.planes[channel][frame] = amplitudes.last[channel];
             }
             Advance();
@@ -415,6 +425,16 @@ namespace Horo::Audio {
         if (state_->remaining != 0 && request.control != AudioVoiceControl::Stop)
             return &AudioErrors::VoiceInvalidTransition;
         return state_->ApplyControl(request, current);
+    }
+
+    /** @copydoc AudioVoicePlayback::CheckRestart */
+    const ErrorCodeDescriptor *AudioVoicePlayback::CheckRestart(const AudioVoiceHandle voice) const noexcept {
+        if (!state_)
+            return &AudioErrors::RuntimeInactive;
+        AudioVoiceState current{};
+        if (const auto *error = state_->Check(voice, current))
+            return error;
+        return Controllable(current) && state_->remaining == 0 ? nullptr : &AudioErrors::VoiceInvalidTransition;
     }
 
     /** @copydoc AudioVoicePlayback::SwapPitch */

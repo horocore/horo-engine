@@ -29,7 +29,8 @@ namespace Horo::Audio {
         Seek,
         SetLoop,
         SetPlaybackSpeed,
-        Cancel
+        Cancel,
+        Restart
     };
 
     /** @brief Fixed-size typed operation; unused fields must remain at their defaults. */
@@ -38,7 +39,8 @@ namespace Horo::Audio {
         AudioVoiceControl control{AudioVoiceControl::Start};
         std::uint32_t seekFrame{};
         AudioVoiceLoop loop;
-        double playbackSpeed{1.0}; /**< Independent pitch-preserving speed: only unity is supported. */
+        double playbackSpeed{1.0};         /**< Independent pitch-preserving speed: only unity is supported. */
+        std::uint64_t operationSequence{}; /**< Optional nonzero repeated-play identity; zero for direct controls. */
     };
 
     /**
