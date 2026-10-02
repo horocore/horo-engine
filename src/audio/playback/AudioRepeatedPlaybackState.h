@@ -70,7 +70,8 @@ namespace Horo::Audio {
         void Project(const std::optional<std::size_t> bucket, const AudioPlaybackLaneHandle lane, const AudioVoiceHandle exclude) {
             projection.clear();
             for (const auto &voice : voices) {
-                if (!voice.playback || voice.playback->Voice() == exclude || (bucket ? voice.bucket != bucket : voice.lane != lane))
+                if (!voice.playback || voice.playback->Voice() == exclude ||
+                    (bucket.has_value() ? voice.bucket != bucket : voice.lane != lane))
                     continue;
                 const auto snapshot = registry.Snapshot(voice.playback->Voice());
                 if (snapshot.HasValue())
@@ -84,8 +85,7 @@ namespace Horo::Audio {
             for (auto &voice : voices) {
                 if (voice.lane != lane || !voice.playback)
                     continue;
-                AudioVoiceState current{};
-                if (registry.CheckState(voice.playback->Voice(), current) || IsTerminalAudioVoiceState(current))
+                if (AudioVoiceState current{}; registry.CheckState(voice.playback->Voice(), current) || IsTerminalAudioVoiceState(current))
                     continue;
                 if (!latest || voice.receipt.sequence > latest->receipt.sequence)
                     latest = &voice;
@@ -93,10 +93,15 @@ namespace Horo::Audio {
             return latest;
         }
 
-        /** @brief Reject stale/retrograde control time and incompatible scheduled generations before state changes. */
+        /** @brief Validate exclusive control time even when returning an already admitted receipt. */
+        bool ValidControlTime(const AudioConcurrencyTime time) const noexcept {
+            return time.timelineGeneration == config.discontinuityRevision && time.sampleFrame >= lastControlFrame;
+        }
+
+        /** @brief New admissions additionally require a compatible future execution target. */
         bool ValidTime(const AudioRepeatedPlaybackRequest &request, const AudioConcurrencyTime time) const noexcept {
             const auto &target = request.target;
-            if (time.timelineGeneration != config.discontinuityRevision || time.sampleFrame < lastControlFrame)
+            if (!ValidControlTime(time))
                 return false;
             if (target.kind == AudioCommandTargetKind::NextBufferBoundary)
                 return target.sampleFrame == 0 && target.clockGeneration == 0 && target.discontinuityRevision == 0;
@@ -115,7 +120,7 @@ namespace Horo::Audio {
                                                   const AudioVoiceHandle exclude) {
             const AudioConcurrencyRequest identities{config.runtime, lane.binding.emitter, lane.binding.owner};
             AudioConcurrencyDecision groupDecision;
-            if (lane.bucket) {
+            if (lane.bucket.has_value()) {
                 auto &bucket = buckets[*lane.bucket];
                 Project(lane.bucket, request.lane, exclude);
                 auto result = EvaluateAudioConcurrency(bucket.group, identities,
@@ -162,8 +167,8 @@ namespace Horo::Audio {
 
         /** @brief Validate the complete resolver set before selection to make malformed input order-independent. */
         bool ValidClips(const Lane &lane, const std::span<const AudioResolvedPlaybackClip> clips) const noexcept {
-            const auto expected = lane.policy.variation ? lane.policy.variation->entries.size() : 1;
-            if (clips.size() != expected || clips.size() > MaximumAudioVariationEntries)
+            if (const auto expected = lane.policy.variation ? lane.policy.variation->entries.size() : 1;
+                clips.size() != expected || clips.size() > MaximumAudioVariationEntries)
                 return false;
             for (std::size_t index = 0; index < clips.size(); ++index) {
                 const auto &clip = clips[index];
@@ -238,7 +243,7 @@ namespace Horo::Audio {
                     if (bucket.key == key)
                         bucketIndex = index;
                 }
-                if (!bucketIndex && buckets.size() == config.maximumLanes)
+                if (!bucketIndex.has_value() && buckets.size() == config.maximumLanes)
                     return Result<BucketSelection>::Failure(MakeError(AudioErrors::HandleCapacityExhausted));
             }
             return Result<BucketSelection>::Success({bucketIndex, key});
@@ -246,19 +251,17 @@ namespace Horo::Audio {
 
         /** @brief Reject complete source-identity reuse independently of mutable playback defaults. */
         bool DuplicateBinding(const AudioPlaybackBinding &binding) const noexcept {
-            for (const auto &lane : lanes) {
-                if (lane && lane->binding.prototype.sound == binding.prototype.sound &&
-                    lane->binding.prototype.sceneContext == binding.prototype.sceneContext && lane->binding.emitter == binding.emitter &&
-                    lane->binding.owner == binding.owner && lane->binding.incarnation == binding.incarnation)
-                    return true;
-            }
-            return false;
+            return std::ranges::any_of(lanes, [&binding](const auto &lane) {
+                return lane && lane->binding.prototype.sound == binding.prototype.sound &&
+                       lane->binding.prototype.sceneContext == binding.prototype.sceneContext && lane->binding.emitter == binding.emitter &&
+                       lane->binding.owner == binding.owner && lane->binding.incarnation == binding.incarnation;
+            });
         }
 
         /** @brief Copy policy and seed into a prepared lane before committing its bucket and generation. */
         Result<AudioPlaybackLaneHandle> StoreLane(const AudioPlaybackBinding &binding, const AudioRepeatedPlaybackPolicy &policy,
                                                   const BucketSelection &selection) {
-            const auto bucketIndex = selection.index;
+            const auto &bucketIndex = selection.index;
             const auto key = selection.key;
             for (std::size_t index = 0; index < lanes.size(); ++index) {
                 if (lanes[index] || generations[index] == std::numeric_limits<std::uint32_t>::max())
@@ -273,9 +276,9 @@ namespace Horo::Audio {
                         if (variation.selection == AudioVariationSelection::Shuffle)
                             prepared.variation.position = static_cast<std::uint32_t>(variation.entries.size());
                     }
-                    if (key && !bucketIndex) {
+                    if (key && !bucketIndex.has_value()) {
                         prepared.bucket = buckets.size();
-                        buckets.push_back({*policy.group, *key, std::nullopt});
+                        buckets.emplace_back(*policy.group, *key, std::nullopt);
                     }
                     lanes[index] = std::move(prepared);
                     return Result<AudioPlaybackLaneHandle>::Success(
@@ -344,21 +347,19 @@ namespace Horo::Audio {
         std::optional<Result<AudioRepeatedPlaybackReceipt>> Replay(const Lane &lane, const AudioRepeatedPlaybackRequest &request) const {
             if (!lane.lastRequest || request.sequence > lane.lastRequest->sequence)
                 return std::nullopt;
-            {
-                const auto &prior = *lane.lastRequest;
-                if (request.sequence != prior.sequence || request.playback != prior.playback || request.cancelled != prior.cancelled ||
-                    !Detail::SameTarget(request.target, prior.target))
-                    return Result<AudioRepeatedPlaybackReceipt>::Failure(MakeError(AudioErrors::PlaybackRequestInvalid));
-                auto receipt = lane.lastReceipt;
-                receipt.disposition = AudioRepeatedPlaybackDisposition::Replay;
-                receipt.commands.commandCount = 0;
-                return Result<AudioRepeatedPlaybackReceipt>::Success(receipt);
-            }
+            if (const auto &prior = *lane.lastRequest; request.sequence != prior.sequence || request.playback != prior.playback ||
+                                                       request.cancelled != prior.cancelled ||
+                                                       !Detail::SameTarget(request.target, prior.target))
+                return Result<AudioRepeatedPlaybackReceipt>::Failure(MakeError(AudioErrors::PlaybackRequestInvalid));
+            auto receipt = lane.lastReceipt;
+            receipt.disposition = AudioRepeatedPlaybackDisposition::Replay;
+            receipt.commands.commandCount = 0;
+            return Result<AudioRepeatedPlaybackReceipt>::Success(receipt);
         }
 
         /** @brief Direct controls share the owned scope and cannot overlap a pending admission except cancellation. */
         const ErrorCodeDescriptor *ApplyDirect(Voice &voice, const AudioCommand &command, const AudioVoiceControlRequest &control,
-                                               const AudioConcurrencyTime time) noexcept {
+                                               const AudioConcurrencyTime time) const noexcept {
             if (command.scope != AudioCommandScope{config.runtime, config.epoch, voice.scene} ||
                 time.timelineGeneration != config.discontinuityRevision)
                 return &AudioErrors::ConcurrencyTimelineStale;
@@ -372,13 +373,13 @@ namespace Horo::Audio {
 
         /** @brief Consume only the retained command identity at its promised execution time. */
         const ErrorCodeDescriptor *ApplyPending(Voice &voice, const AudioCommand &command, const AudioVoiceControlRequest &control,
-                                                const AudioConcurrencyTime time) noexcept {
+                                                const AudioConcurrencyTime time) const noexcept {
             if (!voice.pending)
                 return &AudioErrors::HandleStale;
             const auto &batch = voice.receipt.commands;
             const auto &expected = batch.commands[0];
-            const auto &operation = std::get<AudioVoiceControlRequest>(expected.payload);
-            if (command.scope != expected.scope || control.control != operation.control || control.seekFrame != operation.seekFrame ||
+            if (const auto &operation = std::get<AudioVoiceControlRequest>(expected.payload);
+                command.scope != expected.scope || control.control != operation.control || control.seekFrame != operation.seekFrame ||
                 control.operationSequence != operation.operationSequence)
                 return &AudioErrors::PlaybackRequestInvalid;
             if (time.timelineGeneration != config.discontinuityRevision ||
@@ -391,9 +392,9 @@ namespace Horo::Audio {
         }
 
         /** @brief Teardown preserves terminal snapshots while retiring any live reservation. */
-        void CancelVoice(Voice &voice) noexcept {
-            AudioVoiceState current{};
-            if (registry.CheckState(voice.playback->Voice(), current) == nullptr && !IsTerminalAudioVoiceState(current))
+        void CancelVoice(Voice &voice) const noexcept {
+            if (AudioVoiceState current{};
+                registry.CheckState(voice.playback->Voice(), current) == nullptr && !IsTerminalAudioVoiceState(current))
                 (void)registry.TryCancel(voice.playback->Voice());
             voice.pending = false;
         }
@@ -459,7 +460,8 @@ namespace Horo::Audio {
         }
 
         /** @brief Publish a new operation on the same prepared voice without selecting or preparing media again. */
-        Result<void> PrepareRestart(Voice &voice, const AudioRepeatedPlaybackRequest &request, AudioRepeatedPlaybackReceipt &receipt) {
+        Result<void> PrepareRestart(Voice &voice, const AudioRepeatedPlaybackRequest &request,
+                                    AudioRepeatedPlaybackReceipt &receipt) const {
             const auto decision = receipt.concurrency;
             receipt = voice.receipt;
             receipt.sequence = request.sequence;
@@ -486,9 +488,9 @@ namespace Horo::Audio {
                 return Result<AudioRepeatedPlaybackReceipt>::Failure(checked.ErrorValue());
             auto admission = checked.Value();
             if (admission.proceed) {
-                const auto prepared = admission.restart ? PrepareRestart(*admission.restart, request, admission.receipt)
-                                                        : PrepareStart(lane, request, clips, admission.receipt);
-                if (prepared.HasError())
+                if (const auto prepared = admission.restart ? PrepareRestart(*admission.restart, request, admission.receipt)
+                                                            : PrepareStart(lane, request, clips, admission.receipt);
+                    prepared.HasError())
                     return Result<AudioRepeatedPlaybackReceipt>::Failure(prepared.ErrorValue());
                 if (lane.bucket)
                     buckets[*lane.bucket].lastAdmission = AdmissionFrame(request, time);

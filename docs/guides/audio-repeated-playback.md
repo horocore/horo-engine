@@ -47,7 +47,9 @@ timeline. Early commands remain pending for retry; late and stale targets return
 a static error. Buffer targets use the processing boundary supplied by the host.
 The host owns clock mapping, batch storage acknowledgement, and context admission.
 Latest identical Submit replay returns the original choice with disposition Replay
-and no new commands. Older or conflicting sequence reuse fails. A delayed restart
+and no new commands, including after its target frame has elapsed. Replay still
+requires the current timeline and non-retrograde control time; only new admissions
+require a future target. Older or conflicting sequence reuse fails. A delayed restart
 whose voice has naturally finished fails at application without reopening it.
 
 Render uses production resident PCM/resampler processing with linear gain and

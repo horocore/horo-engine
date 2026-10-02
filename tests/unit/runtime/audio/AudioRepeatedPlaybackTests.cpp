@@ -199,6 +199,17 @@ namespace Horo::Audio {
             CHECK(owner.Apply(forged, {1, 100}) == &AudioErrors::PlaybackRequestInvalid);
             Apply(owner, receipt, 100);
             CHECK(owner.Apply(receipt.commands.commands[0], {1, 100}) == &AudioErrors::HandleStale);
+            const auto cached = owner.Submit(request, {}, {1, 110});
+            REQUIRE(cached.HasValue());
+            CHECK(cached.Value().disposition == AudioRepeatedPlaybackDisposition::Replay);
+            CHECK(cached.Value().voice == receipt.voice);
+            CHECK(cached.Value().commands.commandCount == 0);
+            SameChoice(receipt, cached.Value());
+            CHECK(owner.Snapshot(receipt.voice).Value().state == AudioVoiceState::Playing);
+            CHECK(owner.Submit(request, {}, {2, 110}).HasError());
+            auto lateNewRequest = request;
+            lateNewRequest.sequence = 2;
+            CHECK(owner.Submit(lateNewRequest, samples.Resolved(false), {1, 110}).HasError());
             REQUIRE(owner.Reset(2, 2, 2).HasValue());
             CHECK(owner.Snapshot(receipt.voice).Value().state == AudioVoiceState::Cancelled);
             CHECK(owner.Submit(request, samples.Resolved(false), {2, 0}).HasError());

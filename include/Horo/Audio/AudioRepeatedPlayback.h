@@ -143,7 +143,8 @@ namespace Horo::Audio {
          * @param clips Complete bounded resolved PCM set for this request; selected PCM is copied.
          * @param time Current control sample frame and discontinuity revision (timelineGeneration).
          * @return Receipt or typed failure; errors leave random, bag and cooldown history unchanged.
-         * Latest identical replay returns Replay with no commands; older/conflicting sequences fail.
+         * Latest identical replay returns Replay with no commands even after the original target frame;
+         * the control time must still match the current timeline. Older/conflicting sequences fail.
          * Unsupported bus/spatial/scene-lifecycle/admission-action requests fail explicitly. */
         [[nodiscard]] Result<AudioRepeatedPlaybackReceipt> Submit(const AudioRepeatedPlaybackRequest &request,
                                                                   std::span<const AudioResolvedPlaybackClip> clips,
