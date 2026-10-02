@@ -615,6 +615,8 @@ horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
     Horo/Navigation/NavigationDataSerialization.h
     Horo/Navigation/NavigationErrors.h
     Horo/Navigation/NavigationIdentity.h
+    Horo/Navigation/NavigationLinkTypes.h
+    Horo/Navigation/NavigationLinkValidation.h
     Horo/Navigation/NavigationMeshBuilder.h
     Horo/Navigation/NavigationOutcomes.h
     Horo/Navigation/NavigationProjectProfiles.h
@@ -633,6 +635,7 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNavigationSceneIntegration PUBLIC_HEADERS
     Horo/Navigation/NavigationSceneActivation.h
+    Horo/Navigation/NavigationSceneLinkCapture.h
 )
 horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRCapabilities.h

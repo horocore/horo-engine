@@ -1167,6 +1167,9 @@ add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavigationErrors.cpp
         runtime/navigation/api/NavigationErrorsScene.cpp
         runtime/navigation/api/NavigationIdentity.cpp
+        runtime/navigation/api/NavigationLinkValidation.cpp
+        runtime/navigation/api/NavigationLinkValidationSnapshot.cpp
+        runtime/navigation/api/NavigationLinkBoundaryAnchors.cpp
         runtime/navigation/api/NavigationOutcomes.cpp
         runtime/navigation/api/NavigationProjectProfiles.cpp
         runtime/navigation/api/NavigationSourceGeometry.cpp
@@ -1194,7 +1197,10 @@ add_library(HoroEngine::NavigationRuntime ALIAS HoroNavigationRuntime)
 target_compile_features(HoroNavigationRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationRuntime PUBLIC HoroEngine::NavigationApi)
 
-add_library(HoroNavigationSceneIntegration STATIC runtime/navigation/integration/NavigationSceneActivation.cpp)
+add_library(HoroNavigationSceneIntegration STATIC
+        runtime/navigation/integration/NavigationSceneActivation.cpp
+        runtime/navigation/integration/NavigationSceneLinkCapture.cpp
+)
 add_library(HoroEngine::NavigationSceneIntegration ALIAS HoroNavigationSceneIntegration)
 target_compile_features(HoroNavigationSceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::RuntimeScene)
