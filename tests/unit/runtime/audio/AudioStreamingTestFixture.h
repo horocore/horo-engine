@@ -7,7 +7,7 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
-#include <stdexcept>
+#include <exception>
 #include <thread>
 #include <utility>
 
@@ -18,6 +18,25 @@ namespace Horo::Audio::StreamingTests {
         StandardException,
         UnknownException
     };
+
+    /** @brief Dedicated standard exception injected at the package-opening boundary. */
+    class PackageOpenException final : public std::exception {
+    public:
+        const char *what() const noexcept override {
+            return "Injected package open failure";
+        }
+    };
+
+    /** @brief Dedicated non-standard provider failure requiring catch-all containment. */
+    struct UnknownPackageOpenFailure final {};
+
+    /** @brief Injects provider faults independently of package-opening and ownership logic. */
+    inline void InjectOpenFailure(const OpenFailure failure) {
+        if (failure == OpenFailure::StandardException)
+            throw PackageOpenException{};
+        if (failure == OpenFailure::UnknownException)
+            throw UnknownPackageOpenFailure{};
+    }
 
     struct PackageFixture final {
         std::atomic<std::uint32_t> opens{};
@@ -124,10 +143,7 @@ namespace Horo::Audio::StreamingTests {
                                            const std::size_t maximumPackageBytes, const CancellationToken &cancelled) {
         auto &fixture = *static_cast<PackageFixture *>(opaque);
         fixture.opening.store(true);
-        if (fixture.openFailure == OpenFailure::StandardException)
-            throw std::runtime_error("Injected package provider failure");
-        if (fixture.openFailure == OpenFailure::UnknownException)
-            throw OpenFailure::UnknownException;
+        InjectOpenFailure(fixture.openFailure);
         while (fixture.holdOpen.load() && (fixture.ignoreCancellation.load() || !cancelled.IsCancellationRequested()))
             std::this_thread::yield();
         if (cancelled.IsCancellationRequested() && !fixture.openAfterCancellation)
@@ -159,6 +175,14 @@ namespace Horo::Audio::StreamingTests {
             service.Pump();
             const auto snapshot = service.Snapshot(handle);
             return snapshot.HasValue() && snapshot.Value().bufferedFrames >= buffered;
+        });
+    }
+
+    /** @brief Reaps a worker failure on control before any test inspects its original error. */
+    inline bool PumpUntilFailure(AudioStreamingService &service, const AudioStreamHandle handle) {
+        return Until([&service, handle] {
+            service.Pump();
+            return service.Snapshot(handle).Value().failed;
         });
     }
 

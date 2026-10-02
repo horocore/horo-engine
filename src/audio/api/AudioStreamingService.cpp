@@ -317,7 +317,7 @@ namespace Horo::Audio {
     AudioStreamState *AudioStreamingService::Find(const AudioStreamHandle handle) noexcept {
         if (!handle.IsValid() || handle.slot > limits_.maximumStreams)
             return nullptr;
-        auto &slot = slots_[handle.slot - 1];
+        const auto &slot = slots_[handle.slot - 1];
         return slot.generation == handle.generation ? slot.state.get() : nullptr;
     }
 

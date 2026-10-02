@@ -82,10 +82,7 @@ namespace Horo::Audio::StreamingTests {
         auto service = Service(jobs, fixture);
         const auto handle = service->Admit(Request()).Value();
         auto port = std::move(service->RenderPort(handle)).Value();
-        REQUIRE(Until([&] {
-            service->Pump();
-            return service->Snapshot(handle).Value().failed;
-        }));
+        REQUIRE(PumpUntilFailure(*service, handle));
         const auto failure = service->Snapshot(handle).Value().failure;
         REQUIRE(failure.has_value());
         CHECK(failure->code.Value() == AudioErrors::StreamReadFailed.code.Value());
@@ -177,10 +174,7 @@ namespace Horo::Audio::StreamingTests {
         auto service = Service(jobs, fixture);
         const auto handle = service->Admit(Request()).Value();
         auto port = std::move(service->RenderPort(handle)).Value();
-        REQUIRE(Until([&service, handle] {
-            service->Pump();
-            return service->Snapshot(handle).Value().failed;
-        }));
+        REQUIRE(PumpUntilFailure(*service, handle));
         const auto failure = service->Snapshot(handle).Value().failure;
         REQUIRE(failure.has_value());
         CHECK(failure->code.Value() == AudioErrors::StreamReadFailed.code.Value());
