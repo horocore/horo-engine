@@ -329,6 +329,21 @@ struct AccessibilityControls {
 
 #### Typed Transport (Screen Reader)
 
+Runtime UI publishes immutable reading order from retained-tree preorder and
+separate focus participation order from its actual per-audience `UiFocusGraph`.
+Covered, suspended and suppressed scopes remain available as semantic records but
+do not participate in active reading order. Disabled controls remain readable.
+The graph's exact modal activation fences reading, focus and action exposure.
+
+The semantic publisher retains accepted live announcements in a bounded FIFO
+until cumulative acknowledgment or explicit lifecycle cancellation. Semantic
+delta overflow requires snapshot resynchronization without discarding accepted
+speech. Admission rejects capacity exhaustion transactionally; status and
+validation occurrences are never silently coalesced or overwritten. See the
+[Runtime UI accessibility delivery migration](../../guides/runtime-ui-accessibility-delivery-migration.md)
+for sequence, generation, cancellation and consumer requirements. These headless
+contracts do not establish native screen-reader availability.
+
 UI elements register structured metadata with the `PlatformAccessibilityBridge`. The bridge
 dispatches focus changes and announcements to the host OS accessibility APIs
 (macOS NSAccessibility, Windows UI Automation, Linux AT-SPI).

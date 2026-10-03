@@ -135,6 +135,13 @@ namespace Horo::PlatformServices::Tests {
         [[nodiscard]] Extensions::ApplicationCapabilityVersionRange Version(const std::uint16_t major) {
             return {{major, 0, 0}, {major, 0, 0}};
         }
+
+        void CompleteAndClose(PlatformProviderLifecycleHost &host, const PlatformProviderLifecycleHost::RequestHandle &request) {
+            CHECK(host.DispatchCompletions(0) == 0);
+            CHECK(host.DispatchCompletions(1) == 1);
+            CHECK(host.Query(request).Value().state == PlatformRequestState::Succeeded);
+            REQUIRE(host.Close().HasValue());
+        }
     }  // namespace
 
     TEST_CASE("Revoking one provider preserves another and permits a later generation", "[platform-services][extension][provider]") {
@@ -419,9 +426,7 @@ namespace Horo::PlatformServices::Tests {
         auto host = std::move(started).Value();
         auto request = host->UnlockAchievement({1});
         REQUIRE(request.HasValue());
-        CHECK(host->DispatchCompletions(1) == 1);
-        CHECK(host->Query(request.Value()).Value().state == PlatformRequestState::Succeeded);
-        REQUIRE(host->Close().HasValue());
+        CompleteAndClose(*host, request.Value());
         manager.UnloadExtension(loaded.Value());
         CHECK(admission.FinalizeOnOwnerThread() == PlatformProviderRetirementDisposition::Complete);
     }

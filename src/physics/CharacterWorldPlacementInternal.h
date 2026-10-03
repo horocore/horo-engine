@@ -27,7 +27,7 @@ namespace Horo::Character::Detail {
     };
 
     /** @brief Checks a Character root against the Physics local-origin safety envelope. */
-    [[nodiscard]] Result<void> ValidatePlacementPosition(const Math::Vec3 position) {
+    [[nodiscard]] inline Result<void> ValidatePlacementPosition(const Math::Vec3 position) {
         if (!Math::IsFinite(position) || std::abs(position.x) > Physics::MaximumPhysicsLocalHalfExtentMeters ||
             std::abs(position.y) > Physics::MaximumPhysicsLocalHalfExtentMeters ||
             std::abs(position.z) > Physics::MaximumPhysicsLocalHalfExtentMeters)
@@ -37,7 +37,8 @@ namespace Horo::Character::Detail {
     }
 
     /** @brief Checks one qualified Character displacement against the world work budget. */
-    [[nodiscard]] Result<void> ValidatePlacementDisplacement(const Math::Vec3 from, const Math::Vec3 to, const float maximumDisplacement) {
+    [[nodiscard]] inline Result<void> ValidatePlacementDisplacement(const Math::Vec3 from, const Math::Vec3 to,
+                                                                    const float maximumDisplacement) {
         if (const auto fromValid = ValidatePlacementPosition(from); fromValid.HasError())
             return fromValid;
         if (const auto toValid = ValidatePlacementPosition(to); toValid.HasError())
@@ -170,7 +171,9 @@ namespace Horo::Character::Detail {
             return Result<CharacterControllerDescriptor>::Failure(
                 MakeError(CharacterErrors::CommandOrderInvalid, "Move and teleport cannot target one Character tick."));
         record.Value()->reservedTeleportTick = request.tick;
-        return Result<CharacterControllerDescriptor>::Success(record.Value()->descriptor);
+        auto descriptor = record.Value()->descriptor;
+        descriptor.capsule = record.Value()->capsule;
+        return Result<CharacterControllerDescriptor>::Success(descriptor);
     }
 
     /** @brief Releases a failed teleport reservation without changing the prior publication. */

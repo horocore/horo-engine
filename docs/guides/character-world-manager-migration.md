@@ -49,3 +49,26 @@ Production hosts link `HoroEngine::PhysicsSceneIntegration` and inject its
 Character worlds, preserves the old bundle when participant preparation or final
 evidence validation fails, and shuts Character down before Physics during
 replacement, unload, and host shutdown.
+
+## Physical surface consumption
+
+`CharacterControllerContracts.h` remains owned by `HoroEngine::Physics`; no Audio,
+VFX or native dependency is added. Existing sweep adapters may omit the additive
+`subshape` field for primitive geometry. Compound/mesh adapters must copy the exact
+Physics authored child ID. The controller copies this provenance to contacts and
+ground results; contacts from different children no longer collapse together.
+
+Results now distinguish an adapter-supplied material (`Query`) from an absent
+binding resolved by the descriptor (`DescriptorFallback`). Custom movement result
+producers must populate the provenance and selected `groundPoint`/`groundSubshape`
+consistently. Fallback records must equal the captured descriptor's physical asset,
+generation and slot; present malformed values are rejected rather than defaulted.
+Airborne producers must clear ground point/child and reset provenance to `Query`.
+
+Post-commit adapters can call `BuildCharacterGroundSurfaceFact(snapshot, descriptor)`
+for bounded copied support and exact tick/sequence/state/publication correlation.
+An airborne snapshot yields an absent fact. Missing/deleted downstream mappings
+suppress presentation; lookup cannot alter movement or reinterpret copied old
+material generations after reload or shutdown. Physical references are not
+semantic surface IDs. The ADR-181 semantic producer/catalog remains a separate
+unimplemented prerequisite; do not infer surfaces from material names or media.

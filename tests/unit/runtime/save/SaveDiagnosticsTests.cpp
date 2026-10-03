@@ -114,6 +114,13 @@ namespace Horo::Runtime {
             }
         }
 
+        TEST_CASE("Stale slot commit generations report a validation failure", "[save][diagnostics]") {
+            const auto record = Record(MakeError(SaveErrors::SlotCommitGenerationStale));
+            REQUIRE(record.HasValue());
+            CHECK(record.Value().Category() == SaveFailureCategory::Validation);
+            CHECK(record.Value().Code().Value() == SaveErrors::SlotCommitGenerationStale.code.Value());
+        }
+
         TEST_CASE("Runtime Save diagnostics categorize slot recovery failures", "[save][diagnostics]") {
             const std::array cases{
                 std::pair{&SaveErrors::SlotRecoveryInvalid, SaveFailureCategory::Validation},

@@ -116,6 +116,7 @@ namespace Horo::Runtime {
             DiagnosticPolicy{&SaveErrors::StorageResultInvalid, Storage},
             DiagnosticPolicy{&SaveErrors::StorageAllocationFailed, Quota},
             DiagnosticPolicy{&SaveErrors::SlotCommitInvalid, Validation},
+            DiagnosticPolicy{&SaveErrors::SlotCommitGenerationStale, Validation},
             DiagnosticPolicy{&SaveErrors::SlotCommitOutcomeUnknown, Storage},
             DiagnosticPolicy{&SaveErrors::SlotCommitRecoveryFailed, Storage},
             DiagnosticPolicy{&SaveErrors::SlotRecoveryInvalid, Validation},

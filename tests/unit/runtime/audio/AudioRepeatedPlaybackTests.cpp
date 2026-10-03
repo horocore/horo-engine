@@ -206,6 +206,9 @@ namespace Horo::Audio {
             CHECK(cached.Value().commands.commandCount == 0);
             SameChoice(receipt, cached.Value());
             CHECK(owner.Snapshot(receipt.voice).Value().state == AudioVoiceState::Playing);
+            CHECK(owner.Submit(request, {}, {1, 109}).HasError());
+            auto retrograde = Request(lane, binding, 2);
+            CHECK(owner.Submit(retrograde, samples.Resolved(false), {1, 109}).HasError());
             CHECK(owner.Submit(request, {}, {2, 110}).HasError());
             auto lateNewRequest = request;
             lateNewRequest.sequence = 2;

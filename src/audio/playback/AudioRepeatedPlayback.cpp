@@ -57,8 +57,11 @@ namespace Horo::Audio {
             return Result<AudioRepeatedPlaybackReceipt>::Failure(MakeError(AudioErrors::HandleStale));
         if (!state_->ValidControlTime(time))
             return Result<AudioRepeatedPlaybackReceipt>::Failure(MakeError(AudioErrors::ConcurrencyTimelineStale));
-        if (auto replay = state_->Replay(*lane, request))
+        if (auto replay = state_->Replay(*lane, request)) {
+            if (replay->HasValue())
+                state_->lastControlFrame = time.sampleFrame;
             return *replay;
+        }
         if (const auto valid = state_->ValidateRequest(*lane, request, time); valid.HasError())
             return Result<AudioRepeatedPlaybackReceipt>::Failure(valid.ErrorValue());
         return state_->Admit(*lane, request, clips, time);
