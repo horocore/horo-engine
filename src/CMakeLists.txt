@@ -41,6 +41,11 @@ target_include_directories(HoroFoundation
         PRIVATE
         $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
 )
+add_library(HoroHostErrors STATIC hosts/ErrorTranslation.cpp)
+add_library(HoroEngine::HostErrors ALIAS HoroHostErrors)
+target_compile_features(HoroHostErrors PUBLIC cxx_std_20)
+target_link_libraries(HoroHostErrors PUBLIC HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
+
 add_library(HoroSecurity STATIC
         security/AgentPolicy.cpp
         security/SecurityErrors.cpp
@@ -654,6 +659,7 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/RpcGameplayDispatch.cpp
         runtime/networking/RpcGameplayDispatchReceive.cpp
         runtime/networking/RpcGameplayDispatchGameplay.cpp
+        runtime/networking/RpcGameplayDispatchPolicy.cpp
 )
 add_library(HoroEngine::NetworkRuntime ALIAS HoroNetworkRuntime)
 target_compile_features(HoroNetworkRuntime PUBLIC cxx_std_20)
@@ -1215,7 +1221,7 @@ target_link_libraries(HoroCinematicRuntime PUBLIC HoroEngine::CinematicModel)
 
 add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavMeshData.cpp
-        runtime/navigation/api/mesh_codec/NavMeshCodec.cpp
+        runtime/navigation/api/NavigationTileDescriptor.cpp
         runtime/navigation/api/NavigationAreas.cpp
         runtime/navigation/api/NavigationAgentProfiles.cpp
         runtime/navigation/api/NavigationBakeFingerprint.cpp
@@ -1265,12 +1271,10 @@ target_link_libraries(HoroNavigationRuntime PUBLIC HoroEngine::NavigationApi)
 add_library(HoroNavigationSceneIntegration STATIC
         runtime/navigation/integration/NavigationSceneActivation.cpp
         runtime/navigation/integration/NavigationSceneLinkCapture.cpp
-        runtime/navigation/integration/NavMeshAssetLoading.cpp
-        runtime/navigation/integration/NavigationAssetSceneActivation.cpp
 )
 add_library(HoroEngine::NavigationSceneIntegration ALIAS HoroNavigationSceneIntegration)
 target_compile_features(HoroNavigationSceneIntegration PUBLIC cxx_std_20)
-target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::RuntimeScene HoroEngine::Assets)
+target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::RuntimeScene)
 
 add_library(HoroNavigationBakeService STATIC
         application/navigation/NavigationBakeService.cpp
@@ -1297,6 +1301,14 @@ add_library(HoroXRApi STATIC
 add_library(HoroEngine::XRApi ALIAS HoroXRApi)
 target_compile_features(HoroXRApi PUBLIC cxx_std_20)
 target_link_libraries(HoroXRApi PUBLIC HoroEngine::Foundation HoroEngine::RenderApi)
+
+add_library(HoroNavigationAssetSceneIntegration STATIC
+        runtime/navigation/integration/NavMeshAssetLoading.cpp
+        runtime/navigation/integration/NavigationAssetSceneActivation.cpp
+)
+add_library(HoroEngine::NavigationAssetSceneIntegration ALIAS HoroNavigationAssetSceneIntegration)
+target_compile_features(HoroNavigationAssetSceneIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroNavigationAssetSceneIntegration PUBLIC HoroEngine::NavigationSceneIntegration HoroEngine::Assets)
 
 add_library(HoroXRRuntime STATIC
         runtime/xr/runtime/XRFeatureNegotiation.cpp
@@ -1938,6 +1950,7 @@ target_include_directories(HoroEditorServices
 target_link_libraries(HoroEditorServices
         PUBLIC
         HoroEngine::Foundation
+        HoroEngine::HostErrors
         HoroEngine::CinematicRuntime
         HoroEngine::NetworkApi
         HoroEngine::Application

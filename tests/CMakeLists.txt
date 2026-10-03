@@ -308,6 +308,8 @@ add_executable(HoroNetworkRuntimeTests
         unit/runtime/networking/ReplicationWorldLifecycleTests.cpp
         unit/runtime/networking/RpcGameplayDispatchTests.cpp
         unit/runtime/networking/RpcGameplayDispatchLifecycleTests.cpp
+        unit/runtime/networking/RpcAuthorizationPolicyTests.cpp
+        unit/runtime/networking/RpcParameterPolicyTests.cpp
 )
 target_compile_features(HoroNetworkRuntimeTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkRuntimeTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
@@ -752,16 +754,19 @@ add_executable(HoroCinematicCurveSamplingBenchmark EXCLUDE_FROM_ALL
 target_compile_features(HoroCinematicCurveSamplingBenchmark PRIVATE cxx_std_20)
 target_link_libraries(HoroCinematicCurveSamplingBenchmark PRIVATE HoroEngine::CinematicModel)
 
+add_executable(HoroNavigationTileDescriptorPublicConsumer support/NavigationTileDescriptorPublicConsumer.cpp)
+target_link_libraries(HoroNavigationTileDescriptorPublicConsumer PRIVATE HoroEngine::NavigationApi)
+add_test(NAME HoroNavigationTileDescriptorPublicConsumer COMMAND HoroNavigationTileDescriptorPublicConsumer)
+
 add_executable(HoroNavMeshAssetPublicHeaderConsumer support/NavMeshAssetPublicHeaderConsumer.cpp)
 target_compile_features(HoroNavMeshAssetPublicHeaderConsumer PRIVATE cxx_std_20)
-target_link_libraries(HoroNavMeshAssetPublicHeaderConsumer PRIVATE HoroEngine::NavigationSceneIntegration)
+target_link_libraries(HoroNavMeshAssetPublicHeaderConsumer PRIVATE HoroEngine::NavigationAssetSceneIntegration)
 add_test(NAME HoroNavMeshAssetPublicHeaderConsumer COMMAND HoroNavMeshAssetPublicHeaderConsumer)
 set_tests_properties(HoroNavMeshAssetPublicHeaderConsumer PROPERTIES LABELS "unit;navigation;headless;public_headers")
 
 add_executable(HoroNavigationApiTests
         support/navigation/DeterministicNavigationProvider.cpp
         unit/runtime/navigation/NavMeshDataTests.cpp
-        unit/runtime/navigation/NavMeshCodecTests.cpp
         unit/runtime/navigation/NavigationAreaRegistryTests.cpp
         unit/runtime/navigation/NavigationAgentProfileTests.cpp
         unit/runtime/navigation/NavigationBakeInputTests.cpp
@@ -803,13 +808,6 @@ target_link_libraries(HoroNavigationBakeDiagnosticsPublicConsumer PRIVATE HoroEn
 add_test(NAME HoroNavigationBakeDiagnosticsPublicConsumer COMMAND HoroNavigationBakeDiagnosticsPublicConsumer)
 
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
-    
-    add_executable(HoroNavigationAssetLoadingTests unit/runtime/navigation/NavMeshAssetLoadingTests.cpp)
-    target_compile_features(HoroNavigationAssetLoadingTests PRIVATE cxx_std_20)
-    target_include_directories(HoroNavigationAssetLoadingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
-    target_link_libraries(HoroNavigationAssetLoadingTests PRIVATE HoroEngine::NavigationSceneIntegration HoroEngine::NavigationRecastDetour)
-    horo_register_catch_test(HoroNavigationAssetLoadingTests LABELS "unit;navigation;headless;assets;lifecycle;provider")
-    
     add_executable(HoroNavigationBakeServiceTests unit/runtime/navigation/NavigationBakeServiceTests.cpp
             unit/runtime/navigation/NavigationBakeDiagnosticsTests.cpp
             unit/runtime/navigation/NavigationBakeDiagnosticRecoveryTests.cpp)
@@ -817,7 +815,6 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_include_directories(HoroNavigationBakeServiceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_link_libraries(HoroNavigationBakeServiceTests PRIVATE HoroEngine::NavigationBakeService HoroEngine::NavigationRecastDetour)
     horo_register_catch_test(HoroNavigationBakeServiceTests LABELS "unit;navigation;headless;cook")
-    
     add_executable(HoroNavigationRecastDetourTests
             unit/runtime/navigation/RecastDetourProviderTests.cpp
             unit/runtime/navigation/RecastDetourLinkValidationTests.cpp
@@ -828,7 +825,11 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_include_directories(HoroNavigationRecastDetourTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_link_libraries(HoroNavigationRecastDetourTests PRIVATE HoroEngine::NavigationRecastDetour)
     horo_register_catch_test(HoroNavigationRecastDetourTests LABELS "unit;navigation;headless;provider")
-    
+    add_executable(HoroNavigationAssetLoadingTests unit/runtime/navigation/NavMeshAssetLoadingTests.cpp)
+    target_compile_features(HoroNavigationAssetLoadingTests PRIVATE cxx_std_20)
+    target_include_directories(HoroNavigationAssetLoadingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_link_libraries(HoroNavigationAssetLoadingTests PRIVATE HoroEngine::NavigationAssetSceneIntegration HoroEngine::NavigationBakeService HoroEngine::NavigationRecastDetour)
+    horo_register_catch_test(HoroNavigationAssetLoadingTests LABELS "unit;navigation;headless;assets;lifecycle;provider")
     add_executable(HoroNavigationCrowdDetourTests unit/runtime/navigation/RecastDetourCrowdProviderTests.cpp)
     target_compile_features(HoroNavigationCrowdDetourTests PRIVATE cxx_std_20)
     target_include_directories(HoroNavigationCrowdDetourTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
@@ -1738,6 +1739,20 @@ add_executable(HoroFoundationResultTests
 target_compile_features(HoroFoundationResultTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationResultTests PRIVATE HoroEngine::Foundation)
 target_include_directories(HoroFoundationResultTests PRIVATE "${PROJECT_SOURCE_DIR}/src/foundation/assertions")
+add_executable(HoroHostErrorTranslationTests unit/hosts/ErrorTranslationTests.cpp)
+target_link_libraries(HoroHostErrorTranslationTests PRIVATE HoroEngine::HostErrors nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroHostErrorTranslationTests LABELS "unit;hosts;headless")
+add_executable(HoroHostErrorFixture unit/hosts/HostErrorFixture.cpp)
+target_link_libraries(HoroHostErrorFixture PRIVATE HoroEngine::HostErrors nlohmann_json::nlohmann_json)
+add_test(NAME HoroHostErrorPythonParity
+    COMMAND "${CMAKE_COMMAND}"
+            "-DHOST_ERROR_FIXTURE=$<TARGET_FILE:HoroHostErrorFixture>"
+            "-DHOST_ERROR_PYTHON=${Python3_EXECUTABLE}"
+            "-DHOST_ERROR_TEST=${PROJECT_SOURCE_DIR}/tests/python/host_error_parity.py"
+            -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunHostErrorPythonParity.cmake")
+set_tests_properties(HoroHostErrorPythonParity PROPERTIES LABELS "integration;hosts;python;headless" TIMEOUT 45
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;PYTHONUTF8=1")
+
 add_executable(HoroCliCommandRegistryTests
         unit/cli/CliCommandRegistryTests.cpp
         unit/cli/CliDispatcherTests.cpp

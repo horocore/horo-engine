@@ -20,6 +20,9 @@ namespace Horo::Network {
         bindings_.reserve(limits.maximumBindings);
         pending_.reserve(limits.maximumPending);
         replay_.reserve(limits.maximumReplayScopes);
+        rates_.reserve(limits.maximumRateScopes);
+        work_.reserve(limits.maximumCallerScopes + 1);
+        work_.emplace_back();  // The first scope is the immutable global accounting bucket.
     }
 
     /** @copydoc RpcGameplayDispatch::~RpcGameplayDispatch */
@@ -35,7 +38,11 @@ namespace Horo::Network {
             limits.maximumBindings > 4096 || limits.maximumObjects == 0 || limits.maximumObjects > 65536 || limits.maximumPending == 0 ||
             limits.maximumPending > 4096 || limits.maximumReplayScopes == 0 || limits.maximumReplayScopes > 65536 ||
             limits.maximumPerDrain == 0 || limits.maximumPerDrain > limits.maximumPending || limits.maximumInvocationBytes == 0 ||
-            limits.maximumInvocationBytes > 1024 * 1024)
+            limits.maximumInvocationBytes > 1024 * 1024 || limits.maximumRateScopes == 0 || limits.maximumRateScopes > 65536 ||
+            limits.maximumCallerScopes == 0 || limits.maximumCallerScopes > 65536 || limits.ticksPerSecond == 0 ||
+            limits.ticksPerSecond > 1000000000 || limits.maximumAttemptsPerSecond == 0 || limits.maximumGlobalAttemptsPerSecond == 0 ||
+            limits.maximumBytesPerSecond == 0 || limits.maximumGlobalBytesPerSecond == 0 || limits.maximumPendingPerPeer == 0 ||
+            limits.maximumPendingPerPeer > 4096)
             return Result<std::shared_ptr<RpcGameplayDispatch>>::Failure(MakeError(NetworkErrors::RpcDescriptorInvalid));
         try {
             return Result<std::shared_ptr<RpcGameplayDispatch>>::Success(
@@ -84,7 +91,7 @@ namespace Horo::Network {
         if (std::this_thread::get_id() != owner_)
             return;
         ++revocationRevision_;
-        std::erase_if(pending_, [connection](const Pending &entry) {
+        terminals_.cancelled += std::erase_if(pending_, [connection](const Pending &entry) {
             return entry.connection == connection;
         });
         std::erase_if(peers_, [connection](const Peer &entry) {
@@ -115,7 +122,7 @@ namespace Horo::Network {
         if (std::this_thread::get_id() != owner_)
             return;
         ++revocationRevision_;
-        std::erase_if(pending_, [object](const Pending &entry) {
+        terminals_.cancelled += std::erase_if(pending_, [object](const Pending &entry) {
             return entry.object == object;
         });
         std::erase_if(objects_, [object](const Object &entry) {
@@ -126,7 +133,7 @@ namespace Horo::Network {
     /** @copydoc RpcGameplayDispatch::RegisterHandler */
     Result<void> RpcGameplayDispatch::RegisterHandler(const RpcId id, std::shared_ptr<IRpcGameplayHandler> handler,
                                                       const std::span<const std::shared_ptr<const IReplicationFieldSerializer>> serializers,
-                                                      std::shared_ptr<const void> moduleLease) {
+                                                      std::shared_ptr<const void> moduleLease, const RpcGameplayPolicy &policy) {
         // Move both parameters into ordered local owners: parameter/temporary teardown
         // order must not release module code before the handler's virtual destructor.
         const auto codeLease = std::move(moduleLease);
@@ -152,28 +159,45 @@ namespace Horo::Network {
         const auto revision = revocationRevision_;
         // A metadata callback is external code too. Pin every input before invoking any adapter.
         try {
-            Binding binding{id, &descriptor, codeLease, handlerPin, {serializers.begin(), serializers.end()}, {}};
-            binding.metadata.reserve(binding.serializers.size());
-            for (std::size_t index = 0; index < binding.serializers.size(); ++index) {
-                const auto &serializer = binding.serializers[index];
-                if (!serializer)
-                    return Result<void>::Failure(MakeError(NetworkErrors::RpcParameterUnsupported));
-                binding.metadata.push_back(serializer->Descriptor());
-                if (stopped_)
-                    return Result<void>::Failure(MakeError(NetworkErrors::SessionShuttingDown));
-                if (revision != revocationRevision_)
-                    return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
-                const auto &metadata = binding.metadata.back();
-                const auto &parameter = descriptor.parameters[index];
-                if (metadata.valueType != parameter.valueType || metadata.codec != parameter.codec || metadata.owner != descriptor.owner ||
-                    metadata.valueKind >= ReplicationValueKind::Count ||
-                    metadata.maximumEncodedBytes < parameter.limits.maximumEncodedBytes ||
-                    metadata.maximumElementCount < parameter.limits.maximumElementCount)
-                    return Result<void>::Failure(MakeError(NetworkErrors::RpcParameterUnsupported));
-            }
+            if (policy.parameters.size() > descriptor.parameters.size())
+                return Result<void>::Failure(MakeError(NetworkErrors::RpcParameterUnsupported));
+            Binding binding{id,
+                            &descriptor,
+                            codeLease,
+                            handlerPin,
+                            {serializers.begin(), serializers.end()},
+                            {},
+                            std::make_shared<const RpcGameplayPolicy>(policy)};
+            if (const auto captured = CaptureSerializerMetadata(binding, revision); captured.HasError())
+                return captured;
+            if (const auto valid = ValidatePolicy(binding); valid.HasError())
+                return valid;
             bindings_.push_back(std::move(binding));
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(NetworkErrors::RpcCapacityExceeded));
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RpcGameplayDispatch::CaptureSerializerMetadata */
+    Result<void> RpcGameplayDispatch::CaptureSerializerMetadata(Binding &binding, const std::uint64_t revision) const {
+        binding.metadata.reserve(binding.serializers.size());
+        for (std::size_t index = 0; index < binding.serializers.size(); ++index) {
+            const auto &serializer = binding.serializers[index];
+            if (!serializer)
+                return Result<void>::Failure(MakeError(NetworkErrors::RpcParameterUnsupported));
+            binding.metadata.push_back(serializer->Descriptor());
+            if (stopped_)
+                return Result<void>::Failure(MakeError(NetworkErrors::SessionShuttingDown));
+            if (revision != revocationRevision_)
+                return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+            const auto &metadata = binding.metadata.back();
+            const auto &parameter = binding.descriptor->parameters[index];
+            if (metadata.valueType != parameter.valueType || metadata.codec != parameter.codec ||
+                metadata.owner != binding.descriptor->owner || metadata.valueKind >= ReplicationValueKind::Count ||
+                metadata.maximumEncodedBytes < parameter.limits.maximumEncodedBytes ||
+                metadata.maximumElementCount < parameter.limits.maximumElementCount)
+                return Result<void>::Failure(MakeError(NetworkErrors::RpcParameterUnsupported));
         }
         return Result<void>::Success();
     }
@@ -183,7 +207,7 @@ namespace Horo::Network {
         if (std::this_thread::get_id() != owner_)
             return;
         ++revocationRevision_;
-        std::erase_if(pending_, [id](const Pending &entry) {
+        terminals_.cancelled += std::erase_if(pending_, [id](const Pending &entry) {
             return entry.id == id;
         });
         std::erase_if(bindings_, [id](const Binding &entry) {
@@ -198,10 +222,20 @@ namespace Horo::Network {
         if (stopped_)
             return;
         stopped_ = true;
+        terminals_.cancelled += pending_.size();
         pending_.clear();
         replay_.clear();
+        rates_.clear();
+        work_.clear();
         bindings_.clear();
         objects_.clear();
         peers_.clear();
+    }
+
+    /** @copydoc RpcGameplayDispatch::TerminalTotals */
+    Result<RpcTerminalTotals> RpcGameplayDispatch::TerminalTotals() const {
+        if (std::this_thread::get_id() != owner_)
+            return Result<RpcTerminalTotals>::Failure(MakeError(NetworkErrors::NetworkIoWrongThread));
+        return Result<RpcTerminalTotals>::Success(terminals_);
     }
 }  // namespace Horo::Network

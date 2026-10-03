@@ -1587,8 +1587,11 @@ Scene definition construction automatically projects enabled navigation surface
 definition identities as `core.navmesh` dependencies. The navigation host adapter
 consumes the same generic registry, Scene `AssetLoadService` preparation and
 verified AssetCook envelopes used by filesystem and packaged archive providers.
-Exact generated dependency envelope digests must match the declared Scene
-closure before navigation publication. Disabled surfaces require no artifact;
+The single canonical NavigationCookedTileSet codec consumes the complete
+definition-rooted tile closure written by NavigationBakeService through existing
+AssetCookCache and durable AssetCook publication. Runtime validates the envelope
+source fingerprint and exact canonical tile identities; authored source dependency
+evidence remains in cook inputs rather than a competing runtime asset manifest. Disabled surfaces require no artifact;
 missing, corrupt or stale required content preserves the previous active Scene.
 The native provider and its retained-world allocation reservation remain
 Navigation host ownership, independently of shared tile byte accounting. See

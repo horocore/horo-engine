@@ -75,6 +75,20 @@ matches the admission owner. Generated `HoroPlatformServicesPublicHeaderConsumer
 `HoroPlatformServicesExtensionPublicHeaderConsumer` targets verify the staged headers;
 the standalone composition test target links only PlatformServices and test support.
 
+## ERR-001.5 Host Translation Boundary
+
+`HoroEngine::HostErrors` solely owns the additive public
+`Horo/Hosts/ErrorTranslation.h` contract. It depends publicly only on Foundation
+and privately on the existing JSON library; GUI, CLI, MCP and Python protocols
+introduce no reverse Foundation dependency. Its generated
+`HoroHostErrorsPublicHeaderConsumer` verifies the staged header boundary.
+EditorServices declares a public HostErrors dependency for the additive
+`NotificationEvent::errorDetail` and `PublishApplicationError` contract. The
+generated EditorServices public-header consumer verifies that dependency.
+Source callers of existing notification methods keep their behavior. Binary
+consumers rebuild for the additive event layout; adopting hosts explicitly create
+the registry-backed mapping scope described in Error And Diagnostics.
+
 ## AUD-007.9 Focus Policy Boundary
 
 `HoroEngine::AudioCommands` solely owns the additive

@@ -57,52 +57,71 @@ namespace Horo::Navigation::AssetTestSupport {
         return std::move(Assets::EncodeCookedArtifact(artifact)).Value();
     }
 
-    [[nodiscard]] inline std::vector<std::uint8_t> Cooked(const std::uint64_t generation = 1,
-                                                          const std::span<const NavMeshAssetDependency> dependencies = {}) {
+    /** @brief The same canonical HNT1/HNS1 format used by the real producer; generations do not change bytes. */
+    [[nodiscard]] inline NavigationCookedTileSet TileSet(const SurfaceId surface = Id<SurfaceId>(101)) {
         const auto fixture = GroundMesh();
-        const std::array partitions{NavMeshAssetPartitionInput{Id<SurfaceId>(101), generation, fixture.View()}};
-        const auto payload = EncodeNavMeshAssetPayload(partitions, dependencies);
+        NavigationPreparedTile input{.tile = {.key = {Id<NavigationAgentProfileId>(7), surface, {}},
+                                              .bounds = fixture.tiles.front().bounds,
+                                              .tileSizeMeters = 32},
+                                     .geometry = fixture.header.profile.buildGeometry,
+                                     .borderSizeCells = 4,
+                                     .dependencyKey = Digest(3)};
+        input.geometry.cellSizeMeters = 0.5F;
+        input.geometry.radiusMeters = 0.5F;
+        NavigationTileBuildResult topology{.state = NavigationTileBuildState::Built,
+                                           .key = {},
+                                           .bounds = input.tile.bounds,
+                                           .vertices = fixture.vertices,
+                                           .polygons = fixture.polygons,
+                                           .polygonVertexIndices = fixture.polygonVertexIndices,
+                                           .polygonAdjacencies = fixture.polygonAdjacencies,
+                                           .provenance = fixture.provenance};
+        auto tile = NavigationCookedTile::Create(input, std::move(topology));
+        REQUIRE(tile.HasValue());
+        return {Digest(2), {std::move(tile).Value()}};
+    }
+
+    [[nodiscard]] inline std::vector<std::uint8_t> Cooked(const std::uint64_t = 1) {
+        const auto payload = EncodeNavigationCookedTileSet(TileSet(), 4096);
         REQUIRE(payload.HasValue());
         return Envelope(payload.Value());
     }
 
-    [[nodiscard]] inline Runtime::RuntimeSceneDefinition Definition(const std::uint64_t revision = 1, const std::uint64_t generation = 1,
-                                                                    const std::span<const NavMeshAssetDependency> dependencies = {},
-                                                                    const bool enabled = true) {
+    [[nodiscard]] inline Runtime::RuntimeSceneDefinition Definition(
+        const std::uint64_t revision = 1, const std::uint64_t generation = 1,
+        const std::span<const Assets::AssetDependency> dependencies = {}, const bool enabled = true,
+        const SurfaceId surface = Id<SurfaceId>(101), const NavigationAgentProfileId profile = Id<NavigationAgentProfileId>(7)) {
         Runtime::SceneDefinitionBuilder builder{{4}, {revision}};
         Runtime::RuntimeEntityDefinition entity;
         entity.object = {101};
-        entity.components.navigationSurface = Runtime::NavigationSurfaceComponent{.id = Id<SurfaceId>(101),
+        entity.components.navigationSurface = Runtime::NavigationSurfaceComponent{.id = surface,
                                                                                   .definition = Asset(),
                                                                                   .generation = generation,
-                                                                                  .profiles = {Id<NavigationAgentProfileId>(7)},
+                                                                                  .profiles = {profile},
                                                                                   .enabled = enabled};
         builder.Add(std::move(entity));
         for (const auto &dependency : dependencies)
-            REQUIRE(builder.RequireAsset(dependency.asset).HasValue());
+            REQUIRE(builder.RequireAsset(dependency).HasValue());
         return std::move(std::move(builder).Build()).Value();
     }
 
     /** @brief Convert already validated neutral rows without truncating unsupported provider features. */
     [[nodiscard]] inline Result<void> ConvertGroundMesh(const LoadedNavMeshPartition &partition, std::vector<Math::Vec3> &vertices,
                                                         std::vector<GroundedNavigationPolygon> &polygons) {
-        for (const auto &tile : partition.data.Tiles()) {
-            const auto resolved = partition.data.ResolveTile(tile.key).Value();
-            if (!resolved.tables.offMeshLinks.empty()) {
+        for (const auto &tile : partition.tiles) {
+            const auto &topology = tile->Topology();
+            if (!topology.offMeshLinks.empty())
                 return Result<void>::Failure(MakeError(NavigationErrors::OperationUnsupported));
-            }
-            vertices.insert(vertices.end(), resolved.tables.vertices.begin(), resolved.tables.vertices.end());
-            for (const auto &row : resolved.tables.polygons) {
-                if (row.vertexIndices.count > 6) {
+            const auto offset = static_cast<std::uint32_t>(vertices.size());
+            vertices.insert(vertices.end(), topology.vertices.begin(), topology.vertices.end());
+            for (const auto &row : topology.polygons) {
+                if (row.vertexIndices.count > 6)
                     return Result<void>::Failure(MakeError(NavigationErrors::OperationUnsupported));
-                }
                 GroundedNavigationPolygon polygon{.vertexCount = static_cast<std::uint8_t>(row.vertexIndices.count),
                                                   .area = row.area,
                                                   .surface = partition.surface};
-                for (std::size_t index = 0; index < row.vertexIndices.count; ++index) {
-                    polygon.vertexIndices[index] =
-                        resolved.tables.polygonVertexIndices[row.vertexIndices.first - tile.polygonVertexIndices.first + index];
-                }
+                for (std::size_t index = 0; index < row.vertexIndices.count; ++index)
+                    polygon.vertexIndices[index] = offset + topology.polygonVertexIndices[row.vertexIndices.first + index];
                 polygons.push_back(polygon);
             }
         }
@@ -122,15 +141,20 @@ namespace Horo::Navigation::AssetTestSupport {
         const auto converted = ConvertGroundMesh(partition, vertices, polygons);
         if (converted.HasError())
             return Result<NavigationPreparedAssetBackend>::Failure(converted.ErrorValue());
-        const std::array areas{
-            NavigationAreaDescriptor{.id = Id<NavigationAreaId>(11),
-                                     .source = {.kind = NavigationDescriptorSourceKind::Project, .id = Id<NavigationDescriptorSourceId>(1)},
-                                     .traversalCost = 1,
-                                     .flags = {.bits = 1}}};
+        const std::array areas{NavigationAreaDescriptor{.id = Id<NavigationAreaId>(11),
+                                                        .source = {.kind = NavigationDescriptorSourceKind::Project,
+                                                                   .id = Id<NavigationDescriptorSourceId>(1)},
+                                                        .traversalCost = 1,
+                                                        .flags = {.bits = 1}},
+                               NavigationAreaDescriptor{.id = Id<NavigationAreaId>(1),
+                                                        .source = {.kind = NavigationDescriptorSourceKind::Project,
+                                                                   .id = Id<NavigationDescriptorSourceId>(1)},
+                                                        .traversalCost = 1,
+                                                        .flags = {.bits = 1}}};
         const std::array filters{NavigationQueryFilterDescriptor{.id = Id<NavigationFilterId>(1),
                                                                  .source = {.kind = NavigationDescriptorSourceKind::Project,
                                                                             .id = Id<NavigationDescriptorSourceId>(1)}}};
-        const auto &geometry = partition.data.Header().profile.buildGeometry;
+        const auto &geometry = partition.descriptor.geometry;
         RecastDetourProviderCreateInfo info{.world = descriptor.world,
                                             .topology = descriptor.topology,
                                             .vertices = vertices,
