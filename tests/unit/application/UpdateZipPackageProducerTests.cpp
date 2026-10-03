@@ -500,7 +500,7 @@ TEST_CASE("ZIP bootstrap fixture supplies canonical native writer authority", "[
     const auto lockPath = directory.root / ".activation.lock";
     auto lock = files.TryAcquireExclusive(lockPath, "ZIP bootstrap fixture");
     if (lock.HasError())
-        INFO("Native writer authority error: " << lock.ErrorValue().code.Value());
+        UNSCOPED_INFO("Native writer authority error: " << lock.ErrorValue().code.Value());
     REQUIRE(lock.HasValue());
     CHECK(lock.Value().ProtectsPath(lockPath));
 }
@@ -525,7 +525,7 @@ TEST_CASE("Native portable ZIP bootstrap repairs and removes only owned files", 
     CHECK_FALSE(std::filesystem::exists(directory.root / "active-version"));
     const auto installed = BootstrapVerifiedInstallation(request, files, verifier, host);
     if (installed.HasError())
-        INFO("Bootstrap error: " << installed.ErrorValue().code.Value());
+        UNSCOPED_INFO("Bootstrap error: " << installed.ErrorValue().code.Value());
     REQUIRE(installed.HasValue());
     REQUIRE(RepairVerifiedInstallation(request, files, verifier, host).HasValue());
     WriteFile(stage / "user-note", "preserve");
