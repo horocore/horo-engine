@@ -1,5 +1,6 @@
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/WorldStreaming/StreamingCellAssetRequest.h"
+#include "Horo/WorldStreaming/StreamingCellDirection.h"
 #include "Horo/WorldStreaming/WorldStreamingErrors.h"
 #include "StreamingCellCandidateTestSupport.h"
 #include "WorldStreamingTestUtils.h"
@@ -7,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -35,6 +37,17 @@ namespace Horo::WorldStreaming {
 
         StreamingCellAssetRequestContext AssetRequestContext() {
             return {IdentityFrom<StreamingCellAssetRequestId>(3), Operation(), 3, StreamingCellAssetRequestLifecycle::Active};
+        }
+
+        /** @brief Create the bounded scheduler used by the asset-retirement regression. */
+        StreamingSchedulerAdmissionLedger RetirementScheduler() {
+            auto result = StreamingSchedulerAdmissionLedger::Create(IdentityFrom<StreamingSchedulerLedgerId>(1),
+                                                                    {1,
+                                                                     5,
+                                                                     {WorldPartitionProjectProfile::Editor,
+                                                                      IdentityFrom<StreamingConcurrencyRevision>(1), 1, 1, 1}});
+            REQUIRE(result.HasValue());
+            return std::move(result).Value();
         }
 
         struct RequestFixture final {
@@ -164,5 +177,148 @@ namespace Horo::WorldStreaming {
         WaitTerminal(request);
         REQUIRE(request.State() == StreamingCellAssetRequestState::Cancelled);
         REQUIRE(request.TakeResult().HasError());
+    }
+
+    TEST_CASE("Cell asset cancellation suppresses already ready bytes and leaves consumed success immutable",
+              "[unit][world_streaming][asset_request][direction]") {
+        RequestFixture fixture;
+        Assets::MemoryAssetProvider provider;
+        for (const auto id : fixture.ids)
+            provider.Insert(id, {1});
+        LoadHarness loads{provider, 1};
+        auto request = Submit(loads, fixture).Value();
+        WaitTerminal(request);
+        REQUIRE(request.State() == StreamingCellAssetRequestState::Ready);
+        REQUIRE(request.RequestCancel().HasValue());
+        REQUIRE(request.State() == StreamingCellAssetRequestState::Cancelled);
+        RequireError(request.TakeResult(), WorldStreamingErrors::CellAssetRequestCancelled);
+        RequireError(request.TakeResult(), WorldStreamingErrors::CellAssetRequestConsumed);
+        RequireError(request.RequestCancel(), WorldStreamingErrors::CellAssetRequestConsumed);
+
+        auto succeeded = Submit(loads, fixture).Value();
+        WaitTerminal(succeeded);
+        REQUIRE(succeeded.TakeResult().HasValue());
+        RequireError(succeeded.RequestCancel(), WorldStreamingErrors::CellAssetRequestConsumed);
+        REQUIRE(succeeded.State() == StreamingCellAssetRequestState::Ready);
+    }
+
+    namespace {
+        class DelayedProvider final : public Assets::IAssetProvider {
+        public:
+            Result<bool> Exists(Assets::AssetId, const CancellationToken &) const override {
+                return Result<bool>::Success(true);
+            }
+
+            Result<std::vector<std::uint8_t>> Load(Assets::AssetId, const CancellationToken &) const override {
+                entered.store(true);
+                while (!release.load())
+                    std::this_thread::yield();
+                return Result<std::vector<std::uint8_t>>::Success({1});
+            }
+
+            mutable std::atomic<bool> entered{};
+            mutable std::atomic<bool> release{};
+        };
+
+        class AssetRetirementParticipant final : public IStreamingCellRetirementParticipant {
+        public:
+            explicit AssetRetirementParticipant(bool &published) : published_(published) {}
+
+            void Start(StreamingCellAssetRequest request) {
+                request_.emplace(std::move(request));
+            }
+
+            StreamingCellActivationRequirement Requirement() const noexcept override {
+                return {IdentityFrom<StreamingRuntimeServiceId>(1), IdentityFrom<StreamingRuntimeServiceRevision>(1)};
+            }
+
+            StreamingCellOperationHandle Operation() const noexcept override {
+                return CandidateTestSupport::Operation();
+            }
+
+            void RevokeAccess() noexcept override {
+                if (request_)
+                    static_cast<void>(request_->RequestCancel());
+            }
+
+            void BeginRetirement() noexcept override {}
+
+            Result<std::optional<StreamingCellRetirementAcknowledgement>> PollRetirement() override {
+                if (!request_)
+                    return Result<std::optional<StreamingCellRetirementAcknowledgement>>::Success(
+                        StreamingCellRetirementAcknowledgement{Requirement(), Operation()});
+                const auto state = request_->State();
+                if (state == StreamingCellAssetRequestState::Loading || state == StreamingCellAssetRequestState::Cancelling)
+                    return Result<std::optional<StreamingCellRetirementAcknowledgement>>::Success(std::nullopt);
+                if (!consumed_) {
+                    auto result = request_->TakeResult();
+                    published_ = result.HasValue();
+                    consumed_ = true;
+                }
+                return Result<std::optional<StreamingCellRetirementAcknowledgement>>::Success(
+                    StreamingCellRetirementAcknowledgement{Requirement(), Operation()});
+            }
+
+        private:
+            bool &published_;
+            std::optional<StreamingCellAssetRequest> request_;
+            bool consumed_{};
+        };
+
+        struct ReleaseRead final {
+            const DelayedProvider &provider;
+
+            ~ReleaseRead() {
+                provider.release.store(true);
+            }
+        };
+    }  // namespace
+
+    TEST_CASE("Direction reversal drains actual uncancellable asset work before releasing scheduler capacity",
+              "[unit][world_streaming][asset_request][direction][lifecycle]") {
+        RequestFixture fixture;
+        DelayedProvider provider;
+        LoadHarness loads{provider, 1};
+        ReleaseRead release{provider};
+        auto scheduler = RetirementScheduler();
+        const auto operation = StreamingCellOperation::Create(CandidateTestSupport::Operation(), StreamingCellOperationKind::Load).Value();
+        std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> participants;
+        bool published{};
+        auto adapter = std::make_unique<AssetRetirementParticipant>(published);
+        auto &assets = *adapter;
+        participants.push_back(std::move(adapter));
+        auto owner = StreamingCellDirectionOwner::Create(scheduler,
+                                                         {operation, IdentityFrom<StreamingCellDemandRevision>(1),
+                                                          StreamingDesiredResidency::Loaded, 1, 5},
+                                                         participants)
+                         .Value();
+        REQUIRE(owner.Advance(owner.Operation(), StreamingCellOperationTransition::BeginPreparation).HasValue());
+        REQUIRE(scheduler.ReservedCapacityUnits() == 5);
+        assets.Start(Submit(loads, fixture).Value());
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (!provider.entered.load() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+        REQUIRE(provider.entered.load());
+        REQUIRE(owner
+                    .UpdateDemand(operation.Handle(), IdentityFrom<StreamingCellDemandRevision>(1),
+                                  IdentityFrom<StreamingCellDemandRevision>(2), StreamingDesiredResidency::Unloaded)
+                    .HasValue());
+        REQUIRE(owner.PollRetirement().Value().State() == StreamingCellOperationState::Retiring);
+        REQUIRE(scheduler.ReservedCapacityUnits() == 5);
+        REQUIRE(owner
+                    .UpdateDemand(operation.Handle(), IdentityFrom<StreamingCellDemandRevision>(2),
+                                  IdentityFrom<StreamingCellDemandRevision>(3), StreamingDesiredResidency::Loaded)
+                    .HasValue());
+        provider.release.store(true);
+        const auto drainDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (!owner.Operation().IsTerminal() && std::chrono::steady_clock::now() < drainDeadline) {
+            REQUIRE(owner.PollRetirement().HasValue());
+            std::this_thread::yield();
+        }
+        REQUIRE(owner.Operation().IsTerminal());
+        REQUIRE(owner.TakeTerminalResult().Value().Outcome() == StreamingCellOperationOutcome::Cancelled);
+        REQUIRE(scheduler.ReservedCapacityUnits() == 0);
+        REQUIRE(owner.RequiresFreshAttempt());
+        REQUIRE_FALSE(published);
     }
 }  // namespace Horo::WorldStreaming
