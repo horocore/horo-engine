@@ -307,13 +307,13 @@ namespace Horo::Character::Detail {
                                                  descriptor.collisionProfile,
                                                  descriptor.queryChannel,
                                                  impl.settings.Values().work.maximumMovementIterations};
+        if (const auto budget = ReserveTickQuery(impl); budget.HasError())
+            return budget;
         if (input.metrics != nullptr)
             ++input.metrics->snapshot.queries;
         auto probe = input.query.sweep(input.query.context, request);
-        if (impl.state.load() != CharacterWorldState::Active)
-            return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
-        if (probe.HasError())
-            return Result<void>::Failure(probe.ErrorValue());
+        if (const auto continuation = ValidateTickQueryContinuation(impl, probe); continuation.HasError())
+            return continuation;
         CharacterSweepProbeResult evidence = std::move(probe).Value();
         if (const auto valid = ValidateCharacterSweepProbeResult(evidence, request); valid.HasError())
             return valid;
@@ -349,15 +349,15 @@ namespace Horo::Character::Detail {
                                                  descriptor.collisionProfile,
                                                  descriptor.queryChannel,
                                                  iteration};
+        if (const auto budget = ReserveTickQuery(impl); budget.HasError())
+            return Result<bool>::Failure(budget.ErrorValue());
         if (input.metrics != nullptr) {
             ++input.metrics->snapshot.queries;
             ++input.metrics->snapshot.movementIterations;
         }
         auto probe = input.query.sweep(input.query.context, request);
-        if (impl.state.load() != CharacterWorldState::Active)
-            return Result<bool>::Failure(MakeError(CharacterErrors::InvalidState));
-        if (probe.HasError())
-            return Result<bool>::Failure(probe.ErrorValue());
+        if (const auto continuation = ValidateTickQueryContinuation(impl, probe); continuation.HasError())
+            return Result<bool>::Failure(continuation.ErrorValue());
         CharacterSweepProbeResult evidence = std::move(probe).Value();
         if (const auto valid = ValidateCharacterSweepProbeResult(evidence, request); valid.HasError())
             return Result<bool>::Failure(valid.ErrorValue());
@@ -379,7 +379,7 @@ namespace Horo::Character::Detail {
      * contact retention and projection against the canonical normal prefix, so native traversal order
      * cannot change the resulting motion.
      */
-    [[nodiscard]] Result<CharacterMovementResult> BuildCapsuleSweepMovementResult(const auto &impl, const CharacterMovementRequest &command,
+    [[nodiscard]] Result<CharacterMovementResult> BuildCapsuleSweepMovementResult(auto &impl, const CharacterMovementRequest &command,
                                                                                   const CharacterTransformPublication &previous,
                                                                                   const CharacterFixedTickInput &input,
                                                                                   const CharacterControllerDescriptor &descriptor) {

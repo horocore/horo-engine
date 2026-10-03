@@ -9,6 +9,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Save/SaveStorageAdapter.h"
 
+#include <memory>
 #include <optional>
 
 namespace Horo::Runtime {
@@ -49,6 +50,18 @@ namespace Horo::Runtime {
     };
 
     /**
+     * @brief Exclusive store-owned namespace/slot lease released by RAII.
+     *
+     * A lease covers journal inspection, generation comparison, publication and recovery cleanup.
+     * Implementations may serialize the whole namespace. The store and its locking authority must
+     * outlive the lease; releasing it must neither mutate storage nor throw.
+     */
+    class ISaveSlotOperationLease {
+    public:
+        virtual ~ISaveSlotOperationLease() = default;
+    };
+
+    /**
      * @brief Qualified backend seam for generation-addressed storage and one atomic catalog visibility gate.
      *
      * Implementations map typed values to private physical storage. Prepared generations are immutable and
@@ -60,6 +73,16 @@ namespace Horo::Runtime {
     class ISaveSlotCommitStore {
     public:
         virtual ~ISaveSlotCommitStore() = default;
+
+        /** @brief Acquires exclusive operation ownership before any journal or catalog access.
+         * @param address Exact namespace binding and slot; revalidate binding under the lease.
+         * @return Non-null owned lease, or OperationInProgress/typed failure without storage mutation.
+         * Concurrent threads and store instances sharing an authority must use the same lock domain.
+         * A filesystem store must also retain an exclusive kernel namespace lock while open.
+         * Read/list snapshots use this same domain and observe a complete old or new catalog.
+         * This worker-only operation must not run from a latency-sensitive owner loop.
+         */
+        [[nodiscard]] virtual Result<std::unique_ptr<ISaveSlotOperationLease>> AcquireLease(const SaveStorageAddress &address) = 0;
 
         /** @brief Loads the bounded journal for one leased slot. @param address Exact slot address.
          * @return Journal, absence, or a preserved storage failure. */
@@ -84,7 +107,7 @@ namespace Horo::Runtime {
         [[nodiscard]] virtual Result<void> RemoveJournal(const SaveSlotCommitJournal &journal) = 0;
     };
 
-    /** @brief Coordinates crash-safe slot publication while a caller holds the namespace and per-slot lease. */
+    /** @brief Coordinates crash-safe slot publication and recovery under an enforced store-owned exclusive lease. */
     class SaveSlotCommitTransaction final {
     public:
         /** @brief Binds a qualified store that outlives this coordinator. @param store Backend storage authority. */
@@ -93,7 +116,7 @@ namespace Horo::Runtime {
         /**
          * @brief Publishes one finalized archive and matching metadata as a new durable generation.
          * @param operation Non-zero operation identity.
-         * @param address Exact leased namespace and logical slot.
+         * @param address Exact namespace binding and logical slot; the coordinator acquires its lease.
          * @param previous Previously published entry, when overwriting.
          * @param candidate New catalog entry matching address and archive.
          * @param archive Complete finalized immutable archive.

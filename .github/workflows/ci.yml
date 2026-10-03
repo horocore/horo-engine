@@ -19,6 +19,10 @@ concurrency:
   # Let main finish its build checkpoints; supersede stale pull requests.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Direct sccache uploads follow the same main-only policy as snapshots.
+env:
+  SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
+
 jobs:
   format:
     name: Format & Tooling Check
@@ -386,7 +390,8 @@ jobs:
         with:
           version: v0.17.0
 
-      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: fetchcontent-vfx-windows-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
@@ -412,6 +417,13 @@ jobs:
           SCCACHE_GHA_ENABLED: 'true'
           SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
 
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
+
   cinematic-foundation-windows:
     name: Cinematic Foundation · Windows / MSVC
     runs-on: windows-2022
@@ -428,7 +440,8 @@ jobs:
         with:
           version: v0.17.0
 
-      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: fetchcontent-cinematic-windows-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
@@ -445,14 +458,24 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
-          cmake --build build/cinematic-windows --target HoroCinematicModelTests HoroCinematicRuntimeTests --parallel 2
-          ctest --test-dir build/cinematic-windows -R '^HoroCinematic(Model|Runtime)Tests::' --output-on-failure -j 2
+          cmake --build build/cinematic-windows --target \
+            HoroCinematicModelTests HoroCinematicRuntimeTests HoroCinematicPropertyIntegrationTests \
+            HoroCinematicModelPublicHeaderConsumer HoroCinematicRuntimePublicHeaderConsumer HoroEditorServicesPublicHeaderConsumer \
+            --parallel 2
+          ctest --test-dir build/cinematic-windows -R '^HoroCinematic(Model|Runtime|PropertyIntegration)Tests::' --output-on-failure -j 2
         env:
           CC: cl
           CXX: cl
           FETCHCONTENT_BASE_DIR: ${{ github.workspace }}/.cmake/fetchcontent
           SCCACHE_GHA_ENABLED: 'true'
           SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
+
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
 
   navigation-compositions:
     name: Navigation Provider Compositions
@@ -465,7 +488,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: navigation-compositions-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
@@ -480,8 +504,18 @@ jobs:
               -DHORO_BUILD_EDITOR_GUI=OFF \
               -DHORO_BUILD_EXAMPLES=OFF \
               -DHORO_BUILD_NAVIGATION_RECAST_DETOUR="${enabled}"
-            cmake --build "${build_dir}" --target \
+            cmake --build "${build_dir}" --parallel 2 --target \
               HoroNavigationRuntime HoroNavigationNull HoroNavigationRecastDetour \
               HoroNavigationApiPublicHeaderConsumer HoroNavigationRuntimePublicHeaderConsumer \
-              HoroNavigationNullPublicHeaderConsumer HoroNavigationRecastDetourPublicHeaderConsumer
+              HoroNavigationNullPublicHeaderConsumer HoroNavigationRecastDetourPublicHeaderConsumer \
+              HoroNavigationBakeServicePublicHeaderConsumer HoroNavigationBakeDiagnosticsPublicConsumer
+            ctest --test-dir "${build_dir}" -j 1 \
+              -R '^HoroNavigationBakeDiagnosticsPublicConsumer$' --output-on-failure
           done
+
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}

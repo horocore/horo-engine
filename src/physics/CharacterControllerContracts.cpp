@@ -41,6 +41,14 @@ namespace Horo::Character {
             if (const auto capsule = Physics::ValidatePhysicsShapeDescriptor(Physics::PhysicsShapeDescriptor{descriptor.capsule});
                 capsule.HasError())
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Controller capsule dimensions are invalid."));
+            if (descriptor.crouchedCapsule.has_value()) {
+                const auto &crouched = *descriptor.crouchedCapsule;
+                if (Physics::ValidatePhysicsShapeDescriptor(Physics::PhysicsShapeDescriptor{crouched}).HasError() ||
+                    crouched.radiusMeters != descriptor.capsule.radiusMeters ||
+                    crouched.cylindricalHalfHeightMeters >= descriptor.capsule.cylindricalHalfHeightMeters)
+                    return Result<void>::Failure(
+                        MakeError(CharacterErrors::DescriptorInvalid, "Crouch requires the standing radius and a lower height."));
+            }
             if (!Math::IsFinite(descriptor.collisionRootPosition) || !IsUnit(descriptor.up) || !Math::IsFinite(descriptor.gravity))
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
             return Result<void>::Success();
@@ -106,12 +114,28 @@ namespace Horo::Character {
                     material.slot == fallback.slot);
         }
 
+        /** @brief Checks the closed stance and shape-result vocabulary before publication. */
+        [[nodiscard]] bool IsShapeStateValid(const Physics::PhysicsCapsuleShape capsule, const CharacterStance stance) noexcept {
+            using enum CharacterStance;
+            const bool knownStance = stance == Standing || stance == Crouched || stance == Custom;
+            return knownStance && std::isfinite(capsule.radiusMeters) && capsule.radiusMeters > 0 &&
+                   std::isfinite(capsule.cylindricalHalfHeightMeters) && capsule.cylindricalHalfHeightMeters > 0 &&
+                   std::isfinite(capsule.radiusMeters + capsule.cylindricalHalfHeightMeters);
+        }
+
         /** @brief Checks movement metadata before flags, capacities and surface evidence. */
         [[nodiscard]] Result<void> ValidateResultMetadata(const CharacterMovementResult &result) {
             if (result.tick == 0 || result.sequence == 0 || !Math::IsFinite(result.finalPosition) || !IsUnit(result.finalHeading) ||
                 !Math::IsFinite(result.achievedVelocityMetersPerSecond) || !IsUnit(result.up) ||
                 !std::isfinite(result.groundSlopeDegrees) || result.groundSlopeDegrees < 0 || result.groundSlopeDegrees > 180)
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Movement result metadata is invalid."));
+            if (result.shapeChange.has_value()) {
+                using enum CharacterShapeChangeStatus;
+                const auto &shape = *result.shapeChange;
+                if (!IsShapeStateValid(shape.effectiveCapsule, shape.effectiveStance) ||
+                    (shape.status != Applied && shape.status != Blocked && shape.status != Invalid))
+                    return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
+            }
             return Result<void>::Success();
         }
 
@@ -451,6 +475,14 @@ namespace Horo::Character {
                 ValidateCharacterControllerHandleOwner(snapshot.controller, descriptor.sceneGeneration, descriptor.characterWorld);
             owner.HasError())
             return owner;
+        if (!IsShapeStateValid(snapshot.capsule, snapshot.stance))
+            return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
+        if (snapshot.movement.shapeChange.has_value()) {
+            const auto &shape = *snapshot.movement.shapeChange;
+            if (snapshot.stance != shape.effectiveStance || snapshot.capsule.radiusMeters != shape.effectiveCapsule.radiusMeters ||
+                snapshot.capsule.cylindricalHalfHeightMeters != shape.effectiveCapsule.cylindricalHalfHeightMeters)
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
+        }
         if (snapshot.stateRevision == 0)
             return Result<void>::Failure(MakeError(CharacterErrors::PlacementInvalid, "Locomotion state revision is invalid."));
         if (const auto movement = ValidateCharacterMovementResult(snapshot.movement, descriptor); movement.HasError())

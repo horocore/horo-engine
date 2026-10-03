@@ -55,6 +55,23 @@ namespace Horo::Runtime::Ui::AccessibilityInternal {
             return node.state.Has(UiAccessibilityStateFlag::Focused) &&
                    (node.state.Has(UiAccessibilityStateFlag::Disabled) || IsInactive(node.exposure));
         }
+
+        /** @brief Checks inclusive retained ancestry within the tree's admitted depth bound. */
+        bool WithinModal(const UiElementTree &tree, UiElementHandle element, const UiElementHandle root) {
+            while (element.IsValid()) {
+                if (element == root)
+                    return true;
+                element = tree.Get(element).Value().parent;
+            }
+            return false;
+        }
+
+        /** @brief Applies the inclusive modal fence without removing outside diagnostic semantics. */
+        void ApplyModalExposure(const UiElementTree &tree, const UiElementHandle element, const UiElementHandle root,
+                                UiAccessibilityNodeInput &node) {
+            if (root.IsValid() && !WithinModal(tree, element, root))
+                node.exposure = UiAccessibilityExposure::Covered;
+        }
     }  // namespace
 
     /** @copydoc ValidateInputBounds */
@@ -80,6 +97,8 @@ namespace Horo::Runtime::Ui::AccessibilityInternal {
         const auto order = tree.Preorder(preorder);
         if (order.HasError())
             return Result<void>::Failure(order.ErrorValue());
+        if (projection.modalRoot.IsValid() && tree.Get(projection.modalRoot).HasError())
+            return Result<void>::Failure(MakeError(UiErrors::AccessibilitySnapshotSourceStale));
         reading.clear();
         for (const auto handle : std::span{preorder}.first(order.Value())) {
             const auto record = tree.Get(handle).Value();
@@ -92,6 +111,7 @@ namespace Horo::Runtime::Ui::AccessibilityInternal {
             node.exposure = Exposure(tree, record.parent, node.exposure, projection, lookup);
             if (node.exposure == UiAccessibilityExposure::Hidden)
                 continue;
+            ApplyModalExposure(tree, handle, projection.modalRoot, node);
             if (InvalidFocus(node))
                 return Result<void>::Failure(MakeError(UiErrors::AccessibilityStateInvalid));
             reading.push_back(node);

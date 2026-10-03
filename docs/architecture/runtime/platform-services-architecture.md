@@ -221,6 +221,60 @@ The first typed operation is an achievement unlock carrying one canonical Horo
 stable ID for the active provider session. Other service payload schemas and
 complete product-profile routing remain separate follow-on work.
 
+### PLS-002.5 product composition
+
+`PlatformServicesComposition` is a host-owned, load-time boundary in the standalone
+`HoroEngine::PlatformServices` target. It does not link editor, renderer, overlay,
+Extensions or proprietary SDK targets. A host injects one exact factory with exclusive
+backend ownership and copied matching session evidence. No process-global provider or
+implicit module registration is introduced.
+
+| Product profile | Existing provider ABI admission profile | Provider policy |
+|---|---|---|
+| Editor / development game | InteractiveDevelopment | Trusted exact provider or explicit Null |
+| Shipping game | Certification | Exact signed-product evidence or explicit optional Null; no development/fixture fallback |
+| Headless / dedicated server | HeadlessServer | Explicit Null by default; exact server-manifest provider requires server-specific session/credential policy |
+| Test | InteractiveDevelopment | Explicit public test fixture or Null; private providers excluded |
+| Unsupported platform | Cook | Explicit absence or Null; provider factories never run |
+
+Product profiles are distinct typed values; the existing four-bit provider ABI and
+project configuration schema remain unchanged. Product-manifest verification remains
+with the application/package trust owner. It supplies provenance, the exact immutable
+configuration fingerprint, a fresh provider generation and an explicit service
+allowlist. Shipping evidence means the signed manifest's exact package/module hashes,
+ABI, SDK runtime and entitlements were verified before composition. This boundary
+cannot discover, verify or load arbitrary packages. Host integration must supply a
+factory bound to the configuration's exact selected module/provider; the composition
+revalidates the returned Horo identity, generation, manifest claims and session.
+
+Null and absence allocate no backend and never invoke a factory. Null returns
+`platform.provider.null` when acquiring a request surface; absence returns typed
+unavailability. Neither acknowledges service writes. Required services fail project
+validation with Null, and product allowlists cannot suppress a required service.
+Provider-reported capabilities outside selected manifest claims fail startup. The
+frontend operation policy intersects enabled project services and the product allowlist;
+public diagnostics expose only admitted Horo availability/reasons and provider identity,
+without binding tokens, sessions, native SDK strings or internal limits.
+
+A transition validates the new selection first, then closes the old frontend before
+invoking a new factory. All generations, including Null and absence, strictly advance.
+Retained old frontend leases remain closed; the old provider/session cannot authorize
+new work. Failed new startup leaves the owner explicitly closed. Failed old shutdown
+retains the owner, revokes capability truth and blocks replacement until host recovery
+or restart. Concrete adapters remain responsible for retaining callback/code resources
+when native teardown cannot finish, as required by ADR-130/131. No normal transition
+reuses a backend or session from another product policy.
+
+Contribution admission/factory retirement and native operation lifecycle are separate
+translation units within `HoroPlatformServicesExtension`. One target-private candidate
+state definition preserves their existing shared ownership and synchronization boundary;
+no new cross-target interface or public ABI is introduced.
+
+The native operation lifecycle also checks that the immutable configuration profile
+matches its admission owner and the selected contribution's profile mask before invoking
+a candidate factory. This prevents reusing a development configuration through an
+already admitted headless or certification owner.
+
 Provider discovery reads only verified `.horopkg` install records and inert manifests;
 it never probes PATH or loads candidates to discover capabilities. Package/Trust
 services resolve integrity, signature, permissions, license and enablement. ExtensionHost
@@ -309,9 +363,9 @@ Implementation status on 10 September 2026: PLS-001.2 provides the standalone
 `HoroEngine::PlatformServices` target and the typed `PlatformRequestStore` foundation.
 It owns bounded active/terminal records, generation-fenced move-only handles, immutable
 typed terminal snapshots, idempotent cancellation intent, and deferred at-most-once
-`OnComplete` subscriptions. Provider routing, the SDK evidence queue, timeout policy,
-provider cancellation, normalized provider errors, and host-wide frontend composition
-remain the later PLS-001.3 through PLS-001.8 slices; callers must not treat the request
+`OnComplete` subscriptions. The later PLS-001.3 through PLS-001.6 slices add routing,
+the provider evidence queue, request finalization and normalized provider errors.
+Host-wide frontend composition remains separate; callers must not treat the request
 store as a provider backend or bypass those owners.
 
 PLS-001.3 adds the generation-fenced `PlatformServicesFrontend` routing boundary.
@@ -321,6 +375,19 @@ unavailable/Null, stale-session, malformed-ID and over-bound requests before bac
 invocation. Routing and idempotent `Close` are serialized by the composition owner;
 `Close` publishes closed admission before invoking backend shutdown. The completion
 queue and provider-to-frontend request-store handoff remain PLS-001.4 scope.
+
+PLS-001.5 gives the version-2 provider lifecycle host a finite per-service request
+policy (30 seconds by default, at most 24 hours), queued owner-lane submission and
+explicit caller cancellation. Existing direct host callers must pump
+`DispatchCompletions` on the owner lane regularly to start queued work, apply ingress,
+evaluate deadlines and deliver terminal observers; without that pump neither launch
+nor timeout advances. `RequestCancel` before the first turn completes the request
+without a native call. Executing cancellation queues one native best-effort
+request for the next owner-lane turn and waits for completion or the admission deadline. The host processes copied
+completion ingress observed by the deadline before its timeout sweep. At timeout it
+publishes the immutable caller result and dispatches observers even when native cancel
+is unsupported. Native leases remain bounded and generation-fenced until a late
+completion or safe provider drain retires them; neither path rewrites the result.
 
 ```cpp
 template <typename T>
@@ -1846,3 +1913,10 @@ Platform-specific backend tests live in the private platform repositories.
   bytes, bounded local admission, credential isolation and save tool policy.
 - [Extension System](../extensions/plugin-system.md)
 - [Release Security](../release/release-security.md)
+
+Candidate rollback failures preserve the composition-owned backend and typed
+shutdown error. The composition stays closed and rejects replacement generations
+until the host restarts; subsequent Close calls do not retry or discard the
+undrained candidate. Standard and non-standard adapter exceptions become typed
+unavailability, and concrete adapters retain native code/resources when final
+destruction cannot safely drain them.
