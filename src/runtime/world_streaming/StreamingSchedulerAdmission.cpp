@@ -36,12 +36,13 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingConcurrencyPolicy::Limit */
     Result<std::uint32_t> StreamingConcurrencyPolicy::Limit(const StreamingCellOperationKind kind) const {
+        using enum StreamingCellOperationKind;
         switch (kind) {
-            case StreamingCellOperationKind::Load:
+            case Load:
                 return Result<std::uint32_t>::Success(loads);
-            case StreamingCellOperationKind::Activate:
+            case Activate:
                 return Result<std::uint32_t>::Success(activations);
-            case StreamingCellOperationKind::Retire:
+            case Retire:
                 return Result<std::uint32_t>::Success(retirements);
         }
         return Failure<std::uint32_t>(WorldStreamingErrors::SchedulerConcurrencyUnsupported);
@@ -60,7 +61,7 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingSchedulerAdmissionLedger::Create */
     Result<StreamingSchedulerAdmissionLedger> StreamingSchedulerAdmissionLedger::Create(const StreamingSchedulerLedgerId owner,
-                                                                                        const StreamingSchedulerAdmissionLimits limits) {
+                                                                                        const StreamingSchedulerAdmissionLimits &limits) {
         if (!owner.IsValid() || !limits.concurrency.revision.IsValid())
             return Failure<StreamingSchedulerAdmissionLedger>(WorldStreamingErrors::SchedulerAdmissionInvalid);
         if (limits.concurrency.profile >= WorldPartitionProjectProfile::Count)
@@ -140,8 +141,7 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingSchedulerAdmissionLedger::ReservedCount */
     Result<std::size_t> StreamingSchedulerAdmissionLedger::ReservedCount(const StreamingCellOperationKind kind) const {
-        const auto limit = limits_.concurrency.Limit(kind);
-        if (limit.HasError())
+        if (const auto limit = limits_.concurrency.Limit(kind); limit.HasError())
             return Result<std::size_t>::Failure(limit.ErrorValue());
         return Result<std::size_t>::Success(static_cast<std::size_t>(std::ranges::count_if(entries_, [kind](const Entry &entry) {
             return entry.operation.Kind() == kind;
@@ -224,6 +224,6 @@ namespace Horo::WorldStreaming {
     }
 
     StreamingSchedulerAdmissionLedger::StreamingSchedulerAdmissionLedger(const StreamingSchedulerLedgerId owner,
-                                                                         const StreamingSchedulerAdmissionLimits limits) noexcept
+                                                                         const StreamingSchedulerAdmissionLimits &limits) noexcept
         : owner_(owner), limits_(limits) {}
 }  // namespace Horo::WorldStreaming

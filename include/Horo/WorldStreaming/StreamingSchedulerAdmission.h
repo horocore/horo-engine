@@ -111,7 +111,7 @@ namespace Horo::WorldStreaming {
          * @return Empty ledger or a typed invalid/capacity failure.
          */
         [[nodiscard]] static Result<StreamingSchedulerAdmissionLedger> Create(StreamingSchedulerLedgerId owner,
-                                                                              StreamingSchedulerAdmissionLimits limits);
+                                                                              const StreamingSchedulerAdmissionLimits &limits);
 
         /**
          * @brief Atomically reserves required capacity and admits one exact queued operation.
@@ -182,7 +182,7 @@ namespace Horo::WorldStreaming {
             StreamingCellOperation operation;
         };
 
-        StreamingSchedulerAdmissionLedger(StreamingSchedulerLedgerId owner, StreamingSchedulerAdmissionLimits limits) noexcept;
+        StreamingSchedulerAdmissionLedger(StreamingSchedulerLedgerId owner, const StreamingSchedulerAdmissionLimits &limits) noexcept;
 
         StreamingSchedulerLedgerId owner_{};
         StreamingSchedulerAdmissionLimits limits_{};
