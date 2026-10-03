@@ -203,7 +203,13 @@ TEST_CASE("Release archive consumes only verified pinned cook generation", "[ass
     } cleanup{root};
 
     std::filesystem::create_directories(root);
-    auto generation = PublishCookGeneration(root, target, entries, payloads);
+    NativeDurableFileSystem files;
+    auto writer = files.TryAcquireExclusive(std::filesystem::weakly_canonical(root) / ".cook-writer.lock", "archive fixture");
+    REQUIRE(writer.HasValue());
+    const AssetCookPublicationPolicy policy{.files = &files,
+                                            .operationId = "10000000-0000-0000-0000-000000000001",
+                                            .writerLease = &writer.Value()};
+    auto generation = PublishCookGeneration(std::filesystem::weakly_canonical(root), target, entries, payloads, {}, policy);
     REQUIRE(generation.HasValue());
     auto archive = BuildAssetArchive(Plan(first, second), generation.Value());
     REQUIRE(archive.HasValue());

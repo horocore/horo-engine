@@ -126,6 +126,7 @@ endif ()
 
 add_library(HoroPlatform STATIC
         platform/Platform.cpp
+        platform/PlatformPublicationLock.cpp
         platform/ProductProbeLease.cpp
         platform/PlatformErrors.cpp
         platform/ConfigurationFileStore.cpp
@@ -736,6 +737,9 @@ add_library(HoroAssets STATIC
         runtime/assets/cooker/AssetCookOutput.cpp
         runtime/assets/cooker/AssetCookOperationScope.cpp
         runtime/assets/cooker/AssetCookOperationScope.h
+        runtime/assets/cooker/AssetCookStoragePaths.cpp
+        runtime/assets/cooker/AssetCookStorageRead.cpp
+        runtime/assets/cooker/AssetCookStorageRecovery.cpp
         runtime/assets/cooker/AssetCookService.cpp
         runtime/assets/cooker/AssetCookTransaction.cpp
         runtime/assets/importer/AssetImporterCatalog.cpp
@@ -1306,6 +1310,8 @@ target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::Navigati
 add_library(HoroNavigationBakeService STATIC
         application/navigation/NavigationBakeService.cpp
         application/navigation/NavigationBakeCook.cpp
+        application/navigation/NavigationBakeSourceAuthority.cpp
+        application/navigation/NavigationBakePublication.cpp
         application/navigation/NavigationBakeDiagnostics.cpp
         application/navigation/NavigationBakeDiagnosticCodec.cpp
         application/navigation/NavigationBakeDiagnosticProjection.cpp

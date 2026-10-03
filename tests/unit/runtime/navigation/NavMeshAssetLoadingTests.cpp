@@ -3,6 +3,7 @@
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #include "Horo/Navigation/NavigationAssetSceneActivation.h"
 #include "Horo/Navigation/NavigationRuntimeQueues.h"
+#include "PublicationOperationId.h"
 #include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavMeshAssetTestFixtures.h"
 #include "navigation/NavigationRuntimeTestFixtures.h"
@@ -21,19 +22,26 @@ namespace Horo::Navigation {
     namespace {
         /** @brief Execute the authoritative native producer and read its durable published generation. */
         [[nodiscard]] std::vector<std::uint8_t> BakeCanonicalContent(const std::filesystem::path &projectRoot) {
+            const auto canonicalRoot = std::filesystem::canonical(projectRoot);
             TestSupport::IncrementalBakeFixture input;
             OperationStore operations{8, 16};
             JobSystem bakeJobs{{.workerCount = 2, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 32}};
             Application::NavigationBakeServiceConfig config{.definition = Asset(),
                                                             .artifactType = Type(),
                                                             .target = Target(),
-                                                            .cacheRoot = projectRoot / "tile-cache",
-                                                            .targetRoot = projectRoot / "cook-output",
+                                                            .cacheRoot = canonicalRoot / "tile-cache",
+                                                            .targetRoot = canonicalRoot / "cook-output",
                                                             .builder = CreateRecastDetourNavigationMeshBuilder().Value(),
                                                             .files = std::make_shared<NativeDurableFileSystem>(),
                                                             .budget = {1, 1024ULL * 1024ULL * 1024ULL, 128U * 1024U * 1024U, 8,
-                                                                       1024ULL * 1024ULL * 1024ULL, Duration::FromMilliseconds(2000)}};
-            auto bake = Application::NavigationBakeService::Create(config, operations, bakeJobs).Value();
+                                                                       1024ULL * 1024ULL * 1024ULL, Duration::FromMilliseconds(2000)},
+                                                            .sourceAuthority =
+                                                                std::make_shared<Application::NavigationBakeSourceAuthority>(),
+                                                            .newOperationId = Horo::TestSupport::NewPublicationOperationId};
+            REQUIRE(config.sourceAuthority->UpdateCurrent(input.revisions, input.Observations()).HasValue());
+            auto created = Application::NavigationBakeService::Create(config, operations, bakeJobs);
+            REQUIRE(created.HasValue());
+            auto bake = std::move(created).Value();
             REQUIRE(bake->Submit({.input = input.Input(),
                                   .compatibility = input.compatibility,
                                   .tiles = input.Tiles(),

@@ -48,6 +48,8 @@ namespace Horo::Application::NavigationBakeDetail {
         std::vector<Navigation::NavigationPreparedTile> prepared;
         std::shared_ptr<NavigationBakePublication> candidate;
         std::vector<std::uint8_t> envelope;
+        std::shared_ptr<Navigation::NavigationBakePublicationReceipt> publicationReceipt{
+            std::make_shared<Navigation::NavigationBakePublicationReceipt>()};
         std::shared_ptr<NavigationBakeDiagnostics> diagnostics;
     };
 

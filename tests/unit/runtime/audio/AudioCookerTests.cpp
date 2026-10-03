@@ -3,6 +3,7 @@
 #include "Horo/Audio/AudioCooker.h"
 #include "Horo/Audio/AudioErrors.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "assets/AssetCookPublicationFixture.h"
 
 #include <algorithm>
 #include <array>
@@ -497,6 +498,7 @@ namespace Horo::Audio {
             .registry = registry.Snapshot(),
             .target = target,
         };
+        Horo::Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(request);
         JobSystem jobs;
         const AudioCookProfile baseline;
         auto first = RunAudioCook(request, type.Value(), target, jobs, baseline);

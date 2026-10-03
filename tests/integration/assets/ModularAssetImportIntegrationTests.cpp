@@ -12,6 +12,7 @@
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "ProjectAssetImportCommitter.h"
+#include "assets/AssetCookPublicationFixture.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -52,7 +53,7 @@ namespace {
             std::filesystem::create_directories(tmp);
             auto unique = tmp / ("test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
             std::filesystem::create_directories(unique);
-            path = unique;
+            path = std::filesystem::canonical(unique);
         }
 
         ~TempDir() {
@@ -206,6 +207,7 @@ TEST_CASE("Full pipeline: create project, import, cook, load", "[native][integra
                 .registry = snapshot,
                 .target = Target("headless-null"),
             };
+            Horo::Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(cookRequest);
 
             auto cookResult = cookService.Cook(cookRequest, cancellation);
             REQUIRE((cookResult.HasValue()));
