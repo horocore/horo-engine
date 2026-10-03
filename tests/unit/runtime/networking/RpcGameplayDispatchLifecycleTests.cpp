@@ -201,6 +201,9 @@ namespace Horo::Network {
         const std::weak_ptr<Handler> handlerWeak = fixture.handler;
         auto serializer = std::make_shared<CallbackSerializer>(fixture.serializer);
         const std::weak_ptr<CallbackSerializer> serializerWeak = serializer;
+        // Avoid an implicit shared_ptr<Handler> conversion temporary retaining an external
+        // handler owner until after RegisterHandler's by-value lease parameter is destroyed.
+        std::shared_ptr<IRpcGameplayHandler> handler = fixture.handler;
         std::array<std::shared_ptr<const IReplicationFieldSerializer>, 1> codecs{serializer};
         serializer->duringDestruction = [&serializerDestroyedWithLease, leaseWeak] {
             serializerDestroyedWithLease = !leaseWeak.expired();
@@ -208,11 +211,12 @@ namespace Horo::Network {
         fixture.handler->duringDestruction = [&handlerDestroyedWithLease, leaseWeak] {
             handlerDestroyedWithLease = !leaseWeak.expired();
         };
-        serializer->duringDescriptor = [&fixture, &codecs, &serializer, &dispatchPinned, &inputsPinned, dispatchWeak, handlerWeak,
+        serializer->duringDescriptor = [&fixture, &codecs, &serializer, &handler, &dispatchPinned, &inputsPinned, dispatchWeak, handlerWeak,
                                         serializerWeak, leaseWeak] {
             fixture.dispatch->Shutdown();
             fixture.dispatch.reset();
             fixture.handler.reset();
+            handler.reset();
             fixture.moduleLease.reset();
             codecs[0].reset();
             serializer.reset();
@@ -220,7 +224,7 @@ namespace Horo::Network {
             inputsPinned = !handlerWeak.expired() && !serializerWeak.expired() && !leaseWeak.expired();
         };
         auto *const dispatch = fixture.dispatch.get();
-        TestSupport::RequireError(dispatch->RegisterHandler(fixture.rpc, fixture.handler, codecs, fixture.moduleLease),
+        TestSupport::RequireError(dispatch->RegisterHandler(fixture.rpc, handler, codecs, fixture.moduleLease),
                                   NetworkErrors::SessionShuttingDown);
         REQUIRE(dispatchPinned);
         REQUIRE(inputsPinned);
