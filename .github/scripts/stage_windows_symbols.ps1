@@ -25,3 +25,12 @@ foreach ($library in @('dbghelp.dll', 'dbgcore.dll', 'symsrv.dll', 'srcsrv.dll')
     Write-Output "Staged symbol library: $source ($((Get-Item -LiteralPath $source).VersionInfo.FileVersion))"
   }
 }
+
+# Run from outside the binary directory to catch accidental reliance on the caller's working directory.
+Push-Location ([System.IO.Path]::GetTempPath())
+try {
+  & (Join-Path $destination 'HoroMixerAllocationFailureWorker.exe') --check-symbols
+  if ($LASTEXITCODE -ne 0) { throw "Allocation worker PDB self-check failed: $LASTEXITCODE" }
+} finally {
+  Pop-Location
+}
