@@ -959,6 +959,83 @@ a project needs broadcast-style auto-ducking.
 
 ## Voice Model
 
+### AUD-003.3 resident playback controls
+
+`HoroEngine::AudioPlayback` owns `AudioVoicePlayback`, the resident PCM execution
+path over the canonical `AudioVoiceStateMachine` and `AudioResampler`. Control
+copies admitted decoded planar PCM into owned storage, reserves DSP/history and
+coefficient banks, and acquires one canonical voice handle in Ready state. It
+then transfers the registry and playback owners together to the exclusive render
+lane at a quiescent boundary. This introduces no concurrent registry access:
+callback validation/transitions use fixed static error descriptors, while general
+`Result` diagnostics, admission, release, moves and destruction stay on detached
+control. The callback produces voice-state facts; control still owns runtime,
+device, scene and operation reconciliation under ADR-062.
+
+`AudioVoiceControlRequest` is an AudioApi-owned value carried by the ordinary
+AudioCommands staging/SPSC/scheduled-batch path. Stop and Cancel reserve critical
+capacity; controls never coalesce or bypass FIFO order. A render-core composition
+validates the published epoch/context, resolves the retained playback owner, and
+calls Apply at the admitted sample/buffer boundary. The existing start/stop values
+remain valid and map to the corresponding typed operation. Controls do not select
+a device, find an asset, or call a scene. Null and interactive backends use the
+same retained render-port composition; the Null integration test executes actual
+PCM and controls through the production SPSC buffer.
+
+| Control | Preconditions and committed behavior |
+|---|---|
+| Start | Ready only; passes Scheduled to Playing at the admitted boundary, retaining the current cursor. Terminal voices require a new generation. |
+| Pause | Playing only; fades the held last output to zero, then enters Paused. Cursor, resampler fraction, look-ahead and history remain frozen. |
+| Resume | Paused only; returns Playing and fades new PCM from zero, preserving fractional position/history. |
+| Stop | Ready, Playing or Paused; enters Stopping and then Stopped, discarding DSP tail. Overrides a pending discontinuity using the current held amplitude. |
+| Seek | Ready, Playing or Paused; source integer frame in `[0, sourceFrames]`, or strictly below enabled loop end. After fade-out, commits the target and resets history, look-ahead, end marker and fractional phase. |
+| SetLoop | Same states; disabled intervals have zero endpoints, enabled intervals satisfy `begin < end <= sourceFrames`. After fade-out, resets DSP; a cursor at/after the new end moves to begin. |
+| Pitch | A fresh ClipToMix resampler is prepared off-callback with the same input/output rates, channels, quality and block bound. At the boundary SwapPitch exchanges retained banks without freeing, then performs the seek-style reset at the integer cursor. Control retires the old bank after acknowledgement/detachment. |
+| Playback speed | Unity is a no-op in a controllable state. Every other value, including non-finite/negative/zero, returns `audio.operation.unsupported`: no time-stretch provider is implemented or implicitly substituted. |
+| Cancel | Any nonterminal voice; publishes Cancelled immediately, suppresses queued ramps and retains memory until detached control reclamation. |
+
+Every ramp has an explicit positive output-frame length of at most 16,384 frames.
+Start/resume and post-reset fade-in use gains `1/N ... 1`. Discontinuity fade-out
+holds the last actual output sample with gains `(N-1)/N ... 0`; it does not consume
+old PCM or advance time. Seek/loop targets commit only at the zero sample. Pitch
+exchanges its prepared converter immediately but processes no new PCM until that
+zero boundary. Ready/Paused resets commit immediately because they emit silence.
+Other controls during a pending fade fail transactionally except Stop/Cancel.
+Zero-length render calls advance neither ramps nor PCM. Malformed buffers leave
+output and state untouched; inactive/paused/terminal output is positive-zero
+silence. Rejected handles and controls allocate nothing and change no state.
+
+The audible cursor separates a bounded integer source frame and `[0,1)` fraction
+from decoder/resampler look-ahead consumption. Each emitted PCM frame advances by
+the admitted input/output-rate ratio times pitch. Loop intervals are exclusive at
+end, permit an intro before begin, and wrap modulo interval length, including
+multiple wraps at high pitch. The resampler receives continuously wrapped PCM
+without an end marker or history reset. Discontinuous seek/loop/pitch resets
+discard fractional phase intentionally. Non-looping EOF clamps the audible cursor
+at sourceFrames while the existing resampler drains its bounded finite tail; only
+then does the canonical voice become Finished. Empty/end-seek voices finish without
+PCM. Render exposes a terminal fact once; the registry retains its exact disposition
+until detached control reconciles and releases it. Shutdown/cancellation already
+committed in the registry is observed without generating a second terminal state.
+
+Preparation admits copied PCM plus fixed owner/scratch bytes separately from the
+resampler's history/work and coefficient reservations. Render is bounded by the
+plan's channels, taps and output limit: one output frame uses at most
+`taps/2 + 66` demand-driven one-frame resampler calls, with prealigned source/output
+scratch. There are no allocations, frees, locks, callback waits, I/O or ordinary
+logs. This conservative scalar composition has no measured aggregate deadline
+qualification; hosts must budget its buffer validation, feed and ramp costs in
+addition to sample products before admitting a device voice workload. It does not
+implement streaming fills/underruns, mixer routing, spatialization, virtualization
+or an application audio service; those retain their declared owning tickets.
+
+This is an additive execution contract. Existing registry callers keep their
+control-only APIs; hosts opting into playback link AudioPlayback and keep its
+borrowed canonical registry alive through detachment and terminal reconciliation.
+The new AudioCommandPayload alternative requires exhaustive visitors to handle
+AudioVoiceControlRequest; in-tree normalization covers it. The generated Api,
+Dsp, Commands and Playback public-header consumers enforce each staged boundary.
+
 A voice represents one active playback instance with:
 
 - clip, stream, or prepared sound-generator handle

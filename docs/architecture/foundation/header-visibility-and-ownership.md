@@ -8,6 +8,22 @@ consumer of one module to discover every header in the repository.
 
 ## Classifications
 
+### AUD-003.3 playback boundary and migration
+
+`HoroAudioApi` owns the additive `Horo/Audio/AudioVoiceControls.h` intent/cursor
+values. `HoroAudioPlayback` solely owns `Horo/Audio/AudioVoicePlayback.h`, with
+explicit one-way public dependencies on AudioDsp and AudioApi. AudioCommands
+carries the Api value without depending on Playback or a backend. Api gains no
+DSP dependency; native APIs and private registry implementation remain hidden.
+Generated standalone consumers compile all four owning target surfaces.
+
+Existing registry/resampler callers remain source-compatible. Opt-in hosts link
+AudioPlayback, retain the canonical registry, and transfer exclusive ownership
+at a quiescent boundary; ordinary control APIs may not race callback checks or
+rendering. The AudioCommandPayload extension requires exhaustive visitors to
+handle AudioVoiceControlRequest. Normalization and critical classification are
+migrated here; there is no second compatibility control state machine.
+
 ### RUI-005.8 Navigation Input Boundary
 
 `HoroEngine::RuntimeUiInput` solely owns the additive

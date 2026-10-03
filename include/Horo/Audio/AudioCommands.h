@@ -7,6 +7,7 @@
 #include "Horo/Audio/AudioClock.h"
 #include "Horo/Audio/AudioMemory.h"
 #include "Horo/Audio/AudioParameterAutomation.h"
+#include "Horo/Audio/AudioVoiceControls.h"
 
 #include <variant>
 
@@ -101,7 +102,7 @@ namespace Horo::Audio {
     using AudioCommandPayload =
         std::variant<AudioCreateVoiceCommand, AudioStartVoiceCommand, AudioStopVoiceCommand, AudioSetParameterCommand,
                      AudioAutomateParameterCommand, AudioCancelAutomationCommand, AudioSwapGraphCommand, AudioReleaseResourceCommand,
-                     AudioSceneUnloadCommand, AudioResetCommand, AudioScheduledBatchCommand>;
+                     AudioSceneUnloadCommand, AudioResetCommand, AudioScheduledBatchCommand, AudioVoiceControlRequest>;
 
     /** @brief Owned next-buffer-boundary intent; copying retains IDs, not resource lifetime or producer references. */
     struct AudioCommand {
@@ -131,7 +132,7 @@ namespace Horo::Audio {
      * Structural validation is not proof of liveness. Resource owners must outlive consumption/acknowledgement.
      */
     [[nodiscard]] AudioCommandStatus NormalizeAudioCommand(const AudioCommand &command, AudioCommand &normalized) noexcept;
-    /** @brief Classify stop/release/unload/reset as critical; other intents consume ordinary capacity.
+    /** @brief Classify stop/cancel/release/unload/reset as critical; other intents consume ordinary capacity.
      * @param command Structurally validated intent. @return Reservation class, with FIFO ordering unchanged.
      */
     [[nodiscard]] AudioCommandClass ClassifyAudioCommand(const AudioCommand &command) noexcept;
