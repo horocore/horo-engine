@@ -157,14 +157,15 @@ namespace Horo::Application::TestSupport {
     /** @brief Owns process services before the facade so accepted jobs drain before private files disappear. */
     struct PublicationHarness {
         std::shared_ptr<PublicationFiles> files{std::make_shared<PublicationFiles>()};
-        OperationStore operations{8, 16};
+        OperationStore operations;
         JobSystem jobs{{.workerCount = 2, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 32}};
         NavigationBakeServiceConfig config;
         std::unique_ptr<NavigationBakeService> service;
         Navigation::TestSupport::IncrementalBakeFixture fixture;
 
-        explicit PublicationHarness(const std::filesystem::path &root)
-            : config{.definition = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000001").Value(),
+        explicit PublicationHarness(const std::filesystem::path &root, std::shared_ptr<IOperationHistorySink> history = {})
+            : operations{8, 16, std::move(history)},
+              config{.definition = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000001").Value(),
                      .artifactType = Assets::AssetTypeId::Parse("core.navmesh").Value(),
                      .target = AssetCookTargetId::Parse("headless-null").Value(),
                      .cacheRoot = root / "cache",

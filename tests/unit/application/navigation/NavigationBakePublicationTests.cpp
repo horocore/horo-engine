@@ -2,11 +2,29 @@
 #include "navigation/NavigationPublicationFixture.h"
 #include "navigation/NavigationPublicationProcess.h"
 
+#include <catch2/generators/catch_generators.hpp>
+#include <stdexcept>
+
 namespace Horo::Application {
     using namespace Navigation;
     using namespace TestSupport;
 
     namespace {
+        /** @brief Throws only after the operation store has retained true terminal commit outcome. */
+        class ThrowingPublicationHistorySink final : public IOperationHistorySink {
+        public:
+            std::atomic<bool> enabled{};
+            bool nonstandard{};
+
+            void AppendTerminal(const OperationRecord &) override {
+                if (!enabled.load())
+                    return;
+                if (nonstandard)
+                    throw 73;
+                throw std::runtime_error("Optional publication history failure");
+            }
+        };
+
         /** @brief Compares every serialized tile identity and topology with the worker-owned publication. */
         void CheckCompletePublication(const PublicationHarness &harness, const Assets::AssetCookGeneration &generation,
                                       const NavigationBakePublication &expected) {
@@ -187,10 +205,20 @@ namespace Horo::Application {
 
     TEST_CASE("Cancellation after true current rename retains committed success and the same disk live receipt") {
         PublicationDirectory directory;
-        PublicationHarness harness(directory.path);
+        auto history = std::make_shared<ThrowingPublicationHistorySink>();
+        history->nonstandard = GENERATE(false, true);
+        PublicationHarness harness(directory.path, history);
         REQUIRE(harness.Terminal(harness.Submit()).state == OperationState::Succeeded);
         const auto prior = harness.Current();
         const auto priorPublication = harness.service->Published();
+        DiagnosticsTestSupport::Directory diagnosticDirectory;
+        auto diagnosticConfig = DiagnosticsTestSupport::DiagnosticConfig(diagnosticDirectory);
+        auto diagnostics = NavigationBakeDiagnostics::Create(diagnosticConfig).Value();
+        DiagnosticsTestSupport::TelemetryOwner telemetry{diagnostics};
+        harness.service->Close();
+        harness.config.diagnostics = diagnostics;
+        harness.service = NavigationBakeService::Create(harness.config, harness.operations, harness.jobs).Value();
+        history->enabled.store(true);
         harness.fixture.ExcludeBorder();
         harness.files->afterCurrentReached.store(false);
         harness.files->pauseAfterCurrent.store(true);

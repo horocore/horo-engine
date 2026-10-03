@@ -222,6 +222,29 @@ namespace Horo::Navigation {
             return outcome;
         }
 
+        /** @brief Delivers the retained terminal checkpoint after store mutation, even when optional history delivery unwinds. */
+        class TerminalCheckpointDelivery final {
+        public:
+            explicit TerminalCheckpointDelivery(std::shared_ptr<NavigationBakeJobDetail::SharedState> state) : state_(std::move(state)) {
+                if (state_->observe) {
+                    auto lock = state_->Lock();
+                    snapshot_ = state_->snapshot;
+                }
+            }
+
+            TerminalCheckpointDelivery(const TerminalCheckpointDelivery &) = delete;
+            TerminalCheckpointDelivery &operator=(const TerminalCheckpointDelivery &) = delete;
+
+            ~TerminalCheckpointDelivery() noexcept {
+                if (state_->observe)
+                    state_->observe(snapshot_);
+            }
+
+        private:
+            std::shared_ptr<NavigationBakeJobDetail::SharedState> state_;
+            NavigationBakeJobSnapshot snapshot_;
+        };
+
         void Finish(const std::shared_ptr<NavigationBakeJobDetail::SharedState> &state, const NavigationBakeJobState terminal,
                     const std::optional<Error> &error = {}, const std::optional<NavigationBakeBudgetResource> limitingResource = {}) {
             OperationUpdate update;
@@ -261,15 +284,8 @@ namespace Horo::Navigation {
                 case NavigationBakeJobState::Running:
                     return;
             }
+            const TerminalCheckpointDelivery checkpoint{state};
             static_cast<void>(state->operations->Update(operation, std::move(update)));
-            if (state->observe) {
-                NavigationBakeJobSnapshot snapshot;
-                {
-                    auto lock = state->Lock();
-                    snapshot = state->snapshot;
-                }
-                state->observe(snapshot);
-            }
         }
 
         [[nodiscard]] Result<void> FinishUnexpectedException(const std::shared_ptr<NavigationBakeJobDetail::SharedState> &state) {
