@@ -34,8 +34,15 @@ namespace {
                                 StreamingFeatureBudgetAmount{StreamingBudgetFeature::Navigation, Bytes(20)},
                                 StreamingFeatureBudgetAmount{StreamingBudgetFeature::Physics, Bytes(20)}};
         const auto policy = StreamingFeatureBudgetPolicy::Create(aggregate, slices).Value();
-        const StreamingFeatureBudgetConfig
-            config{1, {owner, Id<StreamingRuntimeCompositionRevision>(1), Id<StreamingSchedulerLedgerId>(1), {2, 2}, 1}, 2, 2};
+        const StreamingSchedulerAdmissionLimits schedulerLimits{2,
+                                                                2,
+                                                                {WorldPartitionProjectProfile::Editor, Id<StreamingConcurrencyRevision>(1),
+                                                                 2, 2, 2}};
+        const StreamingFeatureBudgetConfig config{1,
+                                                  {owner, Id<StreamingRuntimeCompositionRevision>(1), Id<StreamingSchedulerLedgerId>(1),
+                                                   schedulerLimits, 1},
+                                                  2,
+                                                  2};
         return StreamingFeatureBudgetReservations::Create(config, bindings, policy);
     }
 
