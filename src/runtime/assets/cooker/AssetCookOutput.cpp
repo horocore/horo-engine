@@ -7,7 +7,6 @@
 #include "Horo/Foundation/Sha256.h"
 
 #include <algorithm>
-#include <exception>
 #include <format>
 #include <limits>
 #include <optional>
@@ -185,8 +184,6 @@ namespace Horo::Assets::CookStorageDetail {
         try {
             replaced = postCommitError == nullptr ? files->AtomicReplace(prepared, destination)
                                                   : files->AtomicReplaceTracked(prepared, destination, receipt);
-        } catch (const std::exception &) {
-            return ResolveReplacementOutcome(std::move(replaced), receipt, postCommitError);
         } catch (...) {
             // External filesystem adapters cannot erase the true commit point by throwing after replacement.
             return ResolveReplacementOutcome(std::move(replaced), receipt, postCommitError);
