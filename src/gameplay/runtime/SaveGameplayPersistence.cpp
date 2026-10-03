@@ -9,6 +9,7 @@
 #include <new>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -130,20 +131,25 @@ namespace Horo::Runtime {
                     return Result<void>::Failure(MakeError(SaveErrors::RestoreTransitionInvalid));
                 const std::size_t moduleLength = std::to_integer<unsigned>(encoded_[EnvelopeMagic.size()]);
                 const auto payload = std::span<const std::byte>{encoded_}.subspan(EnvelopePrefixBytes + moduleLength);
-                try {
-                    auto prepared = source_->PrepareRuntimeState(payload);
-                    if (prepared.HasError())
-                        return Result<void>::Failure(prepared.ErrorValue());
-                    candidate_ = std::move(prepared).Value();
-                    if (!candidate_)
-                        return Result<void>::Failure(MakeError(SaveErrors::RestoreAdapterContractInvalid));
-                    return Result<void>::Success();
-                } catch (const std::bad_alloc &) {
-                    return Result<void>::Failure(MakeError(SaveErrors::RestoreAllocationFailed));
-                } catch (...) {
-                    // Project modules may throw non-standard exceptions; none may cross the restore boundary.
-                    return Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
-                }
+                static_assert(std::is_nothrow_move_constructible_v<Result<void>>);
+                // Prepare owned failures before project code runs; unwinding never allocates a replacement error.
+                return [this, payload, allocationFailure = Result<void>::Failure(MakeError(SaveErrors::RestoreAllocationFailed)),
+                        callbackFailure = Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed))]() mutable noexcept {
+                    try {
+                        auto prepared = source_->PrepareRuntimeState(payload);
+                        if (prepared.HasError())
+                            return Result<void>::Failure(prepared.ErrorValue());
+                        candidate_ = std::move(prepared).Value();
+                        if (!candidate_)
+                            return Result<void>::Failure(MakeError(SaveErrors::RestoreAdapterContractInvalid));
+                        return Result<void>::Success();
+                    } catch (const std::bad_alloc &) {
+                        return std::move(allocationFailure);
+                    } catch (...) {
+                        // Project modules may throw non-standard exceptions; none may cross the restore boundary.
+                        return std::move(callbackFailure);
+                    }
+                }();
             }
 
             [[nodiscard]] Result<void> FixupReferences(const ICanonicalRestoreDependencyLookup &) override {
@@ -216,23 +222,29 @@ namespace Horo::Runtime {
         const auto budget = CapturePayloadBudget(descriptor_, context);
         if (budget.HasError())
             return Result<CanonicalCaptureDisposition>::Failure(budget.ErrorValue());
-        try {
-            auto captured = source_->CaptureRuntimeState(budget.Value());
-            if (captured.HasError())
-                return Result<CanonicalCaptureDisposition>::Failure(captured.ErrorValue());
-            auto payload = std::move(captured).Value();
-            if (payload.size() > budget.Value())
-                return Result<CanonicalCaptureDisposition>::Failure(MakeError(SaveErrors::CaptureBudgetExceeded));
-            const auto encoded = EncodeEnvelope(descriptor_, payload);
-            if (auto written = sink.WriteCopied(descriptor_.record, encoded); written.HasError())
-                return Result<CanonicalCaptureDisposition>::Failure(written.ErrorValue());
-            return Result<CanonicalCaptureDisposition>::Success(CanonicalCaptureDisposition::Captured);
-        } catch (const std::bad_alloc &) {
-            return Result<CanonicalCaptureDisposition>::Failure(MakeError(SaveErrors::CaptureAllocationFailed));
-        } catch (...) {
-            // Unknown project exceptions must become typed failures, not unwind through archive work.
-            return Result<CanonicalCaptureDisposition>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
-        }
+        using Return = Result<CanonicalCaptureDisposition>;
+        static_assert(std::is_nothrow_move_constructible_v<Return>);
+        // Reserve both typed failures before invoking project code, including the allocation-failure result.
+        return [this, &sink, &budget, allocationFailure = Return::Failure(MakeError(SaveErrors::CaptureAllocationFailed)),
+                callbackFailure = Return::Failure(MakeError(SaveErrors::LifecycleCallbackFailed))]() mutable noexcept {
+            try {
+                auto captured = source_->CaptureRuntimeState(budget.Value());
+                if (captured.HasError())
+                    return Result<CanonicalCaptureDisposition>::Failure(captured.ErrorValue());
+                auto payload = std::move(captured).Value();
+                if (payload.size() > budget.Value())
+                    return Result<CanonicalCaptureDisposition>::Failure(MakeError(SaveErrors::CaptureBudgetExceeded));
+                const auto encoded = EncodeEnvelope(descriptor_, payload);
+                if (auto written = sink.WriteCopied(descriptor_.record, encoded); written.HasError())
+                    return Result<CanonicalCaptureDisposition>::Failure(written.ErrorValue());
+                return Result<CanonicalCaptureDisposition>::Success(CanonicalCaptureDisposition::Captured);
+            } catch (const std::bad_alloc &) {
+                return std::move(allocationFailure);
+            } catch (...) {
+                // Unknown project exceptions must become typed failures, not unwind through archive work.
+                return std::move(callbackFailure);
+            }
+        }();
     }
 
     /** @copydoc GameplayPersistenceAdapter::StageRestore */

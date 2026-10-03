@@ -1,3 +1,4 @@
+#include "AllocationProbe.h"
 #include "Horo/Gameplay/SaveGameplayPersistence.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveParticipation.h"
@@ -66,26 +67,68 @@ namespace Horo::Runtime {
             std::vector<std::byte> authoredFields{std::byte{0x7a}};
             mutable std::uint64_t observedMaximum{};
             unsigned prepareCalls{};
+            mutable std::size_t allocationsBeforeThrow{};
             bool throwOnCapture{};
             bool throwOnPrepare{};
             ProjectCallbackException exception{ProjectCallbackException::Integer};
 
             Result<std::vector<std::byte>> CaptureRuntimeState(const std::uint64_t maximumBytes) const override {
                 observedMaximum = maximumBytes;
-                if (throwOnCapture)
+                if (throwOnCapture) {
+                    allocationsBeforeThrow = Horo::Tests::AllocationProbe::Count();
                     ThrowProjectCallback(exception);
+                }
                 return Result<std::vector<std::byte>>::Success(active);
             }
 
             Result<std::unique_ptr<IPreparedGameplayPersistenceState>> PrepareRuntimeState(
                 const std::span<const std::byte> bytes) override {
                 ++prepareCalls;
-                if (throwOnPrepare)
+                if (throwOnPrepare) {
+                    allocationsBeforeThrow = Horo::Tests::AllocationProbe::Count();
                     ThrowProjectCallback(exception);
+                }
                 return Result<std::unique_ptr<IPreparedGameplayPersistenceState>>::Success(
                     std::make_unique<PreparedState>(active, std::vector<std::byte>{bytes.begin(), bytes.end()}));
             }
         };
+
+        /** @brief Detects writes after a callback that is required to fail before producing a payload. */
+        class UnusedSink final : public ICanonicalCaptureSink {
+        public:
+            bool written{};
+
+            Result<void> WriteCopied(SaveRecordId, std::span<const std::byte>) override {
+                written = true;
+                return Result<void>::Success();
+            }
+
+            Result<void> WriteImmutable(SaveRecordId, std::shared_ptr<const IImmutableCanonicalPayload>) override {
+                written = true;
+                return Result<void>::Success();
+            }
+        };
+
+        /** @brief Verifies exception translation neither allocates nor writes a partial capture. */
+        void RequireAllocationFreeCapture(const GameplayPersistenceAdapter &adapter, const StateSource &source,
+                                          const ErrorCodeDescriptor &expected) {
+            UnusedSink sink;
+            const auto &descriptor = adapter.Descriptor().participant;
+            const CanonicalCaptureContext context{.participant = descriptor.participant,
+                                                  .schemaVersion = descriptor.schemaVersion,
+                                                  .scope = descriptor.scope,
+                                                  .admission = {.operationRecords = 1,
+                                                                .operationPayloadBytes = 128,
+                                                                .participantRecords = 1,
+                                                                .participantPayloadBytes = 128,
+                                                                .maximumCopiedRecordBytes = 128}};
+            const auto directCapture = adapter.Capture(context, sink);
+            const auto captureAllocations = Horo::Tests::AllocationProbe::Count() - source.allocationsBeforeThrow;
+            REQUIRE(directCapture.HasError());
+            CHECK(directCapture.ErrorValue().code.Value() == expected.code.Value());
+            CHECK(captureAllocations == 0);
+            CHECK_FALSE(sink.written);
+        }
 
         TEST_CASE("Gameplay project exception boundaries contain standard and unknown capture and prepare failures",
                   "[unit][runtime][save][gameplay]") {
@@ -106,6 +149,7 @@ namespace Horo::Runtime {
                 const auto &captureError = exception == ProjectCallbackException::Allocation ? SaveErrors::CaptureAllocationFailed
                                                                                              : SaveErrors::LifecycleCallbackFailed;
                 CHECK(captured.ErrorValue().code.Value() == captureError.code.Value());
+                RequireAllocationFreeCapture(*adapter, *source, captureError);
                 source->throwOnCapture = false;
                 source->throwOnPrepare = true;
                 auto staged = adapter->StageRestore(adapter->Descriptor().participant.schemaVersion, adapter->Descriptor().record,
@@ -117,7 +161,9 @@ namespace Horo::Runtime {
                 REQUIRE(receipt->Instantiate({}).HasValue());
                 const NoDependencies dependencies;
                 const auto prepared = receipt->ApplyState(dependencies);
+                const auto restoreAllocations = Horo::Tests::AllocationProbe::Count() - source->allocationsBeforeThrow;
                 REQUIRE(prepared.HasError());
+                CHECK(restoreAllocations == 0);
                 const auto &restoreError = exception == ProjectCallbackException::Allocation ? SaveErrors::RestoreAllocationFailed
                                                                                              : SaveErrors::LifecycleCallbackFailed;
                 CHECK(prepared.ErrorValue().code.Value() == restoreError.code.Value());

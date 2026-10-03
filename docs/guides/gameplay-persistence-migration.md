@@ -67,3 +67,13 @@ module must register a deliberate migration before old bytes can be loaded.
 Optional participants may be absent from a save only when their registered
 descriptor and canonical snapshot explicitly allow omission. Hot-reload state
 is session migration, never an implicit durable participant.
+
+## Callback exception translation
+
+Capture and restore preparation build owned callback and allocation failure
+results before invoking project code. Local `noexcept` guards move the matching
+prepared result on standard, foreign or allocation exceptions. Error translation
+therefore performs no allocations during unwinding, and result moves are checked
+at compile time. Public signatures, error codes and module-generation lifetime
+ordering are unchanged. Preparing fallback results is fallible setup outside the
+callback guard; capture retains the existing outer host allocation boundary.
