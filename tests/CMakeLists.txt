@@ -119,7 +119,7 @@ endif ()
 add_compile_definitions(HORO_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
 function(horo_register_catch_test target)
-    cmake_parse_arguments(ARG "" "" "LABELS;EXTRA_ARGS;PROPERTIES" ${ARGN})
+    cmake_parse_arguments(PARSE_ARGV 1 ARG "" "" "LABELS;EXTRA_ARGS;PROPERTIES")
     horo_ci_catch_labels(${target})
     target_compile_features(${target} PRIVATE cxx_std_20)
     target_compile_definitions(${target} PRIVATE HORO_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
@@ -127,8 +127,8 @@ function(horo_register_catch_test target)
     catch_discover_tests(${target}
             TEST_PREFIX "${target}::"
             EXTRA_ARGS ${ARG_EXTRA_ARGS}
-            PROPERTIES LABELS "${ARG_LABELS}" ${ARG_PROPERTIES}
     )
+    horo_ci_catch_properties(${target})
 endfunction()
 
 add_executable(HoroModelProviderTests unit/editor/ModelProviderContractTests.cpp)

@@ -81,6 +81,19 @@ function(horo_ci_catch_labels target)
     set(ARG_PROPERTIES "${ARG_PROPERTIES}" PARENT_SCOPE)
 endfunction()
 
+function(horo_ci_catch_properties target)
+    # Apply properties after discovery: Catch flattens list-valued properties
+    # into separate arguments, corrupting labels and subsequent key/value pairs.
+    set(properties "LABELS [==[${ARG_LABELS}]==]")
+    foreach(property IN LISTS ARG_PROPERTIES)
+        string(APPEND properties " [==[${property}]==]")
+    endforeach()
+    set(properties_file "${CMAKE_CURRENT_BINARY_DIR}/${target}_properties.cmake")
+    file(GENERATE OUTPUT "${properties_file}" CONTENT
+        "if(${target}_TESTS)\n    set_tests_properties(\${${target}_TESTS} PROPERTIES ${properties})\nendif()\n")
+    set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES "${properties_file}")
+endfunction()
+
 function(horo_finalize_ci_suites)
     add_custom_target(HoroCiAudioRealtimeChecks DEPENDS ${HORO_CI_AUDIO_TARGETS})
     if(HORO_BUILD_INPUT_SDL3)
