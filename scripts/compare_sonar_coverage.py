@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 from defusedxml import ElementTree as element_tree
 from defusedxml.common import DefusedXmlException
@@ -10,10 +11,11 @@ from defusedxml.common import DefusedXmlException
 
 def repository_path(path: Path, root: Path) -> Path:
     """Reject resolved input/output paths outside the selected repository."""
-    resolved = path.resolve()
-    if not resolved.is_relative_to(root.resolve()):
+    resolved = os.path.realpath(path)
+    base = os.path.realpath(root)
+    if resolved != base and not resolved.startswith(base.rstrip(os.sep) + os.sep):
         raise ValueError(f"Path outside repository: {path.name}")
-    return resolved
+    return Path(resolved)
 
 
 def read_report(path: Path, root: Path) -> dict[tuple[str, int], bool]:

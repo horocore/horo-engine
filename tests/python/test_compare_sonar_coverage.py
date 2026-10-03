@@ -157,3 +157,10 @@ def test_main_rejects_outside_output(tmp_path: Path, monkeypatch: pytest.MonkeyP
         comparison.main()
     assert error.value.code == 2
     assert not outside.exists()
+
+
+def test_rejects_a_sibling_with_the_same_path_prefix(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    with pytest.raises(ValueError):
+        comparison.repository_path(tmp_path / "repo-other" / "output.json", root)

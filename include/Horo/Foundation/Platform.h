@@ -90,7 +90,8 @@ namespace Horo {
     public:
         virtual ~DurableFileSystem() = default;
 
-        /** @brief Creates missing parent directories and immediately acquires an exclusive OS lock. @param path Lock-file path.
+        /** @brief Creates missing parent directories and immediately acquires an exclusive OS lock. @param path Lock-file path within
+         * host-owned parent directories. Symlinks, reparse points, and multiply linked files are rejected.
          * @param ownerMetadata Diagnostic-only owner text. @return Move-only lock or typed busy/I/O failure. */
         [[nodiscard]] virtual Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path,
                                                                             std::string_view ownerMetadata) = 0;

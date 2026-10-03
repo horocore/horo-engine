@@ -68,6 +68,33 @@ namespace Horo {
         }
 
 #if defined(_WIN32)
+        /** @brief Admits only one regular, non-aliased disk file for lock metadata. */
+        [[nodiscard]] bool IsPrivateLockFile(const HANDLE handle) {
+            BY_HANDLE_FILE_INFORMATION info{};
+            return GetFileType(handle) == FILE_TYPE_DISK && GetFileInformationByHandle(handle, &info) &&
+                   (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) == 0U && info.nNumberOfLinks == 1U;
+        }
+
+        /** @brief Validates the opened lock handle before replacing and flushing diagnostic owner text. */
+        [[nodiscard]] bool WriteLockOwner(const HANDLE handle, const std::string_view ownerMetadata) {
+            if (!IsPrivateLockFile(handle))
+                return false;
+            LARGE_INTEGER zero{};
+            if (!SetFilePointerEx(handle, zero, nullptr, FILE_BEGIN) || !SetEndOfFile(handle))
+                return false;
+            std::size_t offset = 0U;
+            while (offset < ownerMetadata.size()) {
+                const auto count = static_cast<DWORD>((std::min)(ownerMetadata.size() - offset, static_cast<std::size_t>(MAXDWORD)));
+                DWORD written{};
+                if (!WriteFile(handle, ownerMetadata.data() + offset, count, &written, nullptr) || written == 0U)
+                    return false;
+                offset += written;
+            }
+            if (!FlushFileBuffers(handle))
+                return false;
+            return true;
+        }
+
         /** @brief Appends only through a private Windows regular-file handle at the exact offset. */
         [[nodiscard]] bool AppendPrivateBytes(const std::filesystem::path &path, const std::uint64_t expectedOffset,
                                               const std::span<const std::byte> bytes) {
@@ -105,6 +132,31 @@ namespace Horo {
                 return true;
 #endif
             return fsync(descriptor) == 0;
+        }
+
+        /** @brief Admits only one regular, non-aliased file for lock metadata. */
+        [[nodiscard]] bool IsPrivateLockFile(const int descriptor) {
+            struct stat info{};
+            return fstat(descriptor, &info) == 0 && S_ISREG(info.st_mode) && info.st_nlink == 1U;
+        }
+
+        /** @brief Replaces and flushes diagnostic owner text after file identity validation and locking. */
+        [[nodiscard]] bool WriteLockOwner(const int descriptor, const std::string_view ownerMetadata) {
+            if (ftruncate(descriptor, 0) != 0)
+                return false;
+            std::size_t offset = 0U;
+            while (offset < ownerMetadata.size()) {
+                const auto count = (std::min)(ownerMetadata.size() - offset, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+                const ssize_t written = write(descriptor, ownerMetadata.data() + offset, count);
+                if (written < 0 && errno == EINTR)
+                    continue;
+                if (written <= 0)
+                    return false;
+                offset += static_cast<std::size_t>(written);
+            }
+            if (!FlushFileDescriptor(descriptor))
+                return false;
+            return true;
         }
 
         /** @brief Appends only through a private POSIX regular-file descriptor at the exact offset. */
@@ -336,29 +388,25 @@ namespace Horo {
 
         state->processKey = key;
 #if defined(_WIN32)
-        state->handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        state->handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
         if (state->handle == INVALID_HANDLE_VALUE)
             return Result<ExclusiveFileLock>::Failure(FsError(GetLastError() == ERROR_SHARING_VIOLATION ? LockBusy : IoFailed, path));
-        LARGE_INTEGER zero{};
-        SetFilePointerEx(state->handle, zero, nullptr, FILE_BEGIN);
-        SetEndOfFile(state->handle);
-        DWORD written{};
-        WriteFile(state->handle, ownerMetadata.data(), static_cast<DWORD>(ownerMetadata.size()), &written, nullptr);
-        FlushFileBuffers(state->handle);
+        if (!WriteLockOwner(state->handle, ownerMetadata))
+            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
 #else
-        state->descriptor = open(path.c_str(), O_RDWR | O_CREAT, 0600);
+        state->descriptor = open(path.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
         if (state->descriptor < 0)
             return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
 
+        if (!IsPrivateLockFile(state->descriptor))
+            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
         struct flock lock = {};
-
         lock.l_type = F_WRLCK;
         lock.l_whence = SEEK_SET;
         if (fcntl(state->descriptor, F_SETLK, &lock) != 0)
             return Result<ExclusiveFileLock>::Failure(FsError(LockBusy, path));
-        if (ftruncate(state->descriptor, 0) != 0 ||
-            (!ownerMetadata.empty() && write(state->descriptor, ownerMetadata.data(), ownerMetadata.size()) < 0) ||
-            !FlushFileDescriptor(state->descriptor))
+        if (!WriteLockOwner(state->descriptor, ownerMetadata))
             return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
 #endif
         return Result<ExclusiveFileLock>::Success(ExclusiveFileLock(std::move(state)));
