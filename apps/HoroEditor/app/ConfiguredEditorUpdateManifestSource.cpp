@@ -94,8 +94,8 @@ namespace Horo::Editor {
             if (!handle)
                 return handle;
             auto *curl = handle.get();
-            // Specify both range bounds: TLS 1.3 is the minimum, including with an older system TLS default.
-            if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3 | CURL_SSLVERSION_MAX_DEFAULT) != CURLE_OK)
+            // TLS 1.3 is the minimum; libcurl retains its default maximum supported version.
+            if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
                 return CurlHandle{nullptr, &curl_easy_cleanup};
             if (const bool configured =
                     curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) == CURLE_OK &&
