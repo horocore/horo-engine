@@ -8,6 +8,16 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::WorldStreaming::WorldStreamingErrors {
+    /** @brief A direction owner, demand revision or participant set is malformed. */
+    extern const ErrorCodeDescriptor CellDirectionInvalid;
+    /** @brief A demand or direction command is unsupported. */
+    extern const ErrorCodeDescriptor CellDirectionUnsupported;
+    /** @brief A demand, completion or retirement receipt does not match current attempt evidence. */
+    extern const ErrorCodeDescriptor CellDirectionStale;
+    /** @brief A complete retirement participant set exceeds its mandatory ceiling. */
+    extern const ErrorCodeDescriptor CellDirectionCapacityExceeded;
+    /** @brief Direction admission, progress, ownership transfer or terminal consumption is unavailable. */
+    extern const ErrorCodeDescriptor CellDirectionLifecycleUnavailable;
     /** @brief Malformed failure-policy facts or identities. */
     extern const ErrorCodeDescriptor FailurePolicyInvalid;
     /** @brief Unsupported failure contract version or enum. */
@@ -489,6 +499,8 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
     extern const ErrorCodeDescriptor CellAssetRequestNotReady;
     /** @brief The terminal aggregate result was already consumed. */
     extern const ErrorCodeDescriptor CellAssetRequestConsumed;
+    /** @brief Aggregate cancellation suppressed a completed but unpublished cell asset batch. */
+    extern const ErrorCodeDescriptor CellAssetRequestCancelled;
     /** @brief A queue owner, context or entry is malformed. */
     extern const ErrorCodeDescriptor FairQueueInvalid;
     /** @brief A queue version, eligibility or withdrawal outcome is unsupported. */
