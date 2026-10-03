@@ -79,9 +79,9 @@ namespace Horo::WorldStreaming {
 
         TEST_CASE("Permanent failure quarantine resets only for newer producer revision or explicit authorization",
                   "[unit][world_streaming][failure_policy]") {
+            using enum StreamingFailureCause;
             const auto policy = StreamingFailurePolicy::Create(Request()).Value();
-            for (const auto cause : {StreamingFailureCause::Integrity, StreamingFailureCause::Schema,
-                                     StreamingFailureCause::MissingRequiredProvider, StreamingFailureCause::PermanentlyOversized}) {
+            for (const auto cause : {Integrity, Schema, MissingRequiredProvider, PermanentlyOversized}) {
                 const auto record = Record(cause);
                 REQUIRE(record.Snapshot().cause == cause);
                 REQUIRE(record.EvaluateRetry(policy, Context(900'000)).Value() == StreamingRetryDisposition::Quarantined);
@@ -102,28 +102,25 @@ namespace Horo::WorldStreaming {
 
         TEST_CASE("Failure history requires cleanup and fences duplicate or foreign completions",
                   "[unit][world_streaming][failure_policy]") {
+            using enum StreamingFailureCause;
             const auto policy = StreamingFailurePolicy::Create(Request()).Value();
             auto operation = Queued();
             operation = operation.Advance(operation.Handle(), StreamingCellOperationTransition::Admit).Value();
             operation = operation.Advance(operation.Handle(), StreamingCellOperationTransition::Fail).Value();
-            RequireError(StreamingFailureRecord::RecordFailure(policy, Context(), operation, StreamingFailureCause::TransientIo,
-                                                               std::nullopt),
+            RequireError(StreamingFailureRecord::RecordFailure(policy, Context(), operation, TransientIo, std::nullopt),
                          WorldStreamingErrors::FailurePolicyTransitionInvalid);
             operation = operation.Advance(operation.Handle(), StreamingCellOperationTransition::AcknowledgeRetirement).Value();
-            const auto record =
-                StreamingFailureRecord::RecordFailure(policy, Context(), operation, StreamingFailureCause::TransientIo, std::nullopt)
-                    .Value();
-            RequireError(StreamingFailureRecord::RecordFailure(policy, Context(), operation, StreamingFailureCause::TransientIo, record),
+            const auto record = StreamingFailureRecord::RecordFailure(policy, Context(), operation, TransientIo, std::nullopt).Value();
+            RequireError(StreamingFailureRecord::RecordFailure(policy, Context(), operation, TransientIo, record),
                          WorldStreamingErrors::FailurePolicyStale);
             RequireError(record.IssueRetry(policy, Context(2'100), Queued()), WorldStreamingErrors::FailurePolicyStale);
             RequireError(record.IssueRetry(policy, Context(2'099), Queued(2)), WorldStreamingErrors::FailurePolicyTransitionInvalid);
             const auto issued = record.IssueRetry(policy, Context(2'100), Queued(2)).Value();
-            RequireError(StreamingFailureRecord::RecordFailure(policy, Context(2'100), Failed(3), StreamingFailureCause::TransientIo,
-                                                               issued),
+            RequireError(StreamingFailureRecord::RecordFailure(policy, Context(2'100), Failed(3), TransientIo, issued),
                          WorldStreamingErrors::FailurePolicyStale);
             auto revised = Context(2'100);
             revised.providerRevision = IdentityFrom<StreamingProviderRevision>(2);
-            RequireError(StreamingFailureRecord::RecordFailure(policy, revised, Failed(2), StreamingFailureCause::TransientIo, issued),
+            RequireError(StreamingFailureRecord::RecordFailure(policy, revised, Failed(2), TransientIo, issued),
                          WorldStreamingErrors::FailurePolicyStale);
             REQUIRE(record.Snapshot().automaticRetriesIssued == 0);
         }
@@ -166,16 +163,16 @@ namespace Horo::WorldStreaming {
 
         TEST_CASE("Interrupted retries retain consumed allowance and require exact cleanup before requeue",
                   "[unit][world_streaming][failure_policy]") {
+            using enum StreamingCellOperationTransition;
             const auto policy = StreamingFailurePolicy::Create(Request()).Value();
-            for (const auto transition : {StreamingCellOperationTransition::Cancel, StreamingCellOperationTransition::Replace,
-                                          StreamingCellOperationTransition::Shutdown}) {
+            for (const auto transition : {Cancel, Replace, Shutdown}) {
                 const auto issued = Record().IssueRetry(policy, Context(2'100), Queued(2)).Value();
                 auto operation = Queued(2);
-                operation = operation.Advance(operation.Handle(), StreamingCellOperationTransition::Admit).Value();
+                operation = operation.Advance(operation.Handle(), Admit).Value();
                 operation = operation.Advance(operation.Handle(), transition).Value();
                 RequireError(issued.ReconcileInterruption(policy, Context(2'100), operation),
                              WorldStreamingErrors::FailurePolicyTransitionInvalid);
-                operation = operation.Advance(operation.Handle(), StreamingCellOperationTransition::AcknowledgeRetirement).Value();
+                operation = operation.Advance(operation.Handle(), AcknowledgeRetirement).Value();
                 const auto retained = issued.ReconcileInterruption(policy, Context(2'100), operation).Value();
                 REQUIRE(retained.Snapshot().automaticRetriesIssued == 1);
                 REQUIRE(retained.Snapshot().attemptCount == 2);

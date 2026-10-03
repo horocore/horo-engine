@@ -668,7 +668,6 @@ replacement do not. The authority retains quarantine tombstones under the config
 record ceiling for the mounted epoch, preventing eviction from resetting failures.
 Unrepresentable cooldown deadlines return a typed time-exhaustion error.
 
-
 ## Bounded Diagnostic Projection And Decision Evidence
 
 `WorldStreamingDiagnosticSnapshot` is the single immutable diagnostic projection

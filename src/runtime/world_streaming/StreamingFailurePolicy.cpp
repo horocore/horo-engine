@@ -103,8 +103,7 @@ namespace Horo::WorldStreaming {
                                                                          const StreamingCellOperation &operation,
                                                                          const StreamingFailureCause cause,
                                                                          const std::optional<StreamingFailureRecord> &previous) {
-        const auto valid = ValidateContext(policy, context);
-        if (!valid.HasValue())
+        if (const auto valid = ValidateContext(policy, context); !valid.HasValue())
             return Result<StreamingFailureRecord>::Failure(valid.ErrorValue());
         if (cause >= StreamingFailureCause::Count)
             return Failure<StreamingFailureRecord>(WorldStreamingErrors::FailurePolicyUnsupported);
@@ -126,8 +125,7 @@ namespace Horo::WorldStreaming {
             next.attemptCount = previous->snapshot_.attemptCount;
         }
         next.observedAtServiceMilliseconds = context.serviceTimeMilliseconds;
-        const auto cooldown = SetCooldown(policy.Facts(), context, next);
-        if (!cooldown.HasValue())
+        if (const auto cooldown = SetCooldown(policy.Facts(), context, next); !cooldown.HasValue())
             return Result<StreamingFailureRecord>::Failure(cooldown.ErrorValue());
         return Result<StreamingFailureRecord>::Success(StreamingFailureRecord{next});
     }
@@ -136,8 +134,8 @@ namespace Horo::WorldStreaming {
     Result<StreamingRetryDisposition> StreamingFailureRecord::EvaluateRetry(const StreamingFailurePolicy &policy,
                                                                             const StreamingFailureContext &context,
                                                                             const StreamingRetryAuthorization authorization) const {
-        const auto valid = ValidateContext(policy, context);
-        if (!valid.HasValue())
+        using enum StreamingRetryDisposition;
+        if (const auto valid = ValidateContext(policy, context); !valid.HasValue())
             return Result<StreamingRetryDisposition>::Failure(valid.ErrorValue());
         if (authorization >= StreamingRetryAuthorization::Count)
             return Failure<StreamingRetryDisposition>(WorldStreamingErrors::FailurePolicyUnsupported);
@@ -145,14 +143,13 @@ namespace Horo::WorldStreaming {
             context.providerRevision.Value() < snapshot_.providerRevision.Value())
             return Failure<StreamingRetryDisposition>(WorldStreamingErrors::FailurePolicyStale);
         if (snapshot_.retryIssued)
-            return Result<StreamingRetryDisposition>::Success(StreamingRetryDisposition::AlreadyIssued);
+            return Result<StreamingRetryDisposition>::Success(AlreadyIssued);
         if (authorization == StreamingRetryAuthorization::Authorized || RevisionChanged(snapshot_, context))
-            return Result<StreamingRetryDisposition>::Success(StreamingRetryDisposition::Eligible);
+            return Result<StreamingRetryDisposition>::Success(Eligible);
         if (snapshot_.nextRetryAtServiceMilliseconds == 0)
-            return Result<StreamingRetryDisposition>::Success(StreamingRetryDisposition::Quarantined);
-        return Result<StreamingRetryDisposition>::Success(context.serviceTimeMilliseconds < snapshot_.nextRetryAtServiceMilliseconds
-                                                              ? StreamingRetryDisposition::CoolingDown
-                                                              : StreamingRetryDisposition::Eligible);
+            return Result<StreamingRetryDisposition>::Success(Quarantined);
+        return Result<StreamingRetryDisposition>::Success(
+            context.serviceTimeMilliseconds < snapshot_.nextRetryAtServiceMilliseconds ? CoolingDown : Eligible);
     }
 
     /** @copydoc StreamingFailureRecord::IssueRetry */
@@ -167,9 +164,9 @@ namespace Horo::WorldStreaming {
             retry.Kind() != StreamingCellOperationKind::Load)
             return Failure<StreamingFailureRecord>(WorldStreamingErrors::FailurePolicyTransitionInvalid);
         const auto &fresh = retry.Handle();
-        const auto &old = snapshot_.operation;
-        if (fresh.operation == old.operation || fresh.fence.partition != old.fence.partition || fresh.fence.epoch != old.fence.epoch ||
-            fresh.fence.cell != old.fence.cell || fresh.fence.generation.Value() <= old.fence.generation.Value())
+        if (const auto &old = snapshot_.operation; fresh.operation == old.operation || fresh.fence.partition != old.fence.partition ||
+                                                   fresh.fence.epoch != old.fence.epoch || fresh.fence.cell != old.fence.cell ||
+                                                   fresh.fence.generation.Value() <= old.fence.generation.Value())
             return Failure<StreamingFailureRecord>(WorldStreamingErrors::FailurePolicyStale);
         auto next = snapshot_;
         const bool reset = authorization == StreamingRetryAuthorization::Authorized || RevisionChanged(snapshot_, context);
@@ -188,21 +185,18 @@ namespace Horo::WorldStreaming {
     Result<StreamingFailureRecord> StreamingFailureRecord::ReconcileInterruption(const StreamingFailurePolicy &policy,
                                                                                  const StreamingFailureContext &context,
                                                                                  const StreamingCellOperation &operation) const {
-        const auto valid = ValidateContext(policy, context);
-        if (!valid.HasValue())
+        using enum StreamingCellOperationOutcome;
+        if (const auto valid = ValidateContext(policy, context); !valid.HasValue())
             return Result<StreamingFailureRecord>::Failure(valid.ErrorValue());
         if (!Matches(snapshot_, context) || !MatchesIssuedOperation(snapshot_, operation) || RevisionChanged(snapshot_, context))
             return Failure<StreamingFailureRecord>(WorldStreamingErrors::FailurePolicyStale);
-        const auto outcome = operation.Outcome();
-        if (!snapshot_.retryIssued || !operation.IsTerminal() ||
-            (outcome != StreamingCellOperationOutcome::Cancelled && outcome != StreamingCellOperationOutcome::Replaced &&
-             outcome != StreamingCellOperationOutcome::Shutdown))
+        if (const auto outcome = operation.Outcome();
+            !snapshot_.retryIssued || !operation.IsTerminal() || (outcome != Cancelled && outcome != Replaced && outcome != Shutdown))
             return Failure<StreamingFailureRecord>(WorldStreamingErrors::FailurePolicyTransitionInvalid);
         auto next = snapshot_;
         next.retryIssued = false;
         next.observedAtServiceMilliseconds = context.serviceTimeMilliseconds;
-        const auto cooldown = SetCooldown(policy.Facts(), context, next);
-        if (!cooldown.HasValue())
+        if (const auto cooldown = SetCooldown(policy.Facts(), context, next); !cooldown.HasValue())
             return Result<StreamingFailureRecord>::Failure(cooldown.ErrorValue());
         return Result<StreamingFailureRecord>::Success(StreamingFailureRecord{next});
     }
@@ -210,8 +204,7 @@ namespace Horo::WorldStreaming {
     /** @copydoc StreamingFailureRecord::ValidateSuccess */
     Result<void> StreamingFailureRecord::ValidateSuccess(const StreamingFailurePolicy &policy, const StreamingFailureContext &context,
                                                          const StreamingCellStateRecord &active) const {
-        const auto valid = ValidateContext(policy, context);
-        if (!valid.HasValue())
+        if (const auto valid = ValidateContext(policy, context); !valid.HasValue())
             return valid;
         if (!active.IsValid())
             return Failure<void>(WorldStreamingErrors::FailurePolicyInvalid);
