@@ -147,7 +147,8 @@ namespace Horo::WorldStreaming {
             return Failure<StreamingFeatureBudgetReservation>(FeatureBudgetStale);
         if (!Fits(peak.values_))
             return Failure<StreamingFeatureBudgetReservation>(FeatureBudgetCapacityExceeded);
-        const auto admitted = runtime_.Scheduler().TryAdmit(operation, capacityUnits);
+        auto &scheduler = runtime_.Scheduler();
+        const auto admitted = scheduler.TryAdmit(operation, capacityUnits, scheduler.Limits().concurrency.revision);
         if (admitted.HasError())
             return Result<StreamingFeatureBudgetReservation>::Failure(admitted.ErrorValue());
         const StreamingFeatureBudgetReservation reservation{runtime_.Owner(), admitted.Value()};
