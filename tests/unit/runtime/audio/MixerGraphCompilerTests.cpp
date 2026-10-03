@@ -58,39 +58,44 @@ namespace {
         }
         FAIL("Mixer preparation did not succeed after every bounded allocation prefix");
     }
+
+    /** @brief Check one explicit request family independently of Catch section selection. */
+    void CheckAllocationObserver(const bool aligned) {
+        constexpr std::size_t bytes = 64;
+        observedFailureBytes = 0;
+        bool caught{};
+        const std::size_t allocations = Horo::Tests::AllocationProbe::Count();
+        const std::size_t frees = Horo::Tests::AllocationProbe::FreeCount();
+        {
+            Horo::Tests::AllocationProbe::ScopedFailure injected(0, ObserveFailureBytes);
+            try {
+                void *unexpected = aligned ? ::operator new(bytes, std::align_val_t{64}) : ::operator new(bytes);
+                if (aligned)
+                    ::operator delete(unexpected, std::align_val_t{64});
+                else
+                    ::operator delete(unexpected);
+            } catch (const std::bad_alloc &) {
+                caught = true;
+            }
+            void *recovered = ::operator new(bytes);
+            ::operator delete(recovered);
+        }
+        const std::size_t acquired = Horo::Tests::AllocationProbe::Count() - allocations;
+        const std::size_t released = Horo::Tests::AllocationProbe::FreeCount() - frees;
+        REQUIRE(caught);
+        REQUIRE(observedFailureBytes == bytes);
+        REQUIRE(acquired == 2);
+        REQUIRE(released == 1);
+    }
 }  // namespace
 
 TEST_CASE("Mixer allocation probe observes ordinary and aligned failures and permits one-shot recovery", "[audio][mixer]") {
-    bool aligned{};
-    SECTION("Ordinary allocation") {}
+    SECTION("Ordinary allocation") {
+        CheckAllocationObserver(false);
+    }
     SECTION("Aligned allocation") {
-        aligned = true;
+        CheckAllocationObserver(true);
     }
-    constexpr std::size_t bytes = 64;
-    observedFailureBytes = 0;
-    bool caught{};
-    const std::size_t allocations = Horo::Tests::AllocationProbe::Count();
-    const std::size_t frees = Horo::Tests::AllocationProbe::FreeCount();
-    {
-        Horo::Tests::AllocationProbe::ScopedFailure injected(0, ObserveFailureBytes);
-        try {
-            void *unexpected = aligned ? ::operator new(bytes, std::align_val_t{64}) : ::operator new(bytes);
-            if (aligned)
-                ::operator delete(unexpected, std::align_val_t{64});
-            else
-                ::operator delete(unexpected);
-        } catch (const std::bad_alloc &) {
-            caught = true;
-        }
-        void *recovered = ::operator new(bytes);
-        ::operator delete(recovered);
-    }
-    const std::size_t acquired = Horo::Tests::AllocationProbe::Count() - allocations;
-    const std::size_t released = Horo::Tests::AllocationProbe::FreeCount() - frees;
-    REQUIRE(caught);
-    REQUIRE(observedFailureBytes == bytes);
-    REQUIRE(acquired == 2);
-    REQUIRE(released == 1);
 }
 
 TEST_CASE("Mixer compiler canonicalizes topology and route order independently of authoring arrays", "[audio][mixer]") {
