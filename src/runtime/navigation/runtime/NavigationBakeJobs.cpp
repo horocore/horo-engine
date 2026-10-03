@@ -329,6 +329,29 @@ namespace Horo::Navigation {
             Finish(state, NavigationBakeJobState::Succeeded);
             return Result<void>::Success();
         }
+
+        /** @brief Preserves an owned queued operation or admits one cancellable coordinator record. */
+        [[nodiscard]] std::optional<OperationId> AdmitOperation(OperationStore &operations, const NavigationBakeJobDescriptor &descriptor,
+                                                                const std::shared_ptr<CancellationSource> &cancellation) {
+            if (descriptor.queuedOperation.has_value()) {
+                if (const auto snapshot = operations.SnapshotIfChanged(0);
+                    !snapshot || !std::ranges::any_of(snapshot->operations, [&descriptor](const auto &record) {
+                    return record.id == *descriptor.queuedOperation &&
+                           (record.state == OperationState::Queued || record.state == OperationState::Cancelling);
+                }))
+                    return std::nullopt;
+                return descriptor.queuedOperation;
+            }
+            return operations.Begin(OperationDescriptor{.kind = OperationKind::Cook,
+                                                        .title = descriptor.title,
+                                                        .phase = "queued",
+                                                        .message = "Navigation bake queued",
+                                                        .progress = 0.0F,
+                                                        .cancellable = true,
+                                                        .requestCancel = [cancellation] {
+                cancellation->RequestCancellation();
+            }});
+        }
     }  // namespace
 
     /** @copydoc NavigationBakeJobSnapshot::IsTerminal */
@@ -382,15 +405,7 @@ namespace Horo::Navigation {
             return Result<NavigationBakeJobHandle>::Failure(validation.ErrorValue());
 
         auto cancellation = std::make_shared<CancellationSource>(descriptor.parentCancellation);
-        const auto operation = operations.Begin(OperationDescriptor{.kind = OperationKind::Cook,
-                                                                    .title = descriptor.title,
-                                                                    .phase = "queued",
-                                                                    .message = "Navigation bake queued",
-                                                                    .progress = 0.0F,
-                                                                    .cancellable = true,
-                                                                    .requestCancel = [cancellation] {
-            cancellation->RequestCancellation();
-        }});
+        const auto operation = AdmitOperation(operations, descriptor, cancellation);
         if (!operation.has_value())
             return BakeFailure<NavigationBakeJobHandle>(NavigationErrors::BakeJobAdmissionRejected);
 
