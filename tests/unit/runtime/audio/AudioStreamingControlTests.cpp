@@ -122,12 +122,29 @@ namespace Horo::Audio::StreamingTests {
         REQUIRE(service->Retire(second.Value()).HasValue());
     }
 
+    TEST_CASE("Streaming source mismatch fails on worker without accessing foreign state", "[unit][audio][streaming]") {
+        JobSystem jobs({.workerCount = 1});
+        CHECK(AudioStreamingService::Create(jobs, {{}, &Open}).HasError());
+        std::uint32_t foreignState{37};
+        auto created = AudioStreamingService::Create(jobs, {BorrowedCallbackContext{&foreignState}, &Open});
+        REQUIRE(created.HasValue());
+        auto service = std::move(created).Value();
+        const auto handle = service->Admit(Request()).Value();
+        REQUIRE(PumpUntilFailure(*service, handle));
+        const auto failure = service->Snapshot(handle).Value().failure;
+        REQUIRE(failure.has_value());
+        CHECK(failure->code.Value() == AudioErrors::StreamReadFailed.code.Value());
+        CHECK_FALSE(failure->cause);
+        CHECK(foreignState == 37);
+        REQUIRE(service->Retire(handle).HasValue());
+    }
+
     TEST_CASE("Streaming preparation allocation failure accepts no stream or reservation", "[unit][audio][streaming]") {
         JobSystem jobs({.workerCount = 1});
         PackageFixture fixture;
         const auto creation = [&] {
             Tests::AllocationProbe::ScopedFailure failure;
-            return AudioStreamingService::Create(jobs, {&fixture, &Open});
+            return AudioStreamingService::Create(jobs, {BorrowedCallbackContext{&fixture}, &Open});
         }();
         CHECK(creation.HasError());
         auto service = Service(jobs, fixture);
@@ -146,7 +163,7 @@ namespace Horo::Audio::StreamingTests {
     TEST_CASE("Streaming source transfer retains its lease through work and retirement", "[unit][audio][streaming]") {
         JobSystem jobs({.workerCount = 1});
         PackageFixture fixture;
-        AudioStreamPackageSource source{&fixture, &Open, std::make_shared<int>(1)};
+        AudioStreamPackageSource source{BorrowedCallbackContext{&fixture}, &Open, std::make_shared<int>(1)};
         const std::weak_ptr<const void> lease = source.ownerLease;
         auto created = AudioStreamingService::Create(jobs, std::move(source));
         REQUIRE(created.HasValue());

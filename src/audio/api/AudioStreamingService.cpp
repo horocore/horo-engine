@@ -272,7 +272,7 @@ namespace Horo::Audio {
     /** @copydoc AudioStreamingService::Create */
     Result<std::unique_ptr<AudioStreamingService>> AudioStreamingService::Create(JobSystem &jobs, AudioStreamPackageSource source,
                                                                                  const AudioStreamingLimits limits) {
-        if (source.context == nullptr || source.open == nullptr || !ValidLimits(limits))
+        if (!source.context.IsValid() || source.open == nullptr || !ValidLimits(limits))
             return Result<std::unique_ptr<AudioStreamingService>>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
         try {
             return Result<std::unique_ptr<AudioStreamingService>>::Success(

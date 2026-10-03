@@ -119,9 +119,13 @@ namespace Horo::Audio::StreamingTests {
         return scratch.size() == 16 && !output.empty() && output.size() <= 4 && output.size() % 2 == 0;
     }
 
-    inline Result<AudioStreamDecodeProgress> Decode(void *opaque, const std::uint64_t firstFrame, const std::span<AudioSample> output,
-                                                    const std::span<std::byte> scratch, const std::atomic<bool> &cancelled) {
-        auto &context = *static_cast<DecoderContext *>(opaque);
+    inline Result<AudioStreamDecodeProgress> Decode(const BorrowedCallbackContext &borrowed, const std::uint64_t firstFrame,
+                                                    const std::span<AudioSample> output, const std::span<std::byte> scratch,
+                                                    const std::atomic<bool> &cancelled) {
+        auto *resolved = borrowed.Get<DecoderContext>();
+        if (resolved == nullptr)
+            return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioErrors::StreamReadFailed));
+        auto &context = *resolved;
         auto &fixture = *context.fixture;
         fixture.decodes.fetch_add(1);
         AwaitPrivateCancellation(fixture, firstFrame, cancelled);
@@ -143,14 +147,19 @@ namespace Horo::Audio::StreamingTests {
         return Result<AudioStreamDecodeProgress>::Success({frames, firstFrame + frames == context.frameCount});
     }
 
-    inline void Release(void *opaque) noexcept {
-        const std::unique_ptr<DecoderContext> context(static_cast<DecoderContext *>(opaque));
-        context->fixture->releases.fetch_add(1);
+    inline void Release(const BorrowedCallbackContext &borrowed) noexcept {
+        const std::unique_ptr<DecoderContext> context(borrowed.Get<DecoderContext>());
+        if (context)
+            context->fixture->releases.fetch_add(1);
     }
 
-    inline Result<AudioStreamDecoder> Open(void *opaque, const Assets::AssetId asset, const AudioStreamDecoderSpec &expected,
-                                           const std::size_t maximumPackageBytes, const CancellationToken &cancelled) {
-        auto &fixture = *static_cast<PackageFixture *>(opaque);
+    inline Result<AudioStreamDecoder> Open(const BorrowedCallbackContext &borrowed, const Assets::AssetId asset,
+                                           const AudioStreamDecoderSpec &expected, const std::size_t maximumPackageBytes,
+                                           const CancellationToken &cancelled) {
+        auto *resolved = borrowed.Get<PackageFixture>();
+        if (resolved == nullptr)
+            return Result<AudioStreamDecoder>::Failure(MakeError(AudioErrors::StreamReadFailed));
+        auto &fixture = *resolved;
         fixture.opening.store(true);
         InjectOpenFailure(fixture.openFailure);
         if (fixture.openFailure == OpenFailure::TypedFailure)
@@ -168,7 +177,7 @@ namespace Horo::Audio::StreamingTests {
         if (fixture.wrongSpec)
             ++spec.frameCount;
         auto context = std::make_unique<DecoderContext>(DecoderContext{&fixture, spec.frameCount});
-        auto opened = AudioStreamDecoder::Create(spec, {context.get(), &Decode, nullptr, &Release});
+        auto opened = AudioStreamDecoder::Create(spec, {BorrowedCallbackContext{context.get()}, &Decode, nullptr, &Release});
         if (opened.HasValue())
             (void)context.release();
         return opened;
@@ -176,7 +185,7 @@ namespace Horo::Audio::StreamingTests {
 
     inline std::unique_ptr<AudioStreamingService> Service(JobSystem &jobs, PackageFixture &fixture,
                                                           AudioStreamingLimits limits = {2, 1, 1U << 20U}) {
-        auto created = AudioStreamingService::Create(jobs, {&fixture, &Open}, limits);
+        auto created = AudioStreamingService::Create(jobs, {BorrowedCallbackContext{&fixture}, &Open}, limits);
         REQUIRE(created.HasValue());
         return std::move(created).Value();
     }

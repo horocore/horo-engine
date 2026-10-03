@@ -1,5 +1,6 @@
 #include "Horo/Audio/AudioCooker.h"
 #include "Horo/Audio/AudioErrors.h"
+#include "Horo/Audio/AudioStreamDecoderErrors.h"
 
 #include <algorithm>
 #include <bit>
@@ -29,9 +30,13 @@ namespace Horo::Audio {
         };
 
         /** @brief Converts one bounded little-endian cooked PCM block into worker-owned samples. */
-        Result<AudioStreamDecodeProgress> DecodePcm(void *opaque, const std::uint64_t firstFrame, const std::span<AudioSample> output,
-                                                    std::span<std::byte>, const std::atomic<bool> &cancelled) {
-            const auto &state = *static_cast<const CookedDecoder *>(opaque);
+        Result<AudioStreamDecodeProgress> DecodePcm(const BorrowedCallbackContext &context, const std::uint64_t firstFrame,
+                                                    const std::span<AudioSample> output, std::span<std::byte>,
+                                                    const std::atomic<bool> &cancelled) {
+            const auto *resolved = context.Get<CookedDecoder>();
+            if (resolved == nullptr)
+                return Result<AudioStreamDecodeProgress>::Failure(MakeError(AudioStreamDecoderErrors::Invalid));
+            const auto &state = *resolved;
             const auto frames =
                 static_cast<std::uint32_t>(std::min<std::uint64_t>(output.size() / state.channels, state.frames - firstFrame));
             for (std::uint32_t frame = 0; frame < frames; ++frame) {
@@ -54,15 +59,17 @@ namespace Horo::Audio {
         }
 
         /** @brief PCM random access needs no private cursor or I/O. */
-        Result<void> SeekPcm(void *, std::uint64_t, const std::atomic<bool> &cancelled) {
+        Result<void> SeekPcm(const BorrowedCallbackContext &context, std::uint64_t, const std::atomic<bool> &cancelled) {
+            if (context.Get<CookedDecoder>() == nullptr)
+                return Result<void>::Failure(MakeError(AudioStreamDecoderErrors::Invalid));
             if (cancelled.load())
                 return Result<void>::Failure(MakeError(AudioErrors::OperationCancelled));
             return Result<void>::Success();
         }
 
         /** @brief Releases the immutable payload only after serialized worker use ends. */
-        void ReleasePcm(void *opaque) noexcept {
-            std::unique_ptr<CookedDecoder> state(static_cast<CookedDecoder *>(opaque));
+        void ReleasePcm(const BorrowedCallbackContext &context) noexcept {
+            std::unique_ptr<CookedDecoder> state(context.Get<CookedDecoder>());
             state.reset();
         }
 
@@ -104,7 +111,8 @@ namespace Horo::Audio {
             state->channels = manifest.format.layout.orderedChannels.size();
             state->frames = manifest.frameCount;
             state->payload = std::move(artifact.payload);
-            const AudioStreamDecoderProvider provider{state.get(), &DecodePcm, expected.seekable ? &SeekPcm : nullptr, &ReleasePcm};
+            const AudioStreamDecoderProvider provider{BorrowedCallbackContext{state.get()}, &DecodePcm,
+                                                      expected.seekable ? &SeekPcm : nullptr, &ReleasePcm};
             AudioStreamDecoderLimits decoderLimits;
             decoderLimits.maximumFramesPerDecode = MaximumAudioCallbackFrames;
             auto decoder = AudioStreamDecoder::Create(expected, provider, decoderLimits);
@@ -114,9 +122,13 @@ namespace Horo::Audio {
         }
 
         /** @brief Loads and verifies an exact cooked generation on a cancellable worker. */
-        Result<AudioStreamDecoder> OpenCooked(void *opaque, const Assets::AssetId asset, const AudioStreamDecoderSpec &expected,
-                                              const std::size_t maximumPackageBytes, const CancellationToken &cancellation) {
-            const auto &source = *static_cast<const CookedSource *>(opaque);
+        Result<AudioStreamDecoder> OpenCooked(const BorrowedCallbackContext &context, const Assets::AssetId asset,
+                                              const AudioStreamDecoderSpec &expected, const std::size_t maximumPackageBytes,
+                                              const CancellationToken &cancellation) {
+            const auto *resolved = context.Get<CookedSource>();
+            if (resolved == nullptr)
+                return Result<AudioStreamDecoder>::Failure(MakeError(AudioErrors::StreamReadFailed));
+            const auto &source = *resolved;
             if (maximumPackageBytes < source.maximumArtifactBytes * 3U)
                 return Result<AudioStreamDecoder>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
             auto artifact = LoadArtifact(source, asset, cancellation);
@@ -143,6 +155,6 @@ namespace Horo::Audio {
             maximumArtifactBytes > (128U << 20U) / 3U)
             return Result<AudioStreamPackageSource>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));
         auto state = std::make_shared<CookedSource>(std::move(provider), std::move(target), std::move(type), maximumArtifactBytes);
-        return Result<AudioStreamPackageSource>::Success({state.get(), &OpenCooked, std::move(state)});
+        return Result<AudioStreamPackageSource>::Success({BorrowedCallbackContext{state.get()}, &OpenCooked, std::move(state)});
     }
 }  // namespace Horo::Audio

@@ -8,6 +8,10 @@ namespace {
     using Horo::Audio::AudioStreamPackageSource;
     using Horo::JobSystem;
 
+    static_assert(std::is_same_v<decltype(AudioStreamPackageSource::context), Horo::BorrowedCallbackContext>);
+    static_assert(std::is_same_v<decltype(Horo::Audio::AudioStreamDecoderProvider::context), Horo::BorrowedCallbackContext>);
+    static_assert(std::is_trivially_copyable_v<Horo::BorrowedCallbackContext>);
+
     // Consumers may use the checked factory, but cannot manufacture its private authority.
     template <typename Service>
     concept HasCheckedFactory = requires(JobSystem &jobs, AudioStreamPackageSource source, AudioStreamingLimits limits) {

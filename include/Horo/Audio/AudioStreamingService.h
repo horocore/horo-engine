@@ -21,11 +21,16 @@
 namespace Horo::Audio {
     struct AudioStreamState;
 
-    /** @brief Package-backed source opened only by a host worker job. */
+    /**
+     * @brief Package-backed source opened only by a host worker job.
+     * @details Open resolves its private state with context.Get<T>() and returns a typed error on mismatch before I/O.
+     * The host retains the object and provider code until shutdown completes; context itself grants no ownership.
+     */
     struct AudioStreamPackageSource final {
-        using OpenFunction = Result<AudioStreamDecoder> (*)(void *context, Assets::AssetId asset, const AudioStreamDecoderSpec &expected,
-                                                            std::size_t maximumPackageBytes, const CancellationToken &cancellation);
-        void *context{};                        /**< Borrowed host provider, retained until service shutdown. */
+        using OpenFunction = Result<AudioStreamDecoder> (*)(const BorrowedCallbackContext &context, Assets::AssetId asset,
+                                                            const AudioStreamDecoderSpec &expected, std::size_t maximumPackageBytes,
+                                                            const CancellationToken &cancellation);
+        BorrowedCallbackContext context{};      /**< Type-checked borrowed host provider, retained until service shutdown. */
         OpenFunction open{};                    /**< Opens immutable cooked media; must observe cancellation during bounded I/O. */
         std::shared_ptr<const void> ownerLease; /**< Pins external provider code through every fill and decoder release. */
     };

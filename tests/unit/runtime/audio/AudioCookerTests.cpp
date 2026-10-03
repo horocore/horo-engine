@@ -267,6 +267,24 @@ namespace Horo::Audio {
         }
     }
 
+    TEST_CASE("Cooked streaming rejects foreign or empty source state before opening media", "[unit][audio][streaming][cook]") {
+        CookedStreamFixture fixture;
+        auto made = MakeCookedAudioStreamSource(fixture.Archive(), fixture.target, fixture.type, fixture.artifactLimit);
+        REQUIRE(made.HasValue());
+        const auto &source = made.Value();
+        std::uint32_t foreignState{91};
+        for (const BorrowedCallbackContext &context : {BorrowedCallbackContext{}, BorrowedCallbackContext{&foreignState}}) {
+            auto opened = source.open(context, fixture.asset, fixture.Request().decoder, fixture.artifactLimit * 3, CancellationToken{});
+            REQUIRE(opened.HasError());
+            CHECK(opened.ErrorValue().code.Value() == AudioErrors::StreamReadFailed.code.Value());
+            CHECK(foreignState == 91);
+        }
+        auto opened = source.open(source.context, fixture.asset, fixture.Request().decoder, fixture.artifactLimit * 3, CancellationToken{});
+        REQUIRE(opened.HasValue());
+        REQUIRE(opened.Value().Seek(2).HasValue());
+        CHECK(opened.Value().CursorFrame() == 2);
+    }
+
     TEST_CASE("Audio cook produces identical PCM payload and compatibility manifest for exact inputs", "[unit][audio][cook]") {
         const auto source = WaveFixture();
         const auto target = Target("linux-desktop");

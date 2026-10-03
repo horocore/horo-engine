@@ -1739,12 +1739,18 @@ admitted workload and contention; functional stress tests do not prove latency.
 The public source factory remains ownership-taking by value, then moves that
 source through private construction without extra shared-lease copies. Const
 service access returns only const stream state; issuing the sole render port and
-advancing report cursors require mutable control access. The cooked provider's
-opaque context signatures are the existing Horo `AudioStreamDecoderProvider` and
-`AudioStreamPackageSource` contracts, not a newly selected third-party/native API.
-Their bodies immediately recover concrete owned state; replacement of these
-signatures requires a deliberate decoder/source contract migration, not type
-aliases or generic callbacks that merely hide the same opaque boundary.
+advancing report cursors require mutable control access. `AudioStreamDecoderProvider`
+and `AudioStreamPackageSource` use Foundation's `BorrowedCallbackContext`, with
+exact private-type resolution in every operation before dereference or I/O.
+An empty context is rejected at admission; a mismatched type returns a typed
+operation error, and release must not destroy foreign state. This context adds
+no allocation, virtual dispatch or lifetime ownership. Decoder release
+responsibility still transfers only on successful admission, once after worker
+completion; the source's object and code lease remain pinned through that release.
+These in-process callbacks are not a native extension ABI. Provider construction
+and type resolution must remain within the same compiled provider identity.
+See [the callback-context migration](../../guides/audio-streaming-provider-migration.md)
+for changed signatures, affected callers and rejection/ownership coverage.
 
 The service's allocation constructor is publicly declared only to permit
 `std::make_unique`, but takes a private, non-aggregate `ConstructionKey` whose
