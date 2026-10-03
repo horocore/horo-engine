@@ -67,10 +67,11 @@ def test_audio_keeps_both_modes_and_all_platforms() -> None:
         assert f"steps.audio_tests_{mode}.outcome" in block
     assert targets(block) == {
         "HoroAudioRealtimeSafetyHarnessTests", "HoroAudioWatchdogTests", "HoroAudioNullTests",
-        "HoroAudioDspTests", "HoroCoreAudioDspTests", "HoroAudioCommandTests",
+        "HoroAudioDspTests", "HoroCoreAudioDspTests", "HoroAudioCommandTests", "HoroAudioMixerTests",
     }
     assert block.count("--timeout 90 -j 1") == 2
     assert block.count("HoroAudio(CallbackLockPolicyTest|") == 2
+    assert block.count("|MixerTests::)") == 2
     assert "mode: Debug-Release" in block
     assert "max-size: 512M" in block
     assert "exit 1" in block

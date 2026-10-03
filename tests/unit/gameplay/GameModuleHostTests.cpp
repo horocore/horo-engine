@@ -283,3 +283,26 @@ TEST_CASE("generated gameplay bundle validation rejects incomplete bindings and 
     REQUIRE(diagnostics.HasError());
     REQUIRE(diagnostics.ErrorValue().code.Value() == GameplayErrors::GeneratedDescriptorDiagnosticsPresent.code.Value());
 }
+
+TEST_CASE("event registration SDK rejects prior generation descriptors and bundles") {
+    ValidBundleStorage storage;
+    const GameModuleLoadExpectation expected{
+        .moduleId = "game.tests",
+        .buildFingerprint = CurrentGameplayBuildFingerprint(),
+        .descriptorRevision = 7,
+    };
+    GameModuleDescriptor descriptor{
+        .moduleId = "game.tests",
+        .buildFingerprint = CurrentGameplayBuildFingerprint().data(),
+    };
+    REQUIRE(ValidateGameModuleDescriptor(descriptor, expected).HasValue());
+    REQUIRE(ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected).HasValue());
+    descriptor.sdkBoundaryVersion = GameplaySdkBoundaryVersion - 1;
+    const auto module = ValidateGameModuleDescriptor(descriptor, expected);
+    REQUIRE(module.HasError());
+    CHECK(module.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
+    storage.bundle.sdkBoundaryVersion = GameplaySdkBoundaryVersion - 1;
+    const auto bundle = ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected);
+    REQUIRE(bundle.HasError());
+    CHECK(bundle.ErrorValue().code.Value() == GameplayErrors::InvalidGeneratedDescriptorBundle.code.Value());
+}

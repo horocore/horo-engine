@@ -13,16 +13,7 @@ namespace {
     class AllocationMeter final {
     public:
         [[nodiscard]] static void *Acquire(const std::size_t byteCount) {
-            count_.fetch_add(1, std::memory_order_relaxed);
-            std::size_t remaining = failureCountdown_.load(std::memory_order_relaxed);
-            while (remaining != DisabledFailureCountdown) {
-                if (remaining == 0) {
-                    if (failureCountdown_.compare_exchange_weak(remaining, DisabledFailureCountdown, std::memory_order_relaxed))
-                        throw std::bad_alloc{};
-                } else if (failureCountdown_.compare_exchange_weak(remaining, remaining - 1, std::memory_order_relaxed)) {
-                    break;
-                }
-            }
+            RecordAllocation(byteCount);
             void *const storage = std::malloc(std::max(byteCount, std::size_t{1}));
             if (storage == nullptr)
                 throw std::bad_alloc{};
@@ -30,20 +21,13 @@ namespace {
         }
 
         static void Release(void *const storage) noexcept {
+            if (storage != nullptr)
+                freeCount_.fetch_add(1, std::memory_order_relaxed);
             std::free(storage);
         }
 
         [[nodiscard]] static void *AcquireAligned(const std::size_t byteCount, const std::size_t alignment) {
-            count_.fetch_add(1, std::memory_order_relaxed);
-            std::size_t remaining = failureCountdown_.load(std::memory_order_relaxed);
-            while (remaining != DisabledFailureCountdown) {
-                if (remaining == 0) {
-                    if (failureCountdown_.compare_exchange_weak(remaining, DisabledFailureCountdown, std::memory_order_relaxed))
-                        throw std::bad_alloc{};
-                } else if (failureCountdown_.compare_exchange_weak(remaining, remaining - 1, std::memory_order_relaxed)) {
-                    break;
-                }
-            }
+            RecordAllocation(byteCount);
 #ifdef _WIN32
             void *const storage = _aligned_malloc(std::max(byteCount, std::size_t{1}), alignment);
 #else
@@ -57,6 +41,8 @@ namespace {
         }
 
         static void ReleaseAligned(void *const storage) noexcept {
+            if (storage != nullptr)
+                freeCount_.fetch_add(1, std::memory_order_relaxed);
 #ifdef _WIN32
             _aligned_free(storage);
 #else
@@ -68,18 +54,43 @@ namespace {
             return count_.load(std::memory_order_relaxed);
         }
 
-        static void FailAfter(const std::size_t successfulAllocations) noexcept {
+        [[nodiscard]] static std::size_t FreeCount() noexcept {
+            return freeCount_.load(std::memory_order_relaxed);
+        }
+
+        static void FailAfter(const std::size_t successfulAllocations, Horo::Tests::AllocationProbe::FailureObserver observer) noexcept {
+            failureObserver_.store(observer, std::memory_order_relaxed);
             failureCountdown_.store(successfulAllocations, std::memory_order_relaxed);
         }
 
         static void DisableFailures() noexcept {
             failureCountdown_.store(DisabledFailureCountdown, std::memory_order_relaxed);
+            failureObserver_.store(nullptr, std::memory_order_relaxed);
         }
 
     private:
+        /** @brief Disable the one-shot failure before notifying or throwing, so exception cleanup can allocate. */
+        static void RecordAllocation(const std::size_t byteCount) {
+            count_.fetch_add(1, std::memory_order_relaxed);
+            std::size_t remaining = failureCountdown_.load(std::memory_order_relaxed);
+            while (remaining != DisabledFailureCountdown) {
+                if (remaining == 0) {
+                    if (failureCountdown_.compare_exchange_weak(remaining, DisabledFailureCountdown, std::memory_order_relaxed)) {
+                        if (const auto observer = failureObserver_.load(std::memory_order_relaxed); observer != nullptr)
+                            observer(byteCount);
+                        throw std::bad_alloc{};
+                    }
+                } else if (failureCountdown_.compare_exchange_weak(remaining, remaining - 1, std::memory_order_relaxed)) {
+                    break;
+                }
+            }
+        }
+
         static constexpr std::size_t DisabledFailureCountdown = std::numeric_limits<std::size_t>::max();
         static inline std::atomic<std::size_t> count_{};
+        static inline std::atomic<std::size_t> freeCount_{};
         static inline std::atomic<std::size_t> failureCountdown_{DisabledFailureCountdown};
+        static inline std::atomic<Horo::Tests::AllocationProbe::FailureObserver> failureObserver_{};
     };
 }  // namespace
 
@@ -132,8 +143,9 @@ void operator delete[](void *memory, std::size_t, const std::align_val_t) noexce
 }
 
 namespace Horo::Tests::AllocationProbe {
-    ScopedFailure::ScopedFailure(const std::size_t successfulAllocationsBeforeFailure) noexcept {
-        AllocationMeter::FailAfter(successfulAllocationsBeforeFailure);
+    /** @copydoc ScopedFailure::ScopedFailure */
+    ScopedFailure::ScopedFailure(const std::size_t successfulAllocationsBeforeFailure, FailureObserver observer) noexcept {
+        AllocationMeter::FailAfter(successfulAllocationsBeforeFailure, observer);
     }
 
     ScopedFailure::~ScopedFailure() {
@@ -142,5 +154,9 @@ namespace Horo::Tests::AllocationProbe {
 
     std::size_t Count() noexcept {
         return AllocationMeter::Count();
+    }
+
+    std::size_t FreeCount() noexcept {
+        return AllocationMeter::FreeCount();
     }
 }  // namespace Horo::Tests::AllocationProbe

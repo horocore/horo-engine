@@ -7,6 +7,7 @@ message(STATUS "Configuring target-specific public header boundaries")
 horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/AssetCookTargetId.h
     Horo/Foundation/Assertions.h
+    Horo/Foundation/BorrowedCallbackContext.h
     Horo/Foundation/BuildOutputStore.h
     Horo/Foundation/CancellationToken.h
     Horo/Foundation/Configuration.h
@@ -349,6 +350,7 @@ horo_configure_target_header_boundary(HoroNetworkTransportNull PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS
+    Horo/Gameplay/GameEventRegistry.h
     Horo/Gameplay/Behavior.h
     Horo/Gameplay/BehaviorTypes.h
     Horo/Gameplay/Component.h
@@ -454,9 +456,13 @@ horo_configure_target_header_boundary(HoroAudioDsp PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroAudioPlayback PUBLIC_HEADERS
     Horo/Audio/AudioVoicePlayback.h
+    Horo/Audio/AudioRepeatedPlayback.h
 )
 horo_configure_target_header_boundary(HoroAudioMemory PUBLIC_HEADERS
     Horo/Audio/AudioMemory.h
+)
+horo_configure_target_header_boundary(HoroAudioMixer PUBLIC_HEADERS
+    Horo/Audio/MixerGraphCompiler.h
 )
 horo_configure_target_header_boundary(HoroAudioCommands PUBLIC_HEADERS
     Horo/Audio/AudioClock.h
@@ -624,11 +630,15 @@ horo_configure_target_header_boundary(HoroCinematicModel PUBLIC_HEADERS
     Horo/Cinematic/CurveSampling.h
     Horo/Cinematic/CinematicErrors.h
     Horo/Cinematic/CinematicIdentity.h
+    Horo/Cinematic/EventTrack.h
+    Horo/Cinematic/EventTrackErrors.h
     Horo/Cinematic/PropertyTrack.h
     Horo/Cinematic/SequenceAsset.h
     Horo/Cinematic/TransformTrack.h
 )
 horo_configure_target_header_boundary(HoroCinematicRuntime PUBLIC_HEADERS
+    Horo/Cinematic/EventDispatcher.h
+    Horo/Cinematic/EventSession.h
     Horo/Cinematic/PropertyTrackRuntime.h
     Horo/Cinematic/SequenceEvaluation.h
     Horo/Cinematic/SequenceEvaluationErrors.h
@@ -636,6 +646,10 @@ horo_configure_target_header_boundary(HoroCinematicRuntime PUBLIC_HEADERS
     Horo/Cinematic/SequencePlayerErrors.h
     Horo/Cinematic/SequencePlaybackRuntime.h
     Horo/Cinematic/SequencePlaybackRuntimeErrors.h
+)
+horo_configure_target_header_boundary(HoroCinematicScriptBridge PUBLIC_HEADERS
+    Horo/Cinematic/GameplayEventAdapter.h
+    Horo/Cinematic/ScriptEventCook.h
 )
 horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
     Horo/Navigation/NavMeshData.h
