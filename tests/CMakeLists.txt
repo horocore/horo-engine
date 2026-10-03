@@ -2133,6 +2133,21 @@ add_executable(HoroRuntimeSaveRootResolverTests
 )
 target_compile_features(HoroRuntimeSaveRootResolverTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveRootResolverTests PRIVATE HoroEngine::Runtime)
+
+add_executable(HoroRuntimeSaveFilesystemLockTests
+        unit/runtime/save/SaveFilesystemLockTests.cpp
+)
+target_compile_features(HoroRuntimeSaveFilesystemLockTests PRIVATE cxx_std_20)
+# Deliberate non-installed test boundary: only the immutable native read mechanism is staged.
+add_library(HoroSaveFilesystemReadInternal INTERFACE)
+set(save_read_internal_root "${CMAKE_CURRENT_BINARY_DIR}/save-read-internal")
+foreach(header SaveFilesystemPinnedRead.h SaveFilesystemStoragePlatform.h SaveFilesystemStorageDetails.h)
+    configure_file("${PROJECT_SOURCE_DIR}/src/runtime/save/${header}" "${save_read_internal_root}/${header}" COPYONLY)
+endforeach()
+target_include_directories(HoroSaveFilesystemReadInternal INTERFACE "${save_read_internal_root}")
+target_link_libraries(HoroSaveFilesystemReadInternal INTERFACE HoroEngine::Runtime)
+target_link_libraries(HoroRuntimeSaveFilesystemLockTests PRIVATE HoroSaveFilesystemReadInternal)
+
 add_executable(HoroRuntimeSaveNamespaceTests
         unit/runtime/save/SaveNamespaceTests.cpp
 )
@@ -3143,6 +3158,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveIdentityTests
         HoroRuntimeSaveDiagnosticsTests
         HoroRuntimeSaveRootResolverTests
+        HoroRuntimeSaveFilesystemLockTests
         HoroRuntimeSaveNamespaceTests
         HoroRuntimeSaveParticipantRegistryTests
         HoroRuntimeSaveCaptureSnapshotTests

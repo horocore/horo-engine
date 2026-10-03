@@ -49,8 +49,10 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
-          cmake --build build/save-path-windows --target HoroRuntimeSaveRootResolverTests --parallel 2
-          ctest --test-dir build/save-path-windows -R '^HoroRuntimeSaveRootResolverTests::' --output-on-failure
+          cmake --build build/save-path-windows --parallel 2 --target \
+            HoroRuntimeSaveRootResolverTests HoroRuntimeSaveFilesystemLockTests \
+            HoroRuntimeSaveSlotCommitTransactionTests HoroRuntimePublicHeaderConsumer
+          ctest --test-dir build/save-path-windows -j1 -R '^HoroRuntimeSave(RootResolver|FilesystemLock|SlotCommitTransaction)Tests::' --output-on-failure
         env:
           CC: cl
           CXX: cl

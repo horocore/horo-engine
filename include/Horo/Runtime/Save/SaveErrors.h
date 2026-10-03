@@ -228,6 +228,8 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor StorageAllocationFailed;
     /** @brief A slot-generation transaction or persisted journal is malformed or contradictory. */
     extern const ErrorCodeDescriptor SlotCommitInvalid;
+    /** @brief The supplied base slot publication no longer matches the selected generation. */
+    extern const ErrorCodeDescriptor SlotCommitGenerationStale;
     /** @brief Atomic catalog publication may have selected the new generation and requires reconciliation. */
     extern const ErrorCodeDescriptor SlotCommitOutcomeUnknown;
     /** @brief Journal replay could not prove or converge to a safe old-or-new generation. */
