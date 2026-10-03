@@ -9,8 +9,12 @@ milestone, a GitHub closing reference, labels, projects, and assignee. It finds
 the issue from the PR's closing references/body/title, or searches for the Jira
 key in the head branch. Use `--issue` when that lookup is ambiguous. If the
 issue has no assignee, the PR author is the default assignee. Use `--project` to
-also require a project on the PR. The script requires an authenticated `gh` CLI;
-project edits need the `project` token scope.
+also require a project on the PR. Set `GH_TOKEN` or `GITHUB_TOKEN`, or authenticate
+the `gh` CLI for `github.com`; project edits need the `project` token scope.
+API requests use fixed-host HTTPS and JSON payloads. The CLI is used only to
+read credentials with fixed arguments, never to execute PR-supplied values.
+Repository names must be ASCII `OWNER/REPO` identifiers. Requests and credential
+lookup have a 30-second timeout; responses and pagination are bounded.
 
 ```bash
 python3 scripts/pr_annotations.py 3067              # read-only check
