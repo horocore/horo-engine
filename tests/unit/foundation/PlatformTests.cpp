@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <optional>
 #include <span>
@@ -330,6 +331,60 @@ namespace {
         REQUIRE((files.RemoveDurable(root / "copied").HasValue()));
         REQUIRE((files.RemoveDurable(root / "published").HasValue()));
         std::filesystem::remove_all(root, ignored);
+    }
+
+    TEST_CASE("Exclusive locks reject aliases before replacing owner metadata", "[unit][foundation][security]") {
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto root = std::filesystem::current_path() / std::format("horo-private-lock-{}", stamp);
+        REQUIRE(std::filesystem::create_directory(root));
+
+        struct Cleanup final {
+            explicit Cleanup(const std::filesystem::path &ownedPath) : path(ownedPath) {}
+
+            Cleanup(const Cleanup &) = delete;
+            Cleanup &operator=(const Cleanup &) = delete;
+            Cleanup(Cleanup &&) = delete;
+            Cleanup &operator=(Cleanup &&) = delete;
+            std::filesystem::path path;
+
+            ~Cleanup() {
+                std::error_code ignored;
+                std::filesystem::remove_all(path, ignored);
+            }
+        };
+
+        const Cleanup cleanup{root};
+
+        Horo::NativeDurableFileSystem files;
+        const auto target = root / std::filesystem::path{u8"kilit örnek.lock"};
+        const auto alias = root / "alias.lock";
+        const std::string original = "preserve owner";
+        REQUIRE(files.WriteDurable(target, std::as_bytes(std::span{original})).HasValue());
+        SECTION("Symbolic links cannot truncate their target") {
+            std::error_code error;
+            std::filesystem::create_symlink(target, alias, error);
+            if (error)
+                SKIP("Symbolic links are unavailable on this host");
+            CHECK(files.TryAcquireExclusive(alias, "attacker").HasError());
+        }
+        SECTION("Hard links cannot truncate another name") {
+            std::error_code error;
+            std::filesystem::create_hard_link(target, alias, error);
+            if (error)
+                SKIP("Hard links are unavailable on this host");
+            CHECK(files.TryAcquireExclusive(alias, "attacker").HasError());
+            CHECK(files.TryAcquireExclusive(target, "attacker").HasError());
+        }
+        SECTION("Directories are rejected") {
+            std::filesystem::create_directory(alias);
+            CHECK(files.TryAcquireExclusive(alias, "attacker").HasError());
+        }
+        std::ifstream input(target, std::ios::binary);
+        CHECK(std::string(std::istreambuf_iterator<char>(input), {}) == original);
+        input.close();
+        std::filesystem::remove(alias);
+        // Failed admission releases the process registry entry as well as the native handle.
+        CHECK(files.TryAcquireExclusive(alias, "legitimate owner").HasValue());
     }
 
     TEST_CASE("Private durable append requires exact offset and rejects file aliases", "[unit][foundation]") {

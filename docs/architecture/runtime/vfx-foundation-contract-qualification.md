@@ -38,7 +38,7 @@ ctest --test-dir build/skeleton -R '^HoroVfxApiTests::' --output-on-failure
 |---|---|---|
 | Linux / GCC | Enabled in `.github/workflows/ci.yml` | Required active CI lane. |
 | macOS / Clang | Enabled in `.github/workflows/ci.yml` | Required active CI lane. |
-| Windows / MSVC | Dedicated `VFX Foundation · Windows / MSVC` job in `.github/workflows/ci.yml` builds and runs `HoroVfxApiTests` | Required focused CI lane. Qualification requires that job to pass on this PR head. |
+| Windows / MSVC | `Test · Windows / MSVC` in `.github/workflows/ci.yml` builds `HoroVfxApiTests` with the focused Windows group and runs its cases in `Test Debug` (`ci-windows` CTest label). | Required focused CI lane. Qualification requires that job to pass on this PR head. |
 
 The full Windows matrix entry remains disabled while the full-suite timeout is
 investigated. The dedicated job qualifies this VFX target without waiting for the
