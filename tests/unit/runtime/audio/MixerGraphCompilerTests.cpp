@@ -1,6 +1,97 @@
+#include "Horo/Platform/ExternalProcess.h"
+#include "MixerAllocationFailureOutcome.h"
 #include "MixerTestFixture.h"
 
+#include <cstdio>
+
 using namespace Horo::Tests::MixerFixture;
+
+namespace {
+    std::size_t observedFailureBytes{};
+
+    /** @brief Observe the attempted request without changing its countdown or allocating. */
+    void ObserveFailureBytes(const std::size_t bytes) noexcept {
+        observedFailureBytes = bytes;
+    }
+
+    /** @brief Exercise every prefix without allowing checked-STL termination to strand the test process. */
+    void CheckAllocationFailurePrefixes(const char *mode) {
+        NativeExternalProcessRunner runner;
+        std::size_t caught{};
+        std::size_t proxyTerminations{};
+        constexpr std::size_t maximumPrefixes = 1024;
+        for (std::size_t prefix = 0; prefix < maximumPrefixes; ++prefix) {
+            std::string diagnostic;
+            ExternalProcessRequest request;
+            request.executable = HORO_MIXER_ALLOCATION_WORKER;
+            request.arguments = {mode, std::to_string(prefix)};
+            request.timeout = std::chrono::seconds{5};
+            request.gracefulTermination = std::chrono::milliseconds{0};
+            request.maximumOutputBytes = 16U * 1024U;
+            request.onOutput = [&](ProcessOutputLine line) {
+                diagnostic += line.text + '\n';
+            };
+            const auto child = runner.Run(request, {});
+            INFO("mode: " << mode << ", prefix: " << prefix << ", child output: " << diagnostic);
+            REQUIRE(child.HasValue());
+            REQUIRE(child.Value().reason == ProcessTerminationReason::Exited);
+            const auto outcome = static_cast<AllocationFailureOutcome>(child.Value().exitCode);
+            if (outcome == AllocationFailureOutcome::Complete) {
+                REQUIRE(caught > 0);
+                if (std::string_view{mode} != "runtime")
+                    REQUIRE(caught > 10);
+                std::printf("%s: %zu caught allocation failures, %zu proven MSVC proxy terminations, complete at prefix %zu\n", mode,
+                            caught, proxyTerminations, prefix);
+                return;
+            }
+            REQUIRE((outcome == AllocationFailureOutcome::Caught || outcome == AllocationFailureOutcome::MsvcDebugProxyTerminated));
+            if (outcome == AllocationFailureOutcome::Caught) {
+                ++caught;
+            } else {
+#if !defined(_MSC_VER) || _ITERATOR_DEBUG_LEVEL == 0
+                FAIL("Checked-STL termination is only expected in MSVC iterator-debug builds");
+#endif
+                if (proxyTerminations == 0)
+                    std::fputs(diagnostic.c_str(), stdout);
+                ++proxyTerminations;
+            }
+        }
+        FAIL("Mixer preparation did not succeed after every bounded allocation prefix");
+    }
+}  // namespace
+
+TEST_CASE("Mixer allocation probe observes ordinary and aligned failures and permits one-shot recovery", "[audio][mixer]") {
+    bool aligned{};
+    SECTION("Ordinary allocation") {}
+    SECTION("Aligned allocation") {
+        aligned = true;
+    }
+    constexpr std::size_t bytes = 64;
+    observedFailureBytes = 0;
+    bool caught{};
+    const std::size_t allocations = Horo::Tests::AllocationProbe::Count();
+    const std::size_t frees = Horo::Tests::AllocationProbe::FreeCount();
+    {
+        Horo::Tests::AllocationProbe::ScopedFailure injected(0, ObserveFailureBytes);
+        try {
+            void *unexpected = aligned ? ::operator new(bytes, std::align_val_t{64}) : ::operator new(bytes);
+            if (aligned)
+                ::operator delete(unexpected, std::align_val_t{64});
+            else
+                ::operator delete(unexpected);
+        } catch (const std::bad_alloc &) {
+            caught = true;
+        }
+        void *recovered = ::operator new(bytes);
+        ::operator delete(recovered);
+    }
+    const std::size_t acquired = Horo::Tests::AllocationProbe::Count() - allocations;
+    const std::size_t released = Horo::Tests::AllocationProbe::FreeCount() - frees;
+    REQUIRE(caught);
+    REQUIRE(observedFailureBytes == bytes);
+    REQUIRE(acquired == 2);
+    REQUIRE(released == 1);
+}
 
 TEST_CASE("Mixer compiler canonicalizes topology and route order independently of authoring arrays", "[audio][mixer]") {
     MixerAssetSchema asset = Asset();
@@ -114,25 +205,15 @@ TEST_CASE("Mixer compiler rejects unavailable DSP capabilities", "[audio][mixer]
 }
 
 TEST_CASE("Mixer preparation allocation failures never publish partially constructed plans", "[audio][mixer]") {
-    const MixerAssetSchema asset = Asset();
-    const MixerCompileProfile profile = Profile();
-    std::uint32_t failures{};
-    for (std::uint32_t fail = 0; fail < 256; ++fail) {
-        std::optional<Result<std::unique_ptr<MixerRenderPlan>>> result;
-        {
-            Horo::Tests::AllocationProbe::ScopedFailure injected(fail);
-            result.emplace(CompileMixerGraph(asset, Identity(), profile));
-        }
-        if (result->HasValue())
-            break;
-        ++failures;
+    SECTION("Complete topology and aligned storage") {
+        CheckAllocationFailurePrefixes("compiler");
     }
-    REQUIRE(failures > 10);
-    REQUIRE(failures < 256);
+    SECTION("Owned DSP descriptors nodes parameters and scratch") {
+        CheckAllocationFailurePrefixes("inserts");
+    }
 }
 
-TEST_CASE("Mixer compilation requires exact nonzero revision identity and runtime preparation rolls back allocation failures",
-          "[audio][mixer]") {
+TEST_CASE("Mixer compilation requires exact nonzero revision identity", "[audio][mixer]") {
     MixerPlanIdentity invalid = Identity();
     SECTION("Owner") {
         invalid.owner = {};
@@ -153,20 +234,10 @@ TEST_CASE("Mixer compilation requires exact nonzero revision identity and runtim
         invalid.profileRevision = 0;
     }
     REQUIRE(CompileMixerGraph(Asset(), invalid, Profile()).HasError());
-    const MixerRuntimeDescriptor descriptor{Scope, IdOf<AudioMemoryPoolId>(33), Profile()};
-    bool succeeded{};
-    for (std::size_t fail = 0; fail < 32; ++fail) {
-        std::optional<Result<std::unique_ptr<MixerGraphRuntime>>> result;
-        {
-            Horo::Tests::AllocationProbe::ScopedFailure injected(fail);
-            result.emplace(MixerGraphRuntime::Create(descriptor));
-        }
-        if (result->HasValue()) {
-            succeeded = true;
-            break;
-        }
-    }
-    REQUIRE(succeeded);
+}
+
+TEST_CASE("Mixer runtime preparation rolls back allocation failures", "[audio][mixer]") {
+    CheckAllocationFailurePrefixes("runtime");
 }
 
 TEST_CASE("Mixer cycle diagnostics are canonical across source order and retain typed schema evidence", "[audio][mixer]") {
