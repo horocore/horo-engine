@@ -98,3 +98,13 @@ def test_cli_output_traversal_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         converter.main()
     assert error.value.code == 2
     assert not outside.exists()
+
+
+def test_source_names_are_escaped_in_serialized_xml(tmp_path: Path) -> None:
+    source = tmp_path / "örnek & 'quoted'.cpp"
+    source.write_text("callback();", encoding="utf-8")
+    document, _ = converter.convert({"sources": {str(source): {"": {"lines": {"1": 1}}}}}, tmp_path)
+    serialized = converter.element_tree.tostring(document, encoding="utf-8", xml_declaration=True)
+    parsed = element_tree.fromstring(serialized)
+    assert parsed.find("file").get("path") == source.name
+    assert parsed.find("file/lineToCover").attrib == {"lineNumber": "1", "covered": "true"}
