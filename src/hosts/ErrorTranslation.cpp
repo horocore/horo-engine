@@ -3,6 +3,7 @@
 #include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
+#include <array>
 #include <nlohmann/json.hpp>
 #include <utility>
 
@@ -10,15 +11,16 @@ namespace Horo::Hosts {
     namespace {
         /** @brief Checks the stable presentation category independently of error message text. */
         [[nodiscard]] bool ValidCategory(const ExitCategory category) noexcept {
+            using enum ExitCategory;
             switch (category) {
-                case ExitCategory::Usage:
-                case ExitCategory::Validation:
-                case ExitCategory::Capability:
-                case ExitCategory::Operation:
-                case ExitCategory::Permission:
-                case ExitCategory::Cancelled:
-                case ExitCategory::Timeout:
-                case ExitCategory::Invariant:
+                case Usage:
+                case Validation:
+                case Capability:
+                case Operation:
+                case Permission:
+                case Cancelled:
+                case Timeout:
+                case Invariant:
                     return true;
             }
             return false;
@@ -31,14 +33,15 @@ namespace Horo::Hosts {
 
         /** @brief Converts only admitted error severities to the canonical wire vocabulary. */
         [[nodiscard]] std::string_view SeverityName(const ErrorSeverity severity) noexcept {
+            using enum ErrorSeverity;
             switch (severity) {
-                case ErrorSeverity::Info:
+                case Info:
                     return "info";
-                case ErrorSeverity::Warning:
+                case Warning:
                     return "warning";
-                case ErrorSeverity::Error:
+                case Error:
                     return "error";
-                case ErrorSeverity::Critical:
+                case Critical:
                     return "fatal";
             }
             return {};
@@ -47,14 +50,14 @@ namespace Horo::Hosts {
         /** @brief Validates and projects one diagnostic in its containing error's declared domain. */
         [[nodiscard]] std::optional<Diagnostic> ProjectDiagnostic(const Diagnostic &diagnostic, const ErrorDomainId &domain,
                                                                   const ErrorCodeRegistry &registry, const ErrorDetail detail) {
-            if (diagnostic.severity > DiagnosticSeverity::Fatal || !ValidText(diagnostic.code.Value()))
+            using enum DiagnosticSeverity;
+            if (diagnostic.severity > Fatal || !ValidText(diagnostic.code.Value()))
                 return std::nullopt;
             const auto *descriptor = registry.Resolve(domain, ErrorCode{diagnostic.code.Value()});
             if (descriptor == nullptr || !ValidText(descriptor->summary))
                 return std::nullopt;
-            const auto maximumSeverity = *DiagnosticSeverityForError(descriptor->defaultSeverity);
-            if (diagnostic.severity > maximumSeverity ||
-                (maximumSeverity == DiagnosticSeverity::Fatal && diagnostic.severity != DiagnosticSeverity::Fatal))
+            if (const auto maximumSeverity = *DiagnosticSeverityForError(descriptor->defaultSeverity);
+                diagnostic.severity > maximumSeverity || (maximumSeverity == Fatal && diagnostic.severity != Fatal))
                 return std::nullopt;
             const bool trusted = detail == ErrorDetail::TrustedLocal;
             if (trusted && (!ValidText(diagnostic.message) || !ValidText(diagnostic.location.source) || !ValidText(diagnostic.path)))
@@ -65,7 +68,7 @@ namespace Horo::Hosts {
 
         /** @brief Encodes an admitted diagnostic with typed location fields and textual severity. */
         [[nodiscard]] nlohmann::json DiagnosticJson(const Diagnostic &diagnostic) {
-            constexpr std::string_view names[]{"note", "warning", "error", "fatal"};
+            constexpr std::array<std::string_view, 4> names{"note", "warning", "error", "fatal"};
             return {{"code", diagnostic.code.Value()},
                     {"severity", names[static_cast<unsigned>(diagnostic.severity)]},
                     {"message", diagnostic.message},
@@ -153,7 +156,7 @@ namespace Horo::Hosts {
         if (!projected)
             return std::nullopt;
         const auto &descriptor = *registry_.Resolve(error);
-        std::string json = ErrorJson(*projected).dump();
+        auto json = ErrorJson(*projected).dump();
         return TranslatedError{std::move(*projected),
                                mapping->category,
                                std::string{descriptor.summary},
