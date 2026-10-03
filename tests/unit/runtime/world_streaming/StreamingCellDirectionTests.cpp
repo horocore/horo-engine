@@ -30,8 +30,14 @@ namespace Horo::WorldStreaming {
             return {StreamingCellOperation::Create(handle, kind).Value(), Revision(1), StreamingDesiredResidency::Activated, 4, 5};
         }
 
-        StreamingSchedulerAdmissionLedger Scheduler() {
-            return StreamingSchedulerAdmissionLedger::Create(IdentityFrom<StreamingSchedulerLedgerId>(1), {1, 5}).Value();
+        StreamingSchedulerAdmissionLedger Scheduler(const std::uint32_t operations = 1, const std::uint64_t capacity = 5) {
+            return StreamingSchedulerAdmissionLedger::Create(IdentityFrom<StreamingSchedulerLedgerId>(1),
+                                                             {operations,
+                                                              capacity,
+                                                              {WorldPartitionProjectProfile::Editor,
+                                                               IdentityFrom<StreamingConcurrencyRevision>(1), operations, operations,
+                                                               operations}})
+                .Value();
         }
 
         struct ParticipantLog final {
@@ -174,7 +180,7 @@ namespace Horo::WorldStreaming {
         REQUIRE(log.started == std::vector<std::uint64_t>{30});
         REQUIRE(log.leases == 2);
         REQUIRE(scheduler.ReservedCapacityUnits() == 5);
-        RequireError(scheduler.TryAdmit(Config(StreamingCellOperationKind::Load, 2).operation, 5),
+        RequireError(scheduler.TryAdmit(Config(StreamingCellOperationKind::Load, 2).operation, 5, scheduler.Limits().concurrency.revision),
                      WorldStreamingErrors::SchedulerCapacityExceeded);
         Demand(owner, StreamingDesiredResidency::Activated);
         REQUIRE_FALSE(owner.RequiresFreshAttempt());
@@ -385,7 +391,7 @@ namespace Horo::WorldStreaming {
     }
 
     TEST_CASE("Retired direction evidence cannot change a successor residency generation", "[unit][world_streaming][direction][fencing]") {
-        auto scheduler = StreamingSchedulerAdmissionLedger::Create(IdentityFrom<StreamingSchedulerLedgerId>(1), {2, 10}).Value();
+        auto scheduler = Scheduler(2, 10);
         const auto authority = TestSupport::WorldOwner();
         auto residency = StreamingCellStateLedger::Create({authority, 2}).Value();
         auto oldConfig = Config();

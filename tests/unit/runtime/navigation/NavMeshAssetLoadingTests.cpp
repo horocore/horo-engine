@@ -1,7 +1,9 @@
+#include "Horo/Application/NavigationBakeService.h"
 #include "Horo/Assets/AssetArchive.h"
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #include "Horo/Navigation/NavigationAssetSceneActivation.h"
 #include "Horo/Navigation/NavigationRuntimeQueues.h"
+#include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavMeshAssetTestFixtures.h"
 #include "navigation/NavigationRuntimeTestFixtures.h"
 
@@ -15,6 +17,42 @@
 
 namespace Horo::Navigation {
     using namespace AssetTestSupport;
+
+    namespace {
+        /** @brief Execute the authoritative native producer and read its durable published generation. */
+        [[nodiscard]] std::vector<std::uint8_t> BakeCanonicalContent(const std::filesystem::path &projectRoot) {
+            TestSupport::IncrementalBakeFixture input;
+            OperationStore operations{8, 16};
+            JobSystem bakeJobs{{.workerCount = 2, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 32}};
+            Application::NavigationBakeServiceConfig config{.definition = Asset(),
+                                                            .artifactType = Type(),
+                                                            .target = Target(),
+                                                            .cacheRoot = projectRoot / "tile-cache",
+                                                            .targetRoot = projectRoot / "cook-output",
+                                                            .builder = CreateRecastDetourNavigationMeshBuilder().Value(),
+                                                            .files = std::make_shared<NativeDurableFileSystem>(),
+                                                            .budget = {1, 1024ULL * 1024ULL * 1024ULL, 128U * 1024U * 1024U, 8,
+                                                                       1024ULL * 1024ULL * 1024ULL, Duration::FromMilliseconds(2000)}};
+            auto bake = Application::NavigationBakeService::Create(config, operations, bakeJobs).Value();
+            REQUIRE(bake->Submit({.input = input.Input(),
+                                  .compatibility = input.compatibility,
+                                  .tiles = input.Tiles(),
+                                  .sources = input.Observations()})
+                        .HasValue());
+            for (std::size_t iteration = 0; iteration < 5000 && !bake->Published(); ++iteration) {
+                bake->Pump();
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            REQUIRE(bake->Published());
+            const auto current = Assets::ResolveCurrentCookGeneration(config.targetRoot);
+            REQUIRE(current.HasValue());
+            REQUIRE(current.Value().manifestDigest == bake->Published()->generation.manifestDigest);
+            const auto contents = Assets::ReadCookGenerationContents(current.Value(), config.maximumCandidateBytes);
+            REQUIRE(contents.HasValue());
+            REQUIRE(contents.Value().artifacts.size() == 1);
+            return contents.Value().artifacts.front();
+        }
+    }  // namespace
 
     TEST_CASE("Canonical NavMesh registry and provider loading deduplicate exact immutable tile allocations",
               "[unit][navigation][navmesh_asset]") {
@@ -134,8 +172,9 @@ namespace Horo::Navigation {
             bytes.back() ^= 1;
             harness.Update(std::move(bytes));
         }
-        SECTION("stale generated surface generation") {
-            harness.Update(Cooked(9));
+        SECTION("missing required surface partition") {
+            const auto payload = EncodeNavigationCookedTileSet(TileSet(Id<SurfaceId>(999)), 4096).Value();
+            harness.Update(Envelope(payload));
             expectedError = &NavigationErrors::StaleSnapshot;
         }
         SECTION("unsupported bundle with recomputed canonical envelope checksum") {
@@ -220,41 +259,12 @@ namespace Horo::Navigation {
         REQUIRE(harness.cache->Snapshot().retainedPayloadBytes == 0);
     }
 
-    TEST_CASE("Canonical dependency closure is verified against exact prepared Scene content",
-              "[unit][navigation][navmesh_asset][dependencies]") {
-        Harness harness;
-        const auto depType = Assets::AssetTypeId::Parse("core.mesh").Value();
-        const std::array<std::uint8_t, 1> payload{42};
-        const auto depBytes = Envelope(payload, Asset(true), depType);
-        const std::array dependencies{NavMeshAssetDependency{{Asset(true), depType}, ComputeSha256(std::as_bytes(std::span{depBytes}))}};
-        harness.provider.Insert(Asset(true), depBytes);
-        harness.provider.Insert(Asset(), Cooked(1, dependencies));
-        REQUIRE(harness.registry.Publish({Record(Asset()), Record(Asset(true), depType)}).status ==
-                Assets::AssetRegistryBuildStatus::Complete);
-        REQUIRE(!harness.Activate(Definition(1, 1, dependencies)).has_value());
-        const auto first = std::move(harness.participant->Acquire()).Value();
-        bool declareDependency = true;
-        harness.provider.Insert(Asset(), Cooked(2, dependencies));
-        SECTION("undeclared dependency is not resolved by hidden I/O") {
-            declareDependency = false;
-        }
-        SECTION("changed dependency bytes reject the generated content evidence") {
-            const std::array<std::uint8_t, 1> changed{43};
-            harness.provider.Insert(Asset(true), Envelope(changed, Asset(true), depType));
-        }
-        REQUIRE(harness.registry.Publish({Record(Asset()), Record(Asset(true), depType)}).status ==
-                Assets::AssetRegistryBuildStatus::Complete);
-        const auto declared =
-            declareDependency ? std::span<const NavMeshAssetDependency>{dependencies} : std::span<const NavMeshAssetDependency>{};
-        REQUIRE(harness.Activate(Definition(2, 2, declared)).has_value());
-        REQUIRE(harness.participant->Acquire().Value().Descriptor() == first.Descriptor());
-        REQUIRE(!first.IsRevoked());
-    }
-
     TEST_CASE("Editor filesystem and packaged archive resolve identical canonical NavMesh content",
               "[unit][navigation][navmesh_asset][package]") {
-        const auto bytes = Cooked();
+        // Execute the authoritative producer before either transport sees a cooked asset.
         Assets::AssetRegistry registry;
+        const FilesystemProject staging{Cooked(), registry};
+        const auto bytes = BakeCanonicalContent(staging.directory);
         const std::array chunks{
             Assets::AssetChunkDefinition{Assets::AssetChunkId::Parse("base").Value(), Assets::AssetChunkKind::Base, {Asset()}}};
         const auto plan = Assets::AssetChunkPlan::Create(chunks);
@@ -274,7 +284,8 @@ namespace Horo::Navigation {
         REQUIRE(editor.Value().id == packaged.Value().id);
         REQUIRE(editor.Value().cookedContentDigest == packaged.Value().cookedContentDigest);
         REQUIRE(editor.Value().tileBytes.front().SharesAllocationWith(packaged.Value().tileBytes.front()));
-        REQUIRE(editor.Value().partitions.front().data.Header() == packaged.Value().partitions.front().data.Header());
+        REQUIRE(NavMeshProfileDescriptor{.buildGeometry = editor.Value().partitions.front().descriptor.geometry} ==
+                NavMeshProfileDescriptor{.buildGeometry = packaged.Value().partitions.front().descriptor.geometry});
         const std::array<Assets::IAssetProvider *, 2> transports{&filesystem, &archive};
         for (auto *transport : transports) {
             JobSystem jobs{JobSystemConfig{1, 8}};
@@ -284,7 +295,9 @@ namespace Horo::Navigation {
             auto *registered = participant.get();
             REQUIRE(service.AddActivationParticipant(std::move(participant)).HasValue());
             REQUIRE(service.Startup(cancellation.Token()).HasValue());
-            REQUIRE(!ActivateService(service, cancellation.Token(), Definition()).has_value());
+            REQUIRE(!ActivateService(service, cancellation.Token(),
+                                     Definition(1, 17, {}, true, Id<SurfaceId>(1), Id<NavigationAgentProfileId>(1)))
+                         .has_value());
             auto lease = std::move(registered->Acquire()).Value();
             REQUIRE(lease.Backend().FindPath(PathRequest(lease), lease.Cancellation()).HasValue());
             REQUIRE(registered->ActiveAssetProvenance().front().cookedContentDigest == editor.Value().cookedContentDigest);
@@ -327,13 +340,11 @@ namespace Horo::Navigation {
 
     TEST_CASE("NavMesh producer bundle rejects duplicate partitions and corrupt metadata before admission",
               "[unit][navigation][navmesh_asset][hostile]") {
-        const auto fixture = GroundMesh();
-        const NavMeshAssetPartitionInput input{Id<SurfaceId>(101), 1, fixture.View()};
-        const std::array duplicates{input, input};
-        REQUIRE(EncodeNavMeshAssetPayload(duplicates, {}).HasError());
+        auto set = TileSet();
+        set.tiles.push_back(set.tiles.front());
+        REQUIRE(EncodeNavigationCookedTileSet(set, 4096).HasError());
         auto cache = std::move(Assets::AssetPayloadCache::Create(8, 4096)).Value();
-        const std::array inputs{input};
-        const auto payload = EncodeNavMeshAssetPayload(inputs, {});
+        const auto payload = EncodeNavigationCookedTileSet(TileSet(), 4096);
         REQUIRE(payload.HasValue());
         for (std::size_t length = 0; length < payload.Value().size(); ++length) {
             const auto encoded = Envelope(std::span<const std::uint8_t>{payload.Value()}.first(length));
@@ -344,5 +355,84 @@ namespace Horo::Navigation {
         REQUIRE(LoadNavMeshAsset({Asset(true), Type()}, {1}, Cooked(), Target(), *cache).HasError());
         REQUIRE(LoadNavMeshAsset({Asset(), Assets::AssetTypeId::Parse("core.mesh").Value()}, {1}, Cooked(), Target(), *cache).HasError());
         REQUIRE(LoadNavMeshAsset({Asset(), Type()}, {1}, Cooked(), AssetCookTargetId::Parse("windows-x64").Value(), *cache).HasError());
+    }
+
+    TEST_CASE("Canonical empty tiles preserve complete closure and exact resolved runtime geometry",
+              "[unit][navigation][navmesh_asset][canonical]") {
+        auto set = TileSet();
+        const auto &built = *set.tiles.front();
+        const auto descriptor = ProjectNavigationCookedTileDescriptor(built).Value();
+        NavigationPreparedTile input{.tile = {.key = {built.Key().profile, built.Key().surface, {.x = 1}},
+                                              .bounds = {{32, -1, 0}, {64, 2, 32}},
+                                              .tileSizeMeters = 32},
+                                     .geometry = descriptor.geometry,
+                                     .borderSizeCells = descriptor.borderSizeCells,
+                                     .dependencyKey = Digest(4)};
+        input.geometry.heightMeters = 2.3F;
+        NavigationTileBuildResult empty{.state = NavigationTileBuildState::Empty, .key = input.tile.key.tile, .bounds = input.tile.bounds};
+        auto tile = NavigationCookedTile::Create(input, empty);
+        REQUIRE(tile.HasValue());
+        auto roundtrip = NavigationCookedTile::Decode(tile.Value()->Bytes());
+        REQUIRE(roundtrip.HasValue());
+        REQUIRE(ProjectNavigationCookedTileDescriptor(*roundtrip.Value()).Value().geometry.heightMeters == 2.3F);
+        REQUIRE(ProjectNavigationCookedTileDescriptor(*roundtrip.Value()).Value().tileSizeMeters == 32);
+        REQUIRE(ProjectNavigationCookedTileDescriptor(*roundtrip.Value()).Value().borderSizeCells == 4);
+        set.tiles.push_back(tile.Value());
+        auto cache = Assets::AssetPayloadCache::Create(8, 4096).Value();
+        const auto mismatch = EncodeNavigationCookedTileSet(set, 4096).Value();
+        REQUIRE(LoadNavMeshAsset({Asset(), Type()}, {1}, Envelope(mismatch), Target(), *cache).HasError());
+        REQUIRE(cache->Snapshot().retainedPayloadBytes == 0);
+        input.geometry = descriptor.geometry;
+        set.tiles.back() = NavigationCookedTile::Create(input, std::move(empty)).Value();
+        const auto payload = EncodeNavigationCookedTileSet(set, 4096).Value();
+        auto loaded = LoadNavMeshAsset({Asset(), Type()}, {1}, Envelope(payload), Target(), *cache);
+        REQUIRE(loaded.HasValue());
+        REQUIRE(loaded.Value().partitions.size() == 1);
+        REQUIRE(loaded.Value().partitions.front().tiles.size() == 2);
+        REQUIRE(loaded.Value().partitions.front().tiles.back()->Topology().IsEmpty());
+        REQUIRE(loaded.Value().tileBytes.size() == 2);
+        REQUIRE(loaded.Value().partitions.front().tiles.front()->ContentIdentity() == built.ContentIdentity());
+    }
+
+    TEST_CASE("Canonical source fingerprints and owner bounds close admission before world mutation",
+              "[unit][navigation][navmesh_asset][canonical][budget]") {
+        auto cache = Assets::AssetPayloadCache::Create(8, 4096).Value();
+        auto envelope = Assets::DecodeCookedArtifact(Cooked()).Value();
+        envelope.sourceDigest = Digest(99);
+        const auto mismatch = Assets::EncodeCookedArtifact(envelope).Value();
+        REQUIRE(LoadNavMeshAsset({Asset(), Type()}, {1}, mismatch, Target(), *cache).HasError());
+        REQUIRE(cache->Snapshot().retainedPayloadBytes == 0);
+        NavMeshAssetLimits limits;
+        limits.maximumDecodedBytes = 1;
+        REQUIRE(LoadNavMeshAsset({Asset(), Type()}, {1}, Cooked(), Target(), *cache, limits).HasError());
+        limits.maximumDecodedBytes = 0;
+        REQUIRE(LoadNavMeshAsset({Asset(), Type()}, {1}, Cooked(), Target(), *cache, limits).HasError());
+        limits = {};
+        limits.maximumPartitions = 0;
+        REQUIRE(LoadNavMeshAsset({Asset(), Type()}, {1}, Cooked(), Target(), *cache, limits).HasError());
+        auto full = Assets::AssetPayloadCache::Create(1, 1).Value();
+        REQUIRE(LoadNavMeshAsset({Asset(), Type()}, {1}, Cooked(), Target(), *full).HasError());
+        REQUIRE(full->Snapshot().retainedPayloadBytes == 0);
+    }
+
+    TEST_CASE("Runtime Scene generation fences remain independent of reusable baked content",
+              "[unit][navigation][navmesh_asset][canonical][lifecycle]") {
+        Harness harness;
+        REQUIRE(!harness.Activate(Definition()).has_value());
+        auto first = harness.participant->Acquire().Value();
+        REQUIRE(!harness.Activate(Definition(2, 73)).has_value());
+        REQUIRE(first.IsRevoked());
+        const auto current = harness.participant->Acquire().Value();
+        REQUIRE(current.Backend().FindPath(PathRequest(current), current.Cancellation()).HasValue());
+        // A structural invalidation is tested while the owning Scene remains alive.
+        auto local = Runtime::RuntimeScene::Create(Definition(8, 73, {}, false), Runtime::SceneRuntimeId{81}).Value();
+        const auto old = local->View();
+        Runtime::SceneCommandBuffer commands;
+        commands.Destroy(*old.Find(Runtime::SceneObjectId{101}));
+        REQUIRE(local->Commit(commands).HasValue());
+        const auto stale = harness.participant->Prepare(Definition(3, 73), old);
+        REQUIRE(stale.HasError());
+        REQUIRE(stale.ErrorValue().code.Value() == NavigationErrors::StaleSnapshot.code.Value());
+        REQUIRE(harness.participant->Acquire().Value().Descriptor() == current.Descriptor());
     }
 }  // namespace Horo::Navigation

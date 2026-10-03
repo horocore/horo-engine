@@ -62,6 +62,33 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## PLS-002.5 Product Composition Boundary
+
+`HoroEngine::PlatformServices` owns the additive
+`Horo/PlatformServices/PlatformServicesComposition.h` host contract. No existing
+frontend caller or provider ABI/profile bit changes. Hosts opting into product policy
+supply an immutable configuration, verified product evidence, a fresh generation and
+one exact exclusively owned backend factory. `PlatformProjectConfiguration::SelectedServices`
+now exposes the already validated selected manifest claims; it is not a second policy
+registry. Existing provider lifecycle callers must use a configuration whose profile
+matches the admission owner. Generated `HoroPlatformServicesPublicHeaderConsumer` and
+`HoroPlatformServicesExtensionPublicHeaderConsumer` targets verify the staged headers;
+the standalone composition test target links only PlatformServices and test support.
+
+## ERR-001.5 Host Translation Boundary
+
+`HoroEngine::HostErrors` solely owns the additive public
+`Horo/Hosts/ErrorTranslation.h` contract. It depends publicly only on Foundation
+and privately on the existing JSON library; GUI, CLI, MCP and Python protocols
+introduce no reverse Foundation dependency. Its generated
+`HoroHostErrorsPublicHeaderConsumer` verifies the staged header boundary.
+EditorServices declares a public HostErrors dependency for the additive
+`NotificationEvent::errorDetail` and `PublishApplicationError` contract. The
+generated EditorServices public-header consumer verifies that dependency.
+Source callers of existing notification methods keep their behavior. Binary
+consumers rebuild for the additive event layout; adopting hosts explicitly create
+the registry-backed mapping scope described in Error And Diagnostics.
+
 ## AUD-007.9 Focus Policy Boundary
 
 `HoroEngine::AudioCommands` solely owns the additive
@@ -123,6 +150,21 @@ They must stop/revoke the route before destroying the borrowed transport or code
 snapshot. `NetworkTransportEvent` now carries an explicit zero-based `channel`;
 the existing GNS baseline supplies channel zero, so current callers retain their
 wire behavior. The NetworkRuntime public-header consumer covers the new header.
+
+## NET-004.9 RPC Gameplay Dispatch Boundary
+
+`HoroEngine::NetworkRuntime` solely owns the additive
+`Horo/Network/RpcGameplayDispatch.h` contract. The existing inbound handler
+signature remains valid; handlers requiring sender authority override the new
+`HandleAdmitted` callback, which receives evidence from the registered session.
+Hosts opt in by binding an accepted RPC descriptor generation, admitted peers,
+live object roles, exact serializers, module-owned handlers and an explicit
+exact-generation code lease covering callback and serializer destruction. They register the
+dispatcher with `InboundMessageDispatcher`, call its fixed-step Gameplay drain,
+and revoke it before borrowed world or module owners are destroyed. No existing
+transport or message codec caller needs migration. The explicit
+`HoroNetworkModePublicHeaderConsumer` and generated public-header consumer check
+the staged target boundary.
 
 ## REL-002.3 Update Discovery Boundary
 

@@ -1,6 +1,7 @@
 #include "Horo/WorldStreaming/StreamingCellCandidate.h"
 
 #include "Horo/WorldStreaming/WorldStreamingErrors.h"
+#include "StreamingCellArtifactInternal.h"
 
 #include <algorithm>
 #include <functional>
@@ -98,14 +99,18 @@ namespace Horo::WorldStreaming {
         }
 
         [[nodiscard]] Result<void> ValidatePayload(const StreamingCellPayloadHeader &payload, const StreamingCellHeaderView &header) {
-            if (!IsKnownProvider(payload.provider) || !IsKnown(payload.requirement) || payload.version == 0 ||
-                payload.compressedSize == 0 || payload.uncompressedSize == 0 ||
+            if (!IsKnown(payload.requirement) || payload.version == 0 || payload.compressedSize == 0 || payload.uncompressedSize == 0 ||
                 (header.compression == StreamingCellCompression::None && payload.compressedSize != payload.uncompressedSize))
                 return Failure<void>(WorldStreamingErrors::CellCandidateInvalid);
             if (header.minorVersion > StreamingCellHeaderView::CurrentMinorVersion &&
                 ProviderValue(payload.provider) > ProviderValue(StreamingCellProvider::Destruction) &&
                 payload.requirement == StreamingCellPayloadRequirement::Required)
                 return Failure<void>(WorldStreamingErrors::CellCandidateUnsupported);
+            if (!IsKnownProvider(payload.provider) &&
+                !(header.minorVersion > StreamingCellHeaderView::CurrentMinorVersion &&
+                  payload.requirement == StreamingCellPayloadRequirement::Optional &&
+                  ProviderValue(payload.provider) > ProviderValue(StreamingCellProvider::Destruction)))
+                return Failure<void>(WorldStreamingErrors::CellCandidateInvalid);
             return Result<void>::Success();
         }
 
@@ -223,5 +228,25 @@ namespace Horo::WorldStreaming {
         return Result<StreamingCellCandidate>::Success(
             StreamingCellCandidate{context.operation, descriptorCells[*descriptorIndex].package.chunkAsset, candidateRecord,
                                    header.compression, std::move(payloads), std::move(hardDependencies)});
+    }
+
+    /** @copydoc ParseStreamingCellArtifact */
+    Result<StreamingCellCandidate> ParseStreamingCellArtifact(const CookedWorldIndexManifest &manifest,
+                                                              const StreamingCellCandidateContext &context,
+                                                              const std::span<const std::byte> artifact,
+                                                              const CancellationToken &cancellation) {
+        if (const auto valid = ValidateContext(manifest, context); valid.HasError())
+            return Result<StreamingCellCandidate>::Failure(valid.ErrorValue());
+        const auto index = FindCell(manifest.Cells(), context.operation.fence.cell, &CookedWorldCellManifestEntry::cell);
+        if (!index.has_value())
+            return Failure<StreamingCellCandidate>(WorldStreamingErrors::CellCandidateUnavailable);
+        auto parsed = Detail::ParseCellArtifactBytes(artifact, context, manifest.Cells()[*index].artifactHash, cancellation);
+        if (parsed.HasError())
+            return Result<StreamingCellCandidate>::Failure(parsed.ErrorValue());
+        auto owned = std::move(parsed).Value();
+        owned.header.payloads = owned.payloads;
+        if (cancellation.IsCancellationRequested())
+            return Failure<StreamingCellCandidate>(WorldStreamingErrors::CellCandidateLifecycleUnavailable);
+        return PrepareStreamingCellCandidate(manifest, context, owned.header);
     }
 }  // namespace Horo::WorldStreaming

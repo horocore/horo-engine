@@ -134,26 +134,6 @@ namespace Horo::Navigation {
                 {sceneId.Value(), generation.Value(), world.Value(), topology.Value()});
         }
 
-        /** @brief Exact dependencies must already belong to the same prepared Scene closure; no query-time I/O occurs. */
-        [[nodiscard]] Result<void> ValidateDependencies(const LoadedNavMeshAsset &asset, const Runtime::RuntimeSceneView scene,
-                                                        const Detail::NavigationAssetSceneState &state) {
-            for (const auto &dependency : asset.dependencies) {
-                const auto resolved = scene.FindAsset(dependency.asset.id);
-                if (!resolved || !resolved->type || *resolved->type != dependency.asset.expectedType) {
-                    return Result<void>::Failure(MakeError(NavigationErrors::NoNavigationData));
-                }
-                const auto verified = Assets::DecodeCookedArtifact(resolved->bytes, state.limits.assets.cook);
-                if (verified.HasError())
-                    return Result<void>::Failure(verified.ErrorValue());
-                if (verified.Value().id != dependency.asset.id || verified.Value().type != dependency.asset.expectedType ||
-                    verified.Value().target != state.target ||
-                    ComputeSha256(std::as_bytes(resolved->bytes)) != dependency.cookedContentDigest) {
-                    return Result<void>::Failure(MakeError(NavigationErrors::NavMeshArtifactCorrupt));
-                }
-            }
-            return Result<void>::Success();
-        }
-
         /** @brief Resolve one canonical asset once per Scene preparation, even when multiple surfaces share it. */
         [[nodiscard]] Result<std::size_t> ResolveAsset(const Assets::AssetId id, const Runtime::RuntimeSceneView scene,
                                                        Detail::NavigationAssetSceneState &state, std::vector<LoadedNavMeshAsset> &assets) {
@@ -167,8 +147,6 @@ namespace Horo::Navigation {
                 LoadNavMeshAsset(metadata, scene.AssetRegistryRevision(), resolved->bytes, state.target, *state.cache, state.limits.assets);
             if (loaded.HasError())
                 return Result<std::size_t>::Failure(loaded.ErrorValue());
-            if (const auto dependencies = ValidateDependencies(loaded.Value(), scene, state); dependencies.HasError())
-                return Result<std::size_t>::Failure(dependencies.ErrorValue());
             assets.push_back(std::move(loaded).Value());
             return Result<std::size_t>::Success(assets.size() - 1);
         }
@@ -189,12 +167,11 @@ namespace Horo::Navigation {
                 for (const auto profile : surface.profiles) {
                     const auto &partitions = assets[assetIndex.Value()].partitions;
                     const auto found = std::ranges::find_if(partitions, [&](const auto &partition) {
-                        return partition.surface == surface.id && partition.surfaceGeneration == surface.generation &&
-                               partition.data.Header().profile.id == profile;
+                        return partition.surface == surface.id && partition.profile == profile;
                     });
                     if (found == partitions.end())
                         return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
-                    surfaces.emplace_back(surface.definition, std::to_address(found));
+                    surfaces.emplace_back(surface.definition, surface.generation, std::to_address(found));
                 }
             }
             return Result<void>::Success();

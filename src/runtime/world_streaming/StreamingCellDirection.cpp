@@ -56,7 +56,7 @@ namespace Horo::WorldStreaming {
         std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> &participants) {
         if (const auto valid = ValidateParticipants(config, participants); valid.HasError())
             return Result<StreamingCellDirectionOwner>::Failure(valid.ErrorValue());
-        auto reservation = scheduler.TryAdmit(config.operation, config.capacityUnits);
+        auto reservation = scheduler.TryAdmit(config.operation, config.capacityUnits, scheduler.Limits().concurrency.revision);
         if (reservation.HasError())
             return Result<StreamingCellDirectionOwner>::Failure(reservation.ErrorValue());
         const auto admitted = config.operation.Advance(config.operation.Handle(), StreamingCellOperationTransition::Admit).Value();

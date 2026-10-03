@@ -18,6 +18,21 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
     extern const ErrorCodeDescriptor CellDirectionCapacityExceeded;
     /** @brief Direction admission, progress, ownership transfer or terminal consumption is unavailable. */
     extern const ErrorCodeDescriptor CellDirectionLifecycleUnavailable;
+    /** @brief Malformed failure-policy facts or identities. */
+    extern const ErrorCodeDescriptor FailurePolicyInvalid;
+    /** @brief Unsupported failure contract version or enum. */
+    extern const ErrorCodeDescriptor FailurePolicyUnsupported;
+    /** @brief Stale failure policy, revision, generation or clock. */
+    extern const ErrorCodeDescriptor FailurePolicyStale;
+    /** @brief Failure history exceeds its bounded record ceiling. */
+    extern const ErrorCodeDescriptor FailurePolicyCapacityExceeded;
+    /** @brief New retry work is closed during cancellation or shutdown. */
+    extern const ErrorCodeDescriptor FailurePolicyLifecycleUnavailable;
+    /** @brief Failure cleanup or retry eligibility is incomplete. */
+    extern const ErrorCodeDescriptor FailurePolicyTransitionInvalid;
+    /** @brief The next monotonic cooldown cannot be represented. */
+    extern const ErrorCodeDescriptor FailurePolicyTimeExhausted;
+
     /** @brief A feature reservation has malformed owner, complete plan, or mandatory configuration. */
     extern const ErrorCodeDescriptor FeatureBudgetInvalid;
     /** @brief A feature reservation names a superseded owner, policy, revision, or operation. */
@@ -178,6 +193,10 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
     extern const ErrorCodeDescriptor CellOperationTransitionInvalid;
     /** @brief A scheduler admission ledger, request, or reservation is malformed. */
     extern const ErrorCodeDescriptor SchedulerAdmissionInvalid;
+    /** @brief A scheduler concurrency profile or operation kind is unknown or explicitly disabled. */
+    extern const ErrorCodeDescriptor SchedulerConcurrencyUnsupported;
+    /** @brief A scheduler concurrency request names another profile or an obsolete policy revision. */
+    extern const ErrorCodeDescriptor SchedulerConcurrencyStale;
     /** @brief Scheduler operation count or generic capacity cannot be reserved within configured ceilings. */
     extern const ErrorCodeDescriptor SchedulerCapacityExceeded;
     /** @brief A scheduler operation already owns a reservation in this ledger. */

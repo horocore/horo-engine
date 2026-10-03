@@ -41,6 +41,11 @@ target_include_directories(HoroFoundation
         PRIVATE
         $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
 )
+add_library(HoroHostErrors STATIC hosts/ErrorTranslation.cpp)
+add_library(HoroEngine::HostErrors ALIAS HoroHostErrors)
+target_compile_features(HoroHostErrors PUBLIC cxx_std_20)
+target_link_libraries(HoroHostErrors PUBLIC HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
+
 add_library(HoroSecurity STATIC
         security/AgentPolicy.cpp
         security/SecurityErrors.cpp
@@ -177,6 +182,7 @@ add_library(HoroPlatformServices STATIC
         platform_services/PlatformServiceErrors.cpp
         platform_services/PlatformServicesBackend.cpp
         platform_services/PlatformServicesFrontend.cpp
+        platform_services/PlatformServicesComposition.cpp
         platform_services/PlatformSessionObserver.cpp
         platform_services/PlatformServicesMetrics.cpp
         platform_services/PlatformStatCacheErrors.cpp
@@ -356,6 +362,7 @@ add_library(HoroRuntime STATIC
         runtime/lifecycle/RuntimeHost.cpp
         runtime/lifecycle/RuntimeErrors.cpp
         runtime/save/SaveErrors.cpp
+        runtime/save/SaveStorageErrors.cpp
         runtime/save/SaveProtectionErrors.cpp
         runtime/save/SaveDiagnostics.cpp
         runtime/save/SaveIdentity.cpp
@@ -389,6 +396,8 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveReference.cpp
         runtime/save/SaveSlotMetadata.cpp
         runtime/save/SaveSlotIndex.cpp
+        runtime/save/SaveCloudRevisionMetadata.cpp
+        runtime/save/SaveCloudRevisionErrors.cpp
         runtime/save/SaveManagerProjection.cpp
         runtime/save/SaveManagerProjectionErrors.cpp
         runtime/save/SaveStorageAdapter.cpp
@@ -647,6 +656,10 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/NetworkTickAlignment.cpp
         runtime/networking/PeerSessionLifecycle.cpp
         runtime/networking/ReplicationWorldLifecycle.cpp
+        runtime/networking/RpcGameplayDispatch.cpp
+        runtime/networking/RpcGameplayDispatchReceive.cpp
+        runtime/networking/RpcGameplayDispatchGameplay.cpp
+        runtime/networking/RpcGameplayDispatchPolicy.cpp
 )
 add_library(HoroEngine::NetworkRuntime ALIAS HoroNetworkRuntime)
 target_compile_features(HoroNetworkRuntime PUBLIC cxx_std_20)
@@ -1208,7 +1221,7 @@ target_link_libraries(HoroCinematicRuntime PUBLIC HoroEngine::CinematicModel)
 
 add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavMeshData.cpp
-        runtime/navigation/api/mesh_codec/NavMeshCodec.cpp
+        runtime/navigation/api/NavigationTileDescriptor.cpp
         runtime/navigation/api/NavigationAreas.cpp
         runtime/navigation/api/NavigationAgentProfiles.cpp
         runtime/navigation/api/NavigationBakeFingerprint.cpp
@@ -1258,12 +1271,10 @@ target_link_libraries(HoroNavigationRuntime PUBLIC HoroEngine::NavigationApi)
 add_library(HoroNavigationSceneIntegration STATIC
         runtime/navigation/integration/NavigationSceneActivation.cpp
         runtime/navigation/integration/NavigationSceneLinkCapture.cpp
-        runtime/navigation/integration/NavMeshAssetLoading.cpp
-        runtime/navigation/integration/NavigationAssetSceneActivation.cpp
 )
 add_library(HoroEngine::NavigationSceneIntegration ALIAS HoroNavigationSceneIntegration)
 target_compile_features(HoroNavigationSceneIntegration PUBLIC cxx_std_20)
-target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::RuntimeScene HoroEngine::Assets)
+target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::RuntimeScene)
 
 add_library(HoroNavigationBakeService STATIC
         application/navigation/NavigationBakeService.cpp
@@ -1290,6 +1301,14 @@ add_library(HoroXRApi STATIC
 add_library(HoroEngine::XRApi ALIAS HoroXRApi)
 target_compile_features(HoroXRApi PUBLIC cxx_std_20)
 target_link_libraries(HoroXRApi PUBLIC HoroEngine::Foundation HoroEngine::RenderApi)
+
+add_library(HoroNavigationAssetSceneIntegration STATIC
+        runtime/navigation/integration/NavMeshAssetLoading.cpp
+        runtime/navigation/integration/NavigationAssetSceneActivation.cpp
+)
+add_library(HoroEngine::NavigationAssetSceneIntegration ALIAS HoroNavigationAssetSceneIntegration)
+target_compile_features(HoroNavigationAssetSceneIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroNavigationAssetSceneIntegration PUBLIC HoroEngine::NavigationSceneIntegration HoroEngine::Assets)
 
 add_library(HoroXRRuntime STATIC
         runtime/xr/runtime/XRFeatureNegotiation.cpp
@@ -1421,12 +1440,16 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/SharedAssetResidencyErrors.cpp
         runtime/world_streaming/StreamingCellOperation.cpp
         runtime/world_streaming/StreamingCellCandidate.cpp
+        runtime/world_streaming/StreamingCellArtifact.cpp
         runtime/world_streaming/StreamingCellAssetRequest.cpp
         runtime/world_streaming/StreamingCellActivation.cpp
         runtime/world_streaming/StreamingCellDirection.cpp
         runtime/world_streaming/StreamingCellStability.cpp
+        runtime/world_streaming/StreamingFailurePolicy.cpp
+        runtime/world_streaming/StreamingFailurePolicyErrors.cpp
         runtime/world_streaming/StreamingCellState.cpp
         runtime/world_streaming/StreamingSchedulerAdmission.cpp
+        runtime/world_streaming/StreamingConcurrencyErrors.cpp
         runtime/world_streaming/WorldDependencyPlan.cpp
         runtime/world_streaming/WorldAuthoringContract.cpp
         runtime/world_streaming/StreamingDesiredState.cpp
@@ -1929,6 +1952,7 @@ target_include_directories(HoroEditorServices
 target_link_libraries(HoroEditorServices
         PUBLIC
         HoroEngine::Foundation
+        HoroEngine::HostErrors
         HoroEngine::CinematicRuntime
         HoroEngine::NetworkApi
         HoroEngine::Application
@@ -2203,7 +2227,10 @@ target_link_libraries(HoroExtensions
 )
 
 # Host composition bridge: neither Platform Services nor Extensions depends on the other.
-add_library(HoroPlatformServicesExtension STATIC platform_services/PlatformProviderAdmission.cpp)
+add_library(HoroPlatformServicesExtension STATIC
+        platform_services/PlatformProviderAdmission.cpp
+        platform_services/PlatformProviderLifecycleDispatch.cpp
+        platform_services/PlatformProviderLifecycleHost.cpp)
 add_library(HoroEngine::PlatformServicesExtension ALIAS HoroPlatformServicesExtension)
 target_compile_features(HoroPlatformServicesExtension PUBLIC cxx_std_20)
 target_link_libraries(HoroPlatformServicesExtension PUBLIC HoroEngine::PlatformServices HoroEngine::Extensions)
