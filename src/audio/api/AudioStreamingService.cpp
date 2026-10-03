@@ -43,6 +43,8 @@ namespace Horo::Audio {
         std::atomic<bool> stopped{false};
         bool failed{};
         bool cancelled{};
+        // Written only by the fill worker; control reads it after proved job completion.
+        bool sourceOpenReturned{};
         std::optional<Error> failure;
         bool portIssued{};
         UnderrunReporting reporting;
@@ -107,17 +109,6 @@ namespace Horo::Audio {
             return true;
         }
 
-        /** @brief Converts source exceptions into a typed worker read failure. */
-        Result<AudioStreamDecoder> OpenSource(const AudioStreamState &state, const AudioStreamPackageSource &source,
-                                              const CancellationToken &cancellation) {
-            try {
-                return source.open(source.context, state.request.asset, state.request.decoder, state.request.maximumPackageBytes,
-                                   cancellation);
-            } catch (...) {
-                return Result<AudioStreamDecoder>::Failure(MakeError(AudioErrors::StreamReadFailed));
-            }
-        }
-
         /** @brief Requires the opened decoder to honor every admitted field. */
         bool MatchesSpec(const AudioStreamDecoderSpec &actual, const AudioStreamDecoderSpec &expected) {
             return actual.codec == expected.codec && actual.outputFormat == expected.outputFormat &&
@@ -128,7 +119,10 @@ namespace Horo::Audio {
         /** @brief Opens once and publishes cancellation access without changing decoder ownership. */
         Result<void> EnsureDecoder(AudioStreamState &state, const AudioStreamPackageSource &source, const CancellationToken &cancellation) {
             if (!state.decoder) {
-                auto opened = OpenSource(state, source, cancellation);
+                // Foundation's job boundary contains provider exceptions, including non-standard ones.
+                auto opened = source.open(source.context, state.request.asset, state.request.decoder, state.request.maximumPackageBytes,
+                                          cancellation);
+                state.sourceOpenReturned = true;
                 if (cancellation.IsCancellationRequested())
                     return JobCancelled();
                 if (opened.HasError())
@@ -357,7 +351,8 @@ namespace Horo::Audio {
                 state->cancelled = true;
             else {
                 state->failed = true;
-                state->failure = job->terminalResult->error;
+                const auto &failure = *job->terminalResult->error;
+                state->failure = state->sourceOpenReturned ? failure : WrapError(AudioErrors::StreamReadFailed, failure);
             }
         }
         fill.reset();

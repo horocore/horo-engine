@@ -162,7 +162,7 @@ namespace Horo::Audio::StreamingTests {
         CHECK(lease.expired());
     }
 
-    TEST_CASE("Streaming provider exceptions become original control errors without callback work", "[unit][audio][streaming]") {
+    TEST_CASE("Streaming provider failures preserve typed errors and worker causes without callback work", "[unit][audio][streaming]") {
         JobSystem jobs({.workerCount = 1});
         PackageFixture fixture;
         SECTION("Standard provider exception") {
@@ -171,13 +171,27 @@ namespace Horo::Audio::StreamingTests {
         SECTION("Unknown provider exception") {
             fixture.openFailure = OpenFailure::UnknownException;
         }
+        SECTION("Returned typed provider error") {
+            fixture.openFailure = OpenFailure::TypedFailure;
+        }
         auto service = Service(jobs, fixture);
         const auto handle = service->Admit(Request()).Value();
         auto port = std::move(service->RenderPort(handle)).Value();
         REQUIRE(PumpUntilFailure(*service, handle));
         const auto failure = service->Snapshot(handle).Value().failure;
         REQUIRE(failure.has_value());
-        CHECK(failure->code.Value() == AudioErrors::StreamReadFailed.code.Value());
+        if (fixture.openFailure == OpenFailure::TypedFailure) {
+            CHECK(failure->domain.Value() == AudioErrors::CookPayloadInvalid.domain.Value());
+            CHECK(failure->code.Value() == AudioErrors::CookPayloadInvalid.code.Value());
+            CHECK(failure->cause.Get() == nullptr);
+        } else {
+            CHECK(failure->domain.Value() == AudioErrors::StreamReadFailed.domain.Value());
+            CHECK(failure->code.Value() == AudioErrors::StreamReadFailed.code.Value());
+            const auto *cause = failure->cause.Get();
+            REQUIRE(cause != nullptr);
+            CHECK(cause->message == (fixture.openFailure == OpenFailure::StandardException ? "Injected package open failure"
+                                                                                           : "Job callback threw an unknown exception."));
+        }
         CallbackBlock output;
         const auto before = Tests::AllocationProbe::Count();
         const auto rendered = output.Render(port, 4);

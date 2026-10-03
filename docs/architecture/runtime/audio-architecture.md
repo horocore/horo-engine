@@ -1628,6 +1628,14 @@ owner lease through decoder destruction. Fixed owner/slot metadata and allocator
 overhead are outside payload byte reservations; no wall-time deadline qualification
 is implied by the deterministic storage and frame limits.
 
+The existing Foundation job boundary contains source-opener exceptions, including
+non-standard exceptions. A worker-owned return marker is read only after terminal
+job synchronization: an opener that did not return produces `audio.stream.read_failed`
+on control with the original scheduler error retained as its typed cause. An opener
+that returned a typed failure retains that failure unchanged. Cause construction
+and diagnostics stay on control; callbacks still only render available frames or
+positive-zero silence.
+
 Decoder publication and cancellation use a separate cross-atomic SC handshake;
 the ring retains its release/acquire guarantees within SC operations. Let P be the worker's SC
 `publishedDecoder` store, A its subsequent SC parent-token load, C control's SC

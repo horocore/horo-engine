@@ -16,6 +16,7 @@
 namespace Horo::Audio::StreamingTests {
     enum class OpenFailure : std::uint8_t {
         None,
+        TypedFailure,
         StandardException,
         UnknownException
     };
@@ -152,6 +153,8 @@ namespace Horo::Audio::StreamingTests {
         auto &fixture = *static_cast<PackageFixture *>(opaque);
         fixture.opening.store(true);
         InjectOpenFailure(fixture.openFailure);
+        if (fixture.openFailure == OpenFailure::TypedFailure)
+            return Result<AudioStreamDecoder>::Failure(MakeError(AudioErrors::CookPayloadInvalid));
         while (fixture.holdOpen.load() && (fixture.ignoreCancellation.load() || !cancelled.IsCancellationRequested()))
             std::this_thread::yield();
         if (cancelled.IsCancellationRequested() && !fixture.openAfterCancellation)
