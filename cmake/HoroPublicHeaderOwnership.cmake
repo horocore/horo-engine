@@ -977,5 +977,9 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ToolchainProviderRegistry.h
 )
 
+
+horo_configure_target_header_boundary(HoroHostErrors PUBLIC_HEADERS
+    Horo/Hosts/ErrorTranslation.h)
+
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

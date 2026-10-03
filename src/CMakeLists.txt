@@ -41,6 +41,11 @@ target_include_directories(HoroFoundation
         PRIVATE
         $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
 )
+add_library(HoroHostErrors STATIC hosts/ErrorTranslation.cpp)
+add_library(HoroEngine::HostErrors ALIAS HoroHostErrors)
+target_compile_features(HoroHostErrors PUBLIC cxx_std_20)
+target_link_libraries(HoroHostErrors PUBLIC HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json)
+
 add_library(HoroSecurity STATIC
         security/AgentPolicy.cpp
         security/SecurityErrors.cpp
@@ -1937,6 +1942,7 @@ target_include_directories(HoroEditorServices
 target_link_libraries(HoroEditorServices
         PUBLIC
         HoroEngine::Foundation
+        HoroEngine::HostErrors
         HoroEngine::CinematicRuntime
         HoroEngine::NetworkApi
         HoroEngine::Application
