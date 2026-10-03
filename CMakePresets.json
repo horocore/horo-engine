@@ -1,0 +1,265 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "ci-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/.cmake/fetchcontent",
+        "CMAKE_C_COMPILER_LAUNCHER": "$env{HORO_COMPILER_LAUNCHER}",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "$env{HORO_COMPILER_LAUNCHER}",
+        "CMAKE_MSVC_DEBUG_INFORMATION_FORMAT": "Embedded"
+      }
+    },
+    {
+      "name": "ci-headless",
+      "hidden": true,
+      "inherits": "ci-base",
+      "cacheVariables": {
+        "HORO_BUILD_EDITOR_GUI": "OFF",
+        "HORO_BUILD_RENDER_OPENGL": "OFF",
+        "HORO_BUILD_RENDER_METAL": "OFF",
+        "HORO_BUILD_AUDIO_SDL3": "OFF",
+        "HORO_ENABLE_OPENTELEMETRY": "OFF"
+      }
+    },
+    {
+      "name": "ci-native-debug",
+      "hidden": true,
+      "inherits": "ci-base",
+      "binaryDir": "${sourceDir}/build/ci",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "HORO_BUILD_EDITOR_GUI": "ON",
+        "HORO_BUILD_RENDER_OPENGL": "ON",
+        "HORO_ENABLE_TELEMETRY": "ON",
+        "HORO_ENABLE_OPENTELEMETRY": "ON"
+      }
+    },
+    {
+      "name": "ci-linux-debug",
+      "inherits": "ci-native-debug",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "HORO_BUILD_RENDER_METAL": "OFF"
+      }
+    },
+    {
+      "name": "ci-macos-debug",
+      "inherits": "ci-native-debug",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "HORO_BUILD_RENDER_METAL": "ON"
+      }
+    },
+    {
+      "name": "ci-windows-debug",
+      "inherits": "ci-headless",
+      "binaryDir": "${sourceDir}/build/ci",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "HORO_BUILD_INPUT_SDL3": "ON"
+      }
+    },
+    {
+      "name": "ci-audio-release",
+      "inherits": "ci-headless",
+      "binaryDir": "${sourceDir}/build/ci-audio-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "HORO_BUILD_INPUT_SDL3": "OFF",
+        "HORO_BUILD_EXAMPLES": "OFF"
+      }
+    },
+    {
+      "name": "ci-navigation-null",
+      "inherits": "ci-headless",
+      "binaryDir": "${sourceDir}/build/ci-navigation-null",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "HORO_BUILD_NAVIGATION_RECAST_DETOUR": "OFF",
+        "HORO_BUILD_EXAMPLES": "OFF"
+      }
+    },
+    {
+      "name": "sonar",
+      "inherits": "ci-linux-debug",
+      "binaryDir": "${sourceDir}/build/sonar",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_C_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "ccache",
+        "CMAKE_C_FLAGS_DEBUG": "--coverage -fprofile-abs-path",
+        "CMAKE_CXX_FLAGS_DEBUG": "--coverage -fprofile-abs-path",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "HORO_CI_SONAR_COVERAGE": "ON",
+        "HORO_ENABLE_IMGUI_UI_TESTS": "ON",
+        "HORO_ENABLE_GPU_SMOKE_TESTS": "ON",
+        "HORO_BUILD_RENDER_VULKAN": "ON",
+        "HORO_BUILD_NETWORK_GNS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "ci-linux-debug",
+      "configurePreset": "ci-linux-debug"
+    },
+    {
+      "name": "ci-macos-debug",
+      "configurePreset": "ci-macos-debug"
+    },
+    {
+      "name": "ci-windows-debug",
+      "configurePreset": "ci-windows-debug",
+      "targets": [
+        "HoroCiWindowsChecks"
+      ],
+      "jobs": 2
+    },
+    {
+      "name": "ci-audio-release",
+      "configurePreset": "ci-audio-release",
+      "targets": [
+        "HoroCiAudioRealtimeChecks"
+      ],
+      "jobs": 1
+    },
+    {
+      "name": "ci-navigation-null",
+      "configurePreset": "ci-navigation-null",
+      "targets": [
+        "HoroCiNavigationChecks"
+      ],
+      "jobs": 2
+    },
+    {
+      "name": "sonar",
+      "configurePreset": "sonar"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "ci-test-base",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ci-linux-debug",
+      "inherits": "ci-test-base",
+      "configurePreset": "ci-linux-debug",
+      "output": {
+        "outputJUnitFile": "${sourceDir}/build/ci/ctest.xml"
+      },
+      "filter": {
+        "exclude": {
+          "label": "gui|tooling"
+        }
+      }
+    },
+    {
+      "name": "ci-macos-debug",
+      "inherits": "ci-test-base",
+      "configurePreset": "ci-macos-debug",
+      "output": {
+        "outputJUnitFile": "${sourceDir}/build/ci/ctest.xml"
+      },
+      "filter": {
+        "exclude": {
+          "label": "gui|tooling"
+        }
+      }
+    },
+    {
+      "name": "ci-windows-debug",
+      "inherits": "ci-test-base",
+      "configurePreset": "ci-windows-debug",
+      "output": {
+        "outputJUnitFile": "${sourceDir}/build/ci/ctest.xml"
+      },
+      "filter": {
+        "include": {
+          "label": "^ci-windows$"
+        }
+      },
+      "execution": {
+        "jobs": 1,
+        "timeout": 90
+      }
+    },
+    {
+      "name": "ci-audio-release",
+      "inherits": "ci-test-base",
+      "configurePreset": "ci-audio-release",
+      "output": {
+        "outputJUnitFile": "${sourceDir}/build/ci-audio-release/ctest.xml"
+      },
+      "filter": {
+        "include": {
+          "label": "^realtime-safety$"
+        }
+      },
+      "execution": {
+        "jobs": 1,
+        "timeout": 90
+      }
+    },
+    {
+      "name": "ci-navigation-null",
+      "inherits": "ci-test-base",
+      "configurePreset": "ci-navigation-null",
+      "output": {
+        "outputJUnitFile": "${sourceDir}/build/ci-navigation-null/ctest.xml"
+      },
+      "filter": {
+        "include": {
+          "label": "^ci-navigation$"
+        }
+      }
+    },
+    {
+      "name": "sonar",
+      "inherits": "ci-test-base",
+      "configurePreset": "sonar",
+      "output": {
+        "outputJUnitFile": "${sourceDir}/build/sonar/ctest.xml"
+      },
+      "filter": {
+        "include": {
+          "label": "^sonar-coverage$"
+        }
+      }
+    }
+  ]
+}

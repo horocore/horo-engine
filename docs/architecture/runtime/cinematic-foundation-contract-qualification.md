@@ -22,7 +22,7 @@ The allocation probe counts `operator new` calls in the test process. It does no
 |---|---|---|
 | Linux / GCC | `Test · Linux / GCC` runs both cinematic test targets through the full suite. | The [current PR checks](https://github.com/horocore/horo-engine/pull/3044/checks) must show this job passing on the latest head SHA. |
 | macOS / Clang | `Test · macOS / Clang` runs both cinematic test targets through the full suite. | The [current PR checks](https://github.com/horocore/horo-engine/pull/3044/checks) must show this job passing on the latest head SHA. |
-| Windows / MSVC | `Cinematic Foundation · Windows / MSVC` builds and runs both targets in a focused job, because the full Windows matrix is disabled. | The [current PR checks](https://github.com/horocore/horo-engine/pull/3044/checks) must show this job passing on the latest head SHA. |
+| Windows / MSVC | `Test · Windows / MSVC` builds both targets with the focused Windows group and runs their cases in `Test Debug` (`ci-windows` CTest label). The full Windows suite remains disabled. | The current PR checks must show this job passing on the latest head SHA. |
 
 Run the focused local pass with `cmake -S . -B build/skeleton -DBUILD_TESTING=ON`, `cmake --build build/skeleton --target HoroCinematicModelTests HoroCinematicRuntimeTests --parallel 2`, and `ctest --test-dir build/skeleton -R '^HoroCinematic(Model|Runtime)Tests::' --output-on-failure -j 2`. The local result qualifies only its own compiler and platform. Hosted pass status must be checked against the final PR head SHA.
 

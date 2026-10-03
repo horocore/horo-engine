@@ -1,6 +1,8 @@
 # Scripts
 
-New repository scripts belong here. Legacy scripts are under `deprecated/scripts/` until migrated.
+Developer and reusable tooling scripts belong here. GitHub workflow helpers belong
+under `.github/scripts/`; shared action setup belongs under `.github/actions/`.
+Legacy scripts are under `deprecated/scripts/` until migrated.
 
 ## Local editor runner
 
@@ -41,11 +43,11 @@ compiler context, advisory metrics, measured timings and CI limitations.
 
 ## Sonar line coverage collection
 
-The Sonar workflow calls `collect_sonar_coverage.sh`, which uses pinned fastcov
-1.17 with GCC/gcov 13.3.0. It collects all existing `build/sonar` inputs,
+The Sonar workflow calls `.github/scripts/collect_sonar_coverage.sh`, which uses
+pinned fastcov 1.17 with GCC/gcov 13.3.0. It collects all existing `build/sonar` inputs,
 including unexecuted units with `--process-gcno`; test and source filters are
-unchanged. Collection failure fails the job. `fastcov_sonar_coverage.py` merges counters across tests and
-template instantiations and emits generic Sonar line coverage. It excludes only
+unchanged. Collection failure fails the job. `fastcov_sonar_coverage.py` merges
+counters across tests and template instantiations and emits generic Sonar line coverage. It excludes only
 zero-hit comments, standalone braces and `else`, matching the former gcovr
 noncode heuristic. Real uncovered code remains in the report. Paths must resolve
 inside the repository, counters must be nonnegative integers, and source line
@@ -67,12 +69,12 @@ flags, with complete differences in JSON and a printed Markdown summary.
 
 ## CI runner grouping and closed PR cleanup
 
-`.github/workflows/ci.yml` shares one format prerequisite, runs both audio build
-modes on each platform runner, and groups compatible Windows headless contracts.
-Both audio modes and all four Windows test groups must pass their aggregate gate.
-Separate JUnit files preserve per-suite evidence even if another suite fails.
-This reduces the CI plus former Prefab workflow from 16 to 9 runner jobs without
-removing targets or test filters. Hosted timings remain the acceptance evidence.
+See [the CI layout](../.github/README.md) for workflow stages and build profiles.
+`ci.yml` uses four runner jobs: tooling and one native job per platform. Native
+Debug includes audio Debug; the same runner builds the smaller audio Release
+group. Windows ABI, MCP, save, input and foundation checks share one headless
+Debug build. Test groups are owned by CMake, and CTest retains case names in
+JUnit artifacts. Hosted timings remain the performance acceptance evidence.
 
 `cancel-closed-pr.yml` runs on `pull_request_target: closed`. Its trusted base
 workflow owns the inline script; no repository source is checked out, and only

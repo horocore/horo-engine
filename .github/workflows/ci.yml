@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -14,150 +14,118 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Let main finish its build checkpoints; supersede stale pull requests.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Direct sccache uploads follow the same main-only policy as snapshots.
-env:
-  SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
-
 jobs:
-  format:
+  tooling:
     name: Format & Tooling Check
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Setup Tooling
-        run: "pip install --no-cache-dir --only-binary=:all: pytest==8.3.4 clang-format==19.1.7"
+      - name: Install tooling
+        run: >-
+          pip install --no-cache-dir --only-binary=:all: pytest==8.3.4 clang-format==19.1.7 defusedxml==0.7.1
 
-
-
-
-      - name: Diagnostics Check
-        run: python3 scripts/dev.py doctor
-
-      - name: Verify C++ Formatting
+      - name: Check C++ formatting
         run: python3 scripts/dev.py format --check
 
-      - name: Run Python Runner Tests
+      - name: Test Python tooling
         run: pytest tests/python/
-
-      - name: Test closed PR workflow selection
-        run: node --test .github/scripts/cancel_closed_pr_runs.test.js
-
 
   test:
     name: Test · ${{ matrix.name }}
+    needs: tooling
     runs-on: ${{ matrix.runner }}
-    needs: [format]
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
+      HORO_COMPILER_LAUNCHER: ${{ matrix.launcher }}
       HORO_LOG_LEVEL: debug
-    timeout-minutes: ${{ matrix.timeout_minutes }}
-    permissions:
-      contents: read
-      checks: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Linux / GCC
             runner: ubuntu-24.04
-            timeout_minutes: 35
             cc: gcc
             cxx: g++
-            build_dir: build/ci
+            launcher: ccache
+            preset: ci-linux-debug
           - name: macOS / Clang
             runner: macos-latest
-            timeout_minutes: 45
             cc: clang
             cxx: clang++
-            build_dir: build/ci
-          # Temporarily disabled while the MSVC test timeout/failure is investigated.
-          # Re-enable this matrix entry after the Windows test suite is stable again.
-          # - name: Windows / MSVC
-          #   runner: windows-2022
-          #   # The full MSVC suite consistently reaches the 45-minute job limit after successful compilation.
-          #   timeout_minutes: 60
-          #   cc: cl
-          #   cxx: cl
-          #   build_dir: build/ci
-
+            launcher: ccache
+            preset: ci-macos-debug
+          # The full Windows suite is still disabled. This preset builds the
+          # existing focused contracts together in one headless composition.
+          - name: Windows / MSVC
+            runner: windows-2022
+            cc: cl
+            cxx: cl
+            launcher: sccache
+            preset: ci-windows-debug
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
 
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          if ! sudo apt-get update; then
-            sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
-            sudo apt-get update
-          fi
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build \
-            libwayland-dev \
-            wayland-protocols \
-            libxkbcommon-dev \
-            libx11-dev \
-            libxrandr-dev \
-            libxinerama-dev \
-            libxcursor-dev \
-            libxi-dev \
-            libxext-dev \
-            libxss-dev \
-            libxtst-dev \
-            libxxf86vm-dev \
-            libgl1-mesa-dev \
-            libglu1-mesa-dev
+      - name: Setup build tools
+        uses: ./.github/actions/setup-build-tools
 
-      - name: Install macOS system dependencies
-        if: runner.os == 'macOS'
-        run: brew install ninja
-
-      - name: Setup MSVC environment
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
-
-      - name: Setup Ninja on Windows
-        if: runner.os == 'Windows'
-        uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67
-
-      - name: Restore native build caches
+      - name: Restore dependency and compiler caches
         id: cache
         uses: ./.github/actions/restore-native-cache
         with:
+          # Preserve the existing main Debug checkpoint and build directory.
+          # Compiler entries also validate the flags of auxiliary builds.
           profile: native-tests-v1
           mode: Debug
           max-size: 2G
 
-      - name: Toolchain & Environment Diagnostics
-        shell: bash
-        run: python3 scripts/dev.py doctor
+      - name: Configure Debug
+        run: cmake --preset "${{ matrix.preset }}"
 
-      - name: Build native targets
-        id: native_build
-        shell: bash
-        run: |
-          compiler_cache_args=(--compiler-launcher ccache)
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            compiler_cache_args=(--compiler-launcher sccache --msvc-debug-information-format Embedded)
-          fi
-          python3 scripts/dev.py build \
-            --dir "${{ matrix.build_dir }}" \
-            --fetchcontent-base-dir "$GITHUB_WORKSPACE/.cmake/fetchcontent" \
-            "${compiler_cache_args[@]}"
+      - name: Build Debug
+        id: debug_build
+        run: cmake --build --preset "${{ matrix.preset }}"
 
-      - name: Checkpoint successful native build
-        if: ${{ !cancelled() && steps.native_build.outcome == 'success' }}
+      # Debug audio is already in the build above. Release verifies NDEBUG
+      # behavior using only the real-time audio group, on this same runner.
+      - name: Configure Release audio checks
+        run: cmake --preset ci-audio-release
+
+      - name: Build Release audio checks
+        id: release_build
+        run: cmake --build --preset ci-audio-release
+
+      - name: Configure navigation without Recast Detour
+        if: runner.os == 'Linux'
+        run: cmake --preset ci-navigation-null
+
+      - name: Build navigation without Recast Detour
+        id: navigation_build
+        if: runner.os == 'Linux'
+        run: cmake --build --preset ci-navigation-null
+
+      - name: Checkpoint main build caches
+        if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         continue-on-error: true
         uses: ./.github/actions/save-native-cache
         with:
@@ -165,427 +133,28 @@ jobs:
           dependency-key: ${{ steps.cache.outputs.dependency-key }}
           dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
 
-      - name: Run native tests
-        id: native_tests
-        shell: bash
-        run: |
-          python3 scripts/dev.py test --skip-build \
-            --dir "${{ matrix.build_dir }}" \
-            --junit "${{ github.workspace }}/${{ matrix.build_dir }}/test-results/ctest.xml"
+      - name: Prepare Windows mixer allocation diagnostics
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
+        shell: pwsh
+        run: ./.github/scripts/stage_windows_symbols.ps1 -BinaryDirectory build/ci/tests
 
-      - name: Report compiler statistics for an incomplete native build
-        if: always() && steps.cache.outcome == 'success' && steps.native_build.outcome != 'success'
-        continue-on-error: true
-        shell: bash
-        run: |
-          if [[ "${{ runner.os }}" == Windows ]]; then
-            sccache --show-stats
-          else
-            ccache --show-stats
-          fi
+      - name: Test Debug
+        if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
+        run: ctest --preset "${{ matrix.preset }}"
 
-      - name: Publish test results
-        if: always() && (steps.native_tests.outcome == 'success' || steps.native_tests.outcome == 'failure')
-        uses: mikepenz/action-junit-report@d9f48fc87bc235f7e214acf696ca5abc0a986f16
-        with:
-          report_paths: ${{ github.workspace }}/${{ matrix.build_dir }}/test-results/ctest.xml
-          check_name: Test Results · ${{ matrix.name }}
-          fail_on_failure: false
-          require_tests: false
-          detailed_summary: true
-          include_passed: false
+      - name: Test Release audio checks
+        if: ${{ !cancelled() && steps.release_build.outcome == 'success' }}
+        run: ctest --preset ci-audio-release
 
-      - name: Upload test results
-        if: always() && (steps.native_tests.outcome == 'success' || steps.native_tests.outcome == 'failure')
+      - name: Test navigation without Recast Detour
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_build.outcome == 'success' }}
+        run: ctest --preset ci-navigation-null
+
+      - name: Upload test reports
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: test-results-${{ runner.os }}
-          path: ${{ github.workspace }}/${{ matrix.build_dir }}/test-results/
-          retention-days: 14
-
-  audio-realtime-safety:
-    name: Audio Real-Time Safety · ${{ matrix.platform }} / Debug + Release
-    runs-on: ${{ matrix.runner }}
-    needs: [format]
-    env:
-      CC: ${{ matrix.cc }}
-      CXX: ${{ matrix.cxx }}
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      checks: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { platform: Linux GCC, runner: ubuntu-24.04, cc: gcc, cxx: g++ }
-          - { platform: macOS Clang, runner: macos-latest, cc: clang, cxx: clang++ }
-          - { platform: Windows MSVC, runner: windows-2022, cc: cl, cxx: cl }
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-
-      - name: Install Ninja
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
-
-      - name: Install Ninja
-        if: runner.os == 'macOS'
-        run: brew install ninja
-
-      - name: Setup MSVC
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
-
-      - name: Setup Ninja
-        if: runner.os == 'Windows'
-        uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67
-
-      - name: Restore native build caches
-        id: cache
-        uses: ./.github/actions/restore-native-cache
-        with:
-          profile: audio-safety-v2
-          mode: Debug-Release
-          max-size: 512M
-
-      - name: Build Debug callback safety targets
-        id: audio_build_debug
-        continue-on-error: true
-        shell: bash
-        run: |
-          compiler_cache_args=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
-          if [[ "${{ runner.os }}" == Windows ]]; then
-            compiler_cache_args=(-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded)
-          fi
-          cmake -S . -B build/audio-realtime-safety-debug -G Ninja \
-            -DCMAKE_BUILD_TYPE="Debug" \
-            -DFETCHCONTENT_BASE_DIR="$GITHUB_WORKSPACE/.cmake/fetchcontent" \
-            "${compiler_cache_args[@]}" \
-            -DBUILD_TESTING=ON \
-            -DHORO_BUILD_EDITOR_GUI=OFF \
-            -DHORO_BUILD_AUDIO_SDL3=OFF \
-            -DHORO_BUILD_RENDER_OPENGL=OFF \
-            -DHORO_BUILD_EXAMPLES=OFF \
-            -DHORO_ENABLE_OPENTELEMETRY=OFF
-          cmake --build build/audio-realtime-safety-debug \
-            --target HoroAudioRealtimeSafetyHarnessTests HoroAudioWatchdogTests HoroAudioNullTests HoroAudioDspTests HoroCoreAudioDspTests HoroAudioCommandTests HoroAudioMixerTests \
-            --parallel 1
-
-      - name: Build Release callback safety targets
-        id: audio_build_release
-        continue-on-error: true
-        shell: bash
-        run: |
-          compiler_cache_args=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
-          if [[ "${{ runner.os }}" == Windows ]]; then
-            compiler_cache_args=(-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded)
-          fi
-          cmake -S . -B build/audio-realtime-safety-release -G Ninja \
-            -DCMAKE_BUILD_TYPE="Release" \
-            -DFETCHCONTENT_BASE_DIR="$GITHUB_WORKSPACE/.cmake/fetchcontent" \
-            "${compiler_cache_args[@]}" \
-            -DBUILD_TESTING=ON \
-            -DHORO_BUILD_EDITOR_GUI=OFF \
-            -DHORO_BUILD_AUDIO_SDL3=OFF \
-            -DHORO_BUILD_RENDER_OPENGL=OFF \
-            -DHORO_BUILD_EXAMPLES=OFF \
-            -DHORO_ENABLE_OPENTELEMETRY=OFF
-          cmake --build build/audio-realtime-safety-release \
-            --target HoroAudioRealtimeSafetyHarnessTests HoroAudioWatchdogTests HoroAudioNullTests HoroAudioDspTests HoroCoreAudioDspTests HoroAudioCommandTests HoroAudioMixerTests \
-            --parallel 1
-
-      - name: Checkpoint successful audio build
-        if: ${{ !cancelled() && steps.audio_build_debug.outcome == 'success' && steps.audio_build_release.outcome == 'success' }}
-        continue-on-error: true
-        uses: ./.github/actions/save-native-cache
-        with:
-          compiler-key: ${{ steps.cache.outputs.compiler-key }}
-          dependency-key: ${{ steps.cache.outputs.dependency-key }}
-          dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
-
-      - name: Stage SDK symbol reader for Windows allocation diagnostics
-        if: ${{ !cancelled() && runner.os == 'Windows' && steps.audio_build_debug.outcome == 'success' }}
-        shell: pwsh
-        run: |
-          $kits = "${env:ProgramFiles(x86)}\Windows Kits\10"
-          $reader = Get-ChildItem "$kits\bin\*\x64\dbghelp.dll" -ErrorAction SilentlyContinue |
-            Sort-Object { $_.VersionInfo.FileVersionRaw } -Descending | Select-Object -First 1
-          if (-not $reader) { throw "Windows SDK x64 symbol reader is unavailable" }
-          $destination = "build/audio-realtime-safety-debug/tests"
-          Copy-Item $reader.FullName "$destination/dbghelp.dll"
-          Write-Host "Using SDK symbol reader: $($reader.FullName) ($($reader.VersionInfo.FileVersion))"
-          $pdb = "$destination/HoroMixerAllocationFailureWorker.pdb"
-          if (-not (Test-Path $pdb)) { throw "Allocation worker PDB is missing: $pdb" }
-
-      - name: Gate Debug callback safety
-        id: audio_tests_debug
-        if: ${{ !cancelled() && steps.audio_build_debug.outcome == 'success' }}
-        continue-on-error: true
-        shell: bash
-        run: |
-          cmake -E make_directory build/audio-realtime-safety-debug/test-results
-          ctest --test-dir build/audio-realtime-safety-debug \
-            -R '^(HoroAudio(CallbackLockPolicyTest|RealtimeSafetyHarnessTests::|WatchdogTests::|NullTests::|DspTests::|CommandTests::|MixerTests::)|HoroCoreAudioDspTests::)' \
-            --output-on-failure --output-junit "${{ github.workspace }}/build/audio-realtime-safety-debug/test-results/ctest.xml" --timeout 90 -j 1
-
-      - name: Gate Release callback safety
-        id: audio_tests_release
-        if: ${{ !cancelled() && steps.audio_build_release.outcome == 'success' }}
-        continue-on-error: true
-        shell: bash
-        run: |
-          cmake -E make_directory build/audio-realtime-safety-release/test-results
-          ctest --test-dir build/audio-realtime-safety-release \
-            -R '^(HoroAudio(CallbackLockPolicyTest|RealtimeSafetyHarnessTests::|WatchdogTests::|NullTests::|DspTests::|CommandTests::|MixerTests::)|HoroCoreAudioDspTests::)' \
-            --output-on-failure --output-junit "${{ github.workspace }}/build/audio-realtime-safety-release/test-results/ctest.xml" --timeout 90 -j 1
-
-      - name: Report compiler statistics for an incomplete audio build
-        if: always() && steps.cache.outcome == 'success' && (steps.audio_build_debug.outcome != 'success' || steps.audio_build_release.outcome != 'success')
-        continue-on-error: true
-        shell: bash
-        run: |
-          if [[ "${{ runner.os }}" == Windows ]]; then
-            sccache --show-stats
-          else
-            ccache --show-stats
-          fi
-
-      - name: Publish audio safety test results
-        if: always()
-        uses: mikepenz/action-junit-report@d9f48fc87bc235f7e214acf696ca5abc0a986f16
-        with:
-          report_paths: ${{ github.workspace }}/build/audio-realtime-safety-*/test-results/ctest.xml
-          check_name: Audio Safety Results · ${{ matrix.platform }} / Debug + Release
-          fail_on_failure: false
-          require_tests: false
-
-      - name: Upload audio safety test results
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: audio-safety-${{ runner.os }}
-          path: ${{ github.workspace }}/build/audio-realtime-safety-*/test-results/
+          path: build/ci*/ctest.xml
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Require both audio configurations to pass
-        if: ${{ !cancelled() }}
-        shell: bash
-        env:
-          DEBUG_BUILD: ${{ steps.audio_build_debug.outcome }}
-          DEBUG_TESTS: ${{ steps.audio_tests_debug.outcome }}
-          RELEASE_BUILD: ${{ steps.audio_build_release.outcome }}
-          RELEASE_TESTS: ${{ steps.audio_tests_release.outcome }}
-        run: |
-          for outcome in "$DEBUG_BUILD" "$DEBUG_TESTS" "$RELEASE_BUILD" "$RELEASE_TESTS"; do
-            if [[ "$outcome" != success ]]; then
-              echo '::error::Both Debug and Release audio builds and tests must pass.'
-              exit 1
-            fi
-          done
-
-  input-sdl-windows:
-    name: Input SDL and Runtime UI · Windows / MSVC
-    runs-on: windows-2022
-    needs: [format]
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-
-      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
-
-      - uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67
-
-      - name: Build and test headless SDL text input
-        shell: bash
-        run: |
-          cmake -S . -B build/input-sdl-windows -G Ninja \
-            -DBUILD_TESTING=ON \
-            -DHORO_BUILD_EDITOR_GUI=OFF \
-            -DHORO_BUILD_INPUT_SDL3=ON \
-            -DHORO_BUILD_AUDIO_SDL3=OFF \
-            -DHORO_BUILD_RENDER_OPENGL=OFF \
-            -DHORO_ENABLE_OPENTELEMETRY=OFF
-          cmake --build build/input-sdl-windows \
-            --target HoroInputTests HoroInputSdlTests HoroRuntimeUiInputTests HoroInputPublicHeaderConsumer \
-            --parallel 2
-          ctest --test-dir build/input-sdl-windows \
-            -R '^Horo(InputTests|InputSdlTests|RuntimeUiInputTests)::' \
-            --output-on-failure --timeout 30 -j 2
-
-  windows-contracts:
-    name: Headless Contracts · Windows / MSVC
-    runs-on: windows-2022
-    needs: [format]
-    timeout-minutes: 90
-    permissions:
-      contents: read
-      checks: write
-    env:
-      CC: cl
-      CXX: cl
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-
-      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
-
-      - uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67
-
-      - name: Restore native build caches
-        id: cache
-        uses: ./.github/actions/restore-native-cache
-        with:
-          profile: windows-contracts-v1
-          mode: Default
-          max-size: 1G
-
-      - name: Build shared Windows contract targets
-        id: contracts_build
-        shell: bash
-        run: |
-          cmake -S . -B build/windows-contracts -G Ninja \
-            -DBUILD_TESTING=ON \
-            -DHORO_BUILD_EDITOR_GUI=OFF \
-            -DHORO_BUILD_RENDER_OPENGL=OFF \
-            -DHORO_ENABLE_OPENTELEMETRY=OFF \
-            -DFETCHCONTENT_BASE_DIR="$GITHUB_WORKSPACE/.cmake/fetchcontent" \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
-          cmake --build build/windows-contracts --parallel 2 --target \
-            HoroCliCommandRegistryTests HoroPlatformTests HoroUpdateZipPackageProducerTests \
-            HoroVfxApiTests HoroCinematicModelTests HoroCinematicRuntimeTests \
-            HoroCinematicPropertyIntegrationTests HoroCinematicModelPublicHeaderConsumer \
-            HoroCinematicRuntimePublicHeaderConsumer HoroEditorServicesPublicHeaderConsumer \
-            HoroPrefabTests HoroPrefabSceneExpansionTests \
-            HoroPrefabSceneExpansionContractConsumer HoroAssetRegistryTests
-          cmake -E make_directory build/windows-contracts/test-results
-
-      - name: Checkpoint successful Windows build
-        if: ${{ !cancelled() && steps.contracts_build.outcome == 'success' }}
-        continue-on-error: true
-        uses: ./.github/actions/save-native-cache
-        with:
-          compiler-key: ${{ steps.cache.outputs.compiler-key }}
-          dependency-key: ${{ steps.cache.outputs.dependency-key }}
-          dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
-
-      - name: Test CLI and Process contracts
-        id: cli_tests
-        if: ${{ !cancelled() && steps.contracts_build.outcome == 'success' }}
-        continue-on-error: true
-        shell: bash
-        run: >-
-          ctest --test-dir build/windows-contracts -R '^Horo(CliCommandRegistry|Platform|UpdateZipPackageProducer)Tests::'
-          --output-on-failure --output-junit "$GITHUB_WORKSPACE/build/windows-contracts/test-results/cli.xml"
-
-      - name: Test VFX Foundation contracts
-        id: vfx_tests
-        if: ${{ !cancelled() && steps.contracts_build.outcome == 'success' }}
-        continue-on-error: true
-        shell: bash
-        run: >-
-          ctest --test-dir build/windows-contracts -R '^HoroVfxApiTests::'
-          --output-on-failure --output-junit "$GITHUB_WORKSPACE/build/windows-contracts/test-results/vfx.xml" --timeout 90
-
-      - name: Test Cinematic Foundation contracts
-        id: cinematic_tests
-        if: ${{ !cancelled() && steps.contracts_build.outcome == 'success' }}
-        continue-on-error: true
-        shell: bash
-        run: >-
-          ctest --test-dir build/windows-contracts -R '^HoroCinematic(Model|Runtime|PropertyIntegration)Tests::'
-          --output-on-failure --output-junit "$GITHUB_WORKSPACE/build/windows-contracts/test-results/cinematic.xml" -j 2
-
-      - name: Test Prefab Foundation contracts
-        id: prefab_tests
-        if: ${{ !cancelled() && steps.contracts_build.outcome == 'success' }}
-        continue-on-error: true
-        shell: bash
-        run: >-
-          ctest --test-dir build/windows-contracts -R '^(HoroPrefabTests|HoroPrefabSceneExpansionTests|HoroAssetRegistryTests)::|^HoroPrefabSceneExpansionContractConsumer$'
-          --output-on-failure --output-junit "$GITHUB_WORKSPACE/build/windows-contracts/test-results/prefab.xml"
-
-      - name: Report compiler statistics for an incomplete Windows build
-        if: always() && steps.cache.outcome == 'success' && steps.contracts_build.outcome != 'success'
-        continue-on-error: true
-        shell: bash
-        run: sccache --show-stats
-
-      - name: Publish Windows contract test results
-        if: always()
-        uses: mikepenz/action-junit-report@d9f48fc87bc235f7e214acf696ca5abc0a986f16
-        with:
-          report_paths: ${{ github.workspace }}/build/windows-contracts/test-results/*.xml
-          check_name: Windows Contract Results
-          fail_on_failure: false
-          require_tests: false
-
-      - name: Upload Windows contract test results
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: windows-contract-results
-          path: build/windows-contracts/test-results/
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Require all Windows contract suites to pass
-        if: ${{ !cancelled() }}
-        shell: bash
-        env:
-          BUILD: ${{ steps.contracts_build.outcome }}
-          CLI: ${{ steps.cli_tests.outcome }}
-          VFX: ${{ steps.vfx_tests.outcome }}
-          CINEMATIC: ${{ steps.cinematic_tests.outcome }}
-          PREFAB: ${{ steps.prefab_tests.outcome }}
-        run: |
-          for outcome in "$BUILD" "$CLI" "$VFX" "$CINEMATIC" "$PREFAB"; do
-            if [[ "$outcome" != success ]]; then
-              echo '::error::Every Windows contract build and test suite must pass.'
-              exit 1
-            fi
-          done
-
-  navigation-compositions:
-    name: Navigation Provider Compositions
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-
-      - name: Install build tooling
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
-
-      - name: Cache FetchContent dependencies
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
-        id: dependency_cache
-        with:
-          path: ${{ github.workspace }}/.cmake/fetchcontent
-          key: navigation-compositions-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
-
-      - name: Build navigation with and without Recast Detour
-        shell: bash
-        run: |
-          for enabled in ON OFF; do
-            build_dir="build/navigation-${enabled,,}"
-            cmake -S . -B "${build_dir}" -G Ninja \
-              -DBUILD_TESTING=ON \
-              -DHORO_BUILD_EDITOR_GUI=OFF \
-              -DHORO_BUILD_EXAMPLES=OFF \
-              -DHORO_BUILD_NAVIGATION_RECAST_DETOUR="${enabled}"
-            cmake --build "${build_dir}" --parallel 2 --target \
-              HoroNavigationRuntime HoroNavigationNull HoroNavigationRecastDetour \
-              HoroNavigationApiPublicHeaderConsumer HoroNavigationRuntimePublicHeaderConsumer \
-              HoroNavigationNullPublicHeaderConsumer HoroNavigationRecastDetourPublicHeaderConsumer \
-              HoroNavigationBakeServicePublicHeaderConsumer HoroNavigationBakeDiagnosticsPublicConsumer
-            ctest --test-dir "${build_dir}" -j 1 \
-              -R '^HoroNavigationBakeDiagnosticsPublicConsumer$' --output-on-failure
-          done
-
-      - name: Save dependency cache on main
-        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
-        with:
-          path: ${{ github.workspace }}/.cmake/fetchcontent
-          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
