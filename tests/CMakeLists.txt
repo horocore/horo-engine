@@ -460,6 +460,9 @@ horo_register_catch_test(HoroAudioDspTests LABELS "unit;audio;headless")
 add_executable(HoroAudioPlaybackTests
     support/AllocationProbe.cpp
     unit/runtime/audio/AudioVoicePlaybackTests.cpp
+    unit/runtime/audio/AudioRepeatedPlaybackTests.cpp
+    unit/runtime/audio/AudioRepeatedPlaybackTestFixture.h
+    unit/runtime/audio/AudioPlaybackTestSupport.h
 )
 target_include_directories(HoroAudioPlaybackTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_features(HoroAudioPlaybackTests PRIVATE cxx_std_20)
