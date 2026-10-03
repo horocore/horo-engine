@@ -87,27 +87,37 @@ namespace Horo::Editor {
             return response == nullptr ? 0 : ReportTransfer(*response);
         };
 
-        /** @brief Configures the exact endpoint with verified TLS and no redirect or ambient credentials. */
-        [[nodiscard]] bool Configure(const CurlHandle &handle, const std::string &url, const EditorUpdateManifestHttpPolicy &policy,
-                                     ManifestResponse &response) {
+        /** @brief Creates an owning request for the exact endpoint with verified TLS and no ambient credentials. */
+        [[nodiscard]] CurlHandle CreateRequest(const std::string &url, const EditorUpdateManifestHttpPolicy &policy,
+                                               ManifestResponse &response) {
+            CurlHandle handle{curl_easy_init(), &curl_easy_cleanup};
+            if (!handle)
+                return handle;
             auto *curl = handle.get();
-            return curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_USERAGENT, "horo-update/1") == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https") == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https") == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_HTTPAUTH, 0L) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "identity") == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, static_cast<long>(policy.connectTimeoutSeconds)) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(policy.requestTimeoutSeconds)) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, ReceiveBodyCallback) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ReportTransferCallback) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &response) == CURLE_OK;
+            // Specify both range bounds: TLS 1.3 is the minimum, including with an older system TLS default.
+            if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3 | CURL_SSLVERSION_MAX_DEFAULT) != CURLE_OK)
+                return CurlHandle{nullptr, &curl_easy_cleanup};
+            const bool configured =
+                curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_USERAGENT, "horo-update/1") == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https") == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https") == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L) == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L) == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_HTTPAUTH, 0L) == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "identity") == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L) == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, static_cast<long>(policy.connectTimeoutSeconds)) == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(policy.requestTimeoutSeconds)) == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, ReceiveBodyCallback) == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response) == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ReportTransferCallback) == CURLE_OK &&
+                curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &response) == CURLE_OK;
+            if (!configured)
+                return CurlHandle{nullptr, &curl_easy_cleanup};
+            return handle;
         }
     }  // namespace
 
@@ -121,13 +131,9 @@ namespace Horo::Editor {
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::Cancelled));
         if (static const bool CurlReady = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK; !CurlReady)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
-        CurlHandle curl{curl_easy_init(), &curl_easy_cleanup};
-        if (!curl)
-            return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
-        if (curl_easy_setopt(curl.get(), CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
-            return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         ManifestResponse response{{}, cancellation};
-        if (!Configure(curl, url, policy, response))
+        CurlHandle curl = CreateRequest(url, policy, response);
+        if (!curl)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         // libcurl copies CAINFO when the option is set.
         if (const std::string caBundle = policy.certificateAuthorityBundle.string();
