@@ -84,7 +84,7 @@ def resolve_issue(pr: dict[str, Any], repo: str, override: int | None) -> dict[s
             "-F", "per_page=100",
         )
         matches = [
-            item for item in matches
+            item for item in matches["items"]
             if key in JIRA_KEY.findall(f"{item['title']} {item.get('body') or ''}")
         ]
         if len(matches) != 1:

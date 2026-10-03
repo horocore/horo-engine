@@ -37,7 +37,21 @@ def test_refuses_ambiguous_issue_links() -> None:
         annotations.issue_number(pr)
 
 
-def test_missing_annotations_are_additive() -> None:
+def test_jira_search_reads_rest_items_without_live_github(monkeypatch: pytest.MonkeyPatch) -> None:
+    pr = {"number": 20, "title": "fix: repair HORO-123", "headRefName": "fix/HORO-123_repair"}
+    issue = {"node_id": "ISSUE_node", "number": 2, "title": "HORO-123 repair", "body": ""}
+
+    def fake_gh(*args: str) -> dict:
+        if args[:4] == ("api", "-X", "GET", "search/issues"):
+            return {"total_count": 1, "items": [issue]}
+        assert args == ("api", "repos/horocore/horo-engine/issues/2")
+        return issue
+
+    monkeypatch.setattr(annotations, "gh", fake_gh)
+    assert annotations.resolve_issue(pr, "horocore/horo-engine", None)["number"] == 2
+
+
+def test_missing_annotations_are_additive(monkeypatch: pytest.MonkeyPatch) -> None:
     pr = {
         "number": 20,
         "author": {"login": "me"},
@@ -55,6 +69,11 @@ def test_missing_annotations_are_additive() -> None:
         "labels": [{"name": "ready"}],
         "projectItems": [{"title": "Roadmap"}],
     }
+    def fake_gh(*args: str) -> dict:
+        assert args == ("pr", "view", "20", "--repo", "horocore/horo-engine", "--json", "closingIssuesReferences")
+        return {"closingIssuesReferences": [{"number": 2}]}
+
+    monkeypatch.setattr(annotations, "gh", fake_gh)
     assert annotations.changes(
         pr, issue, None, "horocore/horo-engine", "main", True
     ) == (
@@ -81,6 +100,8 @@ def test_check_mode_does_not_write(monkeypatch: pytest.MonkeyPatch, capsys: pyte
     issue = {
         "node_id": "ISSUE_node",
         "number": 2005,
+        "title": "[DFR-002.3] Fracture",
+        "body": "",
         "assignees": [],
         "milestone": {"number": 4, "title": "M3 — Alpha"},
         "labels": [],
@@ -121,6 +142,8 @@ def test_fix_mode_writes_only_missing_fields(monkeypatch: pytest.MonkeyPatch) ->
     issue = {
         "node_id": "ISSUE_node",
         "number": 2005,
+        "title": "[DFR-002.3] Fracture",
+        "body": "",
         "assignees": [],
         "milestone": {"number": 4, "title": "M3 — Alpha"},
         "labels": [{"name": "ready"}],
