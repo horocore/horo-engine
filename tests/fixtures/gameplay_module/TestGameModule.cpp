@@ -1,5 +1,6 @@
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameAssetTypeRegistry.h"
+#include "Horo/Gameplay/GameEventRegistry.h"
 #include "Horo/Gameplay/GameModule.h"
 #include "Horo/Gameplay/GameServiceRegistry.h"
 #include "Horo/Gameplay/GameplayErrors.h"
@@ -103,6 +104,9 @@ namespace {
     class Module final : public IGameModule {
     public:
         Result<void> Register(GameRegistrationContext &context) override {
+            if (auto registered = context.events.Register({90, 1, 91, 1, BorrowedCallbackContext{this}, &CompleteQuest});
+                registered.HasError())
+                return registered;
             const ComponentTypeId movementType = ComponentTypeId::Parse("game.tests.movement_settings").Value();
             ComponentDescriptor descriptor{
                 .typeId = movementType,
@@ -213,6 +217,29 @@ namespace {
                 return Result<void>::Failure(MakeError(GameplayErrors::GameplayReloadRestoreFailed));
             return Result<void>::Success();
         }
+
+    private:
+        static GameplayEventOutcome CompleteQuest(const BorrowedCallbackContext &context, const GameplayEventRequest &request) {
+            using enum GameplayEventOutcome;
+            auto *instance = context.Get<Module>();
+            if (instance == nullptr)
+                return InvalidTarget;
+            auto &gameModule = *instance;
+            if (request.payload.size() < sizeof(std::uint64_t) || request.committedTick == 0 || request.traversal == 0)
+                return InvalidTarget;
+            // The fixture's cooked contract is a one-argument canonical array of signed integers.
+            // Inspect its little-endian scalar without requiring a VM or extension runtime in the gameplay SDK.
+            std::uint64_t quest{};
+            const auto scalar = request.payload.last(sizeof(quest));
+            for (std::size_t byte = 0; byte < scalar.size(); ++byte)
+                quest |= static_cast<std::uint64_t>(std::to_integer<unsigned>(scalar[byte])) << (byte * 8U);
+            if (quest != 42)
+                return InvalidTarget;
+            ++gameModule.completedQuests_;
+            return Accepted;
+        }
+
+        std::uint64_t completedQuests_{};
     };
 
 }  // namespace
@@ -221,6 +248,6 @@ extern "C" HORO_GAME_EXPORT IGameModule *CreateGameModule() noexcept {
     return new Module{};
 }
 
-extern "C" HORO_GAME_EXPORT void DestroyGameModule(IGameModule *module) noexcept {
-    delete module;
+extern "C" HORO_GAME_EXPORT void DestroyGameModule(IGameModule *gameModule) noexcept {
+    delete gameModule;
 }

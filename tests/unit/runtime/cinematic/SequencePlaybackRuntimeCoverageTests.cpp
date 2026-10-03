@@ -57,9 +57,10 @@ namespace Horo::Cinematic {
             return true;
         }
 
-        /** @brief Counts synchronous event delivery during repeated cancellation. */
-        void CountEvent(void *context, const SequenceFrameEventOccurrence &) noexcept {
-            ++*static_cast<std::size_t *>(context);
+        /** @brief Counts event staging during repeated cancellation. */
+        Result<void> CountEvent(const BorrowedCallbackContext &context, const std::span<const SequenceFrameEventOccurrence> events) {
+            *context.Get<std::size_t>() += events.size();
+            return Result<void>::Success();
         }
 
         struct CoordinationProbe final {
@@ -382,7 +383,7 @@ namespace Horo::Cinematic {
         const SequenceFrameScratch scratch{std::span<SequenceSampledValue>{}, occurrences, std::span<SequenceFrameCameraCutRequest>{}};
         const std::array events{SequenceFrameEventKey{TrackId{1, 1}, KeyframeId{1, 1}, 2, true}};
         std::size_t delivered{};
-        const SequenceFrameHooks hooks{&delivered, CountEvent, nullptr, nullptr};
+        const SequenceFrameHooks hooks{BorrowedCallbackContext{&delivered}, CountEvent, nullptr, nullptr};
         constexpr std::uint32_t cycles = 512;
         for (std::uint32_t generation = 1; generation <= cycles; ++generation) {
             const auto handle = Handle(200, generation);
