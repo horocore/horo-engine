@@ -2099,6 +2099,13 @@ migration. Future save adapters consume this value model rather than introducing
 AI state storage. The Scene borrow remains alive until commit/rollback, and all capture,
 prepare and commit operations run on the simulation owner thread.
 
+Restore preparation is const: it stages detached state without publishing changes to the
+AI owner. Calls through `AiSceneRuntime` remain source-compatible; explicit member-function
+pointer declarations for preparation must include the const qualifier. Restore candidates
+remain runtime-created only: an inaccessible construction token permits RAII allocation
+without exposing a consumer path to forge partial transactions. Integrations obtain them
+from `PrepareRestoreAtSafePoint`, never by direct construction.
+
 ### Perception Save And Restore
 
 The AI subsystem's ADR-114 canonical adapter contributes its versioned perception

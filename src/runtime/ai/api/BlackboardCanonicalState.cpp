@@ -37,7 +37,7 @@ namespace Horo::AI {
             BlackboardCanonicalState state{.schema = schema_->Identity(), .schemaVersion = schema_->Version()};
             state.entries.reserve(values_.size());
             for (std::size_t index = 0; index < values_.size(); ++index)
-                state.entries.push_back({schema_->Keys()[index].key, values_[index]});
+                state.entries.emplace_back(schema_->Keys()[index].key, values_[index]);
             return Result<BlackboardCanonicalState>::Success(std::move(state));
         } catch (const std::bad_alloc &) {
             return Result<BlackboardCanonicalState>::Failure(MakeError(AIErrors::BlackboardStorageUnavailable));

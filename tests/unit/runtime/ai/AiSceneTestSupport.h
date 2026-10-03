@@ -21,7 +21,7 @@ namespace Horo::AI::TestSupport {
 
     [[nodiscard]] inline std::shared_ptr<const BlackboardSchema> MakeSchema(const std::uint64_t identity, const std::uint32_t version = 1,
                                                                             const BlackboardValueKind kind = BlackboardValueKind::Boolean,
-                                                                            const BlackboardValue defaultValue = BlackboardScalarValue{
+                                                                            const BlackboardValue &defaultValue = BlackboardScalarValue{
                                                                                 false}) {
         const BlackboardKeyDescriptor key{.key = MakeIdentity<BlackboardKeyId>(identity + 1),
                                           .kind = kind,
@@ -102,7 +102,7 @@ namespace Horo::AI::TestSupport {
                 .agent = {.owner = owner, .agent = agent, .controller = controller}};
     }
 
-    [[nodiscard]] inline std::unique_ptr<AiSceneActivationCandidate> Publish(AiSceneRuntime &runtime, ActivationFixture &fixture) {
+    [[nodiscard]] inline std::unique_ptr<AiSceneActivationCandidate> Publish(AiSceneRuntime &runtime, const ActivationFixture &fixture) {
         auto prepared = runtime.PrepareScene(fixture.binding, std::array{fixture.agent}, std::array{fixture.descriptor});
         REQUIRE(prepared.HasValue());
         auto candidate = std::move(prepared).Value();
@@ -158,7 +158,7 @@ namespace Horo::AI::TestSupport {
 
         [[nodiscard]] std::unique_ptr<AiSceneRestoreCandidate> Stage(const AiCanonicalState &state,
                                                                      const std::span<const BlackboardSchemaMigration> migrations = {},
-                                                                     const CancellationToken cancellation = {}) {
+                                                                     const CancellationToken cancellation = {}) const {
             auto candidate = runtime.PrepareRestoreAtSafePoint(scene->View(), fixtures.front().binding, state, migrations, cancellation);
             REQUIRE(candidate.HasValue());
             return std::move(candidate).Value();

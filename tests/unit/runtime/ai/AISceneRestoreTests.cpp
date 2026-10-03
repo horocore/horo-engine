@@ -1,6 +1,11 @@
 #include "AiSceneTestSupport.h"
 
+#include <type_traits>
+
 namespace Horo::AI {
+    static_assert(!std::is_default_constructible_v<AiSceneRestoreCandidate::ConstructionKey>);
+    static_assert(!std::is_default_constructible_v<AiSceneRestoreCandidate>);
+
     namespace {
         using TestSupport::ExpectError;
         using TestSupport::MakeFixture;
@@ -8,6 +13,12 @@ namespace Horo::AI {
         using TestSupport::MakeSchema;
         using TestSupport::Publish;
         using TestSupport::RestoreHarness;
+
+        /** @brief Commits ownership once outside assertion macro expansion, then checks the retained result. */
+        void RequireCommit(AiSceneRuntime &runtime, std::unique_ptr<AiSceneRestoreCandidate> candidate) {
+            const auto committed = runtime.CommitRestoreAtSafePoint(std::move(candidate));
+            REQUIRE(committed.HasValue());
+        }
 
         /** @brief Mutates detached input in one malformed-state scenario; never touches the live harness. */
         void BreakCanonicalPopulation(AiCanonicalState &broken) {
@@ -52,22 +63,22 @@ namespace Horo::AI {
                                      std::unique_ptr<AiSceneRestoreCandidate> &staged) {
             SECTION("task mutation expires staging") {
                 harness.StartTask();
-                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::move(staged)), AIErrors::CanonicalRestoreStale);
+                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::exchange(staged, {})), AIErrors::CanonicalRestoreStale);
                 CHECK(harness.runtime.Find(harness.handle).Value().hasRunningTask);
             }
             SECTION("disable expires staging") {
                 REQUIRE(harness.runtime.DisableAtSafePoint(harness.handle).HasValue());
-                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::move(staged)), AIErrors::CanonicalRestoreStale);
+                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::exchange(staged, {})), AIErrors::CanonicalRestoreStale);
                 CHECK(harness.runtime.Find(harness.handle).Value().state == AiAgentActivationState::Disabled);
             }
             SECTION("retirement expires staging") {
                 REQUIRE(harness.runtime.RetireOwnerAtSafePoint(harness.fixtures.front().owner).Value() == 1);
-                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::move(staged)), AIErrors::CanonicalRestoreStale);
+                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::exchange(staged, {})), AIErrors::CanonicalRestoreStale);
             }
             SECTION("another restore expires the old instance schema fence") {
                 auto winner = harness.Stage(original);
-                REQUIRE(harness.runtime.CommitRestoreAtSafePoint(std::move(winner)).HasValue());
-                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::move(staged)), AIErrors::CanonicalRestoreStale);
+                RequireCommit(harness.runtime, std::move(winner));
+                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::exchange(staged, {})), AIErrors::CanonicalRestoreStale);
             }
         }
 
@@ -81,7 +92,7 @@ namespace Horo::AI {
             auto candidate = harness.Stage(changed);
             CHECK(harness.Capture() == original);
             REQUIRE(harness.runtime.Find(harness.handle).Value().hasRunningTask);
-            REQUIRE(harness.runtime.CommitRestoreAtSafePoint(std::move(candidate)).HasValue());
+            RequireCommit(harness.runtime, std::move(candidate));
             CHECK(harness.Capture() == changed);
             CHECK_FALSE(harness.runtime.Find(harness.handle).Value().hasRunningTask);
             CHECK(harness.scene->View().Get(harness.fixtures.front().owner).Value().components->aiAgent ==
@@ -127,7 +138,7 @@ namespace Horo::AI {
                                                       .destinationVersion = 2};
             SECTION("compatible migration publishes source values") {
                 auto candidate = harness.Stage(source, std::array{migration});
-                REQUIRE(harness.runtime.CommitRestoreAtSafePoint(std::move(candidate)).HasValue());
+                RequireCommit(harness.runtime, std::move(candidate));
                 RestoreHarness::Blackboard(source).schemaVersion = 2;
                 CHECK(harness.Capture() == source);
             }
@@ -173,7 +184,7 @@ namespace Horo::AI {
             SECTION("cancel after preparation") {
                 auto staged = harness.Stage(original, {}, cancellation.Token());
                 cancellation.RequestCancellation();
-                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::move(staged)), AIErrors::CanonicalRestoreCancelled);
+                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::exchange(staged, {})), AIErrors::CanonicalRestoreCancelled);
             }
             CHECK(harness.Capture() == original);
             CHECK(harness.runtime.Find(harness.handle).Value().hasRunningTask);
@@ -190,25 +201,25 @@ namespace Horo::AI {
                 commands.Destroy(harness.fixtures.back().owner);
                 REQUIRE(harness.scene->Commit(commands).HasValue());
                 CHECK_FALSE(borrowed.IsCurrent());
-                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::move(staged)), AIErrors::CanonicalRestoreStale);
+                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::exchange(staged, {})), AIErrors::CanonicalRestoreStale);
                 ExpectError(harness.runtime.CaptureCanonicalState(harness.scene->View()), AIErrors::CanonicalRestoreStale);
             }
             SECTION("scene publication replacement expires staging") {
                 auto replacement = MakeFixture(1, 11, 7, 0, 2);
                 auto replaced = Publish(harness.runtime, replacement);
                 REQUIRE(replaced != nullptr);
-                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::move(staged)), AIErrors::CanonicalRestoreStale);
+                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::exchange(staged, {})), AIErrors::CanonicalRestoreStale);
             }
             SECTION("shutdown closes restore admission") {
                 harness.runtime.BeginShutdown();
-                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::move(staged)), AIErrors::RuntimeUnavailable);
+                ExpectError(harness.runtime.CommitRestoreAtSafePoint(std::exchange(staged, {})), AIErrors::RuntimeUnavailable);
                 ExpectError(harness.runtime.CaptureCanonicalState(harness.scene->View()), AIErrors::RuntimeUnavailable);
                 ExpectError(harness.runtime.PrepareRestoreAtSafePoint(harness.scene->View(), harness.fixtures.front().binding, original),
                             AIErrors::RuntimeUnavailable);
             }
             SECTION("another runtime cannot consume this candidate") {
                 RestoreHarness other;
-                ExpectError(other.runtime.CommitRestoreAtSafePoint(std::move(staged)), AIErrors::CanonicalStateInvalid);
+                ExpectError(other.runtime.CommitRestoreAtSafePoint(std::exchange(staged, {})), AIErrors::CanonicalStateInvalid);
                 CHECK(other.Capture() == original);
             }
             SECTION("wrong destination binding") {
@@ -230,11 +241,11 @@ namespace Horo::AI {
             disabled.agents.front().state = AiCanonicalAgentState::Disabled;
             disabled.agents.front().controller->blackboard.reset();
             auto candidate = harness.Stage(disabled);
-            REQUIRE(harness.runtime.CommitRestoreAtSafePoint(std::move(candidate)).HasValue());
+            RequireCommit(harness.runtime, std::move(candidate));
             CHECK(harness.Capture() == disabled);
             ExpectError(harness.runtime.StartTaskAtSafePoint(harness.handle, MakeIdentity<TaskId>(42)), AIErrors::HandleInvalid);
             auto restored = harness.Stage(active);
-            REQUIRE(harness.runtime.CommitRestoreAtSafePoint(std::move(restored)).HasValue());
+            RequireCommit(harness.runtime, std::move(restored));
             CHECK(harness.Capture() == active);
             harness.StartTask();
         }

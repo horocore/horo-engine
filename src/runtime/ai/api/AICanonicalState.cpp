@@ -57,7 +57,7 @@ namespace Horo::AI {
             BlackboardCanonicalState candidate{.schema = destination.Identity(), .schemaVersion = destination.Version()};
             candidate.entries.reserve(destination.Keys().size());
             for (const auto &key : destination.Keys())
-                candidate.entries.push_back({key.key, key.defaultValue});
+                candidate.entries.emplace_back(key.key, key.defaultValue);
             std::array<bool, MaximumBlackboardKeys> assigned{};
             for (const auto &entry : state.entries) {
                 const auto mapping = std::ranges::find(migration.keys, entry.key, &BlackboardKeyMigration::source);

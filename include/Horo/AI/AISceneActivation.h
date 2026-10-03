@@ -18,6 +18,8 @@
 #include <vector>
 
 namespace Horo::AI {
+    class AiSceneRuntime;
+
     inline constexpr std::size_t MaximumAiSceneAgents = 65'536;
 
     /** @brief Exact AI and RuntimeScene incarnation used by one detached activation candidate. */
@@ -97,18 +99,27 @@ namespace Horo::AI {
         struct AiSceneRestoreState;
     }  // namespace Detail
 
-    class AiSceneRuntime;
-
     /** @brief Detached complete restore transaction; destruction rolls back without touching live or authored state. */
     class AiSceneRestoreCandidate final {
     public:
+        /** @brief Runtime-only construction token; consumers cannot manufacture a candidate. */
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class AiSceneRuntime;
+        };
+
+        /**
+         * @brief Takes ownership of runtime-validated detached restore state.
+         * @param key Unforgeable token issued only by the runtime preparation boundary.
+         * @param state Complete detached restore state owned until commit or rollback.
+         */
+        AiSceneRestoreCandidate(const ConstructionKey &key, std::unique_ptr<Detail::AiSceneRestoreState> state) noexcept;
         ~AiSceneRestoreCandidate();
         AiSceneRestoreCandidate(const AiSceneRestoreCandidate &) = delete;
         AiSceneRestoreCandidate &operator=(const AiSceneRestoreCandidate &) = delete;
 
     private:
         friend class AiSceneRuntime;
-        explicit AiSceneRestoreCandidate(std::unique_ptr<Detail::AiSceneRestoreState> state) noexcept;
         std::unique_ptr<Detail::AiSceneRestoreState> state_;
     };
 
@@ -216,7 +227,7 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<std::unique_ptr<AiSceneRestoreCandidate>> PrepareRestoreAtSafePoint(
             Runtime::RuntimeSceneView scene, AiSceneActivationBinding expectedBinding, const AiCanonicalState &state,
-            std::span<const BlackboardSchemaMigration> migrations = {}, CancellationToken cancellation = {});
+            std::span<const BlackboardSchemaMigration> migrations = {}, CancellationToken cancellation = {}) const;
         /**
          * @brief Revalidates all destination fences then atomically restores canonical state and retires transient work.
          * @param candidate Transaction prepared by this runtime; consumed on success or failure.

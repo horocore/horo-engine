@@ -45,8 +45,8 @@ namespace Horo::AI {
             const auto entity = scene.Get(record.owner);
             if (entity.HasError())
                 return Result<void>::Failure(WrapError(AIErrors::CanonicalRestoreStale, entity.ErrorValue()));
-            const auto *components = entity.Value().components;
-            if (components == nullptr || components->aiAgent != record.agent || components->aiController != record.controller)
+            if (const auto *components = entity.Value().components;
+                components == nullptr || components->aiAgent != record.agent || components->aiController != record.controller)
                 return Result<void>::Failure(MakeError(AIErrors::CanonicalRestoreStale));
             return Result<void>::Success();
         }
@@ -57,10 +57,33 @@ namespace Horo::AI {
             if (reference == nullptr)
                 return Result<void>::Success();
             const Runtime::EntityRef entity{Runtime::SceneRuntimeId{reference->sceneIncarnation}, {reference->slot, reference->generation}};
-            const auto current = scene.Get(entity);
-            if (current.HasError())
+            if (const auto current = scene.Get(entity); current.HasError())
                 return Result<void>::Failure(WrapError(AIErrors::CanonicalRestoreStale, current.ErrorValue()));
             return Result<void>::Success();
+        }
+
+        /** @brief Validates bounded collection members without touching opaque payloads. */
+        [[nodiscard]] Result<void> ValidateEntityCollection(const Runtime::RuntimeSceneView scene,
+                                                            const BlackboardCollectionValue &collection) {
+            if (collection.count > MaximumBlackboardCollectionElements)
+                return Result<void>::Failure(MakeError(AIErrors::CanonicalStateInvalid));
+            for (std::size_t index = 0; index < collection.count; ++index) {
+                if (const auto valid = ValidateEntityScalar(scene, collection.elements[index]); valid.HasError())
+                    return valid;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks the closed value alternatives with type-directed entity validation. */
+        [[nodiscard]] Result<void> ValidateEntityValue(const Runtime::RuntimeSceneView scene, const BlackboardValue &value) {
+            return std::visit([scene]<typename Stored>(const Stored &stored) -> Result<void> {
+                if constexpr (std::is_same_v<Stored, BlackboardScalarValue>)
+                    return ValidateEntityScalar(scene, stored);
+                else if constexpr (std::is_same_v<Stored, BlackboardCollectionValue>)
+                    return ValidateEntityCollection(scene, stored);
+                else
+                    return Result<void>::Success();
+            }, value);
         }
 
         /** @brief Checks all entity-valued entries, including bounded collection members. */
@@ -68,17 +91,8 @@ namespace Horo::AI {
             for (const auto &entry : state.entries) {
                 if (!entry.value)
                     continue;
-                if (const auto *scalar = std::get_if<BlackboardScalarValue>(&*entry.value)) {
-                    if (const auto valid = ValidateEntityScalar(scene, *scalar); valid.HasError())
-                        return valid;
-                } else if (const auto *collection = std::get_if<BlackboardCollectionValue>(&*entry.value)) {
-                    if (collection->count > MaximumBlackboardCollectionElements)
-                        return Result<void>::Failure(MakeError(AIErrors::CanonicalStateInvalid));
-                    for (std::size_t index = 0; index < collection->count; ++index) {
-                        if (const auto valid = ValidateEntityScalar(scene, collection->elements[index]); valid.HasError())
-                            return valid;
-                    }
-                }
+                if (const auto valid = ValidateEntityValue(scene, *entry.value); valid.HasError())
+                    return valid;
             }
             return Result<void>::Success();
         }
@@ -111,8 +125,8 @@ namespace Horo::AI {
             if (source.controller && source.controller->authored != *destination.record.controller)
                 return Result<void>::Failure(MakeError(AIErrors::CanonicalSchemaUnsupported));
             const bool active = source.state == AiCanonicalAgentState::Active;
-            const bool hasBlackboard = source.controller && source.controller->blackboard.has_value();
-            if (active != hasBlackboard || (active && (!source.authored.enabled || !source.controller->authored.enabled)))
+            if (const bool hasBlackboard = source.controller && source.controller->blackboard.has_value();
+                active != hasBlackboard || (active && (!source.authored.enabled || !source.controller->authored.enabled)))
                 return Result<void>::Failure(MakeError(AIErrors::CanonicalStateInvalid));
             return Result<void>::Success();
         }
@@ -159,10 +173,11 @@ namespace Horo::AI {
                                                       const std::size_t maximumAgents) {
             if (state.version != CurrentAiCanonicalStateVersion)
                 return Result<void>::Failure(MakeError(AIErrors::CanonicalSchemaUnsupported));
-            const auto count = static_cast<std::size_t>(std::ranges::count_if(destination.agents, [](const auto &agent) {
+            if (const auto count = static_cast<std::size_t>(std::ranges::count_if(destination.agents,
+                                                                                  [](const auto &agent) {
                 return !agent.retired;
             }));
-            if (state.agents.size() > maximumAgents || state.agents.size() != count)
+                state.agents.size() > maximumAgents || state.agents.size() != count)
                 return Result<void>::Failure(MakeError(AIErrors::CanonicalStateInvalid));
             AgentId previous;
             for (const auto &agent : state.agents) {
@@ -174,7 +189,8 @@ namespace Horo::AI {
         }
     }  // namespace
 
-    AiSceneRestoreCandidate::AiSceneRestoreCandidate(std::unique_ptr<Detail::AiSceneRestoreState> state) noexcept
+    /** @copydoc AiSceneRestoreCandidate::AiSceneRestoreCandidate */
+    AiSceneRestoreCandidate::AiSceneRestoreCandidate(const ConstructionKey &, std::unique_ptr<Detail::AiSceneRestoreState> state) noexcept
         : state_(std::move(state)) {}
 
     AiSceneRestoreCandidate::~AiSceneRestoreCandidate() = default;
@@ -210,7 +226,7 @@ namespace Horo::AI {
     /** @copydoc AiSceneRuntime::PrepareRestoreAtSafePoint */
     Result<std::unique_ptr<AiSceneRestoreCandidate>> AiSceneRuntime::PrepareRestoreAtSafePoint(
         const Runtime::RuntimeSceneView scene, const AiSceneActivationBinding expectedBinding, const AiCanonicalState &state,
-        const std::span<const BlackboardSchemaMigration> migrations, CancellationToken cancellation) {
+        const std::span<const BlackboardSchemaMigration> migrations, CancellationToken cancellation) const {
         using RestoreResult = Result<std::unique_ptr<AiSceneRestoreCandidate>>;
         if (shutdown_ || !active_)
             return RestoreResult::Failure(MakeError(AIErrors::RuntimeUnavailable));
@@ -250,8 +266,9 @@ namespace Horo::AI {
                     return RestoreResult::Failure(agent.ErrorValue());
                 staged->agents.push_back(std::move(agent).Value());
             }
-            // Private construction keeps forged/partial restore candidates outside the public API.
-            return RestoreResult::Success(std::unique_ptr<AiSceneRestoreCandidate>{new AiSceneRestoreCandidate{std::move(staged)}});
+            // The runtime-only token keeps forged/partial restore candidates outside the public API.
+            const AiSceneRestoreCandidate::ConstructionKey key;
+            return RestoreResult::Success(std::make_unique<AiSceneRestoreCandidate>(key, std::move(staged)));
         } catch (const std::bad_alloc &) {
             return RestoreResult::Failure(MakeError(AIErrors::BlackboardStorageUnavailable));
         }
