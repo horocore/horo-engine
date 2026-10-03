@@ -8,27 +8,15 @@
 #include "Horo/Assets/AssetPayloadCache.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Assets/NavMeshAssetType.h"
-#include "Horo/Navigation/NavMeshCodec.h"
+#include "Horo/Navigation/NavigationTileDescriptor.h"
 
 namespace Horo::Navigation {
-    /** @brief Exact dependency identity/type and digest of its complete verified cooked envelope. */
-    struct NavMeshAssetDependency final {
-        Assets::AssetDependency asset;
-        Sha256Digest cookedContentDigest;
-    };
-
-    /** @brief One generated surface/profile partition inside the definition's single canonical AssetId. */
-    struct NavMeshAssetPartitionInput final {
-        SurfaceId surface;
-        std::uint64_t surfaceGeneration{};
-        NavMeshArtifactView artifact;
-    };
-
-    /** @brief Immutable decoded preparation input; provider construction must copy every borrowed row it retains. */
+    /** @brief Immutable complete surface/profile tile closure, including encoded empty tiles. */
     struct LoadedNavMeshPartition final {
         SurfaceId surface;
-        std::uint64_t surfaceGeneration{};
-        NavMeshData data;
+        NavigationAgentProfileId profile;
+        NavigationCookedTileDescriptor descriptor;
+        std::vector<std::shared_ptr<const NavigationCookedTile>> tiles;
     };
 
     /** @brief Exact canonical provenance and temporary decoded preparation storage with shared tile byte pins. */
@@ -49,36 +37,24 @@ namespace Horo::Navigation {
         Sha256Digest cookedContentDigest;
         Sha256Digest sourceDigest;
         Sha256Digest cacheKeyDigest;
-        std::vector<NavMeshAssetDependency> dependencies;
         std::vector<LoadedNavMeshPartition> partitions;
         std::vector<Assets::AssetPayloadLease> tileBytes;
     };
 
-    /** @brief Bounds for the definition bundle in addition to existing per-partition NavMeshData limits. */
+    /** @brief Bounds for the definition tile closure in addition to canonical tile decoder limits. */
     struct NavMeshAssetLimits final {
         std::size_t maximumPartitions{64};
-        std::size_t maximumDependencies{1024};
         Assets::AssetCookLimits cook;
-        NavMeshArtifactLimits mesh;
+        std::size_t maximumDecodedBytes{64U * 1024U * 1024U};
     };
 
-    /** @brief Encode canonical sorted partitions and exact dependency evidence for the AssetCook payload.
-     * @param partitions Surface/profile partitions, with no generated AssetIds.
-     * @param dependencies Unique sorted canonical asset requirements with exact cooked content evidence.
-     * @param limits Positive qualified limits.
-     * @return Bounded producer wire bytes or typed invalid/capacity error.
-     * @note The future baker uses this encoder inside the host-owned AssetCook envelope; CacheKeyV1 is unchanged. */
-    [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeNavMeshAssetPayload(std::span<const NavMeshAssetPartitionInput> partitions,
-                                                                              std::span<const NavMeshAssetDependency> dependencies,
-                                                                              const NavMeshAssetLimits &limits = {});
-
-    /** @brief Verify canonical record/envelope identity and all tables before admitting immutable tile allocations.
+    /** @brief Verify canonical record/envelope identity and complete canonical closure before admitting immutable tile allocations.
      * @param metadata Canonical identity/type resolved from the captured registry or prepared Scene dependency.
      * @param registryRevision Registry revision that resolved the record.
      * @param encoded Exact provider bytes containing the AssetCook envelope.
      * @param target Host-selected cook target; mismatches never fall back to another target.
      * @param cache AssetPipeline allocation owner, mutated only on its owner thread.
-     * @param limits Qualified envelope/bundle/table ceilings.
+     * @param limits Qualified envelope/canonical tile closure ceilings.
      * @return Fully prepared value or original envelope/typed navigation error; no world is published.
      * @note A failed capacity admission may warm the byte cache; it cannot mutate a navigation world. */
     [[nodiscard]] Result<LoadedNavMeshAsset> LoadNavMeshAsset(const Assets::AssetDependency &metadata,

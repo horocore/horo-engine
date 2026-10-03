@@ -1,7 +1,6 @@
 #include "Horo/Assets/AssetPayloadCache.h"
 #include "Horo/Assets/NavMeshAssetType.h"
 #include "Horo/Navigation/NavMeshAssetLoading.h"
-#include "Horo/Navigation/NavMeshCodec.h"
 #include "Horo/Navigation/NavigationAssetSceneActivation.h"
 
 #include <type_traits>
