@@ -55,8 +55,8 @@ namespace Horo::Application::DiagnosticsTestSupport {
 
     /** @brief Starts one explicitly composed dispatcher and drains it before releasing sink owners. */
     struct TelemetryOwner {
-        explicit TelemetryOwner(const std::shared_ptr<NavigationBakeDiagnostics> &journal) {
-            REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = 512}, std::shared_ptr<Telemetry::ISink>{journal}));
+        explicit TelemetryOwner(const std::shared_ptr<Telemetry::ISink> &sink) {
+            REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = 512}, sink));
         }
 
         TelemetryOwner(const TelemetryOwner &) = delete;

@@ -16,6 +16,7 @@ namespace Horo::Audio {
         std::uint32_t rampFrames{64};        /**< Positive bounded output-frame ramp, at most 16384. */
         std::uint64_t maximumStorageBytes{}; /**< Copied PCM plus owner/scratch storage, excluding the resampler reservation. */
         std::uint64_t maximumCoefficientBytes{};
+        float gain{1.0F}; /**< Finite non-negative linear gain, applied to PCM before discontinuity ramps. */
     };
 
     /** @brief Fixed callback evidence; errors reference static descriptors, never allocated diagnostics. */
@@ -64,10 +65,18 @@ namespace Horo::Audio {
          * @param request Exact handle and typed control; Start requires Ready, Pause Playing, Resume Paused.
          * Seek/loop/rate require Ready, Playing or Paused. Stop accepts Ready, Playing or Paused and
          * overrides an in-flight discontinuity. Cancel accepts any nonterminal voice. Other overlapping
-         * controls fail until the ramp completes. Terminal voices never restart.
+         * controls fail until the ramp completes. Restart retains the admitted PCM/pitch/gain, resets
+         * to source frame zero and resumes a paused voice; terminal voices never restart.
          * @return Null on success or a static stable descriptor; failure changes neither cursor nor DSP/lifecycle.
          */
         [[nodiscard]] const ErrorCodeDescriptor *Apply(const AudioVoiceControlRequest &request) noexcept;
+        /**
+         * @brief Check restart admission without altering cursor, DSP or lifecycle.
+         * @param voice Exact retained live voice generation.
+         * @return Null for Ready/Playing/Paused without an overlapping ramp, or a static error.
+         * @note The exclusive owner must serialize this check with later command reservation/application.
+         */
+        [[nodiscard]] const ErrorCodeDescriptor *CheckRestart(AudioVoiceHandle voice) const noexcept;
         /**
          * @brief Exchange a prepared pitch converter at a command boundary without reclaiming either bank.
          * @param voice Exact admitted handle.
