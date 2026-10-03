@@ -1,4 +1,5 @@
 #include "Horo/Assets/AssetCookTransaction.h"
+#include "navigation/NavigationBakeDiagnosticsFixture.h"
 #include "navigation/NavigationPublicationFixture.h"
 #include "navigation/NavigationPublicationProcess.h"
 

@@ -90,8 +90,8 @@ namespace Horo::Application {
     /** @copydoc NavigationBakeService::Create */
     Result<std::unique_ptr<NavigationBakeService>> NavigationBakeService::Create(NavigationBakeServiceConfig config,
                                                                                  OperationStore &operations, JobSystem &jobs) {
-        if (jobs.WorkerCount() < 2 || !ValidHostConfig(config) || !ValidStorageConfig(config) || !ValidCapacityConfig(config) || !config.tileLimits.IsValid() ||
-            (config.diagnostics && !config.diagnostics->Owns(config.definition)))
+        if (jobs.WorkerCount() < 2 || !ValidHostConfig(config) || !ValidStorageConfig(config) || !ValidCapacityConfig(config) ||
+            !config.tileLimits.IsValid() || (config.diagnostics && !config.diagnostics->Owns(config.definition)))
             return Result<std::unique_ptr<NavigationBakeService>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         std::error_code error;
         if (const auto canonical = std::filesystem::weakly_canonical(config.targetRoot, error);

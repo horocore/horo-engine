@@ -177,3 +177,11 @@ replace the existing NavMeshData schema or claim native Detour tile-pack loading
 Regression queries weld shared planar portal vertices from actual cooked
 neutral output and pass that topology through the production Detour query API.
 Editor/CLI command adapters and native tile streaming remain their own tickets.
+
+The current-main integration retains `Detail::CookOperationScope` as the single
+private cook lifecycle owner. It carries the irreversible commit receipt and
+contains optional history failures while keeping source-scoped collision cook
+findings and cancellation classification. Collision cook test hosts provide the
+same native filesystem and operation-ID entropy as other full-cook hosts. Windows
+symbol-deployment regressions follow the shared `stage_windows_symbols.ps1` step
+and the Debug CTest preset rather than the retired audio-only workflow job.

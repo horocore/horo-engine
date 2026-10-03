@@ -96,10 +96,10 @@ namespace Horo::Navigation {
         std::vector<NavigationBakeWorkItem> work;
         CancellationToken parentCancellation;
         std::optional<OperationId> queuedOperation; /**< Host-owned queued operation whose cancellation uses parentCancellation. */
-        std::function<void(const NavigationBakeJobSnapshot &)>
-            observe; /**< Optional non-throwing owned checkpoint consumer; invoked outside locks after store updates. */
         std::shared_ptr<NavigationBakePublicationReceipt>
             publicationReceipt; /**< Optional fresh receipt for exactly one final Publication item. */
+        std::function<void(const NavigationBakeJobSnapshot &)>
+            observe; /**< Optional non-throwing owned checkpoint consumer; invoked outside locks after store updates. */
     };
 
     /** @brief Immutable polling projection of one accepted navigation bake. */

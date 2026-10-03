@@ -53,7 +53,7 @@ namespace {
             std::filesystem::create_directories(tmp);
             auto unique = tmp / ("test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
             std::filesystem::create_directories(unique);
-            path = unique;
+            path = std::filesystem::canonical(unique);
         }
 
         ~TempDir() {

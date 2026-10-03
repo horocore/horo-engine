@@ -166,6 +166,11 @@ namespace Horo {
     /** @brief Native Windows/macOS/Linux durable filesystem implementation. */
     class NativeDurableFileSystem final : public DurableFileSystem {
     public:
+        /** @copydoc DurableFileSystem::TryAcquireExclusive
+         * @pre path is absolute, lexically normalized, has a nonempty filename and contains no embedded NUL.
+         * The host authorizes the path and protects its canonical parent from concurrent replacement.
+         * @post Invalid path text is rejected before creating directories or writing lock metadata.
+         */
         [[nodiscard]] Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path,
                                                                     std::string_view ownerMetadata) override;
         /** @brief Holds a shared launch lease until the product process exits; fails while maintenance is active. */

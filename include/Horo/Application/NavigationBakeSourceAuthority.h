@@ -55,7 +55,7 @@ namespace Horo::Application {
          * @return Success, typed contention, or invalid/capacity failure; failure leaves current evidence unchanged.
          */
         [[nodiscard]] Result<void> UpdateCurrent(const Navigation::NavigationBakeInputRevisions &revisions,
-                                                 std::vector<Navigation::NavigationSourceObservation> sources);
+                                                 std::vector<Navigation::NavigationSourceObservation> sources) const;
 
         /** @brief Acquires a nonblocking adoption guard and verifies captured input against current evidence.
          * @param input Immutable candidate capture.

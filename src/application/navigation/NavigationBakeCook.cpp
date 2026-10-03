@@ -309,10 +309,10 @@ namespace Horo::Application::NavigationBakeDetail {
                                                .budget = state->config.budget,
                                                .parentCancellation = attempt->cancellation->Token(),
                                                .queuedOperation = attempt->operation,
+                                               .publicationReceipt = attempt->publicationReceipt,
                                                .observe = [diagnostics = state->config.diagnostics](const auto &snapshot) noexcept {
             ObserveBake(diagnostics, snapshot);
-        },
-                                               .publicationReceipt = attempt->publicationReceipt};
+        }};
         descriptor.work = {{.stage = NavigationBakeJobStage::PartitionGather,
                             .workUnits = gathering,
                             .residentBytes = resident,

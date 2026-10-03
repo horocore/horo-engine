@@ -22,8 +22,8 @@ namespace Horo::Navigation {
             NavigationBakeJobSnapshot snapshot;
             std::shared_ptr<CancellationSource> cancellation;
             OperationStore *operations{};
-            std::function<void(const NavigationBakeJobSnapshot &)> observe;
             std::shared_ptr<NavigationBakePublicationReceipt> publicationReceipt;
+            std::function<void(const NavigationBakeJobSnapshot &)> observe;
 
         private:
             mutable std::mutex mutex_;
@@ -495,8 +495,8 @@ namespace Horo::Navigation {
         state->snapshot.totalWorkUnits = std::max<std::uint64_t>(1, validation.Value().totalWorkUnits);
         state->cancellation = std::move(cancellation);
         state->operations = &operations;
-        state->observe = descriptor.observe;
         state->publicationReceipt = descriptor.publicationReceipt;
+        state->observe = descriptor.observe;
         NavigationBakeJobHandle handle{state};
 
         if (validation.Value().limitingResource.has_value()) {

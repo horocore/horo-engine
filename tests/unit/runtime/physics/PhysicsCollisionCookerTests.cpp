@@ -1,8 +1,10 @@
 #include "Horo/Assets/AssetCookService.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Foundation/Platform.h"
 #include "Horo/Physics/PhysicsCollisionCooker.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "PhysicsTestUtils.h"
+#include "PublicationOperationId.h"
 
 #include <algorithm>
 #include <array>
@@ -108,6 +110,7 @@ namespace {
 
         Project() {
             std::filesystem::create_directories(root / "assets");
+            root = std::filesystem::canonical(root);
             Write(1);
         }
 
@@ -161,6 +164,8 @@ namespace {
                        .registry = registry.Snapshot(),
                        .target = Target,
                        .buildOutputStore = &output};
+            request.publicationFiles = std::make_shared<NativeDurableFileSystem>();
+            request.newPublicationOperationId = Horo::TestSupport::NewPublicationOperationId;
             const auto fresh = service.Cook(request, {});
             REQUIRE(fresh.HasValue());
             REQUIRE(fresh.Value().cookedAssets == 1);

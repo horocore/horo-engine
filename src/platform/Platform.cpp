@@ -31,33 +31,6 @@ namespace Horo {
 #endif
     namespace {
 #if defined(_WIN32)
-        /** @brief Admits only one regular, non-aliased disk file for lock metadata. */
-        [[nodiscard]] bool IsPrivateLockFile(const HANDLE handle) {
-            BY_HANDLE_FILE_INFORMATION info{};
-            return GetFileType(handle) == FILE_TYPE_DISK && GetFileInformationByHandle(handle, &info) &&
-                   (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) == 0U && info.nNumberOfLinks == 1U;
-        }
-
-        /** @brief Validates the opened lock handle before replacing and flushing diagnostic owner text. */
-        [[nodiscard]] bool WriteLockOwner(const HANDLE handle, const std::string_view ownerMetadata) {
-            if (!IsPrivateLockFile(handle))
-                return false;
-            LARGE_INTEGER zero{};
-            if (!SetFilePointerEx(handle, zero, nullptr, FILE_BEGIN) || !SetEndOfFile(handle))
-                return false;
-            std::size_t offset = 0U;
-            while (offset < ownerMetadata.size()) {
-                const auto count = static_cast<DWORD>((std::min)(ownerMetadata.size() - offset, static_cast<std::size_t>(MAXDWORD)));
-                DWORD written{};
-                if (!WriteFile(handle, ownerMetadata.data() + offset, count, &written, nullptr) || written == 0U)
-                    return false;
-                offset += written;
-            }
-            if (!FlushFileBuffers(handle))
-                return false;
-            return true;
-        }
-
         /** @brief Appends only through a private Windows regular-file handle at the exact offset. */
         [[nodiscard]] bool AppendPrivateBytes(const std::filesystem::path &path, const std::uint64_t expectedOffset,
                                               const std::span<const std::byte> bytes) {
@@ -89,20 +62,6 @@ namespace Horo {
             return ok;
         }
 #else
-        [[nodiscard]] bool FlushFileDescriptor(const int descriptor) {
-#if defined(__APPLE__) && defined(F_FULLFSYNC)
-            if (fcntl(descriptor, F_FULLFSYNC) == 0)
-                return true;
-#endif
-            return fsync(descriptor) == 0;
-        }
-
-        /** @brief Admits only one regular, non-aliased file for lock metadata. */
-        [[nodiscard]] bool IsPrivateLockFile(const int descriptor) {
-            struct stat info{};
-            return fstat(descriptor, &info) == 0 && S_ISREG(info.st_mode) && info.st_nlink == 1U;
-        }
-
         /** @brief Appends only through a private POSIX regular-file descriptor at the exact offset. */
         [[nodiscard]] bool AppendPrivateBytes(const std::filesystem::path &path, const std::uint64_t expectedOffset,
                                               const std::span<const std::byte> bytes) {

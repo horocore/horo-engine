@@ -57,7 +57,7 @@ namespace Horo::Application {
 
     /** @copydoc NavigationBakeSourceAuthority::UpdateCurrent */
     Result<void> NavigationBakeSourceAuthority::UpdateCurrent(const Navigation::NavigationBakeInputRevisions &revisions,
-                                                              std::vector<Navigation::NavigationSourceObservation> sources) {
+                                                              std::vector<Navigation::NavigationSourceObservation> sources) const {
         using namespace Navigation;
         if (!ValidRevisions(revisions))
             return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));

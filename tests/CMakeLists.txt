@@ -1889,6 +1889,7 @@ target_compile_features(HoroFoundationJobSystemTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationJobSystemTests PRIVATE HoroEngine::Foundation)
 add_executable(HoroPlatformTests
         unit/foundation/PlatformTests.cpp
+        unit/foundation/PlatformPublicationLockTests.cpp
 )
 
 add_executable(HoroProcessTestChild helpers/platform/ProcessTreeChild.cpp)

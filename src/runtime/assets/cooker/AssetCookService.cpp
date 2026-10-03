@@ -5,7 +5,7 @@
 #include "Horo/Assets/AssetCookService.h"
 
 #include "../AssetErrors.h"
-#include "AssetCookOperation.h"
+#include "AssetCookOperationScope.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetCookCache.h"
 #include "Horo/Assets/AssetCookOutput.h"
@@ -28,6 +28,7 @@
 
 namespace Horo::Assets {
     namespace {
+        using Detail::CookOperationScope;
 
         /**
          * @brief Reads source bytes from a project-relative path under sourceRoot.
@@ -72,7 +73,7 @@ namespace Horo::Assets {
         };
 
         /** @brief Adds authoritative source navigation to a typed asset-scoped result. */
-        void PublishAssetResult(const AssetCookRequest &request, const AssetRecord &record, const AssetCookOperation &operation,
+        void PublishAssetResult(const AssetCookRequest &request, const AssetRecord &record, const CookOperationScope &operation,
                                 BuildOutputRecord result) {
             result.timestampUtc = std::chrono::system_clock::now();
             if (result.message.empty())
@@ -86,7 +87,7 @@ namespace Horo::Assets {
         Result<AssetCookGeneration> PublishOwnedGeneration(const AssetCookRequest &request,
                                                            const std::span<const AssetCookManifestEntry> entries,
                                                            const std::span<const std::vector<std::uint8_t>> payloads,
-                                                           const CancellationToken &cancellation, AssetCookOperation &operation,
+                                                           const CancellationToken &cancellation, CookOperationScope &operation,
                                                            std::string successMessage) {
             if (cancellation.IsCancellationRequested())
                 return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::Cancelled));
@@ -118,7 +119,7 @@ namespace Horo::Assets {
 
         /** @brief Publishes the canonical empty manifest through the same transaction as a nonempty full cook. */
         Result<AssetCookReport> HandleEmptyCookSnapshot(const AssetCookRequest &request, const CancellationToken &cancellation,
-                                                        AssetCookOperation &operation) {
+                                                        CookOperationScope &operation) {
             auto generation = PublishOwnedGeneration(request, {}, {}, cancellation, operation, "Cooked 0 assets");
             if (generation.HasError()) {
                 operation.RecordError(generation.ErrorValue());
@@ -229,7 +230,7 @@ namespace Horo::Assets {
         }
 
         /** @brief Publishes failures for callbacks that ran and siblings cancelled before execution. */
-        void PublishCookFailures(const AssetCookRequest &request, std::span<CookSlot> slots, const AssetCookOperation &operation,
+        void PublishCookFailures(const AssetCookRequest &request, std::span<CookSlot> slots, const CookOperationScope &operation,
                                  const bool groupFailed) {
             for (CookSlot &slot : slots) {
                 if (!slot.cacheHit && groupFailed && !slot.cookError.has_value() && slot.cookedArtifact.empty())
@@ -242,7 +243,7 @@ namespace Horo::Assets {
         /** @brief Runs uncached cook slots as a fail-fast group while preserving cancellation causes. */
         Result<void> CookUncachedSlots(JobSystem &jobs, const CookerCatalogSnapshot &catalog, const AssetCookRequest &request,
                                        std::span<CookSlot> slots, const CancellationToken &cancellation,
-                                       const AssetCookOperation &operation) {
+                                       const CookOperationScope &operation) {
             TaskGroup group(jobs, TaskGroupFailurePolicy::FailFast, cancellation);
             std::optional<Error> admissionError;
             for (CookSlot &slot : slots) {
@@ -265,7 +266,7 @@ namespace Horo::Assets {
         Result<AssetCookReport> PublishCookedSlots(const AssetCookRequest &request, const AssetCookCache &cache,
 
                                                    std::vector<CookSlot> &slots, const std::size_t cacheHits,
-                                                   const CancellationToken &cancellation, AssetCookOperation &operation) {
+                                                   const CancellationToken &cancellation, CookOperationScope &operation) {
             if (request.buildOutputStore != nullptr) {
                 for (const auto &slot : slots) {
                     if (!slot.cacheHit) {
@@ -314,7 +315,7 @@ namespace Horo::Assets {
         }
 
         Result<std::vector<CookSlot>> PrepareCookSlots(const AssetCookRequest &request, const CookerCatalogSnapshot &catalog,
-                                                       std::span<const AssetRecord> records, AssetCookOperation &operation) {
+                                                       std::span<const AssetRecord> records, CookOperationScope &operation) {
             std::vector<CookSlot> slots;
             slots.reserve(records.size());
             operation.Update("prepare", "Reading asset sources", 0.1F);
@@ -391,7 +392,7 @@ namespace Horo::Assets {
 
         Result<std::size_t> ResolveCacheHits(const AssetCookRequest &request, const CookerCatalogSnapshot &catalog,
                                              const AssetCookCache &cache, std::span<CookSlot> slots, const CancellationToken &cancellation,
-                                             AssetCookOperation &operation) {
+                                             CookOperationScope &operation) {
             operation.Update("cache_check", "Checking artifact cache", 0.2F);
             std::size_t cacheHits = 0;
             for (auto &slot : slots) {
@@ -424,41 +425,6 @@ namespace Horo::Assets {
                 }
             }
             return Result<std::size_t>::Success(cacheHits);
-        }
-
-        /** @brief Executes captured source/cache work while the caller retains terminal operation ownership. */
-        Result<AssetCookReport> ExecuteCapturedCook(JobSystem &jobs, const CookerCatalogSnapshot &catalog, const AssetCookRequest &request,
-                                                    const std::span<const AssetRecord> records, const CancellationToken &cancellation,
-                                                    CookOperationScope &operation) {
-            AssetCookCache cache(request.cacheRoot, request.limits);
-            auto slotsResult = PrepareCookSlots(request, catalog, records, operation);
-            if (slotsResult.HasError()) {
-                operation.RecordError(slotsResult.ErrorValue());
-                return Result<AssetCookReport>::Failure(slotsResult.ErrorValue());
-            }
-            auto slots = std::move(slotsResult).Value();
-
-            auto cacheHitsResult = ResolveCacheHits(request, catalog, cache, slots, cancellation, operation);
-            if (cacheHitsResult.HasError()) {
-                operation.RecordError(cacheHitsResult.ErrorValue());
-                return Result<AssetCookReport>::Failure(cacheHitsResult.ErrorValue());
-            }
-            const std::size_t cacheHits = cacheHitsResult.Value();
-
-            if (cacheHits < slots.size()) {
-                operation.Update("cook", std::format("Cooking {} assets", slots.size() - cacheHits), 0.4F);
-                if (const auto cooked = CookUncachedSlots(jobs, catalog, request, slots, cancellation, operation); cooked.HasError()) {
-                    const bool cancelled = IsJobCancelled(cooked.ErrorValue());
-                    Error error = cancelled ? WithCause(MakeError(CookErrors::Cancelled), cooked.ErrorValue()) : cooked.ErrorValue();
-                    operation.RecordOutcome(cancelled);
-                    return Result<AssetCookReport>::Failure(std::move(error));
-                }
-            }
-
-            Result<AssetCookReport> published = PublishCookedSlots(request, cache, slots, cacheHits, cancellation, operation);
-            if (published.HasError())
-                operation.RecordError(published.ErrorValue());
-            return published;
         }
 
         /** @brief Allocates the optional build-output identity before admitting an operation row. */
@@ -498,7 +464,7 @@ namespace Horo::Assets {
         [[nodiscard]] Result<AssetCookReport> CookRegistryRecords(JobSystem &jobs, const CookerCatalogSnapshot &catalog,
                                                                   const AssetCookRequest &request,
                                                                   const std::span<const AssetRecord> records,
-                                                                  const CancellationToken &cancellation, AssetCookOperation &operation) {
+                                                                  const CancellationToken &cancellation, CookOperationScope &operation) {
             if (records.empty())
                 return HandleEmptyCookSnapshot(request, cancellation, operation);
             if (records.size() > request.limits.maximumAssets) {
@@ -552,7 +518,7 @@ namespace Horo::Assets {
         auto operationId = BeginCookOperation(request, records.size());
         if (operationId.HasError())
             return Result<AssetCookReport>::Failure(operationId.ErrorValue());
-        AssetCookOperation operation{request.operationStore, request.buildOutputStore, cancellation,
+        CookOperationScope operation{request.operationStore, request.buildOutputStore, cancellation,
                                      outputSession.Value().value_or(BuildOutputSessionId{}), operationId.Value()};
 
         if (request.buildOutputStore != nullptr) {

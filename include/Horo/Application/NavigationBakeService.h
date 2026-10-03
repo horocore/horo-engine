@@ -25,12 +25,12 @@ namespace Horo::Application {
         Assets::AssetCookLimits cookLimits;
         std::size_t maximumTiles{1024};
         std::size_t maximumCandidateBytes{64U * 1024U * 1024U};
-        std::shared_ptr<NavigationBakeDiagnostics>
-            diagnostics; /**< Project-owned retained output/history consumer shared by bake entry points. */
         std::shared_ptr<NavigationBakeSourceAuthority>
             sourceAuthority; /**< Required current-source authority; shared with host mutations. */
         Duration writerWaitTimeout{Duration::FromMilliseconds(30'000)}; /**< Background-only bounded lock contention deadline. */
         std::function<Result<Assets::AssetId>()> newOperationId; /**< Required host-composed operation UUID generator using OS entropy. */
+        std::shared_ptr<NavigationBakeDiagnostics>
+            diagnostics; /**< Project-owned retained output/history consumer shared by bake entry points. */
     };
 
     /** @brief Complete owned capture; each submission replaces the entire definition tile closure. */

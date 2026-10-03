@@ -1,4 +1,5 @@
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "PublicationOperationId.h"
 #include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavigationBakeDiagnosticsFixture.h"
 
@@ -32,7 +33,10 @@ namespace Horo::Application {
         };
 
         [[nodiscard]] NavigationBakeServiceConfig BakeConfig(const Directory &directory, const std::shared_ptr<Builder> &builder,
-                                                             const std::shared_ptr<NavigationBakeDiagnostics> &journal) {
+                                                             const std::shared_ptr<NavigationBakeDiagnostics> &journal,
+                                                             const IncrementalBakeFixture &fixture) {
+            auto authority = std::make_shared<NavigationBakeSourceAuthority>();
+            REQUIRE(authority->UpdateCurrent(fixture.revisions, fixture.Observations()).HasValue());
             return {.definition = Asset(),
                     .artifactType = Assets::AssetTypeId::Parse("core.navmesh").Value(),
                     .target = AssetCookTargetId::Parse("headless-null").Value(),
@@ -46,6 +50,8 @@ namespace Horo::Application {
                                .maximumWorkItems = 8,
                                .maximumWorkUnits = 1024ULL * 1024ULL * 1024ULL,
                                .childDrainTimeout = Duration::FromMilliseconds(2000)},
+                    .sourceAuthority = std::move(authority),
+                    .newOperationId = Horo::TestSupport::NewPublicationOperationId,
                     .diagnostics = journal};
         }
 
@@ -99,10 +105,10 @@ namespace Horo::Application {
         OperationStore operations{8, 16};
         JobSystem jobs{{.workerCount = 2, .maxQueuedJobs = 16}};
         auto builder = std::make_shared<Builder>();
-        auto bake = BakeConfig(directory, builder, journal);
+        IncrementalBakeFixture fixture;
+        auto bake = BakeConfig(directory, builder, journal, fixture);
         bake.tileLimits.maximumVertices = 1;
         auto service = NavigationBakeService::Create(bake, operations, jobs).Value();
-        IncrementalBakeFixture fixture;
         const auto id = service->Submit(Request(fixture)).Value();
         REQUIRE(AwaitTerminal(*service, operations, id).state == OperationState::Failed);
         jobs.Shutdown(ShutdownPolicy::Drain);
@@ -141,7 +147,7 @@ namespace Horo::Application {
             OperationStore operations{8, 16};
             JobSystem jobs{{.workerCount = 2, .maxQueuedJobs = 16}};
             auto builder = std::make_shared<Builder>();
-            auto bake = BakeConfig(directory, builder, journal);
+            auto bake = BakeConfig(directory, builder, journal, fixture);
             bake.tileLimits.maximumVertices = 1;
             auto service = NavigationBakeService::Create(bake, operations, jobs).Value();
             auto panelSnapshot = config.output->SnapshotIfChanged(0);
@@ -185,8 +191,8 @@ namespace Horo::Application {
         JobSystem jobs{{.workerCount = 2, .maxQueuedJobs = 16}};
         auto builder = std::make_shared<Builder>();
         builder->pause.store(true);
-        auto service = NavigationBakeService::Create(BakeConfig(directory, builder, journal), operations, jobs).Value();
         IncrementalBakeFixture fixture;
+        auto service = NavigationBakeService::Create(BakeConfig(directory, builder, journal, fixture), operations, jobs).Value();
         const auto id = service->Submit(Request(fixture)).Value();
         AwaitBuilder(*builder);
         const auto running = journal->Snapshot();
@@ -219,7 +225,8 @@ namespace Horo::Application {
         TelemetryOwner telemetry(journal);
         OperationStore operations{8, 16};
         JobSystem jobs{{.workerCount = 2, .maxQueuedJobs = 16}};
-        auto bake = BakeConfig(directory, std::make_shared<Builder>(), journal);
+        IncrementalBakeFixture fixture;
+        auto bake = BakeConfig(directory, std::make_shared<Builder>(), journal, fixture);
         auto expected = OperationState::Succeeded;
         auto result = BuildOutputResult::Succeeded;
         bool unavailableHistory{};
@@ -239,7 +246,6 @@ namespace Horo::Application {
             result = BuildOutputResult::Failed;
         }
         auto service = NavigationBakeService::Create(bake, operations, jobs).Value();
-        IncrementalBakeFixture fixture;
         const auto id = service->Submit(Request(fixture)).Value();
         REQUIRE(AwaitTerminal(*service, operations, id).state == expected);
         jobs.Shutdown(ShutdownPolicy::Drain);

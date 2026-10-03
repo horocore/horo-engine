@@ -131,13 +131,25 @@ namespace Horo::Application {
         /** @brief Seeds a valid existing generation whose portable filename predates canonical asset-ID naming. */
         void PublishLegacyArtifact(const BakeHarness &harness, const Assets::AssetCookManifestEntry &entry,
                                    const std::vector<std::uint8_t> &artifact) {
-            const auto lock = harness.config.files->TryAcquireExclusive(harness.config.targetRoot / ".cook-writer.lock", "legacy fixture");
+            NativeDurableFileSystem files;
+            const auto lock = files.TryAcquireExclusive(harness.config.targetRoot / ".cook-writer.lock", "legacy fixture");
             REQUIRE(lock.HasValue());
-            const std::array entries{entry};
-            const std::array artifacts{artifact};
-            REQUIRE(Assets::PublishCookGeneration(harness.config.targetRoot, harness.config.target, entries, artifacts,
-                                                  harness.config.cookLimits, {.files = harness.config.files.get()})
-                        .HasValue());
+            const auto manifest = std::format(
+                R"({{"schemaVersion":1,"target":"{}","artifacts":[{{"assetId":"{}","assetType":"{}","artifact":"{}","artifactHash":"{}"}}]}})",
+                harness.config.target.Value(), entry.assetId.ToString(), entry.assetType.Value(), entry.artifactFile,
+                FormatSha256(entry.artifactHash));
+            const auto manifestBytes = std::as_bytes(std::span{manifest.data(), manifest.size()});
+            const auto manifestHex = FormatSha256(ComputeSha256(manifestBytes)).substr(7);
+            const auto generationPath = "generations/" + manifestHex;
+            const auto generationRoot = harness.config.targetRoot / generationPath;
+            REQUIRE(files.WriteDurable(generationRoot / entry.artifactFile, std::as_bytes(std::span{artifact})).HasValue());
+            REQUIRE(files.WriteDurable(generationRoot / "manifest.json", manifestBytes).HasValue());
+            const auto current =
+                std::format(R"({{"schemaVersion":1,"target":"{}","manifestDigest":"{}","generationPath":"{}","artifactCount":"1"}})",
+                            harness.config.target.Value(), manifestHex, generationPath);
+            const auto prepared = harness.config.targetRoot / "legacy-current.json";
+            REQUIRE(files.WriteDurable(prepared, std::as_bytes(std::span{current.data(), current.size()})).HasValue());
+            REQUIRE(files.AtomicReplace(prepared, harness.config.targetRoot / "current.json").HasValue());
         }
 
         [[nodiscard]] OperationRecord Terminal(NavigationBakeService &service, const OperationStore &operations, OperationId id) {
@@ -411,11 +423,9 @@ namespace Horo::Application {
                                                    .assetType = otherType,
                                                    .artifactFile = harness.config.definition.ToString() + ".cooked",
                                                    .artifactHash = ComputeSha256(std::as_bytes(std::span{artifact}))};
-        REQUIRE(
-            Assets::PublishCookArtifactReplacement(harness.config.targetRoot, harness.config.target, other, artifact,
-                                                   harness.config.maximumCandidateBytes, harness.config.cookLimits,
-                                                   {.files = harness.config.files.get(), .newOperationId = harness.config.newOperationId})
-                .HasValue());
+        PublishLegacyArtifact(harness, other, artifact);
+        const auto legacy = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value();
+        REQUIRE(Assets::ReadCookGenerationContents(legacy, harness.config.maximumCandidateBytes).HasValue());
         REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
         harness.fixture.ExcludeBorder();
@@ -442,15 +452,14 @@ namespace Horo::Application {
 
     TEST_CASE("Artifact replacement rejects a noncanonical filename without changing the current authority") {
         BakeHarness harness;
-        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state ==
-                OperationState::Succeeded);
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
         const auto contents = Assets::ReadCookGenerationContents(before->generation, harness.config.maximumCandidateBytes).Value();
         auto entry = contents.entries.front();
         entry.artifactFile = "foreign.cooked";
         CHECK(Assets::PublishCookArtifactReplacement(harness.config.targetRoot, harness.config.target, entry, contents.artifacts.front(),
                                                      harness.config.maximumCandidateBytes, harness.config.cookLimits,
-                                                     {.files = harness.config.files.get()})
+                                                     {.files = harness.config.files.get(), .newOperationId = harness.config.newOperationId})
                   .HasError());
         CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
     }
