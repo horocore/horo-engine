@@ -26,6 +26,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Direct sccache uploads follow the same main-only policy as snapshots.
+env:
+  SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
+
 jobs:
   mcp-session-windows:
     name: MCP Session · Windows / MSVC
@@ -42,7 +46,8 @@ jobs:
         with:
           version: v0.17.0
 
-      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: fetchcontent-mcp-windows-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
@@ -67,3 +72,10 @@ jobs:
           FETCHCONTENT_BASE_DIR: ${{ github.workspace }}/.cmake/fetchcontent
           SCCACHE_GHA_ENABLED: 'true'
           SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
+
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}

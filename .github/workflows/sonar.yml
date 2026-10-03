@@ -29,7 +29,6 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.sonar/ccache
       CCACHE_COMPRESS: 'true'
       CCACHE_MAXSIZE: 2G
-      CACHE_SCOPE: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
       FETCHCONTENT_BASE_DIR: ${{ github.workspace }}/.cmake/fetchcontent
       SONAR_USER_HOME: ${{ github.workspace }}/.sonar/user-home
 
@@ -68,9 +67,8 @@ jobs:
         with:
           path: |
             ${{ github.workspace }}/.sonar/ccache
-          key: sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-${{ env.CACHE_SCOPE }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-${{ env.CACHE_SCOPE }}-
             sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-
             sonar-v1-gcc-${{ runner.os }}-${{ runner.arch }}-refs/heads/main-
 
@@ -133,7 +131,7 @@ jobs:
       # Checkpoint build inputs before coverage and analysis. A later scan timeout
       # must not discard the dependency and compiler work needed by the next run.
       - name: Save FetchContent dependencies
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.deps.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.build.outcome == 'success' && steps.deps.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
@@ -141,7 +139,7 @@ jobs:
           key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Save compiler cache
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.compiler.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.build.outcome == 'success' && steps.compiler.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
@@ -152,6 +150,7 @@ jobs:
         id: coverage
         run: |
           xvfb-run -a ctest --test-dir build/sonar --output-on-failure -LE 'gui|editor'
+          build/sonar/tests/HoroCinematicPropertyIntegrationTests
           xvfb-run -a build/sonar/tests/HoroEditorPresentationTests
           xvfb-run -a build/sonar/tests/HoroEditorUiAutomationTests '~[native]'
           xvfb-run -a build/sonar/tests/HoroSourceFileOpenServiceTests

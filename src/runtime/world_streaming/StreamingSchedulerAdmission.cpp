@@ -151,11 +151,10 @@ namespace Horo::WorldStreaming {
     /** @copydoc StreamingSchedulerAdmissionLedger::Advance */
     Result<StreamingCellOperation> StreamingSchedulerAdmissionLedger::Advance(const StreamingSchedulerReservation &reservation,
                                                                               const StreamingCellOperationTransition transition) {
-        if (!reservation.IsValid())
-            return Failure<StreamingCellOperation>(WorldStreamingErrors::SchedulerAdmissionInvalid);
-        const auto found = FindReservation(entries_, reservation.id);
-        if (reservation.owner != owner_ || found == entries_.end() || found->reservation != reservation)
-            return Failure<StreamingCellOperation>(WorldStreamingErrors::SchedulerReservationStale);
+        const auto index = FindExact(reservation);
+        if (index.HasError())
+            return Result<StreamingCellOperation>::Failure(index.ErrorValue());
+        const auto found = entries_.begin() + static_cast<std::ptrdiff_t>(index.Value());
 
         const auto successor = found->operation.Advance(found->operation.Handle(), transition);
         if (successor.HasError())
@@ -166,11 +165,10 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingSchedulerAdmissionLedger::Release */
     Result<void> StreamingSchedulerAdmissionLedger::Release(const StreamingSchedulerReservation &reservation) {
-        if (!reservation.IsValid())
-            return Result<void>::Failure(MakeError(WorldStreamingErrors::SchedulerAdmissionInvalid));
-        const auto found = FindReservation(entries_, reservation.id);
-        if (reservation.owner != owner_ || found == entries_.end() || found->reservation != reservation)
-            return Result<void>::Failure(MakeError(WorldStreamingErrors::SchedulerReservationStale));
+        const auto index = FindExact(reservation);
+        if (index.HasError())
+            return Result<void>::Failure(index.ErrorValue());
+        const auto found = entries_.begin() + static_cast<std::ptrdiff_t>(index.Value());
         if (!found->operation.IsTerminal())
             return Result<void>::Failure(MakeError(WorldStreamingErrors::SchedulerLifecycleUnavailable));
 
@@ -180,6 +178,23 @@ namespace Horo::WorldStreaming {
         if (state_ == Draining && entries_.empty())
             state_ = Closed;
         return Result<void>::Success();
+    }
+
+    /** @copydoc StreamingSchedulerAdmissionLedger::Inspect */
+    Result<StreamingCellOperation> StreamingSchedulerAdmissionLedger::Inspect(const StreamingSchedulerReservation &reservation) const {
+        const auto index = FindExact(reservation);
+        if (index.HasError())
+            return Result<StreamingCellOperation>::Failure(index.ErrorValue());
+        return Result<StreamingCellOperation>::Success(entries_[index.Value()].operation);
+    }
+
+    Result<std::size_t> StreamingSchedulerAdmissionLedger::FindExact(const StreamingSchedulerReservation &reservation) const {
+        if (!reservation.IsValid())
+            return Failure<std::size_t>(WorldStreamingErrors::SchedulerAdmissionInvalid);
+        const auto found = FindReservation(entries_, reservation.id);
+        if (reservation.owner != owner_ || found == entries_.end() || found->reservation != reservation)
+            return Failure<std::size_t>(WorldStreamingErrors::SchedulerReservationStale);
+        return Result<std::size_t>::Success(static_cast<std::size_t>(found - entries_.begin()));
     }
 
     /** @copydoc StreamingSchedulerAdmissionLedger::BeginShutdown */

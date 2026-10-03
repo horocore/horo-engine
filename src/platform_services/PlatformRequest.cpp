@@ -1,6 +1,7 @@
 #include "Horo/PlatformServices/PlatformRequest.h"
 
 #include "Horo/PlatformServices/PlatformRequestErrors.h"
+#include "PlatformRequestState.h"
 #include "PlatformServicesMetrics.h"
 
 #include <algorithm>
@@ -9,214 +10,37 @@
 #include <deque>
 #include <mutex>
 #include <new>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace Horo::PlatformServices {
-    struct PlatformRequestSubscription::Slot final {
-        friend class PlatformRequestStore;
-
-    private:
-        mutable std::mutex mutex;
-        bool active{true};
-        std::function<void(const PlatformRequestStore::ErasedSnapshot &)> observer;
-        std::function<void()> release;
-
-    public:
-        Slot() = default;
-
-        void Reset() noexcept {
-            std::function<void()> releaseOwner;
-            {
-                std::lock_guard lock(mutex);
-                if (!active)
-                    return;
-                active = false;
-                observer = {};
-                releaseOwner = std::move(release);
-            }
-            if (releaseOwner)
-                releaseOwner();
-        }
-
-        [[nodiscard]] bool IsActive() const noexcept {
-            std::lock_guard lock(mutex);
-            return active;
-        }
-
-        [[nodiscard]] std::function<void(const PlatformRequestStore::ErasedSnapshot &)> Take() noexcept {
-            std::function<void(const PlatformRequestStore::ErasedSnapshot &)> callback;
-            std::function<void()> releaseOwner;
-            {
-                std::lock_guard lock(mutex);
-                if (!active)
-                    return callback;
-                active = false;
-                callback = std::move(observer);
-                releaseOwner = std::move(release);
-            }
-            if (releaseOwner)
-                releaseOwner();
-            return callback;
-        }
-    };
-
-    struct PlatformRequestStore::State final {
-        struct Record final {
-            std::type_index type{typeid(void)};
-            ErasedSnapshot snapshot;
-            std::vector<std::weak_ptr<PlatformRequestSubscription::Slot>> observers;
-        };
-
-        struct Delivery final {
-            std::shared_ptr<PlatformRequestSubscription::Slot> slot;
-            ErasedSnapshot snapshot;
-        };
-
-        explicit State(const PlatformRequestStoreConfig &requested) : config(requested) {}
-
-    private:
-        friend class PlatformRequestStore;
-
-        PlatformRequestStoreConfig config;
-        mutable std::mutex mutex;
-        std::unordered_map<std::uint64_t, Record> records;
-        std::deque<std::uint64_t> terminalOrder;
-        std::deque<Delivery> deliveries;
-        std::uint64_t nextId{1};
-        std::size_t activeCount{};
-        std::size_t observerCount{};
-        std::uint64_t callbackFailures{};
-        bool closed{};
-        std::atomic_flag dispatching = ATOMIC_FLAG_INIT;
-
-        [[nodiscard]] Record *FindRecord(const PlatformRequestId id, const PlatformRequestGeneration generation,
-                                         const std::type_index type) noexcept {
-            auto *record = FindRecord(id, generation);
-            return record != nullptr && record->type == type ? record : nullptr;
-        }
-
-        [[nodiscard]] Record *FindRecord(const PlatformRequestId id, const PlatformRequestGeneration generation) noexcept {
-            if (!id.IsValid() || generation != config.generation)
-                return nullptr;
-            const auto found = records.find(id.value);
-            if (found == records.end())
-                return nullptr;
-            return &found->second;
-        }
-
-        [[nodiscard]] Result<PlatformRequestId> Admit(const std::type_index type, const std::chrono::steady_clock::time_point now) {
-            std::lock_guard lock(mutex);
-            if (config.activeCapacity == 0 || config.terminalCapacity == 0 || config.observerCapacity == 0 || !config.generation.IsValid())
-                return Result<PlatformRequestId>::Failure(MakeError(RequestErrors::InvalidConfiguration));
-            if (closed)
-                return Result<PlatformRequestId>::Failure(MakeError(RequestErrors::FrontendUnavailable));
-            if (activeCount >= config.activeCapacity || nextId == 0)
-                return Result<PlatformRequestId>::Failure(MakeError(RequestErrors::CapacityExceeded));
-
-            const PlatformRequestId id{nextId};
-            Record record{.type = type,
-                          .snapshot = ErasedSnapshot{.id = id,
-                                                     .generation = config.generation,
-                                                     .state = PlatformRequestState::Queued,
-                                                     .timing = PlatformRequestTiming{.admittedAt = now}}};
-            try {
-                records.try_emplace(id.value, std::move(record));
-            } catch (const std::bad_alloc &) {
-                return Result<PlatformRequestId>::Failure(MakeError(RequestErrors::CapacityExceeded));
-            }
-            ++nextId;
-            ++activeCount;
-            return Result<PlatformRequestId>::Success(id);
-        }
-
-        template <typename Operation>
-        [[nodiscard]] Result<PlatformRequestMutation> MutateRecord(const PlatformRequestId id, const PlatformRequestGeneration generation,
-                                                                   const std::type_index type, Operation &&operation) {
-            std::lock_guard lock(mutex);
-            auto *record = FindRecord(id, generation, type);
-            if (record == nullptr)
-                return Result<PlatformRequestMutation>::Failure(MakeError(RequestErrors::Stale));
-            return std::forward<Operation>(operation)(*record);
-        }
-
-        template <typename Operation>
-        [[nodiscard]] Result<PlatformRequestMutation> MutateRecordUntyped(const PlatformRequestId id,
-                                                                          const PlatformRequestGeneration generation,
-                                                                          Operation &&operation) {
-            std::lock_guard lock(mutex);
-            auto *record = FindRecord(id, generation);
-            if (record == nullptr)
-                return Result<PlatformRequestMutation>::Failure(MakeError(RequestErrors::Stale));
-            return std::forward<Operation>(operation)(*record);
-        }
-
-        void QueueObservers(Record &record) {
-            for (const auto &weak : record.observers)
-                if (auto slot = weak.lock())
-                    deliveries.push_back(Delivery{.slot = std::move(slot), .snapshot = record.snapshot});
-            record.observers.clear();
-        }
-
-        void ExpireTerminalRecords() {
-            while (terminalOrder.size() > config.terminalCapacity) {
-                records.erase(terminalOrder.front());
-                terminalOrder.pop_front();
-            }
-        }
-
-        void ReleaseObserver(const PlatformRequestId id, const PlatformRequestSubscription::Slot *slotIdentity) {
-            if (observerCount > 0)
-                --observerCount;
-            if (const auto record = records.find(id.value); record != records.end()) {
-                std::erase_if(record->second.observers, [slotIdentity](const auto &weak) {
-                    const auto candidate = weak.lock();
-                    return !candidate || candidate.get() == slotIdentity;
-                });
-            }
-            std::erase_if(deliveries, [slotIdentity](const auto &delivery) {
-                return delivery.slot.get() == slotIdentity;
-            });
-        }
-    };
-
     namespace {
-        [[nodiscard]] bool CanComplete(const PlatformRequestState from, const PlatformRequestState to) noexcept {
-            constexpr auto StateBit = [](const PlatformRequestState state) {
-                return std::byte{static_cast<std::uint8_t>(1U << static_cast<std::uint8_t>(state))};
-            };
-            constexpr std::array<std::byte, 7> AllowedTerminalStates{
-                StateBit(PlatformRequestState::Failed) | StateBit(PlatformRequestState::TimedOut),
-                StateBit(PlatformRequestState::Succeeded) | StateBit(PlatformRequestState::Failed) |
-                    StateBit(PlatformRequestState::TimedOut),
-                StateBit(PlatformRequestState::Succeeded) | StateBit(PlatformRequestState::Failed) |
-                    StateBit(PlatformRequestState::Cancelled) | StateBit(PlatformRequestState::TimedOut),
-                std::byte{},
-                std::byte{},
-                std::byte{},
-                std::byte{},
-            };
-            return (AllowedTerminalStates[static_cast<std::size_t>(from)] & StateBit(to)) != std::byte{};
+        /** @brief Publishes the bounded terminal-state counter after authoritative state mutation succeeds. */
+        void RecordTerminalMetric(const PlatformRequestState terminalState) {
+            using enum Detail::PlatformRequestMetricOutcome;
+            Detail::PlatformRequestMetricOutcome outcome = Failed;
+            switch (terminalState) {
+                case PlatformRequestState::Succeeded:
+                    outcome = Succeeded;
+                    break;
+                case PlatformRequestState::Cancelled:
+                    outcome = Cancelled;
+                    break;
+                case PlatformRequestState::TimedOut:
+                    outcome = TimedOut;
+                    break;
+                case PlatformRequestState::Failed:
+                    outcome = Failed;
+                    break;
+                case PlatformRequestState::Queued:
+                case PlatformRequestState::Running:
+                case PlatformRequestState::Cancelling:
+                    break;
+            }
+            Detail::RecordPlatformRequestMetric(outcome);
         }
-
-        [[nodiscard]] bool TerminalShapeIsValid(const PlatformRequestState state, const std::shared_ptr<const void> &value,
-                                                const std::optional<Error> &error) noexcept {
-            if (state == PlatformRequestState::Succeeded)
-                return !error.has_value();
-            if (!IsTerminal(state) || value || !error.has_value())
-                return false;
-            const auto &code = error->code.Value();
-            const auto &domain = error->domain.Value();
-            const auto isCancelled = code == RequestErrors::Cancelled.code.Value() && domain == RequestErrors::Cancelled.domain.Value();
-            const auto isTimedOut = code == RequestErrors::TimedOut.code.Value() && domain == RequestErrors::TimedOut.domain.Value();
-            if (state == PlatformRequestState::Cancelled)
-                return isCancelled;
-            if (state == PlatformRequestState::TimedOut)
-                return isTimedOut;
-            return !isCancelled && !isTimedOut;
-        }
-
     }  // namespace
 
     /** @copydoc PlatformRequestSubscription::~PlatformRequestSubscription */
@@ -304,15 +128,7 @@ namespace Horo::PlatformServices {
                                                                               const PlatformRequestGeneration generation,
                                                                               const std::type_index type) {
         auto &state = MutableState();
-        return state.MutateRecord(id, generation, type, [](State::Record &record) {
-            auto &snapshot = record.snapshot;
-            if (IsTerminal(snapshot.state) || snapshot.cancellationRequested)
-                return Result<PlatformRequestMutation>::Success(PlatformRequestMutation::Unchanged);
-            snapshot.cancellationRequested = true;
-            snapshot.timing.cancellationRequestedAt = std::chrono::steady_clock::now();
-            snapshot.state = PlatformRequestState::Cancelling;
-            return Result<PlatformRequestMutation>::Success(PlatformRequestMutation::Applied);
-        });
+        return state.MutateRecord(id, generation, type, State::CancelRecord);
     }
 
     /** @copydoc PlatformRequestStore::RecordObservationErased */
@@ -343,15 +159,7 @@ namespace Horo::PlatformServices {
     Result<PlatformRequestMutation> PlatformRequestStore::RequestCancel(const PlatformRequestId id,
                                                                         const PlatformRequestGeneration generation) {
         auto &state = MutableState();
-        return state.MutateRecordUntyped(id, generation, [](State::Record &record) {
-            auto &snapshot = record.snapshot;
-            if (IsTerminal(snapshot.state) || snapshot.cancellationRequested)
-                return Result<PlatformRequestMutation>::Success(PlatformRequestMutation::Unchanged);
-            snapshot.cancellationRequested = true;
-            snapshot.timing.cancellationRequestedAt = std::chrono::steady_clock::now();
-            snapshot.state = PlatformRequestState::Cancelling;
-            return Result<PlatformRequestMutation>::Success(PlatformRequestMutation::Applied);
-        });
+        return state.MutateRecordUntyped(id, generation, State::CancelRecord);
     }
 
     /** @copydoc PlatformRequestStore::CompleteSuccess */
@@ -371,7 +179,7 @@ namespace Horo::PlatformServices {
                                              error = std::move(error)](State::Record &record) mutable {
             if (IsTerminal(record.snapshot.state))
                 return Result<PlatformRequestMutation>::Success(PlatformRequestMutation::Unchanged);
-            if (!CanComplete(record.snapshot.state, terminalState) || !TerminalShapeIsValid(terminalState, value, error))
+            if (!State::CanComplete(record.snapshot.state, terminalState) || !State::TerminalShapeIsValid(terminalState, value, error))
                 return Result<PlatformRequestMutation>::Failure(MakeError(RequestErrors::InvalidTransition));
 
             record.snapshot.state = terminalState;
@@ -385,29 +193,8 @@ namespace Horo::PlatformServices {
             state.ExpireTerminalRecords();
             return Result<PlatformRequestMutation>::Success(PlatformRequestMutation::Applied);
         });
-        if (completed.HasValue() && completed.Value() == PlatformRequestMutation::Applied) {
-            using enum Detail::PlatformRequestMetricOutcome;
-            Detail::PlatformRequestMetricOutcome outcome = Failed;
-            switch (terminalState) {
-                case PlatformRequestState::Succeeded:
-                    outcome = Succeeded;
-                    break;
-                case PlatformRequestState::Cancelled:
-                    outcome = Cancelled;
-                    break;
-                case PlatformRequestState::TimedOut:
-                    outcome = TimedOut;
-                    break;
-                case PlatformRequestState::Failed:
-                    outcome = Failed;
-                    break;
-                case PlatformRequestState::Queued:
-                case PlatformRequestState::Running:
-                case PlatformRequestState::Cancelling:
-                    break;
-            }
-            Detail::RecordPlatformRequestMetric(outcome);
-        }
+        if (completed.HasValue() && completed.Value() == PlatformRequestMutation::Applied)
+            RecordTerminalMetric(terminalState);
         return completed;
     }
 
@@ -457,7 +244,7 @@ namespace Horo::PlatformServices {
         };
         ++state.observerCount;
         if (found->second.snapshot.terminal)
-            state.deliveries.push_back(State::Delivery{.slot = slot, .snapshot = found->second.snapshot});
+            state.deliveries.push_back(State::Delivery{.slot = slot, .snapshot = found->second.snapshot, .context = found->second.context});
         else
             found->second.observers.emplace_back(slot);
         return Result<PlatformRequestSubscription>::Success(PlatformRequestSubscription{std::move(slot)});
@@ -465,44 +252,31 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformRequestStore::DispatchCompletions */
     std::size_t PlatformRequestStore::DispatchCompletions(const std::size_t maxCount) noexcept {
-        if (maxCount == 0 || state_->dispatching.test_and_set())
+        auto &state = MutableState();
+        if (!state.TryBeginDispatch(maxCount))
             return 0;
 
-        struct DispatchGuard final {
-            std::atomic_flag &flag;
-
-            explicit DispatchGuard(std::atomic_flag &flagToClear) noexcept : flag(flagToClear) {}
-
-            DispatchGuard(const DispatchGuard &) = delete;
-            DispatchGuard &operator=(const DispatchGuard &) = delete;
-            DispatchGuard(DispatchGuard &&) = delete;
-            DispatchGuard &operator=(DispatchGuard &&) = delete;
-
-            ~DispatchGuard() {
-                flag.clear();
-            }
-        };
-
-        DispatchGuard guard{state_->dispatching};
+        const State::TurnGuard guard{state.dispatching};
 
         std::size_t delivered{};
         while (delivered < maxCount) {
             State::Delivery delivery;
             {
-                std::lock_guard lock(state_->mutex);
-                if (state_->deliveries.empty())
+                std::lock_guard lock(state.mutex);
+                if (state.deliveries.empty())
                     break;
-                delivery = std::move(state_->deliveries.front());
-                state_->deliveries.pop_front();
+                delivery = std::move(state.deliveries.front());
+                state.deliveries.pop_front();
             }
             auto observer = delivery.slot->Take();
             if (!observer)
                 continue;
             try {
+                const Log::ScopedLogContext context(delivery.context);
                 observer(delivery.snapshot);
             } catch (...) {
-                std::lock_guard lock(state_->mutex);
-                ++state_->callbackFailures;
+                std::lock_guard lock(state.mutex);
+                ++state.callbackFailures;
             }
             ++delivered;
         }
@@ -515,6 +289,7 @@ namespace Horo::PlatformServices {
             return;
         auto &state = MutableState();
         std::vector<std::shared_ptr<PlatformRequestSubscription::Slot>> observers;
+        std::deque<State::ProviderEvidence> retiredEvidence;
         std::size_t shutdownCount{};
         {
             std::lock_guard lock(state.mutex);
@@ -538,6 +313,7 @@ namespace Horo::PlatformServices {
             for (auto &delivery : state.deliveries)
                 observers.push_back(std::move(delivery.slot));
             state.deliveries.clear();
+            retiredEvidence.swap(state.evidence);
             state.activeCount = 0;
             state.ExpireTerminalRecords();
         }
@@ -545,6 +321,8 @@ namespace Horo::PlatformServices {
             Detail::RecordPlatformRequestMetric(Detail::PlatformRequestMetricOutcome::Shutdown, static_cast<std::uint64_t>(shutdownCount));
         for (const auto &observer : observers)
             observer->Reset();
+        // Explicitly retire payloads after unlocking and suppressing subscriptions; payload destruction may re-enter the store.
+        retiredEvidence.clear();
     }
 
     /** @copydoc PlatformRequestStore::Generation */

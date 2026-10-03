@@ -37,6 +37,14 @@ namespace Horo::Destruction::ChunkMeshCookErrors {
 namespace Horo::Destruction {
     using namespace ChunkMeshDetail;
 
+    /** @copydoc ValidateChunkMeshArtifact */
+    Result<void> ValidateChunkMeshArtifact(const ChunkMeshArtifact &artifact) {
+        if (artifact.schemaVersion != ChunkMeshCookSchemaVersion || !artifact.content.IsValid() || artifact.chunks.empty() ||
+            artifact.integrityDigest != ArtifactDigest(artifact))
+            return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInput));
+        return Result<void>::Success();
+    }
+
     /** @copydoc ComputeChunkMeshSemanticDigest */
     Sha256Digest ComputeChunkMeshSemanticDigest(const OfflineVoronoiCandidate &source, std::span<const ChunkMaterialBinding> materials,
                                                 ChunkUvPolicy uv) {
