@@ -510,6 +510,39 @@ The ledger is confined to StreamingAuthorityRole and must be drained or transfer
 before its owner is destroyed. WST-003.3 defines the multidimensional CPU, I/O,
 memory, and frame-time policy that supplies these bounded admission charges.
 
+`StreamingConcurrencyPolicy` is the WST-003.6 stage/profile policy owned by that
+same scheduler ledger. Host composition supplies one exact `WorldPartitionProjectProfile`,
+one non-zero immutable revision, and complete independent Load, Activate and Retire
+ceilings. A stage is the existing operation kind, not a transient execution phase:
+Activate includes preparation/publication, and interrupted Load/Activate work keeps
+its original slot through rollback. Explicit Retire work uses the retirement ceiling.
+Cleanup of accepted work never acquires a second slot or waits for new admission.
+This bounds all retained attempts without creating a competing cleanup scheduler.
+
+There is no inferred per-profile numerical table or activation default. The baseline
+four-load/four-retirement guidance below remains configurable host policy; zero
+explicitly disables admission of that kind. The total-operation and generic-capacity
+ceilings still apply independently. Each submission captures the current typed policy
+revision. Unknown profiles/kinds, disabled stages, malformed limits, stale revisions
+and exhausted ceilings fail before accepting work or changing any charge.
+
+Policy replacement is owner-thread, same-profile, strictly-newer and transactional.
+Lowering a ceiling below retained usage closes new admission for that stage until
+acknowledged terminal reservations actually release. Replacement never edits accepted
+operation state or invalidates its exact old reservation token. Cancellation, failure,
+replacement and shutdown retain stage slots until matching retirement acknowledgement
+and explicit release. Moving the unique ledger closes the source; move assignment is
+not supported because it could discard outstanding ownership.
+
+WST-003.6 intentionally tightens the public admission contract: callers constructing
+`StreamingSchedulerAdmissionLimits` (runtime composition and diagnostic snapshots)
+must now supply the complete `concurrency` policy, and `TryAdmit` requires the captured
+`StreamingConcurrencyRevision`. Existing callers migrate by supplying their explicit
+host profile and existing numerical allowances; omitted policy is rejected. The public
+header remains owned by HoroWorldStreaming and introduces no cross-target dependency.
+Regression coverage exercises every profile/kind, exact ceilings, stale/disabled/invalid
+inputs, policy replacement, all interrupted outcomes, release and moved-owner shutdown.
+
 `StreamingBudgetModel` is the inert WST-003.3 policy and observation boundary.
 Every amount vector explicitly carries exactly one known value for CPU-resident,
 GPU-resident, staging, in-flight I/O, queue/scratch, retired-resource, and

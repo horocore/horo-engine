@@ -183,6 +183,10 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
     extern const ErrorCodeDescriptor CellOperationTransitionInvalid;
     /** @brief A scheduler admission ledger, request, or reservation is malformed. */
     extern const ErrorCodeDescriptor SchedulerAdmissionInvalid;
+    /** @brief A scheduler concurrency profile or operation kind is unknown or explicitly disabled. */
+    extern const ErrorCodeDescriptor SchedulerConcurrencyUnsupported;
+    /** @brief A scheduler concurrency request names another profile or an obsolete policy revision. */
+    extern const ErrorCodeDescriptor SchedulerConcurrencyStale;
     /** @brief Scheduler operation count or generic capacity cannot be reserved within configured ceilings. */
     extern const ErrorCodeDescriptor SchedulerCapacityExceeded;
     /** @brief A scheduler operation already owns a reservation in this ledger. */

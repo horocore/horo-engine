@@ -27,9 +27,31 @@ namespace Horo::WorldStreaming {
         }
     }  // namespace
 
+    /** @copydoc StreamingConcurrencyPolicy::IsValid */
+    bool StreamingConcurrencyPolicy::IsValid() const noexcept {
+        constexpr auto maximum = StreamingSchedulerAdmissionLimits::MaximumConcurrentOperations;
+        return profile < WorldPartitionProjectProfile::Count && revision.IsValid() && loads <= maximum && activations <= maximum &&
+               retirements <= maximum && (loads > 0 || activations > 0 || retirements > 0);
+    }
+
+    /** @copydoc StreamingConcurrencyPolicy::Limit */
+    Result<std::uint32_t> StreamingConcurrencyPolicy::Limit(const StreamingCellOperationKind kind) const {
+        using enum StreamingCellOperationKind;
+        switch (kind) {
+            case Load:
+                return Result<std::uint32_t>::Success(loads);
+            case Activate:
+                return Result<std::uint32_t>::Success(activations);
+            case Retire:
+                return Result<std::uint32_t>::Success(retirements);
+        }
+        return Failure<std::uint32_t>(WorldStreamingErrors::SchedulerConcurrencyUnsupported);
+    }
+
     /** @copydoc StreamingSchedulerAdmissionLimits::IsValid */
     bool StreamingSchedulerAdmissionLimits::IsValid() const noexcept {
-        return concurrentOperations > 0 && concurrentOperations <= MaximumConcurrentOperations && capacityUnits > 0;
+        return concurrentOperations > 0 && concurrentOperations <= MaximumConcurrentOperations && capacityUnits > 0 &&
+               concurrency.IsValid();
     }
 
     /** @copydoc StreamingSchedulerReservation::IsValid */
@@ -39,8 +61,12 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingSchedulerAdmissionLedger::Create */
     Result<StreamingSchedulerAdmissionLedger> StreamingSchedulerAdmissionLedger::Create(const StreamingSchedulerLedgerId owner,
-                                                                                        const StreamingSchedulerAdmissionLimits limits) {
-        if (!owner.IsValid() || !limits.IsValid())
+                                                                                        const StreamingSchedulerAdmissionLimits &limits) {
+        if (!owner.IsValid() || !limits.concurrency.revision.IsValid())
+            return Failure<StreamingSchedulerAdmissionLedger>(WorldStreamingErrors::SchedulerAdmissionInvalid);
+        if (limits.concurrency.profile >= WorldPartitionProjectProfile::Count)
+            return Failure<StreamingSchedulerAdmissionLedger>(WorldStreamingErrors::SchedulerConcurrencyUnsupported);
+        if (!limits.IsValid())
             return Failure<StreamingSchedulerAdmissionLedger>(WorldStreamingErrors::SchedulerAdmissionInvalid);
 
         StreamingSchedulerAdmissionLedger ledger{owner, limits};
@@ -56,12 +82,22 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingSchedulerAdmissionLedger::TryAdmit */
     Result<StreamingSchedulerReservation> StreamingSchedulerAdmissionLedger::TryAdmit(const StreamingCellOperation &operation,
-                                                                                      const std::uint64_t requiredCapacityUnits) {
+                                                                                      const std::uint64_t requiredCapacityUnits,
+                                                                                      const StreamingConcurrencyRevision expectedRevision) {
         using enum StreamingSchedulerAdmissionState;
         if (state_ != Accepting)
             return Failure<StreamingSchedulerReservation>(WorldStreamingErrors::SchedulerLifecycleUnavailable);
-        if (!IsAdmissionRequestValid(operation, requiredCapacityUnits))
+        if (!expectedRevision.IsValid() || !IsAdmissionRequestValid(operation, requiredCapacityUnits))
             return Failure<StreamingSchedulerReservation>(WorldStreamingErrors::SchedulerAdmissionInvalid);
+        if (expectedRevision != limits_.concurrency.revision)
+            return Failure<StreamingSchedulerReservation>(WorldStreamingErrors::SchedulerConcurrencyStale);
+        const auto stageLimit = limits_.concurrency.Limit(operation.Kind());
+        if (stageLimit.HasError())
+            return Result<StreamingSchedulerReservation>::Failure(stageLimit.ErrorValue());
+        if (stageLimit.Value() == 0)
+            return Failure<StreamingSchedulerReservation>(WorldStreamingErrors::SchedulerConcurrencyUnsupported);
+        if (ReservedCount(operation.Kind()).Value() >= stageLimit.Value())
+            return Failure<StreamingSchedulerReservation>(WorldStreamingErrors::SchedulerCapacityExceeded);
         if (entries_.size() >= limits_.concurrentOperations || requiredCapacityUnits > limits_.capacityUnits - reservedCapacityUnits_)
             return Failure<StreamingSchedulerReservation>(WorldStreamingErrors::SchedulerCapacityExceeded);
         if (std::ranges::any_of(entries_, [&operation](const Entry &entry) {
@@ -85,6 +121,31 @@ namespace Horo::WorldStreaming {
         reservedCapacityUnits_ += requiredCapacityUnits;
         nextReservationValue_ = nextReservationValue_ == std::numeric_limits<std::uint64_t>::max() ? 0 : nextReservationValue_ + 1;
         return Result<StreamingSchedulerReservation>::Success(reservation);
+    }
+
+    /** @copydoc StreamingSchedulerAdmissionLedger::ReplaceConcurrency */
+    Result<void> StreamingSchedulerAdmissionLedger::ReplaceConcurrency(const StreamingConcurrencyRevision expectedRevision,
+                                                                       const StreamingConcurrencyPolicy &policy) {
+        if (state_ != StreamingSchedulerAdmissionState::Accepting)
+            return Failure<void>(WorldStreamingErrors::SchedulerLifecycleUnavailable);
+        if (policy.profile >= WorldPartitionProjectProfile::Count)
+            return Failure<void>(WorldStreamingErrors::SchedulerConcurrencyUnsupported);
+        if (!expectedRevision.IsValid() || !policy.IsValid())
+            return Failure<void>(WorldStreamingErrors::SchedulerAdmissionInvalid);
+        if (expectedRevision != limits_.concurrency.revision || policy.profile != limits_.concurrency.profile ||
+            policy.revision.Value() <= limits_.concurrency.revision.Value())
+            return Failure<void>(WorldStreamingErrors::SchedulerConcurrencyStale);
+        limits_.concurrency = policy;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc StreamingSchedulerAdmissionLedger::ReservedCount */
+    Result<std::size_t> StreamingSchedulerAdmissionLedger::ReservedCount(const StreamingCellOperationKind kind) const {
+        if (const auto limit = limits_.concurrency.Limit(kind); limit.HasError())
+            return Result<std::size_t>::Failure(limit.ErrorValue());
+        return Result<std::size_t>::Success(static_cast<std::size_t>(std::ranges::count_if(entries_, [kind](const Entry &entry) {
+            return entry.operation.Kind() == kind;
+        })));
     }
 
     /** @copydoc StreamingSchedulerAdmissionLedger::Advance */
@@ -168,7 +229,16 @@ namespace Horo::WorldStreaming {
         return reservedCapacityUnits_;
     }
 
+    /** @copydoc StreamingSchedulerAdmissionLedger::StreamingSchedulerAdmissionLedger(StreamingSchedulerAdmissionLedger&&) */
+    StreamingSchedulerAdmissionLedger::StreamingSchedulerAdmissionLedger(StreamingSchedulerAdmissionLedger &&other) noexcept
+        : owner_(other.owner_), limits_(other.limits_), state_(other.state_),
+          reservedCapacityUnits_(std::exchange(other.reservedCapacityUnits_, 0)), nextReservationValue_(other.nextReservationValue_),
+          entries_(std::move(other.entries_)) {
+        other.entries_.clear();
+        other.state_ = StreamingSchedulerAdmissionState::Closed;
+    }
+
     StreamingSchedulerAdmissionLedger::StreamingSchedulerAdmissionLedger(const StreamingSchedulerLedgerId owner,
-                                                                         const StreamingSchedulerAdmissionLimits limits) noexcept
+                                                                         const StreamingSchedulerAdmissionLimits &limits) noexcept
         : owner_(owner), limits_(limits) {}
 }  // namespace Horo::WorldStreaming
