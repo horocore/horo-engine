@@ -125,7 +125,8 @@ def run_git(root: Path, *arguments: str) -> bytes:
         # Callers validate external refs and place them after Git's end-of-options marker.
         # Bandit cannot infer the validated absolute executable; argv[0] is literal and shell execution is disabled.
         return subprocess.run(  # nosec B603, B607
-            ["git", "-C", str(root), *arguments],
+            ["git", *arguments],
+            cwd=root.resolve(strict=True),
             executable=executable,
             check=True,
             capture_output=True,

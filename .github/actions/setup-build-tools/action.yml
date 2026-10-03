@@ -1,0 +1,32 @@
+name: Setup build tools
+description: Install the native toolchain and Linux display dependencies used by CI and coverage
+runs:
+  using: composite
+  steps:
+    - name: Install Linux build and display libraries
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        if ! sudo apt-get update; then
+          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update
+        fi
+        sudo apt-get install -y --no-install-recommends \
+          ninja-build ccache unzip python3-venv xvfb xauth libssl-dev \
+          libwayland-dev wayland-protocols libxkbcommon-dev \
+          libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+          libxext-dev libxss-dev libxtst-dev libxxf86vm-dev \
+          libgl1-mesa-dev libglu1-mesa-dev
+
+    - name: Install macOS build tools
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install ninja
+
+    - name: Setup MSVC
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+
+    - name: Setup Windows Ninja
+      if: runner.os == 'Windows'
+      uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67

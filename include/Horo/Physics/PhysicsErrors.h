@@ -61,6 +61,8 @@ namespace Horo::Physics::PhysicsErrors {
     extern const ErrorCodeDescriptor InitializationFailed;
     /** @brief Convex or mesh source geometry is malformed before solver cooking. */
     extern const ErrorCodeDescriptor ShapeCookSourceInvalid;
+    /** @brief A collision importer failed unexpectedly before publication. */
+    extern const ErrorCodeDescriptor ShapeCookImporterFailed;
     /** @brief Shape cooking exceeded an explicit source, output or payload limit. */
     extern const ErrorCodeDescriptor ShapeCookLimitExceeded;
     /** @brief Shape cooking was cooperatively cancelled before publication. */

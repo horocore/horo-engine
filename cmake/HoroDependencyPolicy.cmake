@@ -225,3 +225,24 @@ horo_allow_temporary_dependency_exception(
     OWNER "Rendering"
     REMOVAL_TICKET "#62"
     REASON "Static backend registration predates the renderer module host")
+
+option(HORO_VERIFY_NETWORK_DISABLED "Verify that no production network dependency is populated or configured" OFF)
+if(HORO_VERIFY_NETWORK_DISABLED)
+    if(HORO_BUILD_NETWORK_GNS)
+        message(FATAL_ERROR "Network-disabled verification requires HORO_BUILD_NETWORK_GNS=OFF")
+    endif()
+    foreach(target HoroNetworkTransportGNS GameNetworkingSockets_s libprotobuf protoc c-ares::cares)
+        if(TARGET ${target})
+            message(FATAL_ERROR "Production network target is present in the disabled graph: ${target}")
+        endif()
+    endforeach()
+    # Cached source directories may exist from the ON build. The current
+    # configure must not populate them or add their targets when networking is OFF.
+    foreach(dependency horo_gns horo_protobuf horo_cares)
+        FetchContent_GetProperties(${dependency} POPULATED populated)
+        if(populated)
+            message(FATAL_ERROR "Production network dependency was populated while disabled: ${dependency}")
+        endif()
+    endforeach()
+    message(STATUS "Network disabled: production targets and FetchContent dependencies are absent")
+endif()
