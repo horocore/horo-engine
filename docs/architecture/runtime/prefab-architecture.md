@@ -880,3 +880,37 @@ enum class PrefabError : std::uint32_t {
 - [Gameplay Behavior Authoring](../extensions/gameplay-behavior-authoring.md)
 - [Project Versioning and Migration](../foundation/project-versioning-and-migration.md)
 - [Editor Document Model](../editor/editor-document-model.md)
+
+## Headless Scene Hierarchy Handoff
+
+`HoroEngine::PrefabSceneExpansion` owns the load/cook-time transformation from an
+immutable `EffectivePrefabCandidate` and its collision-checked, revision-matched
+`PrefabSceneIdentityMap` into a complete `ExpandedPrefabSceneSubtree` of typed
+`RuntimeEntityDefinition` values. It depends on Prefab Authoring and Runtime Scene;
+neither Runtime Scene nor Prefab Authoring depends on this bridge or an editor.
+The new public header belongs exclusively to this target. Headless consumers link
+this target; existing Editor conversion delegates to the same transformation.
+
+Schema adapters supply exactly one inert typed component projection per stable
+expanded object key. Projection order is irrelevant; missing, duplicate, foreign,
+invalid or excessive projections fail before a subtree is returned. Existing
+Editor schema adapters retain their accepted types and unsupported-type errors.
+Provider lookup, component schema interpretation and mutable authoring state stay
+outside the hierarchy bridge. Adapters must preserve source payload semantics;
+there are no callbacks, service discovery, I/O or component lifecycle hooks.
+
+The bridge preserves resolver sibling order, remapped parent identities, authored
+child transforms and typed payloads. It composes placement transforms only onto
+the outer root, and rechecks complete root-inclusive hierarchy depth, object and
+component counts, dynamic output payload bytes and derived work against the
+captured policy before copying bounded output. A smaller conversion policy is
+honored even when source resolution used larger limits. The immutable output
+retains its pinned revision and survives retirement of the resolver or registry.
+Publication still requires the existing source revision fence.
+
+The subtree is detached. Only the containing `SceneDefinitionBuilder` may admit
+its external scene parent, validate aggregate component references and publish the
+complete scene after every required placement succeeds. Conversion failure leaves
+both authored references and any previously activated runtime definition intact.
+This introduces an additive headless API; existing editor conversion callers and
+component payload schemas require no migration.

@@ -1438,6 +1438,12 @@ target_include_directories(HoroPrefabAuthoring PRIVATE ${PROJECT_SOURCE_DIR}/src
 target_link_libraries(HoroPrefabAuthoring PUBLIC HoroEngine::Prefab HoroEngine::Application
         PRIVATE nlohmann_json::nlohmann_json)
 
+# Load/cook bridge. RuntimeScene never depends on prefab source authoring or Editor.
+add_library(HoroPrefabSceneExpansion STATIC runtime/prefab/PrefabSceneExpansion.cpp)
+add_library(HoroEngine::PrefabSceneExpansion ALIAS HoroPrefabSceneExpansion)
+target_compile_features(HoroPrefabSceneExpansion PUBLIC cxx_std_20)
+target_link_libraries(HoroPrefabSceneExpansion PUBLIC HoroEngine::PrefabAuthoring HoroEngine::RuntimeScene)
+
 add_library(HoroInput STATIC
         runtime/input/Input.cpp
         runtime/input/InputPresentation.cpp
@@ -1714,6 +1720,7 @@ target_link_libraries(HoroEditorModel
         HoroEngine::AI
         HoroEngine::Prefab
         HoroEngine::PrefabAuthoring
+        HoroEngine::PrefabSceneExpansion
         HoroEngine::SceneModel
         HoroEngine::RuntimeScene
         PRIVATE nlohmann_json::nlohmann_json

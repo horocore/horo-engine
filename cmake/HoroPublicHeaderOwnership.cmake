@@ -754,6 +754,10 @@ Horo/Prefab/PrefabDependencyGraph.h
     Horo/Prefab/PrefabSourceResolver.h
 )
 
+horo_configure_target_header_boundary(HoroPrefabSceneExpansion PUBLIC_HEADERS
+    Horo/Prefab/PrefabSceneExpansion.h
+)
+
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
     Horo/Runtime/Render/MotionHistory.h
     Horo/Runtime/Render/MotionHistoryErrors.h

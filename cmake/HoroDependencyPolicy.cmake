@@ -87,6 +87,7 @@ horo_allow_target_dependencies(TARGET HoroNavigationCrowdDetour DEPENDENCIES Hor
 horo_allow_target_dependencies(TARGET HoroWorldStreaming DEPENDENCIES HoroFoundation HoroAssets)
 horo_allow_target_dependencies(TARGET HoroPrefab DEPENDENCIES HoroFoundation HoroAssets HoroGameplayApi)
 horo_allow_target_dependencies(TARGET HoroPrefabAuthoring DEPENDENCIES HoroPrefab HoroApplication)
+horo_allow_target_dependencies(TARGET HoroPrefabSceneExpansion DEPENDENCIES HoroPrefabAuthoring HoroRuntimeScene)
 horo_allow_target_dependencies(TARGET HoroInput DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroInputSdl DEPENDENCIES HoroInput)
 
@@ -113,7 +114,7 @@ horo_allow_target_dependencies(TARGET HoroRenderMetal)
 horo_allow_target_dependencies(TARGET HoroRenderVulkan)
 
 horo_allow_target_dependencies(TARGET HoroEditorModel
-    DEPENDENCIES HoroFoundation HoroAI HoroPrefab HoroPrefabAuthoring HoroSceneModel HoroRuntimeScene)
+    DEPENDENCIES HoroFoundation HoroAI HoroPrefab HoroPrefabAuthoring HoroPrefabSceneExpansion HoroSceneModel HoroRuntimeScene)
 horo_allow_target_dependencies(TARGET HoroEditorViewportScene DEPENDENCIES HoroEditorModel)
 horo_allow_target_dependencies(TARGET HoroEditorViewportResources
     DEPENDENCIES HoroEditorViewportScene HoroRenderFrontend)
