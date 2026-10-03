@@ -154,6 +154,45 @@ authoritative operation already committed. See the
 [asynchronous action migration guide](../../guides/runtime-ui-async-action-migration.md)
 for composition, affinity, retention and consumer migration.
 
+## Accessibility projection and change publication
+
+`UiAccessibilityExtractor` copies the existing typed core/contributed semantics
+against the exact retained tree. Snapshot nodes now follow retained preorder,
+regardless of contributor input order; parents are the nearest exposed semantic
+ancestor. Hidden nodes remove their entire subtree. Offscreen propagates to visible
+descendants, while covered/suppressed/suspended ancestors prevent descendants from
+remaining actionable or focused. Disabled controls remain readable. An exposed
+relation targeting an omitted node fails transactionally instead of dangling.
+
+`UiAccessibilityChangePublisher` is an optional Runtime UI owner-thread companion
+to that extractor, owned by the same instance/canvas/document composition. It
+retains one latest immutable snapshot lease, publishes generation-fenced removals,
+insertions, reparent/reorder records, coalesced property masks, authoritative focus
+changes and owned polite/assertive announcements. It never consults render nodes,
+Platform, gameplay or mutable widget pointers. Consumers correlate PreviousRevision
+and Revision with the complete snapshot descriptor; only matching successful
+presentation evidence may authorize native exposure. Model-only recording needs
+no renderer. Traversal/navigation policy and native adapters are separate work.
+
+Create preallocates node indexes, delta output, text and deduplication history.
+Delta overflow discards partial output and publishes one Resynchronize record;
+consumers must adopt the complete latest snapshot before further deltas. Suppressed
+announcements are remembered and never replayed during resync. Event IDs are scoped
+to exact node generations and an inclusive, explicit semantic-revision window.
+Unexpired history exhaustion, invalid/stale announcements and source regressions
+return typed failures while preserving prior output and the last-good baseline.
+Retire publishes final reverse-preorder removals and focus release, closes admission
+idempotently and releases its lease; other snapshot leases remain readable.
+
+Migration: former extraction callers must consume snapshot-owned node order rather
+than assuming candidate order, and must not refer to hidden nodes from exposed
+relations. The new changes header belongs only to HoroRuntimeUi. Existing extractors
+and their slot budgets are unchanged; a composed publisher occupies one slot lease,
+so at least two concurrent slots are needed for subsequent successful publication.
+Reload within the same semantic owner uses the publisher; owner/canvas/document
+replacement retires the old publisher and creates a new one. Output borrows last
+until successful publication, retirement, owner replacement or destruction.
+
 ## Pause, Suspension And Teardown
 
 Gameplay pause stops fixed simulation, not Runtime UI lifecycle, input, layout or
@@ -434,8 +473,39 @@ closes admission before releasing focus, modal, and restoration state.
 Focus changes may include typed bring-into-view evidence for the scroll owner,
 but the graph never calls layout or scroll code. Input consumes the graph's
 owner/revision evidence only for the matching last-presented interaction
-generation; spatial search and gameplay action ownership remain separate
-contracts.
+generation; gameplay action ownership remains a separate contract.
+
+`UiFocusGraph::UpdateLayout` copies hit-test rectangles from the matching immutable
+`UiLayoutSnapshot` without retaining a lease or calling layout/scroll services. The
+Runtime UI owner admits only last-presented geometry, with exact instance, canvas,
+document and tree evidence and equal/newer interaction revision. Updates are atomic,
+use preallocated scratch and adopt the accepted interaction revision. Missing exact
+handles, including recycled slots, have no spatial geometry. Reload clears geometry
+until a matching update, and empty graphs are valid focus scopes. Existing callers
+keep their authored links; owners enabling geometry call UpdateLayout after creation
+or replacement and after adopting a newly presented layout. No public header ownership
+or target dependency changes are required: both contracts remain RuntimeUi-owned.
+
+Cardinal Move uses authored links first. Without a link it searches positive-area
+layout boxes inside the active modal, excluding nonfocusable nodes and hidden or
+disabled ancestor paths. In the requested center half-plane it ranks perpendicular
+overlap, forward doubled-center distance, perpendicular interval gap, perpendicular
+doubled-center distance, then stable ID bytes. Integer 1/64-DIP rectangles cannot
+represent nonfinite values; negative extents fail layout publication. Signed 64-bit
+projection preserves ordering at int32 coordinate extremes without squared distances.
+Typed None/Horizontal/Vertical/Both wrap applies only when no forward candidate
+exists, choosing the opposite center edge, then perpendicular gap/distance and stable
+ID. Next/Previous retain their authored semantics. Invalid declared links retain the
+existing recovery policy instead of silently becoming automatic navigation.
+
+Graph creation/reload are bounded owner safe-point preparation operations. Handle
+indices and parent indices are prepared there; layout adoption takes O(N + M log N)
+bounded work and cardinal search O(N * maximum tree depth), without allocation or I/O.
+`SetParticipation` updates focusable/enabled/visible state with exact current owner
+and element-generation evidence, recovering invalid focus immediately without
+allocation. Structural changes use complete transactional Reload candidates. Failed
+updates preserve prior geometry; retirement and shutdown close admission and release
+geometry together with focus, modal and restoration storage.
 
 High-frequency pointer movement does not travel through data buses. The UI input
 router consumes input snapshots during VariableUpdate through one per-player/
@@ -840,6 +910,149 @@ Revocation closes read/write admission, publishes unavailable evidence, cancels
 pending work and drains snapshot/command/callback/UI-generation leases before a
 scene/player/game/module disappears. Editor preview uses explicit fixture providers
 and schema projections, not live runtime pointers or editor widgets.
+
+### Versioned retained binding publication
+
+`HoroEngine::RuntimeUi` owns `UiBindingStore.h`. A host resolves each descriptor
+to one exact `UiBindingProviderInstanceId` before preparation; it supplies an owned
+schema snapshot, exact provider revision and initial property values. Store creation
+copies metadata and values, resolves stable element IDs to current retained handles,
+builds property-to-target adjacency, and reserves bounded target text storage.
+Required missing values reject preparation; optional missing values use the typed
+fallback. No provider object, module pointer, callback or contributor span is retained.
+
+At the VariableUpdate binding cutoff, `UiBindingStore::Apply(tree, batches, layout)`
+validates the complete ordered provider delta set before any publication. Each
+batch carries exact schema evidence, an expected committed revision and a strictly
+newer snapshot revision. Property slots refer only to that exact identity-sorted
+schema. Reordered/duplicate providers or slots, missing revision ancestry, malformed
+values, stale tree/document/instance evidence and capacity overflow reject the whole
+set. Count and aggregate input-byte limits bound frame work. A producer completing
+after the cutoff submits its delta at the next cutoff; layout/render never poll it.
+
+Only changed properties visit their compiled subscribers. Equal values and empty
+frames produce no dirty work. Text, localized text and visibility changes queue
+exact `Measure` invalidations through `UiLayoutEngine::InvalidateBatch`; provider
+layout flags may add further measure dependencies. That API validates ownership,
+handles, tree revisions and complete queue capacity before replacing its queue.
+The binding store publishes target copies and provider revisions only after queue
+admission succeeds. The normal layout request uses `Current().content`; this revision
+advances only for layout work, so progress, enabled and other paint/action changes
+do not trigger the layout engine's global source-change fallback. Ancestor measure
+and dependent arrange work remains the incremental layout owner's responsibility.
+
+Text/intrinsic and UI-local state consumers read the store's `Find(tree, binding)`
+projection at the same owner phase. It is a synchronous borrow, never a render lease.
+Text, layout, accessibility and render publication copy their derived immutable state
+into their existing snapshot stores before any later binding mutation. `DrainDirty`
+copies accumulated exact binding/element/property work in descriptor order to bounded
+owner storage for paint, accessibility and actions; insufficient capacity acknowledges
+nothing and never truncates notifications. No new focus/accessibility authority is
+introduced by this binding dependency record.
+
+`Unregister` publishes optional fallbacks and removes readable required values,
+reports required unavailability for the owning UI activation policy, and permanently
+closes that provider incarnation in the store. The host stops provider producers
+before unregister and must retry reported layout backpressure or retire the entire
+UI generation before releasing its provider scope. Retirement closes all target
+reads and update admission; retirement/shutdown abandon pending write reservations
+before releasing authority leases and Horo-owned copies. Old downstream
+immutable leases remain with their existing owners. Repeated unregister/retirement/
+shutdown is harmless. Structural/document reload prepares a new store against the
+replacement retained tree and fresh provider evidence; an old store never silently
+rebinds a recycled slot or stable ID.
+
+This is an additive publication API. Existing descriptor validation and callers
+remain valid. SourceToTarget and TwoWay retain committed provider projections.
+TargetToSource requires an explicitly authored typed `initialTarget` in the resolved
+descriptor and ignores incoming provider deltas. Store preparation validates this
+value against provider and target limits and reports its origin as `UiLocal` until
+an accepted commit. Missing/invalid values fail preparation atomically. Readable
+directions reject `initialTarget` so the provider projection remains authoritative;
+it requires the same explicit write admission as TwoWay. Converter metadata needs an
+executable conversion capability and preparation still rejects converters. Provider cadence
+is producer-driven for OnChange, EveryVariableUpdate and Manual; none permits a
+getter during layout or extraction. `HoroRuntimeUiPublicHeaderConsumer` covers the
+new header's isolated target ownership, and binding-store regression coverage drives
+the ordinary retained tree, declarative evaluator and incremental layout publisher.
+
+### Two-way write authority and conflict policy
+
+The host explicitly calls `AdmitWrites` with an exact presented owner, authored
+action, binding, Change/Blur/Submit trigger and leased `UiBindingWriteAuthority`.
+Read/write schema access is necessary but never grants permission. Admission checks
+the provider incarnation, semantic scope, complete schema, property slot/signature
+and non-reusable host permission incarnation. Descriptor validation stays inert.
+The API remains owned by `HoroEngine::RuntimeUi`; no gameplay ABI change is required.
+
+Before editing, `BeginEdit` freezes the committed provider revision and exact
+presented element. A routed form/gameplay request supplies bounded typed control
+data to `QueueWrite`. The admitted trigger must match. `QueueControlDefault`
+previews the real control's staged default, verifies the complete action payload,
+admits the write, then applies only its UI-local pending draft. A prevented default
+cannot produce a write. Text change/blur owners route the current bounded text
+projection through the same form action boundary. `CancelEdit` closes an unqueued
+draft; failed admission leaves committed target/provider/layout state untouched.
+
+`RejectStale` is the sole conflict policy. Neither the UI nor the adapter may silently
+retry a stale draft against newer state. A fresh edit requires a new capture and
+request. Commands retain exact provider/schema/property/capability, complete
+document/tree/presented-element evidence, expected revision, request and operation
+correlation. Replayed action requests and recycled elements/providers are rejected.
+
+At the explicit shared provider/UI owner safe point, `ProcessWrite` processes at most
+one command per call in deterministic round-robin binding order, so a pending producer
+cannot starve another binding. The authority validates all fences,
+permission, expected revision and domain rules on each preparation/pending poll.
+The adapter owns authoritative state and structured jobs; Pending does not transfer
+execution to the control. Ready reserves a non-failing commit of exactly the command
+value at the next provider revision. The store stages read subscribers and the
+accepted target, atomically admits precise layout invalidations through the existing
+publisher, then invokes that reserved commit. Capacity, malformed values, provider
+rejection/error/cancellation and stale revisions leave committed state unchanged.
+The provider cannot reenter UI or publish state during preparation; asynchronous
+work returns private evidence for later owner-thread preparation, never UI callbacks.
+
+The new provider capability's `Prepare` boundary is exception-free (`noexcept`),
+matching the Foundation public engine module policy. The owned adapter converts
+private standard/third-party exceptions into its typed `Result` before returning;
+RuntimeUi preserves that original error rather than translating generic exceptions.
+Async producers copy command inputs before the synchronous borrow ends and retain
+their own execution leases until terminal completion or cancellation drains.
+
+Terminal feedback retains original Foundation error evidence and occupies its bounded
+slot until `DrainWriteResults` acknowledges it. Pending poll evidence is nonterminal.
+The owner calls `ReconcileControl` after an outcome to replace the draft with committed
+target state. Reconciliation preserves focus/availability and clears transient edits.
+Revocation closes write admission before cancelling private work; retirement produces
+one cancellation per admitted command. Shutdown/destruction/move replacement abandon
+reservations before releasing authority leases. The adapter retains its provider and
+module image/callback leases until its jobs drain, so old work cannot mutate a newly
+activated owner or outlive mapped code. `UpdateWritePresentation` adopts a newer
+successfully presented interaction without rebuilding read bindings, cancelling old
+edit/reservation evidence first; structural/document replacements still prepare a new
+store. No normal frame waits, provider polling from layout, renderer
+objects, hidden registration, reflection or gameplay ABI mutation is introduced.
+
+Presented action-router replacement passes the old `LastIssuedSequence()` into the
+new descriptor's `previousSequence`. The host retains this high-water mark for the
+whole ownership generation, including periods with no active route, preventing
+request identity reuse while keeping each router's queue bounded and private.
+
+Migration is additive: existing read-only callers keep their API. Write users provide
+explicit host admissions, capture edit sessions before input, route typed commands,
+process them at the documented safe point, acknowledge terminal feedback and reconcile
+controls. Preallocation includes a bounded draft per target; successful supported
+control writes need no heap allocation after preparation. Native module composition,
+list/record editing and general asynchronous UI progress remain separate contracts.
+
+Write entry points borrow large owner/source/edit inputs through const references
+only until return, copying evidence into retained command storage when admitted.
+`UiControlStateMachine::Handle` likewise borrows its input until return; ordinary
+call expressions remain valid, while member-function-pointer aliases must use
+`const UiControlInput&`. This avoids a redundant large input copy without changing
+input ownership or admitting asynchronous borrows. The affected in-tree control
+and binding consumers are covered by the isolated public-header and regression builds.
 
 ## Templates And Presets
 

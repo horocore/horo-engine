@@ -276,6 +276,8 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor AsyncActionFailureInvalid;
     /** @brief A default navigation command or result has invalid focus evidence. */
     extern const ErrorCodeDescriptor NavigationInvalid;
+    /** @brief Canonical navigation or glyph capability is unsupported by the supplied action bindings. */
+    extern const ErrorCodeDescriptor NavigationCapabilityUnsupported;
     /** @brief A semantic Runtime UI feedback intent or producer outcome is malformed. */
     extern const ErrorCodeDescriptor FeedbackInvalid;
     /** @brief Feedback source or audience belongs to another presented owner generation. */
@@ -414,6 +416,10 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor BindingUpdatePolicyInvalid;
     /** @brief A binding descriptor or provider schema exceeds its finite construction bounds. */
     extern const ErrorCodeDescriptor BindingCapacityExceeded;
+    /** @brief A runtime binding value violates its declared type, range, or byte limit. */
+    extern const ErrorCodeDescriptor BindingValueInvalid;
+    /** @brief A retained binding owner or exact provider registration is closed. */
+    extern const ErrorCodeDescriptor BindingLifecycleUnavailable;
     /** @brief An accessibility semantic schema value is malformed or unsupported. */
     extern const ErrorCodeDescriptor AccessibilitySchemaInvalid;
     /** @brief An accessibility node role is unknown or incompatible with its control data. */

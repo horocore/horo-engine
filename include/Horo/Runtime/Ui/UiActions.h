@@ -370,6 +370,7 @@ namespace Horo::Runtime::Ui {
     struct UiActionRouterDescriptor final {
         UiActionOwnerContext owner;
         std::uint32_t maximumQueuedCommands{};
+        UiActionSequence previousSequence; /**< Host-retained owner high-water mark when replacing a presented router. */
 
         /** @brief Validates owner identities and the bounded command queue size. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -434,6 +435,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] const UiActionOwnerContext &Owner() const noexcept;
         /** @brief Returns current queued request count. @return Bounded count. */
         [[nodiscard]] std::size_t QueuedCount() const noexcept;
+        /** @brief Returns the owner high-water mark for replacement. @return Last issued or injected sequence; invalid before any issue. */
+        [[nodiscard]] UiActionSequence LastIssuedSequence() const noexcept;
         /**
          * @brief Closes admission while allowing already queued values to be drained or discarded.
          * @param reason First cancellation reason published to pending asynchronous operations.

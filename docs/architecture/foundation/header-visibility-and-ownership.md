@@ -8,6 +8,32 @@ consumer of one module to discover every header in the repository.
 
 ## Classifications
 
+### RUI-005.8 Navigation Input Boundary
+
+`HoroEngine::RuntimeUiInput` solely owns the additive
+`Horo/Runtime/Ui/UiNavigationInput.h` contract. It composes the existing Input
+router, Runtime UI focus graph and action queue through their public contracts;
+Input and Runtime UI retain their existing one-way dependencies. The text-input
+adapter stays target-private. No existing caller changes signature.
+
+Hosts opting into navigation compose `DefaultUiNavigationActions` into their
+Input action map, copy the eight digital action IDs into the adapter descriptor,
+provide the separate signed `ui.navigate` action and explicit Input player
+assignment, then bind their existing presented focus graph and matching action
+queue. They pump once per committed snapshot before gameplay capture, rebind
+after publishing a complete UI or binding replacement, and suspend/stop input
+before retiring its borrowed owners. The adapter does not create a UI service,
+renderer, device assignment or second focus graph. The generated staged header
+consumer and `HoroRuntimeUiNavigationPublicHeaderConsumer` exercise this boundary.
+
+Input's existing value-only `ReadAction` remains source-compatible. New consumers
+use `ReadActionEvidence` for canonical source and typed admission status; legacy
+consumers can query `LastActionStatus`. A full 4,096-entry exact gamepad transition
+ledger refuses an action atomically with `CapacityExceeded`, preserving prior
+consumers and rolling back that action's key, pointer, wheel and gamepad admission.
+The next committed frame releases the ledger. Keyboard and pointer ledgers use
+fixed bitsets. These are runtime storage changes with no profile/wire migration.
+
 Every header has exactly one classification:
 
 | Classification | Location | Visibility |
@@ -128,6 +154,51 @@ they retain sole authority for scheduling, cache storage and atomic publication.
 The cook produces independently hashed neutral tile payloads and a complete sorted
 manifest, without a cache root, runtime state, native handle or global registry.
 Generated public-header consumer coverage checks the staged target boundary.
+
+## TRF-004.3 Foliage Placement Cook Boundary
+
+`HoroEngine::TerrainCook` also owns the additive
+`Horo/Terrain/FoliagePlacementCook.h` contract. Existing tile-cook callers do not
+change. The host supplies an exact integer placement source, validated foliage
+definition, capability set, finite limits and target/toolchain envelope. Terrain
+Cook returns a detached generation; the owner publishes it against an exact
+content revision, and no renderer or runtime-native handle crosses this header.
+The standalone public-header consumer checks the owning target's staged include
+view.
+
+## TRF-004.4 Foliage Cluster Cook Boundary
+
+`HoroEngine::TerrainCook` owns the additive `Horo/Terrain/FoliageClusterCook.h`
+contract. Existing placement and tile callers retain their signatures. Cluster
+hosts supply a complete borrowed snapshot of cook-issued placements, verified
+geometry artifact digests and conservative unscaled geometry radii enclosing every
+admitted LOD and wind envelope. The synchronous cook owns all returned records and
+canonical bytes; it never retains those input pointers. A narrowly declared friend
+lets the cluster cook recheck placement integrity without exposing mutable placement
+storage or changing placement identity/PRNG semantics.
+Placement adds read-only target/toolchain/tier evidence, captured from the existing
+request, so downstream cook rejects incompatible provenance rather than treating an
+opaque placement fingerprint as proof of a matching target. Existing callers keep
+their signatures and canonical placement output identities.
+
+Schema-v1 payloads use network-order fixed-width integers, stable typed identities,
+source/definition/capability/content provenance, conservative integer bounds and
+canonical stable-instance-ID order. They are neutral source artifacts, not native
+instance buffers, GPU offsets, selected LODs or draw commands. Complete replacement
+membership is explicit; unchanged sources retain their exact cluster IDs and bytes,
+while the aggregate revision advances independently. Assets remains the storage,
+cache and publication authority. Runtime decoding/consumer activation is not claimed
+by this cook slice. Hosts verify independently loaded bytes against a trusted cluster
+entry before consuming them, and retain detached roots across owner replacement or
+close. The explicit cluster consumer plus generated TerrainCook header consumers
+exercise the same staged owning-target boundary.
+
+Count and byte admission uses the captured Terrain tier limits. Byte accounting is
+a conservative owned-capacity estimate including neutral records, canonical bytes,
+cluster objects and sorting workspace; allocator bookkeeping is not a portable payload
+format. Work units count source/record visits, merge outputs and cluster visits.
+Geometry bounds use a scaled sphere with outward integer rounding on every axis.
+No geometry/capability absence selects a renderer, drops instances or invents fallback.
 
 ## REL-002.4 Update Transfer Boundary
 
@@ -1272,3 +1343,40 @@ into the separate session and supply caller-owned output/scratch and an owned
 provider context. No codec-specific or native backend type crosses the public
 boundary. The generated `HoroAudioApiPublicHeaderConsumer` and focused
 `HoroAudioApiTests` cover the new headers and lifecycle contract.
+
+## Cooked Runtime Prefab Template (PFB-004.1)
+
+`HoroEngine::Prefab` solely owns `Horo/Prefab/CookedPrefab.h`. The immutable
+`CookedPrefab` value, portable codec and dense entity/member/reference/dependency
+tables require only existing Foundation, Assets and GameplayApi dependencies.
+They do not depend on PrefabAuthoring, Application, source resolution, filesystem
+paths, native backends or scene mutation. The generated standalone
+`HoroPrefabPublicHeaderConsumer` and dedicated `HoroCookedPrefabTests` consume
+this contract through its owning target. This is an additive runtime contract;
+existing authoring callers require no migration. Future provider and spawn
+implementations consume this value rather than extending `PrefabDocument` into
+a runtime source authority.
+
+## AUD-004.8 Parameter Automation Boundary
+
+`HoroEngine::AudioCommands` solely owns the additive
+`Horo/Audio/AudioParameterAutomation.h` fixed-state contract. Its generated
+standalone public-header consumer compiles through staged AudioCommands headers.
+Existing voice snapshots keep their signatures. Opting-in hosts prepare and seal
+exact scene/runtime/graph bindings off-callback, dispatch the new automation and
+cancel FIFO payloads, and apply sampled values to already prepared physical
+targets. No editor, native backend, mixer implementation or registry type enters
+the header. Hosts must add handling for the two new public command alternatives;
+unhandled payloads must receive explicit rejection/reconciliation, never silent
+discard. Reset/replacement closes and detaches the old engine before reclamation.
+
+### Audio scoped concurrency model (AUD-003.4)
+
+`Horo/Audio/AudioConcurrencyGroup.h` is an additive `HoroAudioApi` contract.
+Its identities, group descriptors and eligibility projections remain backend
+neutral and use existing Audio voice snapshots. Existing sound defaults and
+voice registry callers require no migration. Admission callers explicitly build
+scoped projections and evaluate group constraints before reserving voices; no
+implicit group registry or source-policy override is introduced. The ownership
+registry stages this header and the generated `HoroAudioApi` public-header
+consumer compiles it using only declared Foundation/Assets dependencies.

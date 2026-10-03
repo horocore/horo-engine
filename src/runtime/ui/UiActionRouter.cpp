@@ -10,19 +10,23 @@
 
 namespace Horo::Runtime::Ui {
     namespace {
+        /** @brief Preserves typed Runtime UI failure evidence at the router boundary. */
         template <typename T = void> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<T>::Failure(MakeError(descriptor));
         }
 
+        /** @brief Validates closed cancellation enums before mutating asynchronous lifecycle state. */
         template <typename Enum> [[nodiscard]] bool IsKnownEnum(const Enum value, const Enum count) noexcept {
             return static_cast<std::underlying_type_t<Enum>>(value) < static_cast<std::underlying_type_t<Enum>>(count);
         }
 
+        /** @brief Supplies stable invalid ownership evidence after a router has relinquished its storage. */
         [[nodiscard]] const UiActionOwnerContext &InvalidOwnerContext() noexcept {
             static const UiActionOwnerContext invalid{};
             return invalid;
         }
 
+        /** @brief Fences synchronous action callbacks and restores the previous dispatch state on every return path. */
         struct DispatchGuard final {
             explicit DispatchGuard(bool &dispatching) noexcept : dispatching_(dispatching), previous_(std::exchange(dispatching, true)) {}
 
@@ -50,9 +54,11 @@ namespace Horo::Runtime::Ui {
 
     }  // namespace
 
+    /** @brief Owns the finite queue, asynchronous operations and ownership-generation sequence evidence. */
     struct UiActionRouter::Storage final {
         Storage(const UiActionRouterDescriptor &descriptor, UiAsyncActionStore operations)
-            : owner(descriptor.owner), queue(descriptor.maximumQueuedCommands), asyncActions(std::move(operations)) {}
+            : owner(descriptor.owner), queue(descriptor.maximumQueuedCommands), asyncActions(std::move(operations)),
+              nextSequence(descriptor.previousSequence.Value() + 1), lastIssued(descriptor.previousSequence) {}
 
         UiActionOwnerContext owner;
         std::vector<UiActionRequest> queue;
@@ -60,13 +66,15 @@ namespace Horo::Runtime::Ui {
         std::size_t head{};
         std::size_t count{};
         std::uint64_t nextSequence{1};
+        UiActionSequence lastIssued;
         UiActionRouterState state{UiActionRouterState::Active};
         bool dispatching{};
     };
 
     /** @copydoc UiActionRouterDescriptor::IsValid */
     bool UiActionRouterDescriptor::IsValid() const noexcept {
-        return owner.IsValid() && maximumQueuedCommands > 0 && maximumQueuedCommands <= MaximumUiActionCommands;
+        return owner.IsValid() && maximumQueuedCommands > 0 && maximumQueuedCommands <= MaximumUiActionCommands &&
+               previousSequence.Value() != std::numeric_limits<std::uint64_t>::max();
     }
 
     /** @copydoc UiActionRouter::Create */
@@ -140,6 +148,7 @@ namespace Horo::Runtime::Ui {
             ++storage->nextSequence;
 
         const UiActionRequestId id{storage->owner.instance.ownership, sequence.Value()};
+        storage->lastIssued = sequence.Value();
         const std::size_t slot = (storage->head + storage->count) % storage->queue.size();
         storage->queue[slot] = UiActionRequest{id, std::move(source), UiActionOriginOf(command), std::move(command)};
         ++storage->count;
@@ -245,6 +254,12 @@ namespace Horo::Runtime::Ui {
     const UiActionOwnerContext &UiActionRouter::Owner() const noexcept {
         auto *const storage = StateStorage();
         return storage ? storage->owner : InvalidOwnerContext();
+    }
+
+    /** @copydoc UiActionRouter::LastIssuedSequence */
+    UiActionSequence UiActionRouter::LastIssuedSequence() const noexcept {
+        const auto *const storage = StateStorage();
+        return storage ? storage->lastIssued : UiActionSequence{};
     }
 
     /** @copydoc UiActionRouter::QueuedCount */

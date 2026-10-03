@@ -2,6 +2,7 @@
 
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "Horo/Runtime/Ui/UiFocusGraph.h"
+#include "Horo/Runtime/Ui/UiLayout.h"
 
 #include <algorithm>
 #include <array>
@@ -64,6 +65,8 @@ namespace Horo::Runtime::Ui {
 
         struct Node final {
             UiFocusNodeDescriptor descriptor;
+            std::size_t parentIndex{InvalidIndex};
+            std::optional<UiLogicalRect> bounds;
         };
 
         struct RestorationEntry final {
@@ -84,6 +87,8 @@ namespace Horo::Runtime::Ui {
             nodes.reserve(value.nodeCapacity);
             modalSlots.resize(value.modalCapacity);
             restorations.resize(value.restorationCapacity);
+            layoutScratch.resize(value.nodeCapacity);
+            handleOrder.reserve(value.nodeCapacity);
         }
 
         [[nodiscard]] std::size_t FindNode(const UiElementId id) const noexcept {
@@ -120,7 +125,7 @@ namespace Horo::Runtime::Ui {
                     return true;
                 if (!node.parent.IsValid())
                     return false;
-                current = FindNode(node.parent);
+                current = nodes[current].parentIndex;
                 if (current == InvalidIndex)
                     return false;
             }
@@ -130,8 +135,18 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsAllowed(const std::size_t index) const noexcept {
             if (index >= nodes.size() || !IsWithinModal(index))
                 return false;
-            const UiFocusNodeDescriptor &node = nodes[index].descriptor;
-            return node.focusable && node.enabled && node.visible;
+            if (const UiFocusNodeDescriptor &node = nodes[index].descriptor; !node.focusable)
+                return false;
+            std::size_t current = index;
+            for (std::uint32_t depth = 0; depth < MaximumUiFocusGraphDepth; ++depth) {
+                const Node &ancestor = nodes[current];
+                if (!ancestor.descriptor.enabled || !ancestor.descriptor.visible)
+                    return false;
+                if (ancestor.parentIndex == InvalidIndex)
+                    return true;
+                current = ancestor.parentIndex;
+            }
+            return false;
         }
 
         [[nodiscard]] std::optional<UiFocusTarget> CurrentTarget() const noexcept {
@@ -309,12 +324,12 @@ namespace Horo::Runtime::Ui {
                 if (!HasValidParentChain(candidate, index))
                     return FocusGraphDetail::Failure(UiErrors::FocusInvalid);
             }
-            return roots == 1 ? Result<void>::Success() : FocusGraphDetail::Failure(UiErrors::FocusInvalid);
+            return roots == 1 || candidate.empty() ? Result<void>::Success() : FocusGraphDetail::Failure(UiErrors::FocusInvalid);
         }
 
         [[nodiscard]] Result<std::vector<Node>> BuildCandidate(const UiFocusGraphDescriptor &candidateDescriptor,
                                                                const std::span<const UiFocusNodeDescriptor> input) const {
-            if (input.empty() || input.size() > candidateDescriptor.nodeCapacity)
+            if (input.size() > candidateDescriptor.nodeCapacity)
                 return FocusGraphDetail::Failure<std::vector<Node>>(UiErrors::FocusCapacityExceeded);
             auto candidate = CopyNodes(candidateDescriptor, input);
             if (candidate.HasError())
@@ -322,11 +337,31 @@ namespace Horo::Runtime::Ui {
             const auto topology = ValidateTopology(candidate.Value());
             if (topology.HasError())
                 return Result<std::vector<Node>>::Failure(topology.ErrorValue());
-            return candidate;
+            auto validated = std::move(candidate).Value();
+            for (Node &node : validated) {
+                if (node.descriptor.parent.IsValid())
+                    node.parentIndex = FindCandidateNode(validated, node.descriptor.parent);
+            }
+            return Result<std::vector<Node>>::Success(std::move(validated));
         }
+
+        /** @brief Prepares handle lookup in already reserved storage after candidate commit. */
+        void IndexHandles() noexcept {
+            handleOrder.clear();
+            for (std::size_t index = 0; index < nodes.size(); ++index)
+                handleOrder.push_back(index);
+            std::ranges::sort(handleOrder, [this](const std::size_t left, const std::size_t right) {
+                return nodes[left].descriptor.element < nodes[right].descriptor.element;
+            });
+        }
+
+        /** @brief Searches the bounded active modal using integer geometry and stable-ID ties, without allocation. */
+        [[nodiscard]] std::optional<std::size_t> SpatialTarget(std::size_t source, UiNavigationDirection direction) const noexcept;
 
         UiFocusGraphDescriptor descriptor;
         std::vector<Node> nodes;
+        std::vector<std::optional<UiLogicalRect>> layoutScratch;
+        std::vector<std::size_t> handleOrder;
         std::vector<ModalSlot> modalSlots;
         std::vector<RestorationEntry> restorations;
         std::optional<std::size_t> focusedIndex;

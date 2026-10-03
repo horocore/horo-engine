@@ -263,7 +263,7 @@ jobs:
             -DHORO_BUILD_EXAMPLES=OFF \
             -DHORO_ENABLE_OPENTELEMETRY=OFF
           cmake --build build/audio-realtime-safety \
-            --target HoroAudioRealtimeSafetyHarnessTests HoroAudioWatchdogTests HoroAudioNullTests HoroAudioDspTests HoroAudioCommandTests \
+            --target HoroAudioRealtimeSafetyHarnessTests HoroAudioWatchdogTests HoroAudioNullTests HoroAudioDspTests HoroCoreAudioDspTests HoroAudioCommandTests \
             --parallel 1
 
       - name: Checkpoint successful audio build
@@ -280,7 +280,7 @@ jobs:
         run: |
           cmake -E make_directory build/audio-realtime-safety/test-results
           ctest --test-dir build/audio-realtime-safety \
-            -R '^HoroAudio(CallbackLockPolicyTest|RealtimeSafetyHarnessTests::|WatchdogTests::|NullTests::|DspTests::|CommandTests::)' \
+            -R '^(HoroAudio(CallbackLockPolicyTest|RealtimeSafetyHarnessTests::|WatchdogTests::|NullTests::|DspTests::|CommandTests::)|HoroCoreAudioDspTests::)' \
             --output-on-failure --output-junit "${{ github.workspace }}/build/audio-realtime-safety/test-results/ctest.xml" --timeout 90 -j 1
 
       - name: Report compiler statistics for an incomplete audio build
@@ -445,8 +445,11 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
-          cmake --build build/cinematic-windows --target HoroCinematicModelTests HoroCinematicRuntimeTests --parallel 2
-          ctest --test-dir build/cinematic-windows -R '^HoroCinematic(Model|Runtime)Tests::' --output-on-failure -j 2
+          cmake --build build/cinematic-windows --target \
+            HoroCinematicModelTests HoroCinematicRuntimeTests HoroCinematicPropertyIntegrationTests \
+            HoroCinematicModelPublicHeaderConsumer HoroCinematicRuntimePublicHeaderConsumer HoroEditorServicesPublicHeaderConsumer \
+            --parallel 2
+          ctest --test-dir build/cinematic-windows -R '^HoroCinematic(Model|Runtime|PropertyIntegration)Tests::' --output-on-failure -j 2
         env:
           CC: cl
           CXX: cl

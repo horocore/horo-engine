@@ -140,6 +140,8 @@ namespace Horo::Physics::Detail {
     /** @brief Reads translated native state alongside retained body policy on the owner thread. */
     [[nodiscard]] Result<PhysicsBodyReconciliation> ReadCanonicalSceneBodyReconciliation(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                                                          BodyHandle body);
+    /** @brief Copies bounded scene-body activity counts on the owner thread; native islands remain private and unsupported. */
+    [[nodiscard]] Result<PhysicsActivationObservation> ReadCanonicalSceneActivation(CanonicalWorldHandle world, PhysicsWorldId owner);
     /** @brief Admits one scene constraint after both body endpoints have been staged. */
     [[nodiscard]] Result<ConstraintHandle> CreateCanonicalSceneConstraint(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                                           const PhysicsConstraintDescriptor &descriptor);

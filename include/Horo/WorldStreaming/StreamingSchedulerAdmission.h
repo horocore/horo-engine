@@ -108,6 +108,10 @@ namespace Horo::WorldStreaming {
          */
         [[nodiscard]] Result<void> Release(const StreamingSchedulerReservation &reservation);
 
+        /** @brief Inspects the ledger-owned operation without permitting caller mutation.
+         * @param reservation Exact retained reservation. @return Canonical snapshot or typed invalid/stale failure. */
+        [[nodiscard]] Result<StreamingCellOperation> Inspect(const StreamingSchedulerReservation &reservation) const;
+
         /** @brief Stops new admission while retained reservations drain. @pre Called on the owning StreamingAuthorityRole. */
         void BeginShutdown() noexcept;
 
@@ -123,6 +127,8 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] std::uint64_t ReservedCapacityUnits() const noexcept;
 
     private:
+        [[nodiscard]] Result<std::size_t> FindExact(const StreamingSchedulerReservation &reservation) const;
+
         struct Entry final {
             StreamingSchedulerReservation reservation;
             StreamingCellOperation operation;

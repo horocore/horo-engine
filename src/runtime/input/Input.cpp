@@ -4,6 +4,7 @@
 #include "InputErrors.h"
 
 #include <algorithm>
+#include <bitset>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -40,6 +41,12 @@ namespace Horo::Input {
             state.down = down;
             state.pressed = down;
             state.released = !down;
+        }
+
+        /** @brief Advances a revision without recycling exhausted identities. */
+        void AdvanceRevision(std::uint64_t &revision) noexcept {
+            if (revision != 0)
+                revision = revision == std::numeric_limits<std::uint64_t>::max() ? 0 : revision + 1;
         }
 
         float ApplyDeadzone(float value, const InputBinding &binding) noexcept {
@@ -133,6 +140,37 @@ namespace Horo::Input {
         struct BindingEvaluationResult {
             float axis{0.0F};
             ButtonState state{};
+            std::optional<GamepadDeviceId> device;
+        };
+
+        /** @brief Fixed exact transition ledger avoids frame-hot hash-node allocation and identity collisions. */
+        struct GamepadTransitions {
+            struct Entry {
+                GamepadDeviceId device;
+                BindingControlKind kind;
+                std::uint64_t control;
+                bool operator==(const Entry &) const noexcept = default;
+            };
+
+            std::array<Entry, MaximumConsumedGamepadTransitions> entries{};
+            std::size_t count{};
+            bool capacityExceeded{};
+
+            bool Consume(const Entry &entry) noexcept {
+                if (const auto used = std::span(entries).first(count); std::ranges::find(used, entry) != used.end())
+                    return false;
+                if (count == entries.size()) {
+                    capacityExceeded = true;
+                    return false;
+                }
+                entries[count++] = entry;
+                return true;
+            }
+
+            void clear() noexcept {
+                count = 0;
+                capacityExceeded = false;
+            }
         };
 
         float ResolveGamepadAxis(const float rawAxis, const InputBinding &binding) noexcept {
@@ -209,19 +247,15 @@ namespace Horo::Input {
         BindingEvaluationResult EvaluateGamepadBinding(const InputBinding &binding, const RawInputSnapshot &snapshot,
                                                        const RawInputSnapshot *previousSnapshot, const InputDeviceAssignments &assignments,
                                                        const std::optional<PlayerId> &player,
-                                                       std::unordered_set<std::uint64_t> &consumedGamepadTransitions) {
+                                                       GamepadTransitions &consumedGamepadTransitions) {
             BindingEvaluationResult result;
             for (const GamepadState &pad : snapshot.gamepads) {
                 if (player.has_value() && assignments.PlayerFor(pad.id) != player)
                     continue;
                 result = EvaluateBindingOnPad(binding, pad, previousSnapshot);
-                if (result.state.pressed) {
-                    const std::uint64_t control =
-                        (static_cast<std::uint64_t>(binding.kind) << 48U) | (GamepadControlId(binding) << 32U) | pad.id.slot;
-                    const std::uint64_t transition = control ^ pad.id.sessionGeneration;
-                    if (!consumedGamepadTransitions.insert(transition).second)
-                        result.state.pressed = false;
-                }
+                result.device = pad.id;
+                if (result.state.pressed && !consumedGamepadTransitions.Consume({pad.id, binding.kind, GamepadControlId(binding)}))
+                    result.state.pressed = false;
                 if (result.axis != 0.0F || result.state.pressed || result.state.released)
                     break;
             }
@@ -840,12 +874,15 @@ namespace Horo::Input {
         std::optional<Capture> capture;
         std::vector<ActionDescriptor> actions;
         InputBindingProfile profile;
-        std::unordered_set<std::uint32_t> consumedKeys;
-        std::unordered_set<std::uint32_t> consumedPointerButtons;
-        std::unordered_set<std::uint64_t> consumedGamepadTransitions;
+        std::bitset<static_cast<std::size_t>(Key::Count)> consumedKeys;
+        std::bitset<static_cast<std::size_t>(PointerButton::Count)> consumedPointerButtons;
+        GamepadTransitions consumedGamepadTransitions;
         bool consumedWheelX{false};
         bool consumedWheelY{false};
         InputDeviceAssignments assignments;
+        std::uint64_t configurationRevision{1};
+        std::uint64_t assignmentRevision{1};
+        ActionReadStatus lastActionStatus{ActionReadStatus::Unavailable};
         std::uint64_t nextToken{1};
         bool modalBarrier{false};
         bool blockNextFrame{false};
@@ -888,8 +925,8 @@ namespace Horo::Input {
             impl_->textFocus.minimumCompositionRevision = snapshot.compositionRevision + 1;
             impl_->textFocus.blockedFrame = true;
         }
-        impl_->consumedKeys.clear();
-        impl_->consumedPointerButtons.clear();
+        impl_->consumedKeys.reset();
+        impl_->consumedPointerButtons.reset();
         impl_->consumedGamepadTransitions.clear();
         impl_->consumedWheelX = false;
         impl_->consumedWheelY = false;
@@ -1034,6 +1071,7 @@ namespace Horo::Input {
             return Result<void>::Failure(MakeError(Errors::ActionMapValidationFailed, validation.diagnostics.front().message));
         impl_->actions = std::move(actions);
         impl_->profile = std::move(profile);
+        AdvanceRevision(impl_->configurationRevision);
         return Result<void>::Success();
     }
 
@@ -1049,49 +1087,54 @@ namespace Horo::Input {
         if (const BindingValidationReport validation = ValidateBindingProfile(impl_->actions, profile); !validation.IsValid())
             return Result<void>::Failure(MakeError(Errors::ProfileValidationFailed, validation.diagnostics.front().message));
         impl_->profile = std::move(profile);
+        AdvanceRevision(impl_->configurationRevision);
         return Result<void>::Success();
     }
 
     namespace {
+        /** @brief Consumes one bounded digital transition without allocating. */
+        template <std::size_t Size> bool ConsumeControl(std::bitset<Size> &bits, const std::size_t index) noexcept {
+            if (index >= Size || bits.test(index))
+                return false;
+            bits.set(index);
+            return true;
+        }
+
+        /** @brief Preserves held state while admitting a digital edge once in the exact frame ledger. */
+        template <std::size_t Size>
+        BindingEvaluationResult EvaluateDigital(ButtonState state, std::bitset<Size> &consumed, const std::size_t index) noexcept {
+            if (state.pressed && !ConsumeControl(consumed, index))
+                state.pressed = false;
+            return {state.down ? 1.0F : 0.0F, state};
+        }
+
+        /** @brief Admits one wheel projection without allocating or replaying a consumed transition. */
+        BindingEvaluationResult EvaluateWheel(const float wheel, bool &consumed) noexcept {
+            const float axis = consumed ? 0.0F : wheel;
+            const bool active = axis != 0.0F;
+            consumed = consumed || active;
+            return {axis, {active, active, false}};
+        }
+
         template <typename ImplType>
-        [[nodiscard]] std::pair<float, ButtonState> EvaluateControlBinding(const InputBinding &binding, const RawInputSnapshot &snapshot,
-                                                                           const std::optional<PlayerId> player, ImplType &impl) {
-            float axis = 0.0F;
-            ButtonState state;
+        [[nodiscard]] BindingEvaluationResult EvaluateControlBinding(const InputBinding &binding, const RawInputSnapshot &snapshot,
+                                                                     const std::optional<PlayerId> player, ImplType &impl) {
+            using enum BindingControlKind;
             switch (binding.kind) {
-                case BindingControlKind::Key:
-                    state = snapshot.State(binding.key);
-                    if (state.pressed && !impl.consumedKeys.insert(static_cast<std::uint32_t>(binding.key)).second)
-                        state.pressed = false;
-                    axis = state.down ? 1.0F : 0.0F;
-                    break;
-                case BindingControlKind::PointerButton:
-                    state = snapshot.State(binding.pointerButton);
-                    if (state.pressed && !impl.consumedPointerButtons.insert(static_cast<std::uint32_t>(binding.pointerButton)).second)
-                        state.pressed = false;
-                    axis = state.down ? 1.0F : 0.0F;
-                    break;
-                case BindingControlKind::PointerWheelX:
-                    axis = impl.consumedWheelX ? 0.0F : snapshot.pointer.wheelX;
-                    state.pressed = axis != 0.0F;
-                    state.down = state.pressed;
-                    impl.consumedWheelX = impl.consumedWheelX || state.pressed;
-                    break;
-                case BindingControlKind::PointerWheelY:
-                    axis = impl.consumedWheelY ? 0.0F : snapshot.pointer.wheelY;
-                    state.pressed = axis != 0.0F;
-                    state.down = state.pressed;
-                    impl.consumedWheelY = impl.consumedWheelY || state.pressed;
-                    break;
+                case Key:
+                    return EvaluateDigital(snapshot.State(binding.key), impl.consumedKeys, Index(binding.key));
+                case PointerButton:
+                    return EvaluateDigital(snapshot.State(binding.pointerButton), impl.consumedPointerButtons,
+                                           Index(binding.pointerButton));
+                case PointerWheelX:
+                    return EvaluateWheel(snapshot.pointer.wheelX, impl.consumedWheelX);
+                case PointerWheelY:
+                    return EvaluateWheel(snapshot.pointer.wheelY, impl.consumedWheelY);
                 default: {
-                    const auto result = EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments, player,
-                                                               impl.consumedGamepadTransitions);
-                    axis = result.axis;
-                    state = result.state;
-                    break;
+                    return EvaluateGamepadBinding(binding, snapshot, impl.previousSnapshot, impl.assignments, player,
+                                                  impl.consumedGamepadTransitions);
                 }
             }
-            return {axis, state};
         }
 
         void ApplyRadialDeadzone(ActionValue &value, const float radialDeadzone) {
@@ -1119,7 +1162,32 @@ namespace Horo::Input {
             ActionValue &value;
             bool &radial2D;
             float &radialDeadzone;
+            ActionEvidence &evidence;
         };
+
+        /** @brief Selects canonical source evidence from admitted edges with a stable simultaneous-modality order. */
+        void AccumulateSource(const InputBinding &binding, const BindingEvaluationResult &evaluated, ActionEvidence &evidence) noexcept {
+            if (!evaluated.state.down && !evaluated.state.pressed)
+                return;
+            const auto source = CanonicalActionSource(binding, evaluated.device);
+            const bool meaningful = evaluated.state.pressed && source.modality != InputModality::Unknown;
+            if (!evidence.source || (meaningful && !evidence.meaningful) ||
+                (meaningful == evidence.meaningful && source.modality < evidence.source->modality))
+                evidence.source = source;
+            evidence.meaningful = evidence.meaningful || meaningful;
+        }
+
+        /** @brief Finalizes post-deadzone evidence; noise cannot drive presentation switching. */
+        void FinalizeAction(ActionEvidence &evidence, const bool radial2D, const float radialDeadzone) noexcept {
+            auto &value = evidence.value;
+            value.x = std::clamp(value.x, -1.0F, 1.0F);
+            value.y = std::clamp(value.y, -1.0F, 1.0F);
+            if (radial2D)
+                ApplyRadialDeadzone(value, radialDeadzone);
+            if (value.x == 0.0F && value.y == 0.0F)
+                evidence.meaningful = false;
+            evidence.status = ActionReadStatus::Resolved;
+        }
 
         template <typename ImplType>
         void AccumulateBinding(const InputBinding &binding, const ActionDescriptor &descriptor, const RawInputSnapshot &snapshot,
@@ -1127,8 +1195,10 @@ namespace Horo::Input {
             if (!IsBindingActive(binding, snapshot))
                 return;
 
-            auto [rawAxis, state] = EvaluateControlBinding(binding, snapshot, player, impl);
-            const float axis = rawAxis * binding.scale;
+            const auto evaluated = EvaluateControlBinding(binding, snapshot, player, impl);
+            const auto state = evaluated.state;
+            const float axis = evaluated.axis * binding.scale;
+            AccumulateSource(binding, evaluated, target.evidence);
             target.radial2D =
                 target.radial2D || (descriptor.valueType == ActionValueType::Axis2D && binding.deadzoneKind == DeadzoneKind::Radial);
             target.radialDeadzone = std::max(target.radialDeadzone, binding.deadzone);
@@ -1145,51 +1215,102 @@ namespace Horo::Input {
         }
     }  // namespace
 
+    /** @copydoc InputRouter::ReadAction */
     ActionValue InputRouter::ReadAction(const InputContextToken &context, const ActionId &actionId, const std::optional<PlayerId> player) {
-        ActionValue value;
+        return ReadActionEvidence(context, actionId, player).value;
+    }
+
+    /** @copydoc InputRouter::ReadActionEvidence */
+    ActionEvidence InputRouter::ReadActionEvidence(const InputContextToken &context, const ActionId &actionId,
+                                                   const std::optional<PlayerId> player) {
+        ActionEvidence evidence;
+        impl_->lastActionStatus = ActionReadStatus::Unavailable;
+        ActionValue &value = evidence.value;
         if (!IsContextActive(context))
-            return value;
+            return evidence;
         const auto descriptor = std::ranges::find(impl_->actions, actionId, &ActionDescriptor::id);
         if (descriptor == impl_->actions.end())
-            return value;
+            return evidence;
         if (const auto contextEntry = std::ranges::find(impl_->contexts, context.token_, &Impl::Context::token);
             contextEntry == impl_->contexts.end() || contextEntry->id != descriptor->context)
-            return value;
+            return evidence;
         const std::vector<InputBinding> *bindings = &descriptor->defaultBindings;
         if (const auto overrideValue = std::ranges::find(impl_->profile.overrides, actionId, &BindingOverride::action);
             overrideValue != impl_->profile.overrides.end())
             bindings = &overrideValue->bindings;
         const RawInputSnapshot &snapshot = Snapshot();
+        const auto keysBefore = impl_->consumedKeys;
+        const auto pointerBefore = impl_->consumedPointerButtons;
+        const auto gamepadCountBefore = impl_->consumedGamepadTransitions.count;
+        const bool wheelXBefore = impl_->consumedWheelX;
+        const bool wheelYBefore = impl_->consumedWheelY;
+        impl_->consumedGamepadTransitions.capacityExceeded = false;
         bool radial2D = false;
         float radialDeadzone = 0.0F;
-        BindingAccumulationTarget target{.value = value, .radial2D = radial2D, .radialDeadzone = radialDeadzone};
+        BindingAccumulationTarget target{value, radial2D, radialDeadzone, evidence};
         for (const InputBinding &binding : *bindings)
             AccumulateBinding(binding, *descriptor, snapshot, player, *impl_, target);
-        value.x = std::clamp(value.x, -1.0F, 1.0F);
-        value.y = std::clamp(value.y, -1.0F, 1.0F);
-        if (radial2D)
-            ApplyRadialDeadzone(value, radialDeadzone);
-        return value;
+        if (impl_->consumedGamepadTransitions.capacityExceeded) {
+            impl_->consumedKeys = keysBefore;
+            impl_->consumedPointerButtons = pointerBefore;
+            impl_->consumedGamepadTransitions.count = gamepadCountBefore;
+            impl_->consumedWheelX = wheelXBefore;
+            impl_->consumedWheelY = wheelYBefore;
+            evidence = {};
+            evidence.status = ActionReadStatus::CapacityExceeded;
+            impl_->lastActionStatus = evidence.status;
+            return evidence;
+        }
+        FinalizeAction(evidence, radial2D, radialDeadzone);
+        impl_->lastActionStatus = evidence.status;
+        return evidence;
+    }
+
+    /** @copydoc InputRouter::LastActionStatus */
+    ActionReadStatus InputRouter::LastActionStatus() const noexcept {
+        return impl_->lastActionStatus;
+    }
+
+    /** @copydoc InputRouter::RoutingState */
+    InputRoutingState InputRouter::RoutingState(const InputContextToken &context) const noexcept {
+        return {context.router_ == this && TokenActive(context.token_) ? context.token_ : 0,
+                impl_->configurationRevision,
+                impl_->assignmentRevision,
+                impl_->contexts.size(),
+                Snapshot().gamepads.size(),
+                impl_->previousSnapshot ? impl_->previousSnapshot->gamepads.size() : 0};
+    }
+
+    /** @copydoc InputRouter::ContextMatches */
+    bool InputRouter::ContextMatches(const InputContextToken &context, const InputContextId &id) const noexcept {
+        if (context.router_ != this)
+            return false;
+        const auto found = std::ranges::find(impl_->contexts, context.token_, &Impl::Context::token);
+        return found != impl_->contexts.end() && found->id == id;
     }
 
     bool InputRouter::ConsumeKey(const InputContextToken &context, const Key key) {
         if (!IsContextActive(context) || !Snapshot().State(key).pressed)
             return false;
-        return impl_->consumedKeys.insert(static_cast<std::uint32_t>(key)).second;
+        return ConsumeControl(impl_->consumedKeys, Index(key));
     }
 
     bool InputRouter::ConsumePointerButton(const InputContextToken &context, const PointerButton button) {
         if (!IsContextActive(context) || !Snapshot().State(button).pressed)
             return false;
-        return impl_->consumedPointerButtons.insert(static_cast<std::uint32_t>(button)).second;
+        return ConsumeControl(impl_->consumedPointerButtons, Index(button));
     }
 
     bool InputRouter::AssignGamepad(const PlayerId player, const GamepadDeviceId gamepad) {
-        return Snapshot().FindGamepad(gamepad) != nullptr && impl_->assignments.Assign(player, gamepad);
+        if (Snapshot().FindGamepad(gamepad) == nullptr || !impl_->assignments.Assign(player, gamepad))
+            return false;
+        AdvanceRevision(impl_->assignmentRevision);
+        return true;
     }
 
     void InputRouter::UnassignGamepad(const GamepadDeviceId gamepad) noexcept {
         impl_->assignments.Unassign(gamepad);
+        AdvanceRevision(impl_->assignmentRevision);
     }
 
     std::optional<PlayerId> InputRouter::PlayerForGamepad(const GamepadDeviceId gamepad) const noexcept {

@@ -56,6 +56,16 @@ namespace Horo::Audio {
                 return Handle(command.voice) && command.parameter.IsValid() && std::isfinite(command.value);
             }
 
+            /** @brief Check owned automation values without resolving the target or smoothing policy. */
+            bool operator()(const AudioAutomateParameterCommand &command) const noexcept {
+                return command.request.address.owner == owner && IsValidAudioAutomationRequest(command.request);
+            }
+
+            /** @brief Cancellation carries the exact sample-clock generation even when the ID is no longer active. */
+            bool operator()(const AudioCancelAutomationCommand &command) const noexcept {
+                return command.requestId != 0 && command.clockGeneration != 0 && command.discontinuityRevision != 0;
+            }
+
             /** @brief Validate prepared graph storage without resolving or adopting it. */
             bool operator()(const AudioSwapGraphCommand &command) const noexcept {
                 return Storage(command.storage);
