@@ -16,7 +16,19 @@
 #include <vector>
 
 namespace Horo::Destruction {
-    inline constexpr std::uint32_t ChunkMeshCookSchemaVersion = 1;
+    inline constexpr std::uint32_t ChunkMeshCookSchemaVersion = 2;
+
+    struct CollisionPieceIdentityTag;
+    /** @brief Geometry-derived chunk-local identity, independent of piece array order or Physics target. */
+    using CollisionPieceId = DestructionStableIdentity<CollisionPieceIdentityTag>;
+
+    /** @brief Solver-neutral closed collision region retained for independent Physics cooking. */
+    struct ChunkCollisionPiece final {
+        CollisionPieceId id{};
+        std::vector<std::array<float, 3>> positions;
+        std::vector<std::array<std::uint32_t, 3>> triangles;
+        double volume{};
+    };
 
     namespace ChunkMeshCookErrors {
         extern const ErrorCodeDescriptor InvalidInput;
@@ -88,6 +100,7 @@ namespace Horo::Destruction {
         std::vector<ChunkMeshVertex> vertices;
         std::vector<ChunkMeshFace> faces;
         ChunkMeshMassInputs mass{};
+        std::vector<ChunkCollisionPiece> collisionPieces;
     };
 
     /** @brief Complete detached artifact payload, owned only through a const shared snapshot. */
@@ -141,6 +154,12 @@ namespace Horo::Destruction {
                                                                                             std::span<const ImportedChunkMaterialBinding>,
                                                                                             const CancellationToken &);
     };
+
+    /** @brief Verifies a sealed mesh artifact before independent derived cooking.
+     * @param artifact Immutable authorized mesh cook result.
+     * @return Success or typed schema/integrity failure without mutation.
+     */
+    [[nodiscard]] Result<void> ValidateChunkMeshArtifact(const ChunkMeshArtifact &artifact);
 
     /**
      * @brief Computes the exact content digest for this mesh cook's semantic inputs.

@@ -148,6 +148,30 @@ namespace Horo::Cinematic {
                                                                    const Runtime::PropertyBindingRegistry &registry);
 
         /**
+         * @brief Inspects every binding at activation without invoking accessors or stopping at the first failed track.
+         * @param tracks Authored tracks to validate, including required tracks.
+         * @param targets Current owner-issued component snapshot.
+         * @param registry Frozen shared scene property registry.
+         * @param diagnostics Caller storage with at least tracks.size() entries.
+         * @return Failed-binding count or a typed structural/capacity failure.
+         * @note Required and optional failures carry identical track-specific evidence; the caller owns admission policy.
+         */
+        [[nodiscard]] static Result<std::size_t> InspectBindings(std::span<const PropertyTrackDescriptor> tracks,
+                                                                 std::span<const PropertyBindingTargetSnapshot> targets,
+                                                                 const Runtime::PropertyBindingRegistry &registry,
+                                                                 std::span<PropertyEvaluationDiagnostic> diagnostics);
+
+        /**
+         * @brief Reports every stale or unresolved binding without touching component storage.
+         * @param context Current scene and component snapshot after lifecycle commit.
+         * @param diagnostics Caller storage with at least TrackCount entries.
+         * @return Diagnostic count or a typed capacity failure.
+         * @note Scene replacement fences every old track, including previously unresolved optional tracks.
+         */
+        [[nodiscard]] Result<std::size_t> Revalidate(const PropertyEvaluationContext &context,
+                                                     std::span<PropertyEvaluationDiagnostic> diagnostics) const;
+
+        /**
          * @brief Samples values directly at an arbitrary time into caller-owned storage.
          * @param time Exact random-access curve time.
          * @param context Current scene generation and target snapshot.
@@ -176,7 +200,8 @@ namespace Horo::Cinematic {
          * @param context Current scene generation and target snapshot.
          * @param values Caller storage with at least TrackCount entries.
          * @param diagnostics Caller storage with at least TrackCount entries.
-         * @return Counts or a typed sampling/stale/capacity failure.
+         * @return Counts or a typed scene/capacity failure; per-track sampling and binding failures skip only their setter
+         * and retain typed diagnostics. Successful samples and diagnostics are compacted in stable track order.
          */
         [[nodiscard]] Result<PropertyEvaluationResult> EvaluateAndApply(CurveTime time, const PropertyEvaluationContext &context,
                                                                         std::span<PropertyEvaluationValue> values,
@@ -201,6 +226,8 @@ namespace Horo::Cinematic {
                                                                 std::span<const PropertyTrackDescriptor> priorTracks,
                                                                 std::span<const PropertyBindingTargetSnapshot> targets,
                                                                 const Runtime::PropertyBindingRegistry &registry);
+        [[nodiscard]] bool SampleTrack(const CompiledTrack &compiled, CurveTime time, const PropertyEvaluationContext &context,
+                                       PropertyEvaluationValue &value, PropertyEvaluationDiagnostic &diagnostic) const;
         [[nodiscard]] bool ApplyTrack(const CompiledTrack &compiled, const PropertyEvaluationContext &context,
                                       const PropertyEvaluationValue &value, PropertyEvaluationDiagnostic &diagnostic) const;
 

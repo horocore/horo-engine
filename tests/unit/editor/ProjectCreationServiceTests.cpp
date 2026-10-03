@@ -204,16 +204,24 @@ namespace {
         Horo::Editor::ProjectCreationService service{jobs, bus};
         std::atomic<int> createdEvents{0};
         std::atomic<int> revisionEvents{0};
+        std::atomic<int> foreignThreadEvents{0};
+        const auto ownerThread = std::this_thread::get_id();
         const auto createdSubscription = bus.Subscribe<Horo::Editor::ProjectCreatedEvent>([&](const auto &) {
             ++createdEvents;
+            if (std::this_thread::get_id() != ownerThread)
+                ++foreignThreadEvents;
         });
         const auto revisionSubscription = bus.Subscribe<Horo::Editor::ProjectCreationRevisionChangedEvent>([&](const auto &) {
             ++revisionEvents;
+            if (std::this_thread::get_id() != ownerThread)
+                ++foreignThreadEvents;
         });
 
         const auto started = service.StartCreate(ValidRequest(temporary.Path() / "EventProject"));
         REQUIRE((started.HasValue()));
         REQUIRE((WaitForTerminal(service, started.Value().id).state == Horo::Editor::ProjectCreationOperationState::Succeeded));
+        // Terminal state commits the directory; joining also finishes both worker-side event publications.
+        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
         REQUIRE((createdEvents.load() == 0));
         REQUIRE((revisionEvents.load() == 0));
         service.PumpMainThread();
@@ -222,6 +230,6 @@ namespace {
         service.PumpMainThread();
         REQUIRE((createdEvents.load() == 1));
         REQUIRE((revisionEvents.load() == 1));
-        jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+        REQUIRE((foreignThreadEvents.load() == 0));
     }
 }  // namespace

@@ -63,6 +63,8 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiControlStateMachine::Storage::Storage */
     UiControlStateMachine::Storage::Storage(UiControlDescriptor source)
         : descriptor(std::move(source)), state(UiControlDetail::InitialState(descriptor)) {
+        configuredAvailability =
+            UiControlDetail::BaseOf(descriptor).initiallyEnabled ? UiControlAvailability::Enabled : UiControlAvailability::Disabled;
         if (const auto *text = std::get_if<UiTextInputControlDescriptor>(&descriptor); text != nullptr)
             editStartText = text->initialText;
     }

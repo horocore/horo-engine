@@ -131,6 +131,27 @@ CI uses two cache layers per job across the validation, UI, and release
 workflows. The workflow files implement the contracts in this document; action
 versions and runner labels may change without changing those contracts.
 
+### Cache Storage Ownership
+
+Only runs with `github.ref == 'refs/heads/main'` may publish GitHub Actions
+caches. Pull requests, feature branches, and tags consume compatible caches
+without uploading new snapshots. A miss on those refs builds normally and keeps
+any new compiler entries on the temporary runner only. This avoids one stored
+compiler/dependency generation per PR competing for the repository cache quota.
+
+Native and Sonar compiler restores select the latest compatible saved main
+checkpoint. They never wait for an in-progress main build. Dependency/scanner
+restores retain their compatibility keys; their save steps also require main.
+Other workflows split restore and save explicitly, and ccache-action's post-job
+save input is enabled only on main. Direct sccache GitHub-backend jobs use
+`SCCACHE_GHA_RW_MODE=READ_ONLY` outside main; directory-snapshot sccache jobs
+disable that backend so there is no second upload path.
+
+Existing caches are not removed by changing writer policy. Main must complete
+its initial checkpoints before other refs can benefit from them, and old main
+generations still share the repository quota and eviction policy. Cache cleanup
+must identify exact refs/keys and preserve needed main checkpoints.
+
 ### Native Test And Audio Checkpoints
 
 The active `ci.yml` native-test and Audio Real-Time Safety jobs restore caches
@@ -146,7 +167,7 @@ described below already exist.
   Unsupported tool names and malformed versions fail before cache restore.
   An immutable run-ID/attempt
   suffix permits every successful build to publish an updated snapshot. Restore
-  first selects the latest accessible snapshot for the same PR/ref, then main.
+  selects the latest compatible main snapshot. Only main publishes checkpoints.
   A running main workflow is never awaited: only an already saved checkpoint is
   available, even if that workflow is still executing tests.
 - FetchContent caches store populated `*-src` directories and `*-subbuild`
@@ -213,9 +234,9 @@ Key design decisions:
   performance trade-off: sccache reuses an object only when its internal key
   matches the compiler, architecture, command line, preprocessing inputs, and
   other compilation state. Incompatible objects remain unused. After a
-  successful primary-key miss, GitHub saves the resulting updated store under
-  the new primary key. The compiler version in `restore-keys` prevents seeding
-  across compiler namespaces.
+  successful primary-key miss on main, GitHub saves the resulting updated store
+  under the new primary key. Other refs only restore. The compiler version in
+  `restore-keys` prevents seeding across compiler namespaces.
 
 - **UI workflow (`ci-ui.yml`):** Uses a separate compiler-cache job or profile
   namespace. The UI automation binary is a different build target with
