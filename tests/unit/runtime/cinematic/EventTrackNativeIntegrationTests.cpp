@@ -4,6 +4,33 @@ namespace Horo::Cinematic {
     using namespace EventTestSupport;
 
     namespace {
+        /** @brief Creates the ordinary session runtime used by publication and rollback regressions. */
+        [[nodiscard]] CinematicRuntimeService MakeRuntime() {
+            auto created = CinematicRuntimeService::Create({Session, SequenceCookTier::Standard});
+            REQUIRE(created.HasValue());
+            return std::move(created).Value();
+        }
+
+        /** @brief Verifies that an aborted preparation has emitted neither values nor completion. */
+        void CheckUnpublished(const PublicationProbe &output) {
+            CHECK(output.writes == 0);
+            CHECK(output.finished == 0);
+        }
+
+        /** @brief Verifies the complete publication evidence for one committed player. */
+        void CheckPublished(const PublicationProbe &output, const float value, const std::size_t finished) {
+            CHECK(output.value == value);
+            CHECK(output.writes == 1);
+            CHECK(output.finished == finished);
+        }
+
+        /** @brief Verifies that aggregate preparation has not changed either participating player. */
+        void CheckUnchangedPlayers(const CinematicRuntimeService &runtime, const SequencePlayerSnapshot &first,
+                                   const SequencePlayerSnapshot &second) {
+            CHECK(runtime.Snapshot(first.handle).Value() == first);
+            CHECK(runtime.Snapshot(second.handle).Value() == second);
+        }
+
         [[nodiscard]] std::unique_ptr<Gameplay::LoadedGameModule> LoadCallback(const Gameplay::GameModuleHost &host,
                                                                                CinematicEventDispatcher &dispatcher) {
             auto loaded = host.Load(HORO_TEST_GAME_MODULE_PATH, {"game.tests", Gameplay::CurrentGameplayBuildFingerprint(),
@@ -43,9 +70,7 @@ namespace Horo::Cinematic {
         Gameplay::GameModuleHost host;
         auto dispatcher = Dispatcher();
         auto gameModule = LoadCallback(host, dispatcher);
-        auto created = CinematicRuntimeService::Create({Session, SequenceCookTier::Standard});
-        REQUIRE(created.HasValue());
-        auto runtime = std::move(created).Value();
+        auto runtime = MakeRuntime();
         const SequencePlayerHandle player{Session, {1, 1}};
         const auto cooked = Cooked();
         CinematicEventSession session(runtime, dispatcher);
@@ -60,8 +85,7 @@ namespace Horo::Cinematic {
         REQUIRE(session.BeginTick(1).HasValue());
         REQUIRE(session.Evaluate(player, 10, scratch, hooks).HasValue());
         CHECK(runtime.Snapshot(player).Value() == before);
-        CHECK(published.writes == 0);
-        CHECK(published.finished == 0);
+        CheckUnpublished(published);
         CHECK(dispatcher.Results().empty());
         REQUIRE(session.AbortTick().HasValue());
         CHECK(runtime.Snapshot(player).Value() == before);
@@ -69,9 +93,7 @@ namespace Horo::Cinematic {
         REQUIRE(session.BeginTick(1).HasValue());
         REQUIRE(session.Evaluate(player, 10, scratch, hooks).HasValue());
         REQUIRE(session.CommitTick().HasValue());
-        CHECK(published.writes == 1);
-        CHECK(published.value == 10.0F);
-        CHECK(published.finished == 1);
+        CheckPublished(published, 10.0F, 1);
         CHECK(runtime.Snapshot(player).Value().state == SequencePlaybackState::Stopped);
         CHECK(dispatcher.Results().empty());
         REQUIRE(dispatcher.Drain(4).Value() == 1);
@@ -94,9 +116,7 @@ namespace Horo::Cinematic {
         auto dispatcher = Dispatcher();
         auto handler = std::make_shared<HandlerProbe>();
         Register(dispatcher, handler);
-        auto created = CinematicRuntimeService::Create({Session, SequenceCookTier::Standard});
-        REQUIRE(created.HasValue());
-        auto runtime = std::move(created).Value();
+        auto runtime = MakeRuntime();
         CinematicEventSession session(runtime, dispatcher);
         const SequencePlayerHandle first{Session, {1, 1}};
         const SequencePlayerHandle second{Session, {2, 1}};
@@ -121,25 +141,19 @@ namespace Horo::Cinematic {
         CHECK(session.Evaluate(second, 3, {secondValues, {}, {}}).HasError());
         CHECK(session.CommitTick().HasError());
         REQUIRE(session.AbortTick().HasValue());
-        CHECK(runtime.Snapshot(first).Value() == firstBefore);
-        CHECK(runtime.Snapshot(second).Value() == secondBefore);
-        CHECK(firstOutput.writes == 0);
-        CHECK(firstOutput.finished == 0);
-        CHECK(secondOutput.writes == 0);
+        CheckUnchangedPlayers(runtime, firstBefore, secondBefore);
+        CheckUnpublished(firstOutput);
+        CheckUnpublished(secondOutput);
         CHECK(dispatcher.Drain(4).Value() == 0);
         CHECK(handler->calls == 0);
 
         REQUIRE(session.BeginTick(1).HasValue());
         REQUIRE(session.Evaluate(second, 3, secondScratch).HasValue());
         REQUIRE(session.Evaluate(first, 10, firstScratch, firstHooks).HasValue());
-        CHECK(runtime.Snapshot(first).Value() == firstBefore);
-        CHECK(runtime.Snapshot(second).Value() == secondBefore);
+        CheckUnchangedPlayers(runtime, firstBefore, secondBefore);
         REQUIRE(session.CommitTick().HasValue());
-        CHECK(firstOutput.value == 10.0F);
-        CHECK(firstOutput.writes == 1);
-        CHECK(firstOutput.finished == 1);
-        CHECK(secondOutput.value == 3.0F);
-        CHECK(secondOutput.writes == 1);
+        CheckPublished(firstOutput, 10.0F, 1);
+        CheckPublished(secondOutput, 3.0F, 0);
         CHECK(runtime.Snapshot(first).Value().state == SequencePlaybackState::Stopped);
         CHECK(runtime.Snapshot(second).Value().position == 3);
         CHECK(handler->calls == 0);
@@ -154,9 +168,7 @@ namespace Horo::Cinematic {
         auto dispatcher = Dispatcher();
         auto handler = std::make_shared<HandlerProbe>();
         Register(dispatcher, handler);
-        auto created = CinematicRuntimeService::Create({Session, SequenceCookTier::Standard});
-        REQUIRE(created.HasValue());
-        auto runtime = std::move(created).Value();
+        auto runtime = MakeRuntime();
         CinematicEventSession session(runtime, dispatcher);
         const SequencePlayerHandle player{Session, {1, 1}};
         PublicationProbe output;
@@ -172,8 +184,7 @@ namespace Horo::Cinematic {
         RequireCode(session.CommitTick(), EventTrackErrors::StaleBinding);
         REQUIRE(session.AbortTick().HasValue());
         CHECK(runtime.Snapshot(player).Value().position == 0);
-        CHECK(output.writes == 0);
-        CHECK(output.finished == 0);
+        CheckUnpublished(output);
         CHECK(dispatcher.Drain(4).Value() == 0);
         CHECK(handler->calls == 0);
         REQUIRE(session.Close().HasValue());
