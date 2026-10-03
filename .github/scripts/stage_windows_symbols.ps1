@@ -26,6 +26,17 @@ foreach ($library in @('dbghelp.dll', 'dbgcore.dll', 'symsrv.dll', 'srcsrv.dll')
   }
 }
 
+# Recent DbgHelp readers load DIA dynamically when opening PDBs. Stage its x64
+# reader as well; copying only DbgHelp's static companions does not prove PDB support.
+$dia = Join-Path $reader.DirectoryName 'msdia140.dll'
+if (-not (Test-Path -LiteralPath $dia -PathType Leaf)) {
+  if (-not $env:VSINSTALLDIR) { throw 'Visual Studio installation path is unavailable for the x64 DIA reader' }
+  $dia = Join-Path $env:VSINSTALLDIR 'DIA SDK\bin\amd64\msdia140.dll'
+}
+if (-not (Test-Path -LiteralPath $dia -PathType Leaf)) { throw "Windows x64 DIA symbol reader is unavailable: $dia" }
+Copy-Item -LiteralPath $dia -Destination (Join-Path $destination 'msdia140.dll') -Force
+Write-Output "Staged DIA symbol library: $dia ($((Get-Item -LiteralPath $dia).VersionInfo.FileVersion))"
+
 # Run from outside the binary directory to catch accidental reliance on the caller's working directory.
 Push-Location ([System.IO.Path]::GetTempPath())
 try {
