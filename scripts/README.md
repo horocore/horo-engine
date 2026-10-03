@@ -39,30 +39,31 @@ Reports and managed profiles live outside the source tree. See the
 [local-analysis guide](../docs/guides/sonarqube-mcp-local-analysis.md) for setup,
 compiler context, advisory metrics, measured timings and CI limitations.
 
-## Sonar coverage collector experiment
+## Sonar line coverage collection
 
-The Sonar workflow benchmarks pinned fastcov 1.17 on pull requests after the
-existing gcovr baseline is generated. Both collectors consume the same
-`build/sonar` coverage data; fastcov includes unexecuted units with
-`--process-gcno`. Its timed region includes collection and generic Sonar XML
-conversion, but excludes package installation. No test or input directory is
-removed from the collection scope.
+The Sonar workflow uses pinned fastcov 1.17 with GCC/gcov 13.3.0. It collects
+all existing `build/sonar` inputs, including unexecuted units with
+`--process-gcno`; test and source filters are unchanged. Collection failure
+fails the job. `fastcov_sonar_coverage.py` merges counters across tests and
+template instantiations and emits generic Sonar line coverage. It excludes only
+zero-hit comments, standalone braces and `else`, matching the former gcovr
+noncode heuristic. Real uncovered code remains in the report. Paths must resolve
+inside the repository, counters must be nonnegative integers, and source line
+numbers must exist. The seven-day artifact retains XML, raw JSON and tool versions.
 
-`compare_sonar_coverage.py` compares normalized source/line identities and
-covered flags, including uncovered lines. Repeated gcovr entries for template
-instantiations are merged with an any-instance-covered rule on both reports.
-Report input and JSON output paths must resolve inside the current repository;
-symlink escapes are rejected. The Markdown summary is printed to stdout and
-the workflow appends it to the runner-owned summary file. It writes complete differences to
-JSON and timings to the workflow summary. The comparison establishes line
-coverage only, matching the existing `--sonarqube-metric line`; function, branch
-and exclusion semantics can differ between collectors. Differences are
-diagnostic during this trial. Invalid reports or collector failures mark the
-experiment incomplete, while Sonar still consumes `coverage.xml` from gcovr.
+On PR #3260, run 37140325812 (Ubuntu 24.04, GCC 13.3.0), gcovr 8.6 took
+309 seconds and fastcov collection plus conversion took 36 seconds. Installation
+was excluded; gcovr ran first. This is one ordered trial, rather than an isolated
+benchmark. The normalized fastcov report retains every gcovr line, adds 218
+lines and changes one covered flag. A local forced-text-parser template fixture
+reproduces gcovr dropping executed lambda lines, consistent with GCC 13 using
+gcovr's text parser; it does not prove the exact engine discrepancy from raw
+GCC 13 counters. Collector adoption changes these line accounting details.
+Branch and function coverage parity is not claimed.
 
-The seven-day workflow artifact contains both XML reports, fastcov JSON,
-comparison JSON and tool versions. A collector change requires reviewing both
-the timings and line differences.
+`compare_sonar_coverage.py` remains an offline audit utility for the original
+experiment artifacts. It compares source/line identities and any-instance-covered
+flags, with complete differences in JSON and a printed Markdown summary.
 
 ## CI runner grouping and closed PR cleanup
 
@@ -74,7 +75,7 @@ This reduces the CI plus former Prefab workflow from 16 to 9 runner jobs without
 removing targets or test filters. Hosted timings remain the acceptance evidence.
 
 `cancel-closed-pr.yml` runs on `pull_request_target: closed` from the trusted base
-branch, checking out only `github.sha` from that trusted base branch. It requests cancellation of active
+branch, checking out literal `main` from the explicitly named `horocore/horo-engine` repository. It requests cancellation of active
 `pull_request` runs linked to that PR, with exact repository/branch/SHA matching
 as a fallback for missing API links. Completed runs and main push runs are
 preserved. It handles both merge and manual closure, even after branch deletion.
