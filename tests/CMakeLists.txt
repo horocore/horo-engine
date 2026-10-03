@@ -745,9 +745,16 @@ add_executable(HoroCinematicCurveSamplingBenchmark EXCLUDE_FROM_ALL
 target_compile_features(HoroCinematicCurveSamplingBenchmark PRIVATE cxx_std_20)
 target_link_libraries(HoroCinematicCurveSamplingBenchmark PRIVATE HoroEngine::CinematicModel)
 
+add_executable(HoroNavMeshAssetPublicHeaderConsumer support/NavMeshAssetPublicHeaderConsumer.cpp)
+target_compile_features(HoroNavMeshAssetPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroNavMeshAssetPublicHeaderConsumer PRIVATE HoroEngine::NavigationSceneIntegration)
+add_test(NAME HoroNavMeshAssetPublicHeaderConsumer COMMAND HoroNavMeshAssetPublicHeaderConsumer)
+set_tests_properties(HoroNavMeshAssetPublicHeaderConsumer PROPERTIES LABELS "unit;navigation;headless;public_headers")
+
 add_executable(HoroNavigationApiTests
         support/navigation/DeterministicNavigationProvider.cpp
         unit/runtime/navigation/NavMeshDataTests.cpp
+        unit/runtime/navigation/NavMeshCodecTests.cpp
         unit/runtime/navigation/NavigationAreaRegistryTests.cpp
         unit/runtime/navigation/NavigationAgentProfileTests.cpp
         unit/runtime/navigation/NavigationBakeInputTests.cpp
@@ -789,6 +796,13 @@ target_link_libraries(HoroNavigationBakeDiagnosticsPublicConsumer PRIVATE HoroEn
 add_test(NAME HoroNavigationBakeDiagnosticsPublicConsumer COMMAND HoroNavigationBakeDiagnosticsPublicConsumer)
 
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
+    
+    add_executable(HoroNavigationAssetLoadingTests unit/runtime/navigation/NavMeshAssetLoadingTests.cpp)
+    target_compile_features(HoroNavigationAssetLoadingTests PRIVATE cxx_std_20)
+    target_include_directories(HoroNavigationAssetLoadingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_link_libraries(HoroNavigationAssetLoadingTests PRIVATE HoroEngine::NavigationSceneIntegration HoroEngine::NavigationRecastDetour)
+    horo_register_catch_test(HoroNavigationAssetLoadingTests LABELS "unit;navigation;headless;assets;lifecycle;provider")
+    
     add_executable(HoroNavigationBakeServiceTests unit/runtime/navigation/NavigationBakeServiceTests.cpp
             unit/runtime/navigation/NavigationBakeDiagnosticsTests.cpp
             unit/runtime/navigation/NavigationBakeDiagnosticRecoveryTests.cpp)
@@ -796,6 +810,7 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_include_directories(HoroNavigationBakeServiceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_link_libraries(HoroNavigationBakeServiceTests PRIVATE HoroEngine::NavigationBakeService HoroEngine::NavigationRecastDetour)
     horo_register_catch_test(HoroNavigationBakeServiceTests LABELS "unit;navigation;headless;cook")
+    
     add_executable(HoroNavigationRecastDetourTests
             unit/runtime/navigation/RecastDetourProviderTests.cpp
             unit/runtime/navigation/RecastDetourLinkValidationTests.cpp
@@ -806,6 +821,7 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_include_directories(HoroNavigationRecastDetourTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_link_libraries(HoroNavigationRecastDetourTests PRIVATE HoroEngine::NavigationRecastDetour)
     horo_register_catch_test(HoroNavigationRecastDetourTests LABELS "unit;navigation;headless;provider")
+    
     add_executable(HoroNavigationCrowdDetourTests unit/runtime/navigation/RecastDetourCrowdProviderTests.cpp)
     target_compile_features(HoroNavigationCrowdDetourTests PRIVATE cxx_std_20)
     target_include_directories(HoroNavigationCrowdDetourTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
@@ -2469,8 +2485,15 @@ add_executable(HoroAssetRegistryTests
 )
 target_compile_features(HoroAssetRegistryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAssetRegistryTests PRIVATE HoroEngine::Assets)
+add_executable(HoroAssetPayloadReleaseOrderTests unit/runtime/assets/AssetPayloadReleaseOrderTests.cpp)
+target_compile_features(HoroAssetPayloadReleaseOrderTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAssetPayloadReleaseOrderTests PRIVATE HoroEngine::Assets Threads::Threads)
+add_test(NAME HoroAssetPayloadReleaseOrderTests COMMAND HoroAssetPayloadReleaseOrderTests)
+set_tests_properties(HoroAssetPayloadReleaseOrderTests PROPERTIES LABELS "unit;assets;headless;allocation;lifecycle" TIMEOUT 30)
+
 add_executable(HoroAssetProviderTests
         unit/runtime/assets/AssetProviderTests.cpp
+        unit/runtime/assets/AssetPayloadCacheTests.cpp
 )
 target_compile_features(HoroAssetProviderTests PRIVATE cxx_std_20)
 target_include_directories(HoroAssetProviderTests PRIVATE

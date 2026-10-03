@@ -718,6 +718,7 @@ add_library(HoroAssets STATIC
         runtime/assets/cooker/CookCatalog.cpp
         runtime/assets/cooker/builtin/HeadlessMeshCooker.cpp
         runtime/assets/cache/AssetCookCache.cpp
+        runtime/assets/cache/AssetPayloadCache.cpp
         runtime/assets/cooker/AssetCookOutput.cpp
         runtime/assets/cooker/AssetCookService.cpp
         runtime/assets/cooker/AssetCookTransaction.cpp
@@ -1200,6 +1201,7 @@ target_link_libraries(HoroCinematicRuntime PUBLIC HoroEngine::CinematicModel)
 
 add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavMeshData.cpp
+        runtime/navigation/api/mesh_codec/NavMeshCodec.cpp
         runtime/navigation/api/NavigationAreas.cpp
         runtime/navigation/api/NavigationAgentProfiles.cpp
         runtime/navigation/api/NavigationBakeFingerprint.cpp
@@ -1249,10 +1251,12 @@ target_link_libraries(HoroNavigationRuntime PUBLIC HoroEngine::NavigationApi)
 add_library(HoroNavigationSceneIntegration STATIC
         runtime/navigation/integration/NavigationSceneActivation.cpp
         runtime/navigation/integration/NavigationSceneLinkCapture.cpp
+        runtime/navigation/integration/NavMeshAssetLoading.cpp
+        runtime/navigation/integration/NavigationAssetSceneActivation.cpp
 )
 add_library(HoroEngine::NavigationSceneIntegration ALIAS HoroNavigationSceneIntegration)
 target_compile_features(HoroNavigationSceneIntegration PUBLIC cxx_std_20)
-target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::RuntimeScene)
+target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::RuntimeScene HoroEngine::Assets)
 
 add_library(HoroNavigationBakeService STATIC
         application/navigation/NavigationBakeService.cpp

@@ -635,6 +635,121 @@ inactive prior generation. Dynamic carving derives a new runtime topology genera
 without mutating the published artifact; a persistent change edits authored intent
 and requires recook.
 
+### Canonical NavMesh Runtime Asset Loading
+
+NAV-002.9 implements the runtime consumer in `HoroNavigationSceneIntegration`.
+This host target depends on `HoroAssets`, `HoroRuntimeScene` and
+`HoroNavigationRuntime`; `HoroNavigationApi` and `HoroNavigationRuntime` retain
+their existing dependency direction. `NavMeshAssetType.h` belongs to Assets and
+names the canonical `core.navmesh` sidecar type. The existing generic registry
+accepts it on an imported `.horoasset` definition; generated partitions do not
+create another registry, source extension, authoring identity or catalog.
+
+`SceneDefinitionBuilder` projects each enabled surface's definition AssetId into
+its canonical typed asset requirements. This deliberately changes activation:
+a definition with an enabled surface now requires the standard Scene asset
+services and its cooked artifact. Editor runtime conversion and packaged Scene
+builders use this same projection. Disabled surfaces require no navigation
+artifact. An explicit conflicting type fails definition construction. Hosts
+must also declare the generated product's canonical dependency closure through
+`RequireAsset`; the activation adapter rejects undeclared dependencies instead
+of opening additional provider I/O during publication or queries.
+
+`LoadNavMeshAsset` consumes the captured registry identity/type/revision, or the
+already resolved equivalent Scene metadata, and verifies the existing
+`AssetCookArtifact` envelope, expected target and actual content digest. The
+source digest and opaque host-computed cache-key digest are retained as
+provenance. Dependencies carry canonical AssetId/type and the digest of their
+complete cooked envelope; every declared dependency must match the exact
+prepared Scene bytes and target. The loader does not compute cook keys,
+register a cooker, publish `CookCatalog`, recook missing data or extend
+`CacheKeyV1`. Dependency-bearing production cooking still requires the approved
+versioned key extension; runtime consumption does not bypass that producer gate.
+
+The producer seam for NAV-002.18 / #1251 is `EncodeNavMeshAssetPayload`, nested
+inside the standard AssetCook envelope. Its bounded bundle starts with
+`HNAVASSET1`, followed by canonical decimal partition/dependency counts, each on
+an ASCII newline. Dependency rows are identity-sorted unique AssetId, canonical
+type and canonical SHA-256 text, each on its own line. Each surface/profile
+partition then contains decimal SurfaceId, positive surface generation and
+neutral artifact byte count, each on its own line, followed by exactly that many
+binary bytes and one newline. Partitions are strictly ordered by SurfaceId and
+profile identity; all partitions for one surface share the authored generation.
+Duplicate, zero, malformed, oversized or trailing values reject the complete
+bundle. There is no provider or source-file fallback.
+
+`NavMeshCodec` serializes the existing `NavMeshData` 1.0 model without native
+struct layouts, padding or a second geometry schema. The fixed 203-byte header
+contains little-endian `HNM1`, followed by the declared model fields in header
+order; the coordinate origin uses three exact signed millimeter values. Identity
+values use uint64, floats use their IEEE uint32 representation, enum tags use
+uint8, and digest fields use 32 raw bytes. The body is an ordered sequence of tile
+descriptors, uint64 encoded tile byte counts and tile fragments. Tile fragments
+contain that tile's existing vertex, polygon, index, adjacency, link, provenance
+and provider-descriptor tables in model order, followed by its exact opaque
+provider sections. Ranges and offsets remain global to the artifact. The body
+SHA-256 covers descriptors and fragments; each tile SHA-256 covers its exact
+fragment. Neutral compression is currently unsupported. Provider-private codec
+metadata remains opaque and subject to exact provider compatibility checking.
+Fixed counts, sizes and qualified limits are checked before table allocation;
+actual digests, contiguous ranges and every existing semantic invariant are
+checked before any world is installed. Producer validation uses the same
+allocation-free `ValidateNavMeshArtifact` that precedes `NavMeshData::Create`.
+
+Assets owns the generic `AssetPayloadCache` immutable allocations. Exact encoded
+tile bytes deduplicate by actual SHA-256 and full byte equality across definition
+assets and provider transports, including tiles still pinned after eviction.
+Eviction drops only the cache pin. Retained vector capacity remains charged
+until the last lease dies, including after cache shutdown or destruction.
+Resident capacity, all-live capacity and fixed index bookkeeping are reported
+separately; allocator/control-block overhead is excluded explicitly. The cache
+owns no AssetId lookup, persisted cache key, provider selection or world lifecycle.
+Decoded preparation tables are temporary per load; native provider allocations
+are per world and do not count as shared immutable tile bytes.
+
+`NavigationAssetSceneActivationParticipant` verifies every enabled surface's
+exact generation and requested profiles against the loaded partitions. An
+injected host factory must copy all borrowed tables it retains and preserve all
+requested semantics or return a typed unsupported failure. In particular a
+provider cannot silently omit off-mesh links. The factory reports an enforced
+allocation reservation, bounded by the remaining host provider budget; this is
+a qualified ceiling, not a claim to measure vendor allocator overhead.
+Reservations and live-world slots remain charged until the actual backend dies.
+The adapter keeps exact asset provenance with the provider generation.
+
+All load, validation, conversion, provider construction and lifecycle retention
+occur before aggregate Scene publication. A detached `NavigationWorldLifecycle`
+is finalized during preparation, then the aggregate's no-fail publication swaps
+the owner. Missing/corrupt assets, stale partitions, dependency mismatch, factory
+failure, a later participant rejection or exhausted retained-world budget leaves
+the previous Scene and navigation world unchanged. Failed preparation may warm
+bounded reusable immutable cache entries, but cannot install a world. Old
+candidate shutdown revokes only its own incarnation. Existing
+`NavigationWorldReadLease` and `NavigationQueuedQuery` pin the backend, tile bytes
+and provider reservation through eviction, replacement and shutdown. Logical
+revocation cancels work and prohibits publishing stale results; physical storage
+remains safe until accepted query records drain. Scene replacement requires a
+fresh registry revision to observe changed provider bytes, following the
+existing Scene asset reuse fence.
+
+Regression coverage uses actual Recast/Detour path execution, canonical
+filesystem/archive content parity, exact dependencies, hostile bytes, aggregate
+rollback and query-queue pins. The adapter remains provider-neutral when Recast
+is omitted; executable composition supplies a compatible factory explicitly.
+WorldStreaming cell integration, incremental rebuilds, obstacle overlays and
+additional query primitive producers remain their independently owned work.
+
+Host registration uses the existing
+`RuntimeSceneService::AddActivationParticipant` before startup, with canonical
+registry/`AssetLoadService`, expected cook target, byte cache and an explicit
+provider factory. Actual sidecar rebuild followed by filesystem and archive
+`AssetLoadService` preparation is covered through Scene publication and Detour
+query execution. The current concrete `HoroEditorApp` still composes an assetless
+Scene service; this change does not claim that the application has configured a
+cook provider or target. Adopting this host adapter there requires the real
+producer/cook routing owned by NAV-002.18, rather than inventing another content
+store or application-local fallback in this runtime consumer.
+
 ### Navigation Bake Operation And Publication
 
 [ADR-106](../../adr/106-navigation-bake-ownership-transaction-and-cache.md)

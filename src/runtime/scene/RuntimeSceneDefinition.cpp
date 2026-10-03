@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 
+#include "Horo/Assets/NavMeshAssetType.h"
 #include "RuntimeSceneErrors.h"
 
 #include <algorithm>
@@ -266,6 +267,16 @@ namespace Horo::Runtime {
 
         if (const Result<void> valid = ValidateEntityHierarchy(entities_); valid.HasError())
             return Result<RuntimeSceneDefinition>::Failure(valid.ErrorValue());
+
+        // Canonical Scene dependency projection is shared by Editor conversion and packaged definitions.
+        const auto navMeshType = Assets::AssetTypeId::Parse(Assets::NavMeshAssetTypeName);
+        for (const auto &entity : entities_) {
+            if (!entity.components.navigationSurface || !entity.components.navigationSurface->enabled)
+                continue;
+            const auto required = RequireAsset({entity.components.navigationSurface->definition, navMeshType.Value()});
+            if (required.HasError())
+                return Result<RuntimeSceneDefinition>::Failure(required.ErrorValue());
+        }
 
         std::ranges::sort(assetDependencies_, {}, [](const SceneAssetDependency &dependency) {
             return dependency.id;
