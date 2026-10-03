@@ -70,7 +70,10 @@ contract, Doxygen documentation, migration notes, and consumer coverage.
 ## AUD-002.8 Streaming Service Boundary
 
 `HoroEngine::AudioApi` owns the additive `Horo/Audio/AudioStreamingService.h`
-contract. Existing decoder and callback callers need no signature migration.
+contract. Decoder/source providers migrate their callback state to Foundation's
+type-checked `BorrowedCallbackContext`; the reason, affected callers and unchanged
+ownership obligations are recorded in
+[the migration guide](../../guides/audio-streaming-provider-migration.md).
 Hosts opting into package streaming supply a retained cooked-generation opener,
 the process JobSystem, exact decoder facts and explicit budgets. The service
 does not select packages or a device. Its sole callback port is borrowed by one

@@ -411,6 +411,7 @@ target_link_libraries(HoroAudioImportTests PRIVATE HoroEngine::AudioImport)
 horo_register_catch_test(HoroAudioImportTests LABELS "unit;audio;headless")
 add_executable(HoroAudioCookTests
         unit/runtime/audio/AudioCookerTests.cpp
+        unit/runtime/audio/AudioCookedStreamContextTests.cpp
 )
 target_compile_features(HoroAudioCookTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioCookTests PRIVATE HoroEngine::AudioCook)

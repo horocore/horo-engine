@@ -153,6 +153,13 @@ namespace Horo::Audio::StreamingTests {
             context->fixture->releases.fetch_add(1);
     }
 
+    /** @brief Completes the fixture's held-open phase while preserving explicit late-open cancellation behavior. */
+    inline bool AwaitPackageOpening(PackageFixture &fixture, const CancellationToken &cancelled) {
+        while (fixture.holdOpen.load() && (fixture.ignoreCancellation.load() || !cancelled.IsCancellationRequested()))
+            std::this_thread::yield();
+        return !cancelled.IsCancellationRequested() || fixture.openAfterCancellation;
+    }
+
     inline Result<AudioStreamDecoder> Open(const BorrowedCallbackContext &borrowed, const Assets::AssetId asset,
                                            const AudioStreamDecoderSpec &expected, const std::size_t maximumPackageBytes,
                                            const CancellationToken &cancelled) {
@@ -164,9 +171,7 @@ namespace Horo::Audio::StreamingTests {
         InjectOpenFailure(fixture.openFailure);
         if (fixture.openFailure == OpenFailure::TypedFailure)
             return Result<AudioStreamDecoder>::Failure(MakeError(AudioErrors::CookPayloadInvalid));
-        while (fixture.holdOpen.load() && (fixture.ignoreCancellation.load() || !cancelled.IsCancellationRequested()))
-            std::this_thread::yield();
-        if (cancelled.IsCancellationRequested() && !fixture.openAfterCancellation)
+        if (!AwaitPackageOpening(fixture, cancelled))
             return Result<AudioStreamDecoder>::Failure(MakeError(AudioErrors::OperationCancelled));
         if (maximumPackageBytes < 32)
             return Result<AudioStreamDecoder>::Failure(MakeError(AudioErrors::StreamCapacityExceeded));

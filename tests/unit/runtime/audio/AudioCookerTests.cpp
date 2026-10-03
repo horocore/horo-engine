@@ -209,6 +209,14 @@ namespace Horo::Audio {
                 std::weak_ptr<const Assets::IAssetProvider> retained = provider;
                 auto source = MakeCookedAudioStreamSource(provider, target, type, artifactLimit);
                 REQUIRE(source.HasValue());
+                if (!expectFailure) {
+                    const auto &binding = source.Value();
+                    auto opened = binding.open(binding.context, asset, Request().decoder, artifactLimit * 3, CancellationToken{});
+                    REQUIRE(opened.HasValue());
+                    auto decoder = std::move(opened).Value();
+                    REQUIRE(decoder.Seek(2).HasValue());
+                    CHECK(decoder.CursorFrame() == 2);
+                }
                 JobSystem jobs({.workerCount = 1});
                 auto created = AudioStreamingService::Create(jobs, std::move(source).Value());
                 REQUIRE(created.HasValue());
@@ -265,24 +273,6 @@ namespace Horo::Audio {
             REQUIRE(rejected.HasError());
             fixture.Run(std::move(provider), true, rejected.ErrorValue());
         }
-    }
-
-    TEST_CASE("Cooked streaming rejects foreign or empty source state before opening media", "[unit][audio][streaming][cook]") {
-        CookedStreamFixture fixture;
-        auto made = MakeCookedAudioStreamSource(fixture.Archive(), fixture.target, fixture.type, fixture.artifactLimit);
-        REQUIRE(made.HasValue());
-        const auto &source = made.Value();
-        std::uint32_t foreignState{91};
-        for (const BorrowedCallbackContext &context : {BorrowedCallbackContext{}, BorrowedCallbackContext{&foreignState}}) {
-            auto opened = source.open(context, fixture.asset, fixture.Request().decoder, fixture.artifactLimit * 3, CancellationToken{});
-            REQUIRE(opened.HasError());
-            CHECK(opened.ErrorValue().code.Value() == AudioErrors::StreamReadFailed.code.Value());
-            CHECK(foreignState == 91);
-        }
-        auto opened = source.open(source.context, fixture.asset, fixture.Request().decoder, fixture.artifactLimit * 3, CancellationToken{});
-        REQUIRE(opened.HasValue());
-        REQUIRE(opened.Value().Seek(2).HasValue());
-        CHECK(opened.Value().CursorFrame() == 2);
     }
 
     TEST_CASE("Audio cook produces identical PCM payload and compatibility manifest for exact inputs", "[unit][audio][cook]") {
