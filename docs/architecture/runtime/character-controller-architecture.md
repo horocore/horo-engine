@@ -45,7 +45,7 @@ Not covered:
 - Slope and step handling are deterministic and configurable per controller.
 - Moving platforms transfer velocity and optionally angular velocity to
   standing characters.
-- Surface materials drive friction, footstep audio, VFX, and gameplay events.
+- Physics material assets own contact coefficients; downstream application bindings select gameplay, footstep Audio and VFX semantics.
 - Root motion from animation may feed into the controller as a delta request,
   but the controller decides the final transform.
 - [ADR-089](../../adr/089-character-controller-ownership-implementation-and-update-order.md)
@@ -427,6 +427,51 @@ asset; application/Gameplay binding assets select optional consumer cues from
 the committed semantic surface. A physical asset can serve several surfaces,
 and several physical assets can share a surface.
 
+### Implemented physical evidence contract
+
+`CharacterSweepHit` consumes the existing Physics-owned `PhysicsQueryMaterial`
+asset UUID, exact asset generation and authored material slot. It also copies the
+optional authored `PhysicsShapeSubresourceId`; native child indexes never escape
+Physics. Selected ground evidence and retained contacts preserve those values,
+body/shape world and slot generations, and `CharacterMaterialSource`:
+
+- `Query` means the Physics adapter supplied the physical binding.
+- `DescriptorFallback` means the binding was absent and Character used the
+  admitted descriptor's exact physical fallback. It does not claim that the
+  collider owns that binding or that a semantic surface was resolved.
+
+Invalid present material/child identities fail the whole tick before publication;
+absence alone does not. Ground selection includes authored child identity in its
+canonical ordering. Contact reduction distinguishes children of the same shape.
+No support clears all ground references, point and provenance. The selected
+support point is retained independently of the bounded contact prefix.
+
+`BuildCharacterGroundSurfaceFact` validates a copied committed locomotion snapshot
+against its captured descriptor, then projects selected support into one bounded
+owned fact. It preserves scene/controller/world, tick, command sequence, state
+revision and transform publication revision. Airborne snapshots produce no fact.
+The projection accesses no live world, material registry or consumer and can run
+on copied snapshots after shutdown. It does not generate transition cadence or
+Animation markers; those adapters consume the fact at their owning boundaries.
+The existing bounded internal event storage retains the same enriched contact
+identity and rejects malformed child/provenance evidence.
+
+Missing or deleted physical bindings in a new valid Physics query use the explicit
+fallback; existing copied facts retain their original UUID/generation/slot.
+An old fact never resolves implicitly to the latest material revision. Reload
+publishes a new complete world/mapping at the Physics safe point, and consumers
+must fence old world generations. Missing/deleted downstream bindings, failed
+optional consumers, consumer reload and shutdown suppress presentation without
+feeding back into Character movement or rewriting historical facts.
+
+The proposed semantic `SurfaceMaterialId`, catalog admission and collider semantic
+projection described in ADR-181 do **not** ship in this contract. Physical evidence
+must not be cast, renamed or inferred into a semantic ID. Once Physics provides the
+versioned typed semantic projection, Character will copy it and its mapping
+provenance and admit the catalog-valid default separately. Until that producer is
+implemented, semantic-dependent consumers remain explicitly unavailable; there
+is no coupled `SurfaceMaterial` containing coefficients or Audio/VFX assets.
+
 ## Locomotion Facts And Footstep Correlation
 
 The controller publishes bounded physical facts based on committed contacts and
@@ -440,12 +485,13 @@ Events:
 | `LeftGround` | Transition from grounded to airborne. |
 | `HitWall` | Horizontal movement blocked by surface. |
 | `HitCeiling` | Vertical movement blocked above. |
-| `SurfaceChanged` | Ground surface material changed. |
+| `SurfaceChanged` | Committed semantic ground surface changed; physical asset revision changes alone are insufficient. |
 | `SlideStart` / `SlideEnd` | Started/stopped sliding on steep slope. |
 
 Events carry:
 
-- surface material ID
+- Physics physical asset/generation/slot, body/shape and optional authored child references; future semantic identity remains separate
+- explicit query or descriptor-fallback provenance
 - contact point and normal
 - impact velocity
 - controller reference
@@ -574,6 +620,31 @@ The controller supports runtime size changes:
 - size changes do not alter `stepOffset`; if crouched geometry requires different
   step behavior, the gameplay system must use a separate controller descriptor or
   override the movement request accordingly
+
+The instantaneous runtime contract uses `CharacterMovementRequest::shapeChange`
+for an explicit radius/cylindrical-half-height replacement, or `Stand`/`Crouch`
+against the immutable descriptor's standing capsule and optional `crouchedCapsule`.
+The crouch profile keeps the standing radius and reduces cylindrical height.
+Explicit geometry requires `Keep` stance; a conflicting named stance, missing
+crouch profile, malformed dimensions or out-of-envelope capsule publishes `Invalid`.
+This replaces the former accepted-but-unused stance intent; callers that request
+crouch must provide the descriptor profile and current overlap adapter.
+
+The collision root is the capsule center and stays fixed during instantaneous
+resize. Every different candidate geometry, including shrink, uses one exact-tick
+overlap probe without depenetration. An overlap publishes `Blocked` and keeps the
+prior geometry/stance; a clear candidate publishes `Applied`. Query errors retain
+their original typed cause and fail the attempted tick. Identity, authored descriptor,
+step policy and heading are preserved. The effective capsule and stance live in the
+owned locomotion snapshot; later movement and teleport queries use that capsule.
+Shape results cannot be supplied by an adapter. All controller candidates preflight
+before any geometry or transform is committed. Failed ticks publish no candidate.
+Without a movement sweep, applied resize detaches support and requires grounding
+revalidation; the sweep path resolves support against the new geometry immediately.
+Shape clearance and movement/ground sweeps share the immutable per-tick query
+budget; exhausting it aborts the attempt before another adapter call.
+Queue capacity, replacement, generation and shutdown rules are the movement rules.
+No transition is retried implicitly on a later tick.
 
 Size changes are fixed-tick commands. A gradual transition advances once per
 committed tick under a typed profile; presentation delta never changes collision

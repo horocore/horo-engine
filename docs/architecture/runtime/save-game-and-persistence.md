@@ -375,6 +375,56 @@ cleanup and shutdown can observe only immutable payload segments and stable capt
 provenance. No borrowed span, mutable runtime pointer or module-owned container
 allocator crosses the safe-point boundary.
 
+### Save-safe quiescence authority
+
+`SaveCaptureBarrier` supplies the bounded SAV-005.3 owner-thread authority before
+`RuntimeSaveCaptureBuilder`. The session registers stable owners for all four
+required domains: fixed simulation, jobs that mutate canonical state, deferred
+scene structural mutation, and subsystem semantic roots. Every capture binding
+in the pinned registry must have a corresponding registered barrier owner.
+Even an empty job/structural domain publishes an explicit ready epoch; absence is
+not readiness. Host-only domain owners do not become serialized records.
+
+A producer acquires an exact authority/index/serial mutation ticket before writing
+canonical state. Starting a mutation invalidates its prior ready epoch. The host
+finishes the ticket only after its work commits, publishing the exact semantic
+capture epoch; independently prepared immutable versions use `PublishReadiness`.
+Worker jobs never call the barrier: their owner-thread completion handoff publishes
+readiness after completion, without a nested join or wait. Adapters remain responsible
+for the semantic correctness and immutability of their supplied roots.
+
+`Request` exposes a pending operation/generation fence. A pending request permits
+normal simulation and mutation between frames. At `CommitDeferredLifecycleChanges`,
+after structural publication and before the next simulation step, the host invokes
+`CaptureAtSafePoint` with current provenance and its pinned registry. A busy or
+wrong-epoch participant returns typed pending evidence without invoking any adapter;
+an explicit denial or quiesce deadline returns Deferred or Failed according to the
+admitted policy. The host acknowledges terminal evidence and may schedule a new
+request with current state; the barrier does not retry, replace operations, or reuse
+a stale tick automatically. Scene/session replacement cancels the old request and
+creates a new exact generation request. Incorrect-generation capture is rejected.
+
+The readiness check and closing of mutation admission are serial on the same owner
+thread. During the synchronous builder capture, reentrant mutation/readiness/lifecycle
+calls reject explicitly. On success, typed failure, budget rejection or unexpected
+exception, admission reopens before return. The result hands off only the builder's
+sealed immutable snapshot. Background serialization, signing and storage never extend
+the barrier. Shutdown closes new admission and cancels pending requests; already
+issued mutation tickets may finish so their owners can drain safely.
+
+The polling projection measures elapsed request time and synchronous capture duration
+with an injected monotonic clock. Finite positive quiesce and capture budgets have
+compiled ceilings. A capture exceeding its synchronous budget is discarded and
+reported with `CaptureBudgetExceeded`; the clock measures actual completion rather
+than promising preemption of arbitrary adapter code. Adapters must honor their bounded
+owner-work contracts. Backward samples cannot reduce already observed duration.
+
+Migration: existing `SaveSafePointCoordinator` users retain its operation/worker
+lifecycle fencing. Capture executors route their concrete immutable cut through
+`SaveCaptureBarrier`, register all canonical mutation owners, and publish readiness
+at each current committed epoch. Phase membership alone no longer proves participant
+quiescence. Restore publication keeps its existing prepared-candidate transaction.
+
 ### Thumbnail Capture
 
 Thumbnail acquisition is a separate renderer-owned asynchronous readback request

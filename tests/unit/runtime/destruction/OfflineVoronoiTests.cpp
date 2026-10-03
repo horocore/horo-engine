@@ -1,9 +1,12 @@
+#include "Horo/Destruction/ChunkCollisionCook.h"
 #include "Horo/Destruction/OfflineVoronoi.h"
+#include "Horo/Physics/PhysicsCookedShapeCache.h"
 
 #include <algorithm>
 #include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -95,9 +98,9 @@ namespace Horo::Destruction {
             for (const auto &triangle : piece.triangles) {
                 for (const auto [from, to] :
                      {std::pair{triangle[0], triangle[1]}, std::pair{triangle[1], triangle[2]}, std::pair{triangle[2], triangle[0]}}) {
-                    auto &edge = edges[std::minmax(from, to)];
-                    ++edge.first;
-                    edge.second += from < to ? 1 : -1;
+                    auto &[count, orientation] = edges[std::minmax(from, to)];
+                    ++count;
+                    orientation += from < to ? 1 : -1;
                 }
             }
             CHECK_FALSE(edges.empty());
@@ -135,7 +138,7 @@ namespace Horo::Destruction {
         CHECK(candidate.chunks[0].neighbors[0] == candidate.chunks[1].id);
         CHECK(candidate.chunks[1].neighbors[0] == candidate.chunks[0].id);
         for (const auto &chunk : candidate.chunks) {
-            const auto interiors = std::count_if(chunk.triangles.begin(), chunk.triangles.end(), [](const auto &triangle) {
+            const auto interiors = std::ranges::count_if(chunk.triangles, [](const auto &triangle) {
                 return triangle.interior && triangle.materialSlot == 17;
             });
             CHECK(interiors >= 2);
@@ -261,6 +264,43 @@ namespace Horo::Destruction {
         CheckError(GenerateOfflineVoronoi(source, recipe, CancellationToken{}), OfflineVoronoiErrors::LimitExceeded);
     }
 
+    TEST_CASE("Voronoi collision regions survive chunk mesh projection into Physics compounds", "[destruction][voronoi][collision]") {
+        const auto source = ConcavePrism();
+        auto recipe = Recipe();
+        recipe.siteCount = 1;
+        recipe.siteIds.resize(1);
+        recipe.sites = {{{0.5, 0.5, 0.5}}};
+        const auto uncut = GenerateOfflineVoronoi(source, recipe, CancellationToken{});
+        REQUIRE(uncut.HasValue());
+        REQUIRE(uncut.Value().chunks.size() == 1);
+        Sha256Digest materialDigest;
+        materialDigest.bytes[0] = 7;
+        const std::array<ChunkMaterialBinding, 1> materials{{{9, source.asset, materialDigest}}};
+        const auto content = FractureArtifactContentIdentity::Create(FractureAssetId::Create(source.asset).Value(),
+                                                                     FractureContentRevision::Create(3).Value(),
+                                                                     ComputeChunkMeshSemanticDigest(uncut.Value(), materials, {}))
+                                 .Value();
+        auto mesh = CookChunkMeshes(uncut.Value(), content, materials, {}, recipe.limits, {});
+        REQUIRE(mesh.HasValue());
+        CHECK(mesh.Value()->chunks[0].collisionPieces.size() == uncut.Value().chunks[0].collisionPieces.size());
+        const std::array<ChunkCollisionMaterial, 1> collisionMaterials{
+            {{mesh.Value()->chunks[0].id, Physics::PhysicsMaterialSlotId::FromValue(71)}}};
+        ChunkCollisionCookRequest collisionRequest;
+        collisionRequest.content = content;
+        collisionRequest.meshIntegrityDigest = mesh.Value()->integrityDigest;
+        collisionRequest.target.digest.bytes[0] = 56;
+        collisionRequest.limits = recipe.limits;
+        collisionRequest.materials = collisionMaterials;
+        auto collision = CookChunkCollision(*mesh.Value(), collisionRequest);
+        REQUIRE(collision.HasValue());
+        const auto &shape = collision.Value()->Shapes()[0].shape;
+        auto cache = Physics::PhysicsCookedShapeCache::Create(collisionRequest.target).Value();
+        auto lease = cache.Acquire(shape.descriptor, shape.payload);
+        REQUIRE(lease.HasValue());
+        REQUIRE(lease.Value().Compound() != nullptr);
+        CHECK(lease.Value().Compound()->children.size() == uncut.Value().chunks[0].collisionPieces.size());
+    }
+
     TEST_CASE("Offline Voronoi rejects malformed source, sites, provenance, and bounds", "[destruction][voronoi]") {
         auto source = Cube();
         auto recipe = Recipe();
@@ -272,7 +312,7 @@ namespace Horo::Destruction {
         source.digest = ComputeOfflineVoronoiSourceDigest(source);
         CheckError(GenerateOfflineVoronoi(source, recipe, CancellationToken{}), OfflineVoronoiErrors::InvalidMesh);
         source = Cube();
-        source.digest.bytes[0] ^= 1;
+        std::as_writable_bytes(std::span{source.digest.bytes})[0] ^= std::byte{1};
         CheckError(GenerateOfflineVoronoi(source, recipe, CancellationToken{}), OfflineVoronoiErrors::InvalidInput);
         source = Cube();
         recipe.sites[1] = recipe.sites[0];
@@ -354,5 +394,51 @@ namespace Horo::Destruction {
         REQUIRE(invalidTotals.HasError());
         CHECK(invalidTotals.ErrorValue().code.Value() == OfflineVoronoiErrors::InvalidInput.code.Value());
         CHECK(owner.Snapshot() == published);
+    }
+
+    TEST_CASE("Imported concave chunks require explicit collision normalization and never become enclosing hulls",
+              "[destruction][collision]") {
+        const auto geometry = ConcavePrism();
+        auto recipe = Recipe();
+        Assets::PreFracturedSource source;
+        source.sourceName = "concave collision authoring";
+        Assets::PreFracturedSourceNode node;
+        node.name = "HoroChunk_29";
+        node.sourcePath = "geometry/concave";
+        node.geometryToWorld = {1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0};
+        node.positions = geometry.positions;
+        node.triangleIndices = geometry.indices;
+        node.triangleMaterials.assign(geometry.indices.size() / 3, "stone");
+        source.nodes.push_back(std::move(node));
+        const auto imported = ValidatePreFracturedSource(source, recipe.limits, {});
+        REQUIRE(imported.HasValue());
+        Sha256Digest materialDigest;
+        materialDigest.bytes[0] = 7;
+        const std::array<ImportedChunkMaterialBinding, 1> materials{{{"stone", {9, geometry.asset, materialDigest}, false}}};
+        const auto content = FractureArtifactContentIdentity::Create(FractureAssetId::Create(geometry.asset).Value(),
+                                                                     FractureContentRevision::Create(9).Value(),
+                                                                     ComputePreFracturedMeshSemanticDigest(imported.Value(), geometry.asset,
+                                                                                                           1, recipe.tier, materials, {}))
+                                 .Value();
+        const auto mesh = CookPreFracturedChunkMeshes(imported.Value(),
+                                                      {geometry.asset,
+                                                       1,
+                                                       ComputePreFracturedMeshSourceDigest(imported.Value()),
+                                                       content,
+                                                       recipe.tier,
+                                                       {},
+                                                       recipe.limits},
+                                                      materials, {});
+        REQUIRE(mesh.HasValue());
+        const std::array<ChunkCollisionMaterial, 1> bindings{{{mesh.Value()->chunks[0].id, Physics::PhysicsMaterialSlotId::FromValue(7)}}};
+        ChunkCollisionCookRequest request;
+        request.content = content;
+        request.meshIntegrityDigest = mesh.Value()->integrityDigest;
+        request.target.digest.bytes[0] = 56;
+        request.materials = bindings;
+        request.limits = recipe.limits;
+        const auto collision = CookChunkCollision(*mesh.Value(), request);
+        REQUIRE(collision.HasError());
+        CHECK(collision.ErrorValue().code.Value() == ChunkMeshCookErrors::InvalidInput.code.Value());
     }
 }  // namespace Horo::Destruction

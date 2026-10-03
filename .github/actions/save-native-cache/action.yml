@@ -1,5 +1,5 @@
 name: Checkpoint native build caches
-description: Persist caches after successful compilation before tests can fail
+description: Persist main caches after successful compilation and report statistics on every ref
 inputs:
   compiler-key:
     description: Compiler key returned by restore-native-cache
@@ -27,7 +27,7 @@ runs:
         fi
 
     - name: Save dependency sources
-      if: inputs.dependency-hit != 'true'
+      if: github.ref == 'refs/heads/main' && inputs.dependency-hit != 'true'
       uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
       with:
         path: |
@@ -36,6 +36,7 @@ runs:
         key: ${{ inputs.dependency-key }}
 
     - name: Save compiler snapshot
+      if: github.ref == 'refs/heads/main'
       uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
       with:
         path: ${{ github.workspace }}/.ci-cache/compiler
