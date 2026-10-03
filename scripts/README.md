@@ -41,15 +41,15 @@ compiler context, advisory metrics, measured timings and CI limitations.
 
 ## Sonar line coverage collection
 
-The Sonar workflow uses pinned fastcov 1.17 with GCC/gcov 13.3.0. It collects
-all existing `build/sonar` inputs, including unexecuted units with
-`--process-gcno`; test and source filters are unchanged. Collection failure
-fails the job. `fastcov_sonar_coverage.py` merges counters across tests and
+The Sonar workflow calls `collect_sonar_coverage.sh`, which uses pinned fastcov
+1.17 with GCC/gcov 13.3.0. It collects all existing `build/sonar` inputs,
+including unexecuted units with `--process-gcno`; test and source filters are
+unchanged. Collection failure fails the job. `fastcov_sonar_coverage.py` merges counters across tests and
 template instantiations and emits generic Sonar line coverage. It excludes only
 zero-hit comments, standalone braces and `else`, matching the former gcovr
 noncode heuristic. Real uncovered code remains in the report. Paths must resolve
 inside the repository, counters must be nonnegative integers, and source line
-numbers must exist. The seven-day artifact retains XML, raw JSON and tool versions.
+numbers must exist. The seven-day artifact retains the XML and raw JSON reports.
 
 On PR #3260, run 37140325812 (Ubuntu 24.04, GCC 13.3.0), gcovr 8.6 took
 309 seconds and fastcov collection plus conversion took 36 seconds. Installation

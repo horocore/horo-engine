@@ -162,32 +162,7 @@ jobs:
 
       - name: Collect fastcov line coverage
         id: coverage
-        run: |
-          {
-            gcc --version
-            gcov --version
-            /tmp/horo-coverage/bin/fastcov --version
-          } > build/sonar/coverage-tool-versions.txt
-          coverage_started=$SECONDS
-          /tmp/horo-coverage/bin/fastcov \
-            --gcov gcov --jobs "$(nproc)" --process-gcno \
-            --search-directory build/sonar \
-            --include "$GITHUB_WORKSPACE/include/" \
-              "$GITHUB_WORKSPACE/src/" \
-              "$GITHUB_WORKSPACE/apps/common/" \
-              "$GITHUB_WORKSPACE/apps/horo-engine/" \
-              "$GITHUB_WORKSPACE/apps/horo-package/" \
-              "$GITHUB_WORKSPACE/apps/HoroEditor/app/EditorUserStateMigration.cpp" \
-              "$GITHUB_WORKSPACE/apps/HoroEditor/app/ConfiguredEditorUpdateBackend.cpp" \
-            --output build/sonar/fastcov-coverage.json
-          /tmp/horo-coverage/bin/python scripts/fastcov_sonar_coverage.py \
-            --input build/sonar/fastcov-coverage.json --output build/sonar/coverage.xml
-          coverage_seconds=$((SECONDS - coverage_started))
-          echo "fastcov collection and conversion completed in ${coverage_seconds}s"
-          echo "seconds=$coverage_seconds" >> "$GITHUB_OUTPUT"
-          echo "## C++ line coverage" >> "$GITHUB_STEP_SUMMARY"
-          echo "Fastcov collection and conversion: ${coverage_seconds}s." >> "$GITHUB_STEP_SUMMARY"
-          ccache --show-stats
+        run: bash scripts/collect_sonar_coverage.sh
 
       - name: Upload coverage evidence
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
@@ -200,7 +175,6 @@ jobs:
           path: |
             build/sonar/coverage.xml
             build/sonar/fastcov-coverage.json
-            build/sonar/coverage-tool-versions.txt
 
       - name: SonarCloud scan
         id: scan
