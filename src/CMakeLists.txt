@@ -658,6 +658,7 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/RpcGameplayDispatch.cpp
         runtime/networking/RpcGameplayDispatchReceive.cpp
         runtime/networking/RpcGameplayDispatchGameplay.cpp
+        runtime/networking/RpcGameplayDispatchPolicy.cpp
 )
 add_library(HoroEngine::NetworkRuntime ALIAS HoroNetworkRuntime)
 target_compile_features(HoroNetworkRuntime PUBLIC cxx_std_20)
