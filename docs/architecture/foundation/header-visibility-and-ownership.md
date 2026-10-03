@@ -243,6 +243,43 @@ preparations before accepting any later candidate; acceptance itself also rotate
 the revision and cancellation token. Shutdown closes acceptance but retains the
 last immutable snapshot for existing readers.
 
+## DFR-002.5 Collision Artifact Migration Notes
+
+`HoroEngine::DestructionPhysicsCook` owns `Horo/Destruction/ChunkCollisionCook.h`
+and depends publicly on `DestructionCook` and `DestructionCollisionArtifacts`. The
+`DestructionCollisionArtifacts` target owns `ChunkCollisionArtifact.h`, depends on
+DestructionApi/Physics, and contains only the source-free bundle codec. Assets/tooling compositions
+link this adapter explicitly; DestructionApi and DestructionRuntime acquire no Physics
+cook dependency. `HoroEngine::Physics` owns `PhysicsCompoundCook.h` and its qualified
+flat convex compound loader/cache extension. The generated public-header consumers
+cover Physics, DestructionCook, DestructionCollisionArtifacts and DestructionPhysicsCook independently.
+
+Chunk mesh cook schema 2 retains solver-neutral collision regions. Schema 1 derived
+meshes must be recooked from the existing source/recipe; there is no runtime migration
+or implicit enclosing hull. The mesh, graph and dependent Physics fingerprints change,
+while authored chunk IDs remain intact. Region IDs hash canonical geometric membership
+and remain independent of piece-array order, materials and Physics target. Duplicate
+region IDs reject. Imported concave chunks need explicit offline convex normalization;
+collision cooking rejects them rather than changing their shape.
+
+The new adapter accepts exact DFR content/mesh digests, Physics target/settings, explicit
+per-chunk Physics material slots and finite budgets. Render material slots are never
+collision authority. One chunk emits a flat Physics compound, including a one-leaf
+compound, so its stable region/material table has one representation. Each leaf uses
+Physics convex cooking; the compound envelope embeds verified cooked leaf bytes and
+an exact upstream generation/settings digest. Assets remains physical publication and
+package authority. One deterministic bundle packages all chunk descriptors/bytes beneath the owning
+asset. The loader verifies complete content, mesh, target, settings and every embedded
+compound before returning an immutable closure. Runtime consumes catalog descriptors and compound bytes through
+`PhysicsCookedShapeCache`; it does not retain or consult the mesh/source/recipe.
+
+No existing caller signature changes. New consumers must retain borrowed request spans
+for synchronous cooking and publish through `ChunkCollisionCookOwner` on its owner
+thread. Failure/cancellation publishes nothing; content, mesh, target, settings/material
+or owner-generation changes reject stale completion. Invalidation cancels old tokens;
+replacement and idempotent shutdown preserve reader snapshots and cache leases. This
+artifact integration does not change Physics world/body activation contracts.
+
 ## REL-001.6 Release Pipeline Boundary
 
 `HoroEngine::Application` owns the additive `ReleaseJobTracker.h` and

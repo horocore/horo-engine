@@ -907,6 +907,8 @@ add_library(HoroPhysics STATIC
         physics/PhysicsCapabilities.cpp
         physics/PhysicsCollisionSchema.cpp
         physics/PhysicsConstraintDescriptor.cpp
+        physics/PhysicsCompoundArtifact.cpp
+        physics/PhysicsCompoundCook.cpp
         physics/PhysicsConvexHullCook.cpp
         physics/PhysicsConvexHullArtifact.cpp
         physics/PhysicsTriangleMeshCook.cpp
@@ -1121,6 +1123,18 @@ add_library(HoroDestructionCook STATIC
 add_library(HoroEngine::DestructionCook ALIAS HoroDestructionCook)
 target_compile_features(HoroDestructionCook PUBLIC cxx_std_20)
 target_link_libraries(HoroDestructionCook PUBLIC HoroEngine::DestructionApi HoroEngine::Assets)
+# Packaged artifact codec contains no source geometry or offline cook implementation.
+add_library(HoroDestructionCollisionArtifacts STATIC runtime/destruction/cook/ChunkCollisionArtifact.cpp)
+add_library(HoroEngine::DestructionCollisionArtifacts ALIAS HoroDestructionCollisionArtifacts)
+target_compile_features(HoroDestructionCollisionArtifacts PUBLIC cxx_std_20)
+target_link_libraries(HoroDestructionCollisionArtifacts PUBLIC HoroEngine::DestructionApi HoroEngine::Physics)
+
+# Offline adapter; runtime/API targets retain no Physics cooker dependency.
+add_library(HoroDestructionPhysicsCook STATIC runtime/destruction/cook/ChunkCollisionCook.cpp)
+add_library(HoroEngine::DestructionPhysicsCook ALIAS HoroDestructionPhysicsCook)
+target_compile_features(HoroDestructionPhysicsCook PUBLIC cxx_std_20)
+target_link_libraries(HoroDestructionPhysicsCook PUBLIC HoroEngine::DestructionCook HoroEngine::DestructionCollisionArtifacts)
+
 add_library(HoroDestructionRuntime STATIC
         runtime/destruction/runtime/DestructionDamageRuntime.cpp
         runtime/destruction/runtime/DestructionEventStream.cpp

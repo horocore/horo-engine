@@ -515,6 +515,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsBodyDynamicsTests.cpp
         unit/runtime/physics/PhysicsCollisionSchemaTests.cpp
         unit/runtime/physics/PhysicsConstraintDescriptorTests.cpp
+        unit/runtime/physics/PhysicsCompoundCookTests.cpp
         unit/runtime/physics/PhysicsConvexHullCookTests.cpp
         unit/runtime/physics/PhysicsTriangleMeshCookTests.cpp
         unit/runtime/physics/PhysicsHeightFieldCookTests.cpp
@@ -683,12 +684,12 @@ horo_register_catch_test(HoroDestructionApplicationTests LABELS "unit;destructio
 
 add_executable(HoroOfflineVoronoiTests unit/runtime/destruction/OfflineVoronoiTests.cpp)
 target_compile_features(HoroOfflineVoronoiTests PRIVATE cxx_std_20)
-target_link_libraries(HoroOfflineVoronoiTests PRIVATE HoroEngine::DestructionCook)
+target_link_libraries(HoroOfflineVoronoiTests PRIVATE HoroEngine::DestructionPhysicsCook)
 horo_register_catch_test(HoroOfflineVoronoiTests LABELS "unit;destruction;headless")
 
-add_executable(HoroChunkMeshCookTests unit/runtime/destruction/ChunkMeshCookTests.cpp)
+add_executable(HoroChunkMeshCookTests unit/runtime/destruction/ChunkMeshCookTests.cpp unit/runtime/destruction/ChunkCollisionCookTests.cpp)
 target_compile_features(HoroChunkMeshCookTests PRIVATE cxx_std_20)
-target_link_libraries(HoroChunkMeshCookTests PRIVATE HoroEngine::DestructionCook)
+target_link_libraries(HoroChunkMeshCookTests PRIVATE HoroEngine::DestructionPhysicsCook)
 horo_register_catch_test(HoroChunkMeshCookTests LABELS "unit;destruction;headless")
 
 add_executable(HoroDestructionReplicationTests

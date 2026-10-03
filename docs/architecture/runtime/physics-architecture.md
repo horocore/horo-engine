@@ -1173,3 +1173,20 @@ Required tests cover:
 - [ADR-144: Destruction Ownership, Authority, State and Runtime Geometry Boundary](../../adr/144-destruction-ownership-authority-state-and-runtime-geometry-boundary.md)
 - [ADR-145: Destruction Source, Chunk Geometry, Collision and Cook Ownership](../../adr/145-destruction-source-chunk-geometry-collision-and-cook-ownership.md)
 - [ADR-146: Destruction Runtime Activation, Physics, Cleanup and Rollback](../../adr/146-destruction-runtime-activation-physics-cleanup-and-rollback.md)
+
+### Flat Convex Compound Artifacts
+
+`PhysicsCompoundCook.h` defines the source-free flat convex compound envelope used by
+DFR collision cooking. Children carry stable asset-local IDs, explicit physical-material
+slots and exact verified convex references. Their finite transforms/scales are baked
+into a shared local coordinate space before this boundary. Up to 256 children are
+encoded in stable-ID order, with complete asset/subresource/target/dependency identity,
+bounded extents and integrity keys. Compound nesting and non-convex children reject;
+there is no simplification, primitive substitution or target fallback.
+
+`LoadCookedPhysicsCompound` verifies the outer envelope and every embedded convex
+artifact through the existing Physics loader. `PhysicsCookedShapeCache` accounts the
+complete decoded child storage and publishes an immutable lease only after complete
+construction. Eviction/replacement/shutdown preserve old active leases. These canonical
+artifact tables retain the existing cache's backend-neutral boundary; world/body native
+activation remains under the existing Physics preparation contract.

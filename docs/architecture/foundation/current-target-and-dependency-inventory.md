@@ -376,3 +376,16 @@ Any later migration ticket should regenerate both inspected configurations and
 update this inventory in the same change when it changes a production target,
 public include boundary, canonical target status, or first-party dependency
 edge.
+
+### DFR-002.5 Physics Cook Adapter
+
+`HoroDestructionPhysicsCook` (`HoroEngine::DestructionPhysicsCook`) is always built.
+It owns `ChunkCollisionCook.h`, publicly links only `HoroDestructionCook` and
+`HoroDestructionCollisionArtifacts`, and projects sealed neutral regions into Physics-owned offline cook
+contracts. `HoroDestructionApi`/`HoroDestructionRuntime` dependencies are unchanged.
+`HoroPhysics` additionally owns `PhysicsCompoundCook.h`; the existing cache supports
+its qualified source-free flat convex loader. `HoroDestructionCollisionArtifacts`
+(`HoroEngine::DestructionCollisionArtifacts`) owns `ChunkCollisionArtifact.h` and
+links DestructionApi/Physics for one source-free packaged bundle, separate from offline
+projection. Generated individual public-header
+consumers validate each of these target boundaries.

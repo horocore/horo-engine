@@ -482,6 +482,7 @@ horo_configure_target_header_boundary(HoroPhysics PUBLIC_HEADERS
     Horo/Physics/PhysicsCapabilities.h
     Horo/Physics/PhysicsCollisionSchema.h
     Horo/Physics/PhysicsConstraintDescriptor.h
+    Horo/Physics/PhysicsCompoundCook.h
     Horo/Physics/PhysicsConvexHullCook.h
     Horo/Physics/PhysicsCookedShapeCache.h
     Horo/Physics/PhysicsHeightFieldCook.h
@@ -588,6 +589,14 @@ horo_configure_target_header_boundary(HoroDestructionCook PUBLIC_HEADERS
     Horo/Destruction/OfflineVoronoi.h
     Horo/Destruction/PreFracturedImport.h
 )
+horo_configure_target_header_boundary(HoroDestructionCollisionArtifacts PUBLIC_HEADERS
+    Horo/Destruction/ChunkCollisionArtifact.h
+)
+
+horo_configure_target_header_boundary(HoroDestructionPhysicsCook PUBLIC_HEADERS
+    Horo/Destruction/ChunkCollisionCook.h
+)
+
 horo_configure_target_header_boundary(HoroDestructionRuntime PUBLIC_HEADERS
     Horo/Destruction/DestructionDamageRuntime.h
     Horo/Destruction/DestructionEventStream.h
