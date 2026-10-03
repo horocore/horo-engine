@@ -635,6 +635,117 @@ inactive prior generation. Dynamic carving derives a new runtime topology genera
 without mutating the published artifact; a persistent change edits authored intent
 and requires recook.
 
+### Canonical NavMesh Runtime Asset Loading
+
+NAV-002.9 implements the runtime consumer in `HoroNavigationAssetSceneIntegration`.
+This host target depends on `HoroAssets`, `HoroRuntimeScene` and
+`HoroNavigationRuntime`; `HoroNavigationApi` and `HoroNavigationRuntime` retain
+their existing dependency direction. `NavMeshAssetType.h` belongs to Assets and
+names the canonical `core.navmesh` sidecar type. The existing generic registry
+accepts it on an imported `.horoasset` definition; generated partitions do not
+create another registry, source extension, authoring identity or catalog.
+
+`SceneDefinitionBuilder` projects each enabled surface's definition AssetId into
+its canonical typed asset requirements. This deliberately changes activation:
+a definition with an enabled surface now requires the standard Scene asset
+services and its cooked artifact. Editor runtime conversion and packaged Scene
+builders use this same projection. Disabled surfaces require no navigation
+artifact. An explicit conflicting type fails definition construction. Hosts
+must also declare the generated product's canonical dependency closure through
+`RequireAsset`; the activation adapter rejects undeclared dependencies instead
+of opening additional provider I/O during publication or queries.
+
+`LoadNavMeshAsset` consumes the captured registry identity/type/revision, or the
+already resolved equivalent Scene metadata, and verifies the existing
+`AssetCookArtifact` envelope, expected target and actual content digest. The
+source digest and opaque host-computed cache-key digest are retained as
+provenance. The envelope source digest must equal the canonical tile-set input
+fingerprint. Runtime Scene dependencies use canonical AssetId and expected type;
+authoring/import dependencies and geometry provenance remain the existing cook
+input authority. Generated tiles are a complete self-contained closure, not a
+second asset registry or a runtime dependency manifest.
+
+The canonical producer is `NavigationBakeService`, using existing AssetCookCache
+and `PublishCookArtifactReplacement`. Its `core.navmesh` payload is
+`EncodeNavigationCookedTileSet` / `DecodeNavigationCookedTileSet` (HNS1), containing
+strictly ordered HNT1 `NavigationCookedTile` artifacts, including empty tiles.
+Each tile encodes surface/profile/grid identity, bounds, metric grid size,
+resolved build geometry and border, dependency key, neutral topology and source
+provenance. The canonical codec owner exposes a fixed-size validated
+`ProjectNavigationCookedTileDescriptor` projection from immutable factory-created
+tile bytes using its existing private reader. Consumers receive exact geometry,
+grid size and border without parsing private bytes or inferring profile defaults.
+The projection runs only during detached loading; canonical Create/Decode remains
+the sole version and semantic validation authority. The standard envelope and the canonical codec verify bounded
+sizes, versions, actual-byte digests, all table ranges and semantic invariants.
+There is one producer/consumer codec. The earlier provisional HNAVASSET1/HNM1
+format is removed; it was never a supported released format and has no runtime
+compatibility fallback. Existing stored provisional test artifacts require recook
+through the canonical producer. Future producer routing uses that same authority.
+
+Assets owns the generic `AssetPayloadCache` immutable allocations. Exact encoded
+tile bytes deduplicate by actual SHA-256 and full byte equality across definition
+assets and provider transports, including tiles still pinned after eviction.
+Eviction drops only the cache pin. Retained vector capacity remains charged
+until the last lease dies, including after cache shutdown or destruction.
+Resident capacity, all-live capacity and fixed index bookkeeping are reported
+separately; allocator/control-block overhead is excluded explicitly. The cache
+owns no AssetId lookup, persisted cache key, provider selection or world lifecycle.
+Decoded preparation tables are temporary per load; native provider allocations
+are per world and do not count as shared immutable tile bytes.
+
+`NavigationAssetSceneActivationParticipant` verifies every enabled surface's
+requested surface/profile closure against the canonical loaded partitions. It binds
+each selected partition to the exact captured live Scene surface generation;
+bake request/document revisions are separate domains and never compared with
+Scene generations. Identical immutable tile content may serve a new Scene
+incarnation. Existing Scene and world staging fences reject stale publication. An
+injected host factory must copy all borrowed tables it retains and preserve all
+requested semantics or return a typed unsupported failure. In particular a
+provider cannot silently omit off-mesh links. The factory reports an enforced
+allocation reservation, bounded by the remaining host provider budget; this is
+a qualified ceiling, not a claim to measure vendor allocator overhead.
+Reservations and live-world slots remain charged until the actual backend dies.
+The adapter keeps exact asset provenance with the provider generation.
+
+All load, validation, conversion, provider construction and lifecycle retention
+occur before aggregate Scene publication. A detached `NavigationWorldLifecycle`
+is finalized during preparation, then the aggregate's no-fail publication swaps
+the owner. Missing/corrupt assets, stale partitions, dependency mismatch, factory
+failure, a later participant rejection or exhausted retained-world budget leaves
+the previous Scene and navigation world unchanged. Failed preparation may warm
+bounded reusable immutable cache entries, but cannot install a world. Old
+candidate shutdown revokes only its own incarnation. Existing
+`NavigationWorldReadLease` and `NavigationQueuedQuery` pin the backend, tile bytes
+and provider reservation through eviction, replacement and shutdown. Logical
+revocation cancels work and prohibits publishing stale results; physical storage
+remains safe until accepted query records drain. Scene replacement requires a
+fresh registry revision to observe changed provider bytes, following the
+existing Scene asset reuse fence.
+
+Regression coverage uses actual Recast/Detour path execution, canonical
+filesystem/archive content parity, complete canonical producer output, hostile bytes, aggregate
+rollback and query-queue pins. The adapter remains provider-neutral when Recast
+is omitted; executable composition supplies a compatible factory explicitly.
+WorldStreaming cell integration, incremental rebuilds, obstacle overlays and
+additional query primitive producers remain their independently owned work.
+
+The asset-aware public headers and two adapters belong to the explicit
+`HoroEngine::NavigationAssetSceneIntegration` target, depending on Assets and
+the existing assetless NavigationSceneIntegration target. Consumers migrate their
+link dependency to that owning target; header paths remain stable.
+
+Host registration uses the existing
+`RuntimeSceneService::AddActivationParticipant` before startup, with canonical
+registry/`AssetLoadService`, expected cook target, byte cache and an explicit
+provider factory. Actual sidecar rebuild followed by filesystem and archive
+`AssetLoadService` preparation is covered through Scene publication and Detour
+query execution. The current concrete `HoroEditorApp` still composes an assetless
+Scene service; this change does not claim that the application has configured a
+cook provider or target. Adopting this host adapter there requires the real
+producer/cook entry-point routing, rather than inventing another content
+store or application-local fallback in this runtime consumer.
+
 ### Navigation Bake Operation And Publication
 
 [ADR-106](../../adr/106-navigation-bake-ownership-transaction-and-cache.md)
@@ -912,7 +1023,7 @@ query seam:
 | **Hearing** | Periodic time-sliced / stimulus queue drain | `PerceptionManager` + `AudioStimulusEmitter` | Distance attenuation + optional `PhysicsWorld` acoustic obstruction raycast | Acoustic detection of footsteps, gunshots, explosions, and environmental noise |
 | **Damage** | Event-driven (immediate on hit) | `HealthSystem` / `CombatSystem` | Direct gameplay event carrying instigator entity, damage amount, and hit direction | Detection of inflicted harm, alerting agent to attacker identity/direction |
 | **Touch** | Event-driven (fixed physics tick) | `PhysicsWorld` collision dispatcher | Contact manifolds and trigger overlap events | Immediate awareness of physical contact, collisions, and proximity penetration |
-| **Team** | Event-driven affiliation/distress updates plus periodic awareness broadcast | `TeamPerceptionRelay` | Squad/faction registry and communication radius or radio channel | Shared squad awareness, target spotting distribution, and distress alerts |
+| **Team** | Event-driven, after Gameplay authorizes one delivery | Gameplay/squad system | Exact recipient, sender and subject generations plus disclosure and perception-filter admission | Transient per-agent memory of an already delivered message |
 
 ```cpp
 enum class AISense : uint8_t {
@@ -978,11 +1089,37 @@ struct StimulusEvent {
      sensory range before detailed LOS physics traces, avoiding all-entity scans
      per listener; a future shared Scene spatial index may supply the same seam.
 3. **Team Dispatch Split**:
-   - Membership, faction, direct distress, and explicit target-spot events wake or
-     invalidate affected agents immediately.
-   - Periodic relay ticks share selected, already-committed perception facts among
-     eligible teammates under bounded range/fan-out budgets. They do not read
-     another agent's mutable in-progress sense evaluation.
+   - Gameplay/squad systems own team membership, communication topology, recipient
+     selection, delivery permission, network disclosure and durable squad knowledge.
+   - The host-composed `Gameplay::PerceptionEventSource` copies a bounded batch of
+     committed producer deliveries and their exact recipient/filter decisions.
+     It obtains the world role from the live `NetworkModeComposition`, never an
+     event field, and admits only Standalone or AuthorityServer worlds under
+     ADR-022. Every delivery revalidates that host role, the active AI publication,
+     the recipient's Perception capability, and current source/sender generations.
+     AI and RuntimeScene incarnations remain separate domains. Only this source
+     can create the synchronous proof used by `RouteGameplayPerceptionEvent`.
+     Neither the source nor the route discovers teammates or relays memory.
+   - Memory retains only transient position and weak, generation-fenced subject
+     and sender provenance. The source system remains read-only to senses.
+
+The value records and route belong to `HoroAI`; the host adapter belongs to the
+separate `HoroGameplayPerceptionIntegration` target, depending one-way on
+`HoroAISceneIntegration` and `HoroNetworkRuntime`. Its bounded capture allocates
+only for the owned producer batch; delivery does not allocate or invoke source
+system callbacks. Borrowed Scene, AI, host and registry owners outlive the sensing
+window, which must close before replacement or teardown. Producer filters are
+frozen for that window; policy changes close it and capture a new producer batch.
+Durable squad knowledge never enters this adapter or its transient memories.
+
+Migration: `AIPerceptionMemory::Observe` remains available for sight, hearing and
+other sense kernels, but rejects the built-in Team sense or Team stimulus identity.
+Team producers use the captured Gameplay delivery path. The caller audit found
+only memory regression tests and the new route using `Observe`, with no existing
+production team producer to migrate. Health/combat and squad producer systems and
+a complete PerceptionManager do not yet exist in this checkout; this integration
+consumes their typed committed output at the explicit host boundary, without
+implementing gameplay communication, topology or network transport.
 
 ### Update Policies And Time-Sliced Budgets
 
@@ -1771,6 +1908,47 @@ Horo 1.0 standardizes on three complementary decision paradigms:
 - Event-triggered and condition-triggered transitions evaluated against blackboard state.
 - State machines can host Behavior Trees as nested sub-state behaviors.
 
+`Horo/AI/StateMachine.h` implements the GAI-003.5 semantic asset and owner-thread
+kernel. `CookedStateMachinePlan` retains the existing `DecisionAssetPlan` without
+changing its node, dependency or blackboard declaration layout. Its states and
+transitions partition the admitted stable nodes; transition guards must use their
+own compiler-admitted typed key bindings. Gameplay event payloads enter the same
+blackboard at `BlackboardSync`; the runner accepts only bounded typed event IDs.
+The new header is owned by `HoroAI`, with no additional target dependency or
+migration of existing callers. The isolated AI public-header consumer covers it.
+
+Hierarchy is a bounded acyclic parent tree with explicit initial children. Entry
+and update run ancestor-first, exit descendant-first. External transitions use
+the least common ancestor, and a transition whose source remains an ancestor of
+its destination exits and re-enters that source. Leaf-most enabled transitions
+win before ancestor transitions; within a depth, higher priority wins, then
+ascending stable transition identity. The default step commits at most one
+transition. Explicit bounded chaining uses the same frozen input, does not reuse
+events, and stops before revisiting a leaf with `CycleBounded` evidence, or at its
+declared cap with `BudgetBounded` evidence. Repeating/backtracking a tick cannot
+evaluate again. Transition cycles across distinct ticks remain legal behavior.
+
+Actions are synchronous host-composed, step-scoped typed intent adapters. The
+borrowed interface replaces erased callback contexts with compiler-checked
+invocations; it adds no owned allocation or task scheduler. They do not
+retain Scene/blackboard views or create a scheduler; long-running work belongs to
+the existing cancellable task owner. Failed entry, update or exit retains its
+typed cause in the shared `AiTaskLifecycle` Failed result and clears the logical
+active path. This is an explicit terminal policy, not rollback of external
+effects. Cancellation, agent retirement and expired blackboard generations stop
+further actions and logical publication; adapters cannot reenter the runner.
+The host owns any already-enqueued intents and downstream resource cancellation.
+
+`AIDecisionSystem` and `BehaviorExecutionContext` are still architectural contracts,
+not concrete implementations at this boundary. Composition must invoke this
+kernel only on the authorized simulation owner in `AiDecisionEvaluate`, provide
+the exact current generation binding and frozen snapshot, and cancel before
+retirement. This ticket does not claim automatic controller discovery, task-provider
+execution, a behavior-tree interpreter, asset-pipeline persistence, hot-reload
+migration or save-service integration; those are separate decision foundation
+consumers. The semantic source is editor-independent, not a second file codec or
+blackboard store.
+
 #### 3. Simple Utility Scoring
 
 - Evaluates competing actions using consideration response curves (Linear, Polynomial, Logistic, Step).
@@ -1790,11 +1968,25 @@ These paradigms will integrate via dedicated provider extension seams without br
 
 ### Runtime Task & Lifecycle Alignment
 
-Implementation status on 12 September 2026: `HoroEngine::AI` provides the
+Implementation status on 2 October 2026: `HoroEngine::AI` provides the
 generation-fenced `AiTaskLifecycle` contract shared by native, script, and graph
 tasks. It owns the `Idle -> Running -> Succeeded | Failed | Cancelled` transition,
 one immutable terminal result, detached operation context, and post-terminal
-cleanup claim. Decision-plan execution and concrete task adapters remain later work.
+cleanup claim. `BehaviorTreeExecutionPlan` and `BehaviorTreeInstance` now provide
+bounded deterministic core control flow over those admitted decision bindings.
+The executable plan validates typed topology and owns preorder child/subtree and
+service ranges. Instances use contiguous state and bounded iterative traversal,
+with exactly-once descendant cancellation and task cleanup. Instance-issued
+`AiTaskContinuation` values admit bounded, generation-fenced terminal candidates
+and coalesced events. The decision owner consumes them through the real evaluator;
+workers cannot advance control flow. Explicit `AiTaskJobService` composition uses
+the process Foundation JobSystem, finite admission, cooperative cancellation and
+owned work/image/callback leases. Shutdown does not wait in normal evaluation;
+the host drains callbacks before releasing module dependencies or code. See the
+[runtime integration guide](../../guides/behavior-tree-runtime-migration.md) for
+explicit parallel, decorator, service, clock, abort and reload semantics.
+Concrete task adapters, dependency-frame execution and aggregate scheduling
+integration remain separate deliveries.
 
 Headless hosts that deliberately omit gameplay AI compose `NullAiRuntime`. Its
 availability is always false and every task admission returns the typed
@@ -1857,6 +2049,58 @@ struct AIBlackboard {
 
 Navigation commands (move-to, follow, patrol) are issued from behavior nodes
 and executed by the navigation system.
+
+### Canonical Base State And Internal Restore
+
+`Horo/AI/AICanonicalState.h` is the sole implemented canonical base-state model
+owned by `HoroAI`: `AiCanonicalState` contains stable-identity-sorted agents,
+`AiAgentCanonicalState` retains authored identity/policy and active/disabled lifecycle,
+`AiBaseControllerCanonicalState` retains the authored controller binding, and
+`BlackboardCanonicalState` retains complete schema-keyed owned values, including
+explicit absence for optional keys. Runtime inspection records and worker blackboard
+snapshots remain process-local observations, not persistence alternatives. This base
+slice does not serialize decision execution frames or define decision-plan replacement;
+GAI-003.11 owns that separate lifecycle. No save-slot, file, or container format is added.
+
+`AiSceneRuntime::CaptureCanonicalState` captures this model at the aggregate snapshot
+safe point using a current RuntimeScene borrow. Save, reload and reconstruction consumers
+use `PrepareRestoreAtSafePoint` and `CommitRestoreAtSafePoint` on the same AI owner.
+They explicitly select the destination AI/Scene binding; canonical source state cannot
+select a runtime generation. The complete population must match admitted authored
+agent/controller identities. Restore never modifies Scene components or authoring assets.
+Entity-valued blackboard projections require live destination entity generations;
+reconstruction adapters must resolve/remap their stored projections before staging.
+
+Restore is bounded load-time owner-thread work. Preparation validates the complete source
+layout and stages detached blackboards, including read-only values. A version change
+requires one inert direct forward `BlackboardSchemaMigration` with an admitted source
+schema. Unspecified keys retain stable identity; explicit mappings rename or discard keys;
+added target keys use valid target defaults. Invalid types, collisions, implicit loss,
+newer/unsupported source versions and ambiguous migrations fail with typed diagnostics.
+Type conversion and multi-hop migration are not inferred. Integrations may explicitly
+compose a direct migration for each supported prior schema version.
+
+Commit revalidates the borrowed Scene structural revision, current owner/agent generations,
+AI publication and mutation revisions, schema/instance generations, and cancellation before
+any live change. Failure or candidate destruction preserves all prior canonical values,
+authored bindings and transient work. Success cancels old task generations and invalidates
+blackboard observers/leases before swapping preallocated replacement storage; task slots
+are never reused by restore, and asynchronous work restarts through the existing task API
+only after publication. Task/query/provider handles, callbacks, cancellation tokens and
+runtime fences never enter the canonical model.
+
+The new public model is owned only by `HoroAI`; its header consumer is generated from the
+public-header ownership registry. Existing activation/task/blackboard callers require no
+migration. Future save adapters consume this value model rather than introducing parallel
+AI state storage. The Scene borrow remains alive until commit/rollback, and all capture,
+prepare and commit operations run on the simulation owner thread.
+
+Restore preparation is const: it stages detached state without publishing changes to the
+AI owner. Calls through `AiSceneRuntime` remain source-compatible; explicit member-function
+pointer declarations for preparation must include the const qualifier. Restore candidates
+remain runtime-created only: an inaccessible construction token permits RAII allocation
+without exposing a consumer path to forge partial transactions. Integrations obtain them
+from `PrepareRestoreAtSafePoint`, never by direct construction.
 
 ### Perception Save And Restore
 

@@ -1,3 +1,4 @@
+#include "PhysicsWorldContainmentInternal.h"
 #include "PhysicsWorldInternal.h"
 
 #include <limits>
@@ -40,6 +41,17 @@ namespace Horo::Physics {
     }  // namespace
 
     namespace {
+        /** @brief Validates all tick admission gates before mutable safe-point work begins. */
+        [[nodiscard]] Result<void> CheckTickAdmission(const auto &impl, const PhysicsFixedTickInput &input) {
+            if (const auto ready = Detail::CheckReadyForTick(impl); ready.HasError())
+                return ready;
+            if (const auto capacity = impl.CheckPublicationRevisionCapacity(); capacity.HasError())
+                return capacity;
+            if (const auto valid = Detail::ValidateTickInput(impl, input); valid.HasError())
+                return valid;
+            return Detail::ValidateSolverJobs(impl.runtime->solverJobs, input.solverJobs);
+        }
+
         /** @brief Runs the joined native step and translates callback diagnostics into world state. */
         [[nodiscard]] Result<Detail::CanonicalStepOutcome> StepCanonicalWorldForTick(auto &impl, const PhysicsFixedTickInput &input) {
             impl.queryEvents.events.BeginTick(input.simulationTick);
@@ -63,9 +75,11 @@ namespace Horo::Physics {
             if (impl.stepping)
                 return Result<void>::Failure(
                     MakeError(PhysicsErrors::InvalidState, "Body mutations must be admitted between fixed ticks."));
-            if (command.order.commandKind != PhysicsStructuralCommandKind::Change ||
-                command.order.targetKind != PhysicsCommandTargetKind::Body ||
-                command.order.targetIdentity != static_cast<std::uint64_t>(command.bodyMutation->body.slot.index) + 1U)
+            if (const std::array matches{command.order.commandKind == PhysicsStructuralCommandKind::Change,
+                                         command.order.targetKind == PhysicsCommandTargetKind::Body,
+                                         command.order.targetIdentity ==
+                                             static_cast<std::uint64_t>(command.bodyMutation->body.slot.index) + 1U};
+                !std::ranges::all_of(matches, std::identity{}))
                 return Result<void>::Failure(
                     MakeError(PhysicsErrors::CommandOrderInvalid, "Body mutation order key must name its exact body slot."));
             if (const auto resolved = Detail::ResolveCanonicalBodyMutation(impl.native, impl.identity, *command.bodyMutation);
@@ -78,6 +92,19 @@ namespace Horo::Physics {
                     return Result<void>::Failure(
                         MakeError(PhysicsErrors::CommandOrderInvalid, "A body already has a mutation for this tick."));
             }
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates command identity and complete mutation intent before queue transfer. */
+        [[nodiscard]] Result<void> ValidateQueuedCommand(const auto &impl, const PhysicsStructuralCommand &command) {
+            if (const auto valid = ValidatePhysicsCommandOrderKey(command.order); valid.HasError())
+                return valid;
+            if (const auto mutation = ValidateBodyMutationAdmission(impl, command); mutation.HasError())
+                return mutation;
+            if (const auto completed = impl.stepping ? impl.activeTick : impl.publication.Snapshot().completedTick;
+                command.order.simulationTick <= completed || command.order.worldGeneration != impl.identity.Value())
+                return Result<void>::Failure(MakeError(PhysicsErrors::CommandOrderInvalid,
+                                                       "Physics commands cannot target a completed tick or another world generation."));
             return Result<void>::Success();
         }
 
@@ -114,8 +141,8 @@ namespace Horo::Physics {
         }
 
         /** @brief Finishes event projection and publishes only a completed tick. */
-        [[nodiscard]] Result<void> RunCanonicalPostStep(auto &impl, const PhysicsFixedTickInput &input, const std::uint32_t eligible,
-                                                        std::uint32_t &applied) {
+        [[nodiscard]] Result<void> RunCanonicalPostStep(auto &impl, const PhysicsFixedTickInput &input, std::uint32_t &applied,
+                                                        const std::span<const BodyHandle> quarantined) {
             using enum PhysicsTickPhase;
             Detail::ObservePhase(input, IntegrateBodies);
             Detail::ObservePhase(input, WriteRuntimeTransforms);
@@ -126,9 +153,13 @@ namespace Horo::Physics {
             }
             Detail::ObservePhase(input, ProduceEvents);
             Detail::ObservePhase(input, ApplyDeferredPostStep);
-            Detail::ObserveCommands(impl, input, eligible, PhysicsStructuralCommandKind::Destroy, PhysicsCommandSafePoint::PostStep,
-                                    applied);
-            impl.DiscardCommands(eligible);
+            Detail::SuppressQuarantinedCommands(impl, quarantined);
+            const auto remainingFrame = Detail::ValidateCommandFrame(impl, input);
+            if (remainingFrame.HasError())
+                return Result<void>::Failure(remainingFrame.ErrorValue());
+            Detail::ObserveCommands(impl, input, remainingFrame.Value(), PhysicsStructuralCommandKind::Destroy,
+                                    PhysicsCommandSafePoint::PostStep, applied);
+            impl.DiscardCommands(remainingFrame.Value());
             impl.querySceneGeneration = input.sceneGeneration;
             Detail::CommitPublishedTick(impl, input.simulationTick, applied, eventResult.Value());
             impl.statistics.completedTicks = input.simulationTick;
@@ -248,6 +279,18 @@ namespace Horo::Physics {
     /** @copydoc PhysicsWorld::PhysicsWorld */
     PhysicsWorld::PhysicsWorld(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
+    /** @copydoc PhysicsWorld::SetQuarantineSink */
+    void PhysicsWorld::SetQuarantineSink(QuarantineSink &sink) const noexcept {
+        impl_->containment.quarantineSink = {&sink};
+    }
+
+    /** @copydoc PhysicsWorld::InjectNonFiniteBodyForTesting */
+    bool PhysicsWorld::InjectNonFiniteBodyForTesting(const BodyHandle body, const float value, const std::uint8_t component,
+                                                     const bool postStep) const noexcept {
+        return impl_->state == PhysicsWorldState::ActiveSolver &&
+               Detail::InjectCanonicalNonFiniteBodyForTesting(impl_->native, body, value, component, postStep);
+    }
+
     /** @copydoc PhysicsWorld::~PhysicsWorld */
     PhysicsWorld::~PhysicsWorld() = default;
 
@@ -283,8 +326,8 @@ namespace Horo::Physics {
             return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
         if (impl_->state == PreparedSolver || impl_->state == PreparedNull) {
             impl_->lifecycleCause = PhysicsWorldLifecycleCause::Reset;
-            impl_->lastFailure.reset();
-            impl_->lastDiagnostic.reset();
+            impl_->diagnostics.lastFailure.reset();
+            impl_->diagnostics.lastDiagnostic.reset();
             return Result<void>::Success();
         }
 
@@ -326,12 +369,12 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsWorld::LastFailure */
     const std::optional<Error> &PhysicsWorld::LastFailure() const noexcept {
-        return impl_->lastFailure;
+        return impl_->diagnostics.lastFailure;
     }
 
     /** @copydoc PhysicsWorld::LastDiagnostic */
     const std::optional<PhysicsDiagnosticRecord> &PhysicsWorld::LastDiagnostic() const noexcept {
-        return impl_->lastDiagnostic;
+        return impl_->diagnostics.lastDiagnostic;
     }
 
     /** @copydoc PhysicsWorld::QueueStructuralCommand */
@@ -342,15 +385,10 @@ namespace Horo::Physics {
             return Result<PhysicsCommandAdmission>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
         if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->runtime->state != PhysicsRuntimeState::Ready)
             return Result<PhysicsCommandAdmission>::Failure(MakeError(PhysicsErrors::InvalidState));
-        if (const Result<void> valid = ValidatePhysicsCommandOrderKey(command.order); valid.HasError())
+        if (const auto valid = ValidateQueuedCommand(*impl_, command); valid.HasError()) {
+            impl_->RecordMutationDiagnostic(valid.ErrorValue(), command);
             return Result<PhysicsCommandAdmission>::Failure(valid.ErrorValue());
-        if (const auto mutation = ValidateBodyMutationAdmission(*impl_, command); mutation.HasError())
-            return Result<PhysicsCommandAdmission>::Failure(mutation.ErrorValue());
-        if (const std::uint64_t completedOrActiveTick = impl_->stepping ? impl_->activeTick : impl_->publication.Snapshot().completedTick;
-            command.order.simulationTick <= completedOrActiveTick || command.order.worldGeneration != impl_->identity.Value())
-            return Result<PhysicsCommandAdmission>::Failure(
-                MakeError(PhysicsErrors::CommandOrderInvalid,
-                          "Physics commands cannot target a completed tick or another world generation."));
+        }
         const auto capacity = static_cast<std::uint32_t>(impl_->commands.size());
         if (capacity == 0)
             return Result<PhysicsCommandAdmission>::Failure(
@@ -364,7 +402,7 @@ namespace Horo::Physics {
         ++impl_->commandCount;
         impl_->commandOrderDirty = true;
         ++impl_->statistics.admittedCommands;
-        impl_->statistics.pendingCommands = impl_->commandCount;
+        impl_->statistics.pendingCommands = impl_->commandCount - static_cast<std::uint32_t>(impl_->containment.retiredCommands.size());
         impl_->statistics.maximumCommandDepth = std::max(impl_->statistics.maximumCommandDepth, impl_->commandCount);
         return Result<PhysicsCommandAdmission>::Success({PhysicsCommandAdmissionStatus::Deferred, impl_->commandCount});
     }
@@ -447,14 +485,14 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsWorld::AdvanceFixedTick */
     Result<void> PhysicsWorld::AdvanceFixedTick(const PhysicsFixedTickInput &input) {
-        if (const Result<void> ready = Detail::CheckReadyForTick(*impl_); ready.HasError())
-            return ready;
-        if (const auto capacity = impl_->CheckPublicationRevisionCapacity(); capacity.HasError())
-            return capacity;
-        if (const Result<void> validInput = Detail::ValidateTickInput(*impl_, input); validInput.HasError())
-            return validInput;
-        if (const Result<void> jobs = Detail::ValidateSolverJobs(impl_->runtime->solverJobs, input.solverJobs); jobs.HasError())
-            return jobs;
+        if (const auto admitted = CheckTickAdmission(*impl_, input); admitted.HasError())
+            return admitted;
+
+        impl_->containment.quarantined.clear();
+        if (const auto contained = Detail::ContainNonFiniteBodies(*impl_, input, impl_->containment.quarantined, false);
+            contained.HasError())
+            return contained;
+        Detail::SuppressQuarantinedCommands(*impl_, impl_->containment.quarantined);
 
         impl_->stepping = true;
         const Detail::BooleanResetGuard stepGuard{impl_->stepping};
@@ -475,7 +513,10 @@ namespace Horo::Physics {
         if (const auto stepped = StepCanonicalWorldForTick(*impl_, input); stepped.HasError())
             return Result<void>::Failure(stepped.ErrorValue());
 
-        return RunCanonicalPostStep(*impl_, input, eligible, applied);
+        if (const auto contained = Detail::ContainNonFiniteBodies(*impl_, input, impl_->containment.quarantined); contained.HasError())
+            return contained;
+
+        return RunCanonicalPostStep(*impl_, input, applied, impl_->containment.quarantined);
     }
 
     /** @copydoc PhysicsWorld::PublishedTick */

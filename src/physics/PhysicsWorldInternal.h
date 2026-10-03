@@ -180,6 +180,20 @@ namespace Horo::Physics {
                     PhysicsDiagnosticContextEntry{.key = SceneGeneration, .value = sceneGeneration},
                     PhysicsDiagnosticContextEntry{.key = SimulationTick, .value = simulationTick}};
         }
+
+        /** @brief World-owned bounded scratch and retirement notifications for body quarantine. */
+        struct PhysicsContainmentState final {
+            CanonicalRetirementSink quarantineSink;
+            std::vector<BodyHandle> quarantined;
+            std::vector<PhysicsCommandOrderKey> retiredCommands;
+        };
+
+        /** @brief Retained failure evidence and per-tick non-finite diagnostic precedence. */
+        struct PhysicsDiagnosticState final {
+            std::optional<Error> lastFailure;
+            std::optional<PhysicsDiagnosticRecord> lastDiagnostic;
+            std::uint64_t nonFiniteDiagnosticTick{};
+        };
     }  // namespace Detail
 
     /** @brief Shared only by the process wrapper and its worlds; identity pointers are owner-thread, stable-address registrations. */
@@ -216,6 +230,8 @@ namespace Horo::Physics {
         Impl(std::shared_ptr<PhysicsRuntime::Impl> runtimeOwner, const PhysicsWorldSettings &worldSettings)
             : runtime(std::move(runtimeOwner)), settings(worldSettings), commands(worldSettings.Values().budgets.maximumCommands),
               sourceOrder(worldSettings.Values().budgets.maximumCommands), queryEvents(worldSettings) {
+            containment.quarantined.reserve(worldSettings.Values().world.capacity.maximumBodies);
+            containment.retiredCommands.reserve(worldSettings.Values().budgets.maximumCommands);
             runtime->identities.push_back(&identity);
         }
 
@@ -230,15 +246,19 @@ namespace Horo::Physics {
             if (state == PhysicsWorldState::Destroyed)
                 return;
             InvalidateQueryEventCapabilities();
+            const bool terminalFailure = state == PhysicsWorldState::Failed;
             Detail::DestroyCanonicalWorld(native);
             native = {};
             state = PhysicsWorldState::Destroyed;
-            lifecycleCause = cause;
-            lastFailure.reset();
-            lastDiagnostic.reset();
+            if (!terminalFailure) {
+                lifecycleCause = cause;
+                diagnostics.lastFailure.reset();
+                diagnostics.lastDiagnostic.reset();
+            }
             std::ranges::fill(commands, PhysicsStructuralCommand{});
             commandHead = 0;
             commandCount = 0;
+            containment.retiredCommands.clear();
             queryEvents.events.Reset();
             statistics.pendingCommands = 0;
             std::erase(runtime->identities, &identity);
@@ -246,27 +266,82 @@ namespace Horo::Physics {
         }
 
         void RecordDiagnostic(const Error &error, const std::uint64_t sceneGeneration, const std::uint64_t simulationTick) {
+            if (diagnostics.nonFiniteDiagnosticTick == simulationTick && diagnostics.lastDiagnostic.has_value())
+                return;
             const auto context = Detail::DiagnosticContext(identity, sceneGeneration, simulationTick);
             const auto record = MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Runtime, error, context);
             if (record.HasValue())
-                lastDiagnostic = record.Value();
+                diagnostics.lastDiagnostic = record.Value();
         }
 
         void RecordEventDropDiagnostic(const std::uint64_t sceneGeneration, const std::uint64_t simulationTick, const bool overflowed) {
+            if (diagnostics.nonFiniteDiagnosticTick == simulationTick && diagnostics.lastDiagnostic.has_value())
+                return;
             const auto context = Detail::DiagnosticContext(identity, sceneGeneration, simulationTick);
             const auto error =
                 overflowed ? MakeError(PhysicsErrors::CapacityExceeded, "Physics event projection dropped bounded records.")
                            : MakeError(PhysicsErrors::DescriptorInvalid, "Physics event projection dropped invalid contact evidence.");
             const auto record = MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Event, error, context);
             if (record.HasValue())
-                lastDiagnostic = record.Value();
+                diagnostics.lastDiagnostic = record.Value();
         }
 
         void Fail(Error error, const std::uint64_t sceneGeneration, const std::uint64_t simulationTick) {
-            state = PhysicsWorldState::Failed;
+            using enum PhysicsWorldState;
+            if (state == Failed || state == Destroyed)
+                return;
+            state = Failed;
             lifecycleCause = PhysicsWorldLifecycleCause::FatalSolverError;
+            InvalidateQueryEventCapabilities();
+            queryEvents.events.AbortTick();
             RecordDiagnostic(error, sceneGeneration, simulationTick);
-            lastFailure = std::move(error);
+            diagnostics.lastFailure = std::move(error);
+        }
+
+        void RecordBodyDiagnostic(const Error &error, const Detail::CanonicalNonFiniteBody &body, const std::uint64_t sceneGeneration,
+                                  const std::uint64_t simulationTick) {
+            if (diagnostics.nonFiniteDiagnosticTick == simulationTick && diagnostics.lastDiagnostic.has_value())
+                return;
+            using enum PhysicsDiagnosticContextKey;
+            std::array<PhysicsDiagnosticContextEntry, 5> context{PhysicsDiagnosticContextEntry{.key = World, .value = identity},
+                                                                 PhysicsDiagnosticContextEntry{.key = Body, .value = body.body},
+                                                                 PhysicsDiagnosticContextEntry{.key = SceneGeneration,
+                                                                                               .value = sceneGeneration},
+                                                                 PhysicsDiagnosticContextEntry{.key = SimulationTick,
+                                                                                               .value = simulationTick},
+                                                                 PhysicsDiagnosticContextEntry{.key = SceneEntity,
+                                                                                               .value = body.sceneEntity}};
+            const auto record =
+                MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Runtime, error, {context.data(), body.sceneEntity == 0 ? 4U : 5U});
+            if (record.HasValue()) {
+                diagnostics.lastDiagnostic = record.Value();
+            }
+        }
+
+        void RecordNonFiniteDiagnostic(const Error &error, const Detail::CanonicalNonFiniteBody &body, const std::uint64_t sceneGeneration,
+                                       const std::uint64_t simulationTick) {
+            RecordBodyDiagnostic(error, body, sceneGeneration, simulationTick);
+            diagnostics.nonFiniteDiagnosticTick = simulationTick;
+        }
+
+        void RecordAdmissionDiagnostic(const Error &error, const std::uint64_t sceneEntity) {
+            using enum PhysicsDiagnosticContextKey;
+            const std::array context{PhysicsDiagnosticContextEntry{.key = World, .value = identity},
+                                     PhysicsDiagnosticContextEntry{.key = SceneEntity, .value = sceneEntity}};
+            const auto record =
+                MakePhysicsDiagnosticRecord(PhysicsDiagnosticCategory::Runtime, error, {context.data(), sceneEntity == 0 ? 1U : 2U});
+            if (record.HasValue())
+                diagnostics.lastDiagnostic = record.Value();
+        }
+
+        void RecordMutationDiagnostic(const Error &error, const PhysicsStructuralCommand &command) {
+            if (!command.bodyMutation.has_value()) {
+                RecordDiagnostic(error, command.order.sceneGeneration, command.order.simulationTick);
+                return;
+            }
+            const auto body = command.bodyMutation->body;
+            RecordBodyDiagnostic(error, {body, Detail::CanonicalSceneEntity(native, body)}, command.order.sceneGeneration,
+                                 command.order.simulationTick);
         }
 
         void ClearForReset() noexcept {
@@ -275,6 +350,7 @@ namespace Horo::Physics {
             std::ranges::fill(commands, PhysicsStructuralCommand{});
             commandHead = 0;
             commandCount = 0;
+            containment.retiredCommands.clear();
             activeTick = 0;
             querySceneGeneration = 0;
             queryBatch.tick = 0;
@@ -284,8 +360,9 @@ namespace Horo::Physics {
             queryEvents.events.Reset();
             publication.Reset();
             statistics = {};
-            lastFailure.reset();
-            lastDiagnostic.reset();
+            diagnostics.lastFailure.reset();
+            diagnostics.lastDiagnostic.reset();
+            diagnostics.nonFiniteDiagnosticTick = 0;
             lifecycleCause = PhysicsWorldLifecycleCause::Reset;
         }
 
@@ -325,7 +402,7 @@ namespace Horo::Physics {
                 const Result<Detail::CanonicalWorldHandle> created = Detail::CreateCanonicalWorld(runtime->native, settings);
                 if (created.HasError()) {
                     state = Failed;
-                    lastFailure = created.ErrorValue();
+                    diagnostics.lastFailure = created.ErrorValue();
                     return Result<void>::Failure(created.ErrorValue());
                 }
                 native = created.Value();
@@ -334,7 +411,7 @@ namespace Horo::Physics {
             } catch (const std::bad_alloc &) {
                 Error error = MakeError(PhysicsErrors::CapacityExceeded, "Unable to rebuild Physics world ownership state during reset.");
                 state = Failed;
-                lastFailure = error;
+                diagnostics.lastFailure = error;
                 return Result<void>::Failure(std::move(error));
             }
         }
@@ -347,16 +424,24 @@ namespace Horo::Physics {
             return commands[(commandHead + offset) % commands.size()];
         }
 
+        [[nodiscard]] bool IsRetiredCommand(const PhysicsCommandOrderKey &key) const noexcept {
+            return std::ranges::find(containment.retiredCommands, key) != containment.retiredCommands.end();
+        }
+
         void DiscardCommands(const std::uint32_t discarded) noexcept {
             if (discarded == 0)
                 return;
+            for (std::uint32_t index = 0; index < discarded; ++index)
+                std::erase(containment.retiredCommands, CommandAt(index).order);
             commandHead = (commandHead + discarded) % commands.size();
             commandCount -= discarded;
-            statistics.pendingCommands = commandCount;
+            statistics.pendingCommands = commandCount - static_cast<std::uint32_t>(containment.retiredCommands.size());
         }
 
         std::shared_ptr<PhysicsRuntime::Impl> runtime;
         PhysicsWorldSettings settings;
+        Detail::PhysicsContainmentState containment;
+        Detail::PhysicsDiagnosticState diagnostics;
         PhysicsWorldState state{PhysicsWorldState::Preparing};
         PhysicsWorldId identity;
         Detail::CanonicalWorldHandle native;
@@ -373,7 +458,13 @@ namespace Horo::Physics {
         PhysicsPublicationState publication;
         PhysicsTickStatistics statistics;
         PhysicsWorldLifecycleCause lifecycleCause{PhysicsWorldLifecycleCause::None};
-        std::optional<Error> lastFailure;
-        std::optional<PhysicsDiagnosticRecord> lastDiagnostic;
+    };
+
+    /** @brief Private deterministic corruption seam used only by containment tests. */
+    struct PhysicsWorldContainmentTestAccess final {
+        [[nodiscard]] static bool Inject(const PhysicsWorld &world, const BodyHandle body, const float value,
+                                         const std::uint8_t component = 0, const bool postStep = true) noexcept {
+            return world.InjectNonFiniteBodyForTesting(body, value, component, postStep);
+        }
     };
 }  // namespace Horo::Physics

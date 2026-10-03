@@ -36,4 +36,21 @@ namespace Horo::Editor {
 
         events_->Publish(event);
     }
+
+    /** @copydoc NotificationService::PublishApplicationError */
+    void NotificationService::PublishApplicationError(const Hosts::TranslatedError &error, std::string localizedMessage,
+                                                      std::string localizedTitle) const {
+        NotificationSeverity severity = NotificationSeverity::Error;
+        if (error.Failure().severity == ErrorSeverity::Info)
+            severity = NotificationSeverity::Info;
+        else if (error.Failure().severity == ErrorSeverity::Warning)
+            severity = NotificationSeverity::Warning;
+        Publish(NotificationEvent{.source = error.Failure().domain.Value(),
+                                  .severity = severity,
+                                  .title = std::move(localizedTitle),
+                                  .message = std::move(localizedMessage),
+                                  .deduplicationKey = error.Failure().code.Value(),
+                                  .durationSeconds = error.Failure().severity == ErrorSeverity::Critical ? 0.0f : 5.0f,
+                                  .errorDetail = error});
+    }
 }  // namespace Horo::Editor

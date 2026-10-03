@@ -90,7 +90,8 @@ namespace Horo::Runtime {
             if (initial.HasError())
                 return Result<void>::Failure(initial.ErrorValue());
             if (!IsPreviousOrEmpty(journal, initial.Value()))
-                return Result<void>::Failure(Invalid("The supplied previous generation is stale relative to the current catalog."));
+                return Result<void>::Failure(MakeError(SaveErrors::SlotCommitGenerationStale,
+                                                       "The supplied previous generation is stale relative to the current catalog."));
             return Result<void>::Success();
         }
 
@@ -185,6 +186,11 @@ namespace Horo::Runtime {
         if (!archive.bytes || archive.bytes->empty())
             return Result<SaveSlotCommitResult>::Failure(Invalid("Slot commit requires a non-empty owned finalized archive."));
 
+        auto lease = store_->AcquireLease(journal.address);
+        if (lease.HasError())
+            return Result<SaveSlotCommitResult>::Failure(lease.ErrorValue());
+        if (!lease.Value())
+            return Result<SaveSlotCommitResult>::Failure(Invalid("The store returned an empty operation lease."));
         if (auto admitted = ValidateAdmission(*store_, journal); admitted.HasError())
             return Result<SaveSlotCommitResult>::Failure(admitted.ErrorValue());
         if (auto prepared = PrepareForPublishing(*store_, journal, archive); prepared.HasError())
@@ -197,6 +203,13 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveSlotCommitTransaction::Recover */
     Result<SaveSlotRecoveryAction> SaveSlotCommitTransaction::Recover(const SaveStorageAddress &address) {
+        if (!address.namespaceAccess.expected.IsValid() || address.namespaceAccess.expectedRevision == 0 || !address.slot.IsValid())
+            return Result<SaveSlotRecoveryAction>::Failure(Invalid("Slot recovery requires a valid namespace binding and slot."));
+        auto lease = store_->AcquireLease(address);
+        if (lease.HasError())
+            return Result<SaveSlotRecoveryAction>::Failure(lease.ErrorValue());
+        if (!lease.Value())
+            return Result<SaveSlotRecoveryAction>::Failure(Invalid("The store returned an empty operation lease."));
         const auto loaded = store_->LoadJournal(address);
         if (loaded.HasError())
             return Result<SaveSlotRecoveryAction>::Failure(
