@@ -11,6 +11,7 @@
 #include <chrono>
 #include <format>
 #include <fstream>
+#include <stdexcept>
 #include <thread>
 
 namespace Horo::Application::TestSupport {
@@ -153,6 +154,21 @@ namespace Horo::Application::TestSupport {
         }
         return reached.load();
     }
+
+    /** @brief Throws only after the operation store has retained true terminal commit outcome. */
+    class ThrowingPublicationHistorySink final : public IOperationHistorySink {
+    public:
+        std::atomic<bool> enabled{};
+        bool nonstandard{};
+
+        void AppendTerminal(const OperationRecord &) override {
+            if (!enabled.load())
+                return;
+            if (nonstandard)
+                throw 73;
+            throw std::runtime_error("Optional publication history failure");
+        }
+    };
 
     /** @brief Owns process services before the facade so accepted jobs drain before private files disappear. */
     struct PublicationHarness {

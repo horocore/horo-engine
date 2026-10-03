@@ -3,27 +3,24 @@
 #include "navigation/NavigationPublicationProcess.h"
 
 #include <catch2/generators/catch_generators.hpp>
-#include <stdexcept>
 
 namespace Horo::Application {
     using namespace Navigation;
     using namespace TestSupport;
 
     namespace {
-        /** @brief Throws only after the operation store has retained true terminal commit outcome. */
-        class ThrowingPublicationHistorySink final : public IOperationHistorySink {
-        public:
-            std::atomic<bool> enabled{};
-            bool nonstandard{};
-
-            void AppendTerminal(const OperationRecord &) override {
-                if (!enabled.load())
-                    return;
-                if (nonstandard)
-                    throw 73;
-                throw std::runtime_error("Optional publication history failure");
-            }
-        };
+        /** @brief Verifies that every terminal projection agrees with the true committed operation exactly once. */
+        void CheckSuccessfulDiagnosticProjection(const NavigationBakeDiagnostics &diagnostics,
+                                                 const NavigationBakeDiagnosticsConfig &config, const OperationId operation) {
+            const auto records = diagnostics.Snapshot().records;
+            REQUIRE_FALSE(records.empty());
+            CHECK(records.back().operation == operation);
+            CHECK(records.back().result == BuildOutputResult::Succeeded);
+            CHECK(std::ranges::count_if(records, [](const auto &record) {
+                return record.result != BuildOutputResult::None;
+            }) == 1);
+            CHECK(config.output->SnapshotIfChanged(0)->records.back().result == BuildOutputResult::Succeeded);
+        }
 
         /** @brief Compares every serialized tile identity and topology with the worker-owned publication. */
         void CheckCompletePublication(const PublicationHarness &harness, const Assets::AssetCookGeneration &generation,
@@ -246,6 +243,8 @@ namespace Horo::Application {
         CHECK(harness.config.sourceAuthority->UpdateCurrent(proposed, harness.fixture.Observations()).HasValue());
         CHECK(harness.files->native.TryAcquireExclusive(harness.config.targetRoot / ".cook-writer.lock", "after navigation adoption")
                   .HasValue());
+        harness.jobs.Shutdown(ShutdownPolicy::Drain);
+        CheckSuccessfulDiagnosticProjection(*diagnostics, diagnosticConfig, operation);
     }
 
     TEST_CASE("Final navigation adoption rejects current source revisions changed after staging") {
