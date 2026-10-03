@@ -637,7 +637,7 @@ and requires recook.
 
 ### Canonical NavMesh Runtime Asset Loading
 
-NAV-002.9 implements the runtime consumer in `HoroNavigationSceneIntegration`.
+NAV-002.9 implements the runtime consumer in `HoroNavigationAssetSceneIntegration`.
 This host target depends on `HoroAssets`, `HoroRuntimeScene` and
 `HoroNavigationRuntime`; `HoroNavigationApi` and `HoroNavigationRuntime` retain
 their existing dependency direction. `NavMeshAssetType.h` belongs to Assets and
@@ -659,42 +659,29 @@ of opening additional provider I/O during publication or queries.
 already resolved equivalent Scene metadata, and verifies the existing
 `AssetCookArtifact` envelope, expected target and actual content digest. The
 source digest and opaque host-computed cache-key digest are retained as
-provenance. Dependencies carry canonical AssetId/type and the digest of their
-complete cooked envelope; every declared dependency must match the exact
-prepared Scene bytes and target. The loader does not compute cook keys,
-register a cooker, publish `CookCatalog`, recook missing data or extend
-`CacheKeyV1`. Dependency-bearing production cooking still requires the approved
-versioned key extension; runtime consumption does not bypass that producer gate.
+provenance. The envelope source digest must equal the canonical tile-set input
+fingerprint. Runtime Scene dependencies use canonical AssetId and expected type;
+authoring/import dependencies and geometry provenance remain the existing cook
+input authority. Generated tiles are a complete self-contained closure, not a
+second asset registry or a runtime dependency manifest.
 
-The producer seam for NAV-002.18 / #1251 is `EncodeNavMeshAssetPayload`, nested
-inside the standard AssetCook envelope. Its bounded bundle starts with
-`HNAVASSET1`, followed by canonical decimal partition/dependency counts, each on
-an ASCII newline. Dependency rows are identity-sorted unique AssetId, canonical
-type and canonical SHA-256 text, each on its own line. Each surface/profile
-partition then contains decimal SurfaceId, positive surface generation and
-neutral artifact byte count, each on its own line, followed by exactly that many
-binary bytes and one newline. Partitions are strictly ordered by SurfaceId and
-profile identity; all partitions for one surface share the authored generation.
-Duplicate, zero, malformed, oversized or trailing values reject the complete
-bundle. There is no provider or source-file fallback.
-
-`NavMeshCodec` serializes the existing `NavMeshData` 1.0 model without native
-struct layouts, padding or a second geometry schema. The fixed 203-byte header
-contains little-endian `HNM1`, followed by the declared model fields in header
-order; the coordinate origin uses three exact signed millimeter values. Identity
-values use uint64, floats use their IEEE uint32 representation, enum tags use
-uint8, and digest fields use 32 raw bytes. The body is an ordered sequence of tile
-descriptors, uint64 encoded tile byte counts and tile fragments. Tile fragments
-contain that tile's existing vertex, polygon, index, adjacency, link, provenance
-and provider-descriptor tables in model order, followed by its exact opaque
-provider sections. Ranges and offsets remain global to the artifact. The body
-SHA-256 covers descriptors and fragments; each tile SHA-256 covers its exact
-fragment. Neutral compression is currently unsupported. Provider-private codec
-metadata remains opaque and subject to exact provider compatibility checking.
-Fixed counts, sizes and qualified limits are checked before table allocation;
-actual digests, contiguous ranges and every existing semantic invariant are
-checked before any world is installed. Producer validation uses the same
-allocation-free `ValidateNavMeshArtifact` that precedes `NavMeshData::Create`.
+The canonical producer is `NavigationBakeService`, using existing AssetCookCache
+and `PublishCookArtifactReplacement`. Its `core.navmesh` payload is
+`EncodeNavigationCookedTileSet` / `DecodeNavigationCookedTileSet` (HNS1), containing
+strictly ordered HNT1 `NavigationCookedTile` artifacts, including empty tiles.
+Each tile encodes surface/profile/grid identity, bounds, metric grid size,
+resolved build geometry and border, dependency key, neutral topology and source
+provenance. The canonical codec owner exposes a fixed-size validated
+`ProjectNavigationCookedTileDescriptor` projection from immutable factory-created
+tile bytes using its existing private reader. Consumers receive exact geometry,
+grid size and border without parsing private bytes or inferring profile defaults.
+The projection runs only during detached loading; canonical Create/Decode remains
+the sole version and semantic validation authority. The standard envelope and the canonical codec verify bounded
+sizes, versions, actual-byte digests, all table ranges and semantic invariants.
+There is one producer/consumer codec. The earlier provisional HNAVASSET1/HNM1
+format is removed; it was never a supported released format and has no runtime
+compatibility fallback. Existing stored provisional test artifacts require recook
+through the canonical producer. Future producer routing uses that same authority.
 
 Assets owns the generic `AssetPayloadCache` immutable allocations. Exact encoded
 tile bytes deduplicate by actual SHA-256 and full byte equality across definition
@@ -708,7 +695,11 @@ Decoded preparation tables are temporary per load; native provider allocations
 are per world and do not count as shared immutable tile bytes.
 
 `NavigationAssetSceneActivationParticipant` verifies every enabled surface's
-exact generation and requested profiles against the loaded partitions. An
+requested surface/profile closure against the canonical loaded partitions. It binds
+each selected partition to the exact captured live Scene surface generation;
+bake request/document revisions are separate domains and never compared with
+Scene generations. Identical immutable tile content may serve a new Scene
+incarnation. Existing Scene and world staging fences reject stale publication. An
 injected host factory must copy all borrowed tables it retains and preserve all
 requested semantics or return a typed unsupported failure. In particular a
 provider cannot silently omit off-mesh links. The factory reports an enforced
@@ -733,11 +724,16 @@ fresh registry revision to observe changed provider bytes, following the
 existing Scene asset reuse fence.
 
 Regression coverage uses actual Recast/Detour path execution, canonical
-filesystem/archive content parity, exact dependencies, hostile bytes, aggregate
+filesystem/archive content parity, complete canonical producer output, hostile bytes, aggregate
 rollback and query-queue pins. The adapter remains provider-neutral when Recast
 is omitted; executable composition supplies a compatible factory explicitly.
 WorldStreaming cell integration, incremental rebuilds, obstacle overlays and
 additional query primitive producers remain their independently owned work.
+
+The asset-aware public headers and two adapters belong to the explicit
+`HoroEngine::NavigationAssetSceneIntegration` target, depending on Assets and
+the existing assetless NavigationSceneIntegration target. Consumers migrate their
+link dependency to that owning target; header paths remain stable.
 
 Host registration uses the existing
 `RuntimeSceneService::AddActivationParticipant` before startup, with canonical
@@ -747,7 +743,7 @@ provider factory. Actual sidecar rebuild followed by filesystem and archive
 query execution. The current concrete `HoroEditorApp` still composes an assetless
 Scene service; this change does not claim that the application has configured a
 cook provider or target. Adopting this host adapter there requires the real
-producer/cook routing owned by NAV-002.18, rather than inventing another content
+producer/cook entry-point routing, rather than inventing another content
 store or application-local fallback in this runtime consumer.
 
 ### Navigation Bake Operation And Publication

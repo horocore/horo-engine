@@ -13,6 +13,7 @@ namespace Horo::Navigation {
     /** @brief Exact Scene-authored partition supplied only during detached provider construction. */
     struct NavigationLoadedSurface final {
         Assets::AssetId definition;
+        std::uint64_t surfaceGeneration{};         /**< Exact live Scene surface incarnation, independent of bake revision. */
         const LoadedNavMeshPartition *partition{}; /**< Borrow expires when the injected factory returns. */
     };
 
