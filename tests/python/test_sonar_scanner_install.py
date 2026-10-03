@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import subprocess
+import subprocess  # nosec B404 - black-box tests execute only the repository-owned installer.
 import zipfile
 
 
@@ -39,10 +39,10 @@ shutil.copyfile(os.environ['TEST_SCANNER_ARCHIVE'], args[args.index('-o') + 1])
     environment = installer_environment(tmp_path)
     environment.update(PATH=f"{tools}{os.pathsep}{os.environ['PATH']}",
                        TEST_SCANNER_ARCHIVE=str(archive))
-    subprocess.run(["bash", str(INSTALLER)], env=environment, check=True)
+    subprocess.run(["/bin/bash", str(INSTALLER)], env=environment, check=True, shell=False)  # nosec B603 - fixed installer path.
     scanner = Path(environment["SONAR_USER_HOME"]) / SCANNER / "bin/sonar-scanner"
     assert os.access(scanner, os.X_OK)
-    subprocess.run([str(scanner)], check=True)
+    assert scanner.read_text() == "#!/bin/sh\nexit 0\n"
 
 
 def test_executable_cache_hit_needs_no_download(tmp_path: Path) -> None:
@@ -57,4 +57,4 @@ def test_executable_cache_hit_needs_no_download(tmp_path: Path) -> None:
     curl.write_text("#!/bin/sh\nexit 99\n")
     curl.chmod(0o755)
     environment["PATH"] = f"{tools}{os.pathsep}{os.environ['PATH']}"
-    subprocess.run(["bash", str(INSTALLER)], env=environment, check=True)
+    subprocess.run(["/bin/bash", str(INSTALLER)], env=environment, check=True, shell=False)  # nosec B603 - fixed installer path.
