@@ -267,6 +267,16 @@ helper result never becomes a success state. Hosts that do not compose updates
 keep using the default app entry point without an update context. The running
 editor never switches its own executable files.
 
+For network discovery, the installed host supplies exact HTTPS manifest
+endpoints keyed by editor channel, including the expected signed channel. The
+private manifest source rejects an absent or ambiguous mapping, userinfo,
+fragments, and query credentials. Its TLS-verified fetch does not follow
+redirects and caps the response at the canonical manifest limit. A fetched
+document cannot choose its own endpoint or expected channel; signature and
+installed-product admission are still checked by `AssessUpdate`. The host must
+provide the authenticated endpoint map and trust-root snapshot before it can
+inject this source into the update backend.
+
 ## Update Trust Root And Metadata Freshness
 
 The updater verifies update metadata against a configured trust root. The trust
