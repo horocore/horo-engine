@@ -27,6 +27,7 @@ namespace Horo::Assets {
         AssetCookTargetId target;            /**< Target this invocation is cooking for. */
         Sha256Digest sourceDigest;           /**< SHA-256 of the source bytes. */
         std::span<const std::uint8_t> bytes; /**< Borrowed immutable source bytes. Valid only for invocation. */
+        std::string_view sourceContext;      /**< Diagnostic-only project-relative source path; excluded from cook identity. */
     };
 
     /**

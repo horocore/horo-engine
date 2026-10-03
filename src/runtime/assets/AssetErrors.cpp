@@ -125,6 +125,9 @@ namespace Horo::Assets::CookErrors {
                                                     "Remove dependencies or use a dependency-aware cook target."};
     const ErrorCodeDescriptor SourceReadFailed{kCookDomain, ErrorCode{"asset.cook.source_read_failed"}, kCookError,
                                                "The source asset could not be read.", "Verify the source file exists and is readable."};
+    const ErrorCodeDescriptor CookerFailed{kCookDomain, ErrorCode{"asset.cook.cooker_failed"}, kCookError,
+                                           "The asset cooker threw before publication.",
+                                           "Inspect the source-linked cooker diagnostic and repair the source adapter."};
     const ErrorCodeDescriptor OutputIdentityExhausted{kCookDomain, ErrorCode{"asset.cook.output_identity_exhausted"}, kCookError,
                                                       "The build-output session identity space is exhausted.",
                                                       "Restart the owning project session before submitting more cook work."};
