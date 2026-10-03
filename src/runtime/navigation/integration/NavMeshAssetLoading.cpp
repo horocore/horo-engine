@@ -42,7 +42,7 @@ namespace Horo::Navigation {
                 if (found == indices.end()) {
                     if (loaded.partitions.size() >= limits.maximumPartitions)
                         return Result<void>::Failure(MakeError(NavigationErrors::CapacityExceeded));
-                    found = indices.emplace(key, loaded.partitions.size()).first;
+                    found = indices.try_emplace(key, loaded.partitions.size()).first;
                     loaded.partitions.push_back({key.first, key.second, descriptor, {}});
                 }
                 auto &partition = loaded.partitions[found->second];
