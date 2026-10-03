@@ -19,6 +19,12 @@ namespace Horo::Editor {
             cmd.command != EditorWorkspaceViewCommand::CancelLightComponentPreview) {
             CancelLightComponentPreview();
         }
+        if (m_assetPlacementPreviewActive && cmd.command != EditorWorkspaceViewCommand::None &&
+            cmd.command != EditorWorkspaceViewCommand::PreviewAssetPlacement &&
+            cmd.command != EditorWorkspaceViewCommand::InstantiateAsset &&
+            cmd.command != EditorWorkspaceViewCommand::CancelAssetPlacementPreview) {
+            CancelAssetPlacementPreview();
+        }
         static_cast<void>(ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) || ProcessSceneObjectCommand(cmd) ||
                           ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) ||
                           ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
@@ -102,6 +108,13 @@ namespace Horo::Editor {
             case EditorWorkspaceViewCommand::CreatePrimitive:
                 if (cmd.primitivePayload.has_value())
                     HandleCreatePrimitive(*cmd.primitivePayload, cmd.objectPayload);
+                break;
+            case EditorWorkspaceViewCommand::PreviewAssetPlacement:
+                if (cmd.assetSceneDrop.has_value())
+                    PreviewAssetPlacement(*cmd.assetSceneDrop);
+                break;
+            case EditorWorkspaceViewCommand::CancelAssetPlacementPreview:
+                CancelAssetPlacementPreview();
                 break;
             case EditorWorkspaceViewCommand::InstantiateAsset:
                 if (cmd.assetSceneDrop.has_value())

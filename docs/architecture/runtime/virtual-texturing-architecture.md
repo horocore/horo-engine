@@ -210,7 +210,7 @@ decode, renderer admission, upload/mapping, device loss and stalled retirement.
 
 - [ADR-164: Virtual Texturing Ownership, Product Scope and Capability Tier](../../adr/164-virtual-texturing-ownership-product-scope-and-capability-tier.md)
 - [ADR-034: GPU Memory and Residency Ownership](../../adr/034-gpu-memory-and-residency-ownership.md)
-- [Virtual Texturing Debug UI Reference](./virtual-texturing-debug.html)
+- [Virtual Texturing Debug UI Reference](../../../mock-studio/designs.md#architecture-runtime-virtual-texturing-debug)
 - [Rendering Architecture](./rendering-architecture.md): virtual texture realization and passes
 - [Material And Shader Model](./material-and-shader-model.md): semantic virtual-texture slots and variants
 - [Asset Pipeline](./asset-pipeline.md): cooked artifacts and bounded byte access

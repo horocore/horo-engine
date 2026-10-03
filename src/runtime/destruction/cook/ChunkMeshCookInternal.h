@@ -88,8 +88,45 @@ namespace Horo::Destruction::ChunkMeshDetail {
         }
     }
 
+    /** @brief Hashes canonical geometric membership, independent of source vertex/triangle order. */
+    [[nodiscard]] inline CollisionPieceId PieceIdentity(const ChunkCollisionPiece &piece) {
+        auto positions = piece.positions;
+        std::ranges::sort(positions);
+        positions.erase(std::ranges::unique(positions).begin(), positions.end());
+        Sha256Builder hash;
+        HashU64(hash, ChunkMeshCookSchemaVersion);
+        HashU64(hash, positions.size());
+        for (const auto &position : positions)
+            for (const float value : position)
+                HashFloat(hash, value == 0.0F ? 0.0F : value);
+        const auto digest = hash.Finalize();
+        std::uint64_t value = 0;
+        for (std::size_t i = 0; i < sizeof(value); ++i)
+            value = (value << 8U) | digest.bytes[i];
+        // Zero is reserved; duplicate identities still fail before publication.
+        return CollisionPieceId::Create(value == 0 ? 1 : value).Value();
+    }
+
+    /** @brief Hashes the complete neutral region table without changing canonical field order. */
+    inline void HashCollisionPieces(Sha256Builder &hash, std::span<const ChunkCollisionPiece> pieces) {
+        HashU64(hash, pieces.size());
+        for (const auto &piece : pieces) {
+            HashU64(hash, piece.id.Value());
+            HashU64(hash, piece.positions.size());
+            for (const auto &position : piece.positions)
+                for (const float value : position)
+                    HashFloat(hash, value);
+            HashU64(hash, piece.triangles.size());
+            for (const auto &triangle : piece.triangles)
+                for (const auto index : triangle)
+                    HashU64(hash, index);
+            HashDouble(hash, piece.volume);
+        }
+    }
+
     inline void HashChunkMesh(Sha256Builder &hash, const ChunkMesh &chunk) {
         HashU64(hash, chunk.id.Value());
+        HashCollisionPieces(hash, chunk.collisionPieces);
         HashU64(hash, chunk.vertices.size());
         for (const auto &vertex : chunk.vertices) {
             for (const float value : vertex.position)
@@ -161,6 +198,24 @@ namespace Horo::Destruction::ChunkMeshDetail {
             return true;
         }
     };
+
+    /** @brief Copies sealed neutral regions with budget admission before geometry allocation. */
+    [[nodiscard]] inline Result<void> AppendCollisionPieces(std::span<const OfflineVoronoiCollisionPiece> pieces, Budget &budget,
+                                                            ChunkMesh &mesh) {
+        for (const auto &piece : pieces) {
+            if (!budget.Charge(sizeof(ChunkCollisionPiece) + piece.positions.size() * sizeof(piece.positions.front()) +
+                                   piece.triangles.size() * sizeof(piece.triangles.front()),
+                               piece.positions.size() + piece.triangles.size()))
+                return Result<void>::Failure(MakeError(ChunkMeshCookErrors::LimitExceeded));
+            ChunkCollisionPiece output{{}, piece.positions, piece.triangles, piece.volume};
+            output.id = PieceIdentity(output);
+            mesh.collisionPieces.push_back(std::move(output));
+        }
+        std::ranges::sort(mesh.collisionPieces, {}, &ChunkCollisionPiece::id);
+        if (std::ranges::adjacent_find(mesh.collisionPieces, {}, &ChunkCollisionPiece::id) != mesh.collisionPieces.end())
+            return Result<void>::Failure(MakeError(ChunkMeshCookErrors::InvalidInput));
+        return Result<void>::Success();
+    }
 
     inline void SetMeshBounds(ChunkMesh &mesh) {
         mesh.mass.minimum = mesh.vertices.front().position;

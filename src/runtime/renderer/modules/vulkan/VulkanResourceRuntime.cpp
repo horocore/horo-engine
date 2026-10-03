@@ -1,5 +1,6 @@
 #include "VulkanResourceRuntime.h"
 
+#include "Horo/Runtime/Render/RenderCapabilities.h"
 #include "VulkanRenderBackendErrors.h"
 #include "VulkanResourceConversions.h"
 
@@ -18,10 +19,10 @@ namespace Horo::Render::Detail {
             return MakeError(code, std::move(message));
         }
 
-        [[nodiscard]] bool IsBufferRealizationValid(const Result<RenderMemoryCostPlan> &plan, const RenderBufferDescriptor &descriptor,
+        [[nodiscard]] bool IsBufferRealizationValid(const RenderMemoryCostPlan &plan, const RenderBufferDescriptor &descriptor,
                                                     const std::span<const std::byte> initialData,
                                                     const RenderMemoryPlacement &placement) noexcept {
-            return plan.HasValue() && VulkanResourceConversion::PlacementMatches(plan.Value(), placement) &&
+            return VulkanResourceConversion::PlacementMatches(plan, placement) &&
                    (initialData.empty() || initialData.size() == descriptor.byteSize) &&
                    (initialData.empty() || descriptor.access == RenderBufferAccess::HostVisible);
         }
@@ -323,7 +324,8 @@ namespace Horo::Render::Detail {
     Result<RenderMemoryCostPlan> VulkanResourceRuntime::QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const {
         if (impl_->device == VK_NULL_HANDLE || !descriptor.IsValid())
             return Result<RenderMemoryCostPlan>::Failure(
-                ResourceError(VulkanBackendErrors::ResourceRequestInvalid, "Invalid buffer plan."));
+                ResourceError(VulkanBackendErrors::ResourceRequestInvalid,
+                              "Vulkan buffer memory-cost query failed: " + DescribeRenderBufferRequest(descriptor)));
         const VkBufferCreateInfo info = BufferCreateInfo(descriptor);
         VkBuffer buffer{VK_NULL_HANDLE};
         if (impl_->dispatch.createBuffer(impl_->device, &info, nullptr, &buffer) != VK_SUCCESS)
@@ -349,10 +351,19 @@ namespace Horo::Render::Detail {
 
     Result<RenderMemoryCostPlan> VulkanResourceRuntime::QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const {
         const auto payload = RenderTextureBaseLevelByteSize(descriptor);
-        if (impl_->device == VK_NULL_HANDLE || !payload.has_value() ||
-            VulkanResourceConversion::TextureFormat(descriptor.format) == VK_FORMAT_UNDEFINED)
+        if (impl_->device == VK_NULL_HANDLE)
             return Result<RenderMemoryCostPlan>::Failure(
-                ResourceError(VulkanBackendErrors::ResourceUnsupported, "Unsupported texture plan."));
+                ResourceError(VulkanBackendErrors::ResourceUnsupported, "Vulkan texture memory-cost query failed: device is unavailable; " +
+                                                                            DescribeRenderTextureRequest(descriptor)));
+        if (!payload.has_value())
+            return Result<RenderMemoryCostPlan>::Failure(
+                ResourceError(VulkanBackendErrors::ResourceUnsupported,
+                              "Vulkan texture memory-cost query failed: base-level size is invalid; " +
+                                  DescribeRenderTextureRequest(descriptor)));
+        if (VulkanResourceConversion::TextureFormat(descriptor.format) == VK_FORMAT_UNDEFINED)
+            return Result<RenderMemoryCostPlan>::Failure(
+                ResourceError(VulkanBackendErrors::ResourceUnsupported, "Vulkan texture memory-cost query failed: format is unavailable; " +
+                                                                            DescribeRenderTextureRequest(descriptor)));
         const VkImageCreateInfo info = VulkanResourceConversion::ImageCreateInfo(descriptor);
         VkImage image{VK_NULL_HANDLE};
         if (impl_->dispatch.createImage(impl_->device, &info, nullptr, &image) != VK_SUCCESS)
@@ -379,9 +390,14 @@ namespace Horo::Render::Detail {
                                                               const std::span<const std::byte> initialData,
                                                               const RenderMemoryPlacement &placement) {
         const auto plan = QueryBufferMemoryCost(descriptor);
-        if (!IsBufferRealizationValid(plan, descriptor, initialData, placement))
+        if (plan.HasError())
+            return Result<std::uint64_t>::Failure(WrapError(VulkanBackendErrors::ResourceRequestInvalid, plan.ErrorValue(),
+                                                            "Vulkan buffer creation failed: " + DescribeRenderBufferRequest(descriptor)));
+        if (!IsBufferRealizationValid(plan.Value(), descriptor, initialData, placement))
             return Result<std::uint64_t>::Failure(
-                ResourceError(VulkanBackendErrors::ResourceRequestInvalid, "Invalid buffer realization."));
+                ResourceError(VulkanBackendErrors::ResourceRequestInvalid,
+                              "Vulkan buffer creation failed: initial data or placement is incompatible with " +
+                                  DescribeRenderBufferRequest(descriptor)));
         const VkBufferCreateInfo info = BufferCreateInfo(descriptor);
         auto instance = Impl::Allocate<Impl::Buffer>();
         if (instance == nullptr)
@@ -436,9 +452,13 @@ namespace Horo::Render::Detail {
                                                                const std::span<const std::byte> initialData,
                                                                const RenderMemoryPlacement &placement) {
         const auto plan = QueryTextureMemoryCost(descriptor);
-        if (plan.HasError() || !VulkanResourceConversion::PlacementMatches(plan.Value(), placement))
-            return Result<std::uint64_t>::Failure(
-                ResourceError(VulkanBackendErrors::ResourceRequestInvalid, "Invalid texture realization."));
+        if (plan.HasError())
+            return Result<std::uint64_t>::Failure(WrapError(VulkanBackendErrors::ResourceRequestInvalid, plan.ErrorValue(),
+                                                            "Vulkan texture creation failed: " + DescribeRenderTextureRequest(descriptor)));
+        if (!VulkanResourceConversion::PlacementMatches(plan.Value(), placement))
+            return Result<std::uint64_t>::Failure(ResourceError(VulkanBackendErrors::ResourceRequestInvalid,
+                                                                "Vulkan texture creation failed: placement is incompatible with " +
+                                                                    DescribeRenderTextureRequest(descriptor)));
         if (!initialData.empty())
             return Result<std::uint64_t>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceUnsupported, "Texture uploads require the Vulkan transfer stage."));

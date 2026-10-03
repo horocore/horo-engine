@@ -1,10 +1,8 @@
 #include "editor/screens/workspace/panels/game/GamePanel.h"
 
-#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 
 namespace Horo::Editor {
@@ -30,16 +28,11 @@ namespace Horo::Editor {
     /** @copydoc GamePanel::DrawPanel */
     void GamePanel::DrawPanel([[maybe_unused]] const ImVec2 &position, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
                               EditorWorkspaceViewCommandData &, const EditorGuiContext &context) {
-        const std::array tabNames{context.localization.Get("editor", "workspace.panel.game").c_str()};
-        Ui::DrawDockTabs(tabNames, 0, context.theme.fonts);
-
-        constexpr float tabBarHeight = 28.0F;
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
-        ImGui::BeginChild("##GameContent", ImVec2(size.x, size.y - tabBarHeight), false,
-                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::BeginChild("##GameContent", ImVec2(size.x, size.y), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         const float width = size.x;
-        const float height = size.y - tabBarHeight;
+        const float height = size.y;
         const ImVec2 framebufferScale = ImGui::GetIO().DisplayFramebufferScale;
         if (viewportRenderer_ != nullptr) {
             viewportRenderer_->RequestExtent(

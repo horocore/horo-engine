@@ -586,7 +586,7 @@ work, preview isolation, cancellation and repeated shutdown.
 
 ## Related Documents
 
-- [Destruction Setup UI Reference](./destruction-setup.html)
+- [Destruction Setup UI Reference](../../../mock-studio/designs.md#architecture-runtime-destruction-setup)
 - [Destruction Product Composition Migration](../../guides/destruction-product-composition-migration.md)
 
 - [Physics Architecture](./physics-architecture.md): fracture chunk physics
@@ -616,3 +616,29 @@ work, preview isolation, cancellation and repeated shutdown.
 - [ADR-149](../../adr/149-destruction-persistence-replication-streaming-and-authority.md):
   canonical save/network state, server authority, paired Physics motion, late join,
   durable streaming handoff and compatibility
+
+### DFR-002.5 Collision Artifact Integration
+
+The implementation retains neutral collision pieces in `ChunkMeshArtifact` schema 2,
+with geometry-derived stable chunk-local region identity. The offline
+`DestructionPhysicsCook` adapter consumes an exact sealed mesh generation, explicit
+Physics material-slot bindings and a complete Physics target/settings snapshot. It
+validates each closed convex region before calling Physics convex and flat compound
+cook contracts. It never calls Jolt or derives an enclosing hull for concave imported
+geometry. Voronoi decomposition is retained rather than reconstructed from render faces.
+
+Physics compound envelopes embed exact verified convex artifacts and stable child/slot
+identity in one baked local coordinate space. Nested compounds, non-convex leaves,
+missing slots and excessive limits fail explicitly. The source-free DestructionCollisionArtifacts target encodes all chunks as one
+asset bundle and validates its exact content/mesh/target/configuration plus every
+embedded Physics product. Runtime loads those bytes through the production Assets
+archive provider and Physics cache without DFR source geometry or a cook service. Assets owns durable
+publication/package storage; the adapter's immutable result is a detached dependency
+closure, not a second disk cache or native world readiness receipt.
+
+The synchronous cook admits bounded region-plane and hull face/vertex work before
+execution, checks cancellation between validation triangles and Physics calls, and
+returns original Physics errors. The owner checks content, mesh, target, complete
+settings/material fingerprint and generation before replacement. Failed or stale work
+retains the prior closure; shutdown closes admission, cancels retained tokens and leaves
+existing reader snapshots/Physics cache leases valid until their owners release them.

@@ -1,0 +1,124 @@
+name: Restore native build caches
+description: Restore exact dependency sources and the latest compatible main compiler snapshot
+inputs:
+  profile:
+    description: Build and dependency selection namespace; change when capability selection changes
+    required: true
+  mode:
+    description: Build configuration
+    required: true
+  max-size:
+    description: Maximum compiler cache size
+    required: true
+outputs:
+  compiler-key:
+    description: Immutable key for the new compiler checkpoint
+    value: ${{ steps.compiler.outputs.cache-primary-key }}
+  dependency-key:
+    description: Exact dependency key
+    value: ${{ steps.deps.outputs.cache-primary-key }}
+  dependency-hit:
+    description: Whether exact dependency sources were restored
+    value: ${{ steps.deps.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Identify compiler and dependency inputs
+      id: identity
+      shell: bash
+      run: |
+        # Only the tools selected by our CI matrix can be queried. Never execute
+        # CC/CXX as commands: their values select fixed, argument-free probes.
+        compiler_version() {
+          case "$1" in
+            gcc) gcc -dumpfullversion -dumpversion ;;
+            g++) g++ -dumpfullversion -dumpversion ;;
+            clang) clang --version ;;
+            clang++) clang++ --version ;;
+            cl)
+              # MSVC prints its version to stderr and exits 2 without inputs.
+              local banner status=0
+              banner=$(cl 2>&1) || status=$?
+              if [[ "$status" != 0 && "$status" != 2 ]]; then
+                printf '%s\n' "$banner" >&2
+                return "$status"
+              fi
+              printf '%s\n' "$banner"
+              ;;
+            *) echo "Unsupported CI compiler: $1" >&2; return 1 ;;
+          esac
+        }
+        cc_version=$(compiler_version "$CC")
+        cxx_version=$(compiler_version "$CXX")
+        cmake_version=$(cmake --version)
+        python3 scripts/ci_cache_identity.py --github-output "$GITHUB_OUTPUT" \
+          --cc "$CC" --cxx "$CXX" --cc-version "$cc_version" \
+          --cxx-version "$cxx_version" --cmake-version "$cmake_version"
+
+    - name: Install and configure ccache
+      if: runner.os != 'Windows'
+      uses: hendrikmuhs/ccache-action@33522472633dbd32578e909b315f5ee43ba878ce
+      with:
+        restore: 'false'
+        save: 'false'
+        max-size: ${{ inputs.max-size }}
+
+    - name: Setup sccache
+      if: runner.os == 'Windows'
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+      with:
+        version: v0.17.0
+
+    - name: Export compiler cache settings
+      shell: bash
+      env:
+        COMPILER_MAX_SIZE: ${{ inputs.max-size }}
+      run: |
+        {
+          echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ci-cache/compiler"
+          echo "CCACHE_COMPILERCHECK=content"
+          echo "CCACHE_COMPRESS=true"
+          echo "CCACHE_MAXSIZE=$COMPILER_MAX_SIZE"
+          echo "SCCACHE_DIR=$GITHUB_WORKSPACE/.ci-cache/compiler"
+          echo "SCCACHE_CACHE_SIZE=$COMPILER_MAX_SIZE"
+          echo "SCCACHE_GHA_ENABLED=false"
+          echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1"
+        } >> "$GITHUB_ENV"
+
+    # Keep download metadata with the sources so FetchContent does not clone
+    # them again. Dependency object/build directories are never archived.
+    - name: Restore dependency sources
+      id: deps
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+      with:
+        path: |
+          ${{ github.workspace }}/.cmake/fetchcontent/*-src
+          ${{ github.workspace }}/.cmake/fetchcontent/*-subbuild
+        key: native-v1-deps-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.identity.outputs.cmake }}-${{ steps.identity.outputs.dependencies }}
+
+    - name: Restore compiler snapshot
+      id: compiler
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+      with:
+        path: ${{ github.workspace }}/.ci-cache/compiler
+        key: native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.c-compiler }}-${{ steps.identity.outputs.compiler }}-${{ inputs.profile }}-${{ inputs.mode }}-main-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.c-compiler }}-${{ steps.identity.outputs.compiler }}-${{ inputs.profile }}-${{ inputs.mode }}-main-
+
+    - name: Report restores and reset per-run statistics
+      shell: bash
+      env:
+        COMPILER_KEY: ${{ steps.compiler.outputs.cache-matched-key }}
+        DEPENDENCY_KEY: ${{ steps.deps.outputs.cache-matched-key }}
+        RUNNER_PLATFORM: ${{ runner.os }}
+      run: |
+        echo "Compiler cache: ${COMPILER_KEY:-cold start}"
+        echo "Dependency cache: ${DEPENDENCY_KEY:-cold start}"
+        if [[ "$RUNNER_PLATFORM" == Windows ]]; then
+          sccache --stop-server || true
+          sccache --start-server
+          sccache --zero-stats
+        else
+          ccache --zero-stats
+        fi

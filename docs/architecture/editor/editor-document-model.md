@@ -316,7 +316,7 @@ after the destination is durable.
 Changing location is coordinated by the workspace controller and project model;
 tabs do not update path state independently.
 
-After successful `Save As`, the active document location is updated and `saved_revision` is set to the saved target revision if that revision is still current.
+After successful `Save As`, the active document location and project `settings.defaultScene` are updated, and `saved_revision` is set to the saved target revision if that revision is still current. If a workspace scene has no active file path, `Save` opens the `Save As` flow to establish its first durable location. `Save Copy As` does not change the project default scene.
 `Save Copy As` writes a separate copy without changing the active document
 identity or saved revision.
 

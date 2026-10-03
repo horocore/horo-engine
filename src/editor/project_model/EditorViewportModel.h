@@ -76,6 +76,13 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<void> Navigate(const EditorViewportNavigationDelta &delta);
 
+        /**
+         * @brief Aligns the camera with one signed world axis while preserving target, distance, and projection.
+         * @param axis Signed world-axis viewpoint selected by the viewport compass.
+         * @return Success, or a validation error without changing camera state.
+         */
+        [[nodiscard]] Result<void> AlignToAxis(EditorViewportAxisView axis);
+
         /** @brief Changes editor projection while preserving apparent scale at the orbit target. */
         [[nodiscard]] Result<void> SetProjection(Runtime::CameraProjection projection);
 

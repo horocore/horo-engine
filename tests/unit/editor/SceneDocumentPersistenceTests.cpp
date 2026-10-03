@@ -66,6 +66,55 @@ TEST_CASE("Project Scene Save Reopens The Same Authored State", "[unit][editor][
     REQUIRE((reopened.PrefabInstances().front() == authored.prefabInstances.front()));
 }
 
+TEST_CASE("Project default scene mutation validates containment and replaces metadata durably", "[unit][editor][persistence]") {
+    TemporaryProject project;
+    project.PrepareEmptyScene();
+
+    NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations(files);
+    CHECK(SetProjectDefaultScenePath(project.Root() / "relative", project.ScenePath(), mutations, files).HasError());
+    CHECK(SetProjectDefaultScenePath(project.Root(), project.Root().parent_path() / "outside.horo", mutations, files).HasError());
+    CHECK(SetProjectDefaultScenePath(project.Root(), project.Root() / "assets/scenes/main.json", mutations, files).HasError());
+
+    REQUIRE((SetProjectDefaultScenePath(project.Root(), project.ScenePath(), mutations, files).HasValue()));
+    const auto loaded = LoadProjectDefaultScene(project.Root());
+    REQUIRE((loaded.HasValue() && loaded.Value().has_value()));
+    CHECK(std::filesystem::weakly_canonical(loaded.Value()->absolutePath) == std::filesystem::weakly_canonical(project.ScenePath()));
+}
+
+TEST_CASE("Project default scene mutation removes its prepared file after replacement failure", "[unit][editor][persistence]") {
+    TemporaryProject project;
+    project.PrepareEmptyScene();
+    ReplaceFailingFileSystem files;
+    ProjectMutationCoordinator mutations(files);
+
+    const auto result = SetProjectDefaultScenePath(project.Root(), project.ScenePath(), mutations, files);
+    REQUIRE(result.HasError());
+    CHECK_FALSE(std::filesystem::exists(project.Root() / ".horo/project.json.save.tmp"));
+}
+
+TEST_CASE("Project default scene mutation reports unreadable and incomplete metadata", "[unit][editor][persistence]") {
+    TemporaryProject project;
+    project.PrepareEmptyScene();
+    NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations(files);
+
+    std::filesystem::remove(project.Root() / ".horo/project.json");
+    CHECK(SetProjectDefaultScenePath(project.Root(), project.ScenePath(), mutations, files).HasError());
+
+    {
+        std::ofstream metadata{project.Root() / ".horo/project.json"};
+        metadata << "{invalid";
+    }
+    CHECK(SetProjectDefaultScenePath(project.Root(), project.ScenePath(), mutations, files).HasError());
+
+    {
+        std::ofstream metadata{project.Root() / ".horo/project.json"};
+        metadata << R"({"settings":{}})";
+    }
+    CHECK(SetProjectDefaultScenePath(project.Root(), project.ScenePath(), mutations, files).HasError());
+}
+
 TEST_CASE("Navigation link direction and modifier shape round trip explicitly", "[unit][editor][persistence][navigation]") {
     TemporaryProject project;
     project.PrepareEmptyScene();

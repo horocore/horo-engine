@@ -1,6 +1,7 @@
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Navigation/NavigationSceneActivation.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "scene/SceneActivationTestGate.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -40,32 +41,6 @@ namespace Horo::Navigation {
             return Runtime::FrameContext{1, {}, 0.0, 0, {}, false, token};
         }
 
-        class GateCandidate final : public Runtime::SceneActivationCandidate {
-        public:
-            explicit GateCandidate(const bool *fail) noexcept : fail_(fail) {}
-
-            [[nodiscard]] Result<void> ValidatePublication() const override {
-                return *fail_ ? Result<void>::Failure(MakeError(NavigationErrors::AgentRegistryStale)) : Result<void>::Success();
-            }
-
-            void Shutdown() noexcept override {}
-
-        private:
-            const bool *fail_{};
-        };
-
-        class GateParticipant final : public Runtime::SceneActivationParticipant {
-        public:
-            explicit GateParticipant(bool &fail) noexcept : fail_(&fail) {}
-
-            [[nodiscard]] Result<std::unique_ptr<Runtime::SceneActivationCandidate>> Prepare(const Runtime::RuntimeSceneDefinition &,
-                                                                                             Runtime::RuntimeSceneView) override {
-                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(std::make_unique<GateCandidate>(fail_));
-            }
-
-        private:
-            bool *fail_{};
-        };
     }  // namespace
 
     TEST_CASE("Navigation scene activation publishes only after aggregate validation and retires old handles",
@@ -74,7 +49,10 @@ namespace Horo::Navigation {
         bool gateFails = false;
         Runtime::RuntimeSceneService service;
         REQUIRE(service.AddActivationParticipant(std::make_unique<NavigationSceneActivationParticipant>(registry)).HasValue());
-        REQUIRE(service.AddActivationParticipant(std::make_unique<GateParticipant>(gateFails)).HasValue());
+        REQUIRE(service
+                    .AddActivationParticipant(
+                        std::make_unique<Runtime::TestSupport::PublicationGateParticipant>(gateFails, NavigationErrors::AgentRegistryStale))
+                    .HasValue());
 
         CancellationSource cancellation;
         REQUIRE(service.Startup(cancellation.Token()).HasValue());

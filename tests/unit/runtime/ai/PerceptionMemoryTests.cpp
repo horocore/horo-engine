@@ -27,16 +27,14 @@ namespace Horo::AI {
                     .source = {.sceneIncarnation = scene, .slot = slot, .generation = generation}};
         }
 
-        [[nodiscard]] PerceptionObservation Observation(const PerceptionMemoryKey key, const std::int64_t x = 0) {
+        [[nodiscard]] PerceptionObservation Observation(const PerceptionMemoryKey &key, const std::int64_t x = 0) {
             return {.key = key, .position = Math::WorldCoordinate64::FromMillimeters(x, 0, 0), .velocity = {1, 2, 3}};
         }
 
-        [[nodiscard]] bool AlwaysAlive(void *, const PerceptionSourceRef &) {
-            return true;
-        }
-
         [[nodiscard]] PerceptionSourceLiveness Live() {
-            return {.isAlive = AlwaysAlive};
+            return {.isAlive = [](auto *, const PerceptionSourceRef &) {
+                return true;
+            }};
         }
 
         [[nodiscard]] AIPerceptionMemory Memory(PerceptionMemoryPolicy policy = {}) {
@@ -70,9 +68,8 @@ namespace Horo::AI {
         TEST_CASE("perception listener limits apply within one globally bounded agent memory", "[unit][ai][perception][memory]") {
             const PerceptionMemoryPolicy policy{.listenerMaximumEntries = 2, .profileMaximumEntries = 3};
             auto memory = Memory(policy);
-            REQUIRE(memory.Observe(Observation(Key(1)), 0).HasValue());
-            REQUIRE(memory.Observe(Observation(Key(2)), 1).HasValue());
-            REQUIRE(memory.Observe(Observation(Key(3)), 2).HasValue());
+            for (std::uint32_t source = 1; source <= 3; ++source)
+                REQUIRE(memory.Observe(Observation(Key(source)), source - 1).HasValue());
             REQUIRE(!memory.Find(Key(1), 2, Live()).Value().has_value());
             REQUIRE(memory.StoredCount() == 2);
             REQUIRE(memory.Observe(Observation(Key(4, 1, 77, 10)), 2).HasValue());
@@ -161,6 +158,7 @@ namespace Horo::AI {
         TEST_CASE("perception memory validates hostile policy source time and liveness", "[unit][ai][perception][memory]") {
             REQUIRE(AIPerceptionMemory::Create(0, Agent()).HasError());
             REQUIRE(AIPerceptionMemory::Create(77, {}, {}).HasError());
+            REQUIRE(AIPerceptionMemory::Create(78, Agent()).HasValue());
             REQUIRE(AIPerceptionMemory::Create(77, Agent(), {.listenerMaximumEntries = 33}).HasError());
             REQUIRE(AIPerceptionMemory::Create(77, Agent(), {.decayPerSecond = -1}).HasError());
             REQUIRE(AIPerceptionMemory::Create(77, Agent(), {.fixedStep = std::chrono::nanoseconds{0}}).HasError());
@@ -186,6 +184,20 @@ namespace Horo::AI {
             REQUIRE(memory.StoredCount() == 0);
         }
 
+        TEST_CASE("memory admits only complete same-scene optional emitter provenance", "[unit][ai][perception][memory]") {
+            auto memory = Memory();
+            auto observation = Observation(Key(1));
+            for (const PerceptionSourceRef provenance :
+                 std::array{PerceptionSourceRef{0, 2, 0}, PerceptionSourceRef{77, 2, 0}, PerceptionSourceRef{88, 2, 1}}) {
+                observation.provenance = provenance;
+                REQUIRE(memory.Observe(observation, 0).HasError());
+                CHECK(memory.StoredCount() == 0);
+            }
+            observation.provenance = {77, 2, 1};
+            REQUIRE(memory.Observe(observation, 0).HasValue());
+            CHECK(memory.Find(observation.key, 0, Live()).Value()->provenance == observation.provenance);
+        }
+
         TEST_CASE("scene source adapter removes destroyed generations before perception reads", "[unit][ai][perception][memory][scene]") {
             Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
             Runtime::RuntimeEntityDefinition entity;
@@ -206,13 +218,13 @@ namespace Horo::AI {
 
             Runtime::SceneCommandBuffer destroy;
             destroy.Destroy(*owner);
-            REQUIRE(scene->Commit(std::move(destroy)).HasValue());
+            REQUIRE(scene->Commit(destroy).HasValue());
             REQUIRE(!memory.Find(key, 1, PerceptionSceneLiveness(*scene)).Value().has_value());
             REQUIRE(memory.StoredCount() == 0);
 
             Runtime::SceneCommandBuffer reuse;
             const auto token = reuse.Create(Runtime::RuntimeEntityCreateInfo{});
-            auto committed = scene->Commit(std::move(reuse));
+            auto committed = scene->Commit(reuse);
             REQUIRE(committed.HasValue());
             REQUIRE(committed.Value().created.size() == 1);
             CHECK(committed.Value().created[0].deferred == token);

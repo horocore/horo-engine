@@ -20,7 +20,6 @@ namespace Horo::Editor {
         [[nodiscard]] float DrawMetrics(const ImVec2 &origin, float width, const EditorGuiContext &context) const;
         void DrawTable(const ImVec2 &origin, float width, float height, const EditorGuiContext &context) const;
         void DrawRow(std::size_t index, float width, const TableLayout &layout, const EditorGuiContext &context) const;
-        void DrawFooter(const ImVec2 &origin, float width, const EditorGuiContext &context) const;
 
         std::array<char, 256> m_search{};
         int m_windowSelection{};

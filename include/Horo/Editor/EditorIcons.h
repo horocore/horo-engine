@@ -70,6 +70,10 @@ namespace Horo::Editor::Ui {
         Record,
         VolumeOff,
         ClearAll,
+        SceneObject,
+        Pending,
+        Success,
+        Cancelled,
         Count,
     };
 

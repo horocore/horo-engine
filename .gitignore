@@ -14,6 +14,7 @@ compile_commands.json
 
 # Local CMake / dependency cache
 .cmake/
+.ci-cache/
 
 # Generated release and analysis artifacts
 sbom.spdx.json

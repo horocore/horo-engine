@@ -832,7 +832,7 @@ or sensitive local paths.
 
 ## Related Documents
 
-- [Package Manager](./package-manager.html): HTML reference design for package
+- [Package Manager](../../../mock-studio/designs.md#architecture-packages-package-manager): React mock design for package
   dependencies, sources, restore state, overrides, and lockfile diff.
 - [Package Restore](./package-restore.md)
 - [Package Lifecycle](./package-lifecycle.md)
