@@ -315,7 +315,14 @@ namespace Horo::Runtime::Ui {
          * @return Transition and state projection, or typed stale, disabled, ordering, capacity or lifecycle failure.
          * @post A successful DefaultPending result must be resolved by ApplyDefault or SuppressDefault before another input.
          */
-        [[nodiscard]] Result<UiControlEventResult> Handle(UiControlInput input);
+        [[nodiscard]] Result<UiControlEventResult> Handle(const UiControlInput &input);
+
+        /**
+         * @brief Copies the staged default action without changing the control value or pending decision.
+         * @return Empty when no action is staged, otherwise the exact action ApplyDefault would emit; no allocation occurs.
+         * @note The owner may admit a binding write before applying the UI-local default, or suppress a refused write.
+         */
+        [[nodiscard]] Result<std::optional<UiControlDefaultAction>> PeekDefault() const;
 
         /**
          * @brief Applies the one staged default action in deterministic owner order.
@@ -328,6 +335,15 @@ namespace Horo::Runtime::Ui {
          * @return Success; repeated suppression with no staged action is harmless.
          */
         [[nodiscard]] Result<void> SuppressDefault();
+
+        /**
+         * @brief Reconciles a value control to authoritative provider state at an owner safe point.
+         * @param value Boolean for Toggle, finite in-range double for Slider, or bounded valid UTF-8 text for TextInput.
+         * @return Success or typed lifecycle/value failure; rejected values leave all control state unchanged.
+         * @post Availability and focus are preserved; press, repeat, pending default and editing state are cleared.
+         * @note The caller fences provider outcome ownership before calling; this operation performs no allocation.
+         */
+        [[nodiscard]] Result<void> ReconcileValue(const UiActionValue &value);
 
         /**
          * @brief Changes availability at an owner safe point and cancels transient interaction state when disabling.

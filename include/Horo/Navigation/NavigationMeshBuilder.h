@@ -74,6 +74,17 @@ namespace Horo::Navigation {
         std::uint64_t maximumOwnedBytes{MaximumOwnedBytes};                 /**< Maximum measured output and bounded work storage. */
         std::uint64_t maximumWorkUnits{MaximumWorkUnits};                   /**< Maximum deterministic voxelization work estimate. */
 
+        /**
+         * @brief Validates caller-selected ceilings before work estimates, cache reuse or provider allocation.
+         * @return True for positive limits within every hard ceiling and polygon corner limits of at least three.
+         */
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return maximumVertices > 0 && maximumVertices <= MaximumVertices && maximumPolygons > 0 && maximumPolygons <= MaximumPolygons &&
+                   maximumOffMeshLinks > 0 && maximumOffMeshLinks <= MaximumOffMeshLinks && maximumVerticesPerPolygon >= 3 &&
+                   maximumVerticesPerPolygon <= MaximumVerticesPerPolygon && maximumOwnedBytes > 0 &&
+                   maximumOwnedBytes <= MaximumOwnedBytes && maximumWorkUnits > 0 && maximumWorkUnits <= MaximumWorkUnits;
+        }
+
         [[nodiscard]] constexpr auto operator<=>(const NavigationTileBuildLimits &) const noexcept = default;
     };
 

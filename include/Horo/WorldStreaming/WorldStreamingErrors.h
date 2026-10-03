@@ -8,6 +8,16 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::WorldStreaming::WorldStreamingErrors {
+    /** @brief A feature reservation has malformed owner, complete plan, or mandatory configuration. */
+    extern const ErrorCodeDescriptor FeatureBudgetInvalid;
+    /** @brief A feature reservation names a superseded owner, policy, revision, or operation. */
+    extern const ErrorCodeDescriptor FeatureBudgetStale;
+    /** @brief A feature reservation exceeds global, feature, or bounded metadata capacity. */
+    extern const ErrorCodeDescriptor FeatureBudgetCapacityExceeded;
+    /** @brief A feature reservation uses an unsupported contract version or feature identifier. */
+    extern const ErrorCodeDescriptor FeatureBudgetUnsupported;
+    /** @brief Feature materialization, release, or replacement is unavailable before retirement. */
+    extern const ErrorCodeDescriptor FeatureBudgetLifecycleUnavailable;
     /** @brief A shared-asset charge, consumer, lease, or limit is malformed. */
     extern const ErrorCodeDescriptor SharedAssetInvalid;
     /** @brief A shared-asset claim names another partition incarnation, owner, or released lease. */
@@ -460,4 +470,16 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
     extern const ErrorCodeDescriptor CellAssetRequestNotReady;
     /** @brief The terminal aggregate result was already consumed. */
     extern const ErrorCodeDescriptor CellAssetRequestConsumed;
+    /** @brief A queue owner, context or entry is malformed. */
+    extern const ErrorCodeDescriptor FairQueueInvalid;
+    /** @brief A queue version, eligibility or withdrawal outcome is unsupported. */
+    extern const ErrorCodeDescriptor FairQueueUnsupported;
+    /** @brief A queue command or proposal no longer names current pending work. */
+    extern const ErrorCodeDescriptor FairQueueStale;
+    /** @brief The bounded queue or admission snapshot exceeds its ceiling. */
+    extern const ErrorCodeDescriptor FairQueueCapacityExceeded;
+    /** @brief Pending work repeats an operation or cell identity. */
+    extern const ErrorCodeDescriptor FairQueueIdentityConflict;
+    /** @brief Pending admission is closed by shutdown. */
+    extern const ErrorCodeDescriptor FairQueueLifecycleUnavailable;
 }  // namespace Horo::WorldStreaming::WorldStreamingErrors

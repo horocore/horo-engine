@@ -5,15 +5,38 @@
 #include "Horo/Navigation/NavigationErrors.h"
 
 #include <atomic>
+#include <mutex>
 
 namespace Horo::Application::NavigationBakeDetail {
     constexpr std::uint64_t Adopted = std::uint64_t{1} << 63U;
+
+    /** @brief Owns the immutable publication lease and its narrowly guarded cross-thread handoff. */
+    class PublicationStore {
+    public:
+        /** @brief Copies a complete immutable lease for host or worker readers under the publication guard. */
+        [[nodiscard]] std::shared_ptr<const NavigationBakePublication> Load() const noexcept {
+            const std::lock_guard lock(publicationMutex_);
+            return published_;
+        }
+
+        /** @brief The sequential publication worker installs a complete lease; state ownership outlives accepted jobs. */
+        void Store(std::shared_ptr<const NavigationBakePublication> publication) noexcept {
+            const std::lock_guard lock(publicationMutex_);
+            published_.swap(publication);
+            // The replaced lease is released after the guard unlocks, outside the publication critical section.
+        }
+
+    private:
+        // Guards only lease copy/swap between host readers and the sequential worker; shared state survives Close and job drain.
+        mutable std::mutex publicationMutex_;
+        std::shared_ptr<const NavigationBakePublication> published_;
+    };
 
     /** @brief Shared worker lifetime; desired generation fences adoption without blocking the host thread. */
     struct ServiceState {
         NavigationBakeServiceConfig config;
         std::atomic<std::uint64_t> desired{};
-        std::atomic<std::shared_ptr<const NavigationBakePublication>> published;
+        PublicationStore publication;
     };
 
     /** @brief One immutable source capture and stage-owned detached result; stages execute sequentially. */

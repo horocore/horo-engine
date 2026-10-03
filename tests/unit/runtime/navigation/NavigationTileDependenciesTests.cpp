@@ -80,4 +80,16 @@ namespace Horo::Navigation {
         cancellation.RequestCancellation();
         CHECK(PrepareNavigationBakeTile(*fixture.Input(), prepared.tile, fixture.compatibility, cancellation.Token()).HasError());
     }
+
+    TEST_CASE("Navigation tile limits admit exact hard ceilings and minimum native budgets") {
+        constexpr NavigationTileBuildLimits maximum;
+        STATIC_REQUIRE(maximum.IsValid());
+        constexpr NavigationTileBuildLimits minimum{.maximumVertices = 1,
+                                                    .maximumPolygons = 1,
+                                                    .maximumOffMeshLinks = 1,
+                                                    .maximumVerticesPerPolygon = 3,
+                                                    .maximumOwnedBytes = 1,
+                                                    .maximumWorkUnits = 1};
+        STATIC_REQUIRE(minimum.IsValid());
+    }
 }  // namespace Horo::Navigation
