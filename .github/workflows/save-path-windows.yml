@@ -11,6 +11,10 @@ on:
       - 'src/CMakeLists.txt'
   workflow_dispatch:
 
+# Direct sccache uploads follow the same main-only policy as snapshots.
+env:
+  SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
+
 jobs:
   save-path-windows:
     name: Save Path · Windows / MSVC
@@ -27,7 +31,8 @@ jobs:
         with:
           version: v0.17.0
 
-      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: fetchcontent-save-path-windows-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
@@ -44,11 +49,20 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
-          cmake --build build/save-path-windows --target HoroRuntimeSaveRootResolverTests --parallel 2
-          ctest --test-dir build/save-path-windows -R '^HoroRuntimeSaveRootResolverTests::' --output-on-failure
+          cmake --build build/save-path-windows --parallel 2 --target \
+            HoroRuntimeSaveRootResolverTests HoroRuntimeSaveFilesystemLockTests \
+            HoroRuntimeSaveSlotCommitTransactionTests HoroRuntimePublicHeaderConsumer
+          ctest --test-dir build/save-path-windows -j1 -R '^HoroRuntimeSave(RootResolver|FilesystemLock|SlotCommitTransaction)Tests::' --output-on-failure
         env:
           CC: cl
           CXX: cl
           FETCHCONTENT_BASE_DIR: ${{ github.workspace }}/.cmake/fetchcontent
           SCCACHE_GHA_ENABLED: 'true'
           SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
+
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}

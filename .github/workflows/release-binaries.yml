@@ -27,6 +27,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@33522472633dbd32578e909b315f5ee43ba878ce
         with:
           key: release-linux
+          save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install system dependencies
         run: |
@@ -43,7 +44,8 @@ jobs:
             libgl1-mesa-dev libglu1-mesa-dev
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        id: dependency_cache
         with:
           path: ~/.cmake/fetchcontent
           key: fetchcontent-release-linux-${{ hashFiles('**/CMakeLists.txt', '**/CMakePresets.json') }}
@@ -127,6 +129,13 @@ jobs:
           gh release upload "$RELEASE_TAG" HoroEngine-linux-x86_64.tar.gz --clobber
           gh release upload "$RELEASE_TAG" build/release/sbom.spdx.json --clobber
 
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        with:
+          path: ~/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
+
   build-macos:
     name: Build · macOS / Clang
     runs-on: macos-latest
@@ -143,12 +152,14 @@ jobs:
         uses: hendrikmuhs/ccache-action@33522472633dbd32578e909b315f5ee43ba878ce
         with:
           key: release-macos
+          save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Ninja
         run: brew install ninja
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        id: dependency_cache
         with:
           path: ~/.cmake/fetchcontent
           key: fetchcontent-release-macos-${{ hashFiles('**/CMakeLists.txt', '**/CMakePresets.json') }}
@@ -199,6 +210,13 @@ jobs:
         run: |
           gh release upload "$RELEASE_TAG" HoroEngine-macos-arm64.tar.gz --clobber
 
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        with:
+          path: ~/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
+
   build-windows:
     name: Build · Windows / MSVC
     runs-on: windows-latest
@@ -206,6 +224,7 @@ jobs:
       contents: write
     timeout-minutes: 35
     env:
+      SCCACHE_GHA_ENABLED: 'false'
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -217,14 +236,16 @@ jobs:
         uses: mozilla-actions/sccache-action@1583d6b38d7b86129b83e1c73e4d8d455ca32f48
 
       - name: Cache sccache
-        uses: actions/cache@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        id: compiler_cache
         with:
           path: ${{ env.SCCACHE_DIR }}
           key: sccache-release-windows-${{ hashFiles('**/CMakeLists.txt', '**/CMakePresets.json') }}
           restore-keys: sccache-release-windows-
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: fetchcontent-release-windows-${{ hashFiles('**/CMakeLists.txt', '**/CMakePresets.json') }}
@@ -287,3 +308,17 @@ jobs:
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats
+
+      - name: Save compiler cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.compiler_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: ${{ steps.compiler_cache.outputs.cache-primary-key }}
+
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}

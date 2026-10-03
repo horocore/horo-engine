@@ -304,6 +304,61 @@ abuse/close policy.
 
 ## Input, Commands, RPCs and Events
 
+`RpcGameplayDispatch` enforces the accepted declaration on the production inbound
+route before queuing and again before Gameplay execution. Host admission supplies
+caller identity and remote role; packet target/recipient metadata cannot grant
+authority or ownership. `RpcGameplayPolicy` is explicit executable composition,
+separate from inert descriptors: it binds an exact custom permission identity and
+pure bounded caller capability, inclusive signed/unsigned/floating parameter
+ranges, and an optional exact object schema/version for schema-specific handlers.
+Floating values and range endpoints must be finite. Missing custom implementations
+fail closed. Gameplay still resolves its exact component occurrence and publishes
+Scene changes through its existing transaction; Network does not expose a mutable
+Scene or turn an accepted command into canonical-state write authority.
+
+The host supplies `ticksPerSecond` for the monotonic admission clock. Per-caller
+and global attempt/byte windows are charged before wire parsing. A caller/RPC
+fixed one-second window plus integer token bucket enforces sustained calls and
+immediate burst before parameter serializers or custom policy callbacks. Rate
+keys include the admitted connection, admission generation, host peer and RPC;
+changing object targets cannot buy more tokens. Invalid values and policy denials
+consume tokens; reliable duplicate/reordered logical commands do not decode or
+consume RPC tokens, but still charge the parsing-work budget. Failed queue admission
+does not consume a logical sequence. Clock regression is rejected; simulation ticks
+do not refill the rate ledger.
+
+Finite caller work and rate ledgers survive peer, object and handler revocation.
+Storage saturation fails closed; entries are not evicted to reopen old budgets or
+replay scopes. `maximumCallerScopes` bounds retained admission work scopes; `maximumPeers`
+independently bounds concurrently registered peers. Hosts create a fresh dispatch at the next
+session/world composition boundary after retiring the old one. `maximumPendingPerPeer` also bounds one admitted caller inside the shared queue. Pending values,
+replay storage, codec work and safe-point drains retain their existing hard bounds.
+There is no per-packet logging: inbound/drain reports retain at most one bounded
+error per finite batch, and `TerminalTotals` provides cumulative accepted/succeeded/
+failed/cancelled counts, including revocation and shutdown, without a diagnostic
+queue. Every accepted command has one terminal outcome; receipt rejections are not
+accepted commands.
+
+Queued commands pin the exact role publication and entity occurrence in addition
+to the session, Scene, authority epoch, object generation and descriptor/module
+generation. A transfer away and back never revives old authorization. Callback
+reentry is guarded; cancellation, revocation or publication changes during a
+serializer/policy call abort admission/execution. Module leases outlive serializers,
+policies and handlers, including their destructors. All module throws, including
+non-standard values, remain contained. Protocol errors retain their existing typed
+codes; permission denials, work/rate limits, typed value violations and legitimate
+Gameplay failures have distinct RPC codes. Gameplay errors retain their cause and
+accepted reliable work is never retried after failure.
+
+Migration from NET-004.9: handler registration accepts a defaulted final policy
+argument; existing built-in policies and codecs remain source-compatible. Hosts
+must set the correct admission-clock frequency and budget profile. Schema-specific
+handlers compose their exact schema/version and custom declarations compose their
+exact capability. Consumers must rebuild for the expanded Runtime dispatch ABI.
+The public header remains owned by `HoroNetworkRuntime` with no new dependency or
+public include root; `HoroNetworkModePublicHeaderConsumer` exercises the added
+closed policy and terminal types.
+
 Client input and RPCs are not replicated state writes. They use separately
 registered stable command/RPC schemas with direction, reliability, rate, permission,
 parameter and payload limits. The server validates the active principal and object

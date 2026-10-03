@@ -8,6 +8,7 @@ typedef struct FixtureAudit {
     unsigned eventCount;
     unsigned failStage;
     unsigned submitStatus;
+    unsigned cancelStatus;
     unsigned busy;
     unsigned destroyed;
     unsigned postDestroyCallbacks;
@@ -42,6 +43,10 @@ void horo_test_provider_submit_status(FixtureAudit *audit, unsigned status) {
     audit->submitStatus = status;
 }
 
+void horo_test_provider_cancel_status(FixtureAudit *audit, unsigned status) {
+    audit->cancelStatus = status;
+}
+
 void horo_test_provider_set_busy(FixtureAudit *audit, unsigned busy) {
     audit->busy = busy;
 }
@@ -68,40 +73,33 @@ HoroExtensionStatus horo_test_provider_session_changed(FixtureAudit *audit, uint
     return audit->sink->sessionChanged(audit->sink->context, revision, phase);
 }
 
+static HoroExtensionStatus Complete(const HoroPlatformProviderSink *sink, uint64_t requestId, uint64_t generation, uint32_t service,
+                                    uint32_t operation, uint32_t resultCode, const uint8_t *payload, uint32_t payloadSize) {
+    const HoroPlatformProviderCompletion completion = {.structSize = sizeof(HoroPlatformProviderCompletion),
+                                                       .requestId = requestId,
+                                                       .requestGeneration = generation,
+                                                       .sessionRevision = 1,
+                                                       .service = service,
+                                                       .operation = operation,
+                                                       .resultCode = resultCode,
+                                                       .payload = payload,
+                                                       .payloadSize = payloadSize};
+    return sink == NULL ? HORO_EXTENSION_ERROR_OUTPUT_REJECTED : sink->complete(sink->context, &completion);
+}
+
 HoroExtensionStatus horo_test_provider_emit(FixtureAudit *audit, uint64_t requestId, uint64_t generation) {
     if (audit->destroyed) {
         ++audit->postDestroyCallbacks;
         return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
     }
-    if (audit->sink == NULL)
-        return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
     static const uint8_t payload[] = {1, 2, 3};
-    const HoroPlatformProviderCompletion completion = {.structSize = sizeof(HoroPlatformProviderCompletion),
-                                                       .requestId = requestId,
-                                                       .requestGeneration = generation,
-                                                       .sessionRevision = 1,
-                                                       .service = 0,
-                                                       .operation = 1,
-                                                       .resultCode = 0,
-                                                       .payload = payload,
-                                                       .payloadSize = sizeof(payload)};
-    return audit->sink->complete(audit->sink->context, &completion);
+    return Complete(audit->sink, requestId, generation, 0, 1, 0, payload, sizeof(payload));
 }
 
 HoroExtensionStatus horo_test_provider_emit_failure(FixtureAudit *audit, uint64_t requestId, uint64_t generation, uint32_t resultCode) {
-    if (audit->sink == NULL)
-        return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
     static const uint8_t privatePayload[] = "token=private-account@example.com";
-    const HoroPlatformProviderCompletion completion = {.structSize = sizeof(HoroPlatformProviderCompletion),
-                                                       .requestId = requestId,
-                                                       .requestGeneration = generation,
-                                                       .sessionRevision = 1,
-                                                       .service = 0,
-                                                       .operation = HORO_PLATFORM_OPERATION_ACHIEVEMENT_UNLOCK,
-                                                       .resultCode = resultCode,
-                                                       .payload = privatePayload,
-                                                       .payloadSize = sizeof(privatePayload)};
-    return audit->sink->complete(audit->sink->context, &completion);
+    return Complete(audit->sink, requestId, generation, 0, HORO_PLATFORM_OPERATION_ACHIEVEMENT_UNLOCK, resultCode, privatePayload,
+                    sizeof(privatePayload));
 }
 
 unsigned horo_test_provider_held_ready(const FixtureAudit *audit) {
@@ -117,19 +115,8 @@ HoroExtensionStatus horo_test_provider_emit_held(FixtureAudit *audit, uint64_t r
     atomic_store_explicit(&audit->heldReady, 1, memory_order_release);
     while (!atomic_load_explicit(&audit->heldRelease, memory_order_acquire)) {
     }
-    if (sink == NULL)
-        return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
     static const uint8_t payload[] = {1};
-    const HoroPlatformProviderCompletion completion = {.structSize = sizeof(HoroPlatformProviderCompletion),
-                                                       .requestId = requestId,
-                                                       .requestGeneration = generation,
-                                                       .sessionRevision = 1,
-                                                       .service = 0,
-                                                       .operation = 1,
-                                                       .resultCode = 0,
-                                                       .payload = payload,
-                                                       .payloadSize = sizeof(payload)};
-    return sink->complete(sink->context, &completion);
+    return Complete(sink, requestId, generation, 0, 1, 0, payload, sizeof(payload));
 }
 
 static HoroExtensionStatus Create(void *context, void **outCandidate) {
@@ -185,8 +172,9 @@ static HoroExtensionStatus Submit(void *candidate, const HoroPlatformProviderOpe
 static HoroExtensionStatus Cancel(void *candidate, uint64_t requestId, uint64_t generation) {
     (void)requestId;
     (void)generation;
-    Record((FixtureAudit *)candidate, 'X');
-    return HORO_EXTENSION_SUCCESS;
+    FixtureAudit *audit = (FixtureAudit *)candidate;
+    Record(audit, 'X');
+    return audit->cancelStatus;
 }
 
 static HoroExtensionStatus CloseAdmission(void *candidate) {

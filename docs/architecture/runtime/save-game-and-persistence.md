@@ -393,6 +393,56 @@ cleanup and shutdown can observe only immutable payload segments and stable capt
 provenance. No borrowed span, mutable runtime pointer or module-owned container
 allocator crosses the safe-point boundary.
 
+### Save-safe quiescence authority
+
+`SaveCaptureBarrier` supplies the bounded SAV-005.3 owner-thread authority before
+`RuntimeSaveCaptureBuilder`. The session registers stable owners for all four
+required domains: fixed simulation, jobs that mutate canonical state, deferred
+scene structural mutation, and subsystem semantic roots. Every capture binding
+in the pinned registry must have a corresponding registered barrier owner.
+Even an empty job/structural domain publishes an explicit ready epoch; absence is
+not readiness. Host-only domain owners do not become serialized records.
+
+A producer acquires an exact authority/index/serial mutation ticket before writing
+canonical state. Starting a mutation invalidates its prior ready epoch. The host
+finishes the ticket only after its work commits, publishing the exact semantic
+capture epoch; independently prepared immutable versions use `PublishReadiness`.
+Worker jobs never call the barrier: their owner-thread completion handoff publishes
+readiness after completion, without a nested join or wait. Adapters remain responsible
+for the semantic correctness and immutability of their supplied roots.
+
+`Request` exposes a pending operation/generation fence. A pending request permits
+normal simulation and mutation between frames. At `CommitDeferredLifecycleChanges`,
+after structural publication and before the next simulation step, the host invokes
+`CaptureAtSafePoint` with current provenance and its pinned registry. A busy or
+wrong-epoch participant returns typed pending evidence without invoking any adapter;
+an explicit denial or quiesce deadline returns Deferred or Failed according to the
+admitted policy. The host acknowledges terminal evidence and may schedule a new
+request with current state; the barrier does not retry, replace operations, or reuse
+a stale tick automatically. Scene/session replacement cancels the old request and
+creates a new exact generation request. Incorrect-generation capture is rejected.
+
+The readiness check and closing of mutation admission are serial on the same owner
+thread. During the synchronous builder capture, reentrant mutation/readiness/lifecycle
+calls reject explicitly. On success, typed failure, budget rejection or unexpected
+exception, admission reopens before return. The result hands off only the builder's
+sealed immutable snapshot. Background serialization, signing and storage never extend
+the barrier. Shutdown closes new admission and cancels pending requests; already
+issued mutation tickets may finish so their owners can drain safely.
+
+The polling projection measures elapsed request time and synchronous capture duration
+with an injected monotonic clock. Finite positive quiesce and capture budgets have
+compiled ceilings. A capture exceeding its synchronous budget is discarded and
+reported with `CaptureBudgetExceeded`; the clock measures actual completion rather
+than promising preemption of arbitrary adapter code. Adapters must honor their bounded
+owner-work contracts. Backward samples cannot reduce already observed duration.
+
+Migration: existing `SaveSafePointCoordinator` users retain its operation/worker
+lifecycle fencing. Capture executors route their concrete immutable cut through
+`SaveCaptureBarrier`, register all canonical mutation owners, and publish readiness
+at each current committed epoch. Phase membership alone no longer proves participant
+quiescence. Restore publication keeps its existing prepared-candidate transaction.
+
 ### Thumbnail Capture
 
 Thumbnail acquisition is a separate renderer-owned asynchronous readback request
@@ -1229,6 +1279,65 @@ and qualify them before production saves are enabled. Profile/account storage, c
 retry journals, editor recovery, authored projects and PIE sandboxes remain distinct
 sibling/virtual namespaces with separate schemas and mutation leases.
 
+### Local operation ordering and process ownership
+
+The local filesystem foundation supports one live storage owner per physical namespace.
+`SaveFilesystemStorage::Open` acquires a nonblocking exclusive kernel lock on the
+handle-relative `.namespace.lock` file in the slot directory (`flock` on POSIX,
+`LockFileEx` on Windows). A competing owner, including another open in the same
+process, returns `save.operation.in_progress`. Separate profiles/environments remain
+independent. Unsupported lock facilities fail closed; no unlocked fallback is allowed.
+The namespace lock is retained across moves until close. The file is persistent and
+never removed, and PID/timestamp contents never establish ownership. Process termination
+releases the kernel lock, so stale unlocked files need no destructive recovery sweep.
+Inherited POSIX handles retain ownership until all holders close; close-on-exec prevents
+ordinary child executables from extending the lease. All participants must cooperate
+with this protocol; arbitrary external edits are not qualified concurrent access.
+
+Within one owner, the filesystem byte primitive serializes worker read selection and
+replacements across the namespace. A read pins the immutable file before releasing the
+operation mutex and reading bytes, so later replacements cannot change that selected
+inode/handle. It returns one complete old or new archive; a returned byte vector remains
+immutable to later publication. The target-private pinned-file mechanism owns the selected native handle
+independently of directory replacement/deletion or storage-owner shutdown and closes
+it through RAII after byte I/O. Its deterministic regression uses a deliberate,
+non-installed internal test interface; the public storage contract remains `Read`.
+Windows publication uses `FileRenameInformationEx` with replace-existing and POSIX
+semantics so open readers continue using the previous immutable file while new opens
+select the replacement. This requires Windows 10 version 1709+ and filesystem support;
+unsupported publication fails closed rather than switching to destructive replacement.
+No lock is held by
+a polling UI getter.
+`Replace` itself is a low-level byte operation, not generation compare-and-swap.
+
+`SaveSlotCommitTransaction` acquires a non-null exclusive store operation lease before
+journal inspection, base-generation comparison, preparation or replay, and retains it
+through publication/outcome reporting and journal retirement. The store must share one
+lock domain across all instances addressing the same namespace/slot. Coarse namespace
+serialization is supported; finer per-slot concurrency must still serialize catalog
+publication and source/destination operations in a stable typed-address order. Read/list
+providers take snapshots under that same domain: each result sees a complete old or new
+catalog, and separate calls need not select the same revision. Callers must pin the exact
+generation when relating metadata and archive reads. Recovery obtains the lease before
+inspecting or removing evidence and never steals a live owner's work.
+
+Generation preconditions are checked under the lease. An absent previous entry means
+create-if-absent; an existing entry must match the selected publication exactly. Two
+writes from the same base cannot both publish: a busy lease returns
+`save.operation.in_progress`, and a later stale base returns `save.slot_commit.generation_stale`
+before journal creation. Admission ordering follows lock acquisition, not wall clocks
+or thread arrival; callers may retry a busy operation through their bounded scheduler.
+The store's namespace binding is revalidated under its lease. Shutdown closes admission
+and settles accepted work before releasing storage or lease authority.
+
+Migration: implementations of `ISaveSlotCommitStore` must now implement `AcquireLease`
+and return an owned non-null RAII guard. The existing fake store is the only current
+implementation; no production catalog store is claimed. This deliberate source contract
+change removes reliance on undocumented caller locking. Existing public headers remain
+owned by `HoroRuntime`; affected consumer and transaction coverage must compile with the
+new seam. Filesystem byte callers must share one opened namespace capability instead of
+opening competing owners for each request.
+
 ### Profile-switch transaction
 
 The application/session owner closes old save/load/delete/import/cloud-apply admission,
@@ -1272,6 +1381,31 @@ raw platform handle crosses the surface. The save/cloud coordinator derives a bo
 Platform Services treats that key and finalized archive bytes as opaque and cannot
 edit local storage. The application/profile-owned `CloudSaveCoordinator` is the one
 sync state authority; Platform Services and UI are transport/presentation adapters.
+
+The coordinator's versioned `SaveCloudRevisionMetadata` sidecar is scoped by the
+complete local `SaveNamespaceId` plus distinct provider and account identities. Each
+record names one current slot generation and exact `ArchiveContentHash`, with bounded
+opaque provider object key, optional CAS revision, typed sync state and last confirmed
+mutation. Provider revisions are not ordered and are never substituted for generation
+or archive identity. The sidecar is not an archive field or a credential store.
+The older `SaveSlotPublicationMetadata.cloudState` is only a non-causal catalog
+listing hint; it cannot override this generation-bound coordinator state or grant a
+remote mutation. Presentation adapters derive current sync status from a validated
+coordinator snapshot instead of treating that hint as a second authority.
+
+The local storage authority persists the sidecar and matching `SaveSlotIndex` as one
+atomic catalog publication under the namespace/slot lease. Readers expose only a
+validated immutable pair; a mismatched index revision, generation, hash, scope,
+schema or limit is not a usable cloud state. A missing or stale sidecar is rebuilt
+from the authoritative local index: exact same-scope generation/hash rows may retain
+confirmed evidence even when another slot advanced the index. Changed rows become
+`Unknown`; sidecars naming a newer index than the local input are rejected rather than
+rolled back. In-flight upload/download
+states return to `Unknown` for journal reconciliation after restart. Missing rows
+never imply deletion; `Deleted` explicitly describes a confirmed remote state for a
+still-named local generation, with durable deletion intent owned by the separate sync
+journal. Existing catalogs need no archive migration: first open creates an all-unknown
+sidecar before cloud scheduling. No cloud failure changes local-save success.
 
 Automatic remote mutation requires provider-enforced conditional revision. A read
 followed by unconditional write, a process-local mutex, advisory lease or provider

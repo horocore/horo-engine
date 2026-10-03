@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <exception>
 #include <memory>
+#include <new>
 #include <type_traits>
 #include <utility>
 
@@ -19,6 +20,30 @@ namespace Horo::Runtime {
                 return "project persistence callback failed";
             }
         };
+
+        struct ForeignProjectCallbackFailure final {};
+
+        enum class ProjectCallbackException {
+            Standard,
+            Integer,
+            Foreign,
+            Allocation
+        };
+
+        /** @brief Exercises foreign exception containment and phase-specific allocation translation. */
+        [[noreturn]] void ThrowProjectCallback(const ProjectCallbackException exception) {
+            switch (exception) {
+                case ProjectCallbackException::Standard:
+                    throw ProjectCallbackFailure{};
+                case ProjectCallbackException::Integer:
+                    throw 42;
+                case ProjectCallbackException::Foreign:
+                    throw ForeignProjectCallbackFailure{};
+                case ProjectCallbackException::Allocation:
+                    throw std::bad_alloc{};
+            }
+            std::terminate();
+        }
 
         class PreparedState final : public IPreparedGameplayPersistenceState {
         public:
@@ -39,27 +64,23 @@ namespace Horo::Runtime {
             std::vector<std::byte> active{std::byte{0x31}};
             std::vector<std::byte> authoredFields{std::byte{0x7a}};
             mutable std::uint64_t observedMaximum{};
+            unsigned prepareCalls{};
             bool throwOnCapture{};
             bool throwOnPrepare{};
-            bool throwStandardException{};
+            ProjectCallbackException exception{ProjectCallbackException::Integer};
 
             Result<std::vector<std::byte>> CaptureRuntimeState(const std::uint64_t maximumBytes) const override {
                 observedMaximum = maximumBytes;
-                if (throwOnCapture) {
-                    if (throwStandardException)
-                        throw ProjectCallbackFailure{};
-                    throw 1;
-                }
+                if (throwOnCapture)
+                    ThrowProjectCallback(exception);
                 return Result<std::vector<std::byte>>::Success(active);
             }
 
             Result<std::unique_ptr<IPreparedGameplayPersistenceState>> PrepareRuntimeState(
                 const std::span<const std::byte> bytes) override {
-                if (throwOnPrepare) {
-                    if (throwStandardException)
-                        throw ProjectCallbackFailure{};
-                    throw 1;
-                }
+                ++prepareCalls;
+                if (throwOnPrepare)
+                    ThrowProjectCallback(exception);
                 return Result<std::unique_ptr<IPreparedGameplayPersistenceState>>::Success(
                     std::make_unique<PreparedState>(active, std::vector<std::byte>{bytes.begin(), bytes.end()}));
             }
@@ -229,14 +250,19 @@ namespace Horo::Runtime {
             auto adapter =
                 GameplayPersistenceAdapter::Create(Descriptor(GameplayPersistenceOwner::Service), source, std::make_shared<int>(1)).Value();
             const auto snapshot = CaptureRegisteredState(adapter);
-            for (const bool standardException : {false, true}) {
-                source->throwStandardException = standardException;
+            for (const auto exception : {ProjectCallbackException::Standard, ProjectCallbackException::Integer,
+                                         ProjectCallbackException::Foreign, ProjectCallbackException::Allocation}) {
+                source->exception = exception;
                 source->throwOnCapture = true;
                 CanonicalStateParticipantRegistry registry;
                 REQUIRE(registry.Register(adapter->Descriptor().participant, adapter).HasValue());
                 const auto participants = registry.Snapshot().Value();
                 auto builder = RuntimeSaveCaptureBuilder::Create(Provenance(participants), participants).Value();
-                CHECK(builder.CaptureParticipants().ErrorValue().code.Value() == SaveErrors::LifecycleCallbackFailed.code.Value());
+                const auto captured = builder.CaptureParticipants();
+                REQUIRE(captured.HasError());
+                const auto &captureError = exception == ProjectCallbackException::Allocation ? SaveErrors::CaptureAllocationFailed
+                                                                                             : SaveErrors::LifecycleCallbackFailed;
+                CHECK(captured.ErrorValue().code.Value() == captureError.code.Value());
                 source->throwOnCapture = false;
                 source->throwOnPrepare = true;
                 auto staged = adapter->StageRestore(adapter->Descriptor().participant.schemaVersion, adapter->Descriptor().record,
@@ -247,8 +273,13 @@ namespace Horo::Runtime {
                 REQUIRE(receipt->Validate({}).HasValue());
                 REQUIRE(receipt->Instantiate({}).HasValue());
                 const NoDependencies dependencies;
-                CHECK(receipt->ApplyState(dependencies).ErrorValue().code.Value() == SaveErrors::LifecycleCallbackFailed.code.Value());
+                const auto prepared = receipt->ApplyState(dependencies);
+                REQUIRE(prepared.HasError());
+                const auto &restoreError = exception == ProjectCallbackException::Allocation ? SaveErrors::RestoreAllocationFailed
+                                                                                             : SaveErrors::LifecycleCallbackFailed;
+                CHECK(prepared.ErrorValue().code.Value() == restoreError.code.Value());
                 CHECK(source->active == std::vector<std::byte>{std::byte{0x31}});
+                CHECK(source->authoredFields == std::vector<std::byte>{std::byte{0x7a}});
                 source->throwOnPrepare = false;
             }
         }
@@ -289,7 +320,62 @@ namespace Horo::Runtime {
                 CHECK(source->active == std::vector<std::byte>{std::byte{0x55}});
                 receipt->PublishPrepared();
                 CHECK(source->active == std::vector<std::byte>{std::byte{0x31}});
+                CHECK(source->authoredFields == std::vector<std::byte>{std::byte{0x7a}});
             }
+        }
+
+        TEST_CASE("Gameplay restore rejects incompatible module identity version and owner before preparation",
+                  "[unit][runtime][save][gameplay][compatibility]") {
+            auto source = std::make_shared<StateSource>();
+            const auto descriptor = Descriptor(GameplayPersistenceOwner::Service);
+            auto adapter = GameplayPersistenceAdapter::Create(descriptor, source, std::make_shared<int>(1)).Value();
+            const auto snapshot = CaptureRegisteredState(adapter);
+            const auto record = snapshot.Records().front().Segment(0);
+            // Envelope: magic[4], identity length[1], module version[4], owner[1], module identity.
+            for (const std::size_t offset : {5U, 9U, 10U}) {
+                std::vector<std::byte> incompatible{record.begin(), record.end()};
+                incompatible[offset] ^= std::byte{1};
+                auto staged = adapter->StageRestore(descriptor.participant.schemaVersion, descriptor.record, incompatible);
+                REQUIRE(staged.HasValue());
+                auto receipt = std::move(staged).Value();
+                REQUIRE(receipt->Decode({}).HasValue());
+                const auto validated = receipt->Validate({});
+                REQUIRE(validated.HasError());
+                CHECK(validated.ErrorValue().code.Value() == SaveErrors::RestoreParticipantInvalid.code.Value());
+                CHECK(receipt->Instantiate({}).HasError());
+                CHECK(source->prepareCalls == 0);
+                CHECK(source->active == std::vector<std::byte>{std::byte{0x31}});
+            }
+        }
+
+        TEST_CASE("Gameplay restore rejects archive records when their module binding is absent",
+                  "[unit][runtime][save][gameplay][compatibility]") {
+            auto source = std::make_shared<StateSource>();
+            const auto descriptor = Descriptor(GameplayPersistenceOwner::Service);
+            auto adapter = GameplayPersistenceAdapter::Create(descriptor, source, std::make_shared<int>(1)).Value();
+            const auto snapshot = CaptureRegisteredState(adapter);
+            auto staged =
+                adapter->StageRestore(descriptor.participant.schemaVersion, descriptor.record, snapshot.Records().front().Segment(0));
+            REQUIRE(staged.HasValue());
+            std::vector<std::unique_ptr<IStagedRestoreParticipant>> receipts;
+            receipts.push_back(std::move(staged).Value());
+            CanonicalStateParticipantRegistry absentModule;
+            const auto participants = absentModule.Snapshot().Value();
+            auto operation =
+                CreateSaveOperation({.operation = 1436, .kind = SaveOperationKind::Load, .maximumCompletionCallbacks = 4}).Value();
+            const auto handle = operation.Handle();
+            const auto created = StagedRestoreTransaction::Create({.operation = 1436,
+                                                                   .registryGeneration = participants.Generation(),
+                                                                   .sessionGeneration = 7,
+                                                                   .sceneIncarnation = 8,
+                                                                   .maximumParticipants = 1},
+                                                                  std::move(operation), participants, std::move(receipts));
+            REQUIRE(created.HasError());
+            CHECK(created.ErrorValue().code.Value() == SaveErrors::RestoreParticipantInvalid.code.Value());
+            REQUIRE(handle.Snapshot().has_value());
+            CHECK(handle.Snapshot()->state == SaveOperationState::Failed);
+            CHECK(source->prepareCalls == 0);
+            CHECK(source->active == std::vector<std::byte>{std::byte{0x31}});
         }
 
         TEST_CASE("Native durable registration is inert and resolves existing gameplay owners", "[unit][runtime][save][gameplay]") {

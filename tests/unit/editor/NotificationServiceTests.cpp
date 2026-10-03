@@ -1,3 +1,4 @@
+#include "../hosts/HostErrorFixture.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/NotificationService.h"
 
@@ -40,5 +41,36 @@ TEST_CASE("NotificationService publishes events across EditorDataBus", "[editor]
         REQUIRE(receivedEvents[0].actions.size() == 1);
         CHECK(receivedEvents[0].actions[0].label == "Open logs");
         CHECK(receivedEvents[0].actions[0].actionId == "open_logs");
+    }
+}
+
+TEST_CASE("Editor error notifications retain canonical application details beneath localized display copy",
+          "[editor][notifications][errors]") {
+    using namespace HostErrorFixture;
+    Horo::Editor::EditorDataBus dataBus;
+    Horo::Editor::NotificationService service{dataBus};
+    std::vector<Horo::Editor::NotificationEvent> received;
+    const auto subscription = dataBus.Subscribe<Horo::Editor::NotificationEvent>([&received](const auto &event) {
+        received.push_back(event);
+    });
+    const auto translator = ErrorTranslator::Create(Registry(), Mappings());
+    REQUIRE(translator);
+    for (const auto severity : {ErrorSeverity::Info, ErrorSeverity::Warning, ErrorSeverity::Error, ErrorSeverity::Critical}) {
+        Error error = Failure(severity == ErrorSeverity::Critical ? 7 : 3);
+        error.severity = severity;
+        const auto translated = translator->Translate(error);
+        REQUIRE(translated);
+        service.PublishApplicationError(*translated, "Yerelleştirilmiş ileti", "Yerelleştirilmiş başlık");
+        REQUIRE(received.back().errorDetail);
+        CHECK(received.back().errorDetail->Json() == translated->Json());
+        CHECK(received.back().errorDetail->Failure().code.Value() == error.code.Value());
+        CHECK(received.back().message == "Yerelleştirilmiş ileti");
+        CHECK(received.back().source == error.domain.Value());
+        CHECK(received.back().deduplicationKey == error.domain.Value() + "::" + error.code.Value());
+        const auto expected = severity == ErrorSeverity::Info      ? Horo::Editor::NotificationSeverity::Info
+                              : severity == ErrorSeverity::Warning ? Horo::Editor::NotificationSeverity::Warning
+                                                                   : Horo::Editor::NotificationSeverity::Error;
+        CHECK(received.back().severity == expected);
+        CHECK(received.back().durationSeconds == (severity == ErrorSeverity::Critical ? 0.0f : 5.0f));
     }
 }

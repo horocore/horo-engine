@@ -111,6 +111,20 @@ namespace {
 
     void RequireSettingsCatalogKeys(const Horo::Editor::LocalizationService &service) {
         REQUIRE_FALSE(service.Get("editor", "settings.nav.packages").starts_with("[missing:"));
+        REQUIRE_FALSE(service.Get("editor", "settings.nav.updates").starts_with("[missing:"));
+        constexpr std::array updateKeys{"settings.updates.check",
+                                        "settings.updates.channel",
+                                        "settings.updates.download",
+                                        "settings.updates.release_notes",
+                                        "settings.updates.compatibility",
+                                        "settings.updates.confirm.restart",
+                                        "settings.updates.confirm.rollback",
+                                        "settings.updates.phase.available",
+                                        "settings.updates.phase.verifying",
+                                        "settings.updates.phase.restart_required",
+                                        "settings.updates.phase.failed",
+                                        "settings.updates.phase.rolled_back"};
+        RequireCatalogKeys(service, updateKeys);
         REQUIRE_FALSE(service.Get("editor", "settings.packages.download_threads").starts_with("[missing:"));
         REQUIRE(service.Get("editor", "settings.network.download_threads").starts_with("[missing:"));
         RequireCatalogKeys(service, globalDockKeys);

@@ -1,7 +1,7 @@
 #include "Horo/Runtime/Save/SaveFilesystemStorage.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
-#include "SaveFilesystemStorageDetails.h"
+#include "SaveFilesystemPinnedRead.h"
 
 #include <algorithm>
 #include <atomic>
@@ -10,6 +10,7 @@
 #include <format>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -19,270 +20,41 @@
 #include <winternl.h>
 #else
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
 
 namespace Horo::Runtime {
-    namespace {
-        using SaveFilesystemDetails::Failure;
-        using SaveFilesystemDetails::SlotName;
-
-#ifdef _WIN32
-        class Handle final {
-        public:
-            explicit Handle(HANDLE value = INVALID_HANDLE_VALUE) noexcept : value_(value) {}
-
-            Handle(Handle &&other) noexcept : value_(std::exchange(other.value_, INVALID_HANDLE_VALUE)) {}
-
-            Handle &operator=(Handle &&other) noexcept {
-                if (this != &other) {
-                    if (value_ != INVALID_HANDLE_VALUE)
-                        ::CloseHandle(value_);
-                    value_ = std::exchange(other.value_, INVALID_HANDLE_VALUE);
-                }
-                return *this;
-            }
-
-            ~Handle() {
-                if (value_ != INVALID_HANDLE_VALUE)
-                    ::CloseHandle(value_);
-            }
-
-            Handle(const Handle &) = delete;
-            Handle &operator=(const Handle &) = delete;
-
-            [[nodiscard]] HANDLE Get() const noexcept {
-                return value_;
-            }
-
-            [[nodiscard]] bool IsValid() const noexcept {
-                return value_ != INVALID_HANDLE_VALUE;
-            }
-
-        private:
-            HANDLE value_;
-        };
-
-        constexpr ULONG kOpenReparsePoint = 0x00200000;
-        constexpr ULONG kDirectoryFile = 0x00000001;
-        constexpr ULONG kNonDirectoryFile = 0x00000040;
-        constexpr ULONG kSynchronousIo = 0x00000020;
-        constexpr ULONG kOpen = 1;
-        constexpr ULONG kCreate = 2;
-        constexpr ULONG kOpenIf = 3;
-
-        [[nodiscard]] Result<Handle> RelativeOpen(const Handle &parent, const std::wstring &name, const ACCESS_MASK access,
-                                                  const ULONG disposition, const ULONG options, const ULONG attributes) {
-            if (name.empty() || name.size() > std::numeric_limits<USHORT>::max() / sizeof(wchar_t))
-                return Result<Handle>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows component length"));
-            const HMODULE library = ::GetModuleHandleW(L"ntdll.dll");
-            const auto create = library ? reinterpret_cast<decltype(&NtCreateFile)>(::GetProcAddress(library, "NtCreateFile")) : nullptr;
-            if (!create)
-                return Result<Handle>::Failure(Failure(SaveErrors::StorageCapabilityUnsupported, "relative Windows creation"));
-            UNICODE_STRING text{};
-            text.Buffer = const_cast<PWSTR>(name.data());
-            text.Length = static_cast<USHORT>(name.size() * sizeof(wchar_t));
-            text.MaximumLength = text.Length;
-            OBJECT_ATTRIBUTES object{};
-            object.Length = sizeof(object);
-            object.RootDirectory = parent.Get();
-            object.ObjectName = &text;
-            IO_STATUS_BLOCK status{};
-            HANDLE opened = INVALID_HANDLE_VALUE;
-            const NTSTATUS result = create(&opened, access | SYNCHRONIZE, &object, &status, nullptr, attributes,
-                                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, disposition,
-                                           options | kOpenReparsePoint | kSynchronousIo, nullptr, 0);
-            if (result < 0)
-                return Result<Handle>::Failure(Failure(SaveErrors::StoragePermanentIo, "relative Windows open", result));
-            Handle value{opened};
-            FILE_ATTRIBUTE_TAG_INFO tag{};
-            if (!::GetFileInformationByHandleEx(value.Get(), FileAttributeTagInfo, &tag, sizeof(tag)) ||
-                (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
-                return Result<Handle>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "Windows reparse admission"));
-            BY_HANDLE_FILE_INFORMATION info{};
-            if (!::GetFileInformationByHandle(value.Get(), &info) || info.nNumberOfLinks != 1)
-                return Result<Handle>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "Windows hard-link admission"));
-            const DWORD length = ::GetFinalPathNameByHandleW(value.Get(), nullptr, 0, FILE_NAME_NORMALIZED);
-            if (length == 0)
-                return Result<Handle>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows name inspection", ::GetLastError()));
-            std::wstring finalName(length + 1, L'\0');
-            const DWORD written =
-                ::GetFinalPathNameByHandleW(value.Get(), finalName.data(), static_cast<DWORD>(finalName.size()), FILE_NAME_NORMALIZED);
-            if (written == 0 || written >= finalName.size())
-                return Result<Handle>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows name inspection", ::GetLastError()));
-            finalName.resize(written);
-            if (finalName.substr(finalName.find_last_of(L"\\/") + 1) != name)
-                return Result<Handle>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "Windows case alias"));
-            return Result<Handle>::Success(std::move(value));
-        }
-
-        [[nodiscard]] Result<void> SameEntry(const Handle &parent, const std::wstring &name, const Handle &held, const ULONG kind) {
-            auto current = RelativeOpen(parent, name, FILE_READ_ATTRIBUTES, kOpen, kind, FILE_ATTRIBUTE_NORMAL);
-            if (current.HasError())
-                return Result<void>::Failure(current.ErrorValue());
-            BY_HANDLE_FILE_INFORMATION left{}, right{};
-            if (!::GetFileInformationByHandle(current.Value().Get(), &left) || !::GetFileInformationByHandle(held.Get(), &right) ||
-                left.dwVolumeSerialNumber != right.dwVolumeSerialNumber || left.nFileIndexHigh != right.nFileIndexHigh ||
-                left.nFileIndexLow != right.nFileIndexLow)
-                return Result<void>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "Windows entry replacement"));
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<void> ExistingWindowsTargetSafe(const Handle &directory, const std::wstring &name) {
-            if (name.empty() || name.size() > std::numeric_limits<USHORT>::max() / sizeof(wchar_t))
-                return Result<void>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows target length"));
-            const HMODULE library = ::GetModuleHandleW(L"ntdll.dll");
-            const auto create = library ? reinterpret_cast<decltype(&NtCreateFile)>(::GetProcAddress(library, "NtCreateFile")) : nullptr;
-            if (!create)
-                return Result<void>::Failure(Failure(SaveErrors::StorageCapabilityUnsupported, "Windows target inspection"));
-            UNICODE_STRING text{};
-            text.Buffer = const_cast<PWSTR>(name.data());
-            text.Length = static_cast<USHORT>(name.size() * sizeof(wchar_t));
-            text.MaximumLength = text.Length;
-            OBJECT_ATTRIBUTES object{};
-            object.Length = sizeof(object);
-            object.RootDirectory = directory.Get();
-            object.ObjectName = &text;
-            IO_STATUS_BLOCK status{};
-            HANDLE opened = INVALID_HANDLE_VALUE;
-            const NTSTATUS result = create(&opened, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &object, &status, nullptr, FILE_ATTRIBUTE_NORMAL,
-                                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, kOpen,
-                                           kNonDirectoryFile | kOpenReparsePoint | kSynchronousIo, nullptr, 0);
-            if (static_cast<std::uint32_t>(result) == 0xC0000034U)
-                return Result<void>::Success();
-            if (result < 0)
-                return Result<void>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "Windows target admission", result));
-            Handle target{opened};
-            FILE_ATTRIBUTE_TAG_INFO tag{};
-            BY_HANDLE_FILE_INFORMATION info{};
-            if (!::GetFileInformationByHandleEx(target.Get(), FileAttributeTagInfo, &tag, sizeof(tag)) ||
-                !::GetFileInformationByHandle(target.Get(), &info) || (tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
-                info.nNumberOfLinks != 1)
-                return Result<void>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "unsafe Windows target"));
-            const DWORD length = ::GetFinalPathNameByHandleW(target.Get(), nullptr, 0, FILE_NAME_NORMALIZED);
-            if (length == 0)
-                return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows target name inspection", ::GetLastError()));
-            std::wstring finalName(length + 1, L'\0');
-            const DWORD written =
-                ::GetFinalPathNameByHandleW(target.Get(), finalName.data(), static_cast<DWORD>(finalName.size()), FILE_NAME_NORMALIZED);
-            if (written == 0 || written >= finalName.size())
-                return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows target name inspection", ::GetLastError()));
-            finalName.resize(written);
-            if (finalName.substr(finalName.find_last_of(L"\\/") + 1) != name)
-                return Result<void>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "Windows target case alias"));
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<void> RenameWindowsFile(HANDLE file, HANDLE directory, const std::wstring &destination) {
-            if (destination.empty() || destination.size() > (std::numeric_limits<DWORD>::max() / sizeof(wchar_t)))
-                return Result<void>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows destination length"));
-            const std::size_t byteLength = destination.size() * sizeof(wchar_t);
-            // FILE_RENAME_INFO includes a one-character tail member; reserve the full
-            // fixed structure plus the variable-length name for Win32's size check.
-            if (byteLength > std::numeric_limits<DWORD>::max() - sizeof(FILE_RENAME_INFO))
-                return Result<void>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows destination buffer"));
-            const std::size_t size = sizeof(FILE_RENAME_INFO) + byteLength;
-            const std::size_t words = size / sizeof(std::uint64_t) + (size % sizeof(std::uint64_t) != 0);
-            std::vector<std::uint64_t> buffer(words);
-            // FILE_RENAME_INFO has the FILE_RENAME_INFORMATION field layout required by NtSetInformationFile.
-            auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(buffer.data());
-            rename->ReplaceIfExists = TRUE;
-            rename->RootDirectory = directory;
-            rename->FileNameLength = static_cast<DWORD>(byteLength);
-            std::copy(destination.begin(), destination.end(), rename->FileName);
-            // Win32 FileRenameInfo rejects this held-directory root; the native information
-            // class accepts a simple name relative to the RootDirectory capability.
-            using NtSetInformationFileFunction = NTSTATUS(NTAPI *)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, ULONG);
-            const HMODULE library = ::GetModuleHandleW(L"ntdll.dll");
-            const auto set =
-                library ? reinterpret_cast<NtSetInformationFileFunction>(::GetProcAddress(library, "NtSetInformationFile")) : nullptr;
-            if (!set)
-                return Result<void>::Failure(Failure(SaveErrors::StorageCapabilityUnsupported, "relative Windows replacement"));
-            IO_STATUS_BLOCK status{};
-            // WDK FILE_INFORMATION_CLASS fixes FileRenameInformation at 10; the user-mode
-            // winternl.h enum omits it. See MicrosoftDocs/windows-driver-docs-ddi at
-            // 7515063cea4c9e98db6a92986c5b4ddb0463fd16, ne-wdm-_file_information_class.md.
-            constexpr ULONG kFileRenameInformation = 10;
-            const NTSTATUS result = set(file, &status, rename, static_cast<ULONG>(size), kFileRenameInformation);
-            if (result != 0)
-                return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "Windows atomic replacement", result));
-            return Result<void>::Success();
-        }
-#else
-        class Directory final {
-        public:
-            explicit Directory(const int fd = -1) noexcept : fd_(fd) {}
-
-            Directory(Directory &&other) noexcept : fd_(std::exchange(other.fd_, -1)) {}
-
-            Directory &operator=(Directory &&other) noexcept {
-                if (this != &other) {
-                    if (fd_ >= 0)
-                        ::close(fd_);
-                    fd_ = std::exchange(other.fd_, -1);
-                }
-                return *this;
-            }
-
-            ~Directory() {
-                if (fd_ >= 0)
-                    ::close(fd_);
-            }
-
-            Directory(const Directory &) = delete;
-            Directory &operator=(const Directory &) = delete;
-
-            [[nodiscard]] int Fd() const noexcept {
-                return fd_;
-            }
-
-        private:
-            int fd_;
-        };
-
-        [[nodiscard]] Result<Directory> Child(const Directory &parent, const std::string &name) {
-            if (::mkdirat(parent.Fd(), name.c_str(), 0700) != 0 && errno != EEXIST)
-                return Result<Directory>::Failure(Failure(SaveErrors::StoragePermanentIo, "directory creation", errno));
-            const int fd = ::openat(parent.Fd(), name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-            if (fd < 0)
-                return Result<Directory>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "directory admission", errno));
-            return Result<Directory>::Success(Directory{fd});
-        }
-
-        [[nodiscard]] Result<void> ExistingTargetSafe(const Directory &directory, const std::string &name) {
-            struct stat entry{};
-            if (::fstatat(directory.Fd(), name.c_str(), &entry, AT_SYMLINK_NOFOLLOW) != 0) {
-                if (errno == ENOENT)
-                    return Result<void>::Success();
-                return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "target inspection", errno));
-            }
-            if (!S_ISREG(entry.st_mode) || entry.st_nlink != 1)
-                return Result<void>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "unsafe target"));
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<void> WritePosixBytes(const int fd, const std::span<const std::byte> bytes) {
-            std::size_t offset = 0;
-            while (offset < bytes.size()) {
-                const std::size_t remaining =
-                    std::min(bytes.size() - offset, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
-                const ssize_t written = ::write(fd, bytes.data() + offset, remaining);
-                if (written < 0 && errno == EINTR)
-                    continue;
-                if (written <= 0)
-                    return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "temporary write", written < 0 ? errno : 0));
-                offset += static_cast<std::size_t>(written);
-            }
-            if (::fsync(fd) != 0)
-                return Result<void>::Failure(Failure(SaveErrors::StoragePermanentIo, "temporary synchronization", errno));
-            return Result<void>::Success();
-        }
-#endif
-    }  // namespace
+    using namespace SaveFilesystemNative;
+    using SaveFilesystemReadDetails::PinArchiveRead;
+    using SaveFilesystemReadDetails::PinnedArchiveRead;
 
     struct SaveFilesystemStorage::State final {
+    private:
+        // Worker-only mutex orders archive selection and replacements. Destruction/move requires
+        // quiescent callers; accepted work retains its storage owner until completion.
+        mutable std::mutex operationMutex_;
+
+    public:
+        /** @brief Selects an immutable file under lexical ownership; the returned handle holds no mutex. */
+        [[nodiscard]] Result<PinnedArchiveRead> PinRead(const SaveGameSlotId slot, const std::size_t maximumBytes) const {
+            const std::lock_guard operationLock{operationMutex_};
+            if (auto valid = Verify(); valid.HasError())
+                return Result<PinnedArchiveRead>::Failure(valid.ErrorValue());
+            return PinArchiveRead(Slots(), slot, maximumBytes);
+        }
+
+        /** @brief Serializes complete publication while retaining namespace lifetime ownership. */
+        [[nodiscard]] Result<void> Replace(const SaveGameSlotId slot, const std::span<const std::byte> bytes) const {
+            const std::lock_guard operationLock{operationMutex_};
+#ifdef _WIN32
+            return ReplaceWindows(slot, bytes);
+#else
+            return ReplacePosix(slot, bytes);
+#endif
+        }
 #ifdef _WIN32
         State(std::filesystem::path path, std::vector<Handle> opened, std::vector<std::wstring> components)
             : rootPath(std::move(path)), directories(std::move(opened)), names(std::move(components)) {}
@@ -309,12 +81,35 @@ namespace Horo::Runtime {
                 if (auto same = SameEntry(directories[index - 1], names[index - 1], directories[index], kDirectoryFile); same.HasError())
                     return same;
             }
+            if (processLock.IsValid())
+                return SameEntry(Slots(), L".namespace.lock", processLock, kNonDirectoryFile);
             return Result<void>::Success();
         }
 
+        [[nodiscard]] Result<void> AcquireProcessLock() {
+            auto opened = RelativeOpen(Slots(), L".namespace.lock", GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES, kOpenIf,
+                                       kNonDirectoryFile, FILE_ATTRIBUTE_NORMAL);
+            if (opened.HasError())
+                return Result<void>::Failure(opened.ErrorValue());
+            Handle lock = std::move(opened).Value();
+            OVERLAPPED offset{};
+            if (!::LockFileEx(lock.Get(), LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &offset)) {
+                const DWORD error = ::GetLastError();
+                return Result<void>::Failure(
+                    Failure(error == ERROR_LOCK_VIOLATION ? SaveErrors::OperationInProgress : SaveErrors::StorageCapabilityUnsupported,
+                            "namespace lock", error));
+            }
+            processLock = std::move(lock);
+            return Verify();
+        }
+
+    private:
+        Handle processLock;
         std::filesystem::path rootPath;
         std::vector<Handle> directories;
         std::vector<std::wstring> names;
+
+    public:
         [[nodiscard]] static Result<std::unique_ptr<State>> OpenWindows(const ProductSaveRoot &root, const SaveNamespaceId &name);
         [[nodiscard]] Result<void> ReplaceWindows(SaveGameSlotId slot, std::span<const std::byte> bytes) const;
 #else
@@ -337,12 +132,41 @@ namespace Horo::Runtime {
                     actual.st_ino != held.st_ino)
                     return Result<void>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "namespace replacement"));
             }
+            if (processLock.Fd() >= 0 &&
+                (::fstatat(Slots().Fd(), ".namespace.lock", &actual, AT_SYMLINK_NOFOLLOW) != 0 || ::fstat(processLock.Fd(), &held) != 0 ||
+                 !S_ISREG(actual.st_mode) || actual.st_nlink != 1 || actual.st_dev != held.st_dev || actual.st_ino != held.st_ino))
+                return Result<void>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "namespace lock replacement"));
             return Result<void>::Success();
         }
 
+        [[nodiscard]] Result<void> AcquireProcessLock() {
+            const int fd = ::openat(Slots().Fd(), ".namespace.lock", O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600);
+            if (fd < 0)
+                return Result<void>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "namespace lock admission", errno));
+            Directory lock{fd};
+            if (struct stat info{}; ::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || info.st_nlink != 1)
+                return Result<void>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "unsafe namespace lock"));
+            int result;
+            do {
+                result = ::flock(fd, LOCK_EX | LOCK_NB);
+            } while (result != 0 && errno == EINTR);
+            if (result != 0) {
+                const int error = errno;
+                return Result<void>::Failure(Failure(error == EWOULDBLOCK || error == EAGAIN ? SaveErrors::OperationInProgress
+                                                                                             : SaveErrors::StorageCapabilityUnsupported,
+                                                     "namespace lock", error));
+            }
+            processLock = std::move(lock);
+            return Verify();
+        }
+
+    private:
+        Directory processLock;
         std::filesystem::path rootPath;
         std::vector<Directory> directories;
         std::vector<std::string> names;
+
+    public:
         [[nodiscard]] static Result<std::unique_ptr<State>> OpenPosix(const ProductSaveRoot &root, const SaveNamespaceId &name);
         [[nodiscard]] Result<void> ReplacePosix(SaveGameSlotId slot, std::span<const std::byte> bytes) const;
 #endif
@@ -425,6 +249,8 @@ namespace Horo::Runtime {
 #endif
         if (state.HasError())
             return Result<SaveFilesystemStorage>::Failure(state.ErrorValue());
+        if (auto locked = state.Value()->AcquireProcessLock(); locked.HasError())
+            return Result<SaveFilesystemStorage>::Failure(locked.ErrorValue());
         return Result<SaveFilesystemStorage>::Success(SaveFilesystemStorage{std::move(state).Value()});
     }
 
@@ -432,56 +258,10 @@ namespace Horo::Runtime {
     Result<std::vector<std::byte>> SaveFilesystemStorage::Read(const SaveGameSlotId slot, const std::size_t maximumBytes) const {
         if (!state_ || !slot.IsValid() || maximumBytes == 0)
             return Result<std::vector<std::byte>>::Failure(Failure(SaveErrors::StorageOperationInvalid, "read validation"));
-        if (auto valid = state_->Verify(); valid.HasError())
-            return Result<std::vector<std::byte>>::Failure(valid.ErrorValue());
-#ifdef _WIN32
-        const std::string narrow = SlotName(slot);
-        const std::wstring name(narrow.begin(), narrow.end());
-        auto opened = RelativeOpen(state_->Slots(), name, GENERIC_READ, kOpen, kNonDirectoryFile, FILE_ATTRIBUTE_NORMAL);
-        if (opened.HasError())
-            return Result<std::vector<std::byte>>::Failure(opened.ErrorValue());
-        LARGE_INTEGER size{};
-        if (!::GetFileSizeEx(opened.Value().Get(), &size) || size.QuadPart < 0 || static_cast<std::uintmax_t>(size.QuadPart) > maximumBytes)
-            return Result<std::vector<std::byte>>::Failure(Failure(SaveErrors::StorageOperationInvalid, "Windows slot size"));
-        std::vector<std::byte> bytes(static_cast<std::size_t>(size.QuadPart));
-        std::size_t offset = 0;
-        while (offset < bytes.size()) {
-            const DWORD amount = static_cast<DWORD>(std::min<std::size_t>(bytes.size() - offset, std::numeric_limits<DWORD>::max()));
-            DWORD received{};
-            if (!::ReadFile(opened.Value().Get(), bytes.data() + offset, amount, &received, nullptr) || received == 0)
-                return Result<std::vector<std::byte>>::Failure(
-                    Failure(SaveErrors::StoragePermanentIo, "Windows slot read", ::GetLastError()));
-            offset += received;
-        }
-        return Result<std::vector<std::byte>>::Success(std::move(bytes));
-#else
-        const std::string name = SlotName(slot);
-        const int fd = ::openat(state_->Slots().Fd(), name.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
-        if (fd < 0)
-            return Result<std::vector<std::byte>>::Failure(Failure(SaveErrors::StoragePermanentIo, "slot open", errno));
-        Directory file{fd};
-        struct stat entry{};
-        if (::fstat(fd, &entry) != 0)
-            return Result<std::vector<std::byte>>::Failure(Failure(SaveErrors::StoragePermanentIo, "slot inspection", errno));
-        if (!S_ISREG(entry.st_mode) || entry.st_nlink != 1)
-            return Result<std::vector<std::byte>>::Failure(Failure(SaveErrors::SaveRootContainmentViolation, "unsafe slot"));
-        if (entry.st_size < 0 || static_cast<std::uintmax_t>(entry.st_size) > maximumBytes)
-            return Result<std::vector<std::byte>>::Failure(Failure(SaveErrors::StorageOperationInvalid, "slot size"));
-        std::vector<std::byte> bytes(static_cast<std::size_t>(entry.st_size));
-        std::size_t offset = 0;
-        while (offset < bytes.size()) {
-            const std::size_t remaining = std::min(bytes.size() - offset, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
-            // EINTR retries unchanged; EOF/errors return; a positive read advances by at most remaining.
-            // flawfinder: ignore - offset < bytes.size() and remaining <= bytes.size() - offset.
-            const ssize_t read = ::read(fd, bytes.data() + offset, remaining);
-            if (read < 0 && errno == EINTR)
-                continue;
-            if (read <= 0)
-                return Result<std::vector<std::byte>>::Failure(Failure(SaveErrors::StoragePermanentIo, "slot read", read < 0 ? errno : 0));
-            offset += static_cast<std::size_t>(read);
-        }
-        return Result<std::vector<std::byte>>::Success(std::move(bytes));
-#endif
+        auto pinned = state_->PinRead(slot, maximumBytes);
+        if (pinned.HasError())
+            return Result<std::vector<std::byte>>::Failure(pinned.ErrorValue());
+        return std::move(pinned).Value().Read();
     }
 
 #ifdef _WIN32
@@ -562,10 +342,6 @@ namespace Horo::Runtime {
     Result<void> SaveFilesystemStorage::Replace(const SaveGameSlotId slot, const std::span<const std::byte> bytes) const {
         if (!state_ || !slot.IsValid() || bytes.empty())
             return Result<void>::Failure(Failure(SaveErrors::StorageOperationInvalid, "replacement validation"));
-#ifdef _WIN32
-        return state_->ReplaceWindows(slot, bytes);
-#else
-        return state_->ReplacePosix(slot, bytes);
-#endif
+        return state_->Replace(slot, bytes);
     }
 }  // namespace Horo::Runtime

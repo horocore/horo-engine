@@ -413,6 +413,15 @@ Application use cases return typed `Result<T, Error>` values. `McpController`
 translates engine errors into JSON-RPC payloads without leaking internal
 implementation details.
 
+The registry-backed reference `Horo::Hosts::TranslateMcpError` wraps the same
+canonical application error used by GUI, CLI and Python in `error.data` with
+protocol code `-32000`. A composition root supplies exact exposed mappings and
+the active registry; unregistered errors are contract failures. The transport
+retains responsibility for request identity and protocol failures. Disclosure,
+bounds and migration from the earlier lifecycle-only `SafeErrorData` projection
+are specified by
+[Host Translation](../foundation/error-and-diagnostics.md#host-translation).
+
 ## Adding A New MCP Tool
 
 1. Define the tool struct in `mcp/tools/<Name>Tool.h`.
