@@ -96,6 +96,9 @@ namespace Horo::Physics {
      * @param physicsTarget Complete qualified Physics cook target; never inferred from a renderer label.
      * @param importer Immutable source adapter retained through all joined cook jobs.
      * @return Contribution for explicit catalog registration, or DescriptorInvalid for missing adapter/identity.
+     * @note The strategy's Cook boundary contains importer exceptions: runtime errors remain ShapeCookSourceInvalid,
+     * allocation failures remain ShapeCookLimitExceeded, and other exceptions become ShapeCookImporterFailed.
+     * Standard exception detail is retained. Failure to allocate the error itself may be fatal under the engine's memory policy.
      * @note Compound and analytic shapes are outside this asset-derived contribution. No runtime cooker is registered. */
     [[nodiscard]] Result<Assets::CookerContribution> MakePhysicsCollisionCookerContribution(
         const Assets::AssetTypeId &type, AssetCookTargetId target, const PhysicsShapeCookTargetDigest &physicsTarget,

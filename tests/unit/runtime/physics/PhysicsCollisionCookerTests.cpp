@@ -361,12 +361,14 @@ TEST_CASE("Collision unexpected importer exceptions fail joined work without rep
     const auto failed = foreignService.Cook(session.request, {});
     REQUIRE(failed.HasError());
     REQUIRE_FALSE(IsJobCancelled(failed.ErrorValue()));
+    REQUIRE(ErrorChainContains(failed.ErrorValue(), PhysicsErrors::ShapeCookImporterFailed.domain,
+                               PhysicsErrors::ShapeCookImporterFailed.code));
     REQUIRE(foreignImporter->calls == 1);
     const auto failedOutput = session.output.SnapshotIfChanged(session.snapshot.revision);
     REQUIRE(failedOutput.has_value());
     REQUIRE(failedOutput->records.back().result == BuildOutputResult::Failed);
     const auto finding = std::ranges::find_if(failedOutput->records, [](const BuildOutputRecord &record) {
-        return record.code.Value() == "asset.cook.cooker_failed";
+        return record.code.Value() == PhysicsErrors::ShapeCookImporterFailed.code.Value();
     });
     REQUIRE(finding != failedOutput->records.end());
     REQUIRE(finding->result == BuildOutputResult::Failed);
@@ -383,6 +385,19 @@ TEST_CASE("Collision importer allocation failures retain the stable Physics limi
     const auto contribution = MakePhysicsCollisionCookerContribution(Type, Target, PhysicsTarget, std::make_shared<SourceImporter>(8));
     REQUIRE(contribution.HasValue());
     Test::RequireError(contribution.Value().strategy->Cook(SourceView(), {}), PhysicsErrors::ShapeCookLimitExceeded);
+}
+
+TEST_CASE("Collision direct cooking contains unexpected importer exceptions with owned diagnostics", "[physics][collision-cook]") {
+    const unsigned kind = GENERATE(7U, 9U);
+    const auto importer = std::make_shared<SourceImporter>(kind);
+    const auto contribution = MakePhysicsCollisionCookerContribution(Type, Target, PhysicsTarget, importer);
+    REQUIRE(contribution.HasValue());
+    const auto failed = contribution.Value().strategy->Cook(SourceView(), {});
+    Test::RequireError(failed, PhysicsErrors::ShapeCookImporterFailed);
+    REQUIRE_FALSE(IsJobCancelled(failed.ErrorValue()));
+    REQUIRE(failed.ErrorValue().message == (kind == 9 ? "private adapter invariant text" : "The asset cooker threw before publication."));
+    REQUIRE(importer->calls == 1);
+    REQUIRE(std::ranges::find(PhysicsErrors::Descriptors(), &PhysicsErrors::ShapeCookImporterFailed) != PhysicsErrors::Descriptors().end());
 }
 
 TEST_CASE("Collision contribution retains its immutable importer for the strategy lifetime", "[physics][collision-cook]") {

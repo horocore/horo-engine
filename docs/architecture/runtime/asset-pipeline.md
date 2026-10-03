@@ -940,6 +940,17 @@ from failures. Physics cancellation retains its stable cause through the shared 
 cancellation result. The contribution installs no ambient service, worker pool or
 runtime fallback.
 
+The Physics strategy contains importer exceptions at its exception-free cook
+boundary, including direct invocations outside Assets jobs. Runtime errors retain
+`physics.shape_cook.source_invalid` and allocation failures retain
+`physics.shape_cook.limit_exceeded`. Other importer exceptions now return the
+registered `physics.shape_cook.importer_failed` instead of escaping to the generic
+Assets `asset.cook.cooker_failed` fallback. Callers filtering that generic code for
+collision imports must migrate to the Physics code. Standard exception detail,
+source links, Failed classification and last-good generation preservation remain
+unchanged. Error allocation after memory exhaustion may be fatal, as allowed by
+the engine exception policy; the boundary does not promise allocation-free recovery.
+
 ### Destruction Domain Source And Cook Boundary
 
 [ADR-145](../../adr/145-destruction-source-chunk-geometry-collision-and-cook-ownership.md)

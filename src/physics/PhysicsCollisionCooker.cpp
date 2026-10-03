@@ -103,17 +103,13 @@ namespace Horo::Physics {
             }
 
             [[nodiscard]] Result<Assets::CookOutputSink> Cook(const Assets::CookSourceView &source,
-                                                              const CancellationToken &cancellation) const override {
-                if (cancellation.IsCancellationRequested())
-                    return Result<Assets::CookOutputSink>::Failure(CookFailure(MakeError(PhysicsErrors::ShapeCookCancelled)));
-                if (source.type != type_ || source.target != target_)
-                    return Result<Assets::CookOutputSink>::Failure(MakeError(PhysicsErrors::ProfileUnsupported));
-                if (source.bytes.size() > PhysicsConvexHullCookLimits::MaximumPayloadBytes)
-                    return Result<Assets::CookOutputSink>::Failure(MakeError(PhysicsErrors::ShapeCookLimitExceeded));
-                if (ComputeSha256(std::as_bytes(source.bytes)) != source.sourceDigest)
-                    return Result<Assets::CookOutputSink>::Failure(
-                        MakeError(PhysicsErrors::ShapeCookSourceInvalid, "Collision source bytes do not match the captured digest"));
+                                                              const CancellationToken &cancellation) const noexcept override {
+                // This owned adapter contains importer exceptions; constructing an error after exhausted memory may still be fatal.
                 try {
+                    if (cancellation.IsCancellationRequested())
+                        return Result<Assets::CookOutputSink>::Failure(CookFailure(MakeError(PhysicsErrors::ShapeCookCancelled)));
+                    if (auto admitted = ValidateSource(source); admitted.HasError())
+                        return Result<Assets::CookOutputSink>::Failure(admitted.ErrorValue());
                     auto imported = importer_->Import(source, cancellation);
                     if (imported.HasError())
                         return Result<Assets::CookOutputSink>::Failure(CookFailure(imported.ErrorValue()));
@@ -141,10 +137,27 @@ namespace Horo::Physics {
                 } catch (const std::runtime_error &) {
                     return Result<Assets::CookOutputSink>::Failure(
                         MakeError(PhysicsErrors::ShapeCookSourceInvalid, "Collision source importer failed before publication"));
+                } catch (const std::exception &exception) {
+                    return Result<Assets::CookOutputSink>::Failure(MakeError(PhysicsErrors::ShapeCookImporterFailed, exception.what()));
+                } catch (...) {
+                    return Result<Assets::CookOutputSink>::Failure(
+                        MakeError(PhysicsErrors::ShapeCookImporterFailed, "The asset cooker threw before publication."));
                 }
             }
 
         private:
+            /** @brief Admits exact bounded captured bytes before invoking the retained importer. */
+            [[nodiscard]] Result<void> ValidateSource(const Assets::CookSourceView &source) const {
+                if (source.type != type_ || source.target != target_)
+                    return Result<void>::Failure(MakeError(PhysicsErrors::ProfileUnsupported));
+                if (source.bytes.size() > PhysicsConvexHullCookLimits::MaximumPayloadBytes)
+                    return Result<void>::Failure(MakeError(PhysicsErrors::ShapeCookLimitExceeded));
+                if (ComputeSha256(std::as_bytes(source.bytes)) != source.sourceDigest)
+                    return Result<void>::Failure(
+                        MakeError(PhysicsErrors::ShapeCookSourceInvalid, "Collision source bytes do not match the captured digest"));
+                return Result<void>::Success();
+            }
+
             Assets::AssetTypeId type_;
             AssetCookTargetId target_;
             PhysicsShapeCookTargetDigest physicsTarget_;
