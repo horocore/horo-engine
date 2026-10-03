@@ -225,8 +225,7 @@ namespace Horo::Application {
     TEST_CASE("Incremental admission rejects invalid native ceilings before scheduling with either cold or warm cache") {
         BakeHarness harness;
         if (GENERATE(false, true))
-            REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state ==
-                    OperationState::Succeeded);
+            REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
         const auto reject = [&harness](auto field, const auto value) {
             auto config = harness.config;
