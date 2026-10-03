@@ -390,6 +390,8 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveReference.cpp
         runtime/save/SaveSlotMetadata.cpp
         runtime/save/SaveSlotIndex.cpp
+        runtime/save/SaveCloudRevisionMetadata.cpp
+        runtime/save/SaveCloudRevisionErrors.cpp
         runtime/save/SaveManagerProjection.cpp
         runtime/save/SaveManagerProjectionErrors.cpp
         runtime/save/SaveStorageAdapter.cpp
