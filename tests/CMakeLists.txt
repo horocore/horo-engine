@@ -513,6 +513,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/CharacterDiagnosticsTests.cpp
         unit/runtime/physics/CharacterFastPathStorageTests.cpp
         unit/runtime/physics/CharacterGroundingTests.cpp
+        unit/runtime/physics/CharacterShapeChangeTests.cpp
         unit/runtime/physics/CharacterMetricsTests.cpp
         unit/runtime/physics/CharacterWorldSettingsTests.cpp
         unit/runtime/physics/CharacterWorldTests.cpp
@@ -545,11 +546,13 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsQueryEventCapabilityTests.cpp
         unit/runtime/physics/PhysicsReferenceSceneCorpusTests.cpp
         unit/runtime/physics/PhysicsSceneActivationTests.cpp
+        unit/runtime/physics/PhysicsSceneContainmentTests.cpp
         unit/runtime/physics/PhysicsShapeDescriptorTests.cpp
         unit/runtime/physics/PhysicsStepPolicyTests.cpp
         unit/runtime/physics/PhysicsTransformAuthorityTests.cpp
         unit/runtime/physics/PhysicsWorldBudgetsTests.cpp
         unit/runtime/physics/PhysicsWorldConstraintMutationTests.cpp
+        unit/runtime/physics/PhysicsWorldContainmentTests.cpp
         unit/runtime/physics/PhysicsWorldDescriptorTests.cpp
         unit/runtime/physics/PhysicsWorldLifecycleTests.cpp
         unit/runtime/physics/PhysicsWorldSettingsTests.cpp
@@ -564,8 +567,10 @@ horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
 
 add_executable(HoroAITests
         support/AllocationProbe.cpp
+        unit/runtime/ai/AICanonicalStateTests.cpp
         unit/runtime/ai/AIIdentityTests.cpp
         unit/runtime/ai/AISceneActivationTests.cpp
+        unit/runtime/ai/AISceneRestoreTests.cpp
         unit/runtime/ai/AISceneComponentsTests.cpp
         unit/runtime/ai/AITaskLifecycleTests.cpp
         unit/runtime/ai/BehaviorTreeTests.cpp
@@ -1005,6 +1010,7 @@ endforeach()
 if(HORO_BUILD_PHYSICS_NATIVE)
     add_executable(HoroPhysicsNativeBoundaryTests
         unit/runtime/physics/CanonicalNativeBoundaryTests.cpp
+        unit/runtime/physics/CanonicalContainmentTests.cpp
         unit/runtime/physics/CanonicalPhysicsRuntimeTests.cpp
         unit/runtime/physics/CanonicalWorldSettingsTests.cpp)
     target_compile_features(HoroPhysicsNativeBoundaryTests PRIVATE cxx_std_20)

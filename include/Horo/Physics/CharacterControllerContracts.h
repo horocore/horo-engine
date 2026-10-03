@@ -78,6 +78,32 @@ namespace Horo::Character {
         Crouch,
     };
 
+    /** @brief Committed collision stance; Custom denotes an explicitly requested capsule. */
+    enum class CharacterStance : std::uint8_t {
+        Standing,
+        Crouched,
+        Custom
+    };
+
+    /** @brief Instantaneous capsule replacement at the command's fixed tick; the center root stays fixed. */
+    struct CharacterShapeChangeRequest final {
+        Physics::PhysicsCapsuleShape capsule;
+    };
+
+    /** @brief Clearance outcome; rejected changes retain the prior geometry and stance. */
+    enum class CharacterShapeChangeStatus : std::uint8_t {
+        Applied,
+        Blocked,
+        Invalid
+    };
+
+    /** @brief Owned shape outcome published only with a successful movement tick. */
+    struct CharacterShapeChangeResult final {
+        CharacterShapeChangeStatus status{CharacterShapeChangeStatus::Invalid};
+        Physics::PhysicsCapsuleShape effectiveCapsule;
+        CharacterStance effectiveStance{CharacterStance::Standing};
+    };
+
     /** @brief Collision outcomes accumulated while resolving one movement request. */
     enum class CharacterCollisionFlags : std::uint16_t {
         None = 0,
@@ -116,6 +142,7 @@ namespace Horo::Character {
         float maximumStepHeightMeters{0.3F};
         float maximumSlopeDegrees{45.0F};
         std::uint32_t maximumContacts{16};
+        std::optional<Physics::PhysicsCapsuleShape> crouchedCapsule; /**< Same radius and lower cylindrical height than standing. */
     };
 
     /** @brief Operation that may publish a new collision-root transform. */
@@ -339,6 +366,7 @@ namespace Horo::Character {
         std::optional<Math::Quaternion> desiredHeading;
         bool jumpRequested{};
         CharacterStanceIntent stance{CharacterStanceIntent::Keep};
+        std::optional<CharacterShapeChangeRequest> shapeChange; /**< Requires Keep stance; conflicts publish Invalid. */
     };
 
     /** @brief Whether physical identity was supplied by Physics or by the explicit controller fallback. */
@@ -389,7 +417,8 @@ namespace Horo::Character {
         bool groundingRevalidationRequired{};
         std::optional<Physics::PhysicsShapeSubresourceId> groundSubshape;             /**< Selected support's authored child identity. */
         CharacterMaterialSource groundMaterialSource{CharacterMaterialSource::Query}; /**< Origin of the effective physical material. */
-        Math::Vec3 groundPoint{}; /**< Selected support point; independent of retained contact capacity. */
+        Math::Vec3 groundPoint{};                              /**< Selected support point; independent of retained contact capacity. */
+        std::optional<CharacterShapeChangeResult> shapeChange; /**< Character-owned clearance outcome, never adapter authority. */
     };
 
     /**
@@ -405,6 +434,8 @@ namespace Horo::Character {
         std::uint64_t stateRevision{};
         CharacterMovementResult movement;
         CharacterTransformPublication transform;
+        Physics::PhysicsCapsuleShape capsule; /**< Effective collision geometry for this committed state. */
+        CharacterStance stance{CharacterStance::Standing};
     };
 
     /**

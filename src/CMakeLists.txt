@@ -911,6 +911,7 @@ add_library(HoroPhysics STATIC
         physics/CharacterWorldMovementInternal.h
         physics/CharacterWorldInternal.h
         physics/CharacterWorldPlacementInternal.h
+        physics/CharacterWorldShapeInternal.h
         physics/CharacterWorldSettings.cpp
         physics/GenerationalSlotStorage.h
         physics/PhysicsBodyDescriptor.cpp
@@ -962,6 +963,7 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntime.cpp
         physics/CanonicalPhysicsRuntimeBodyCreation.cpp
         physics/CanonicalPhysicsRuntimeDebug.cpp
+        physics/CanonicalPhysicsRuntimeContainment.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
@@ -975,6 +977,7 @@ if(HORO_BUILD_PHYSICS_NATIVE)
         physics/CanonicalPhysicsRuntime.cpp
         physics/CanonicalPhysicsRuntimeBodyCreation.cpp
         physics/CanonicalPhysicsRuntimeDebug.cpp
+        physics/CanonicalPhysicsRuntimeContainment.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
         physics/CanonicalPhysicsRuntimeQuery.cpp
@@ -999,6 +1002,9 @@ target_compile_features(HoroPhysicsSceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics HoroEngine::RuntimeScene)
 
 add_library(HoroAI STATIC
+        runtime/ai/api/AICanonicalErrors.cpp
+        runtime/ai/api/AICanonicalState.cpp
+        runtime/ai/api/BlackboardCanonicalState.cpp
         runtime/ai/api/AIErrors.cpp
         runtime/ai/api/AISceneComponents.cpp
         runtime/ai/api/AISceneErrors.cpp
@@ -1033,6 +1039,7 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::AI)
 
 add_library(HoroAISceneIntegration STATIC
         runtime/ai/integration/AISceneActivation.cpp
+        runtime/ai/integration/AISceneRestore.cpp
         runtime/ai/integration/AIScenePerceptionSource.cpp
         runtime/ai/integration/EnvironmentQueryContexts.cpp
         runtime/ai/integration/PerceptionSpatialBroadphase.cpp)

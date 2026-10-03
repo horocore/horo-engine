@@ -29,6 +29,8 @@ namespace Horo::Character {
             std::uint64_t lastTeleportTick{};
             std::optional<std::uint64_t> reservedTeleportTick;
             bool spawned{};
+            Physics::PhysicsCapsuleShape capsule;
+            CharacterStance stance{CharacterStance::Standing};
         };
 
         /** @brief Process-owned synchronization and non-wrapping Character world identity source. */
@@ -131,11 +133,29 @@ namespace Horo::Character {
         std::thread::id ownerThread{std::this_thread::get_id()};
         std::atomic<CharacterWorldState> state{CharacterWorldState::Prepared};
         std::atomic<bool> ticking{};
+        std::uint32_t tickQueries{}; /**< Owner-thread count, reset before each fixed-tick attempt. */
         bool placementActive{};
         bool shutdownRequested{};
     };
 
     namespace Detail {
+        /** @brief Reserves one query from the shared shape/movement fixed-tick work bound. */
+        [[nodiscard]] Result<void> ReserveTickQuery(auto &impl) {
+            if (impl.tickQueries >= impl.settings.Values().work.maximumQueriesPerTick)
+                return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded));
+            ++impl.tickQueries;
+            return Result<void>::Success();
+        }
+
+        /** @brief Revalidates world liveness after a borrowed query callback while preserving its original typed error. */
+        [[nodiscard]] Result<void> ValidateTickQueryContinuation(const auto &impl, const auto &probe) {
+            if (impl.state.load() != CharacterWorldState::Active)
+                return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
+            if (probe.HasError())
+                return Result<void>::Failure(probe.ErrorValue());
+            return Result<void>::Success();
+        }
+
         /** @brief Drains controller storage after an owner-thread shutdown deferred by a guarded operation. */
         template <typename Impl> void DrainDeferredShutdown(Impl &impl) noexcept {
             if (!impl.shutdownRequested)

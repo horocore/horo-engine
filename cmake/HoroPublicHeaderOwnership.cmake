@@ -522,6 +522,7 @@ horo_configure_target_header_boundary(HoroPhysicsSceneIntegration PUBLIC_HEADERS
     Horo/Physics/PhysicsSceneActivation.h
 )
 horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
+    Horo/AI/AICanonicalState.h
     Horo/AI/AIErrors.h
     Horo/AI/AISceneComponents.h
     Horo/AI/AIIdentity.h
