@@ -442,6 +442,48 @@ namespace Horo::Cinematic {
                                                  std::vector<SequenceAuthorityClaim> claims) noexcept
         : authorityRevision_(authorityRevision), eligibleSimulationTick_(eligibleSimulationTick), claims_(std::move(claims)) {}
 
+    /** @copydoc CinematicRuntimeService::PrepareEventFrame */
+    Result<SequenceFrameEvaluationResult> CinematicRuntimeService::PrepareEventFrame(const SequencePlayerHandle &handle,
+                                                                                     const SequenceTime delta, SequenceFrameCursor &cursor,
+                                                                                     SequenceFrameScratch &scratch,
+                                                                                     const SequenceFrameHooks &hooks) {
+        auto slot = ResolveSlot(handle);
+        if (slot.HasError())
+            return Result<SequenceFrameEvaluationResult>::Failure(slot.ErrorValue());
+        Instance &instance = *slots_[slot.Value()].instance;
+        if (instance.coordination.clockSource != SequenceClockSource::CommittedSimulation)
+            return Failed<SequenceFrameEvaluationResult>(SequencePlaybackRuntimeErrors::ClockInvalid);
+        cursor = instance.cursor;
+        if (instance.player.Snapshot().state == SequencePlaybackState::Playing &&
+            (instance.gameplayPaused || instance.resumeBaselinePending)) {
+            const auto snapshot = instance.player.Snapshot();
+            return Result<SequenceFrameEvaluationResult>::Success(
+                {snapshot.position, snapshot.position, cursor.traversal, cursor.evaluationRevision, 0, 0, 0, false});
+        }
+        ConfigureBlendScratch(scratch, instance.blend, instance.blendBaselines);
+        if (scratch.maximumBoundaryOccurrences == 0 || scratch.maximumBoundaryOccurrences > budget_.maximumBoundaryOccurrences)
+            scratch.maximumBoundaryOccurrences = budget_.maximumBoundaryOccurrences;
+        return instance.plan.EvaluatePrepared(instance.player.Snapshot(), delta, cursor, scratch, hooks, false);
+    }
+
+    /** @copydoc CinematicRuntimeService::PublishEventFrame */
+    void CinematicRuntimeService::PublishEventFrame(const SequencePlayerHandle &handle, const SequenceFrameCursor &cursor,
+                                                    const SequenceFrameScratch &scratch, const SequenceFrameHooks &hooks,
+                                                    const SequenceFrameEvaluationResult &result) {
+        Instance &instance = *slots_[ResolveSlot(handle).Value()].instance;
+        instance.cursor = cursor;
+        instance.resumeBaselinePending = false;
+        (void)instance.player.CommitEvaluationPosition(cursor.controlFence, result.position);
+        instance.plan.PublishPrepared(scratch, hooks, result);
+        if (result.reachedEnd) {
+            (void)instance.player.Stop(handle);
+            (void)instance.player.FinishStop(handle);
+            ReleaseCoordination(instance);
+            if (hooks.finishedHook != nullptr)
+                hooks.finishedHook(hooks.finishedContext, handle);
+        }
+    }
+
     /** @copydoc CinematicRuntimeService::Evaluate */
     Result<SequenceFrameEvaluationResult> CinematicRuntimeService::Evaluate(const SequencePlayerHandle &handle,
                                                                             const SequenceTime sourceDelta,

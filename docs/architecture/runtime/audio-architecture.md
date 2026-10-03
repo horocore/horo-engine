@@ -736,6 +736,62 @@ fader taps into compiled storage; a destination clears its own accumulator, then
 pulls completed source taps in canonical route order. Sources never push into a
 destination accumulator, so destination clearing cannot erase upstream signal.
 
+`HoroEngine::AudioMixer` owns `Audio/MixerGraphCompiler.h` and the private
+compiler/executor. It consumes the existing MixerAsset, AudioDsp and AudioCommands
+contracts; there is no backend or core-node implementation dependency. Compilation
+copies all retained metadata, uses stable-ID Kahn order and sorted incoming route
+tables, and reserves disjoint pre-fader, post-fader and insert-work planes. DSP
+state is per insert; scratch is reused only across sequential inserts. Profile
+limits bound schema sizes, frames, voice count, fan-in/out, aligned backing storage,
+scratch and declared callback work before preparation succeeds.
+
+The initial capability admits matching semantic layouts, one main input/output
+per insert, and zero declared latency. Conversion, sidechain/auxiliary/control
+dependencies and latency compensation fail explicitly until their owning contracts
+exist. An explicit control-only factory translates persisted effects into owned
+prepared `IAudioDSPNode` strategies and declares bounded operations per frame;
+returned nodes retain their provider/code leases. A missing factory never silently
+skips an authored effect. Bounded insert history survives ordinary blocks; graph
+replacement and shutdown explicitly cancel that generation's tails, with no
+implicit overlap, migration or compensation. Pause suppresses direct voice input
+but preserves routing; the voice owner remains responsible for paused clocks.
+
+`MixerGraphRuntime` retains at most one active and one pending plan, with a combined
+backing-byte budget. The control owner submits the existing `AudioSwapGraphCommand`
+through scene-gated `AudioCommandStaging`. The host dispatcher passes its consumed
+graph record to `Render` at the beginning of a whole processing block and dispatches
+all other command kinds to their own executors. Queue consumption is not execution
+proof. Runtime/epoch/context, pinned revisions, monotonic generation, exact storage
+handle and accepted sequence must match. Rejected, stale or saturated publication
+retains caller ownership and leaves the active generation intact. The callback
+never looks up a registry or rebuilds topology. Direct voice inputs use already
+resolved bus indices and exact graph generations in stable voice-slot order;
+Return buses reject direct voices. The host retains and validates voice resources.
+
+A lock-free sequentially consistent pending-plan mailbox publishes only fully
+prepared storage. The callback performs at most three atomic operations per block
+boundary, with no atomic operation in the sample loops; stronger ordering keeps
+publication and completed-block reclamation in one total order.
+The callback publishes a sequence acknowledgement after all sample/node accesses
+in the block end. Control `Reconcile` can then destroy the replaced generation.
+Future stale commands cannot obtain a retired slot pointer from that mailbox.
+Rendering faults produce complete admitted silence, reset insert history and
+retain the active ownership island for control recovery. `Close` rejects new
+publication and requests callback quiescence; active and queued plan ownership
+remains retained until the owning host validates exact-epoch native stop/join,
+including completion of every in-flight reader and impossible future entry, and
+passes that proof to `CompleteShutdown`. A final graph-local silent callback is
+unnecessary after this proof; parent lifecycle matching quiescence and detachment
+remain mandatory at their owning boundary. `Close`, queue consumption, silence,
+or timeout alone never authorize release. Partial startup follows the same
+explicit detached cleanup. Runtime destruction itself requires stopped/joined
+callback and reconciled transport work; no destructor joins a device.
+
+Contract fixtures use absolute sample tolerance `2e-6` for analytical gain/send
+signals and verify canonical order, immutable tap retention, failed preparation,
+saturated retry, stale handles/voices, fault silence and guarded lease retirement.
+General allocation and deallocation counters cover the actual render call.
+
 [ADR-066](../../adr/066-spatial-provider-and-required-capability.md) is the single
 normative owner of spatial provider identity, typed capabilities, profile
 resolution, activation preflight, fallback, runtime failure, and observability.

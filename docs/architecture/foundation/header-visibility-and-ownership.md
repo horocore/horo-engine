@@ -1,5 +1,10 @@
 # Header Visibility And Ownership
 
+`AudioRepeatedPlayback.h` is owned by `HoroAudioPlayback`. Its explicit
+`HoroAudioCommands` dependency exposes the normalized command/batch contract to
+consumers through staged headers. The migration and processing-owner boundary
+are recorded in [Resident repeated playback](../../guides/audio-repeated-playback.md).
+
 ## Purpose
 
 This document defines the enforceable C++ header boundary for Horo's production

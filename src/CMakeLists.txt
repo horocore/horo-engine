@@ -591,6 +591,7 @@ target_compile_features(HoroUiTemplateGraph PUBLIC cxx_std_20)
 target_link_libraries(HoroUiTemplateGraph PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::Packages)
 
 add_library(HoroGameplayApi STATIC
+        gameplay/api/GameEventRegistry.cpp
         gameplay/api/BehaviorTypes.cpp
         gameplay/api/GameAsset.cpp
         gameplay/api/GameAssetTypeRegistry.cpp
@@ -875,10 +876,15 @@ add_library(HoroEngine::AudioDsp ALIAS HoroAudioDsp)
 target_compile_features(HoroAudioDsp PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioDsp PUBLIC HoroEngine::AudioApi)
 
-add_library(HoroAudioPlayback STATIC audio/playback/AudioVoicePlayback.cpp)
+add_library(HoroAudioPlayback STATIC
+    audio/playback/AudioVoicePlayback.cpp
+    audio/playback/AudioRepeatedPlayback.cpp
+    audio/playback/AudioRepeatedPlaybackState.h
+    audio/playback/PlaybackVariation.h
+)
 add_library(HoroEngine::AudioPlayback ALIAS HoroAudioPlayback)
 target_compile_features(HoroAudioPlayback PUBLIC cxx_std_20)
-target_link_libraries(HoroAudioPlayback PUBLIC HoroEngine::AudioDsp HoroEngine::AudioApi)
+target_link_libraries(HoroAudioPlayback PUBLIC HoroEngine::AudioDsp HoroEngine::AudioApi HoroEngine::AudioCommands)
 
 add_library(HoroAudioMemory STATIC
         audio/memory/AudioMemoryPool.cpp
@@ -903,6 +909,17 @@ add_library(HoroAudioCommands STATIC
 add_library(HoroEngine::AudioCommands ALIAS HoroAudioCommands)
 target_compile_features(HoroAudioCommands PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioCommands PUBLIC HoroEngine::AudioMemory PRIVATE HoroAudioSafetyHooks)
+
+add_library(HoroAudioMixer STATIC
+        audio/mixer/MixerGraphCompiler.cpp
+        audio/mixer/MixerCycleEvidence.cpp
+        audio/mixer/MixerGraphRuntime.cpp
+        audio/mixer/MixerRenderPlan.cpp
+        audio/mixer/MixerPlanState.h
+)
+add_library(HoroEngine::AudioMixer ALIAS HoroAudioMixer)
+target_compile_features(HoroAudioMixer PUBLIC cxx_std_20)
+target_link_libraries(HoroAudioMixer PUBLIC HoroEngine::AudioDsp HoroEngine::AudioCommands)
 
 add_library(HoroAudioMetrics STATIC
         audio/metrics/AudioMetricExtraction.cpp
@@ -1193,6 +1210,8 @@ add_library(HoroCinematicModel STATIC
         runtime/cinematic/model/CurveSampling.cpp
         runtime/cinematic/model/CinematicErrors.cpp
         runtime/cinematic/model/CinematicIdentity.cpp
+        runtime/cinematic/model/EventTrack.cpp
+        runtime/cinematic/model/EventTrackErrors.cpp
         runtime/cinematic/model/PropertyTrack.cpp
         runtime/cinematic/model/SequenceAsset.cpp
         runtime/cinematic/model/SequenceAssetCook.cpp
@@ -1207,6 +1226,8 @@ target_link_libraries(HoroCinematicModel
 )
 
 add_library(HoroCinematicRuntime STATIC
+        runtime/cinematic/player/EventDispatcher.cpp
+        runtime/cinematic/player/EventSession.cpp
         runtime/cinematic/player/PropertyTrackRuntime.cpp
         runtime/cinematic/player/SequenceEvaluation.cpp
         runtime/cinematic/player/SequenceFrameBlend.cpp
@@ -2225,6 +2246,15 @@ target_link_libraries(HoroExtensions
         PUBLIC HoroEngine::Foundation HoroEngine::Platform HoroEngine::Assets HoroEngine::Security
         PRIVATE nlohmann_json::nlohmann_json CURL::libcurl miniz
 )
+
+# Host-side bridge: sequence model and runtime remain independent of Extensions.
+add_library(HoroCinematicScriptBridge STATIC
+        runtime/cinematic/script/ScriptEventCook.cpp
+        runtime/cinematic/script/GameplayEventAdapter.cpp
+)
+add_library(HoroEngine::CinematicScriptBridge ALIAS HoroCinematicScriptBridge)
+target_compile_features(HoroCinematicScriptBridge PUBLIC cxx_std_20)
+target_link_libraries(HoroCinematicScriptBridge PUBLIC HoroEngine::CinematicRuntime HoroEngine::Extensions HoroEngine::GameplayModuleHost)
 
 # Host composition bridge: neither Platform Services nor Extensions depends on the other.
 add_library(HoroPlatformServicesExtension STATIC
