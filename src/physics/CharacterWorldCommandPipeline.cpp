@@ -109,6 +109,7 @@ namespace Horo::Character {
         Detail::TickGuard ticking{*impl_};
         MetricAttempt metrics{*impl_, input.metrics, input.tick};
         impl_->fastPath.ResetTransient();
+        impl_->tickQueries = 0;
         if (const auto frozen = Detail::FreezeCommandFrame(*impl_, input); frozen.HasError())
             return frozen;
 

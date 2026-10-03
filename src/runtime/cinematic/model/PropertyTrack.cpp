@@ -211,9 +211,6 @@ namespace Horo::Cinematic {
                 target.componentRevision == 0)
                 return RejectProperty<void>(CinematicErrors::PropertyMalformed,
                                             "A property target snapshot contains an invalid identity or revision.");
-            if (target.component == nullptr)
-                return RejectProperty<void>(CinematicErrors::PropertyBindingTargetMissing,
-                                            "A property target has no live component instance.");
             if (std::ranges::find_if(targets.first(index), [&target](const PropertyBindingTargetSnapshot &entry) {
                 return entry.binding == target.binding && entry.targetObject == target.targetObject;
             }) != targets.first(index).end())
@@ -257,6 +254,12 @@ namespace Horo::Cinematic {
                 {track, binding, std::nullopt, MaximumPropertyTracks, PropertyBindingEvaluationOutcome::TargetMissing});
         }
         const PropertyBindingTargetSnapshot &target = targets[*targetIndex];
+        if (target.component == nullptr) {
+            if (track.required)
+                return RejectProperty<CompiledTrack>(CinematicErrors::PropertyBindingTargetMissing);
+            return Result<CompiledTrack>::Success(
+                {track, binding, std::nullopt, MaximumPropertyTracks, PropertyBindingEvaluationOutcome::TargetMissing});
+        }
         if (target.componentType != binding->componentType) {
             if (track.required)
                 return RejectProperty<CompiledTrack>(CinematicErrors::PropertyComponentMismatch,
@@ -297,6 +300,55 @@ namespace Horo::Cinematic {
             return std::pair{track.track.track.stableValue, track.track.track.generation};
         });
         return Result<PropertyEvaluationPlan>::Success(PropertyEvaluationPlan{scene, std::move(compiled)});
+    }
+
+    /** @copydoc PropertyEvaluationPlan::InspectBindings */
+    Result<std::size_t> PropertyEvaluationPlan::InspectBindings(const std::span<const PropertyTrackDescriptor> tracks,
+                                                                const std::span<const PropertyBindingTargetSnapshot> targets,
+                                                                const Runtime::PropertyBindingRegistry &registry,
+                                                                const std::span<PropertyEvaluationDiagnostic> diagnostics) {
+        if (!registry.IsFrozen())
+            return RejectProperty<std::size_t>(CinematicErrors::PropertyRegistryUnfrozen);
+        if (tracks.empty() || tracks.size() > MaximumPropertyTracks || targets.size() > MaximumPropertyTracks ||
+            diagnostics.size() < tracks.size())
+            return RejectProperty<std::size_t>(CinematicErrors::PropertyLimitExceeded);
+        if (auto valid = ValidateTargetSnapshots(targets); valid.HasError())
+            return Result<std::size_t>::Failure(std::move(valid).ErrorValue());
+        std::size_t count{};
+        for (std::size_t index = 0; index < tracks.size(); ++index) {
+            PropertyTrackDescriptor candidate = tracks[index];
+            candidate.required = false;
+            auto compiled = CompileTrack(candidate, tracks.first(index), targets, registry);
+            if (compiled.HasError())
+                return Result<std::size_t>::Failure(std::move(compiled).ErrorValue());
+            const auto outcome = compiled.Value().activationOutcome;
+            if (outcome != PropertyBindingEvaluationOutcome::Applied)
+                diagnostics[count++] = Diagnostic(tracks[index], outcome, DiagnosticError(outcome));
+        }
+        return Result<std::size_t>::Success(count);
+    }
+
+    /** @copydoc PropertyEvaluationPlan::Revalidate */
+    Result<std::size_t> PropertyEvaluationPlan::Revalidate(const PropertyEvaluationContext &context,
+                                                           const std::span<PropertyEvaluationDiagnostic> diagnostics) const {
+        using enum PropertyBindingEvaluationOutcome;
+        if (diagnostics.size() < orderedTracks_.size())
+            return RejectProperty<std::size_t>(CinematicErrors::PropertyLimitExceeded);
+        std::size_t count{};
+        for (const CompiledTrack &compiled : orderedTracks_) {
+            auto outcome = compiled.activationOutcome;
+            if (context.scene != scene_)
+                outcome = BindingStale;
+            else if (compiled.activationTarget.has_value()) {
+                if (compiled.activationTargetIndex >= context.targets.size())
+                    outcome = TargetMissing;
+                else if (!SameTarget(context.targets[compiled.activationTargetIndex], *compiled.activationTarget))
+                    outcome = BindingStale;
+            }
+            if (outcome != Applied)
+                diagnostics[count++] = Diagnostic(compiled.track, outcome, DiagnosticError(outcome));
+        }
+        return Result<std::size_t>::Success(count);
     }
 
     /** @copydoc PropertyEvaluationPlan::Evaluate */
@@ -403,14 +455,70 @@ namespace Horo::Cinematic {
         return Result<PropertyEvaluationResult>::Success(result);
     }
 
+    bool PropertyEvaluationPlan::SampleTrack(const CompiledTrack &compiled, const CurveTime time, const PropertyEvaluationContext &context,
+                                             PropertyEvaluationValue &value, PropertyEvaluationDiagnostic &diagnostic) const {
+        if (compiled.activationOutcome != PropertyBindingEvaluationOutcome::Applied) {
+            diagnostic = Diagnostic(compiled.track, compiled.activationOutcome, DiagnosticError(compiled.activationOutcome));
+            return false;
+        }
+        if (compiled.activationTargetIndex >= context.targets.size()) {
+            diagnostic =
+                Diagnostic(compiled.track, PropertyBindingEvaluationOutcome::TargetMissing, CinematicErrors::PropertyBindingTargetMissing);
+            return false;
+        }
+        if (!SameTarget(context.targets[compiled.activationTargetIndex], *compiled.activationTarget)) {
+            diagnostic = Diagnostic(compiled.track, PropertyBindingEvaluationOutcome::BindingStale, CinematicErrors::PropertyBindingStale);
+            return false;
+        }
+        auto sampled = SampleValue(compiled.track, time);
+        if (sampled.HasError() || !IsWithinRange(compiled.binding->range, sampled.Value())) {
+            diagnostic =
+                Diagnostic(compiled.track, PropertyBindingEvaluationOutcome::ValueOutOfRange, CinematicErrors::PropertySampleInvalid);
+            if (sampled.HasError())
+                diagnostic.error = std::move(sampled).ErrorValue();
+            return false;
+        }
+        value = {.track = compiled.track.track,
+                 .binding = compiled.track.binding,
+                 .targetObject = compiled.track.targetObject,
+                 .value = std::move(sampled).Value()};
+        return true;
+    }
+
     /** @copydoc PropertyEvaluationPlan::EvaluateAndApply */
     Result<PropertyEvaluationResult> PropertyEvaluationPlan::EvaluateAndApply(
         const CurveTime time, const PropertyEvaluationContext &context, const std::span<PropertyEvaluationValue> values,
         const std::span<PropertyEvaluationDiagnostic> diagnostics) const {
-        auto sampled = Evaluate(time, context, values);
-        if (sampled.HasError())
-            return Result<PropertyEvaluationResult>::Failure(std::move(sampled).ErrorValue());
-        return Apply(context, values.first(sampled.Value()), diagnostics);
+        if (context.scene != scene_)
+            return RejectProperty<PropertyEvaluationResult>(CinematicErrors::PropertyBindingStale);
+        if (values.size() < orderedTracks_.size() || diagnostics.size() < orderedTracks_.size())
+            return RejectProperty<PropertyEvaluationResult>(CinematicErrors::PropertyLimitExceeded);
+
+        // Preflight every sample before invoking any owner setter. Scratch remains in track order until compaction.
+        for (std::size_t index = 0; index < orderedTracks_.size(); ++index) {
+            const CompiledTrack &compiled = orderedTracks_[index];
+            diagnostics[index] = {};
+            static_cast<void>(SampleTrack(compiled, time, context, values[index], diagnostics[index]));
+        }
+
+        PropertyEvaluationResult result{};
+        for (std::size_t index = 0; index < orderedTracks_.size(); ++index) {
+            if (diagnostics[index].error.has_value())
+                continue;
+            if (ApplyTrack(orderedTracks_[index], context, values[index], diagnostics[index]))
+                ++result.applied;
+            if (result.sampled != index)
+                values[result.sampled] = std::move(values[index]);
+            ++result.sampled;
+        }
+        for (std::size_t index = 0; index < orderedTracks_.size(); ++index) {
+            if (!diagnostics[index].error.has_value())
+                continue;
+            if (result.diagnostics != index)
+                diagnostics[result.diagnostics] = std::move(diagnostics[index]);
+            ++result.diagnostics;
+        }
+        return Result<PropertyEvaluationResult>::Success(result);
     }
 
     /** @copydoc PropertyEvaluationPlan::SceneVersion */

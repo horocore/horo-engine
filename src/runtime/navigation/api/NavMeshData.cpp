@@ -401,15 +401,19 @@ namespace Horo::Navigation {
         return ValidateTileContents(artifact, tileIndex, limits);
     }
 
+    /** @copydoc ValidateNavMeshArtifact */
+    Result<void> ValidateNavMeshArtifact(const NavMeshArtifactView &artifact, const NavMeshArtifactLimits &limits) {
+        if (const auto header = ValidateNavMeshArtifactHeader(artifact.header, limits); header.HasError())
+            return header;
+        if (const auto shape = ValidateViewShape(artifact); shape.HasError())
+            return shape;
+        return ValidatePartitions(artifact, limits);
+    }
+
     /** @copydoc NavMeshData::Create */
     Result<NavMeshData> NavMeshData::Create(const NavMeshArtifactView &artifact, const NavMeshArtifactLimits &limits) {
-        if (const auto header = ValidateNavMeshArtifactHeader(artifact.header, limits); header.HasError())
-            return Result<NavMeshData>::Failure(header.ErrorValue());
-        if (const auto shape = ValidateViewShape(artifact); shape.HasError())
-            return Result<NavMeshData>::Failure(shape.ErrorValue());
-        if (const auto partitions = ValidatePartitions(artifact, limits); partitions.HasError())
-            return Result<NavMeshData>::Failure(partitions.ErrorValue());
-
+        if (const auto valid = ValidateNavMeshArtifact(artifact, limits); valid.HasError())
+            return Result<NavMeshData>::Failure(valid.ErrorValue());
         return Result<NavMeshData>::Success(NavMeshData{artifact});
     }
 

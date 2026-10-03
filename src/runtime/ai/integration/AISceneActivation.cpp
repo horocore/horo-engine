@@ -1,5 +1,6 @@
 #include "Horo/AI/AISceneActivation.h"
 
+#include "AISceneRuntimeDetail.h"
 #include "Horo/AI/AIErrors.h"
 
 #include <algorithm>
@@ -23,26 +24,11 @@ namespace Horo::AI {
             return Result<void>::Failure(MakeError(descriptor, std::move(message)));
         }
 
-        struct AgentRuntimeState final {
-            AiAgentRuntimeRecord record;
-            std::unique_ptr<BlackboardInstance> blackboard;
-            std::unique_ptr<AiTaskLifecycle> task;
-            CancellationSource cancellation;
-            bool retired{};
-        };
-
-        struct EntityRefHash final {
-            [[nodiscard]] std::size_t operator()(const Runtime::EntityRef &entity) const noexcept {
-                std::size_t result = std::hash<std::uint64_t>{}(entity.runtime.value);
-                result ^= std::hash<std::uint32_t>{}(entity.entity.index) + static_cast<std::size_t>(0x9e3779b9U) + (result << 6U) +
-                          (result >> 2U);
-                result ^= std::hash<std::uint32_t>{}(entity.entity.generation) + static_cast<std::size_t>(0x9e3779b9U) + (result << 6U) +
-                          (result >> 2U);
-                return result;
-            }
-        };
-
-        [[nodiscard]] AgentRuntimeState *FindAgent(Detail::AiSceneRuntimeState &state, const AgentHandle handle) noexcept;
+        using Detail::AgentRuntimeState;
+        using Detail::CancelOwnedWork;
+        using Detail::EntityRefHash;
+        using Detail::FindAgent;
+        using Detail::ShutdownStateContents;
 
         [[nodiscard]] const AiControllerDescriptor *FindDescriptor(const std::span<const AiControllerDescriptor> descriptors,
                                                                    const ControllerTypeId controller) noexcept {
@@ -54,6 +40,30 @@ namespace Horo::AI {
             return (required.bits & ~available.bits) == 0;
         }
 
+        [[nodiscard]] Result<AiSceneActivationBinding> MakeBinding(const Runtime::RuntimeSceneView scene) {
+            if (!scene.IsCurrent() || !scene.RuntimeId().IsValid())
+                return Failure<AiSceneActivationBinding>(AIErrors::SceneActivationInvalid,
+                                                         "The RuntimeScene view is stale or has no valid runtime identity.");
+            const auto incarnation = AiRuntimeIncarnation::Create(scene.RuntimeId().value);
+            if (incarnation.HasError())
+                return Result<AiSceneActivationBinding>::Failure(incarnation.ErrorValue());
+            return Result<AiSceneActivationBinding>::Success(
+                AiSceneActivationBinding{.incarnation = incarnation.Value(), .scene = scene.RuntimeId()});
+        }
+    }  // namespace
+
+    namespace Detail {
+        /** @copydoc EntityRefHash::operator() */
+        std::size_t EntityRefHash::operator()(const Runtime::EntityRef &entity) const noexcept {
+            std::size_t result = std::hash<std::uint64_t>{}(entity.runtime.value);
+            result ^=
+                std::hash<std::uint32_t>{}(entity.entity.index) + static_cast<std::size_t>(0x9e3779b9U) + (result << 6U) + (result >> 2U);
+            result ^= std::hash<std::uint32_t>{}(entity.entity.generation) + static_cast<std::size_t>(0x9e3779b9U) + (result << 6U) +
+                      (result >> 2U);
+            return result;
+        }
+
+        /** @copydoc CancelOwnedWork */
         void CancelOwnedWork(AgentRuntimeState &agent) noexcept {
             agent.cancellation.RequestCancellation();
             if (agent.task) {
@@ -72,31 +82,8 @@ namespace Horo::AI {
             agent.record.stagedCapabilities = {};
         }
 
-        void ShutdownStateContents(Detail::AiSceneRuntimeState &state) noexcept;
-
-        [[nodiscard]] Result<AiSceneActivationBinding> MakeBinding(const Runtime::RuntimeSceneView scene) {
-            if (!scene.IsCurrent() || !scene.RuntimeId().IsValid())
-                return Failure<AiSceneActivationBinding>(AIErrors::SceneActivationInvalid,
-                                                         "The RuntimeScene view is stale or has no valid runtime identity.");
-            const auto incarnation = AiRuntimeIncarnation::Create(scene.RuntimeId().value);
-            if (incarnation.HasError())
-                return Result<AiSceneActivationBinding>::Failure(incarnation.ErrorValue());
-            return Result<AiSceneActivationBinding>::Success(
-                AiSceneActivationBinding{.incarnation = incarnation.Value(), .scene = scene.RuntimeId()});
-        }
-    }  // namespace
-
-    namespace Detail {
-        struct AiSceneRuntimeState final {
-            AiSceneActivationBinding binding;
-            std::vector<AgentRuntimeState> agents;
-            std::unordered_multimap<Runtime::EntityRef, std::size_t, EntityRefHash> agentsByOwner; /**< Stable owner-to-slot lookup. */
-            std::uint32_t nextTaskSlot{};
-        };
-    }  // namespace Detail
-
-    namespace {
-        [[nodiscard]] AgentRuntimeState *FindAgent(Detail::AiSceneRuntimeState &state, const AgentHandle handle) noexcept {
+        /** @copydoc FindAgent */
+        AgentRuntimeState *FindAgent(AiSceneRuntimeState &state, const AgentHandle handle) noexcept {
             if (!handle.IsValid() || handle.incarnation != state.binding.incarnation || handle.slot.index >= state.agents.size())
                 return nullptr;
             AgentRuntimeState &candidate = state.agents[handle.slot.index];
@@ -105,13 +92,16 @@ namespace Horo::AI {
             return &candidate;
         }
 
-        void ShutdownStateContents(Detail::AiSceneRuntimeState &state) noexcept {
+        /** @copydoc ShutdownStateContents */
+        void ShutdownStateContents(AiSceneRuntimeState &state) noexcept {
             for (AgentRuntimeState &agent : state.agents)
                 CancelOwnedWork(agent);
             state.agents.clear();
             state.agentsByOwner.clear();
         }
+    }  // namespace Detail
 
+    namespace {
         [[nodiscard]] Result<void> ValidateSceneInputs(const std::span<const AiSceneAgentDescriptor> agents,
                                                        const std::span<const AiControllerDescriptor> descriptors,
                                                        const AiSceneActivationBinding binding) {
@@ -145,6 +135,27 @@ namespace Horo::AI {
             }
         }
 
+        /** @brief Admitted schema metadata retained even while an agent is disabled. */
+        struct AgentSchemaPublication final {
+            std::shared_ptr<const BlackboardSchema> schema;
+            BlackboardInstanceBinding binding;
+        };
+
+        /** @brief Resolves an inert controller schema without activating the agent or mutating any catalog. */
+        [[nodiscard]] AgentSchemaPublication ResolveAgentSchema(const AiControllerDescriptor *descriptor,
+                                                                const std::optional<AiControllerComponent> &controller,
+                                                                const AgentHandle handle) {
+            if (descriptor == nullptr || !controller || ValidateAiControllerBinding(*controller, *descriptor).HasError())
+                return {};
+            const auto schema = descriptor->blackboardSchema;
+            return {.schema = schema,
+                    .binding = {.agent = handle,
+                                .schema = schema->Identity(),
+                                .schemaVersion = schema->Version(),
+                                .schemaGeneration = 1,
+                                .instanceGeneration = 1}};
+        }
+
         [[nodiscard]] Result<void> PrepareAgentRuntimeState(const AiSceneActivationBinding binding, const AiSceneAgentDescriptor &input,
                                                             const std::span<const AiControllerDescriptor> descriptors,
                                                             const AiCapabilitySet availableCapabilities, const std::uint32_t slotIndex,
@@ -154,16 +165,20 @@ namespace Horo::AI {
             const bool controllerStartup =
                 input.controller && input.controller->enabled && input.controller->startupPolicy == AiStartupPolicy::OnSceneActivation;
             const AgentHandle handle{binding.incarnation, Horo::Handle<AgentHandleTag>{slotIndex, 1}};
+            const AiControllerDescriptor *descriptor =
+                input.controller ? FindDescriptor(descriptors, input.controller->controller) : nullptr;
+            const auto schemaPublication = ResolveAgentSchema(descriptor, input.controller, handle);
             if (!sceneStartup || !controllerStartup) {
                 prepared.emplace(AgentRuntimeState{.record = AiAgentRuntimeRecord{.handle = handle,
                                                                                   .owner = input.owner,
                                                                                   .agent = input.agent,
                                                                                   .controller = input.controller,
-                                                                                  .state = AiAgentActivationState::Disabled}});
+                                                                                  .state = AiAgentActivationState::Disabled},
+                                                   .schema = schemaPublication.schema,
+                                                   .blackboardBinding = schemaPublication.binding});
                 return Result<void>::Success();
             }
 
-            const AiControllerDescriptor *descriptor = FindDescriptor(descriptors, input.controller->controller);
             if (descriptor == nullptr)
                 return Failure(AIErrors::ControllerDescriptorMissing,
                                "An enabled AI controller has no matching immutable activation descriptor.");
@@ -172,13 +187,7 @@ namespace Horo::AI {
             if (!HasCapabilities(availableCapabilities, input.controller->requiredCapabilities))
                 return Failure(AIErrors::CapabilityUnavailable, "An enabled AI controller requires an unavailable host capability.");
 
-            const auto schema = descriptor->blackboardSchema;
-            const BlackboardInstanceBinding blackboardBinding{.agent = handle,
-                                                              .schema = schema->Identity(),
-                                                              .schemaVersion = schema->Version(),
-                                                              .schemaGeneration = 1,
-                                                              .instanceGeneration = 1};
-            auto blackboard = BlackboardInstance::Create(blackboardBinding, schema);
+            auto blackboard = BlackboardInstance::Create(schemaPublication.binding, schemaPublication.schema);
             if (blackboard.HasError())
                 return Result<void>::Failure(blackboard.ErrorValue());
 
@@ -191,6 +200,8 @@ namespace Horo::AI {
                                                .state = AiAgentActivationState::Active,
                                                .hasBlackboard = true,
                                                .hasRunningTask = false},
+                .schema = schemaPublication.schema,
+                .blackboardBinding = schemaPublication.binding,
                 .blackboard = std::move(blackboard).Value(),
             });
             return Result<void>::Success();
@@ -343,6 +354,8 @@ namespace Horo::AI {
     Result<TaskHandle> AiSceneRuntime::StartTaskAtSafePoint(const AgentHandle agent, const TaskId taskDefinition) {
         if (shutdown_ || active_ == nullptr)
             return Failure<TaskHandle>(AIErrors::RuntimeUnavailable, "The AI scene runtime is not active.");
+        if (active_->revision == std::numeric_limits<std::uint64_t>::max())
+            return Result<TaskHandle>::Failure(MakeError(AIErrors::CanonicalRestoreStale, "The AI mutation revision is exhausted."));
         if (!taskDefinition.IsValid())
             return Failure<TaskHandle>(AIErrors::TaskContextInvalid, "An AI task requires a valid persistent task identity.");
         if (const Result<void> valid = ValidateAiRuntimeHandle(agent, active_->binding.incarnation); valid.HasError())
@@ -364,6 +377,7 @@ namespace Horo::AI {
                                                         .cancellation = slot->cancellation.Token()});
             started.HasError())
             return Result<TaskHandle>::Failure(started.ErrorValue());
+        ++active_->revision;
         slot->task = std::move(lifecycle);
         slot->record.hasRunningTask = true;
         return Result<TaskHandle>::Success(task);
@@ -373,6 +387,8 @@ namespace Horo::AI {
     Result<void> AiSceneRuntime::DisableAtSafePoint(const AgentHandle agent) {
         if (shutdown_ || active_ == nullptr)
             return Failure(AIErrors::RuntimeUnavailable, "The AI scene runtime is not active.");
+        if (active_->revision == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(AIErrors::CanonicalRestoreStale, "The AI mutation revision is exhausted."));
         if (const Result<void> valid = ValidateAiRuntimeHandle(agent, active_->binding.incarnation); valid.HasError())
             return valid;
         AgentRuntimeState *slot = FindAgent(*active_, agent);
@@ -380,6 +396,7 @@ namespace Horo::AI {
             return Failure(AIErrors::HandleInvalid, "The AI agent handle is stale or retired.");
         if (slot->record.state == AiAgentActivationState::Disabled)
             return Result<void>::Success();
+        ++active_->revision;
         CancelOwnedWork(*slot);
         slot->record.state = AiAgentActivationState::Disabled;
         return Result<void>::Success();
@@ -389,6 +406,8 @@ namespace Horo::AI {
     Result<std::size_t> AiSceneRuntime::RetireOwnerAtSafePoint(const Runtime::EntityRef owner) {
         if (shutdown_ || active_ == nullptr)
             return Failure<std::size_t>(AIErrors::RuntimeUnavailable, "The AI scene runtime is not active.");
+        if (active_->revision == std::numeric_limits<std::uint64_t>::max())
+            return Result<std::size_t>::Failure(MakeError(AIErrors::CanonicalRestoreStale, "The AI mutation revision is exhausted."));
         if (!owner.IsValid() || owner.runtime != active_->binding.scene)
             return Failure<std::size_t>(AIErrors::HandleInvalid, "The AI entity owner is stale or belongs to another scene.");
         std::size_t retired = 0;
@@ -402,6 +421,8 @@ namespace Horo::AI {
             slot.retired = true;
             ++retired;
         }
+        if (retired != 0)
+            ++active_->revision;
         return Result<std::size_t>::Success(retired);
     }
 

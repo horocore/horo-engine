@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "UiControlsInternal.h"
 
+#include <cmath>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -85,19 +86,20 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiControlStateMachine::Handle */
-    Result<UiControlEventResult> UiControlStateMachine::Handle(UiControlInput input) {
+    Result<UiControlEventResult> UiControlStateMachine::Handle(const UiControlInput &input) {
+        using enum UiControlInputKind;
         if (!storage_ || storage_->lifecycle != UiControlLifecycleState::Active)
             return Failure<UiControlEventResult>(UiErrors::ControlLifecycleUnavailable);
         if (!input.IsValid() || !UiControlDetail::IsPressSource(input.kind, input.activationSource) ||
-            ((input.kind == UiControlInputKind::TextInput) && !UiControlDetail::IsValidControlText(input.text)) ||
-            (input.kind != UiControlInputKind::TextInput && input.text.size != 0))
+            ((input.kind == TextInput) && !UiControlDetail::IsValidControlText(input.text)) ||
+            (input.kind != TextInput && input.text.size != 0))
             return Failure<UiControlEventResult>(UiErrors::ControlInputInvalid);
-        const UiControlDescriptorBase &base = UiControlDetail::BaseOf(storage_->descriptor);
-        if (input.source.owner != base.owner || input.source.element != base.element)
+        if (const UiControlDescriptorBase &base = UiControlDetail::BaseOf(storage_->descriptor);
+            input.source.owner != base.owner || input.source.element != base.element)
             return Failure<UiControlEventResult>(UiErrors::ControlSourceStale);
         if (input.sequence <= storage_->lastSequence || (input.tick != 0 && input.tick < storage_->lastTick))
             return Failure<UiControlEventResult>(UiErrors::ControlSequenceInvalid);
-        if (storage_->pending && input.kind != UiControlInputKind::Cancel && input.kind != UiControlInputKind::FocusLost)
+        if (storage_->pending && input.kind != Cancel && input.kind != FocusLost)
             return Failure<UiControlEventResult>(UiErrors::ControlDefaultPending);
         const auto transition = storage_->ApplyInput(input);
         if (transition.HasError())
@@ -108,8 +110,8 @@ namespace Horo::Runtime::Ui {
         return Result<UiControlEventResult>::Success({transition.Value(), storage_->state, storage_->pending});
     }
 
-    /** @copydoc UiControlStateMachine::ApplyDefault */
-    Result<std::optional<UiControlDefaultAction>> UiControlStateMachine::ApplyDefault() {
+    /** @copydoc UiControlStateMachine::PeekDefault */
+    Result<std::optional<UiControlDefaultAction>> UiControlStateMachine::PeekDefault() const {
         if (!storage_ || storage_->lifecycle != UiControlLifecycleState::Active)
             return Failure<std::optional<UiControlDefaultAction>>(UiErrors::ControlLifecycleUnavailable);
         if (!storage_->pending)
@@ -149,16 +151,25 @@ namespace Horo::Runtime::Ui {
         if (!action.IsValid())
             return Failure<std::optional<UiControlDefaultAction>>(UiErrors::ControlDefaultInvalid);
 
-        if (storage_->pendingDefault.kind == UiControlDetail::PendingKind::Toggle)
+        return Result<std::optional<UiControlDefaultAction>>::Success(std::optional<UiControlDefaultAction>{std::move(action)});
+    }
+
+    /** @copydoc UiControlStateMachine::ApplyDefault */
+    Result<std::optional<UiControlDefaultAction>> UiControlStateMachine::ApplyDefault() {
+        using enum UiControlDetail::PendingKind;
+        auto action = PeekDefault();
+        if (action.HasError() || !action.Value().has_value())
+            return action;
+
+        if (storage_->pendingDefault.kind == Toggle)
             std::get<UiToggleControlState>(storage_->state).checked = !std::get<UiToggleControlState>(storage_->state).checked;
-        else if (storage_->pendingDefault.kind == UiControlDetail::PendingKind::ValueChanged)
+        else if (storage_->pendingDefault.kind == ValueChanged)
             std::get<UiSliderControlState>(storage_->state).value = storage_->pendingDefault.value;
-        else if (storage_->pendingDefault.kind == UiControlDetail::PendingKind::Submit &&
-                 std::get<UiTextInputControlDescriptor>(storage_->descriptor).submitEndsEditing)
+        else if (storage_->pendingDefault.kind == Submit && std::get<UiTextInputControlDescriptor>(storage_->descriptor).submitEndsEditing)
             std::get<UiTextInputControlState>(storage_->state).editing = false;
 
         storage_->pending = false;
-        return Result<std::optional<UiControlDefaultAction>>::Success(std::optional<UiControlDefaultAction>{std::move(action)});
+        return action;
     }
 
     /** @copydoc UiControlStateMachine::SuppressDefault */
@@ -169,19 +180,86 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
-    /** @copydoc UiControlStateMachine::SetAvailability */
-    Result<void> UiControlStateMachine::SetAvailability(const UiControlAvailability availability) {
+    /** @copydoc UiControlStateMachine::ReconcileValue */
+    Result<void> UiControlStateMachine::ReconcileValue(const UiActionValue &value) {
+        using enum UiControlKind;
         if (!storage_ || storage_->lifecycle != UiControlLifecycleState::Active)
             return Failure(UiErrors::ControlLifecycleUnavailable);
-        if (!IsKnown(availability, UiControlAvailability::Count))
+        switch (Kind()) {
+            case Toggle: {
+                const auto *checked = std::get_if<bool>(&value);
+                if (!checked)
+                    return Failure(UiErrors::ControlInputInvalid);
+                std::get<UiToggleControlState>(storage_->state).checked = *checked;
+                break;
+            }
+            case Slider: {
+                const auto *scalar = std::get_if<double>(&value);
+                if (const auto &descriptor = std::get<UiSliderControlDescriptor>(storage_->descriptor);
+                    !scalar || !std::isfinite(*scalar) || *scalar < descriptor.minimum || *scalar > descriptor.maximum)
+                    return Failure(UiErrors::ControlInputInvalid);
+                std::get<UiSliderControlState>(storage_->state).value = *scalar;
+                break;
+            }
+            case TextInput: {
+                const auto *text = std::get_if<UiActionText>(&value);
+                if (const auto &descriptor = std::get<UiTextInputControlDescriptor>(storage_->descriptor);
+                    !text || !UiControlDetail::IsValidControlText(*text) || text->size > descriptor.maximumTextBytes)
+                    return Failure(UiErrors::ControlInputInvalid);
+                std::get<UiTextInputControlState>(storage_->state).text = *text;
+                storage_->editStartText = *text;
+                break;
+            }
+            case Button:
+            case Count:
+                return Failure(UiErrors::ControlInputInvalid);
+        }
+        storage_->ClearTransient(false);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiControlStateMachine::SetAvailability */
+    Result<void> UiControlStateMachine::SetAvailability(const UiControlAvailability availability) {
+        using enum UiControlAvailability;
+        if (!storage_ || storage_->lifecycle != UiControlLifecycleState::Active)
+            return Failure(UiErrors::ControlLifecycleUnavailable);
+        if (!IsKnown(availability, Count) || availability == Busy)
             return Failure(UiErrors::ControlInputInvalid);
-        if (availability == UiControlAvailability::Disabled) {
+        storage_->configuredAvailability = availability;
+        const auto effective = availability == Enabled && storage_->asyncAction && storage_->asyncAction->Busy() ? Busy : availability;
+        if (availability == Disabled) {
             storage_->ClearTransient(true);
-            storage_->SetAvailabilityProjection(availability);
+            storage_->SetAvailabilityProjection(effective);
         } else {
-            storage_->SetAvailabilityProjection(availability);
+            storage_->SetAvailabilityProjection(effective);
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc UiControlStateMachine::ObserveAsyncActions */
+    Result<void> UiControlStateMachine::ObserveAsyncActions(const UiAsyncActionStore &actions) {
+        if (!storage_ || storage_->lifecycle != UiControlLifecycleState::Active)
+            return Failure(UiErrors::ControlLifecycleUnavailable);
+        const auto &base = UiControlDetail::BaseOf(storage_->descriptor);
+        auto projected = actions.Project({base.owner, base.element});
+        if (projected.HasError())
+            return Result<void>::Failure(projected.ErrorValue());
+        const bool busy = projected.Value() && projected.Value()->Busy();
+        if (busy)
+            storage_->ClearTransient(false);
+        storage_->asyncAction = std::move(projected).Value();
+        const auto effective = storage_->configuredAvailability == UiControlAvailability::Enabled && busy
+                                   ? UiControlAvailability::Busy
+                                   : storage_->configuredAvailability;
+        storage_->SetAvailabilityProjection(effective);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiControlStateMachine::AsyncAction */
+    Result<std::optional<UiAsyncActionSnapshot>> UiControlStateMachine::AsyncAction() const {
+        if (!storage_ || storage_->lifecycle == UiControlLifecycleState::Stopped)
+            return Failure<std::optional<UiAsyncActionSnapshot>>(UiErrors::ControlLifecycleUnavailable);
+        return Result<std::optional<UiAsyncActionSnapshot>>::Success(storage_->asyncAction);
     }
 
     /** @copydoc UiControlStateMachine::BeginRetirement */
@@ -190,6 +268,7 @@ namespace Horo::Runtime::Ui {
             return Failure(UiErrors::ControlLifecycleUnavailable);
         storage_->ClearTransient(true);
         storage_->lifecycle = UiControlLifecycleState::Retiring;
+        storage_->asyncAction.reset();
         return Result<void>::Success();
     }
 
@@ -200,5 +279,6 @@ namespace Horo::Runtime::Ui {
         storage_->ClearTransient(true);
         storage_->SetAvailabilityProjection(UiControlAvailability::Disabled);
         storage_->lifecycle = UiControlLifecycleState::Stopped;
+        storage_->asyncAction.reset();
     }
 }  // namespace Horo::Runtime::Ui

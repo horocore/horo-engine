@@ -635,6 +635,13 @@ Horo's typed error domains.
 Detailed failure identity remains in the structured Horo error code. Shell
 scripts should not infer domain details from prose.
 
+The registry-backed reference implementation is
+`Horo::Hosts::TranslateCliError`, with exact composition-root mappings in
+`ErrorTranslator`. It emits schema version 1, a numeric `exitCode` and the shared
+canonical `error` payload. Mapping and disclosure rules, including the Python
+exception categories, are specified by
+[Host Translation](../foundation/error-and-diagnostics.md#host-translation).
+
 ## CLI And Data Bus
 
 Commands call use cases directly and receive typed results. They may subscribe

@@ -208,6 +208,51 @@ TEST_CASE("Delta metadata rejects missing full packages and ambiguous base ident
     CHECK(SignedUpdateManifest::ParseCanonical(document.dump()).HasError());
 }
 
+TEST_CASE("Release notes and compatibility impacts are bounded signed manifest content", "[release][update]") {
+    auto data = ManifestData();
+    data.releaseNotes = "Improved editor stability.\nProject files stay unchanged.";
+    data.compatibilityImpacts = {"Plugin API revision 2 is required."};
+    const auto manifest = SignedManifest(data);
+    auto parsed = SignedUpdateManifest::ParseCanonical(manifest.CanonicalDocument());
+    REQUIRE(parsed.HasValue());
+    CHECK(parsed.Value().Data().releaseNotes == data.releaseNotes);
+    CHECK(parsed.Value().Data().compatibilityImpacts == data.compatibilityImpacts);
+    CHECK(VerifyUpdateManifest(parsed.Value(), Context(), Root(), std::make_shared<TestSignatureProvider>()).HasValue());
+
+    auto tampered = nlohmann::json::parse(manifest.CanonicalDocument());
+    tampered["manifest"]["releaseNotes"] = "Untrusted instructions";
+    auto tamperedManifest = SignedUpdateManifest::ParseCanonical(tampered.dump());
+    REQUIRE(tamperedManifest.HasValue());
+    CHECK(tamperedManifest.Value().CanonicalPayload() != manifest.CanonicalPayload());
+    data.releaseNotes.assign(32U * 1024U + 1U, 'x');
+    CHECK(BuildCanonicalUpdatePayload(data).HasError());
+    data.releaseNotes.clear();
+    data.compatibilityImpacts.assign(17U, "impact");
+    CHECK(BuildCanonicalUpdatePayload(data).HasError());
+    data.compatibilityImpacts.clear();
+    data.releaseNotes = std::string{"safe\0hidden", 11U};
+    CHECK(BuildCanonicalUpdatePayload(data).HasError());
+    data.releaseNotes.clear();
+    data.compatibilityImpacts = {std::string{"safe\0hidden", 11U}};
+    CHECK(BuildCanonicalUpdatePayload(data).HasError());
+}
+
+TEST_CASE("Delta manifests retain signed presentation fields", "[release][update][delta]") {
+    auto data = DeltaManifestData();
+    data.releaseNotes = "Verified delta update.";
+    data.compatibilityImpacts = {"Plugin compatibility must be checked."};
+    data.minimumAllowedVersion = data.version;
+    const auto manifest = SignedManifest(data);
+    auto parsed = SignedUpdateManifest::ParseCanonical(manifest.CanonicalDocument());
+    REQUIRE(parsed.HasValue());
+    CHECK(parsed.Value().Data().releaseNotes == data.releaseNotes);
+    CHECK(parsed.Value().Data().compatibilityImpacts == data.compatibilityImpacts);
+    CHECK(parsed.Value().Data().deltas.size() == 1U);
+    auto document = nlohmann::json::parse(manifest.CanonicalDocument());
+    document["manifest"]["unknown"] = "rejected";
+    CHECK(SignedUpdateManifest::ParseCanonical(document.dump()).HasError());
+}
+
 TEST_CASE("Update metadata rejects stale, wrong-target and rollback candidates", "[release][update]") {
     const auto manifest = SignedManifest();
     auto roots = Root();

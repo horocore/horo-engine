@@ -17,6 +17,9 @@
 #include <optional>
 
 namespace Horo::AI {
+    struct PerceptionEventDelivery;
+    class PerceptionDescriptorRegistry;
+    class PerceptionEventAdmission;
     /** @brief Hard storage ceiling for one agent's remembered stimuli. */
     inline constexpr std::size_t MaximumPerceptionMemoryEntries = 32;
 
@@ -68,11 +71,13 @@ namespace Horo::AI {
         PerceptionMemoryKey key;
         Math::WorldCoordinate64 position;
         std::array<double, 3> velocity{}; /**< World velocity in meters per simulation second. */
+        PerceptionSourceRef provenance;   /**< Optional generation-safe emitter; defaults to key source at admission. */
     };
 
     /** @brief Immutable value record safe to hand to decisions without exposing mutable memory storage. */
     struct PerceivedStimulus final {
         PerceptionMemoryKey key;
+        PerceptionSourceRef provenance; /**< Weak event emitter identity; never a live entity or durable squad fact. */
         Math::WorldCoordinate64 lastKnownPosition;
         std::array<double, 3> lastKnownVelocity{};
         std::uint64_t firstSensedTick{}; /**< First committed simulation tick in this memory lifetime. */
@@ -118,7 +123,7 @@ namespace Horo::AI {
          * @param observation Typed weak source and last-known spatial facts.
          * @param simulationTick Current committed fixed simulation tick, not a frame or wall clock.
          * @return Success or a typed invalid observation/time failure. At a listener or profile cap the weakest, then oldest
-         * record within the exhausted scope is evicted.
+         * record within the exhausted scope is evicted. Team sense/stimulus observations require Gameplay event admission.
          */
         [[nodiscard]] Result<void> Observe(const PerceptionObservation &observation, std::uint64_t simulationTick);
 
@@ -177,10 +182,20 @@ namespace Horo::AI {
         [[nodiscard]] std::size_t ListenerCapacity() const noexcept;
         /** @brief Returns the scene-owned agent identity. @return Exact admitted agent handle. */
         [[nodiscard]] AgentHandle Agent() const noexcept;
+        /** @brief Returns the exact RuntimeScene identity owning this memory. @return Non-zero scene incarnation. */
+        [[nodiscard]] std::uint64_t SceneIncarnation() const noexcept;
         /** @brief Returns currently stored record count, before a new time/liveness query. @return At most Capacity(). */
         [[nodiscard]] std::size_t StoredCount() const noexcept;
 
     private:
+        friend Result<void> RouteGameplayPerceptionEvent(const PerceptionEventDelivery &, const PerceptionDescriptorRegistry &,
+                                                         const PerceptionEventAdmission &, AIPerceptionMemory &);
+        /** @brief Refreshes one observation after event authority admission where required. */
+        [[nodiscard]] Result<void> ObserveAdmitted(const PerceptionObservation &observation, std::uint64_t simulationTick);
+        /** @brief Validates optional provenance without accepting a partial weak reference. */
+        [[nodiscard]] bool ValidObservation(const PerceptionObservation &observation) const noexcept;
+        /** @brief Evicts the weakest oldest record within the exhausted listener or profile scope. */
+        void EvictFor(PerceptionListenerTypeId listener) noexcept;
         AIPerceptionMemory(std::uint64_t sceneIncarnation, AgentHandle agent, const PerceptionMemoryPolicy &policy,
                            std::uint64_t initialSimulationTick) noexcept;
         [[nodiscard]] bool ValidKey(const PerceptionMemoryKey &key) const noexcept;

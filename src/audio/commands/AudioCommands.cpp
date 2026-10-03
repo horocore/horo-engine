@@ -51,9 +51,24 @@ namespace Horo::Audio {
                 return Handle(command.voice);
             }
 
+            /** @brief Validate typed playback intent while leaving state/PCM bounds to the playback owner. */
+            bool operator()(const AudioVoiceControlRequest &command) const noexcept {
+                return Handle(command.voice) && ValidateAudioVoiceControlRequest(command);
+            }
+
             /** @brief Reject malformed parameter targets and nonfinite model values. */
             bool operator()(const AudioSetParameterCommand &command) const noexcept {
                 return Handle(command.voice) && command.parameter.IsValid() && std::isfinite(command.value);
+            }
+
+            /** @brief Check owned automation values without resolving the target or smoothing policy. */
+            bool operator()(const AudioAutomateParameterCommand &command) const noexcept {
+                return command.request.address.owner == owner && IsValidAudioAutomationRequest(command.request);
+            }
+
+            /** @brief Cancellation carries the exact sample-clock generation even when the ID is no longer active. */
+            bool operator()(const AudioCancelAutomationCommand &command) const noexcept {
+                return command.requestId != 0 && command.clockGeneration != 0 && command.discontinuityRevision != 0;
             }
 
             /** @brief Validate prepared graph storage without resolving or adopting it. */
@@ -110,6 +125,9 @@ namespace Horo::Audio {
     /** @copydoc ClassifyAudioCommand */
     AudioCommandClass ClassifyAudioCommand(const AudioCommand &command) noexcept {
         const bool critical = std::holds_alternative<AudioStopVoiceCommand>(command.payload) ||
+                              (std::holds_alternative<AudioVoiceControlRequest>(command.payload) &&
+                               (std::get<AudioVoiceControlRequest>(command.payload).control == AudioVoiceControl::Stop ||
+                                std::get<AudioVoiceControlRequest>(command.payload).control == AudioVoiceControl::Cancel)) ||
                               std::holds_alternative<AudioReleaseResourceCommand>(command.payload) ||
                               std::holds_alternative<AudioSceneUnloadCommand>(command.payload) ||
                               std::holds_alternative<AudioResetCommand>(command.payload) ||

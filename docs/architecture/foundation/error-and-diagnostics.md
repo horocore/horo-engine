@@ -492,6 +492,83 @@ create an implicit conversion or control-flow contract.
 
 ## Host Translation
 
+### Reference Translation Scope (ERR-001.5)
+
+`HoroEngine::HostErrors` owns `Horo/Hosts/ErrorTranslation.h`. Composition roots
+create an `ErrorTranslator` with the active `ErrorCodeRegistry` snapshot and an
+explicit `(domain, code, ExitCategory)` mapping for each exposed application
+failure. The translator copies the mapping table and retains the immutable
+registry. Duplicate, undeclared or invalid mappings fail construction. A missing
+outer mapping or undeclared cause or diagnostic fails translation; hosts must treat this as a
+contract violation rather than synthesize a business error. Matching is exact:
+neither message text, namespace prefixes nor cause text determine classification.
+
+Translation is a tooling/workflow boundary, never a frame-hot or audio callback
+operation. It allocates owned presentation values. Each admitted chain contains
+at most 16 error nodes, with at most 64 diagnostics per node and 4096 UTF-8 bytes
+per disclosed field. Bounds are checked before publication; exceeding them rejects
+the projection rather than silently truncating its meaning. Every cause resolves
+against the same snapshot. Severity may be lowered below a non-critical
+descriptor default but never raised above it; critical descriptors cannot be
+downgraded. The category describes presentation only, and the application-owned
+identity remains the branching contract.
+
+The translated value is immutable, so its typed detail and canonical JSON cannot
+drift after publication. Each diagnostic resolves in its containing error's
+domain, with the same severity bounds as an error descriptor.
+The default `ErrorDetail::Public` uses registered summaries and preserves
+diagnostic identity, severity and order, while replacing operation messages and
+clearing source details. `TrustedLocal` retains bounded operation text and diagnostic
+locations; callers select it only for an authorized local recipient. Registry
+summaries and remediation are module-declared public copy. A host must never
+select trusted disclosure based on untrusted request arguments.
+
+All reference adapters use the same canonical payload: `domain`, `code`, textual
+`severity`, `message`, ordered `diagnostics`, `metadata` and a nested `cause` or
+null. Diagnostic fields are `code`, textual `severity`, `message`, `location`
+(`source`, `line`, `column`) and `path`. Error severities serialize as `info`,
+`warning`, `error`, `fatal`; diagnostic severities as `note`, `warning`, `error`,
+`fatal`. The current C++ `Error` has no typed metadata collection, so `metadata`
+is always an empty object; adapters do not manufacture fields from messages.
+
+`TranslateGuiError` retains the canonical payload and chooses the requested inline,
+notification or workflow surface; critical errors force `FatalDialog`.
+`NotificationService::PublishApplicationError` connects that shared detail to the
+existing editor notification event, with caller-localized display copy and an
+owned `errorDetail`. It maps only visual severity and makes critical notifications
+sticky. The workflow remains responsible for presenting the fatal dialog and
+handling the operation result. Publishing never retries or changes that result.
+
+`TranslateCliError` supplies stderr text, a stable exit category and a version-one
+envelope `{schemaVersion: 1, exitCode: <category>, error: <canonical payload>}`.
+The process host writes the human text to stderr and returns the category.
+`TranslateMcpError` returns a JSON-RPC engine error object with code `-32000`, a
+registered summary and the identical canonical payload in `data`; the transport
+adds request identity and the JSON-RPC outer envelope. Protocol parse/admission
+errors remain separate from these valid-request application failures.
+
+The Python edge `scripts/horo_errors.py::raise_application_error` consumes the
+version-one CLI envelope and raises one `HoroError` subclass. Exit mappings are
+stable: `2` → `HoroUsageError`, `3` → `HoroValidationError`, `4` →
+`HoroCapabilityError`, `5` → `HoroOperationError`, `6` → `HoroPermissionError`,
+`7` → `HoroCancelledError`, `8` → `HoroTimeoutError`, `10` → `HoroInvariantError`.
+Every subclass exposes the original `domain`, `code`, `severity`, `message`,
+`diagnostics`, `metadata`, nested `cause`, owned `payload` and `exit_code`.
+Malformed or unsupported protocol envelopes raise Python `ValueError` rather
+than acquiring an application error identity. Exit `0`, pre-initialization exit
+`1`, and native process signals are outside this application-failure contract.
+
+This is an additive reference contract. Existing GUI workflows keep their
+localized copy and opt into shared details through `PublishApplicationError`.
+Existing CLI dispatch returns typed application outcomes and can opt into this
+presentation at its process boundary. The earlier MCP `SafeErrorData` identity
+projection is a bounded transport/lifecycle format, not the canonical application
+schema; callers migrating application-error output must supply an active registry
+and exact mapping scope, then use `TranslateMcpError`. Existing wire consumers
+must explicitly version their adoption rather than interpreting one format as
+the other. No native Python binding runtime is required: tooling consumes actual
+C++ output, covered by `HoroHostErrorPythonParity`.
+
 ### GUI
 
 The GUI maps errors into inline field diagnostics, non-blocking notifications,

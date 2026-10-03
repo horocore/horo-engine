@@ -156,6 +156,9 @@ namespace Horo::Physics {
         if (snapshot.completedTick != expectedCompletedTick || snapshot.sceneGeneration != expectedSceneGeneration)
             return Result<void>::Failure(
                 MakeError(PhysicsErrors::QuerySnapshotStale, "Dynamic transform snapshot is not from the completed admission tick."));
+        if (snapshot.state.activity == PhysicsBodyActivity::Static)
+            return Result<void>::Failure(
+                MakeError(PhysicsErrors::DescriptorInvalid, "A dynamic snapshot cannot describe static activity."));
         return ValidatePhysicsBodyState(snapshot.state, expectedWorld);
     }
 

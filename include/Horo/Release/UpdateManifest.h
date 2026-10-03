@@ -49,6 +49,8 @@ namespace Horo::Release {
         std::uint32_t minimumUpdaterVersion{};
         std::uint64_t minimumRootRevision{};
         std::optional<ReleaseProductVersion> minimumAllowedVersion;
+        std::string releaseNotes;                      /**< Optional signed plain-text notes, bounded to 32 KiB. */
+        std::vector<std::string> compatibilityImpacts; /**< Optional signed user-visible impact summaries. */
         std::vector<UpdatePackageRecord> packages;
         std::vector<UpdateDeltaPackageRecord> deltas; /**< Empty for schema-v1 full-package-only manifests. */
     };
