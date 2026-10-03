@@ -1,9 +1,7 @@
 #include "Horo/PlatformServices/PlatformProviderAdmission.h"
 
 #include "Horo/Extensions/ExtensionErrors.h"
-#include "Horo/PlatformServices/PlatformRequestErrors.h"
-#include "Horo/PlatformServices/PlatformServiceErrors.h"
-#include "Horo/PlatformServices/PlatformServicesFrontend.h"
+#include "PlatformProviderCandidateState.h"
 
 #include <algorithm>
 #include <array>
@@ -84,24 +82,6 @@ namespace Horo::PlatformServices {
             return descriptor;
         }
     }  // namespace
-
-    struct PlatformProviderCandidateState final {
-        std::mutex mutex;  // Protects admission, lease count and native retirement state; callbacks run outside it.
-        std::weak_ptr<PlatformProviderRetirementState> retirement;
-        std::shared_ptr<void> moduleCodeLease;
-        PlatformProviderContributionDescriptor descriptor;
-        PlatformProviderId provider;
-        void *candidate{};
-        HoroPlatformProviderRetireFunc retire{};
-        HoroPlatformProviderDestroyFunc destroy{};
-        HoroPlatformProviderOperations operations{};
-        std::thread::id ownerThread;
-        std::size_t leaseCount{};
-        bool backendActive{};
-        bool revoked{};
-        bool retiring{};
-        bool retired{};
-    };
 
     struct PlatformProviderRetirementState final {
         std::mutex mutex;  // Protects bounded candidate list and publication closure; never held during native calls.

@@ -62,6 +62,19 @@ Public placement is a compatibility commitment, not merely a convenient include
 path. Moving a source header into `include/Horo/` requires a stable owner, a narrow
 contract, Doxygen documentation, migration notes, and consumer coverage.
 
+## PLS-002.5 Product Composition Boundary
+
+`HoroEngine::PlatformServices` owns the additive
+`Horo/PlatformServices/PlatformServicesComposition.h` host contract. No existing
+frontend caller or provider ABI/profile bit changes. Hosts opting into product policy
+supply an immutable configuration, verified product evidence, a fresh generation and
+one exact exclusively owned backend factory. `PlatformProjectConfiguration::SelectedServices`
+now exposes the already validated selected manifest claims; it is not a second policy
+registry. Existing provider lifecycle callers must use a configuration whose profile
+matches the admission owner. Generated `HoroPlatformServicesPublicHeaderConsumer` and
+`HoroPlatformServicesExtensionPublicHeaderConsumer` targets verify the staged headers;
+the standalone composition test target links only PlatformServices and test support.
+
 ## ERR-001.5 Host Translation Boundary
 
 `HoroEngine::HostErrors` solely owns the additive public

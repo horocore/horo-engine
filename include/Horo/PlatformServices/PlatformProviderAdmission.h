@@ -225,6 +225,7 @@ namespace Horo::PlatformServices {
         [[nodiscard]] PlatformProviderRetirementDisposition FinalizeOnOwnerThread() noexcept;
 
     private:
+        friend class PlatformProviderLifecycleHost;
         Extensions::ApplicationCapabilityRegistry &capabilities_;
         Extensions::BackendServiceRegistry &services_;
         Extensions::ExtensionAdmissionPolicy policy_;

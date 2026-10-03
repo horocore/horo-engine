@@ -209,8 +209,9 @@ namespace Horo::PlatformServices {
         for (const auto timeout : requestPolicy.timeouts)
             if (timeout <= std::chrono::milliseconds::zero() || timeout > std::chrono::hours{24})
                 return HostResult::Failure(MakeError(RequestErrors::InvalidConfiguration));
-        if (configuration.UsesNullProvider() || !configuration.SelectedProvider() || !configuration.SelectedModule() ||
-            identity.moduleId != configuration.SelectedModule()->value || identity.providerId != configuration.SelectedProviderKey())
+        if (configuration.Profile() != admission.profile_ || configuration.UsesNullProvider() || !configuration.SelectedProvider() ||
+            !configuration.SelectedModule() || identity.moduleId != configuration.SelectedModule()->value ||
+            identity.providerId != configuration.SelectedProviderKey())
             return HostResult::Failure(MakeError(PlatformProviderLifecycleErrors::InvalidSelection));
         auto created = admission.CreateExact(identity, authority, versions, context.consumerExtensionId, context.consumerModuleId,
                                              context.consumerGeneration);
@@ -220,6 +221,7 @@ namespace Horo::PlatformServices {
         const auto &descriptor = candidate.Descriptor();
         const auto requiredMask = RequiredMask(configuration);
         if (descriptor.provider != *configuration.SelectedProvider() || descriptor.owner != identity ||
+            (static_cast<std::uint32_t>(descriptor.profiles) & (1U << static_cast<std::uint32_t>(configuration.Profile()))) == 0 ||
             (requiredMask & ~ClaimedMask(descriptor)) != 0)
             return HostResult::Failure(MakeError(PlatformProviderLifecycleErrors::InvalidSelection));
         const auto operations = candidate.Operations();

@@ -1,5 +1,14 @@
 #include "PlatformProviderLifecycleTestSupport.h"
 
+TEST_CASE("Configuration cannot reuse a provider admitted under another host profile", "[platform-services][lifecycle]") {
+    Rig rig;
+    rig.Publish();
+    const auto started = rig.Start({}, PlatformServicesHostProfile::InteractiveDevelopment);
+    REQUIRE(started.HasError());
+    CHECK(started.ErrorValue().code.Value() == PlatformProviderLifecycleErrors::InvalidSelection.code.Value());
+    CHECK(horo_test_provider_event_count(rig.audit.get()) == 0);
+}
+
 TEST_CASE("Exact selection never substitutes another provider", "[platform-services][lifecycle]") {
     Rig rig;
     rig.Publish();
