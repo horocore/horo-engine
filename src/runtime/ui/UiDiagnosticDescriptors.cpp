@@ -133,6 +133,11 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::ActionResultStale,
             &UiErrors::ActionHandlerFailed,
             &UiErrors::ActionLifecycleUnavailable,
+            &UiErrors::AsyncActionCapacityExceeded,
+            &UiErrors::AsyncActionBusy,
+            &UiErrors::AsyncActionProgressInvalid,
+            &UiErrors::AsyncActionAlreadyTerminal,
+            &UiErrors::AsyncActionFailureInvalid,
             &UiErrors::NavigationInvalid,
         };
         const std::array bindings{
@@ -140,7 +145,7 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::BindingProviderUnknown,    &UiErrors::BindingPropertyUnknown, &UiErrors::BindingPropertySignatureMismatch,
             &UiErrors::BindingDescriptorConflict, &UiErrors::BindingAccessInvalid,   &UiErrors::BindingTypeMismatch,
             &UiErrors::BindingConverterInvalid,   &UiErrors::BindingFallbackInvalid, &UiErrors::BindingUpdatePolicyInvalid,
-            &UiErrors::BindingCapacityExceeded,
+            &UiErrors::BindingCapacityExceeded,   &UiErrors::BindingValueInvalid,    &UiErrors::BindingLifecycleUnavailable,
         };
         const std::array pointerCapture{
             &UiErrors::PointerCaptureInvalid, &UiErrors::PointerCaptureSourceStale,      &UiErrors::PointerCaptureInteractionStale,

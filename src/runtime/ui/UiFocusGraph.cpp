@@ -4,6 +4,16 @@ namespace Horo::Runtime::Ui {
     using FocusGraphDetail::DirectionIndex;
     using FocusGraphDetail::IsKnown;
 
+    namespace {
+        /** @brief Requires one complete same-owner inclusive root for an active modal activation. */
+        bool ValidModalState(const UiFocusSnapshot &state) noexcept {
+            if (state.modalDepth == 0)
+                return !state.activeModal && !state.modalRoot;
+            return state.activeModal && state.activeModal->IsValid() && state.modalRoot && state.modalRoot->IsValid() &&
+                   state.modalRoot->element.ownership == state.owner.instance.ownership;
+        }
+    }  // namespace
+
     /** @copydoc UiFocusScope::IsValid */
     bool UiFocusScope::IsValid(const UiOwnershipGeneration expectedOwnership) const noexcept {
         if (!expectedOwnership.IsValid() || !presentationLayer.IsValid() || presentationLayer.ownership != expectedOwnership)
@@ -89,8 +99,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiFocusSnapshot::IsValid */
     bool UiFocusSnapshot::IsValid() const noexcept {
-        return owner.IsValid() && (!focused.has_value() || focused->IsValid()) && (!activeModal.has_value() || activeModal->IsValid()) &&
-               modalDepth <= MaximumUiFocusModalDepth &&
-               ((modalDepth == 0 && !activeModal.has_value()) || (modalDepth != 0 && activeModal.has_value()));
+        return owner.IsValid() && (!focused.has_value() || focused->IsValid()) && modalDepth <= MaximumUiFocusModalDepth &&
+               ValidModalState(*this);
     }
 }  // namespace Horo::Runtime::Ui

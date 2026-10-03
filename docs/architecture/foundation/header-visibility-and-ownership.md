@@ -8,6 +8,48 @@ consumer of one module to discover every header in the repository.
 
 ## Classifications
 
+### AUD-003.3 playback boundary and migration
+
+`HoroAudioApi` owns the additive `Horo/Audio/AudioVoiceControls.h` intent/cursor
+values. `HoroAudioPlayback` solely owns `Horo/Audio/AudioVoicePlayback.h`, with
+explicit one-way public dependencies on AudioDsp and AudioApi. AudioCommands
+carries the Api value without depending on Playback or a backend. Api gains no
+DSP dependency; native APIs and private registry implementation remain hidden.
+Generated standalone consumers compile all four owning target surfaces.
+
+Existing registry/resampler callers remain source-compatible. Opt-in hosts link
+AudioPlayback, retain the canonical registry, and transfer exclusive ownership
+at a quiescent boundary; ordinary control APIs may not race callback checks or
+rendering. The AudioCommandPayload extension requires exhaustive visitors to
+handle AudioVoiceControlRequest. Normalization and critical classification are
+migrated here; there is no second compatibility control state machine.
+
+### RUI-005.8 Navigation Input Boundary
+
+`HoroEngine::RuntimeUiInput` solely owns the additive
+`Horo/Runtime/Ui/UiNavigationInput.h` contract. It composes the existing Input
+router, Runtime UI focus graph and action queue through their public contracts;
+Input and Runtime UI retain their existing one-way dependencies. The text-input
+adapter stays target-private. No existing caller changes signature.
+
+Hosts opting into navigation compose `DefaultUiNavigationActions` into their
+Input action map, copy the eight digital action IDs into the adapter descriptor,
+provide the separate signed `ui.navigate` action and explicit Input player
+assignment, then bind their existing presented focus graph and matching action
+queue. They pump once per committed snapshot before gameplay capture, rebind
+after publishing a complete UI or binding replacement, and suspend/stop input
+before retiring its borrowed owners. The adapter does not create a UI service,
+renderer, device assignment or second focus graph. The generated staged header
+consumer and `HoroRuntimeUiNavigationPublicHeaderConsumer` exercise this boundary.
+
+Input's existing value-only `ReadAction` remains source-compatible. New consumers
+use `ReadActionEvidence` for canonical source and typed admission status; legacy
+consumers can query `LastActionStatus`. A full 4,096-entry exact gamepad transition
+ledger refuses an action atomically with `CapacityExceeded`, preserving prior
+consumers and rolling back that action's key, pointer, wheel and gamepad admission.
+The next committed frame releases the ledger. Keyboard and pointer ledgers use
+fixed bitsets. These are runtime storage changes with no profile/wire migration.
+
 Every header has exactly one classification:
 
 | Classification | Location | Visibility |
@@ -216,6 +258,43 @@ The authoring owner must call `Invalidate()` on source changes to cancel older
 preparations before accepting any later candidate; acceptance itself also rotates
 the revision and cancellation token. Shutdown closes acceptance but retains the
 last immutable snapshot for existing readers.
+
+## DFR-002.5 Collision Artifact Migration Notes
+
+`HoroEngine::DestructionPhysicsCook` owns `Horo/Destruction/ChunkCollisionCook.h`
+and depends publicly on `DestructionCook` and `DestructionCollisionArtifacts`. The
+`DestructionCollisionArtifacts` target owns `ChunkCollisionArtifact.h`, depends on
+DestructionApi/Physics, and contains only the source-free bundle codec. Assets/tooling compositions
+link this adapter explicitly; DestructionApi and DestructionRuntime acquire no Physics
+cook dependency. `HoroEngine::Physics` owns `PhysicsCompoundCook.h` and its qualified
+flat convex compound loader/cache extension. The generated public-header consumers
+cover Physics, DestructionCook, DestructionCollisionArtifacts and DestructionPhysicsCook independently.
+
+Chunk mesh cook schema 2 retains solver-neutral collision regions. Schema 1 derived
+meshes must be recooked from the existing source/recipe; there is no runtime migration
+or implicit enclosing hull. The mesh, graph and dependent Physics fingerprints change,
+while authored chunk IDs remain intact. Region IDs hash canonical geometric membership
+and remain independent of piece-array order, materials and Physics target. Duplicate
+region IDs reject. Imported concave chunks need explicit offline convex normalization;
+collision cooking rejects them rather than changing their shape.
+
+The new adapter accepts exact DFR content/mesh digests, Physics target/settings, explicit
+per-chunk Physics material slots and finite budgets. Render material slots are never
+collision authority. One chunk emits a flat Physics compound, including a one-leaf
+compound, so its stable region/material table has one representation. Each leaf uses
+Physics convex cooking; the compound envelope embeds verified cooked leaf bytes and
+an exact upstream generation/settings digest. Assets remains physical publication and
+package authority. One deterministic bundle packages all chunk descriptors/bytes beneath the owning
+asset. The loader verifies complete content, mesh, target, settings and every embedded
+compound before returning an immutable closure. Runtime consumes catalog descriptors and compound bytes through
+`PhysicsCookedShapeCache`; it does not retain or consult the mesh/source/recipe.
+
+No existing caller signature changes. New consumers must retain borrowed request spans
+for synchronous cooking and publish through `ChunkCollisionCookOwner` on its owner
+thread. Failure/cancellation publishes nothing; content, mesh, target, settings/material
+or owner-generation changes reject stale completion. Invalidation cancels old tokens;
+replacement and idempotent shutdown preserve reader snapshots and cache leases. This
+artifact integration does not change Physics world/body activation contracts.
 
 ## REL-001.6 Release Pipeline Boundary
 
@@ -1317,6 +1396,32 @@ into the separate session and supply caller-owned output/scratch and an owned
 provider context. No codec-specific or native backend type crosses the public
 boundary. The generated `HoroAudioApiPublicHeaderConsumer` and focused
 `HoroAudioApiTests` cover the new headers and lifecycle contract.
+
+## Cooked Runtime Prefab Template (PFB-004.1)
+
+`HoroEngine::Prefab` solely owns `Horo/Prefab/CookedPrefab.h`. The immutable
+`CookedPrefab` value, portable codec and dense entity/member/reference/dependency
+tables require only existing Foundation, Assets and GameplayApi dependencies.
+They do not depend on PrefabAuthoring, Application, source resolution, filesystem
+paths, native backends or scene mutation. The generated standalone
+`HoroPrefabPublicHeaderConsumer` and dedicated `HoroCookedPrefabTests` consume
+this contract through its owning target. This is an additive runtime contract;
+existing authoring callers require no migration. Future provider and spawn
+implementations consume this value rather than extending `PrefabDocument` into
+a runtime source authority.
+
+## AUD-004.8 Parameter Automation Boundary
+
+`HoroEngine::AudioCommands` solely owns the additive
+`Horo/Audio/AudioParameterAutomation.h` fixed-state contract. Its generated
+standalone public-header consumer compiles through staged AudioCommands headers.
+Existing voice snapshots keep their signatures. Opting-in hosts prepare and seal
+exact scene/runtime/graph bindings off-callback, dispatch the new automation and
+cancel FIFO payloads, and apply sampled values to already prepared physical
+targets. No editor, native backend, mixer implementation or registry type enters
+the header. Hosts must add handling for the two new public command alternatives;
+unhandled payloads must receive explicit rejection/reconciliation, never silent
+discard. Reset/replacement closes and detaches the old engine before reclamation.
 
 ### Audio scoped concurrency model (AUD-003.4)
 

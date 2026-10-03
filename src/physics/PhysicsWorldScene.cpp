@@ -83,6 +83,17 @@ namespace Horo::Physics {
         return Detail::DestroyCanonicalSceneConstraint(impl_->native, constraint);
     }
 
+    /** @copydoc PhysicsWorld::ReadSceneActivation */
+    Result<PhysicsActivationObservation> PhysicsWorld::ReadSceneActivation() const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->runtime->state != PhysicsRuntimeState::Ready || impl_->stepping)
+            return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::InvalidState));
+        return Detail::ReadCanonicalSceneActivation(impl_->native, impl_->identity);
+    }
+
     /** @copydoc PhysicsWorld::ReadSceneJointState */
     Result<PhysicsJointState> PhysicsWorld::ReadSceneJointState(const ConstraintHandle constraint) const {
         if (impl_->runtime->ownerThread != std::this_thread::get_id())

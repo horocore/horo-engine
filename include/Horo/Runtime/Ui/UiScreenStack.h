@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Ui/UiActions.h"
 #include "Horo/Runtime/Ui/UiDocument.h"
 #include "Horo/Runtime/Ui/UiIdentity.h"
 
@@ -104,22 +105,58 @@ namespace Horo::Runtime::Ui {
         std::optional<UiRouteId> route;
         UiRouteStackGuard guard;
 
-        /** @brief Creates a push request for one stable route definition. */
-        [[nodiscard]] static UiRouteOperationRequest Push(UiRouteId route, UiRouteStackGuard guard = {});
-        /** @brief Creates a pop request. */
-        [[nodiscard]] static UiRouteOperationRequest Pop(UiRouteStackGuard guard = {});
-        /** @brief Creates a replace-top request for one stable route definition. */
-        [[nodiscard]] static UiRouteOperationRequest Replace(UiRouteId route, UiRouteStackGuard guard = {});
-        /** @brief Creates a replace-top request using the route-action vocabulary. */
-        [[nodiscard]] static UiRouteOperationRequest ReplaceTop(UiRouteId route, UiRouteStackGuard guard = {});
-        /** @brief Creates a back request. */
-        [[nodiscard]] static UiRouteOperationRequest Back(UiRouteStackGuard guard = {});
-        /** @brief Creates a clear request. */
-        [[nodiscard]] static UiRouteOperationRequest Clear(UiRouteStackGuard guard = {});
-        /** @brief Creates a clear request using the route-action vocabulary. */
-        [[nodiscard]] static UiRouteOperationRequest Reset(UiRouteStackGuard guard = {});
-        /** @brief Creates an explicit guarded navigation request. */
-        [[nodiscard]] static UiRouteOperationRequest Navigate(UiRouteId route, UiRouteStackGuard guard);
+        /**
+         * @brief Creates a push request for one stable route definition.
+         * @param route Stable route definition to activate.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Typed request owning its correlation guard.
+         */
+        [[nodiscard]] static UiRouteOperationRequest Push(UiRouteId route, const UiRouteStackGuard &guard = {});
+        /**
+         * @brief Creates a pop request.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Typed request owning its correlation guard.
+         */
+        [[nodiscard]] static UiRouteOperationRequest Pop(const UiRouteStackGuard &guard = {});
+        /**
+         * @brief Creates a replace-top request for one stable route definition.
+         * @param route Stable route definition to activate.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Typed request owning its correlation guard.
+         */
+        [[nodiscard]] static UiRouteOperationRequest Replace(UiRouteId route, const UiRouteStackGuard &guard = {});
+        /**
+         * @brief Creates a replace-top request using the route-action vocabulary.
+         * @param route Stable route definition to activate.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Typed request owning its correlation guard.
+         */
+        [[nodiscard]] static UiRouteOperationRequest ReplaceTop(UiRouteId route, const UiRouteStackGuard &guard = {});
+        /**
+         * @brief Creates a back request.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Typed request owning its correlation guard.
+         */
+        [[nodiscard]] static UiRouteOperationRequest Back(const UiRouteStackGuard &guard = {});
+        /**
+         * @brief Creates a clear request.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Typed request owning its correlation guard.
+         */
+        [[nodiscard]] static UiRouteOperationRequest Clear(const UiRouteStackGuard &guard = {});
+        /**
+         * @brief Creates a clear request using the route-action vocabulary.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Typed request owning its correlation guard.
+         */
+        [[nodiscard]] static UiRouteOperationRequest Reset(const UiRouteStackGuard &guard = {});
+        /**
+         * @brief Creates an explicit guarded navigation request.
+         * @param route Stable route definition to activate.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Typed request owning its correlation guard.
+         */
+        [[nodiscard]] static UiRouteOperationRequest Navigate(UiRouteId route, const UiRouteStackGuard &guard);
 
         /** @brief Validates only request shape; owner and route-catalog checks occur at preparation. */
         [[nodiscard]] Result<void> Validate() const;
@@ -224,22 +261,58 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<Transaction> Prepare(UiRouteOperationRequest request);
         /** @brief Prepares and commits one request, returning exactly one terminal result. */
         [[nodiscard]] Result<UiRouteOperationResult> Navigate(UiRouteOperationRequest request);
-        /** @brief Performs guarded navigation to one stable route definition. */
-        [[nodiscard]] Result<UiRouteOperationResult> Navigate(UiRouteId route, UiRouteStackGuard guard);
-        /** @brief Pushes one route instance. */
-        [[nodiscard]] Result<UiRouteOperationResult> Push(UiRouteId route, UiRouteStackGuard guard = {});
-        /** @brief Pops the current top route instance. */
-        [[nodiscard]] Result<UiRouteOperationResult> Pop(UiRouteStackGuard guard = {});
-        /** @brief Replaces the current top route instance. */
-        [[nodiscard]] Result<UiRouteOperationResult> Replace(UiRouteId route, UiRouteStackGuard guard = {});
-        /** @brief Replaces the current top route instance using the route-action vocabulary. */
-        [[nodiscard]] Result<UiRouteOperationResult> ReplaceTop(UiRouteId route, UiRouteStackGuard guard = {});
-        /** @brief Applies back navigation to the current top route instance. */
-        [[nodiscard]] Result<UiRouteOperationResult> Back(UiRouteStackGuard guard = {});
-        /** @brief Clears every route instance in this stack. */
-        [[nodiscard]] Result<UiRouteOperationResult> Clear(UiRouteStackGuard guard = {});
-        /** @brief Clears every route instance using the route-action vocabulary. */
-        [[nodiscard]] Result<UiRouteOperationResult> Reset(UiRouteStackGuard guard = {});
+        /**
+         * @brief Performs guarded navigation to one stable route definition.
+         * @param route Stable route definition to activate.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Terminal committed/rejected outcome, or typed preparation/lifecycle failure.
+         */
+        [[nodiscard]] Result<UiRouteOperationResult> Navigate(UiRouteId route, const UiRouteStackGuard &guard);
+        /**
+         * @brief Pushes one route instance.
+         * @param route Stable route definition to activate.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Terminal committed/rejected outcome, or typed preparation/lifecycle failure.
+         */
+        [[nodiscard]] Result<UiRouteOperationResult> Push(UiRouteId route, const UiRouteStackGuard &guard = {});
+        /**
+         * @brief Pops the current top route instance.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Terminal committed/rejected outcome, or typed preparation/lifecycle failure.
+         */
+        [[nodiscard]] Result<UiRouteOperationResult> Pop(const UiRouteStackGuard &guard = {});
+        /**
+         * @brief Replaces the current top route instance.
+         * @param route Stable route definition to activate.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Terminal committed/rejected outcome, or typed preparation/lifecycle failure.
+         */
+        [[nodiscard]] Result<UiRouteOperationResult> Replace(UiRouteId route, const UiRouteStackGuard &guard = {});
+        /**
+         * @brief Replaces the current top route instance using the route-action vocabulary.
+         * @param route Stable route definition to activate.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Terminal committed/rejected outcome, or typed preparation/lifecycle failure.
+         */
+        [[nodiscard]] Result<UiRouteOperationResult> ReplaceTop(UiRouteId route, const UiRouteStackGuard &guard = {});
+        /**
+         * @brief Applies back navigation to the current top route instance.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Terminal committed/rejected outcome, or typed preparation/lifecycle failure.
+         */
+        [[nodiscard]] Result<UiRouteOperationResult> Back(const UiRouteStackGuard &guard = {});
+        /**
+         * @brief Clears every route instance in this stack.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Terminal committed/rejected outcome, or typed preparation/lifecycle failure.
+         */
+        [[nodiscard]] Result<UiRouteOperationResult> Clear(const UiRouteStackGuard &guard = {});
+        /**
+         * @brief Clears every route instance using the route-action vocabulary.
+         * @param guard Borrowed observed stack state, copied into the request; empty disables the guard except for Navigate.
+         * @return Terminal committed/rejected outcome, or typed preparation/lifecycle failure.
+         */
+        [[nodiscard]] Result<UiRouteOperationResult> Reset(const UiRouteStackGuard &guard = {});
 
         /** @brief Returns the exact stack identity. @return Owner-issued stack handle. */
         [[nodiscard]] UiRouteStackId Stack() const noexcept;
@@ -257,6 +330,19 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::span<const UiRouteInstance> Routes() const noexcept;
         /** @brief Creates a guard against the current stack revision and top instance. */
         [[nodiscard]] Result<UiRouteStackGuard> Guard() const;
+
+        /**
+         * @brief Transfers one active router into the exact live route's lifetime.
+         * @param route Exact committed route incarnation.
+         * @param router Same-owner router, moved only on success; its source revisions stay immutable.
+         * @return Success or typed stale/duplicate/lifecycle failure. Preparation failure leaves both owners unchanged.
+         * @details Pop/back/clear cancel with OwnerRetired, replacement cancels with Superseded, stack shutdown
+         * cancels with Shutdown. Failed/cancelled route transactions preserve pending operations.
+         */
+        [[nodiscard]] Result<void> AttachActions(UiRouteInstanceId route, UiActionRouter &&router);
+        /** @brief Borrows a live route's action router for one owner-thread operation. @param route Exact route. @return Router or null;
+         * never retain across route mutation. */
+        [[nodiscard]] UiActionRouter *Actions(UiRouteInstanceId route) noexcept;
 
         /** @brief Closes new operation admission while retaining committed routes for drain/inspection. */
         [[nodiscard]] Result<void> BeginRetirement();

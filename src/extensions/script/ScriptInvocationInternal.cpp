@@ -1,6 +1,7 @@
 #include "ScriptInvocationInternal.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "ScriptCapabilityContextInternal.h"
 
 #include <algorithm>
 #include <atomic>
@@ -67,6 +68,8 @@ namespace Horo::Extensions {
 
         ScriptInvocationCancellationReason PendingCancellationLocked(const ScriptInvocationState &state) noexcept {
             using enum ScriptInvocationCancellationReason;
+            if (state.request.authority && !state.request.authority->IsUsable())
+                return Context;
             if (!state.context->active)
                 return Context;
             if (!state.provider->active)
@@ -137,6 +140,7 @@ namespace Horo::Extensions {
                     .kind = ScriptInvocationEventKind::Completed,
                     .invocation = state.id,
                     .context = context.id,
+                    .diagnostics = state.request.diagnostics,
                     .providerGeneration = provider.generation,
                     .progress = state.progress,
                     .terminalResult = state.terminalResult,
@@ -203,6 +207,44 @@ namespace Horo::Extensions {
             return ValidateScriptArguments(*function, request.arguments, *descriptor, limits);
         }
 
+        /** @brief Checks immutable binding identity under the registry/provider/context lifecycle locks, without relocking them. */
+        static bool BindingAuthorityMatches(const ScriptInvocationRequest &request, const ScriptInvocationContextState &context,
+                                            const std::shared_ptr<ScriptInvocationProviderState> &provider) {
+            if (!request.authority)
+                return true;
+            const auto &binding = *request.authority;
+            if (!binding.IsUsable() || !binding.MatchesProvider(provider) || binding.context->registration.Id() != context.id)
+                return false;
+            const auto &importedApi = binding.context->descriptor.imports[binding.importIndex];
+            return request.descriptors == importedApi.descriptors && request.apiId == importedApi.apiId &&
+                   std::ranges::find(importedApi.functions, request.functionId) != importedApi.functions.end();
+        }
+
+        /** @brief Constructs owned request/deadline state after admission, while the caller holds all lifecycle locks. */
+        static std::shared_ptr<ScriptInvocationState> CreateInvocationRecord(const std::shared_ptr<ScriptInvocationRegistryState> &registry,
+                                                                             const std::shared_ptr<ScriptInvocationContextState> &context,
+                                                                             const std::shared_ptr<ScriptInvocationProviderState> &provider,
+                                                                             ScriptInvocationId id, ScriptInvocationRequest request,
+                                                                             ScriptExportInvocationMode invocationMode) {
+            if (request.diagnostics.operationId == 0)
+                request.diagnostics.operationId = id.value;
+            std::optional<std::chrono::steady_clock::time_point> deadline;
+            if (request.timeout.has_value())
+                deadline = std::chrono::steady_clock::now() + *request.timeout;
+            ScriptInvocationExecutionContext execution{
+                .registry = registry,
+                .context = context,
+                .provider = provider,
+                .id = id,
+                .request = std::move(request),
+                .invocationMode = invocationMode,
+                .completionAffinity = ScriptInvocationCompletionAffinity::OwnerThreadSafePoint,
+                .deadline = deadline,
+                .valueLimits = registry->limits.value,
+            };
+            return std::make_shared<ScriptInvocationState>(std::move(execution));
+        }
+
         Result<std::shared_ptr<ScriptInvocationState>> AdmitInvocation(const std::shared_ptr<ScriptInvocationRegistryState> &registry,
                                                                        const std::shared_ptr<ScriptInvocationContextState> &context,
                                                                        const std::shared_ptr<ScriptInvocationProviderState> &provider,
@@ -228,22 +270,10 @@ namespace Horo::Extensions {
                     return InvocationFailure<std::shared_ptr<ScriptInvocationState>>(ScriptInvocationCapacityExceeded,
                                                                                      "Script invocation identity exhausted.");
 
+                if (!BindingAuthorityMatches(request, *context, provider))
+                    return InvocationFailure<std::shared_ptr<ScriptInvocationState>>(ScriptInvocationContextRevoked);
                 const ScriptInvocationId id{registry->nextInvocation++};
-                std::optional<std::chrono::steady_clock::time_point> deadline;
-                if (request.timeout.has_value())
-                    deadline = std::chrono::steady_clock::now() + *request.timeout;
-                ScriptInvocationExecutionContext execution{
-                    .registry = registry,
-                    .context = context,
-                    .provider = provider,
-                    .id = id,
-                    .request = std::move(request),
-                    .invocationMode = invocationMode,
-                    .completionAffinity = ScriptInvocationCompletionAffinity::OwnerThreadSafePoint,
-                    .deadline = deadline,
-                    .valueLimits = registry->limits.value,
-                };
-                invocation = std::make_shared<ScriptInvocationState>(std::move(execution));
+                invocation = CreateInvocationRecord(registry, context, provider, id, std::move(request), invocationMode);
                 context->invocations.try_emplace(id.value, invocation);
                 provider->invocations.try_emplace(id.value, invocation);
                 ++context->reservedTerminalSlots;
@@ -272,6 +302,7 @@ namespace Horo::Extensions {
             return ScriptInvocationSnapshot{
                 .invocation = state.id,
                 .context = state.context->id,
+                .diagnostics = state.request.diagnostics,
                 .providerGeneration = state.provider->generation,
                 .apiId = state.request.apiId,
                 .functionId = state.request.functionId,

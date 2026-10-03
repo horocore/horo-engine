@@ -82,6 +82,7 @@ consumer. Existing callers require no migration; new built-in node consumers lin
 | `HoroAssets` (`HoroEngine::Assets`) | Always | Owns all current `Assets/**` headers. The target currently combines registry, provider, import, preview, reimport, cook, cache, and output responsibilities. | Foundation (public) |
 | `HoroAnimationApi` (`HoroEngine::AnimationApi`) | Always | Owns backend-neutral persistent animation asset identities, generation-safe runtime handles, stable validation errors, inert component contracts, immutable bounded skeleton, skinning, and clip assets, exact bounded clip traversal/sampling, plus preallocated frame pose storage with deterministic hierarchy evaluation and move-only immutable leases under `Animation/**`. Renderer resources, presentation palette publication, graph evaluation, and backend integration remain outside this target. | Foundation, Assets (public) |
 | `HoroInput` (`HoroEngine::Input`) | Always | Owns the backend-neutral `Runtime/Input.h` contract and runtime implementation. | Foundation (public) |
+| `HoroRuntimeUiInput` (`HoroEngine::RuntimeUiInput`) | Always | Owns public `Runtime/Ui/UiNavigationInput.h` canonical navigation/modality/glyph composition plus the target-private focused-text adapter. Borrows the existing Input router, Runtime UI focus graph and action queue; creates no independent UI owner or device assignment. | Input, RuntimeUi (public) |
 | `HoroAudioMemory` (`HoroEngine::AudioMemory`) | Always | Owns `Audio/AudioMemory.h`, bounded scratch storage and generation-safe fixed pools with explicit deferred reuse. Aligned allocation details remain target-private. | AudioApi (public) |
 | `HoroAudioCommands` (`HoroEngine::AudioCommands`) | Always | Owns `Audio/AudioCommands.h`, `Audio/AudioCommandBuffer.h` and `Audio/AudioCommandStaging.h`: typed intents, normalization/coalescing, bounded MPSC/control/SPSC transport and scene/barrier admission. | AudioMemory (public) |
 | `HoroAudioCook` (`HoroEngine::AudioCook`) | Always | Owns `Audio/AudioCookProfile.h` and `Audio/AudioCooker.h`: immutable exact-target quality policy, deterministic PCM payloads, compatibility manifests and an inert AST cooker contribution. It neither caches nor publishes on its own. | AudioImport, Assets (public) |
@@ -124,7 +125,7 @@ consumer. Existing callers require no migration; new built-in node consumers lin
 | `HoroEditorModel` (`HoroEngine::EditorModel`) | Always | Owns scene-document, selection, and viewport model code. Its intended contract spans selected `Editor/**` headers and internal `src/editor/**` headers; all of `src/` is currently exported to consumers. | Foundation, SceneModel, RuntimeScene (public) |
 | `HoroEditorViewportScene` (`HoroEngine::EditorViewportScene`) | Always | Owns backend-neutral editor viewport scene/camera/light visualization geometry. It has no isolated installed public surface and exports `src/`. | EditorModel (public) |
 | `HoroEditorRenderExtraction` (`HoroEngine::EditorRenderExtraction`) | Always | Owns editor-to-render snapshot extraction, mesh cache, picking, and asset drop conversion. It has no isolated installed public surface and exports `src/`. | EditorModel, EditorViewportScene (public) |
-| `HoroEditorServices` (`HoroEngine::EditorServices`) | Always | Owns current GUI-neutral project, settings, localization, input orchestration, workspace model, editor bus, modal host, notification, menu, hierarchy, and status contracts under `Editor/**`, including the persistent UI Canvas document/session boundary. It also exports `src/`. | Foundation, Application, Platform, RuntimeUi, EditorModel, GameplayLua, GameplayModuleHost, GameplayBuild, Input, ProjectMigrations (public); Assets (private) |
+| `HoroEditorServices` (`HoroEngine::EditorServices`) | Always | Owns current GUI-neutral project, settings, localization, input orchestration, workspace model, editor bus, modal host, notification, menu, hierarchy, and status contracts under `Editor/**`, including the persistent UI Canvas document/session boundary and shared cinematic property inspector/Problems adapters. It also exports `src/`. | Foundation, CinematicRuntime, Application, Platform, RuntimeUi, EditorModel, GameplayLua, GameplayModuleHost, GameplayBuild, Input, ProjectMigrations (public); Assets (private) |
 | `HoroEditorViewportOpenGL` (`HoroEngine::EditorViewportOpenGL`) | GUI and OpenGL | Owns the OpenGL ImGui/viewport/presentation bridge. Backend, SDL, GLAD, and ImGui adapter details are private, but SDL is currently a public link dependency. | EditorViewportScene, RenderOpenGL (public) |
 | `HoroEditorViewportMetal` (`HoroEngine::EditorViewportMetal`) | Apple, GUI, and Metal | Owns the Metal ImGui/viewport/presentation bridge. Objective-C++ and ImGui adapter details are private, but SDL is currently a public link dependency. | EditorViewportScene, RenderMetal (public) |
 | `HoroGui` (`HoroEngine::Gui`) | Editor GUI only | Owns ImGui screens, modals, panels, workspace controllers, and design-system implementation. ImGui is private, while all of `include/` and `src/` are exported as public include roots. | EditorServices, Foundation (public); EditorRenderExtraction and Extensions (private) |
@@ -375,3 +376,16 @@ Any later migration ticket should regenerate both inspected configurations and
 update this inventory in the same change when it changes a production target,
 public include boundary, canonical target status, or first-party dependency
 edge.
+
+### DFR-002.5 Physics Cook Adapter
+
+`HoroDestructionPhysicsCook` (`HoroEngine::DestructionPhysicsCook`) is always built.
+It owns `ChunkCollisionCook.h`, publicly links only `HoroDestructionCook` and
+`HoroDestructionCollisionArtifacts`, and projects sealed neutral regions into Physics-owned offline cook
+contracts. `HoroDestructionApi`/`HoroDestructionRuntime` dependencies are unchanged.
+`HoroPhysics` additionally owns `PhysicsCompoundCook.h`; the existing cache supports
+its qualified source-free flat convex loader. `HoroDestructionCollisionArtifacts`
+(`HoroEngine::DestructionCollisionArtifacts`) owns `ChunkCollisionArtifact.h` and
+links DestructionApi/Physics for one source-free packaged bundle, separate from offline
+projection. Generated individual public-header
+consumers validate each of these target boundaries.
