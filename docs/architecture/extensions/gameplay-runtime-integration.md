@@ -261,14 +261,22 @@ persists game-owned component or service state, it must use stable component
 IDs, schema versions, and explicit upgrade paths rather than C++ layout
 identity.
 
-Game modules may later participate in a save system through explicit save
-descriptors or hooks. That contract is intentionally separate from scene
+Game modules participate through the explicit `GameRegistrationContext::persistence`
+registry and host-acquired generation-pinned adapters. That contract is separate from scene
 authoring serialization. `BehaviorComponent.fields` are authoring/default data;
 runtime behavior instance state is included in a save snapshot only if the
 behavior or service declares a stable save payload and schema version. Save data
 uses the same stable component/behavior IDs and upgrade rules as persistent
 content, but it is not allowed to serialize raw C++ object memory, function
 pointers, entity runtime addresses, or module allocator ownership.
+
+Freeze resolves declared behavior/service owners without calling their sources.
+Module-global and session records use the same inert canonical descriptor and
+runtime-only source. Explicit host composition binds each accepted declaration
+to `SaveParticipationClient`; archive work receives detached owned bytes and
+restore joins the aggregate staged transaction. Missing adapters and mismatched
+module/schema versions fail before live publication under the exact compatibility
+policy described in the gameplay persistence migration guide.
 
 ## Replication Registration
 
