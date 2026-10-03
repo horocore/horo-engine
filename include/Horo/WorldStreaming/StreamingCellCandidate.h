@@ -5,6 +5,7 @@
  * @brief Worker-safe cell-header resolution and immutable candidate preparation.
  */
 
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/WorldStreaming/CookedWorldIndexManifest.h"
 #include "Horo/WorldStreaming/StreamingCellOperation.h"
 
@@ -153,4 +154,22 @@ namespace Horo::WorldStreaming {
     [[nodiscard]] Result<StreamingCellCandidate> PrepareStreamingCellCandidate(const CookedWorldIndexManifest &manifest,
                                                                                const StreamingCellCandidateContext &context,
                                                                                const StreamingCellHeaderView &header);
+
+    /**
+     * @brief Parses a canonical HOROCELL artifact directly into the existing immutable candidate boundary.
+     * @param manifest Immutable cell identity, package and integrity authority.
+     * @param context Captured operation fence, lifecycle and mandatory byte/count ceilings.
+     * @param artifact Complete borrowed standalone file or package chunk; never retained or modified.
+     * @param cancellation Cooperative cancellation observed between bounded hashing and table-validation units.
+     * @return Complete candidate or a typed invalid, stale, unsupported, capacity or lifecycle failure.
+     * @details Verifies the canonical artifact hash, exact length, flags, TOC, padding and aggregate CRC before publication.
+     *          Major versions require recooking. Encryption requires a later security adapter and is rejected here.
+     *          This boundary performs no decompression, provider calls or live state changes. The owner must revalidate
+     *          the retained operation fence before activation; replacement never rewrites a captured candidate.
+     * @throws std::bad_alloc if bounded TOC/candidate ownership allocation fails; no candidate is published.
+     */
+    [[nodiscard]] Result<StreamingCellCandidate> ParseStreamingCellArtifact(const CookedWorldIndexManifest &manifest,
+                                                                            const StreamingCellCandidateContext &context,
+                                                                            std::span<const std::byte> artifact,
+                                                                            const CancellationToken &cancellation = {});
 }  // namespace Horo::WorldStreaming

@@ -1628,6 +1628,25 @@ cannot publish an older candidate. This boundary performs no I/O, decompression,
 provider invocation, owner-thread transition or partial publication. The owner revalidates the exact
 operation fence before the later atomic commit.
 
+`ParseStreamingCellArtifact` supplies that same candidate boundary directly from
+canonical `HOROCELL` bytes. Caller ceilings bound the encoded input before hashing
+and the TOC count/decoded total before allocation. Hashing uses cancellable 64 KiB
+units; authenticated rows have contained canonical ranges, zero padding and an
+aggregate CRC combined without decompressing optional blocks. Both the header hash
+and the existing manifest hash must match before header controls are interpreted.
+The parser owns temporary rows only, never retains borrowed bytes, invokes providers
+or publishes live state. Success returns the existing candidate with its captured
+operation fence; cancellation, closed admission, malformed bytes, capacity overflow
+and unsupported controls return typed failures without changing the manifest.
+Encryption and noncanonical coordinate systems are explicitly unsupported by this
+entry point until their owning adapters are available. Independent block decode and
+per-entry decoded CRC verification remain the next preparation phase.
+
+This entry point preserves the version-one wire format and provider-owned schema
+authority. No older supported artifact schema or migration step is currently
+specified: major versions still require recooking, and optional same-major forward
+payload compatibility does not constitute an older-artifact migration.
+
 `StreamingCellAssetRequest` is the WST-005.4 asynchronous ownership boundary. It
 resolves the candidate package followed by canonical hard-dependency packages against
 the same immutable manifest and asset-registry revision, validates the complete bounded

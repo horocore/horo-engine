@@ -1421,6 +1421,7 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/SharedAssetResidencyErrors.cpp
         runtime/world_streaming/StreamingCellOperation.cpp
         runtime/world_streaming/StreamingCellCandidate.cpp
+        runtime/world_streaming/StreamingCellArtifact.cpp
         runtime/world_streaming/StreamingCellAssetRequest.cpp
         runtime/world_streaming/StreamingCellActivation.cpp
         runtime/world_streaming/StreamingCellStability.cpp
