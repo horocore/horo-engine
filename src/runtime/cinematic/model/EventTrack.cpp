@@ -47,8 +47,10 @@ namespace Horo::Cinematic {
 
     /** @copydoc CookedEventPlan::Find */
     const CookedEventKey *CookedEventPlan::Find(const TrackId track, const KeyframeId key) const noexcept {
-        const CookedEventKey target{track, key};
-        const auto found = std::ranges::lower_bound(keys_, target, KeyLess);
+        // A payload-bearing search sentinel allocates an empty vector's debug proxy on MSVC.
+        const auto found = std::ranges::lower_bound(keys_, std::pair{track, key}, std::ranges::less{}, [](const CookedEventKey &entry) {
+            return std::pair{entry.track, entry.key};
+        });
         return found != keys_.end() && found->track == track && found->key == key ? std::to_address(found) : nullptr;
     }
 

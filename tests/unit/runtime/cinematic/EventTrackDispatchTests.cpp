@@ -85,6 +85,23 @@ namespace Horo::Cinematic {
         CHECK(probe->calls == 1);
     }
 
+    TEST_CASE("Cooked event lookup does not construct payload storage", "[unit][cinematic][event][allocation]") {
+        const auto plan = Cooked();
+        const auto *expected = plan->Find(Track, Key);
+        REQUIRE(expected != nullptr);
+        std::size_t matches{};
+        const std::size_t before = Horo::Tests::AllocationProbe::Count();
+        for (std::size_t query = 0; query < 1'024; ++query) {
+            matches += plan->Find(Track, Key) == expected;
+            matches += plan->Find(Track, {12, 1}) == nullptr;
+            matches += plan->Find({9, 1}, Key) == nullptr;
+            matches += plan->Find({11, 1}, Key) == nullptr;
+        }
+        const std::size_t after = Horo::Tests::AllocationProbe::Count();
+        CHECK(matches == 4'096);
+        CHECK(after == before);
+    }
+
     TEST_CASE("Revocation and cancellation fence queued event callbacks", "[unit][cinematic][event][lifecycle]") {
         auto dispatcher = Dispatcher();
         auto probe = std::make_shared<HandlerProbe>();
