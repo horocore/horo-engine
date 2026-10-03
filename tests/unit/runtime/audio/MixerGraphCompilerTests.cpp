@@ -35,6 +35,7 @@ namespace {
             INFO("mode: " << mode << ", prefix: " << prefix << ", child output: " << diagnostic);
             REQUIRE(child.HasValue());
             REQUIRE(child.Value().reason == ProcessTerminationReason::Exited);
+            INFO("worker exit code: " << child.Value().exitCode);
             const auto outcome = static_cast<AllocationFailureOutcome>(child.Value().exitCode);
             if (outcome == AllocationFailureOutcome::Complete) {
                 REQUIRE(caught > 0);
