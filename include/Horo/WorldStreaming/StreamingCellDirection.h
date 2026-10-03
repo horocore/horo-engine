@@ -155,7 +155,7 @@ namespace Horo::WorldStreaming {
         /** @brief Retains the first cleanup disposition and fences publication before adapter calls. */
         [[nodiscard]] Result<void> BeginInterruption(StreamingCellOperationTransition reason);
         /** @brief Revokes every participant before ordered cleanup begins. */
-        void RevokeParticipants() noexcept;
+        void RevokeParticipants() const noexcept;
         /** @brief Releases canonical terminal capacity exactly once. @return Success or the scheduler error. */
         [[nodiscard]] Result<void> ReleaseTerminal();
 

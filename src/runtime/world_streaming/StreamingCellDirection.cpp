@@ -101,14 +101,12 @@ namespace Horo::WorldStreaming {
     /** @copydoc StreamingCellDirectionOwner::Advance */
     Result<StreamingCellOperation> StreamingCellDirectionOwner::Advance(const StreamingCellOperation &expected,
                                                                         const StreamingCellOperationTransition transition) {
+        using enum StreamingCellOperationTransition;
         if (!Matches(expected, operation_))
             return Internal::Failure<StreamingCellOperation>(WorldStreamingErrors::CellDirectionStale);
-        const bool supported =
-            transition == StreamingCellOperationTransition::BeginPreparation ||
-            transition == StreamingCellOperationTransition::BeginActivation ||
-            transition == StreamingCellOperationTransition::BeginRetirement ||
-            (transition == StreamingCellOperationTransition::Complete && operation_.Kind() == StreamingCellOperationKind::Load);
-        if (!supported)
+        if (const bool supported = transition == BeginPreparation || transition == BeginActivation || transition == BeginRetirement ||
+                                   (transition == Complete && operation_.Kind() == StreamingCellOperationKind::Load);
+            !supported)
             return Internal::Failure<StreamingCellOperation>(WorldStreamingErrors::CellDirectionUnsupported);
         if (!scheduler_ || !reservation_ || demandClosed_ || scheduler_->State() != StreamingSchedulerAdmissionState::Accepting)
             return Internal::Failure<StreamingCellOperation>(WorldStreamingErrors::CellDirectionLifecycleUnavailable);
@@ -126,11 +124,12 @@ namespace Horo::WorldStreaming {
     /** @copydoc StreamingCellDirectionOwner::CommitActivation */
     Result<void> StreamingCellDirectionOwner::CommitActivation(StreamingCellActivationTransaction &transaction,
                                                                const StreamingCellActivationCommitPoint point) {
+        using enum StreamingCellActivationLifecycle;
         const auto lifecycle = scheduler_ && scheduler_->State() == StreamingSchedulerAdmissionState::Accepting && !demandClosed_ &&
                                        reservation_ && operation_.State() == StreamingCellOperationState::Activating
-                                   ? StreamingCellActivationLifecycle::Active
-                                   : StreamingCellActivationLifecycle::Cancelling;
-        if (lifecycle != StreamingCellActivationLifecycle::Active) {
+                                   ? Active
+                                   : Cancelling;
+        if (lifecycle != Active) {
             transaction.Rollback();
             return Internal::Failure<void>(WorldStreamingErrors::CellActivationLifecycleUnavailable);
         }
@@ -146,12 +145,12 @@ namespace Horo::WorldStreaming {
     /** @copydoc StreamingCellDirectionOwner::Interrupt */
     Result<void> StreamingCellDirectionOwner::Interrupt(const StreamingCellOperationHandle &expected,
                                                         const StreamingCellOperationTransition reason) {
+        using enum StreamingCellOperationTransition;
         if (!expected.IsValid())
             return Internal::Failure<void>(WorldStreamingErrors::CellDirectionInvalid);
         if (expected != operation_.Handle())
             return Internal::Failure<void>(WorldStreamingErrors::CellDirectionStale);
-        if (reason != StreamingCellOperationTransition::Cancel && reason != StreamingCellOperationTransition::Fail &&
-            reason != StreamingCellOperationTransition::Replace && reason != StreamingCellOperationTransition::Shutdown)
+        if (reason != Cancel && reason != Fail && reason != Replace && reason != Shutdown)
             return Internal::Failure<void>(WorldStreamingErrors::CellDirectionUnsupported);
         if (!scheduler_ || operation_.IsTerminal())
             return Internal::Failure<void>(WorldStreamingErrors::CellDirectionLifecycleUnavailable);
@@ -174,7 +173,7 @@ namespace Horo::WorldStreaming {
     }
 
     /** @copydoc StreamingCellDirectionOwner::RevokeParticipants */
-    void StreamingCellDirectionOwner::RevokeParticipants() noexcept {
+    void StreamingCellDirectionOwner::RevokeParticipants() const noexcept {
         for (const auto &participant : participants_)
             participant->RevokeAccess();
     }
@@ -184,7 +183,7 @@ namespace Horo::WorldStreaming {
         if (!scheduler_ || operation_.State() != StreamingCellOperationState::Retiring)
             return Internal::Failure<StreamingCellOperation>(WorldStreamingErrors::CellDirectionLifecycleUnavailable);
         while (nextRetirement_ < participants_.size()) {
-            auto &participant = participants_[nextRetirement_];
+            const auto &participant = participants_[nextRetirement_];
             if (!retirementStarted_) {
                 participant->BeginRetirement();
                 retirementStarted_ = true;
@@ -194,8 +193,7 @@ namespace Horo::WorldStreaming {
                 return Result<StreamingCellOperation>::Failure(polled.ErrorValue());
             if (!polled.Value())
                 return Result<StreamingCellOperation>::Success(operation_);
-            const auto &ack = *polled.Value();
-            if (ack.operation != operation_.Handle() || ack.participant != participant->Requirement())
+            if (const auto &ack = *polled.Value(); ack.operation != operation_.Handle() || ack.participant != participant->Requirement())
                 return Internal::Failure<StreamingCellOperation>(WorldStreamingErrors::CellDirectionStale);
             ++nextRetirement_;
             retirementStarted_ = false;
