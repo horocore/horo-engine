@@ -1440,6 +1440,7 @@ target_link_libraries(HoroPrefabAuthoring PUBLIC HoroEngine::Prefab HoroEngine::
 
 add_library(HoroInput STATIC
         runtime/input/Input.cpp
+        runtime/input/InputPresentation.cpp
         runtime/input/InputErrors.cpp
 )
 add_library(HoroEngine::Input ALIAS HoroInput)
@@ -1451,6 +1452,7 @@ target_link_libraries(HoroInput PUBLIC HoroEngine::Foundation PRIVATE nlohmann_j
 # retains its Foundation/Assets-only contract.
 add_library(HoroRuntimeUiInput STATIC
         runtime/ui/input/UiTextInputAdapter.cpp
+        runtime/ui/input/UiNavigationInput.cpp
 )
 add_library(HoroEngine::RuntimeUiInput ALIAS HoroRuntimeUiInput)
 target_compile_features(HoroRuntimeUiInput PUBLIC cxx_std_20)
