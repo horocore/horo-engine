@@ -2186,6 +2186,7 @@ add_executable(HoroRuntimeSaveCaptureSnapshotTests
         unit/runtime/save/SaveCaptureSnapshotTests.cpp
         unit/runtime/save/SaveCaptureSnapshotEdgeTests.cpp
         unit/runtime/save/SaveGameplayPersistenceTests.cpp
+        unit/runtime/save/SaveGameplayPersistenceLifetimeTests.cpp
 )
 target_compile_features(HoroRuntimeSaveCaptureSnapshotTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveCaptureSnapshotTests PRIVATE HoroEngine::Runtime HoroEngine::GameplayRuntime)
