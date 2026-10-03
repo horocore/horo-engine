@@ -37,6 +37,7 @@ namespace Horo::Extensions {
                         .kind = ScriptInvocationEventKind::Progress,
                         .invocation = state_->id,
                         .context = state_->context->id,
+                        .diagnostics = state_->request.diagnostics,
                         .providerGeneration = state_->provider->generation,
                         .progress = state_->progress,
                         .revision = state_->revision,

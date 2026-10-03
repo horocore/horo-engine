@@ -2,7 +2,7 @@
 
 #include "Horo/Gameplay/Component.h"
 #include "Horo/Prefab/PrefabErrors.h"
-#include "Horo/Prefab/PrefabSceneIdentityRemap.h"
+#include "Horo/Prefab/PrefabSceneExpansion.h"
 #include "editor/document/NavigationAgentJson.h"
 
 #include <algorithm>
@@ -153,17 +153,6 @@ namespace Horo::Editor {
         void AddInstanceContext(Error &error, const ScenePrefabInstanceProjection &projection) {
             error.message = std::format("Required prefab instance {} ({}) failed: {}", projection.authored.instanceId.Value(),
                                         projection.authored.sourcePrefab.Asset().ToString(), error.message);
-        }
-
-        [[nodiscard]] Result<Math::Transform> ApplyInstanceTransform(const ScenePrefabInstance &instance,
-                                                                     const Prefab::ResolvedPrefabObject &object) {
-            if (!object.key.object.NestedInstanceScope().empty() || !object.key.object.SourceObject().IsRoot())
-                return Result<Math::Transform>::Success(object.effectiveLocalTransform);
-            const auto composed =
-                Math::TryDecomposeAffineTRS(Math::Multiply(instance.rootTransform.ToMatrix(), object.effectiveLocalTransform.ToMatrix()));
-            if (composed.HasError())
-                return Result<Math::Transform>::Failure(composed.ErrorValue());
-            return composed;
         }
 
         [[nodiscard]] Result<Runtime::NavigationAgentComponent> ParsePrefabNavigationAgent(const Prefab::RawComponentPayload &payload) {
@@ -378,35 +367,30 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> AddPrefabCandidate(const ScenePrefabInstance &instance,
                                                       const Prefab::EffectivePrefabCandidate &candidate,
                                                       const Prefab::PrefabSceneIdentityMap &identityMap,
-                                                      Runtime::SceneDefinitionBuilder &builder) {
+                                                      Runtime::SceneDefinitionBuilder &builder, const Prefab::PrefabLimitProfile &limits) {
+            std::vector<Prefab::PrefabRuntimeComponentProjection> projections;
+            projections.reserve(candidate.Objects().size());
             for (const Prefab::ResolvedPrefabObject &object : candidate.Objects()) {
-                const std::optional<Prefab::PrefabSceneObjectId> sceneId = identityMap.Find(object.key);
+                const auto sceneId = identityMap.Find(object.key);
                 if (!sceneId)
                     return Result<void>::Failure(MakeError(Prefab::PrefabErrors::IdentityCollision));
                 auto components = ProjectPrefabComponents(object, *sceneId);
                 if (components.HasError())
                     return Result<void>::Failure(components.ErrorValue());
-
-                std::optional<Runtime::SceneObjectId> parent;
-                if (object.parent) {
-                    const auto parentId = identityMap.Find(*object.parent);
-                    if (!parentId)
-                        return Result<void>::Failure(MakeError(Prefab::PrefabErrors::HierarchyInvalid));
-                    parent = Runtime::SceneObjectId{parentId->value};
-                } else if (object.key.object.NestedInstanceScope().empty() && instance.parent)
-                    parent = Runtime::SceneObjectId{instance.parent->value};
-
-                const Result<Math::Transform> transform = ApplyInstanceTransform(instance, object);
-                if (transform.HasError())
-                    return Result<void>::Failure(transform.ErrorValue());
-                builder.Add(Runtime::RuntimeEntityDefinition{
-                    .object = Runtime::SceneObjectId{sceneId->value},
-                    .parent = parent,
-                    .localTransform = transform.Value(),
-                    .primitiveMesh = std::nullopt,
-                    .components = std::move(components).Value(),
-                });
+                projections.emplace_back(object.key, std::move(components).Value());
             }
+            auto expanded =
+                Prefab::ExpandPrefabSceneSubtree(candidate, identityMap, projections,
+                                                 Prefab::PrefabRuntimePlacement{.rootTransform = instance.rootTransform,
+                                                                                .parent = instance.parent
+                                                                                              ? std::optional{Runtime::SceneObjectId{
+                                                                                                    instance.parent->value}}
+                                                                                              : std::nullopt},
+                                                 limits);
+            if (expanded.HasError())
+                return Result<void>::Failure(expanded.ErrorValue());
+            for (const auto &entity : expanded.Value().Entities())
+                builder.Add(entity);
             return Result<void>::Success();
         }
     }  // namespace
@@ -475,7 +459,7 @@ namespace Horo::Editor {
                 Prefab::PrefabSceneIdentityMap identityMap = std::move(remapped).Value();
                 for (const Prefab::PrefabSceneIdentityMapping &mapping : identityMap.Mappings())
                     occupied.push_back(mapping.scene);
-                if (const auto added = AddPrefabCandidate(instance, resolved, identityMap, builder); added.HasError()) {
+                if (const auto added = AddPrefabCandidate(instance, resolved, identityMap, builder, limits); added.HasError()) {
                     Error error = added.ErrorValue();
                     ScenePrefabInstanceProjection context{.authored = instance};
                     AddInstanceContext(error, context);

@@ -6,6 +6,7 @@
 
 #include "Horo/Audio/AudioClock.h"
 #include "Horo/Audio/AudioMemory.h"
+#include "Horo/Audio/AudioParameterAutomation.h"
 #include "Horo/Audio/AudioVoiceControls.h"
 
 #include <variant>
@@ -42,6 +43,18 @@ namespace Horo::Audio {
         AudioVoiceHandle voice;
         AudioParameterId parameter;
         float value{}; /**< Finite model-owned units; normalization canonicalizes zero/subnormal, not range or gain. */
+    };
+
+    /** @brief Sample-clock automation intent; never coalesced across overlap/cancellation boundaries. */
+    struct AudioAutomateParameterCommand {
+        AudioParameterAutomationRequest request;
+    };
+
+    /** @brief Cancel one exact callback-generation automation request through ordinary FIFO consumption. */
+    struct AudioCancelAutomationCommand {
+        std::uint64_t requestId{};
+        std::uint64_t clockGeneration{};
+        std::uint64_t discontinuityRevision{};
     };
 
     /** @brief Publish prevalidated graph storage retained through callback acknowledgement by its control owner. */
@@ -88,8 +101,8 @@ namespace Horo::Audio {
     /** @brief Allocation-free tagged payload; clock-mapped scheduled batches are a separate timing contract. */
     using AudioCommandPayload =
         std::variant<AudioCreateVoiceCommand, AudioStartVoiceCommand, AudioStopVoiceCommand, AudioSetParameterCommand,
-                     AudioSwapGraphCommand, AudioReleaseResourceCommand, AudioSceneUnloadCommand, AudioResetCommand,
-                     AudioScheduledBatchCommand, AudioVoiceControlRequest>;
+                     AudioAutomateParameterCommand, AudioCancelAutomationCommand, AudioSwapGraphCommand, AudioReleaseResourceCommand,
+                     AudioSceneUnloadCommand, AudioResetCommand, AudioScheduledBatchCommand, AudioVoiceControlRequest>;
 
     /** @brief Owned next-buffer-boundary intent; copying retains IDs, not resource lifetime or producer references. */
     struct AudioCommand {

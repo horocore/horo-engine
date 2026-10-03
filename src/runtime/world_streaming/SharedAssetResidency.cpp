@@ -256,6 +256,16 @@ namespace Horo::WorldStreaming {
         return Result<std::uint64_t>::Success(charged_[index]);
     }
 
+    /** @copydoc SharedAssetResidencyLedger::Inspect */
+    Result<std::optional<SharedAssetCharge>> SharedAssetResidencyLedger::Inspect(const SharedAssetKey &key) const {
+        if (!key.IsValid())
+            return Failure<std::optional<SharedAssetCharge>>(WorldStreamingErrors::SharedAssetInvalid);
+        const auto found = std::ranges::find(entries_, key, &Entry::key);
+        if (found == entries_.end())
+            return Result<std::optional<SharedAssetCharge>>::Success(std::nullopt);
+        return Result<std::optional<SharedAssetCharge>>::Success(SharedAssetCharge{found->id, found->cost, found->retiring});
+    }
+
     /** @copydoc SharedAssetResidencyLedger::LeaseCount */
     std::size_t SharedAssetResidencyLedger::LeaseCount() const noexcept {
         return leases_.size();
