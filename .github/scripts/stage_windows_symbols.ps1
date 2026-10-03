@@ -22,6 +22,6 @@ foreach ($library in @('dbghelp.dll', 'dbgcore.dll', 'symsrv.dll', 'srcsrv.dll')
   $source = Join-Path $reader.DirectoryName $library
   if (Test-Path -LiteralPath $source -PathType Leaf) {
     Copy-Item -LiteralPath $source -Destination (Join-Path $destination $library) -Force
-    Write-Host "Staged symbol library: $source ($((Get-Item -LiteralPath $source).VersionInfo.FileVersion))"
+    Write-Output "Staged symbol library: $source ($((Get-Item -LiteralPath $source).VersionInfo.FileVersion))"
   }
 }
