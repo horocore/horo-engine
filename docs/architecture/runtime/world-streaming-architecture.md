@@ -490,6 +490,37 @@ partition replacement and shutdown close admission while
 old exact leases and retirement acknowledgements remain routable to their original
 ledger. Host composition must drain that ledger before destroying its cache owner.
 
+`StreamingFeatureBudgetReservations` owns the WST-003.4 aggregate reservation
+boundary. It creates one `WorldStreamingRuntimeComposition` with the existing canonical
+scheduler and one shared-residency ledger, exposing both children read-only. A complete
+peak plan names Terrain, Foliage, Navigation, Physics and General across all seven
+independent resource axes. Four immutable feature slices are deducted from each global
+hard limit with checked subtraction; General receives exactly the remainder. A feature
+cannot borrow another slice merely because aggregate capacity remains available.
+The existing budget model retains soft-target/service-window evaluation; this authority
+enforces admitted hard capacity and does not create another clock or pressure policy.
+
+Admission checks current owner, immutable policy, authority revision and the host's
+canonical cell-attempt fence before accepting any peak or canonical operation. Growth
+must be admitted before allocation. Realizing a new shared allocation transfers its
+exact reserved portion into one cache charge in the original feature; it never adds
+that physical charge again. Cache reuse may resolve an explicitly reserved duplicate
+peak, or use an explicit zero portion for already-known reuse. It creates only another
+lease and retains the original charge's slice. Unknown costs are not zero: all plan
+features and resource axes must be explicitly present. Scratch/upload copies outside
+the realized charge remain reserved until their operation's acknowledged retirement.
+
+Cancellation, failure, replacement and shutdown retain outstanding peaks. Terminal
+operation release removes only unrealized portions; unleased and retiring cache
+allocations remain charged until the cache owner acknowledges actual retirement.
+Non-reused scheduler reservations, charge incarnations and outer authority revisions
+prevent stale completions from freeing successors. Borrowed service replacement is
+blocked while either operations or cache charges remain. Shutdown closes both child
+admission seams and reaches Closed only when both have drained. Policy/partition
+replacement uses a new non-reused owner and routes old acknowledgements to the original
+authority rather than resetting retained usage. See the
+[feature reservation migration guide](../../guides/world-streaming-feature-budget-migration.md).
+
 GPU reservation realization follows
 [ADR-034](../../adr/034-gpu-memory-and-residency-ownership.md): the host-composed
 provider adapter obtains a renderer claim against the host GPU envelope before
@@ -659,6 +690,37 @@ and is capped by the policy. This provides bounded priority recovery for feasibl
 waiting work, not a budget bypass or an unconditional admission deadline. Hosts pass
 the ranked prefix to the separate scheduler/budget authority, which remains
 responsible for capacity, pins, required content and retirement.
+
+`StreamingFairQueue` is the authority-owned WST-003.7 pending-work contract.
+It captures exact operation/cell-generation fences and source descriptors in bounded
+preallocated storage, and uses the existing numerical priority policy unchanged.
+The host issues a non-reused queue lifetime identity; a queue owns one immutable
+priority publication and mounted partition epoch. Replacement of that policy or
+partition composes a new queue lifetime after explicitly withdrawing old pending work.
+All commands and complete eligibility snapshots carry the current non-wrapping queue
+revision and monotonic unscaled service time. The authority validates source freshness,
+required content and budget feasibility before supplying each exact operation's typed
+Admissible/Deferred decision. Eligibility is evaluated at the same authority safe point
+as the later scheduler admission; the queue cannot override that decision.
+
+After at most the configured number of successful score-first dispatches (default
+three), one fair dispatch chooses the oldest admissible pending entry. Enqueue time
+is captured by the owner; same-time arrival order is stable. A same-cell successor
+attempt replaces metadata without resetting its wait order. With N older continuously
+admissible entries, pending work progresses within (N+1)*(burst+1) successful
+dispatches despite continuously arriving higher-scored work. Deferred entries do not
+block feasible work; no wall-clock deadline or progress under impossible budgets is
+promised. Numerical age boost remains capped and never becomes a budget bypass.
+
+Selection publishes a revision-fenced proposal while retaining the pending entry.
+Only after successful atomic scheduler admission does CommitDispatch remove that
+exact proposal and advance fairness credit. A failed reservation leaves pending work
+and fairness credit intact. A fresh selection replaces the old proposal, including
+an all-deferred snapshot that revokes it. Malformed, duplicate, stale or oversized
+snapshots preserve the prior publication. Enqueue, replacement, queued cancellation,
+failure withdrawal and shutdown revoke proposals explicitly. Terminal shutdown
+clears only pending metadata idempotently; admitted operations and actual reservations
+remain owned by the scheduler ledger and its ordinary retirement lifecycle.
 
 Loss of all demands starts the configured linger timer; new demand cancels linger.
 `StreamingCellStabilityPolicy` makes that rule an explicit pure per-cell transition

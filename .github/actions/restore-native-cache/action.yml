@@ -1,5 +1,5 @@
 name: Restore native build caches
-description: Restore exact dependency sources and the latest compatible PR or main compiler snapshot
+description: Restore exact dependency sources and the latest compatible main compiler snapshot
 inputs:
   profile:
     description: Build and dependency selection namespace; change when capability selection changes
@@ -100,13 +100,10 @@ runs:
     - name: Restore compiler snapshot
       id: compiler
       uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
-      env:
-        CACHE_SCOPE: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
       with:
         path: ${{ github.workspace }}/.ci-cache/compiler
-        key: native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.c-compiler }}-${{ steps.identity.outputs.compiler }}-${{ inputs.profile }}-${{ inputs.mode }}-${{ env.CACHE_SCOPE }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.c-compiler }}-${{ steps.identity.outputs.compiler }}-${{ inputs.profile }}-${{ inputs.mode }}-main-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.c-compiler }}-${{ steps.identity.outputs.compiler }}-${{ inputs.profile }}-${{ inputs.mode }}-${{ env.CACHE_SCOPE }}-
           native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.identity.outputs.c-compiler }}-${{ steps.identity.outputs.compiler }}-${{ inputs.profile }}-${{ inputs.mode }}-main-
 
     - name: Report restores and reset per-run statistics

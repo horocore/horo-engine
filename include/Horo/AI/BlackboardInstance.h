@@ -5,6 +5,7 @@
  * @brief Generation-fenced gameplay-AI blackboard storage, snapshots, and safe-point batches.
  */
 
+#include "Horo/AI/AICanonicalState.h"
 #include "Horo/AI/AIIdentity.h"
 #include "Horo/AI/BlackboardSchema.h"
 
@@ -206,6 +207,18 @@ namespace Horo::AI {
          */
         [[nodiscard]] static Result<std::unique_ptr<BlackboardInstance>> Create(const BlackboardInstanceBinding &binding,
                                                                                 std::shared_ptr<const BlackboardSchema> schema);
+        /**
+         * @brief Materializes fully validated canonical values in detached storage, including read-only and absent optional keys.
+         * @param binding Destination generation fence, never copied from canonical state.
+         * @param schema Admitted destination schema.
+         * @param state Complete canonical destination layout after migration.
+         * @return Detached instance or typed validation/storage failure; no live publication occurs.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<BlackboardInstance>> CreateFromCanonical(const BlackboardInstanceBinding &binding,
+                                                                                             std::shared_ptr<const BlackboardSchema> schema,
+                                                                                             const BlackboardCanonicalState &state);
+        /** @brief Captures the sole canonical schema-keyed value layout. @return Owned state or typed lifecycle/storage failure. */
+        [[nodiscard]] Result<BlackboardCanonicalState> CaptureCanonical() const;
         /** @brief Captures an immutable value copy for worker observation. @return Snapshot or stale failure. */
         [[nodiscard]] Result<BlackboardSnapshot> Snapshot() const;
         /** @brief Starts a detached fixed-capacity batch. @return Revision-fenced batch or stale failure. */
