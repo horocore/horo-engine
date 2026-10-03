@@ -37,6 +37,8 @@ namespace Horo::Physics::PhysicsErrors {
     extern const ErrorCodeDescriptor SolverAssertionFailed;
     /** @brief The native solver reported a fatal condition outside a recoverable operation result. */
     extern const ErrorCodeDescriptor SolverFatalCondition;
+    /** @brief A resident body's solver state contained NaN or infinity at publication. */
+    extern const ErrorCodeDescriptor BodyStateNonFinite;
     /** @brief Malformed or unsupported-version descriptor metadata. */
     extern const ErrorCodeDescriptor DescriptorInvalid;
     /** @brief A command lacks complete canonical identity/order evidence or duplicates an admitted key. */

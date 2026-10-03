@@ -37,7 +37,8 @@ namespace Horo::Character::Detail {
                                         left.normal.z,
                                         left.relativeVelocityMetersPerSecond.x,
                                         left.relativeVelocityMetersPerSecond.y,
-                                        left.relativeVelocityMetersPerSecond.z};
+                                        left.relativeVelocityMetersPerSecond.z,
+                                        left.subshape};
         const auto rightKey = std::tuple{right.distanceMeters,
                                          SweepResponseRank(right.response),
                                          right.body.has_value(),
@@ -55,17 +56,11 @@ namespace Horo::Character::Detail {
                                          right.normal.z,
                                          right.relativeVelocityMetersPerSecond.x,
                                          right.relativeVelocityMetersPerSecond.y,
-                                         right.relativeVelocityMetersPerSecond.z};
+                                         right.relativeVelocityMetersPerSecond.z,
+                                         right.subshape};
         if (const auto ordering = leftKey <=> rightKey; ordering != 0)
             return ordering < 0;
-        if (left.material.has_value() != right.material.has_value())
-            return !left.material.has_value();
-        if (!left.material.has_value())
-            return false;
-        const auto leftSlot = left.material->slot.Value();
-        const auto rightSlot = right.material->slot.Value();
-        return std::tie(left.material->asset.Bytes(), left.material->assetGeneration, leftSlot) <
-               std::tie(right.material->asset.Bytes(), right.material->assetGeneration, rightSlot);
+        return CharacterFastPathOptionalMaterialLess(left.material, right.material);
     }
 
     /** @brief Orders retained contacts by stable identities and copied geometry. */
@@ -84,7 +79,8 @@ namespace Horo::Character::Detail {
                                         left.normal.z,
                                         left.point.x,
                                         left.point.y,
-                                        left.point.z};
+                                        left.point.z,
+                                        left.subshape};
         const auto rightKey = std::tuple{right.body.has_value(),
                                          rightBody.world,
                                          rightBody.slot.index,
@@ -97,9 +93,12 @@ namespace Horo::Character::Detail {
                                          right.normal.z,
                                          right.point.x,
                                          right.point.y,
-                                         right.point.z};
+                                         right.point.z,
+                                         right.subshape};
         if (const auto ordering = leftKey <=> rightKey; ordering != 0)
             return ordering < 0;
+        if (left.materialSource != right.materialSource)
+            return left.materialSource < right.materialSource;
         const auto leftSlot = left.material.slot.Value();
         const auto rightSlot = right.material.slot.Value();
         return std::tie(left.material.asset.Bytes(), left.material.assetGeneration, leftSlot) <
@@ -133,7 +132,8 @@ namespace Horo::Character::Detail {
                             const CharacterControllerDescriptor &descriptor) {
         if (const auto duplicate = std::ranges::find_if(result.contacts.begin(), result.contacts.begin() + result.contactCount,
                                                         [&hit](const CharacterSurfaceContact &contact) {
-            return contact.body == hit.body && contact.shape == hit.shape && contact.normal == hit.normal;
+            return contact.body == hit.body && contact.shape == hit.shape && contact.subshape == hit.subshape &&
+                   contact.normal == hit.normal;
         });
             duplicate != result.contacts.begin() + result.contactCount)
             return;
@@ -147,6 +147,8 @@ namespace Horo::Character::Detail {
         contact.point = hit.point;
         contact.normal = hit.normal;
         contact.material = hit.material.value_or(descriptor.defaultMaterial);
+        contact.subshape = hit.subshape;
+        contact.materialSource = hit.material.has_value() ? CharacterMaterialSource::Query : CharacterMaterialSource::DescriptorFallback;
         contact.penetrationDepthMeters = std::max(0.0F, descriptor.skinWidthMeters - hit.distanceMeters);
     }
 
@@ -223,6 +225,9 @@ namespace Horo::Character::Detail {
         result.groundSlopeDegrees = 0.0F;
         result.groundNormal = up;
         result.groundMaterial.reset();
+        result.groundSubshape.reset();
+        result.groundMaterialSource = CharacterMaterialSource::Query;
+        result.groundPoint = {};
         result.groundBody.reset();
         result.groundShape = {};
         result.groundDistanceMeters = 0.0F;
@@ -261,6 +266,26 @@ namespace Horo::Character::Detail {
         return std::nullopt;
     }
 
+    /** @brief Copies one selected Physics support independently of the retained contact prefix. */
+    void PublishGroundSupport(CharacterMovementResult &result, const CharacterSweepHit &support,
+                              const CharacterControllerDescriptor &descriptor, const float snap) {
+        result.grounded = true;
+        result.groundSlopeDegrees = GroundSlopeDegrees(support.normal, descriptor.up);
+        result.groundNormal = support.normal;
+        result.groundMaterial = support.material.value_or(descriptor.defaultMaterial);
+        result.groundSubshape = support.subshape;
+        result.groundMaterialSource =
+            support.material.has_value() ? CharacterMaterialSource::Query : CharacterMaterialSource::DescriptorFallback;
+        result.groundPoint = support.point;
+        result.groundBody = support.body;
+        result.groundShape = support.shape;
+        result.groundDistanceMeters = support.distanceMeters - snap;
+        result.groundRelativeVelocityMetersPerSecond = support.relativeVelocityMetersPerSecond;
+        result.collisions = result.collisions | CharacterCollisionFlags::Ground;
+        result.groundingRevalidationRequired = false;
+        RetainSweepContact(result, support, descriptor);
+    }
+
     /** @brief Resolves bounded floor classification and downward snap after ordinary movement. */
     [[nodiscard]] Result<void> ResolveGrounding(auto &impl, CharacterMovementResult &result, const CharacterMovementRequest &command,
                                                 const CharacterFixedTickInput &input, const CharacterControllerDescriptor &descriptor,
@@ -282,13 +307,13 @@ namespace Horo::Character::Detail {
                                                  descriptor.collisionProfile,
                                                  descriptor.queryChannel,
                                                  impl.settings.Values().work.maximumMovementIterations};
+        if (const auto budget = ReserveTickQuery(impl); budget.HasError())
+            return budget;
         if (input.metrics != nullptr)
             ++input.metrics->snapshot.queries;
         auto probe = input.query.sweep(input.query.context, request);
-        if (impl.state.load() != CharacterWorldState::Active)
-            return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
-        if (probe.HasError())
-            return Result<void>::Failure(probe.ErrorValue());
+        if (const auto continuation = ValidateTickQueryContinuation(impl, probe); continuation.HasError())
+            return continuation;
         CharacterSweepProbeResult evidence = std::move(probe).Value();
         if (const auto valid = ValidateCharacterSweepProbeResult(evidence, request); valid.HasError())
             return valid;
@@ -299,17 +324,7 @@ namespace Horo::Character::Detail {
 
         const float snap = std::max(0.0F, support->distanceMeters - descriptor.skinWidthMeters);
         position += down * snap;
-        result.grounded = true;
-        result.groundSlopeDegrees = GroundSlopeDegrees(support->normal, descriptor.up);
-        result.groundNormal = support->normal;
-        result.groundMaterial = support->material.value_or(descriptor.defaultMaterial);
-        result.groundBody = support->body;
-        result.groundShape = support->shape;
-        result.groundDistanceMeters = support->distanceMeters - snap;
-        result.groundRelativeVelocityMetersPerSecond = support->relativeVelocityMetersPerSecond;
-        result.collisions = result.collisions | CharacterCollisionFlags::Ground;
-        result.groundingRevalidationRequired = false;
-        RetainSweepContact(result, *support, descriptor);
+        PublishGroundSupport(result, *support, descriptor, snap);
         return Result<void>::Success();
     }
 
@@ -334,15 +349,15 @@ namespace Horo::Character::Detail {
                                                  descriptor.collisionProfile,
                                                  descriptor.queryChannel,
                                                  iteration};
+        if (const auto budget = ReserveTickQuery(impl); budget.HasError())
+            return Result<bool>::Failure(budget.ErrorValue());
         if (input.metrics != nullptr) {
             ++input.metrics->snapshot.queries;
             ++input.metrics->snapshot.movementIterations;
         }
         auto probe = input.query.sweep(input.query.context, request);
-        if (impl.state.load() != CharacterWorldState::Active)
-            return Result<bool>::Failure(MakeError(CharacterErrors::InvalidState));
-        if (probe.HasError())
-            return Result<bool>::Failure(probe.ErrorValue());
+        if (const auto continuation = ValidateTickQueryContinuation(impl, probe); continuation.HasError())
+            return Result<bool>::Failure(continuation.ErrorValue());
         CharacterSweepProbeResult evidence = std::move(probe).Value();
         if (const auto valid = ValidateCharacterSweepProbeResult(evidence, request); valid.HasError())
             return Result<bool>::Failure(valid.ErrorValue());
@@ -364,7 +379,7 @@ namespace Horo::Character::Detail {
      * contact retention and projection against the canonical normal prefix, so native traversal order
      * cannot change the resulting motion.
      */
-    [[nodiscard]] Result<CharacterMovementResult> BuildCapsuleSweepMovementResult(const auto &impl, const CharacterMovementRequest &command,
+    [[nodiscard]] Result<CharacterMovementResult> BuildCapsuleSweepMovementResult(auto &impl, const CharacterMovementRequest &command,
                                                                                   const CharacterTransformPublication &previous,
                                                                                   const CharacterFixedTickInput &input,
                                                                                   const CharacterControllerDescriptor &descriptor) {

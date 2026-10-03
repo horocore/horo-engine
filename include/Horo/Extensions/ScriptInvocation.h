@@ -7,6 +7,7 @@
 
 #include "Horo/Extensions/ScriptValue.h"
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Foundation/Telemetry/Operation.h"
 
 #include <chrono>
 #include <cstddef>
@@ -18,6 +19,7 @@
 #include <vector>
 
 namespace Horo::Extensions {
+    struct ScriptCapabilityBindingState;
     struct ScriptInvocationRegistryState;
     struct ScriptInvocationProviderState;
     struct ScriptInvocationContextState;
@@ -130,23 +132,43 @@ namespace Horo::Extensions {
         std::size_t maximumHandles{1024};     /**< Maximum active opaque handles for this context. */
     };
 
+    /** @brief Bounded host identity evidence; excludes source, arguments, secrets and native addresses. */
+    struct ScriptInvocationDiagnosticContext final {
+        std::string packageId;
+        std::string moduleId;
+        std::string scriptId;
+        std::string apiId;
+        std::uint64_t policyRevision{};
+        std::uint64_t operationId{};
+        /**
+         * @brief Creates a safe Foundation operation/log snapshot for explicit worker-thread binding.
+         * @return Owned correlation with package, module, script, API and policy identity only.
+         * @note Provider adapters bind this snapshot with Telemetry::ScopedOperationContext before logging.
+         */
+        [[nodiscard]] Telemetry::OperationContext CaptureOperationContext() const;
+        bool operator==(const ScriptInvocationDiagnosticContext &) const noexcept = default;
+    };
+
     /** @brief Immutable request copied before provider work is admitted. */
     struct ScriptInvocationRequest final {
-        ScriptExportDescriptorSnapshotPtr descriptors;    /**< Validated immutable API generation. */
-        std::string apiId;                                /**< Exact script API identity. */
-        std::string functionId;                           /**< Exact function identity within the API. */
-        std::vector<ScriptValue> arguments;               /**< Owned ordered arguments; no VM values or borrowed views. */
-        std::optional<std::chrono::milliseconds> timeout; /**< Optional finite timeout; zero expires at admission. */
+        std::shared_ptr<const ScriptCapabilityBindingState> authority; /**< Host binding lease; never supplied by the VM. */
+        ScriptInvocationDiagnosticContext diagnostics;                 /**< Host-only safe identity evidence. */
+        ScriptExportDescriptorSnapshotPtr descriptors;                 /**< Validated immutable API generation. */
+        std::string apiId;                                             /**< Exact script API identity. */
+        std::string functionId;                                        /**< Exact function identity within the API. */
+        std::vector<ScriptValue> arguments;                            /**< Owned ordered arguments; no VM values or borrowed views. */
+        std::optional<std::chrono::milliseconds> timeout;              /**< Optional finite timeout; zero expires at admission. */
         ScriptInvocationCompletionAffinity completionAffinity{ScriptInvocationCompletionAffinity::OwnerThreadSafePoint};
     };
 
     /** @brief Immutable invocation snapshot copied under the host lifecycle lock. */
     struct ScriptInvocationSnapshot final {
-        ScriptInvocationId invocation;      /**< Host-issued invocation identity. */
-        ScriptContextId context;            /**< Owning script context identity. */
-        std::uint64_t providerGeneration{}; /**< Exact provider generation admitted for the call. */
-        std::string apiId;                  /**< Copied API identity. */
-        std::string functionId;             /**< Copied function identity. */
+        ScriptInvocationId invocation;                 /**< Host-issued invocation identity. */
+        ScriptContextId context;                       /**< Owning script context identity. */
+        ScriptInvocationDiagnosticContext diagnostics; /**< Copied async correlation, independent of payloads. */
+        std::uint64_t providerGeneration{};            /**< Exact provider generation admitted for the call. */
+        std::string apiId;                             /**< Copied API identity. */
+        std::string functionId;                        /**< Copied function identity. */
         ScriptExportInvocationMode invocationMode{ScriptExportInvocationMode::Count}; /**< Descriptor scheduling mode. */
         ScriptInvocationCompletionAffinity completionAffinity{ScriptInvocationCompletionAffinity::Count};
         ScriptInvocationStateKind state{ScriptInvocationStateKind::Queued}; /**< Current or immutable terminal state. */
@@ -176,10 +198,29 @@ namespace Horo::Extensions {
         ScriptInvocationEventKind kind{ScriptInvocationEventKind::Progress};
         ScriptInvocationId invocation;
         ScriptContextId context;
+        ScriptInvocationDiagnosticContext diagnostics; /**< Copied async correlation, independent of payloads. */
         std::uint64_t providerGeneration{};
         ScriptInvocationProgress progress;
         std::optional<ScriptCallResult> terminalResult;
         std::uint64_t revision{1};
+    };
+
+    /** @brief Copyable observer of one exact host provider registration; generation reuse cannot revive it. */
+    class ScriptInvocationProviderLease final {
+    public:
+        ScriptInvocationProviderLease() = default;
+        /** @brief Reports provider registration liveness. @return False after reset or shutdown. */
+        [[nodiscard]] bool IsUsable() const noexcept;
+        /** @brief Returns the leased generation. @return Zero for an empty lease. */
+        [[nodiscard]] std::uint64_t Generation() const noexcept;
+        /** @brief Checks exact registration identity. @param provider Candidate registration. @return True only for the leased state. */
+        [[nodiscard]] bool Matches(const ScriptInvocationProviderRegistration &provider) const noexcept;
+
+    private:
+        friend class ScriptInvocationProviderRegistration;
+        friend struct ScriptCapabilityBindingState;
+        explicit ScriptInvocationProviderLease(std::shared_ptr<ScriptInvocationProviderState> provider) noexcept;
+        std::shared_ptr<ScriptInvocationProviderState> provider_;
     };
 
     /** @brief Move-only provider-generation registration whose reset revokes its invocations and handles. */
@@ -195,11 +236,14 @@ namespace Horo::Extensions {
         void Reset() const noexcept;
         /** @brief Reports whether this generation is still admitted. @return True while registered. */
         [[nodiscard]] bool IsRegistered() const noexcept;
+        /** @brief Returns an exact revocable provider observer. @return Empty after move. */
+        [[nodiscard]] ScriptInvocationProviderLease Lease() const noexcept;
         /** @brief Returns the immutable generation identity. @return Zero for moved-from registration. */
         [[nodiscard]] std::uint64_t Generation() const noexcept;
 
     private:
         friend class ScriptInvocationRegistry;
+        friend class ScriptInvocationProviderLease;
         ScriptInvocationProviderRegistration(std::weak_ptr<ScriptInvocationRegistryState> registry,
                                              std::shared_ptr<ScriptInvocationProviderState> provider) noexcept;
 
@@ -290,7 +334,11 @@ namespace Horo::Extensions {
         std::shared_ptr<ScriptInvocationState> state_;
     };
 
-    /** @brief Explicit host-owned registry for safe script values and asynchronous invocation records. */
+    /**
+     * @brief Explicit host-owned registry for safe script values and asynchronous invocation records.
+     * @note This low-level host primitive is never exposed to a VM. Script module adapters receive
+     * ScriptCapabilityBinding values from ScriptCapabilityContext, which owns import authority.
+     */
     class ScriptInvocationRegistry final {
     public:
         static constexpr std::size_t MaximumContexts = 256;
