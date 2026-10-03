@@ -371,6 +371,7 @@ target_compile_features(HoroNetworkTransportCompositionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkTransportCompositionTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
 add_dependencies(HoroNetworkTransportCompositionTests HoroNetworkDisabledLinkProbe HoroNetworkNullLinkProbe)
 horo_register_catch_test(HoroNetworkTransportCompositionTests LABELS "unit;network;headless")
+target_sources(HoroAudioApiPublicHeaderConsumer PRIVATE support/AudioStreamingFactoryPublicContract.cpp)
 add_executable(HoroAudioApiTests
         support/AllocationProbe.cpp
         unit/runtime/audio/AudioAcousticQueryTests.cpp
@@ -378,6 +379,9 @@ add_executable(HoroAudioApiTests
         unit/runtime/audio/MixerAssetSchemaTests.cpp
         unit/runtime/audio/AudioSoundReferenceTests.cpp
         unit/runtime/audio/AudioStreamDecoderTests.cpp
+        unit/runtime/audio/AudioStreamingServiceTests.cpp
+        unit/runtime/audio/AudioStreamingCancellationTests.cpp
+        unit/runtime/audio/AudioStreamingControlTests.cpp
         unit/runtime/audio/AudioBackendCapabilitiesTests.cpp
         unit/runtime/audio/AudioCallbackEventsTests.cpp
         unit/runtime/audio/AudioDeviceDiscoveryTests.cpp
@@ -409,9 +413,11 @@ target_link_libraries(HoroAudioImportTests PRIVATE HoroEngine::AudioImport)
 horo_register_catch_test(HoroAudioImportTests LABELS "unit;audio;headless")
 add_executable(HoroAudioCookTests
         unit/runtime/audio/AudioCookerTests.cpp
+        unit/runtime/audio/AudioCookedStreamContextTests.cpp
 )
 target_compile_features(HoroAudioCookTests PRIVATE cxx_std_20)
-target_link_libraries(HoroAudioCookTests PRIVATE HoroEngine::AudioCook)
+target_link_libraries(HoroAudioCookTests PRIVATE HoroEngine::AudioCook HoroEngine::Platform)
+target_include_directories(HoroAudioCookTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 horo_register_catch_test(HoroAudioCookTests LABELS "unit;audio;headless")
 add_executable(HoroAudioBackendContractTests
         unit/runtime/audio/AudioBackendContractTests.cpp
@@ -845,7 +851,8 @@ add_test(NAME HoroNavigationBakeDiagnosticsPublicConsumer COMMAND HoroNavigation
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     add_executable(HoroNavigationBakeServiceTests unit/runtime/navigation/NavigationBakeServiceTests.cpp
             unit/runtime/navigation/NavigationBakeDiagnosticsTests.cpp
-            unit/runtime/navigation/NavigationBakeDiagnosticRecoveryTests.cpp)
+            unit/runtime/navigation/NavigationBakeDiagnosticRecoveryTests.cpp
+            unit/application/navigation/NavigationBakePublicationTests.cpp)
     target_compile_features(HoroNavigationBakeServiceTests PRIVATE cxx_std_20)
     target_include_directories(HoroNavigationBakeServiceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_link_libraries(HoroNavigationBakeServiceTests PRIVATE HoroEngine::NavigationBakeService HoroEngine::NavigationRecastDetour)
@@ -1887,6 +1894,7 @@ target_compile_features(HoroFoundationJobSystemTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationJobSystemTests PRIVATE HoroEngine::Foundation)
 add_executable(HoroPlatformTests
         unit/foundation/PlatformTests.cpp
+        unit/foundation/PlatformPublicationLockTests.cpp
 )
 
 add_executable(HoroProcessTestChild helpers/platform/ProcessTreeChild.cpp)
@@ -2610,7 +2618,7 @@ target_link_libraries(HoroAssetCookTests PRIVATE HoroEngine::Assets)
 add_executable(HoroAssetChunkPlanTests
         unit/runtime/assets/AssetChunkPlanTests.cpp
         unit/runtime/assets/AssetArchiveTests.cpp)
-target_link_libraries(HoroAssetChunkPlanTests PRIVATE HoroEngine::Assets)
+target_link_libraries(HoroAssetChunkPlanTests PRIVATE HoroEngine::Assets HoroEngine::Platform)
 horo_register_catch_test(HoroAssetChunkPlanTests LABELS "assets;release;headless")
 add_executable(HoroCookCatalogTests
         unit/runtime/assets/CookCatalogTests.cpp
@@ -2632,25 +2640,30 @@ target_compile_features(HoroAssetCookCacheTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAssetCookCacheTests PRIVATE HoroEngine::Assets)
 add_executable(HoroAssetCookOutputTests
         unit/runtime/assets/AssetCookOutputTests.cpp
+        unit/runtime/assets/AssetCookPublicationTests.cpp
 )
 target_compile_features(HoroAssetCookOutputTests PRIVATE cxx_std_20)
-target_link_libraries(HoroAssetCookOutputTests PRIVATE HoroEngine::Assets)
+target_link_libraries(HoroAssetCookOutputTests PRIVATE HoroEngine::Assets HoroEngine::Platform)
+target_include_directories(HoroAssetCookOutputTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 add_executable(HoroAssetCookServiceTests
         unit/runtime/assets/AssetCookServiceTests.cpp
+        unit/runtime/assets/AssetCookServicePublicationTests.cpp
 )
 target_compile_features(HoroAssetCookServiceTests PRIVATE cxx_std_20)
-target_link_libraries(HoroAssetCookServiceTests PRIVATE HoroEngine::Assets HoroEngine::Foundation)
+target_link_libraries(HoroAssetCookServiceTests PRIVATE HoroEngine::Assets HoroEngine::Foundation HoroEngine::Platform)
 target_include_directories(HoroAssetCookServiceTests PRIVATE
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin
+        ${PROJECT_SOURCE_DIR}/tests/support
 )
 add_executable(HoroAssetCookIntegrationTests
         integration/assets/AssetCookIntegrationTests.cpp
 )
 target_compile_features(HoroAssetCookIntegrationTests PRIVATE cxx_std_20)
 target_compile_definitions(HoroAssetCookIntegrationTests PRIVATE PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-target_link_libraries(HoroAssetCookIntegrationTests PRIVATE HoroEngine::Assets HoroEngine::Foundation)
+target_link_libraries(HoroAssetCookIntegrationTests PRIVATE HoroEngine::Assets HoroEngine::Foundation HoroEngine::Platform)
 target_include_directories(HoroAssetCookIntegrationTests PRIVATE
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin
+        ${PROJECT_SOURCE_DIR}/tests/support
 )
 add_executable(HoroAssetImporterCatalogTests
         unit/runtime/assets/AssetImporterCatalogTests.cpp
@@ -2688,10 +2701,11 @@ add_executable(HoroModularAssetImportIntegrationTests
 )
 target_compile_features(HoroModularAssetImportIntegrationTests PRIVATE cxx_std_20)
 target_compile_definitions(HoroModularAssetImportIntegrationTests PRIVATE PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-target_link_libraries(HoroModularAssetImportIntegrationTests PRIVATE HoroEngine::Assets HoroEngine::Foundation)
+target_link_libraries(HoroModularAssetImportIntegrationTests PRIVATE HoroEngine::Assets HoroEngine::Foundation HoroEngine::Platform)
 target_include_directories(HoroModularAssetImportIntegrationTests PRIVATE
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/importer
+        ${PROJECT_SOURCE_DIR}/tests/support
 )
 add_executable(HoroExtensionDiscoveryTests
         unit/extensions/DiscoveryPathsTests.cpp

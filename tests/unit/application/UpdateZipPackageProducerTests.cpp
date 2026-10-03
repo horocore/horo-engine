@@ -36,6 +36,7 @@ namespace {
             std::filesystem::create_directories(root / "source/bin");
             std::filesystem::create_directories(root / "first");
             std::filesystem::create_directories(root / "second");
+            root = std::filesystem::canonical(root);
         }
 
         ~TemporaryDirectory() {
@@ -493,6 +494,17 @@ TEST_CASE("ZIP producer refuses an existing output symlink", "[release][update][
     CHECK(std::filesystem::is_symlink(std::filesystem::symlink_status(directory.root / "first/update.zip")));
 }
 
+TEST_CASE("ZIP bootstrap fixture supplies canonical native writer authority", "[release][install][zip]") {
+    TemporaryDirectory directory;
+    NativeDurableFileSystem files;
+    const auto lockPath = directory.root / ".activation.lock";
+    auto lock = files.TryAcquireExclusive(lockPath, "ZIP bootstrap fixture");
+    if (lock.HasError())
+        UNSCOPED_INFO("Native writer authority error: " << lock.ErrorValue().code.Value());
+    REQUIRE(lock.HasValue());
+    CHECK(lock.Value().ProtectsPath(lockPath));
+}
+
 #if defined(_WIN32) || defined(__APPLE__)
 TEST_CASE("Native portable ZIP bootstrap repairs and removes only owned files", "[release][install][zip]") {
     TemporaryDirectory directory;
@@ -511,7 +523,10 @@ TEST_CASE("Native portable ZIP bootstrap repairs and removes only owned files", 
     WriteFile(project, "user data");
     CHECK(BootstrapVerifiedInstallation(request, files, verifier, noSpace).HasError());
     CHECK_FALSE(std::filesystem::exists(directory.root / "active-version"));
-    REQUIRE(BootstrapVerifiedInstallation(request, files, verifier, host).HasValue());
+    const auto installed = BootstrapVerifiedInstallation(request, files, verifier, host);
+    if (installed.HasError())
+        UNSCOPED_INFO("Bootstrap error: " << installed.ErrorValue().code.Value());
+    REQUIRE(installed.HasValue());
     REQUIRE(RepairVerifiedInstallation(request, files, verifier, host).HasValue());
     WriteFile(stage / "user-note", "preserve");
     CHECK(UninstallVerifiedInstallation(request, files, verifier, host).HasError());

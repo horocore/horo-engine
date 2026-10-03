@@ -104,6 +104,12 @@ namespace Horo::Assets::CookErrors {
                                                 "Use a compatible engine version or re-cook the asset."};
     const ErrorCodeDescriptor MalformedArtifact{kCookDomain, ErrorCode{"asset.cook.malformed_artifact"}, kCookError,
                                                 "Cooked artifact is malformed.", "Re-cook the asset from its authoritative source."};
+    const ErrorCodeDescriptor NotPublished{kCookDomain,
+                                           ErrorCode{"asset.cook.not_published"},
+                                           kCookError,
+                                           "No cooked generation has been published for this target.",
+                                           "Complete a cook operation before loading this target.",
+                                           true};
     const ErrorCodeDescriptor TooLarge{kCookDomain, ErrorCode{"asset.cook.too_large"}, kCookError,
                                        "Cooked artifact exceeds the configured size limit.",
                                        "Increase the limit or reduce the source asset."};

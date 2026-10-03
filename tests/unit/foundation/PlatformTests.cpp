@@ -301,10 +301,11 @@ namespace {
     }
 
     TEST_CASE("Native Durable Filesystem Serializes Locks And Replaces Files", "[unit][foundation]") {
-        const auto root = std::filesystem::temp_directory_path() / "horo-platform-durable-test";
+        const auto temporary = std::filesystem::temp_directory_path() / "horo-platform-durable-test";
         std::error_code ignored;
-        std::filesystem::remove_all(root, ignored);
-        std::filesystem::create_directories(root);
+        std::filesystem::remove_all(temporary, ignored);
+        std::filesystem::create_directories(temporary);
+        const auto root = std::filesystem::canonical(temporary);
         Horo::NativeDurableFileSystem files;
         {
             auto first = files.TryAcquireExclusive(root / "mutation.lock", "first");
@@ -322,6 +323,20 @@ namespace {
             std::ifstream input(root / "published", std::ios::binary);
             REQUIRE((std::string(std::istreambuf_iterator<char>(input), {}) == text));
         }
+        Horo::AtomicFileReplacementReceipt tracked;
+        CHECK_FALSE(tracked.WasCommitted());
+        REQUIRE(files.WriteDurable(root / "prepared", bytes).HasValue());
+        REQUIRE(files.AtomicReplaceTracked(root / "prepared", root / "published", tracked).HasValue());
+        CHECK(tracked.WasCommitted());
+        CHECK_FALSE(std::filesystem::exists(root / "prepared"));
+        Horo::AtomicFileReplacementReceipt failed;
+        REQUIRE(files.AtomicReplaceTracked(root / "missing", root / "published", failed).HasError());
+        CHECK_FALSE(failed.WasCommitted());
+        REQUIRE(files.WriteDurable(root / "prepared", bytes).HasValue());
+        CHECK(files.AtomicReplaceTracked(root / "prepared", root / "published", tracked).HasError());
+        CHECK(tracked.WasCommitted());
+        CHECK(std::filesystem::exists(root / "prepared"));
+        REQUIRE(files.RemoveDurable(root / "prepared").HasValue());
         REQUIRE((files.CopyDurable(root / "published", root / "copied").HasValue()));
         {
             std::ifstream input(root / "copied", std::ios::binary);
@@ -425,10 +440,23 @@ namespace {
             CHECK(files.AppendPrivateDurable(partial, 0U, std::as_bytes(std::span{first})).HasError());
     }
 
+    TEST_CASE("Filesystem without tracked replacement support rejects before invoking its legacy writer", "[unit][foundation]") {
+        FaultingDurableFileSystem files;
+        Horo::AtomicFileReplacementReceipt receipt;
+        const auto result = files.AtomicReplaceTracked("prepared", "published", receipt);
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().domain.Value() == "horo.platform.filesystem");
+        CHECK(result.ErrorValue().code.Value() == "filesystem.atomic_tracking_unsupported");
+        CHECK_FALSE(receipt.WasCommitted());
+        CHECK(files.operations.empty());
+        CHECK(files.published == "last-valid");
+    }
+
     TEST_CASE("Configuration File Store Publishes Deterministic Versioned Documents", "[unit][foundation][configuration]") {
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        const std::filesystem::path root = std::filesystem::temp_directory_path() / ("horo-configuration-store-" + std::to_string(stamp));
-        std::filesystem::create_directories(root);
+        const auto temporary = std::filesystem::temp_directory_path() / ("horo-configuration-store-" + std::to_string(stamp));
+        std::filesystem::create_directories(temporary);
+        const auto root = std::filesystem::canonical(temporary);
         Horo::NativeDurableFileSystem files;
         Horo::ConfigurationFileStore store{files};
         const Horo::ConfigurationSnapshot snapshot = BuildConfigurationSnapshot();

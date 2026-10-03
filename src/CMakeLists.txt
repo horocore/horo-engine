@@ -126,6 +126,7 @@ endif ()
 
 add_library(HoroPlatform STATIC
         platform/Platform.cpp
+        platform/PlatformPublicationLock.cpp
         platform/ProductProbeLease.cpp
         platform/PlatformErrors.cpp
         platform/ConfigurationFileStore.cpp
@@ -744,6 +745,9 @@ add_library(HoroAssets STATIC
         runtime/assets/cooker/AssetCookOutput.cpp
         runtime/assets/cooker/AssetCookOperationScope.cpp
         runtime/assets/cooker/AssetCookOperationScope.h
+        runtime/assets/cooker/AssetCookStoragePaths.cpp
+        runtime/assets/cooker/AssetCookStorageRead.cpp
+        runtime/assets/cooker/AssetCookStorageRecovery.cpp
         runtime/assets/cooker/AssetCookService.cpp
         runtime/assets/cooker/AssetCookTransaction.cpp
         runtime/assets/importer/AssetImporterCatalog.cpp
@@ -797,6 +801,7 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioSoundReference.cpp
         audio/api/AudioStreamDecoder.cpp
         audio/api/AudioStreamDecoderErrors.cpp
+        audio/api/AudioStreamingService.cpp
         audio/api/AudioConcurrencyGroup.cpp
         audio/api/AudioVoiceStateMachine.cpp
         audio/api/AudioVoiceControls.cpp
@@ -823,6 +828,7 @@ add_library(HoroAudioCook STATIC
         audio/cook/AudioCookProfile.cpp
         audio/cook/AudioCooker.cpp
         audio/cook/AudioCookInspector.cpp
+        audio/cook/AudioCookedStreamSource.cpp
 )
 add_library(HoroEngine::AudioCook ALIAS HoroAudioCook)
 target_compile_features(HoroAudioCook PUBLIC cxx_std_20)
@@ -1312,6 +1318,8 @@ target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::Navigati
 add_library(HoroNavigationBakeService STATIC
         application/navigation/NavigationBakeService.cpp
         application/navigation/NavigationBakeCook.cpp
+        application/navigation/NavigationBakeSourceAuthority.cpp
+        application/navigation/NavigationBakePublication.cpp
         application/navigation/NavigationBakeDiagnostics.cpp
         application/navigation/NavigationBakeDiagnosticCodec.cpp
         application/navigation/NavigationBakeDiagnosticProjection.cpp
