@@ -22,6 +22,11 @@ request under a persistently failing clock. Explicit shutdown preserves the erro
 and exact cancelled barrier evidence; no successful timing sample is invented and
 unrelated queued/manual operations and mutation tickets remain intact.
 
+Unexpected exceptions escaping teardown produce an emergency log record; they are
+not silently discarded. Hosts must use explicit `BeginShutdown` while dependencies
+are alive to observe typed cleanup failures. Clock containment includes standard
+exceptions, foreign class types and integral exceptions such as `throw 42`.
+
 ## Host wiring
 
 Construct one scheduler on the owner thread after composing the existing arbiter,

@@ -274,6 +274,12 @@ namespace Horo::Navigation {
     [[nodiscard]] Result<void> ValidateNavMeshTile(const NavMeshArtifactView &artifact, std::size_t tileIndex,
                                                    const NavMeshArtifactLimits &limits = {});
 
+    /** @brief Validate complete decoded tables without allocating an owning copy.
+     * @param artifact Borrowed tables and parser-observed digest evidence.
+     * @param limits Qualified schema and ownership ceilings.
+     * @return The same typed validation result used by NavMeshData::Create. */
+    [[nodiscard]] Result<void> ValidateNavMeshArtifact(const NavMeshArtifactView &artifact, const NavMeshArtifactLimits &limits = {});
+
     /** @brief Immutable, move-only provider-neutral cooked NavMesh artifact. */
     class NavMeshData final {
     public:

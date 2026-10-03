@@ -72,6 +72,14 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor PerceptionMemoryInvalid;
     /** @brief Perception memory received a backward committed simulation tick. */
     extern const ErrorCodeDescriptor PerceptionMemoryTimeInvalid;
+    /** @brief An authoritative gameplay perception event or its admission adapter is malformed. */
+    extern const ErrorCodeDescriptor PerceptionEventInvalid;
+    /** @brief Gameplay has not authorized this exact recipient or disclosure. */
+    extern const ErrorCodeDescriptor PerceptionEventUnauthorized;
+    /** @brief An event source, sender or recipient no longer has its exact scene generation. */
+    extern const ErrorCodeDescriptor PerceptionEventStale;
+    /** @brief The current recipient's perception filter rejects this event. */
+    extern const ErrorCodeDescriptor PerceptionEventFiltered;
     /** @brief A spatial publication record or query violates its typed range/filter contract. */
     extern const ErrorCodeDescriptor PerceptionSpatialInvalid;
     /** @brief A spatial publication exceeds a hard participant capacity. */
@@ -166,4 +174,14 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor SceneActivationInvalid;
     /** @brief The bounded AI scene-agent capacity has been exhausted. */
     extern const ErrorCodeDescriptor AgentCapacityExceeded;
+    /** @brief Canonical state has malformed, duplicate, missing, or over-limit data. */
+    extern const ErrorCodeDescriptor CanonicalStateInvalid;
+    /** @brief No unambiguous supported forward schema migration exists. */
+    extern const ErrorCodeDescriptor CanonicalSchemaUnsupported;
+    /** @brief A declared migration cannot preserve the source value contract. */
+    extern const ErrorCodeDescriptor CanonicalMigrationFailed;
+    /** @brief Scene, agent, schema, or runtime publication changed before restore. */
+    extern const ErrorCodeDescriptor CanonicalRestoreStale;
+    /** @brief Restore was cooperatively cancelled before publication. */
+    extern const ErrorCodeDescriptor CanonicalRestoreCancelled;
 }  // namespace Horo::AI::AIErrors

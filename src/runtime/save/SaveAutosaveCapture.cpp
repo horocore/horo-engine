@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Runtime/Save/SaveAutosaveScheduler.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
@@ -29,8 +30,8 @@ namespace Horo::Runtime {
         try {
             static_cast<void>(BeginShutdown());
         } catch (...) {
-            // Teardown cannot propagate host callbacks or error-allocation failures.
-            // Hosts use explicit BeginShutdown while dependencies live to observe cleanup errors.
+            Log::Logger::WriteEmergency("runtime.save.autosave", Log::Level::Error,
+                                        "Autosave teardown failed unexpectedly; ownership cleanup could not be confirmed.");
         }
     }
 

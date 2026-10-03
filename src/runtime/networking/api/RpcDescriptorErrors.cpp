@@ -59,4 +59,49 @@ namespace Horo::Network::NetworkErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor RpcPermissionUnsupported{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.rpc.permission_unsupported"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The declared RPC caller policy has no admitted implementation.",
+        .remediationHint = "Compose a host-approved caller-policy capability before enabling this RPC.",
+        .retryable = false,
+        .userActionable = true,
+    };
+    const ErrorCodeDescriptor RpcPermissionDenied{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.rpc.permission_denied"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The admitted caller is not permitted to invoke this RPC.",
+        .remediationHint = "Use the current server-issued direction, role and object ownership grant.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor RpcRateLimited{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.rpc.rate_limited"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The caller or global RPC work budget is exhausted.",
+        .remediationHint = "Wait for the host clock budget to refill; never retry an accepted logical command.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor RpcParameterInvalid{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.rpc.parameter_invalid"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "A canonical typed RPC value violates Gameplay's declared constraint.",
+        .remediationHint = "Submit finite values inside the owner-composed typed parameter range.",
+        .retryable = false,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor RpcGameplayFailed{
+        .domain = NetworkDomain,
+        .code = ErrorCode{"network.rpc.gameplay_failed"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "An authorized Gameplay RPC invocation failed.",
+        .remediationHint = "Inspect the retained Gameplay cause; the logical command is terminal and must not be replayed.",
+        .retryable = false,
+        .userActionable = false,
+    };
 }  // namespace Horo::Network::NetworkErrors

@@ -106,6 +106,16 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor RpcCapacityExceeded;
     /** @brief An RPC parameter has no exact accepted typed codec metadata. */
     extern const ErrorCodeDescriptor RpcParameterUnsupported;
+    /** @brief Dispatch has no host-approved implementation of the declared caller policy. */
+    extern const ErrorCodeDescriptor RpcPermissionUnsupported;
+    /** @brief The current admitted caller or owner publication denies an RPC. */
+    extern const ErrorCodeDescriptor RpcPermissionDenied;
+    /** @brief The caller/RPC or active work budget is exhausted. */
+    extern const ErrorCodeDescriptor RpcRateLimited;
+    /** @brief A canonical typed parameter violates an owner constraint. */
+    extern const ErrorCodeDescriptor RpcParameterInvalid;
+    /** @brief A permitted Gameplay invocation failed; the original cause is retained. */
+    extern const ErrorCodeDescriptor RpcGameplayFailed;
     /** @brief Serializer metadata, quantization policy, or typed value representation is malformed. */
     extern const ErrorCodeDescriptor ReplicationSerializerInvalid;
     /** @brief Multiple serializers claim the same owner, semantic type, and codec identity. */

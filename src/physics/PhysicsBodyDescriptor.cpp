@@ -125,7 +125,7 @@ namespace Horo::Physics {
             return owner;
         if (const auto pose = ValidatePhysicsPose(state.pose); pose.HasError())
             return pose;
-        if (state.activity > PhysicsBodyActivity::Sleeping)
+        if (state.activity > PhysicsBodyActivity::Static)
             return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Unknown body activity state."));
         if (!FiniteStateVelocity(state))
             return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Observed body velocities must be finite."));

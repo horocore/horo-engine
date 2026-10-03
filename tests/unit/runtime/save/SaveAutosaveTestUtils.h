@@ -23,6 +23,12 @@ namespace Horo::Runtime::AutosaveTestSupport {
 
     struct AdapterFailure final {};
 
+    enum class HostClockException {
+        Standard,
+        Foreign,
+        Integer
+    };
+
     inline Duration Ns(const std::int64_t value) {
         return Duration::FromNanoseconds(value);
     }
@@ -31,10 +37,12 @@ namespace Horo::Runtime::AutosaveTestSupport {
     public:
         Duration now;
         bool throws{};
-        bool nonstandardException{};
+        HostClockException exception{HostClockException::Standard};
 
         [[nodiscard]] Duration MonotonicNow() const override {
-            if (throws && nonstandardException)
+            if (throws && exception == HostClockException::Integer)
+                throw 42;
+            if (throws && exception == HostClockException::Foreign)
                 throw AdapterFailure{};
             if (throws)
                 throw HostClockFailure{};

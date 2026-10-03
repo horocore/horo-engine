@@ -66,6 +66,8 @@ namespace Horo::Physics::Detail {
         [[nodiscard]] Result<PhysicsEventProjectionResult> CompleteTick(std::uint64_t simulationTick);
         /** @brief Abandons the open capture window without changing the prior lifecycle/publication state. */
         void AbortTick() noexcept;
+        /** @brief Retires all copied and published contact/trigger evidence for one quarantined body after callback join. */
+        void SuppressBody(BodyHandle body) noexcept;
         /** @brief Clears lifecycle and publication state at a world reset/unload boundary. */
         void Reset() noexcept;
         /** @brief Returns the most recently published immutable event records until the next publication boundary. */
@@ -95,6 +97,10 @@ namespace Horo::Physics::Detail {
         void BuildCurrentPairs(std::uint32_t retained);
         /** @brief Reconciles prior and current pair sets into bounded lifecycle records. */
         void ReconcileLifecycle() noexcept;
+        /** @brief Appends the contact or trigger entry for a new pair. */
+        void AppendEnter(const PairState &pair) noexcept;
+        /** @brief Appends the contact or trigger exit for a retired pair. */
+        void AppendExit(const PairState &pair) noexcept;
         /** @brief Appends one record or accounts for canonical event-buffer overflow. */
         void Append(PhysicsEventKind kind, const PairState &state) noexcept;
         /** @brief Appends the correct begin/end/persist transition for one old/current pair match. */

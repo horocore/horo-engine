@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <limits>
 #include <new>
-#include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime::Ui {
@@ -18,18 +17,6 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Failure(MakeError(descriptor));
         }
 
-        template <typename Enum> [[nodiscard]] bool IsKnown(const Enum value, const Enum count) noexcept {
-            return static_cast<std::underlying_type_t<Enum>>(value) < static_cast<std::underlying_type_t<Enum>>(count);
-        }
-
-        [[nodiscard]] bool IsValidRouteMetadata(const UiRouteMetadata &route) noexcept {
-            return route.id.IsValid() && IsKnown(route.band, UiPresentationBand::Count);
-        }
-
-        [[nodiscard]] bool HasGuardField(const UiRouteStackGuard &guard) noexcept {
-            return guard.stack.IsValid() || guard.revision.IsValid() || guard.top.has_value();
-        }
-
         [[nodiscard]] bool IsSameTop(const std::optional<UiRouteInstanceId> &expected,
                                      const std::vector<UiRouteInstance> &routes) noexcept {
             if (!expected.has_value())
@@ -38,153 +25,12 @@ namespace Horo::Runtime::Ui {
         }
     }  // namespace
 
-    /** @copydoc UiRouteStackGuard::Create */
-    Result<UiRouteStackGuard> UiRouteStackGuard::Create(const UiRouteStackId stack, const UiRouteStackRevision revision,
-                                                        const std::optional<UiRouteInstanceId> top) {
-        UiRouteStackGuard guard{stack, revision, top};
-        if (!guard.IsValid())
-            return Failure<UiRouteStackGuard>(UiErrors::RouteOperationInvalid);
-        return Result<UiRouteStackGuard>::Success(guard);
-    }
-
-    /** @copydoc UiRouteStackGuard::IsEmpty */
-    bool UiRouteStackGuard::IsEmpty() const noexcept {
-        return !stack.IsValid() && !revision.IsValid() && !top.has_value();
-    }
-
-    /** @copydoc UiRouteStackGuard::IsValid */
-    bool UiRouteStackGuard::IsValid() const noexcept {
-        return stack.IsValid() && revision.IsValid() && (!top.has_value() || (top->IsValid() && top->ownership == stack.ownership));
-    }
-
-    /** @copydoc UiRouteOperationId::IsValid */
-    bool UiRouteOperationId::IsValid() const noexcept {
-        return ownership.IsValid() && sequence.IsValid();
-    }
-
-    /** @copydoc UiRouteOperationRequest::Push */
-    UiRouteOperationRequest UiRouteOperationRequest::Push(const UiRouteId route, const UiRouteStackGuard guard) {
-        return {UiRouteOperationKind::Push, route, guard};
-    }
-
-    /** @copydoc UiRouteOperationRequest::Pop */
-    UiRouteOperationRequest UiRouteOperationRequest::Pop(const UiRouteStackGuard guard) {
-        return {UiRouteOperationKind::Pop, std::nullopt, guard};
-    }
-
-    /** @copydoc UiRouteOperationRequest::Replace */
-    UiRouteOperationRequest UiRouteOperationRequest::Replace(const UiRouteId route, const UiRouteStackGuard guard) {
-        return {UiRouteOperationKind::Replace, route, guard};
-    }
-
-    /** @copydoc UiRouteOperationRequest::ReplaceTop */
-    UiRouteOperationRequest UiRouteOperationRequest::ReplaceTop(const UiRouteId route, const UiRouteStackGuard guard) {
-        return Replace(route, guard);
-    }
-
-    /** @copydoc UiRouteOperationRequest::Back */
-    UiRouteOperationRequest UiRouteOperationRequest::Back(const UiRouteStackGuard guard) {
-        return {UiRouteOperationKind::Back, std::nullopt, guard};
-    }
-
-    /** @copydoc UiRouteOperationRequest::Clear */
-    UiRouteOperationRequest UiRouteOperationRequest::Clear(const UiRouteStackGuard guard) {
-        return {UiRouteOperationKind::Clear, std::nullopt, guard};
-    }
-
-    /** @copydoc UiRouteOperationRequest::Reset */
-    UiRouteOperationRequest UiRouteOperationRequest::Reset(const UiRouteStackGuard guard) {
-        return Clear(guard);
-    }
-
-    /** @copydoc UiRouteOperationRequest::Navigate */
-    UiRouteOperationRequest UiRouteOperationRequest::Navigate(const UiRouteId route, const UiRouteStackGuard guard) {
-        return {UiRouteOperationKind::Navigate, route, guard};
-    }
-
-    /** @copydoc UiRouteOperationRequest::Validate */
-    Result<void> UiRouteOperationRequest::Validate() const {
-        if (!IsKnown(kind, UiRouteOperationKind::Count))
-            return Failure(UiErrors::RouteOperationInvalid);
-        const bool needsRoute =
-            kind == UiRouteOperationKind::Push || kind == UiRouteOperationKind::Replace || kind == UiRouteOperationKind::Navigate;
-        if (needsRoute != route.has_value() || (route.has_value() && !route->IsValid()))
-            return Failure(UiErrors::RouteOperationInvalid);
-        if (kind == UiRouteOperationKind::Navigate && guard.IsEmpty())
-            return Failure(UiErrors::RouteOperationInvalid);
-        if (HasGuardField(guard) && !guard.IsValid())
-            return Failure(UiErrors::RouteOperationInvalid);
-        return Result<void>::Success();
-    }
-
-    /** @copydoc UiRouteOperationResult::Committed */
-    Result<UiRouteOperationResult> UiRouteOperationResult::Committed(const UiRouteOperationId operation, const UiRouteOperationKind kind,
-                                                                     const UiRouteStackRevision revision,
-                                                                     const std::optional<UiRouteInstanceId> route) {
-        UiRouteOperationResult result{operation, kind, UiRouteOperationOutcome::Committed, UiRouteOperationRejection::None,
-                                      revision,  route};
-        if (const auto valid = result.Validate(); valid.HasError())
-            return Failure<UiRouteOperationResult>(UiErrors::RouteOperationInvalid);
-        return Result<UiRouteOperationResult>::Success(result);
-    }
-
-    /** @copydoc UiRouteOperationResult::Rejected */
-    Result<UiRouteOperationResult> UiRouteOperationResult::Rejected(const UiRouteOperationId operation, const UiRouteOperationKind kind,
-                                                                    const UiRouteStackRevision revision,
-                                                                    const UiRouteOperationRejection rejection) {
-        if (!IsKnown(rejection, UiRouteOperationRejection::Count) || rejection == UiRouteOperationRejection::None)
-            return Failure<UiRouteOperationResult>(UiErrors::RouteOperationInvalid);
-        UiRouteOperationResult result{operation, kind, UiRouteOperationOutcome::Rejected, rejection, revision, std::nullopt};
-        if (const auto valid = result.Validate(); valid.HasError())
-            return Failure<UiRouteOperationResult>(UiErrors::RouteOperationInvalid);
-        return Result<UiRouteOperationResult>::Success(result);
-    }
-
-    /** @copydoc UiRouteOperationResult::Validate */
-    Result<void> UiRouteOperationResult::Validate() const {
-        if (!operation.IsValid() || !IsKnown(kind, UiRouteOperationKind::Count) || !revision.IsValid() ||
-            !IsKnown(outcome, UiRouteOperationOutcome::Count))
-            return Failure(UiErrors::RouteOperationInvalid);
-        if (route.has_value() && !route->IsValid())
-            return Failure(UiErrors::RouteOperationInvalid);
-        if (outcome == UiRouteOperationOutcome::Committed)
-            return rejection == UiRouteOperationRejection::None ? Result<void>::Success() : Failure(UiErrors::RouteOperationInvalid);
-        if (outcome != UiRouteOperationOutcome::Rejected || !IsKnown(rejection, UiRouteOperationRejection::Count) ||
-            rejection == UiRouteOperationRejection::None || route.has_value())
-            return Failure(UiErrors::RouteOperationInvalid);
-        return Result<void>::Success();
-    }
-
-    /** @copydoc UiRouteOperationResult::IsTerminal */
-    bool UiRouteOperationResult::IsTerminal() const noexcept {
-        return outcome == UiRouteOperationOutcome::Committed || outcome == UiRouteOperationOutcome::Rejected;
-    }
-
-    /** @copydoc UiRouteOperationResult::IsCommitted */
-    bool UiRouteOperationResult::IsCommitted() const noexcept {
-        return outcome == UiRouteOperationOutcome::Committed;
-    }
-
-    /** @copydoc UiScreenStackDescriptor::IsValid */
-    bool UiScreenStackDescriptor::IsValid() const noexcept {
-        if (!ownership.IsValid() || !stack.IsValid() || stack.ownership != ownership || maximumRoutes == 0 ||
-            maximumRoutes > MaximumUiScreenStackRoutes || definitions.size() > MaximumUiScreenStackRoutes)
-            return false;
-        for (std::size_t index = 0; index < definitions.size(); ++index) {
-            if (!IsValidRouteMetadata(definitions[index]))
-                return false;
-            for (std::size_t prior = 0; prior < index; ++prior)
-                if (definitions[prior].id == definitions[index].id)
-                    return false;
-        }
-        return true;
-    }
-
     struct UiScreenStack::Storage final {
         explicit Storage(const UiScreenStackDescriptor &descriptor)
             : ownership(descriptor.ownership), stack(descriptor.stack),
               definitions(descriptor.definitions.begin(), descriptor.definitions.end()), maximumRoutes(descriptor.maximumRoutes) {
             routes.reserve(maximumRoutes);
+            actions.reserve(maximumRoutes);
         }
 
         [[nodiscard]] std::optional<UiRouteMetadata> Find(const UiRouteId route) const noexcept {
@@ -224,6 +70,25 @@ namespace Horo::Runtime::Ui {
         UiRouteStackId stack;
         std::vector<UiRouteMetadata> definitions;
         std::vector<UiRouteInstance> routes;
+
+        struct RouteActions final {
+            UiRouteInstanceId route;
+            UiActionRouter router;
+        };
+
+        std::vector<RouteActions> actions;
+
+        /** @brief Cancels before releasing the exact route-owned router; no widget callback is invoked. */
+        void RetireActions(const UiRouteInstanceId route, const UiActionCancellationReason reason) noexcept {
+            const auto found = std::ranges::find(actions, route, &RouteActions::route);
+            if (found != actions.end()) {
+                if (found->router.State() == UiActionRouterState::Active)
+                    (void)found->router.BeginRetirement(reason);
+                found->router.Shutdown();
+                actions.erase(found);
+            }
+        }
+
         std::size_t maximumRoutes;
         UiRouteStackRevision revision{UiRouteStackRevision::Create(1).Value()};
         std::uint32_t nextInstanceSlot{1};
@@ -317,7 +182,13 @@ namespace Horo::Runtime::Ui {
     UiScreenStack::UiScreenStack(UiScreenStack &&) noexcept = default;
 
     /** @copydoc UiScreenStack::operator= */
-    UiScreenStack &UiScreenStack::operator=(UiScreenStack &&) noexcept = default;
+    UiScreenStack &UiScreenStack::operator=(UiScreenStack &&other) noexcept {
+        if (this != &other) {
+            Shutdown();
+            storage_ = std::move(other.storage_);
+        }
+        return *this;
+    }
 
     /** @copydoc UiScreenStack::ApplyMutation */
     Result<std::optional<UiRouteInstanceId>> UiScreenStack::ApplyMutation(Storage &storage, Transaction &transaction) {
@@ -334,6 +205,7 @@ namespace Horo::Runtime::Ui {
             }
             case UiRouteOperationKind::Pop:
             case UiRouteOperationKind::Back:
+                storage.RetireActions(storage.routes.back().id, UiActionCancellationReason::OwnerRetired);
                 storage.routes.pop_back();
                 if (storage.routes.empty())
                     return Result<std::optional<UiRouteInstanceId>>::Success(std::nullopt);
@@ -343,10 +215,13 @@ namespace Horo::Runtime::Ui {
                 const auto instance = storage.NextInstance();
                 if (instance.HasError())
                     return Result<std::optional<UiRouteInstanceId>>::Failure(instance.ErrorValue());
+                storage.RetireActions(storage.routes.back().id, UiActionCancellationReason::Superseded);
                 storage.routes.back() = {instance.Value(), *transaction.definition_, UiRouteVisibilityState::Visible};
                 return Result<std::optional<UiRouteInstanceId>>::Success(instance.Value());
             }
             case UiRouteOperationKind::Clear:
+                for (const auto &route : storage.routes)
+                    storage.RetireActions(route.id, UiActionCancellationReason::OwnerRetired);
                 storage.routes.clear();
                 return Result<std::optional<UiRouteInstanceId>>::Success(std::nullopt);
             case UiRouteOperationKind::Count:
@@ -420,42 +295,42 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiScreenStack::Navigate */
-    Result<UiRouteOperationResult> UiScreenStack::Navigate(const UiRouteId route, const UiRouteStackGuard guard) {
+    Result<UiRouteOperationResult> UiScreenStack::Navigate(const UiRouteId route, const UiRouteStackGuard &guard) {
         return Navigate(UiRouteOperationRequest::Navigate(route, guard));
     }
 
     /** @copydoc UiScreenStack::Push */
-    Result<UiRouteOperationResult> UiScreenStack::Push(const UiRouteId route, const UiRouteStackGuard guard) {
+    Result<UiRouteOperationResult> UiScreenStack::Push(const UiRouteId route, const UiRouteStackGuard &guard) {
         return Navigate(UiRouteOperationRequest::Push(route, guard));
     }
 
     /** @copydoc UiScreenStack::Pop */
-    Result<UiRouteOperationResult> UiScreenStack::Pop(const UiRouteStackGuard guard) {
+    Result<UiRouteOperationResult> UiScreenStack::Pop(const UiRouteStackGuard &guard) {
         return Navigate(UiRouteOperationRequest::Pop(guard));
     }
 
     /** @copydoc UiScreenStack::Replace */
-    Result<UiRouteOperationResult> UiScreenStack::Replace(const UiRouteId route, const UiRouteStackGuard guard) {
+    Result<UiRouteOperationResult> UiScreenStack::Replace(const UiRouteId route, const UiRouteStackGuard &guard) {
         return Navigate(UiRouteOperationRequest::Replace(route, guard));
     }
 
     /** @copydoc UiScreenStack::ReplaceTop */
-    Result<UiRouteOperationResult> UiScreenStack::ReplaceTop(const UiRouteId route, const UiRouteStackGuard guard) {
+    Result<UiRouteOperationResult> UiScreenStack::ReplaceTop(const UiRouteId route, const UiRouteStackGuard &guard) {
         return Replace(route, guard);
     }
 
     /** @copydoc UiScreenStack::Back */
-    Result<UiRouteOperationResult> UiScreenStack::Back(const UiRouteStackGuard guard) {
+    Result<UiRouteOperationResult> UiScreenStack::Back(const UiRouteStackGuard &guard) {
         return Navigate(UiRouteOperationRequest::Back(guard));
     }
 
     /** @copydoc UiScreenStack::Clear */
-    Result<UiRouteOperationResult> UiScreenStack::Clear(const UiRouteStackGuard guard) {
+    Result<UiRouteOperationResult> UiScreenStack::Clear(const UiRouteStackGuard &guard) {
         return Navigate(UiRouteOperationRequest::Clear(guard));
     }
 
     /** @copydoc UiScreenStack::Reset */
-    Result<UiRouteOperationResult> UiScreenStack::Reset(const UiRouteStackGuard guard) {
+    Result<UiRouteOperationResult> UiScreenStack::Reset(const UiRouteStackGuard &guard) {
         return Clear(guard);
     }
 
@@ -573,6 +448,28 @@ namespace Horo::Runtime::Ui {
         return UiRouteStackGuard::Create(storage_->stack, storage_->revision, top);
     }
 
+    /** @copydoc UiScreenStack::AttachActions */
+    Result<void> UiScreenStack::AttachActions(const UiRouteInstanceId route, UiActionRouter &&router) {
+        if (!storage_ || storage_->state != UiScreenStackState::Active || storage_->busy)
+            return Failure(UiErrors::RouteOperationLifecycleUnavailable);
+        if (router.State() != UiActionRouterState::Active || router.Owner().instance.ownership != storage_->ownership)
+            return Failure(UiErrors::ActionSourceStale);
+        if (std::ranges::find(storage_->routes, route, &UiRouteInstance::id) == storage_->routes.end())
+            return Failure(UiErrors::RouteOperationStale);
+        if (Actions(route) != nullptr)
+            return Failure(UiErrors::RouteOperationReentrant);
+        storage_->actions.emplace_back(route, std::move(router));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiScreenStack::Actions */
+    UiActionRouter *UiScreenStack::Actions(const UiRouteInstanceId route) noexcept {
+        if (!storage_ || storage_->state != UiScreenStackState::Active)
+            return nullptr;
+        const auto found = std::ranges::find(storage_->actions, route, &Storage::RouteActions::route);
+        return found == storage_->actions.end() ? nullptr : &found->router;
+    }
+
     /** @copydoc UiScreenStack::BeginRetirement */
     Result<void> UiScreenStack::BeginRetirement() {
         if (!storage_ || storage_->state != UiScreenStackState::Active)
@@ -580,6 +477,9 @@ namespace Horo::Runtime::Ui {
         if (storage_->busy)
             return Failure(UiErrors::RouteOperationReentrant);
         storage_->state = UiScreenStackState::Retiring;
+        for (auto &actions : storage_->actions)
+            if (actions.router.State() == UiActionRouterState::Active)
+                (void)actions.router.BeginRetirement(UiActionCancellationReason::OwnerRetired);
         return Result<void>::Success();
     }
 
@@ -590,6 +490,9 @@ namespace Horo::Runtime::Ui {
         storage_->state = UiScreenStackState::Stopped;
         storage_->busy = false;
         storage_->activeOperation = {};
+        for (auto &actions : storage_->actions)
+            actions.router.Shutdown();
+        storage_->actions.clear();
         storage_->routes.clear();
         storage_->definitions.clear();
     }

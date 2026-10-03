@@ -198,7 +198,7 @@ namespace Horo::Runtime {
 
         TEST_CASE("Autosave contains host clock exceptions and retains owned cleanup", "[unit][save][autosave]") {
             Fixture fixture;
-            fixture.clock.nonstandardException = GENERATE(false, true);
+            fixture.clock.exception = GENERATE(HostClockException::Standard, HostClockException::Foreign, HostClockException::Integer);
             fixture.Sample(100);
             SECTION("Request boundary") {
                 fixture.clock.throws = true;
@@ -233,7 +233,7 @@ namespace Horo::Runtime {
 
         TEST_CASE("Autosave teardown retires pending ownership when the host clock permanently fails", "[unit][save][autosave]") {
             Fixture fixture;
-            fixture.clock.nonstandardException = GENERATE(false, true);
+            fixture.clock.exception = GENERATE(HostClockException::Standard, HostClockException::Foreign, HostClockException::Integer);
             const auto mutation = fixture.barrier->BeginMutation(0).Value();
             fixture.Sample(100);
             REQUIRE(fixture.Poll().HasValue());
@@ -275,7 +275,7 @@ namespace Horo::Runtime {
 
         TEST_CASE("Barrier cancellation timing failure releases only the exact pending request", "[unit][save][autosave]") {
             Fixture fixture;
-            fixture.clock.nonstandardException = GENERATE(false, true);
+            fixture.clock.exception = GENERATE(HostClockException::Standard, HostClockException::Foreign, HostClockException::Integer);
             REQUIRE(fixture.barrier->Request(55, fixture.generation).HasValue());
             fixture.clock.throws = true;
             CHECK(fixture.barrier->Cancel(11).HasError());

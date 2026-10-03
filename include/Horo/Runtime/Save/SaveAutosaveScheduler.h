@@ -106,7 +106,10 @@ namespace Horo::Runtime {
                                                                                    const SaveAutosaveClockSample &initial,
                                                                                    SaveOperationArbiter &arbiter,
                                                                                    SaveCaptureBarrier &barrier);
-        /** @brief Closes on the owner without waiting; detached producers remain host-owned. */
+        /** @brief Closes on the owner without waiting; detached producers remain host-owned.
+         * Unexpected teardown exceptions emit emergency evidence without propagating.
+         * Use BeginShutdown while dependencies live to observe typed cleanup failures.
+         */
         ~SaveAutosaveScheduler();
         SaveAutosaveScheduler(const SaveAutosaveScheduler &) = delete;
         SaveAutosaveScheduler &operator=(const SaveAutosaveScheduler &) = delete;
