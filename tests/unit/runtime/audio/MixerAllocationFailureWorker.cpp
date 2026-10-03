@@ -71,8 +71,8 @@ namespace {
         const bool loaded = SymLoadModuleExW(process, nullptr, executable.data(), nullptr, module, 0, nullptr, 0) != 0;
         IMAGEHLP_MODULEW64 information{};
         information.SizeOfStruct = sizeof(information);
-        const bool hasPdb =
-            loaded && SymGetModuleInfoW64(process, module, &information) && information.SymType == SymPdb && information.NumSyms != 0;
+        // NumSyms is not meaningful for SymPdb; the self-check and recorded stack use actual symbol lookups.
+        const bool hasPdb = loaded && SymGetModuleInfoW64(process, module, &information) && information.SymType == SymPdb;
         if (!hasPdb) {
             std::fprintf(stderr, "worker PDB load failed: symbol type %d, symbols %lu, Windows error %lu\n",
                          static_cast<int>(information.SymType), information.NumSyms, GetLastError());
