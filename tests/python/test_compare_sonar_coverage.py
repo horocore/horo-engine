@@ -57,8 +57,6 @@ def test_retains_missing_and_extra_uncovered_lines() -> None:
     "",
     '<lineToCover lineNumber="0" covered="true"/>',
     '<lineToCover lineNumber="1" covered="unknown"/>',
-    '<lineToCover lineNumber="1" covered="true"/>'
-    '<lineToCover lineNumber="1" covered="false"/>',
 ])
 def test_rejects_invalid_or_empty_reports(tmp_path: Path, lines: str) -> None:
     path = report(tmp_path / "coverage.xml", "src/example.cpp", lines)
@@ -86,37 +84,76 @@ def test_rejects_entity_expansion(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("candidate_covered", ["true", "false"])
 def test_main_writes_timing_and_complete_comparison(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, candidate_covered: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, candidate_covered: str
 ) -> None:
     baseline = report(tmp_path / "baseline.xml", "src/example.cpp",
                       '<lineToCover lineNumber="1" covered="true"/>')
     candidate = report(tmp_path / "candidate.xml", "src/example.cpp",
                        f'<lineToCover lineNumber="1" covered="{candidate_covered}"/>')
     output = tmp_path / "comparison.json"
-    summary = tmp_path / "summary.md"
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", [
         "compare_sonar_coverage.py", "--root", str(tmp_path),
         "--gcovr-report", str(baseline), "--fastcov-report", str(candidate),
         "--gcovr-seconds", "193", "--fastcov-seconds", "12",
-        "--output", str(output), "--summary", str(summary),
+        "--output", str(output),
     ])
     assert comparison.main() == 0
     result = json.loads(output.read_text(encoding="utf-8"))
     assert result["equivalent"] == (candidate_covered == "true")
     assert result["seconds"] == {"gcovr": 193, "fastcov": 12}
-    assert "Sonar continues to use the gcovr baseline" in summary.read_text(encoding="utf-8")
+    assert "Sonar continues to use the gcovr baseline" in capsys.readouterr().out
 
 
 def test_main_rejects_incomplete_input(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
     missing = tmp_path / "missing.xml"
     output = tmp_path / "comparison.json"
     monkeypatch.setattr(sys, "argv", [
         "compare_sonar_coverage.py", "--root", str(tmp_path),
         "--gcovr-report", str(missing), "--fastcov-report", str(missing),
         "--gcovr-seconds", "193", "--fastcov-seconds", "12",
-        "--output", str(output), "--summary", str(tmp_path / "summary.md"),
+        "--output", str(output),
     ])
     with pytest.raises(SystemExit) as error:
         comparison.main()
     assert error.value.code == 2
     assert not output.exists()
+
+
+@pytest.mark.parametrize("flags", [("false", "true"), ("true", "false"), ("false", "false")])
+def test_combines_duplicate_instantiation_lines(tmp_path: Path, flags: tuple[str, str]) -> None:
+    path = report(tmp_path / "coverage.xml", "src/example.cpp", "".join(
+        f'<lineToCover lineNumber="1" covered="{flag}"/>' for flag in flags
+    ))
+    assert comparison.read_report(path, tmp_path) == {("src/example.cpp", 1): "true" in flags}
+
+
+def test_rejects_input_output_and_symlink_escape(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "link").symlink_to(outside, target_is_directory=True)
+    for path in (outside / "report.xml", root / "link/report.xml"):
+        with pytest.raises(ValueError):
+            comparison.repository_path(path, root)
+
+
+def test_main_rejects_outside_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    source = report(root / "coverage.xml", "src/example.cpp",
+                    '<lineToCover lineNumber="1" covered="true"/>')
+    outside = tmp_path / "outside.json"
+    monkeypatch.setattr(sys, "argv", [
+        "compare_sonar_coverage.py", "--root", str(root),
+        "--gcovr-report", str(source), "--fastcov-report", str(source),
+        "--gcovr-seconds", "1", "--fastcov-seconds", "1",
+        "--output", str(outside),
+    ])
+    with pytest.raises(SystemExit) as error:
+        comparison.main()
+    assert error.value.code == 2
+    assert not outside.exists()

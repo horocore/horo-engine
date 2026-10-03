@@ -303,6 +303,20 @@ jobs:
           dependency-key: ${{ steps.cache.outputs.dependency-key }}
           dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
 
+      - name: Stage SDK symbol reader for Windows allocation diagnostics
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.audio_build_debug.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $kits = "${env:ProgramFiles(x86)}\Windows Kits\10"
+          $reader = Get-ChildItem "$kits\bin\*\x64\dbghelp.dll" -ErrorAction SilentlyContinue |
+            Sort-Object { $_.VersionInfo.FileVersionRaw } -Descending | Select-Object -First 1
+          if (-not $reader) { throw "Windows SDK x64 symbol reader is unavailable" }
+          $destination = "build/audio-realtime-safety-debug/tests"
+          Copy-Item $reader.FullName "$destination/dbghelp.dll"
+          Write-Host "Using SDK symbol reader: $($reader.FullName) ($($reader.VersionInfo.FileVersion))"
+          $pdb = "$destination/HoroMixerAllocationFailureWorker.pdb"
+          if (-not (Test-Path $pdb)) { throw "Allocation worker PDB is missing: $pdb" }
+
       - name: Gate Debug callback safety
         id: audio_tests_debug
         if: ${{ !cancelled() && steps.audio_build_debug.outcome == 'success' }}

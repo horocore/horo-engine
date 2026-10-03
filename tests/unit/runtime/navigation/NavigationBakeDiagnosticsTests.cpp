@@ -72,6 +72,17 @@ namespace Horo::Application {
             return {};
         }
 
+        /** @brief Check terminal truth independently of trailing persistence warnings. */
+        void RequireTerminalProjection(const BuildOutputStore &store, const OperationId id, const BuildOutputResult result) {
+            const auto output = store.SnapshotIfChanged(0).value();
+            REQUIRE(std::ranges::count_if(output.records, [id, result](const auto &record) {
+                return record.operationId == id && record.result == result;
+            }) == 1);
+            REQUIRE(std::ranges::count_if(output.records, [id](const auto &record) {
+                return record.operationId == id && record.result != BuildOutputResult::None;
+            }) == 1);
+        }
+
         void AwaitBuilder(const Builder &builder) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
             while (!builder.entered.load() && std::chrono::steady_clock::now() < deadline)
@@ -211,7 +222,12 @@ namespace Horo::Application {
         auto bake = BakeConfig(directory, std::make_shared<Builder>(), journal);
         auto expected = OperationState::Succeeded;
         auto result = BuildOutputResult::Succeeded;
+        bool unavailableHistory{};
         SECTION("native success") { /* Exercise the unmodified production configuration. */ }
+        SECTION("successful operation with unavailable persistence") {
+            REQUIRE(Telemetry::Runtime::Shutdown());
+            unavailableHistory = true;
+        }
         SECTION("admitted budget failure") {
             bake.budget.maximumWorkItems = 1;
             expected = OperationState::Failed;
@@ -227,7 +243,8 @@ namespace Horo::Application {
         const auto id = service->Submit(Request(fixture)).Value();
         REQUIRE(AwaitTerminal(*service, operations, id).state == expected);
         jobs.Shutdown(ShutdownPolicy::Drain);
-        REQUIRE(Telemetry::Runtime::Flush());
+        if (!unavailableHistory)
+            REQUIRE(Telemetry::Runtime::Flush());
         const auto snapshot = journal->Snapshot();
         REQUIRE(snapshot.records.back().result == result);
         REQUIRE(std::ranges::count_if(snapshot.records, [](const auto &record) {
@@ -235,7 +252,14 @@ namespace Horo::Application {
         }) == 1);
         if (expected == OperationState::Failed)
             REQUIRE_FALSE(snapshot.records.back().causeCode.empty());
-        REQUIRE(config.output->SnapshotIfChanged(0)->records.back().result == result);
+        if (unavailableHistory) {
+            REQUIRE(snapshot.persistenceDrops > 0);
+            const auto output = config.output->SnapshotIfChanged(0).value();
+            REQUIRE(std::ranges::any_of(output.records, [](const auto &record) {
+                return record.code.Value() == "navigation.bake.history_unavailable";
+            }));
+        }
+        RequireTerminalProjection(*config.output, id, result);
     }
 
 }  // namespace Horo::Application

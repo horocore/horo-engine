@@ -159,6 +159,9 @@ jobs:
           build/sonar/tests/HoroConfiguredEditorUpdateBackendTests
           /tmp/horo-gcovr/bin/coverage run --source=scripts -m pytest tests/python --quiet
           /tmp/horo-gcovr/bin/coverage xml -o build/sonar/python-coverage.xml
+          node --test --experimental-test-coverage \
+            --test-reporter=lcov --test-reporter-destination=build/sonar/javascript-coverage.lcov \
+            .github/scripts/cancel_closed_pr_runs.test.js
 
       - name: Collect gcovr coverage baseline
         id: coverage
@@ -221,7 +224,7 @@ jobs:
             --gcovr-report build/sonar/coverage.xml \
             --fastcov-report build/sonar/fastcov-coverage.xml \
             --gcovr-seconds "$GCOVR_SECONDS" --fastcov-seconds "$fastcov_seconds" \
-            --output build/sonar/coverage-comparison.json --summary "$GITHUB_STEP_SUMMARY"
+            --output build/sonar/coverage-comparison.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report incomplete fastcov experiment
         if: ${{ !cancelled() && steps.fastcov.outcome == 'failure' }}
@@ -261,6 +264,7 @@ jobs:
             -Dsonar.cfamily.compile-commands=build/sonar/compile_commands.json \
             -Dsonar.coverageReportPaths=build/sonar/coverage.xml \
             -Dsonar.python.coverage.reportPaths=build/sonar/python-coverage.xml \
+            -Dsonar.javascript.lcov.reportPaths=build/sonar/javascript-coverage.lcov \
             -Dsonar.cfamily.analysisCache.mode=server \
             -Dsonar.qualitygate.wait=true \
             -Dsonar.qualitygate.timeout=300

@@ -8,9 +8,17 @@ from defusedxml import ElementTree as element_tree
 from defusedxml.common import DefusedXmlException
 
 
+def repository_path(path: Path, root: Path) -> Path:
+    """Reject resolved input/output paths outside the selected repository."""
+    resolved = path.resolve()
+    if not resolved.is_relative_to(root.resolve()):
+        raise ValueError(f"Path outside repository: {path.name}")
+    return resolved
+
+
 def read_report(path: Path, root: Path) -> dict[tuple[str, int], bool]:
     """Normalize source paths and retain every measured line, including misses."""
-    document = element_tree.parse(path).getroot()
+    document = element_tree.parse(repository_path(path, root)).getroot()
     if document.tag != "coverage" or document.get("version") != "1":
         raise ValueError(f"Unsupported coverage format: {path.name}")
     lines = {}
@@ -25,9 +33,9 @@ def read_report(path: Path, root: Path) -> dict[tuple[str, int], bool]:
             if number < 1 or covered not in {"true", "false"}:
                 raise ValueError(f"Invalid coverage line in {path.name}")
             key = (normalized, number)
-            if key in lines:
-                raise ValueError(f"Duplicate coverage line in {path.name}: {key}")
-            lines[key] = covered == "true"
+            # gcovr emits repeated lines for multiple template instantiations.
+            # A source line is covered if any instance executed.
+            lines[key] = lines.get(key, False) or covered == "true"
     if not lines:
         raise ValueError(f"Empty coverage report: {path.name}")
     return lines
@@ -63,7 +71,7 @@ def compare_reports(baseline: dict, candidate: dict) -> dict:
     }
 
 
-def write_summary(result: dict, path: Path) -> None:
+def format_summary(result: dict) -> str:
     """Explain timing and equivalence separately in the workflow summary."""
     timings = result["seconds"]
     text = [
@@ -86,8 +94,7 @@ def write_summary(result: dict, path: Path) -> None:
         "This comparison checks line coverage; it does not establish branch parity.",
         "See the coverage experiment artifact for complete differences.", "",
     ])
-    with path.open("a", encoding="utf-8") as summary:
-        summary.write("\n".join(text))
+    return "\n".join(text)
 
 
 def main() -> int:
@@ -99,9 +106,11 @@ def main() -> int:
     parser.add_argument("--gcovr-seconds", type=int, required=True)
     parser.add_argument("--fastcov-seconds", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--summary", type=Path, required=True)
     args = parser.parse_args()
     try:
+        if args.root.resolve() != Path.cwd().resolve():
+            raise ValueError("Repository root must be the current working directory")
+        output = repository_path(args.output, args.root)
         result = compare_reports(
             read_report(args.gcovr_report, args.root),
             read_report(args.fastcov_report, args.root),
@@ -109,8 +118,8 @@ def main() -> int:
         result["seconds"] = {
             "gcovr": args.gcovr_seconds, "fastcov": args.fastcov_seconds,
         }
-        args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-        write_summary(result, args.summary)
+        output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        print(format_summary(result))
     except (OSError, element_tree.ParseError, DefusedXmlException, ValueError, KeyError) as error:
         parser.exit(2, f"Coverage comparison failed: {error}\n")
     print(f"Line coverage equivalent: {result['equivalent']}")

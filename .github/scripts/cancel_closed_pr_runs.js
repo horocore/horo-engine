@@ -7,28 +7,32 @@ function belongsToClosedPr(run, pr) {
     && run.head_branch === pr.head.ref && run.head_sha === pr.head.sha;
 }
 
+/** Cancel one run; a concurrent completion is harmless, other errors remain failures. */
+function cancelRun(github, context, core, run) {
+  return github.rest.actions.cancelWorkflowRun({...context.repo, run_id: run.id}).then(() => {
+    core.info(`Requested cancellation: ${run.name} (${run.id})`);
+    return 1;
+  }, error => {
+    if (error.status !== 409) throw error;
+    core.info(`Run ${run.id} changed state before cancellation.`);
+    return 0;
+  });
+}
+
 /** Cancel active workflow runs belonging to one closed PR; preserve main and other PRs. */
 module.exports = async function cancelClosedPrRuns({github, context, core}) {
   const pr = context.payload.pull_request;
-  const { owner, repo } = context.repo;
   const active = new Set(['queued', 'in_progress', 'waiting', 'pending', 'requested']);
-  let cancelled = 0;
+  const selected = [];
   for await (const page of github.paginate.iterator(github.rest.actions.listWorkflowRunsForRepo, {
-    owner, repo, event: 'pull_request', branch: pr.head.ref,
+    ...context.repo, event: 'pull_request', branch: pr.head.ref,
     created: `>=${pr.created_at}`, per_page: 100,
   })) {
-    for (const run of page.data) {
-      if (!active.has(run.status) || run.event !== 'pull_request') continue;
-      if (!belongsToClosedPr(run, pr)) continue;
-      try {
-        await github.rest.actions.cancelWorkflowRun({ owner, repo, run_id: run.id });
-        core.info(`Requested cancellation: ${run.name} (${run.id})`);
-        cancelled++;
-      } catch (error) {
-        if (error.status !== 409) throw error;
-        core.info(`Run ${run.id} changed state before cancellation.`);
-      }
-    }
+    selected.push(...page.data.filter(run => active.has(run.status)
+      && run.event === 'pull_request' && belongsToClosedPr(run, pr)));
   }
+  // Serialize requests to avoid bursting the write API when many workflows remain active.
+  const cancelled = await selected.reduce((pending, run) => pending.then(async count =>
+    count + await cancelRun(github, context, core, run)), Promise.resolve(0));
   core.info(`Requested cancellation for ${cancelled} runs belonging to closed PR #${pr.number}.`);
 };

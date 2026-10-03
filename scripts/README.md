@@ -49,7 +49,11 @@ conversion, but excludes package installation. No test or input directory is
 removed from the collection scope.
 
 `compare_sonar_coverage.py` compares normalized source/line identities and
-covered flags, including uncovered lines. It writes complete differences to
+covered flags, including uncovered lines. Repeated gcovr entries for template
+instantiations are merged with an any-instance-covered rule on both reports.
+Report input and JSON output paths must resolve inside the current repository;
+symlink escapes are rejected. The Markdown summary is printed to stdout and
+the workflow appends it to the runner-owned summary file. It writes complete differences to
 JSON and timings to the workflow summary. The comparison establishes line
 coverage only, matching the existing `--sonarqube-metric line`; function, branch
 and exclusion semantics can differ between collectors. Differences are
