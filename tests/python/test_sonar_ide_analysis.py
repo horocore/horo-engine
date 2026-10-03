@@ -310,8 +310,8 @@ def test_run_git_uses_a_literal_argv0_and_resolved_executable(tmp_path: Path, mo
     assert sonar_ide_analysis.run_git(tmp_path, "status") == b"ok"
     assert calls == [
         (
-            ["git", "-C", str(tmp_path), "status"],
-            {"executable": "/tools/git", "check": True, "capture_output": True, "shell": False},
+            ["git", "status"],
+            {"executable": "/tools/git", "cwd": tmp_path.resolve(), "check": True, "capture_output": True, "shell": False},
         )
     ]
 
@@ -329,3 +329,18 @@ def test_main_rejects_combining_explicit_files_with_a_change_selector(capsys: py
 def test_main_rejects_unverified_explicit_port(capsys: pytest.CaptureFixture[str]) -> None:
     assert sonar_ide_analysis.main(["--port", "64120", "--no-prepare", "source.cpp"]) == 2
     assert "Unverified explicit ports" in json.loads(capsys.readouterr().err)["error"]
+
+
+def test_run_git_keeps_option_like_worktree_names_out_of_argv(tmp_path, monkeypatch):
+    root = tmp_path / "--exec=hostile directory örnek"
+    root.mkdir()
+    calls = []
+    monkeypatch.setattr(sonar_ide_analysis, "resolved_tool", lambda _: "/tools/git")
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(stdout=b"ok")
+    monkeypatch.setattr(sonar_ide_analysis.subprocess, "run", run)
+    assert sonar_ide_analysis.run_git(root, "status") == b"ok"
+    assert calls[0][0] == ["git", "status"]
+    assert calls[0][1]["cwd"] == root.resolve()
