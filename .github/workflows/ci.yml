@@ -483,8 +483,11 @@ jobs:
               -DHORO_BUILD_EDITOR_GUI=OFF \
               -DHORO_BUILD_EXAMPLES=OFF \
               -DHORO_BUILD_NAVIGATION_RECAST_DETOUR="${enabled}"
-            cmake --build "${build_dir}" --target \
+            cmake --build "${build_dir}" --parallel 2 --target \
               HoroNavigationRuntime HoroNavigationNull HoroNavigationRecastDetour \
               HoroNavigationApiPublicHeaderConsumer HoroNavigationRuntimePublicHeaderConsumer \
-              HoroNavigationNullPublicHeaderConsumer HoroNavigationRecastDetourPublicHeaderConsumer
+              HoroNavigationNullPublicHeaderConsumer HoroNavigationRecastDetourPublicHeaderConsumer \
+              HoroNavigationBakeServicePublicHeaderConsumer HoroNavigationBakeDiagnosticsPublicConsumer
+            ctest --test-dir "${build_dir}" -j 1 \
+              -R '^HoroNavigationBakeDiagnosticsPublicConsumer$' --output-on-failure
           done

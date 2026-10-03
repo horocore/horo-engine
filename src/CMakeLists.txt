@@ -1251,10 +1251,14 @@ target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::Navigati
 add_library(HoroNavigationBakeService STATIC
         application/navigation/NavigationBakeService.cpp
         application/navigation/NavigationBakeCook.cpp
+        application/navigation/NavigationBakeDiagnostics.cpp
+        application/navigation/NavigationBakeDiagnosticCodec.cpp
+        application/navigation/NavigationBakeDiagnosticProjection.cpp
 )
 add_library(HoroEngine::NavigationBakeService ALIAS HoroNavigationBakeService)
 target_compile_features(HoroNavigationBakeService PUBLIC cxx_std_20)
-target_link_libraries(HoroNavigationBakeService PUBLIC HoroEngine::NavigationRuntime HoroEngine::Assets HoroEngine::Platform)
+target_link_libraries(HoroNavigationBakeService PUBLIC HoroEngine::NavigationRuntime HoroEngine::Assets HoroEngine::Platform HoroEngine::Runtime
+        PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroXRApi STATIC
         runtime/xr/api/XRCapabilities.cpp

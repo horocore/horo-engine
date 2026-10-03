@@ -658,6 +658,7 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroNavigationBakeService PUBLIC_HEADERS
     Horo/Application/NavigationBakeService.h
+    Horo/Application/NavigationBakeDiagnostics.h
 )
 horo_configure_target_header_boundary(HoroNavigationSceneIntegration PUBLIC_HEADERS
     Horo/Navigation/NavigationSceneActivation.h

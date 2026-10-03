@@ -16,6 +16,11 @@ namespace Horo::Application {
                 return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
             if (request.cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
+            if (request.diagnosticSources.size() > NavigationSourceGeometryLimits::MaximumContributions ||
+                !std::ranges::all_of(request.diagnosticSources, [&request](const auto &source) {
+                return std::ranges::count(request.sources, source.observation) == 1 && source.target.relativePath.size() <= 1024;
+            }))
+                return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
             if (!std::ranges::all_of(request.input->Partitions(), [&request](const auto &partition) {
                 return std::ranges::any_of(request.tiles, [&partition](const auto &tile) {
                     return tile.key.surface == partition.surface && tile.key.profile == partition.profile;
@@ -31,7 +36,7 @@ namespace Horo::Application {
             if (!existing || existing->cancellation->Token().IsCancellationRequested() ||
                 existing->request.input->Fingerprint() != request.input->Fingerprint() ||
                 existing->request.compatibility != request.compatibility || existing->request.sources != request.sources ||
-                existing->request.tiles.size() != request.tiles.size())
+                existing->request.diagnosticSources != request.diagnosticSources || existing->request.tiles.size() != request.tiles.size())
                 return false;
             return std::ranges::equal(existing->request.tiles, request.tiles, [](const auto &a, const auto &b) {
                 return a.key == b.key && a.bounds.minimum == b.bounds.minimum && a.bounds.maximum == b.bounds.maximum &&
@@ -48,6 +53,12 @@ namespace Horo::Application {
         static_cast<void>(operations.Update(attempt->operation, {.state = OperationState::Cancelled,
                                                                  .phase = "superseded",
                                                                  .message = "Navigation bake superseded before execution"}));
+        if (attempt->diagnostics)
+            attempt->diagnostics->Record({.operation = attempt->operation,
+                                          .event = NavigationBakeDiagnosticEvent::Superseded,
+                                          .stage = "superseded",
+                                          .result = BuildOutputResult::Cancelled,
+                                          .message = "Navigation bake superseded before execution"});
     }
 
     /** @copydoc NavigationBakeService::Create */
@@ -57,7 +68,8 @@ namespace Horo::Application {
             !config.files || config.cacheRoot.empty() || !config.cacheRoot.is_absolute() || config.targetRoot.empty() ||
             !config.targetRoot.is_absolute() || config.maximumTiles == 0 || config.maximumTiles > NavMeshArtifactLimits::MaximumTiles ||
             config.maximumCandidateBytes == 0 || config.maximumCandidateBytes > config.cookLimits.maximumArtifactBytes ||
-            config.maximumCandidateBytes > NavMeshArtifactLimits::MaximumOwnedBytes || !config.tileLimits.IsValid())
+            config.maximumCandidateBytes > NavMeshArtifactLimits::MaximumOwnedBytes || !config.tileLimits.IsValid() ||
+            (config.diagnostics && !config.diagnostics->Owns(config.definition)))
             return Result<std::unique_ptr<NavigationBakeService>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         std::error_code error;
         config.targetRoot = std::filesystem::weakly_canonical(config.targetRoot, error);
@@ -105,6 +117,13 @@ namespace Horo::Application {
             return Result<OperationId>::Failure(MakeError(NavigationErrors::BakeJobAdmissionRejected));
         attempt->generation = nextGeneration_++;
         attempt->operation = *id;
+        attempt->diagnostics = state_->config.diagnostics;
+        if (attempt->diagnostics)
+            attempt->diagnostics->Record({.operation = *id,
+                                          .event = NavigationBakeDiagnosticEvent::Queued,
+                                          .stage = "queued",
+                                          .message = "Navigation bake queued",
+                                          .progress = 0.0F});
         state_->desired.store(attempt->generation);
         CancelPending(operations_, pending_);
         if (active_)
@@ -138,8 +157,16 @@ namespace Horo::Application {
         active_ = std::move(pending_);
         auto submitted = StartNavigationBakeJob(operations_, jobs_, Descriptor(state_, active_));
         if (submitted.HasError()) {
-            static_cast<void>(operations_.Update(active_->operation,
-                                                 {.state = OperationState::Failed, .phase = "admission", .error = submitted.ErrorValue()}));
+            if (const bool newlyTerminal =
+                    operations_.Update(active_->operation,
+                                       {.state = OperationState::Failed, .phase = "admission", .error = submitted.ErrorValue()});
+                newlyTerminal && active_->diagnostics)
+                active_->diagnostics->Record({.operation = active_->operation,
+                                              .event = NavigationBakeDiagnosticEvent::StageFailed,
+                                              .stage = "admission",
+                                              .result = BuildOutputResult::Failed,
+                                              .message = "Navigation bake admission failed",
+                                              .causeCode = std::string{submitted.ErrorValue().code.Value()}});
             active_.reset();
         } else
             activeJob_ = std::move(submitted).Value();

@@ -22,6 +22,7 @@ namespace Horo::Navigation {
             NavigationBakeJobSnapshot snapshot;
             std::shared_ptr<CancellationSource> cancellation;
             OperationStore *operations{};
+            std::function<void(const NavigationBakeJobSnapshot &)> observe;
 
         private:
             mutable std::mutex mutex_;
@@ -159,6 +160,14 @@ namespace Horo::Navigation {
                                                                                    .phase = std::string{StageName(stage)},
                                                                                    .message = "Navigation bake in progress",
                                                                                    .progress = normalized}));
+            if (state->observe) {
+                NavigationBakeJobSnapshot snapshot;
+                {
+                    auto lock = state->Lock();
+                    snapshot = state->snapshot;
+                }
+                state->observe(snapshot);
+            }
         }
 
         void CountAccepted(const std::shared_ptr<NavigationBakeJobDetail::SharedState> &state) {
@@ -241,6 +250,14 @@ namespace Horo::Navigation {
                     return;
             }
             static_cast<void>(state->operations->Update(operation, std::move(update)));
+            if (state->observe) {
+                NavigationBakeJobSnapshot snapshot;
+                {
+                    auto lock = state->Lock();
+                    snapshot = state->snapshot;
+                }
+                state->observe(snapshot);
+            }
         }
 
         [[nodiscard]] Result<void> FinishUnexpectedException(const std::shared_ptr<NavigationBakeJobDetail::SharedState> &state) {
@@ -414,6 +431,7 @@ namespace Horo::Navigation {
         state->snapshot.totalWorkUnits = std::max<std::uint64_t>(1, validation.Value().totalWorkUnits);
         state->cancellation = std::move(cancellation);
         state->operations = &operations;
+        state->observe = descriptor.observe;
         NavigationBakeJobHandle handle{state};
 
         if (validation.Value().limitingResource.has_value()) {
