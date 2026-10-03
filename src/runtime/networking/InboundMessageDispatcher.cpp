@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <new>
+#include <stdexcept>
 #include <utility>
 
 namespace Horo::Network {
@@ -38,7 +39,7 @@ namespace Horo::Network {
     };
 
     /** @copydoc InboundMessageDispatcher::InboundMessageDispatcher */
-    InboundMessageDispatcher::InboundMessageDispatcher(INetworkTransport &transport, const MessageCodecRegistry &codecs,
+    InboundMessageDispatcher::InboundMessageDispatcher(ConstructionKey, INetworkTransport &transport, const MessageCodecRegistry &codecs,
                                                        const InboundDispatchLimits &limits)
         : transport_(transport), codecs_(codecs), limits_(limits), owner_(std::this_thread::get_id()), queue_(limits.maximumQueuedPackets) {
         sessions_.reserve(limits.maximumSessions);
@@ -59,8 +60,7 @@ namespace Horo::Network {
             limits.maximumPacketsPerPoll > limits.maximumQueuedPackets || limits.envelope.maximumFrameBytes == 0)
             return Result<std::unique_ptr<InboundMessageDispatcher>>::Failure(MakeError(NetworkErrors::NetworkIoServiceInvalid));
         try {
-            auto created = std::unique_ptr<InboundMessageDispatcher>(  // NOSONAR: make_unique cannot access this validated private ctor.
-                new InboundMessageDispatcher(transport, codecs, limits));
+            auto created = std::make_unique<InboundMessageDispatcher>(ConstructionKey{}, transport, codecs, limits);
             return Result<std::unique_ptr<InboundMessageDispatcher>>::Success(std::move(created));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<InboundMessageDispatcher>>::Failure(MakeError(NetworkErrors::NetworkIoServiceCapacityExceeded));
@@ -274,13 +274,21 @@ namespace Horo::Network {
             // Apply invokes synchronously; pin both owners while the decoded message and rate slot are borrowed.
             return session->gate.Apply(input, nowTick,
                                        [rate, &message, bound, session, connection = event.connection, generation = session->generation,
-                                        nowTick] {
+                                        nowTick, delivery = event.delivery] {
                 ++rate->count;
                 if (auto activity = session->lifecycle->RecordActivity(connection, generation, nowTick); activity.HasError())
                     return activity;
-                return bound->Handle(message);
+                return bound->HandleAdmitted({connection, generation, session->lifecycle, nowTick, session->cancellation.Token(), delivery},
+                                             message);
             });
-        } catch (...) {  // NOSONAR: non-std handler throws require typed rejection; replay-consumption regression covers this boundary.
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(NetworkErrors::NetworkIoServiceCapacityExceeded));
+        } catch (const std::invalid_argument &) {
+            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+        } catch (const std::out_of_range &) {
+            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+        } catch (...) {
+            // Untrusted handlers may throw non-standard values; none may cross the admitted owner boundary.
             return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
         }
     }

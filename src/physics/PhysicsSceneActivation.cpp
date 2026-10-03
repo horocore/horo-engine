@@ -65,6 +65,7 @@ namespace Horo::Physics::Detail {
             shapeBindings.reserve(shapeCount);
             bodyHandles.reserve(plan.bodies.size());
             for (const PlannedBody &body : plan.bodies) {
+                const std::size_t firstShapeBinding = shapeBindings.size();
                 std::vector<PhysicsSceneShapeInstance> instances;
                 instances.reserve(body.colliders.size());
                 for (const PlannedCollider &collider : body.colliders) {
@@ -90,12 +91,15 @@ namespace Horo::Physics::Detail {
                                                        .linearVelocity = body.authored.initialLinearVelocity,
                                                        .angularVelocity = body.authored.initialAngularVelocity,
                                                        .motionSafety = body.authored.motionSafety};
-                const Result<BodyHandle> nativeBody = physics.CreateSceneBody({descriptor, body.sensor});
+                const Result<BodyHandle> nativeBody =
+                    physics.CreateSceneBody({.body = descriptor, .sensor = body.sensor, .sceneEntity = body.object.value});
                 if (nativeBody.HasError())
                     return Result<void>::Failure(
                         AddActivationContext(nativeBody.ErrorValue(), "body", body.object, body.component.value, std::nullopt));
                 bodyHandles.emplace_back(nativeBody.Value());
                 bodyBindings.emplace_back(body.object, body.slot, nativeBody.Value());
+                for (std::size_t index = firstShapeBinding; index < shapeBindings.size(); ++index)
+                    shapeBindings[index].body = nativeBody.Value();
             }
             return Result<void>::Success();
         }
@@ -158,7 +162,8 @@ namespace Horo::Physics {
         if (const std::array valid{runtime_->State() == PhysicsRuntimeState::Ready, scene.IsCurrent(), scene.RuntimeId().IsValid()};
             !std::ranges::all_of(valid, std::identity{}))
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        if (definition.Id() != scene.DefinitionId() || definition.Revision() != scene.DefinitionRevision())
+        if (const std::array matches{definition.Id() == scene.DefinitionId(), definition.Revision() == scene.DefinitionRevision()};
+            !std::ranges::all_of(matches, std::identity{}))
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(
                 MakeError(PhysicsErrors::QuerySnapshotStale, "The Physics definition does not match the resolved scene generation."));
 

@@ -536,26 +536,74 @@ falls back to source parsing.
 
 ### Binary Layout
 
-- **Header / envelope**: Magic bytes (`HPFB`), `cookedFormatVersion`, object count, and payload
-  size. The standard artifact envelope validates a cryptographic digest of the actual cooked
-  payload bytes. Source/dependency digests are provenance/cache inputs, not substitutes for
-  cooked-byte integrity verification.
-- **Hierarchy Table**: Flat array of parent-child slot indices and local transforms.
-- **Component Tables**: Contiguous, aligned arrays of primitive component data and behavioral descriptors.
-- **Asset Reference Table**: List of dependent `AssetId`s required for instantiation.
+The implemented V1 contract is `Horo::Prefab::CookedPrefab` in
+`Horo/Prefab/CookedPrefab.h`, owned by `HoroEngine::Prefab`. Construction and
+decoding are bounded load-time operations with no registry discovery, source
+resolution, I/O, provider callbacks, scene activation or backend selection.
+`Create` validates a detached candidate and owns its canonical bytes; `Parse`
+checks the expected catalog AssetId, format and payload integrity before decoding
+and publishing a complete immutable value. Runtime provider lease/cache lifecycle
+and scene-owned spawn transactions remain separate consumers of this schema.
 
-```cpp
-namespace Horo::Runtime {
-    class CookedPrefab final {
-    public:
-        [[nodiscard]] Assets::AssetId GetAssetId() const noexcept;
-        [[nodiscard]] std::uint32_t GetObjectCount() const noexcept;
-        [[nodiscard]] std::span<const PrefabSlotDescriptor> GetHierarchy() const noexcept;
-        [[nodiscard]] std::span<const Assets::AssetId> GetDependencies() const noexcept;
-        // ... internal typed component table accessors
-    };
-}
-```
+The 64-byte `HPFB` header contains, in order: four magic bytes, a big-endian u32
+`cookedFormatVersion` (currently 1), the 16 persistent AssetId bytes, big-endian
+u32 object count, big-endian u32 payload byte count, and 32 SHA-256 digest bytes
+computed over the **actual encoded payload**. The caller must supply the expected
+template identity from its catalog. This integrity check is not authentication;
+the verified Asset Pipeline generation remains the artifact trust authority.
+Unsupported formats return `UnsupportedCookedVersion`; bad magic, identity,
+length, digest, tags, truncation or noncanonical bytes reject the artifact. The
+standard Asset Pipeline envelope may wrap these bytes and verifies its own
+artifact identity/digest independently.
+
+All payload collection/string/blob lengths are big-endian u32 values. Stable
+member/property/binding IDs are big-endian u64 values; floating values preserve
+IEEE-754 bits in network byte order. There is no native struct padding. The
+payload consists of these four length-prefixed tables in order:
+
+1. **Entities**, in parent-before-child order, root first: parent u32 (`UINT32_MAX`
+   for the root), local translation xyz, quaternion xyzw, scale xyz (ten f32s),
+   source AssetId and source digest, length-prefixed nested placement u32 scope,
+   source-local object u32, and length-prefixed member occurrences. Source
+   addresses are unique scoped identities, never paths. No display/editor data,
+   source documents, variant graph or overrides are retained.
+2. **Dependencies**, in strict unique ascending AssetId order: runtime AssetId,
+   expected AssetTypeId text, exact cooked artifact SHA-256. Source-only prefab
+   resolution dependencies are not runtime resource requirements.
+3. **Bindings**, in strict unique ascending stable interface-ID order: nonzero
+   u64 ID, required u8 boolean, component-type-present u8 boolean and optional
+   registered ComponentTypeId text. Missing optional bindings become typed
+   `Unbound` in the later spawn contract; this template captures no external
+   scene object or runtime handle.
+4. **References**, in strict unique owner/property order: owner entity u32, owner
+   member u32, nonzero stable property u64, target u8 tag, then target slot(s).
+   Tags 0/1/2/3 mean local entity/local member/asset dependency/binding declaration.
+   A member target carries entity and member slots; other targets carry one u32.
+   Every owner and target must exist before admission. Dense slots are template
+   addresses, never runtime handles. Provider schema interpretation and required
+   binding validation occur before the later scene-owned spawn publication.
+
+Member tag 0 contains a stable component occurrence u64, ComponentTypeId text,
+schema u32, payload encoding u8 and length-prefixed canonical component bytes.
+Member tag 1 contains behavior occurrence u64, BehaviorTypeId text, schema u32,
+enabled u8 boolean and length-prefixed typed fields. Each field contains name
+text and a value tag: 0 monostate, 1 bool u8, 2 signed integer i64 bits, 3 f64,
+4 text, 5 Vec2, 6 Vec3, 7 quaternion. Vector/quaternion fields contain f32 values.
+Unknown member/value/reference tags and non-boolean u8 values fail closed.
+Provider-owned component payloads retain their existing bounded serialization
+contract; the Prefab codec never interprets component property offsets.
+
+The captured `PrefabLimitProfile` bounds root-inclusive hierarchy depth, entity
+count, members per entity, dependencies, binding declarations/reference uses,
+source-scope depth and **encoded payload bytes** (excluding the fixed header).
+Provider payload/field ceilings apply as well. Counts and byte lengths are checked
+before allocation, every transform and typed numeric field must be finite, and
+duplicate stable occurrences or fixups reject the complete candidate. Decoding
+re-encodes the accepted typed value and requires exact byte equality, eliminating
+trailing data and alternate representations. No partial value can escape failure.
+All returned data/byte views borrow immutable value-owned storage. Replacing a
+provider template cannot mutate an older retained value or already spawned scene
+entities.
 
 ---
 
@@ -832,3 +880,37 @@ enum class PrefabError : std::uint32_t {
 - [Gameplay Behavior Authoring](../extensions/gameplay-behavior-authoring.md)
 - [Project Versioning and Migration](../foundation/project-versioning-and-migration.md)
 - [Editor Document Model](../editor/editor-document-model.md)
+
+## Headless Scene Hierarchy Handoff
+
+`HoroEngine::PrefabSceneExpansion` owns the load/cook-time transformation from an
+immutable `EffectivePrefabCandidate` and its collision-checked, revision-matched
+`PrefabSceneIdentityMap` into a complete `ExpandedPrefabSceneSubtree` of typed
+`RuntimeEntityDefinition` values. It depends on Prefab Authoring and Runtime Scene;
+neither Runtime Scene nor Prefab Authoring depends on this bridge or an editor.
+The new public header belongs exclusively to this target. Headless consumers link
+this target; existing Editor conversion delegates to the same transformation.
+
+Schema adapters supply exactly one inert typed component projection per stable
+expanded object key. Projection order is irrelevant; missing, duplicate, foreign,
+invalid or excessive projections fail before a subtree is returned. Existing
+Editor schema adapters retain their accepted types and unsupported-type errors.
+Provider lookup, component schema interpretation and mutable authoring state stay
+outside the hierarchy bridge. Adapters must preserve source payload semantics;
+there are no callbacks, service discovery, I/O or component lifecycle hooks.
+
+The bridge preserves resolver sibling order, remapped parent identities, authored
+child transforms and typed payloads. It composes placement transforms only onto
+the outer root, and rechecks complete root-inclusive hierarchy depth, object and
+component counts, dynamic output payload bytes and derived work against the
+captured policy before copying bounded output. A smaller conversion policy is
+honored even when source resolution used larger limits. The immutable output
+retains its pinned revision and survives retirement of the resolver or registry.
+Publication still requires the existing source revision fence.
+
+The subtree is detached. Only the containing `SceneDefinitionBuilder` may admit
+its external scene parent, validate aggregate component references and publish the
+complete scene after every required placement succeeds. Conversion failure leaves
+both authored references and any previously activated runtime definition intact.
+This introduces an additive headless API; existing editor conversion callers and
+component payload schemas require no migration.

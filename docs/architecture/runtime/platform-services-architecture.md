@@ -363,9 +363,9 @@ Implementation status on 10 September 2026: PLS-001.2 provides the standalone
 `HoroEngine::PlatformServices` target and the typed `PlatformRequestStore` foundation.
 It owns bounded active/terminal records, generation-fenced move-only handles, immutable
 typed terminal snapshots, idempotent cancellation intent, and deferred at-most-once
-`OnComplete` subscriptions. Provider routing, the SDK evidence queue, timeout policy,
-provider cancellation, normalized provider errors, and host-wide frontend composition
-remain the later PLS-001.3 through PLS-001.8 slices; callers must not treat the request
+`OnComplete` subscriptions. The later PLS-001.3 through PLS-001.6 slices add routing,
+the provider evidence queue, request finalization and normalized provider errors.
+Host-wide frontend composition remains separate; callers must not treat the request
 store as a provider backend or bypass those owners.
 
 PLS-001.3 adds the generation-fenced `PlatformServicesFrontend` routing boundary.
@@ -375,6 +375,19 @@ unavailable/Null, stale-session, malformed-ID and over-bound requests before bac
 invocation. Routing and idempotent `Close` are serialized by the composition owner;
 `Close` publishes closed admission before invoking backend shutdown. The completion
 queue and provider-to-frontend request-store handoff remain PLS-001.4 scope.
+
+PLS-001.5 gives the version-2 provider lifecycle host a finite per-service request
+policy (30 seconds by default, at most 24 hours), queued owner-lane submission and
+explicit caller cancellation. Existing direct host callers must pump
+`DispatchCompletions` on the owner lane regularly to start queued work, apply ingress,
+evaluate deadlines and deliver terminal observers; without that pump neither launch
+nor timeout advances. `RequestCancel` before the first turn completes the request
+without a native call. Executing cancellation queues one native best-effort
+request for the next owner-lane turn and waits for completion or the admission deadline. The host processes copied
+completion ingress observed by the deadline before its timeout sweep. At timeout it
+publishes the immutable caller result and dispatches observers even when native cancel
+is unsupported. Native leases remain bounded and generation-fenced until a late
+completion or safe provider drain retires them; neither path rewrites the result.
 
 ```cpp
 template <typename T>
@@ -498,6 +511,26 @@ frontend serializes request mutation on its declared owner lane. Re-entering fro
 later completion callback may enqueue new work; it cannot recursively drain completion
 or change the published terminal record. Callback exceptions are caught at the engine
 executor boundary and do not change the platform request result.
+
+Implementation status for PLS-001.4: `PlatformRequestStore::CompletionSink(handle)`
+issues a copyable Horo-owned SDK ingress token with a weak store lease and the exact
+request type and generation. `Complete(Result<T>)` and `AcknowledgeCancellation`
+copy/move normalized outcomes into a finite FIFO; they neither mutate terminal
+state nor invoke observers. Admission captures diagnostic context, restored for
+engine-side terminal publication and deferred observer delivery. Duplicate queued
+or terminal evidence is an idempotent no-op and consumes no extra queue slot.
+Capacity rejection leaves that request eligible for a later retry.
+
+`DrainProviderCompletions(maxCount)` runs only on the thread that constructed the
+store, commits at most the given number of evidence records, and reports applied
+and discarded evidence. `DispatchCompletions` remains a separate later owner-thread
+turn; observer callbacks cannot recursively drain SDK evidence. Timeout or another
+terminal publication supersedes queued native evidence without changing the retained
+result. Session replacement closes the old store and composes a new generation;
+`Shutdown` atomically closes ingress and discards pending evidence. Tokens retained
+past store destruction return typed unavailable results without retaining provider
+or frontend lifetimes. This extends the existing request API without changing direct
+owner-lane completion, cancellation, or handle retention contracts.
 
 ### Timeouts, Retry, And Throttling
 

@@ -2,9 +2,14 @@
 #include "Horo/Runtime/Save/SaveSlotCommitTransaction.h"
 #include "SaveTestUtils.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <functional>
+#include <latch>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <thread>
 #include <vector>
 
 namespace Horo::Runtime {
@@ -26,6 +31,27 @@ namespace Horo::Runtime {
 
         class FakeCommitStore final : public ISaveSlotCommitStore {
         public:
+            class Lease final : public ISaveSlotOperationLease {
+            public:
+                explicit Lease(std::unique_lock<std::mutex> lock) : lock_(std::move(lock)) {}
+
+            private:
+                std::unique_lock<std::mutex> lock_;
+            };
+
+            std::mutex operationMutex;
+            std::function<void()> onPrepare;
+            bool emptyLease{};
+
+            Result<std::unique_ptr<ISaveSlotOperationLease>> AcquireLease(const SaveStorageAddress &) override {
+                if (emptyLease)
+                    return Result<std::unique_ptr<ISaveSlotOperationLease>>::Success(nullptr);
+                std::unique_lock lock(operationMutex, std::try_to_lock);
+                if (!lock.owns_lock())
+                    return Result<std::unique_ptr<ISaveSlotOperationLease>>::Failure(MakeError(SaveErrors::OperationInProgress));
+                return Result<std::unique_ptr<ISaveSlotOperationLease>>::Success(std::make_unique<Lease>(std::move(lock)));
+            }
+
             std::optional<SaveSlotCommitJournal> journal;
             std::optional<SaveSlotCatalogEntry> published;
             bool candidatePrepared{};
@@ -52,6 +78,8 @@ namespace Horo::Runtime {
             [[nodiscard]] Result<void> PrepareGeneration(const SaveSlotCommitJournal &, const ImmutableSaveArchive &) override {
                 if (ShouldFail())
                     return Result<void>::Failure(InjectedFailure());
+                if (onPrepare)
+                    onPrepare();
                 candidatePrepared = true;
                 return Result<void>::Success();
             }
@@ -108,6 +136,63 @@ namespace Horo::Runtime {
             CHECK(transaction.Recover(Address()).Value() == SaveSlotRecoveryAction::None);
             CHECK(store.publishEffects == 1);
             CHECK(store.discardEffects == 0);
+        }
+
+        TEST_CASE("Slot commits reject concurrent ownership and stale base generations", "[unit][save][slot-commit]") {
+            FakeCommitStore store;
+            store.published = Entry(1);
+            SaveSlotCommitTransaction first(store), second(store);
+            store.onPrepare = [&] {
+                bool writeRejected = false, recoveryRejected = false;
+                std::thread contender([&] {
+                    const auto competing = second.Execute(12, Address(), Entry(1), Entry(3), Archive());
+                    writeRejected =
+                        competing.HasError() && competing.ErrorValue().code.Value() == SaveErrors::OperationInProgress.code.Value();
+                    const auto recovery = second.Recover(Address());
+                    recoveryRejected =
+                        recovery.HasError() && recovery.ErrorValue().code.Value() == SaveErrors::OperationInProgress.code.Value();
+                });
+                contender.join();
+                CHECK(writeRejected);
+                CHECK(recoveryRejected);
+                CHECK(store.discardEffects == 0);
+                REQUIRE(store.journal.has_value());
+                CHECK(store.journal->operation == 11);
+            };
+            REQUIRE(first.Execute(11, Address(), Entry(1), Entry(2), Archive()).HasValue());
+            const auto stale = second.Execute(12, Address(), Entry(1), Entry(3), Archive());
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == SaveErrors::SlotCommitGenerationStale.code.Value());
+            CHECK(store.published == Entry(2));
+            CHECK(store.publishEffects == 1);
+        }
+
+        TEST_CASE("Concurrent writes cannot both publish from one base", "[unit][save][slot-commit]") {
+            FakeCommitStore store;
+            store.published = Entry(1);
+            std::latch start{2};
+            std::array<bool, 2> succeeded{};
+            auto write = [&](const std::size_t index) {
+                SaveSlotCommitTransaction transaction(store);
+                start.arrive_and_wait();
+                succeeded[index] =
+                    transaction.Execute(11 + index, Address(), Entry(1), Entry(static_cast<std::uint8_t>(2 + index)), Archive()).HasValue();
+            };
+            std::thread first(write, 0), second(write, 1);
+            first.join();
+            second.join();
+            CHECK(succeeded[0] != succeeded[1]);
+            CHECK(store.publishEffects == 1);
+            CHECK_FALSE(store.journal.has_value());
+        }
+
+        TEST_CASE("Empty operation leases fail before journal access", "[unit][save][slot-commit]") {
+            FakeCommitStore store;
+            store.emptyLease = true;
+            SaveSlotCommitTransaction transaction(store);
+            CHECK(transaction.Execute(11, Address(), std::nullopt, Entry(2), Archive()).HasError());
+            CHECK(transaction.Recover(Address()).HasError());
+            CHECK(store.calls == 0);
         }
 
         TEST_CASE("Slot commit publishes one complete generation and retains the previous generation", "[unit][save][slot-commit]") {
