@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <fstream>
+#include <semaphore>
 #include <stdexcept>
+#include <thread>
 
 namespace Horo::Application {
     using namespace Navigation;
@@ -11,6 +13,68 @@ namespace Horo::Application {
     using namespace DiagnosticsTestSupport;
 
     namespace {
+        /** @brief Pauses the real dispatcher outside its queue lock while the retention burst is submitted. */
+        class PausedDiagnosticSink final : public Telemetry::ISink {
+        public:
+            explicit PausedDiagnosticSink(std::shared_ptr<NavigationBakeDiagnostics> journal) : journal_(std::move(journal)) {}
+
+            void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *descriptor) override {
+                if (record.subsystem == "test.navigation.pause") {
+                    entered_.release();
+                    resume_.acquire();
+                } else {
+                    journal_->Export(record, descriptor);
+                }
+            }
+
+            void Flush() override {
+                journal_->Flush();
+            }
+
+            /** @brief Bounds admission retries for the inert synchronization record, not diagnostic checkpoints. */
+            void Pause() {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+                bool accepted{};
+                do {
+                    accepted = Telemetry::Runtime::EmitRecord({.subsystem = "test.navigation.pause"});
+                    if (!accepted)
+                        std::this_thread::yield();
+                } while (!accepted && std::chrono::steady_clock::now() < deadline);
+                REQUIRE(accepted);
+                REQUIRE(entered_.try_acquire_for(std::chrono::seconds{5}));
+            }
+
+            /** @brief Releases once on the test owner thread, including assertion-failure cleanup. */
+            void Resume() {
+                if (!resumed_) {
+                    resumed_ = true;
+                    resume_.release();
+                }
+            }
+
+        private:
+            std::shared_ptr<NavigationBakeDiagnostics> journal_;
+            std::binary_semaphore entered_{0};
+            std::binary_semaphore resume_{0};
+            bool resumed_{};
+        };
+
+        /** @brief Resumes the worker before the telemetry owner drains it during stack unwinding. */
+        struct ResumeDispatcher final {
+            PausedDiagnosticSink &sink;
+
+            explicit ResumeDispatcher(PausedDiagnosticSink &value) : sink(value) {}
+
+            ResumeDispatcher(const ResumeDispatcher &) = delete;
+            ResumeDispatcher &operator=(const ResumeDispatcher &) = delete;
+            ResumeDispatcher(ResumeDispatcher &&) = delete;
+            ResumeDispatcher &operator=(ResumeDispatcher &&) = delete;
+
+            ~ResumeDispatcher() {
+                sink.Resume();
+            }
+        };
+
         /** @brief Private source adapter failure normalized by its owning adapter. */
         class AdapterFailure final : public std::logic_error {
         public:
@@ -98,7 +162,10 @@ namespace Horo::Application {
         {
             auto config = DiagnosticConfig(directory, 3, 1);
             auto journal = NavigationBakeDiagnostics::Create(config).Value();
-            TelemetryOwner telemetry(journal);
+            auto sink = std::make_shared<PausedDiagnosticSink>(journal);
+            TelemetryOwner telemetry(sink);
+            ResumeDispatcher resume{*sink};
+            sink->Pause();
             REQUIRE(
                 journal->Record({.operation = 1, .event = NavigationBakeDiagnosticEvent::Queued, .stage = "queued", .message = "queued"}));
             for (int i = 0; i < 5; ++i)
@@ -113,10 +180,12 @@ namespace Horo::Application {
                                      .result = BuildOutputResult::Succeeded,
                                      .message = "completed",
                                      .progress = 1.0F}));
+            sink->Resume();
             REQUIRE(Telemetry::Runtime::Flush());
             const auto snapshot = journal->Snapshot();
             REQUIRE(snapshot.suppressedRecords == 5);
             REQUIRE(snapshot.droppedRecords == 4);
+            REQUIRE(snapshot.persistenceDrops == 0);
             const auto output = config.output->SnapshotIfChanged(0).value();
             REQUIRE(output.droppedRecordCount == 4);
             REQUIRE(std::ranges::any_of(output.records, [](const auto &record) {
