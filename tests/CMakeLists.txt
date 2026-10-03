@@ -371,6 +371,7 @@ target_compile_features(HoroNetworkTransportCompositionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkTransportCompositionTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
 add_dependencies(HoroNetworkTransportCompositionTests HoroNetworkDisabledLinkProbe HoroNetworkNullLinkProbe)
 horo_register_catch_test(HoroNetworkTransportCompositionTests LABELS "unit;network;headless")
+target_sources(HoroAudioApiPublicHeaderConsumer PRIVATE support/AudioStreamingFactoryPublicContract.cpp)
 add_executable(HoroAudioApiTests
         support/AllocationProbe.cpp
         unit/runtime/audio/AudioAcousticQueryTests.cpp
@@ -378,6 +379,9 @@ add_executable(HoroAudioApiTests
         unit/runtime/audio/MixerAssetSchemaTests.cpp
         unit/runtime/audio/AudioSoundReferenceTests.cpp
         unit/runtime/audio/AudioStreamDecoderTests.cpp
+        unit/runtime/audio/AudioStreamingServiceTests.cpp
+        unit/runtime/audio/AudioStreamingCancellationTests.cpp
+        unit/runtime/audio/AudioStreamingControlTests.cpp
         unit/runtime/audio/AudioBackendCapabilitiesTests.cpp
         unit/runtime/audio/AudioCallbackEventsTests.cpp
         unit/runtime/audio/AudioDeviceDiscoveryTests.cpp
@@ -409,6 +413,7 @@ target_link_libraries(HoroAudioImportTests PRIVATE HoroEngine::AudioImport)
 horo_register_catch_test(HoroAudioImportTests LABELS "unit;audio;headless")
 add_executable(HoroAudioCookTests
         unit/runtime/audio/AudioCookerTests.cpp
+        unit/runtime/audio/AudioCookedStreamContextTests.cpp
 )
 target_compile_features(HoroAudioCookTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioCookTests PRIVATE HoroEngine::AudioCook)

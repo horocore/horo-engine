@@ -789,6 +789,7 @@ add_library(HoroAudioApi STATIC
         audio/api/AudioSoundReference.cpp
         audio/api/AudioStreamDecoder.cpp
         audio/api/AudioStreamDecoderErrors.cpp
+        audio/api/AudioStreamingService.cpp
         audio/api/AudioConcurrencyGroup.cpp
         audio/api/AudioVoiceStateMachine.cpp
         audio/api/AudioVoiceControls.cpp
@@ -815,6 +816,7 @@ add_library(HoroAudioCook STATIC
         audio/cook/AudioCookProfile.cpp
         audio/cook/AudioCooker.cpp
         audio/cook/AudioCookInspector.cpp
+        audio/cook/AudioCookedStreamSource.cpp
 )
 add_library(HoroEngine::AudioCook ALIAS HoroAudioCook)
 target_compile_features(HoroAudioCook PUBLIC cxx_std_20)

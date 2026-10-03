@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Audio/AudioMediaFormatRegistry.h"
+#include "Horo/Foundation/BorrowedCallbackContext.h"
 #include "Horo/Foundation/Result.h"
 
 #include <atomic>
@@ -59,16 +60,19 @@ namespace Horo::Audio {
      * @details The provider owns source I/O and codec internals. Decode and seek run only on a worker, use at most the supplied
      * output and scratch spans, and poll cancellation during bounded work. The caller must join an active worker before release.
      * A successful session takes responsibility for invoking release exactly once; a rejected session takes none.
+     * Each operation resolves its exact private state type with context.Get<T>() and rejects a mismatch before dereferencing.
+     * The context does not extend object/code lifetime and must not cross independently rebuilt ABI boundaries.
      */
     struct AudioStreamDecoderProvider final {
-        using DecodeFunction = Result<AudioStreamDecodeProgress> (*)(void *context, std::uint64_t firstFrame,
+        using DecodeFunction = Result<AudioStreamDecodeProgress> (*)(const BorrowedCallbackContext &context, std::uint64_t firstFrame,
                                                                      std::span<AudioSample> interleavedOutput,
                                                                      std::span<std::byte> workingMemory,
                                                                      const std::atomic<bool> &cancelled);
-        using SeekFunction = Result<void> (*)(void *context, std::uint64_t targetFrame, const std::atomic<bool> &cancelled);
-        using ReleaseFunction = void (*)(void *context) noexcept;
+        using SeekFunction = Result<void> (*)(const BorrowedCallbackContext &context, std::uint64_t targetFrame,
+                                              const std::atomic<bool> &cancelled);
+        using ReleaseFunction = void (*)(const BorrowedCallbackContext &context) noexcept;
 
-        void *context{};           /**< Provider-owned context transferred to the accepted session. */
+        BorrowedCallbackContext context{}; /**< Type-checked provider state; release responsibility transfers only on success. */
         DecodeFunction decode{};   /**< Bounded synchronous decode; output is discarded when an error or cancellation is returned. */
         SeekFunction seek{};       /**< Required exactly when the specification advertises seekable. */
         ReleaseFunction release{}; /**< Called after the worker has stopped, including failure and cancellation. */
