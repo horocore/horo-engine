@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
+import runpy
 import sys
 from unittest.mock import Mock
 from urllib.parse import parse_qs, urlsplit
@@ -10,6 +12,13 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from pr_annotations_test_support import annotations
+
+
+@pytest.mark.parametrize("spec", [None, Mock(loader=None)])
+def test_regression_loader_checks_spec_and_loader_explicitly(monkeypatch, spec):
+    monkeypatch.setattr("importlib.util.spec_from_file_location", lambda *_: spec)
+    with pytest.raises(ImportError, match="cannot load the annotation validator"):
+        runpy.run_path(str(Path(__file__).with_name("pr_annotations_test_support.py")))
 
 
 @pytest.fixture
