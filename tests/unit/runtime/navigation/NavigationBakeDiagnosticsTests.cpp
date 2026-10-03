@@ -131,7 +131,16 @@ namespace Horo::Application {
             return record.code.Value() == "navigation.bake.tile_failed" && record.message.find("profile=1") != std::string::npos &&
                    !record.source;
         }));
-        REQUIRE(snapshot.persistenceDrops == 0);
+        const auto telemetryStatistics = Telemetry::Runtime::GetStatistics();
+        CAPTURE(snapshot.persistenceDrops, telemetryStatistics.contentionDrops, telemetryStatistics.queueFullDrops);
+        // The dispatcher may reject a checkpoint rather than block on its consumer's queue lock.
+        REQUIRE(snapshot.persistenceDrops <= telemetryStatistics.contentionDrops);
+        REQUIRE(telemetryStatistics.queueFullDrops == 0);
+        REQUIRE(snapshot.submissionFailures == 0);
+        REQUIRE(snapshot.historyFailures == 0);
+        REQUIRE(std::ranges::count_if(output.records, [](const auto &record) {
+            return record.code.Value() == "navigation.bake.history_unavailable";
+        }) == (snapshot.persistenceDrops > 0 ? 1 : 0));
     }
 
     TEST_CASE("Bake diagnostics survive observer closure and project restart without live operation aliasing",
