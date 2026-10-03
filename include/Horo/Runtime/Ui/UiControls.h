@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Runtime/Ui/UiActions.h"
+#include "Horo/Runtime/Ui/UiAsyncActions.h"
 
 #include <compare>
 #include <cstdint>
@@ -29,6 +30,7 @@ namespace Horo::Runtime::Ui {
     enum class UiControlAvailability : std::uint8_t {
         Enabled,
         Disabled,
+        Busy,
         Count,
     };
 
@@ -347,10 +349,21 @@ namespace Horo::Runtime::Ui {
 
         /**
          * @brief Changes availability at an owner safe point and cancels transient interaction state when disabling.
-         * @param availability New explicit availability.
+         * @param availability Enabled or Disabled; Busy is derived exclusively from the action owner projection.
          * @return Success or typed lifecycle/state failure.
          */
         [[nodiscard]] Result<void> SetAvailability(UiControlAvailability availability);
+
+        /**
+         * @brief Copies the current action owner's projection and derives effective busy availability.
+         * @param actions Router-owned operation store for this exact source generation.
+         * @return Success or typed stale/lifecycle failure. Pending work clears transient activation;
+         * terminal state restores the separately configured availability. No callback or operation is owned by the control.
+         */
+        [[nodiscard]] Result<void> ObserveAsyncActions(const UiAsyncActionStore &actions);
+        /** @brief Copies retained progress/terminal/error presentation state. @return Optional immutable projection or lifecycle failure.
+         */
+        [[nodiscard]] Result<std::optional<UiAsyncActionSnapshot>> AsyncAction() const;
 
         /** @brief Closes input/default admission and releases transient focus/press state. @return Success or lifecycle failure. */
         [[nodiscard]] Result<void> BeginRetirement();

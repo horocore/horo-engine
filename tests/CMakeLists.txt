@@ -2259,6 +2259,7 @@ target_include_directories(HoroRuntimeUiPointerCaptureTests PRIVATE ${CMAKE_CURR
 target_link_libraries(HoroRuntimeUiPointerCaptureTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiActionsTests
         unit/runtime/ui/UiActionsTests.cpp
+        unit/runtime/ui/UiAsyncActionsTests.cpp
         support/AllocationProbe.cpp
 )
 target_compile_features(HoroRuntimeUiActionsTests PRIVATE cxx_std_20)

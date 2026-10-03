@@ -518,9 +518,12 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiPointerCaptureErrors.cpp
         runtime/ui/UiActions.cpp
         runtime/ui/UiActionRouter.cpp
+        runtime/ui/UiAsyncActions.cpp
+        runtime/ui/UiAsyncActionErrors.cpp
         runtime/ui/UiFeedback.cpp
         runtime/ui/UiFeedbackErrors.cpp
         runtime/ui/UiScreenStack.cpp
+        runtime/ui/UiRouteOperations.cpp
         runtime/ui/UiFocusGraph.cpp
         runtime/ui/UiFocusGraphOperations.cpp
         runtime/ui/UiFocusGraphParticipation.cpp

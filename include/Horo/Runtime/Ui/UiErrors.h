@@ -264,6 +264,16 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor ActionHandlerFailed;
     /** @brief The Runtime UI action router is retiring, stopped, or dispatching reentrantly. */
     extern const ErrorCodeDescriptor ActionLifecycleUnavailable;
+    /** @brief All bounded asynchronous slots remain retained or leased. */
+    extern const ErrorCodeDescriptor AsyncActionCapacityExceeded;
+    /** @brief The source already has a pending operation or retention was released before terminal. */
+    extern const ErrorCodeDescriptor AsyncActionBusy;
+    /** @brief Progress is outside its finite bound or moves backwards within a phase. */
+    extern const ErrorCodeDescriptor AsyncActionProgressInvalid;
+    /** @brief A completion/progress publication arrived after the operation became terminal. */
+    extern const ErrorCodeDescriptor AsyncActionAlreadyTerminal;
+    /** @brief An immutable failure is absent, malformed or exceeds the diagnostic budget. */
+    extern const ErrorCodeDescriptor AsyncActionFailureInvalid;
     /** @brief A default navigation command or result has invalid focus evidence. */
     extern const ErrorCodeDescriptor NavigationInvalid;
     /** @brief Canonical navigation or glyph capability is unsupported by the supplied action bindings. */

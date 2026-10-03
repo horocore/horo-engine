@@ -133,6 +133,11 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::ActionResultStale,
             &UiErrors::ActionHandlerFailed,
             &UiErrors::ActionLifecycleUnavailable,
+            &UiErrors::AsyncActionCapacityExceeded,
+            &UiErrors::AsyncActionBusy,
+            &UiErrors::AsyncActionProgressInvalid,
+            &UiErrors::AsyncActionAlreadyTerminal,
+            &UiErrors::AsyncActionFailureInvalid,
             &UiErrors::NavigationInvalid,
         };
         const std::array bindings{

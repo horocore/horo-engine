@@ -127,6 +127,33 @@ ECS, renderer, asset or scheduler state directly. Failed or skipped presentation
 suppresses interaction for that viewport until a matching layout is presented, so
 the player cannot click geometry that was never visible.
 
+### Asynchronous action and busy-state lifecycle
+
+The typed action router owns a preallocated `UiAsyncActionStore`; controls own
+only copied presentation state. An asynchronous action provider retains one
+move-only completion lease in its operation coordinator and owns execution through
+structured jobs. Workers may observe its lock-free cancellation token but never
+invoke a control, tree or widget, or publish directly into mutable UI state.
+Prepared results cross the existing bounded owner-command handoff before
+VariableUpdate projects busy/progress/typed failure state into controls.
+
+Screen stacks may own routers by exact route incarnation. Committed close/back/
+clear, replacement and shutdown cancel their pending operations before releasing
+the route-owned router; cancelled/rejected navigation preserves them. Reload
+retires the old router before publishing its new revision context. The first
+terminal transition is immutable, and completion leases retain only bounded
+operation storage after route/control/tree retirement. Outstanding cancellation
+observers prevent slot reuse, so late work cannot target a replacement generation.
+
+Finite queue/operation capacity supplies typed backpressure. Progress is monotonic
+within finite numbered phases; immutable failures preserve their original typed
+identity and bounded diagnostics. Successful frame operations allocate nothing,
+poll no job, perform no I/O and wait on nothing. Provider execution and eventual
+drain remain outside UI; UI cancellation does not claim rollback of an
+authoritative operation already committed. See the
+[asynchronous action migration guide](../../guides/runtime-ui-async-action-migration.md)
+for composition, affinity, retention and consumer migration.
+
 ## Accessibility projection and change publication
 
 `UiAccessibilityExtractor` copies the existing typed core/contributed semantics

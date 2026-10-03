@@ -18,6 +18,8 @@
 #include <variant>
 
 namespace Horo::Runtime::Ui {
+    class UiAsyncActionStore;
+    class UiAsyncActionHandler;
     inline constexpr std::size_t MaximumUiActionTextBytes = 256;
     inline constexpr std::size_t MaximumUiActionArguments = 8;
     inline constexpr std::uint32_t MaximumUiActionCommands = 1'024;
@@ -418,14 +420,29 @@ namespace Horo::Runtime::Ui {
         /** @brief Dequeues and dispatches one request, returning empty when no work is queued. */
         [[nodiscard]] Result<std::optional<UiActionResult>> DispatchNext(UiActionHandler &handler);
 
+        /**
+         * @brief Schedules one queued request with router-owned pending state.
+         * @param handler Borrowed provider scheduler; retains only the completion lease, never this router or request.
+         * @return Pending result, empty when idle, or typed scheduling failure. Capacity/busy refusal retains the queue head.
+         * @note Runs only while Active. Scheduling never waits; the provider owns execution and owner-thread result handoff.
+         */
+        [[nodiscard]] Result<std::optional<UiActionResult>> DispatchNext(UiAsyncActionHandler &handler);
+
+        /** @brief Borrows bounded asynchronous projection/cancellation state. @return Store pointer, or null after move. */
+        [[nodiscard]] UiAsyncActionStore *AsyncActions() noexcept;
+
         /** @brief Returns the exact owner/revision evidence. @return Borrowed immutable context. */
         [[nodiscard]] const UiActionOwnerContext &Owner() const noexcept;
         /** @brief Returns current queued request count. @return Bounded count. */
         [[nodiscard]] std::size_t QueuedCount() const noexcept;
         /** @brief Returns the owner high-water mark for replacement. @return Last issued or injected sequence; invalid before any issue. */
         [[nodiscard]] UiActionSequence LastIssuedSequence() const noexcept;
-        /** @brief Closes admission while allowing already queued values to be drained or discarded. */
-        [[nodiscard]] Result<void> BeginRetirement();
+        /**
+         * @brief Closes admission while allowing already queued values to be drained or discarded.
+         * @param reason First cancellation reason published to pending asynchronous operations.
+         * @return Success or typed lifecycle/invalid-reason failure.
+         */
+        [[nodiscard]] Result<void> BeginRetirement(UiActionCancellationReason reason = UiActionCancellationReason::OwnerRetired);
         /** @brief Idempotently stops dispatch and releases queued requests. */
         void Shutdown() noexcept;
         /** @brief Returns the explicit lifecycle state. */
@@ -433,7 +450,11 @@ namespace Horo::Runtime::Ui {
 
     private:
         struct Storage;
-        explicit UiActionRouter(std::unique_ptr<Storage> storage) noexcept;
-        std::unique_ptr<Storage> storage_;
+        explicit UiActionRouter(std::shared_ptr<Storage> storage) noexcept;
+        /** @brief Borrows mutable owner state. @return Null after move; unavailable on const owners. */
+        [[nodiscard]] Storage *StateStorage() noexcept;
+        /** @brief Borrows read-only owner state. @return Null after move. */
+        [[nodiscard]] const Storage *StateStorage() const noexcept;
+        std::shared_ptr<Storage> storage_;
     };
 }  // namespace Horo::Runtime::Ui

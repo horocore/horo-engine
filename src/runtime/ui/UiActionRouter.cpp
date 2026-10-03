@@ -1,8 +1,10 @@
 #include "Horo/Runtime/Ui/UiActions.h"
+#include "Horo/Runtime/Ui/UiAsyncActions.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
 
 #include <limits>
 #include <new>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -11,6 +13,11 @@ namespace Horo::Runtime::Ui {
         /** @brief Preserves typed Runtime UI failure evidence at the router boundary. */
         template <typename T = void> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<T>::Failure(MakeError(descriptor));
+        }
+
+        /** @brief Validates closed cancellation enums before mutating asynchronous lifecycle state. */
+        template <typename Enum> [[nodiscard]] bool IsKnownEnum(const Enum value, const Enum count) noexcept {
+            return static_cast<std::underlying_type_t<Enum>>(value) < static_cast<std::underlying_type_t<Enum>>(count);
         }
 
         /** @brief Supplies stable invalid ownership evidence after a router has relinquished its storage. */
@@ -36,25 +43,26 @@ namespace Horo::Runtime::Ui {
             bool previous_;
         };
 
-        /** @brief Contains arbitrary handler exceptions at the explicit Runtime UI callback boundary. */
-        [[nodiscard]] Result<UiActionResult> InvokeActionHandler(const UiActionRequest &request, UiActionHandler &handler) {
+        /** @brief Contains foreign callback exceptions at the synchronous consumer boundary. */
+        template <typename Callback> [[nodiscard]] auto InvokeActionHandler(Callback &&callback) {
             try {
-                return handler.Handle(request);
+                return callback();
             } catch (...) {  // NOSONAR(cpp:S2738) The Runtime UI callback boundary must contain arbitrary handler exceptions.
-                return Failure<UiActionResult>(UiErrors::ActionHandlerFailed);
+                return decltype(callback())::Failure(MakeError(UiErrors::ActionHandlerFailed));
             }
         }
 
     }  // namespace
 
-    /** @brief Owns one finite command queue and its ownership-generation sequence evidence. */
+    /** @brief Owns the finite queue, asynchronous operations and ownership-generation sequence evidence. */
     struct UiActionRouter::Storage final {
-        explicit Storage(const UiActionRouterDescriptor &descriptor)
-            : owner(descriptor.owner), queue(descriptor.maximumQueuedCommands), nextSequence(descriptor.previousSequence.Value() + 1),
-              lastIssued(descriptor.previousSequence) {}
+        Storage(const UiActionRouterDescriptor &descriptor, UiAsyncActionStore operations)
+            : owner(descriptor.owner), queue(descriptor.maximumQueuedCommands), asyncActions(std::move(operations)),
+              nextSequence(descriptor.previousSequence.Value() + 1), lastIssued(descriptor.previousSequence) {}
 
         UiActionOwnerContext owner;
         std::vector<UiActionRequest> queue;
+        UiAsyncActionStore asyncActions;
         std::size_t head{};
         std::size_t count{};
         std::uint64_t nextSequence{1};
@@ -74,14 +82,27 @@ namespace Horo::Runtime::Ui {
         if (!descriptor.IsValid())
             return Failure<UiActionRouter>(UiErrors::ActionInvalid);
         try {
-            return Result<UiActionRouter>::Success(UiActionRouter{std::make_unique<Storage>(descriptor)});
+            auto operations = UiAsyncActionStore::Create(descriptor.owner, descriptor.maximumQueuedCommands);
+            if (operations.HasError())
+                return Result<UiActionRouter>::Failure(operations.ErrorValue());
+            return Result<UiActionRouter>::Success(UiActionRouter{std::make_shared<Storage>(descriptor, std::move(operations).Value())});
         } catch (const std::bad_alloc &) {
             return Failure<UiActionRouter>(UiErrors::CapacityExceeded);
         }
     }
 
     /** @copydoc UiActionRouter::UiActionRouter */
-    UiActionRouter::UiActionRouter(std::unique_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
+    UiActionRouter::UiActionRouter(std::shared_ptr<Storage> storage) noexcept : storage_(std::move(storage)) {}
+
+    /** @copydoc UiActionRouter::StateStorage */
+    UiActionRouter::Storage *UiActionRouter::StateStorage() noexcept {
+        return storage_.get();
+    }
+
+    /** @copydoc UiActionRouter::StateStorage */
+    const UiActionRouter::Storage *UiActionRouter::StateStorage() const noexcept {
+        return storage_.get();
+    }
 
     /** @copydoc UiActionRouter::~UiActionRouter */
     UiActionRouter::~UiActionRouter() {
@@ -92,64 +113,80 @@ namespace Horo::Runtime::Ui {
     UiActionRouter::UiActionRouter(UiActionRouter &&) noexcept = default;
 
     /** @copydoc UiActionRouter::operator= */
-    UiActionRouter &UiActionRouter::operator=(UiActionRouter &&) noexcept = default;
+    UiActionRouter &UiActionRouter::operator=(UiActionRouter &&other) noexcept {
+        if (this != &other) {
+            if (auto *const storage = StateStorage())
+                storage->asyncActions.Retire(UiActionCancellationReason::Superseded);
+            Shutdown();
+            storage_ = std::move(other.storage_);
+        }
+        return *this;
+    }
 
     /** @copydoc UiActionRouter::Enqueue */
     Result<UiActionRequestId> UiActionRouter::Enqueue(UiActionSource source, UiActionCommand command) {
-        if (!storage_ || storage_->state != UiActionRouterState::Active || storage_->dispatching)
+        auto *const storage = StateStorage();
+        if (!storage || storage->state != UiActionRouterState::Active || storage->dispatching)
             return Failure<UiActionRequestId>(UiErrors::ActionLifecycleUnavailable);
         if (!source.IsValid())
             return Failure<UiActionRequestId>(UiErrors::ActionInvalid);
-        if (source.owner != storage_->owner)
+        if (source.owner != storage->owner)
             return Failure<UiActionRequestId>(UiErrors::ActionSourceStale);
         if (const auto valid = ValidateUiActionCommand(command); valid.HasError())
             return Result<UiActionRequestId>::Failure(valid.ErrorValue());
-        if (storage_->count == storage_->queue.size())
+        if (storage->count == storage->queue.size())
             return Failure<UiActionRequestId>(UiErrors::ActionQueueCapacityExceeded);
-        if (storage_->nextSequence == 0)
+        if (storage->nextSequence == 0)
             return Failure<UiActionRequestId>(UiErrors::GenerationExhausted);
 
-        const auto sequence = UiActionSequence::Create(storage_->nextSequence);
+        const auto sequence = UiActionSequence::Create(storage->nextSequence);
         if (sequence.HasError())
             return Result<UiActionRequestId>::Failure(sequence.ErrorValue());
-        if (storage_->nextSequence == std::numeric_limits<std::uint64_t>::max())
-            storage_->nextSequence = 0;
+        if (storage->nextSequence == std::numeric_limits<std::uint64_t>::max())
+            storage->nextSequence = 0;
         else
-            ++storage_->nextSequence;
+            ++storage->nextSequence;
 
-        const UiActionRequestId id{storage_->owner.instance.ownership, sequence.Value()};
-        storage_->lastIssued = sequence.Value();
-        const std::size_t slot = (storage_->head + storage_->count) % storage_->queue.size();
-        storage_->queue[slot] = UiActionRequest{id, std::move(source), UiActionOriginOf(command), std::move(command)};
-        ++storage_->count;
+        const UiActionRequestId id{storage->owner.instance.ownership, sequence.Value()};
+        storage->lastIssued = sequence.Value();
+        const std::size_t slot = (storage->head + storage->count) % storage->queue.size();
+        storage->queue[slot] = UiActionRequest{id, std::move(source), UiActionOriginOf(command), std::move(command)};
+        ++storage->count;
         return Result<UiActionRequestId>::Success(id);
     }
 
     /** @copydoc UiActionRouter::TryDequeue */
     Result<std::optional<UiActionRequest>> UiActionRouter::TryDequeue() {
-        if (!storage_ || storage_->state == UiActionRouterState::Stopped || storage_->dispatching)
+        auto *const storage = StateStorage();
+        if (!storage || storage->state == UiActionRouterState::Stopped || storage->dispatching)
             return Failure<std::optional<UiActionRequest>>(UiErrors::ActionLifecycleUnavailable);
-        if (storage_->count == 0)
+        if (storage->count == 0)
             return Result<std::optional<UiActionRequest>>::Success(std::nullopt);
 
-        UiActionRequest request = std::move(storage_->queue[storage_->head]);
-        storage_->queue[storage_->head] = UiActionRequest{};
-        storage_->head = (storage_->head + 1) % storage_->queue.size();
-        --storage_->count;
+        UiActionRequest request = std::move(storage->queue[storage->head]);
+        storage->queue[storage->head] = UiActionRequest{};
+        storage->head = (storage->head + 1) % storage->queue.size();
+        --storage->count;
         return Result<std::optional<UiActionRequest>>::Success(std::optional<UiActionRequest>{std::move(request)});
     }
 
     /** @copydoc UiActionRouter::Dispatch */
     Result<UiActionResult> UiActionRouter::Dispatch(const UiActionRequest &request, UiActionHandler &handler) {
-        if (!storage_ || storage_->state == UiActionRouterState::Stopped || storage_->dispatching)
+        auto *const storage = StateStorage();
+        if (!storage || storage->state == UiActionRouterState::Stopped || storage->dispatching)
             return Failure<UiActionResult>(UiErrors::ActionLifecycleUnavailable);
         if (const auto valid = request.Validate(); valid.HasError())
             return Result<UiActionResult>::Failure(valid.ErrorValue());
-        if (request.source.owner != storage_->owner || request.id.ownership != storage_->owner.instance.ownership)
+        if (request.source.owner != storage->owner || request.id.ownership != storage->owner.instance.ownership)
             return Failure<UiActionResult>(UiErrors::ActionSourceStale);
 
-        DispatchGuard guard{storage_->dispatching};
-        auto result = InvokeActionHandler(request, handler);
+        const auto lifetime = storage_;
+        DispatchGuard guard{storage->dispatching};
+        auto result = InvokeActionHandler([&request, &handler] {
+            return handler.Handle(request);
+        });
+        if (lifetime->state == UiActionRouterState::Stopped)
+            return Failure<UiActionResult>(UiErrors::ActionLifecycleUnavailable);
         if (result.HasError())
             return Result<UiActionResult>::Failure(std::move(result).ErrorValue());
         if (result.Value().request != request.id)
@@ -161,7 +198,7 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiActionRouter::DispatchNext */
     Result<std::optional<UiActionResult>> UiActionRouter::DispatchNext(UiActionHandler &handler) {
-        if (!storage_ || storage_->state == UiActionRouterState::Stopped || storage_->dispatching)
+        if (const auto *const storage = StateStorage(); !storage || storage->state == UiActionRouterState::Stopped || storage->dispatching)
             return Failure<std::optional<UiActionResult>>(UiErrors::ActionLifecycleUnavailable);
         const auto request = TryDequeue();
         if (request.HasError())
@@ -175,41 +212,89 @@ namespace Horo::Runtime::Ui {
         return Result<std::optional<UiActionResult>>::Success(std::optional<UiActionResult>{std::move(result).Value()});
     }
 
+    /** @copydoc UiActionRouter::DispatchNext */
+    Result<std::optional<UiActionResult>> UiActionRouter::DispatchNext(UiAsyncActionHandler &handler) {
+        auto *const storage = StateStorage();
+        if (!storage || storage->state != UiActionRouterState::Active || storage->dispatching)
+            return Failure<std::optional<UiActionResult>>(UiErrors::ActionLifecycleUnavailable);
+        if (storage->count == 0)
+            return Result<std::optional<UiActionResult>>::Success(std::nullopt);
+        const auto lifetime = storage_;
+        const UiActionRequest request = storage->queue[storage->head];
+        auto admitted = storage->asyncActions.Start(request);
+        if (admitted.HasError())
+            return Result<std::optional<UiActionResult>>::Failure(admitted.ErrorValue());
+        auto producer = std::move(admitted).Value();
+        const auto key = producer.Key();
+        // Admission reserves state before removing the command; refusal never loses queued work.
+        storage->queue[storage->head] = {};
+        storage->head = (storage->head + 1) % storage->queue.size();
+        --storage->count;
+        DispatchGuard guard{storage->dispatching};
+        if (auto scheduled = InvokeActionHandler([&request, &handler, &producer] {
+            return handler.Start(request, std::move(producer));
+        });
+            scheduled.HasError()) {
+            (void)storage->asyncActions.Cancel(key, UiActionCancellationReason::Requested);
+            (void)storage->asyncActions.Release(key);
+            return Result<std::optional<UiActionResult>>::Failure(std::move(scheduled).ErrorValue());
+        }
+        if (lifetime->state != UiActionRouterState::Active)
+            return Failure<std::optional<UiActionResult>>(UiErrors::ActionLifecycleUnavailable);
+        return Result<std::optional<UiActionResult>>::Success(UiActionResult::Pending(request.id, key.operation).Value());
+    }
+
+    /** @copydoc UiActionRouter::AsyncActions */
+    UiAsyncActionStore *UiActionRouter::AsyncActions() noexcept {
+        auto *const storage = StateStorage();
+        return storage ? &storage->asyncActions : nullptr;
+    }
+
     /** @copydoc UiActionRouter::Owner */
     const UiActionOwnerContext &UiActionRouter::Owner() const noexcept {
-        return storage_ ? storage_->owner : InvalidOwnerContext();
+        auto *const storage = StateStorage();
+        return storage ? storage->owner : InvalidOwnerContext();
     }
 
     /** @copydoc UiActionRouter::LastIssuedSequence */
     UiActionSequence UiActionRouter::LastIssuedSequence() const noexcept {
-        return storage_ ? storage_->lastIssued : UiActionSequence{};
+        const auto *const storage = StateStorage();
+        return storage ? storage->lastIssued : UiActionSequence{};
     }
 
     /** @copydoc UiActionRouter::QueuedCount */
     std::size_t UiActionRouter::QueuedCount() const noexcept {
-        return storage_ ? storage_->count : 0;
+        const auto *const storage = StateStorage();
+        return storage ? storage->count : 0;
     }
 
     /** @copydoc UiActionRouter::BeginRetirement */
-    Result<void> UiActionRouter::BeginRetirement() {
-        if (!storage_ || storage_->state != UiActionRouterState::Active || storage_->dispatching)
+    Result<void> UiActionRouter::BeginRetirement(const UiActionCancellationReason reason) {
+        auto *const storage = StateStorage();
+        if (!storage || storage->state != UiActionRouterState::Active)
             return Failure(UiErrors::ActionLifecycleUnavailable);
-        storage_->state = UiActionRouterState::Retiring;
+        if (!IsKnownEnum(reason, UiActionCancellationReason::Count))
+            return Failure(UiErrors::ActionResultInvalid);
+        storage->state = UiActionRouterState::Retiring;
+        storage->asyncActions.Retire(reason);
         return Result<void>::Success();
     }
 
     /** @copydoc UiActionRouter::Shutdown */
     void UiActionRouter::Shutdown() noexcept {
-        if (!storage_ || storage_->dispatching)
+        auto *const storage = StateStorage();
+        if (!storage)
             return;
-        storage_->state = UiActionRouterState::Stopped;
-        storage_->head = 0;
-        storage_->count = 0;
-        storage_->queue.clear();
+        storage->state = UiActionRouterState::Stopped;
+        storage->asyncActions.Retire(UiActionCancellationReason::Shutdown);
+        storage->head = 0;
+        storage->count = 0;
+        storage->queue.clear();
     }
 
     /** @copydoc UiActionRouter::State */
     UiActionRouterState UiActionRouter::State() const noexcept {
-        return storage_ ? storage_->state : UiActionRouterState::Stopped;
+        const auto *const storage = StateStorage();
+        return storage ? storage->state : UiActionRouterState::Stopped;
     }
 }  // namespace Horo::Runtime::Ui
