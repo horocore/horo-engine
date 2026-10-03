@@ -25,7 +25,7 @@ MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
 JIRA_KEY = re.compile(r"(?<![A-Z0-9])([A-Z][A-Z0-9]+-\d+)(?![A-Z0-9])")
 CLOSING_REF = re.compile(
-    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+" r"(?:horocore/horo-engine)?#(\d+)\b",
+    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:horocore/horo-engine)?#(\d+)\b",
     re.IGNORECASE,
 )
 ISSUE_REF = re.compile(r"(?<!\w)#(\d+)\b")
@@ -359,6 +359,26 @@ def load_pr(number: int, options: CheckOptions) -> dict[str, Any]:
     }
 
 
+def report_changes(
+    number: int,
+    pr: dict[str, Any],
+    issue: dict[str, Any],
+    fixes: list[tuple[str, str]],
+    options: CheckOptions,
+) -> bool:
+    """Report missing fields or apply them in order, stopping at the first failed write."""
+    action = "fix" if options.fix else "missing"
+    for kind, value in fixes:
+        print(f"  {action}: {kind} {value}", flush=True)
+        if options.fix:
+            try:
+                apply_fix(number, kind, value, pr, issue, options)
+            except AnnotationError as error:
+                print(f"  ERROR: {kind}: {error}", file=sys.stderr, flush=True)
+                return False
+    return True
+
+
 def check_pr(number: int, options: CheckOptions) -> bool:
     pr = load_pr(number, options)
     try:
@@ -383,14 +403,8 @@ def check_pr(number: int, options: CheckOptions) -> bool:
         print(f"  note: {note}", flush=True)
     if options.fix and issue["number"] is None:
         return False
-    for kind, value in fixes:
-        print(f"  {'fix' if options.fix else 'missing'}: {kind} {value}", flush=True)
-        if options.fix:
-            try:
-                apply_fix(number, kind, value, pr, issue, options)
-            except AnnotationError as error:
-                print(f"  ERROR: {kind}: {error}", file=sys.stderr, flush=True)
-                return False
+    if not report_changes(number, pr, issue, fixes, options):
+        return False
     if not fixes and issue["number"] is not None:
         print("  OK", flush=True)
     return issue["number"] is not None and (not fixes or options.fix)

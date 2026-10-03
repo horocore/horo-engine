@@ -64,8 +64,9 @@ def test_https_fixed_host_json_and_connection_cleanup(transport):
 def test_http_errors_do_not_follow_redirects_or_expose_tokens(transport, status):
     factory, connection, response = transport
     response.status = status
+    api = annotations.GitHub("secret-fixture")
     with pytest.raises(annotations.AnnotationError, match=f"HTTP {status}") as failure:
-        annotations.GitHub("secret-fixture").request("GET", "/repos/o/r")
+        api.request("GET", "/repos/o/r")
     assert "secret-fixture" not in str(failure.value)
     response.read.assert_not_called()
     assert factory.call_count == 1
@@ -77,8 +78,9 @@ def test_bad_or_oversized_response_is_rejected(monkeypatch, transport, body, mes
     _, connection, response = transport
     monkeypatch.setattr(annotations, "MAX_RESPONSE_BYTES", 8)
     response.read.return_value = body
+    api = annotations.GitHub("token")
     with pytest.raises(annotations.AnnotationError, match=message):
-        annotations.GitHub("token").request("GET", "/repos/o/r")
+        api.request("GET", "/repos/o/r")
     connection.close.assert_called_once_with()
 
 
@@ -86,8 +88,9 @@ def test_bad_or_oversized_response_is_rejected(monkeypatch, transport, body, mes
 def test_transport_errors_close_connections(transport, error):
     _, connection, _ = transport
     connection.request.side_effect = error
+    api = annotations.GitHub("token")
     with pytest.raises(annotations.AnnotationError, match="JSON response"):
-        annotations.GitHub("token").request("GET", "/repos/o/r")
+        api.request("GET", "/repos/o/r")
     connection.close.assert_called_once_with()
 
 
@@ -172,11 +175,12 @@ def test_cli_credential_arguments_are_fixed(monkeypatch, returncode):
     )
     spawn = AsyncMock(return_value=process)
     monkeypatch.setattr(annotations.asyncio, "create_subprocess_exec", spawn)
+    credential_lookup = annotations.cli_token()
     if returncode:
         with pytest.raises(annotations.AnnotationError, match="authenticate gh"):
-            asyncio.run(annotations.cli_token())
+            asyncio.run(credential_lookup)
     else:
-        assert asyncio.run(annotations.cli_token()) == "fixture-token"
+        assert asyncio.run(credential_lookup) == "fixture-token"
     spawn.assert_awaited_once_with(
         "gh",
         "auth",
@@ -193,7 +197,8 @@ def test_cli_timeout_kills_and_reaps_process(monkeypatch):
     monkeypatch.setattr(
         annotations.asyncio, "create_subprocess_exec", AsyncMock(return_value=process)
     )
+    credential_lookup = annotations.cli_token()
     with pytest.raises(annotations.AnnotationError, match="timed out"):
-        asyncio.run(annotations.cli_token())
+        asyncio.run(credential_lookup)
     process.kill.assert_called_once_with()
     assert process.communicate.await_count == 2

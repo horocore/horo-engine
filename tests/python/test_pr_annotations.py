@@ -17,8 +17,9 @@ from pr_annotations_test_support import annotations
 @pytest.mark.parametrize("spec", [None, Mock(loader=None)])
 def test_regression_loader_checks_spec_and_loader_explicitly(monkeypatch, spec):
     monkeypatch.setattr("importlib.util.spec_from_file_location", lambda *_: spec)
+    helper_path = str(Path(__file__).with_name("pr_annotations_test_support.py"))
     with pytest.raises(ImportError, match="cannot load the annotation validator"):
-        runpy.run_path(str(Path(__file__).with_name("pr_annotations_test_support.py")))
+        runpy.run_path(helper_path)
 
 
 @pytest.fixture
@@ -247,6 +248,7 @@ def test_complete_annotations_are_success_without_writes(options, raw_pr, raw_is
 
 def test_failed_write_is_reported_and_not_success(options, raw_pr, raw_issue, capsys):
     options.fix = True
+    raw_issue["labels"] = [{"name": "ready"}]
     options.api.request.side_effect = [
         raw_pr,
         raw_issue,
@@ -254,6 +256,8 @@ def test_failed_write_is_reported_and_not_success(options, raw_pr, raw_issue, ca
     ]
     assert not annotations.check_pr(3067, options)
     assert "ERROR: milestone: denied" in capsys.readouterr().err
+    assert options.api.request.call_count == 3
+    options.api.graphql.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -439,11 +443,12 @@ def test_option_loading_resolves_project_number_once(monkeypatch, project):
     ]
     monkeypatch.setattr(annotations, "github_token", lambda: "fixture-token")
     monkeypatch.setattr(annotations, "GitHub", Mock(return_value=api))
+    args = arguments(project)
     if project == "0":
         with pytest.raises(annotations.AnnotationError, match="must be positive"):
-            annotations.load_options(arguments(project))
+            annotations.load_options(args)
     else:
-        loaded = annotations.load_options(arguments(project))
+        loaded = annotations.load_options(args)
         assert loaded.default_branch == "main"
         assert loaded.project == ("Roadmap" if project == "1" else project)
         assert loaded.project_pr_numbers == ({20} if project == "1" else set())
