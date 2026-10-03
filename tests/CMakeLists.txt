@@ -554,6 +554,7 @@ add_executable(HoroAITests
         unit/runtime/ai/BehaviorTreeTests.cpp
         unit/runtime/ai/BehaviorTreeRuntimeTests.cpp
         unit/runtime/ai/BehaviorTreeLifecycleTests.cpp
+        unit/runtime/ai/BehaviorTreeAsyncTests.cpp
         unit/runtime/ai/BlackboardInstanceTests.cpp
         unit/runtime/ai/BlackboardSchemaTests.cpp
         unit/runtime/ai/DecisionAssetValidationTests.cpp

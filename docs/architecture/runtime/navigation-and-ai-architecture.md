@@ -1857,7 +1857,7 @@ These paradigms will integrate via dedicated provider extension seams without br
 
 ### Runtime Task & Lifecycle Alignment
 
-Implementation status on 12 September 2026: `HoroEngine::AI` provides the
+Implementation status on 2 October 2026: `HoroEngine::AI` provides the
 generation-fenced `AiTaskLifecycle` contract shared by native, script, and graph
 tasks. It owns the `Idle -> Running -> Succeeded | Failed | Cancelled` transition,
 one immutable terminal result, detached operation context, and post-terminal
@@ -1865,7 +1865,13 @@ cleanup claim. `BehaviorTreeExecutionPlan` and `BehaviorTreeInstance` now provid
 bounded deterministic core control flow over those admitted decision bindings.
 The executable plan validates typed topology and owns preorder child/subtree and
 service ranges. Instances use contiguous state and bounded iterative traversal,
-with exactly-once descendant cancellation and task cleanup. See the
+with exactly-once descendant cancellation and task cleanup. Instance-issued
+`AiTaskContinuation` values admit bounded, generation-fenced terminal candidates
+and coalesced events. The decision owner consumes them through the real evaluator;
+workers cannot advance control flow. Explicit `AiTaskJobService` composition uses
+the process Foundation JobSystem, finite admission, cooperative cancellation and
+owned work/image/callback leases. Shutdown does not wait in normal evaluation;
+the host drains callbacks before releasing module dependencies or code. See the
 [runtime integration guide](../../guides/behavior-tree-runtime-migration.md) for
 explicit parallel, decorator, service, clock, abort and reload semantics.
 Concrete task adapters, dependency-frame execution and aggregate scheduling
