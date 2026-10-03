@@ -28,8 +28,9 @@ namespace Horo::Gameplay {
     class ReplicationRegistrationRegistry;
     class PersistenceRegistrationRegistry;
     class SystemRegistry;
+    class GameEventRegistry;
 
-    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 7;
+    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 8;
     inline constexpr std::uint32_t GameplayDescriptorBundleSchemaVersion = 1;
     inline constexpr std::uint32_t GameModuleReloadSnapshotSchemaVersion = 1;
     inline constexpr std::size_t MaximumGeneratedBehaviorDescriptors = 4096;
@@ -74,6 +75,7 @@ namespace Horo::Gameplay {
         GameServiceRegistry &services;
         GameAssetTypeRegistry &assetTypes;
         ReplicationRegistrationRegistry &replication;
+        GameEventRegistry &events;
         PersistenceRegistrationRegistry &persistence;
     };
 

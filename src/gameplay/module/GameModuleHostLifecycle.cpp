@@ -65,42 +65,47 @@ namespace Horo::Gameplay {
     }
 
     Result<void> LoadedGameModule::Impl::RegisterAndStart(const std::span<const GameplayCapabilityId> hostCapabilities) {
-        components = std::make_unique<ComponentRegistry>();
-        assetTypes = std::make_unique<GameAssetTypeRegistry>(moduleId);
-        services = std::make_unique<GameServiceRegistry>(moduleId);
-        systems = std::make_unique<SystemRegistry>(moduleId);
-        stateRegistrations.replication = std::make_unique<ReplicationRegistrationRegistry>(moduleId);
-        stateRegistrations.persistence = std::make_unique<PersistenceRegistrationRegistry>(moduleId);
+        registries.components = std::make_unique<ComponentRegistry>();
+        registries.assetTypes = std::make_unique<GameAssetTypeRegistry>(moduleId);
+        registries.services = std::make_unique<GameServiceRegistry>(moduleId);
+        registries.systems = std::make_unique<SystemRegistry>(moduleId);
+        registries.replication = std::make_unique<ReplicationRegistrationRegistry>(moduleId);
+        registries.events = std::make_unique<GameEventRegistry>();
+        registries.persistence = std::make_unique<PersistenceRegistrationRegistry>(moduleId);
         GameRegistrationContext registration{moduleId,
-                                             *components,
-                                             *systems,
-                                             *services,
-                                             *assetTypes,
-                                             *stateRegistrations.replication,
-                                             *stateRegistrations.persistence};
+                                             *registries.components,
+                                             *registries.systems,
+                                             *registries.services,
+                                             *registries.assetTypes,
+                                             *registries.replication,
+                                             *registries.events,
+                                             *registries.persistence};
         if (Result<void> registered = InvokeRegister(*gameplayModule, registration); registered.HasError())
             return registered;
-        if (Result<void> frozen = components->Freeze(); frozen.HasError())
+        if (Result<void> frozen = registries.components->Freeze(); frozen.HasError())
             return frozen;
-        if (Result<void> frozen = assetTypes->Freeze(); frozen.HasError())
+        if (Result<void> frozen = registries.assetTypes->Freeze(); frozen.HasError())
             return frozen;
-        if (Result<void> frozen = services->Freeze(hostCapabilities); frozen.HasError())
+        if (Result<void> frozen = registries.services->Freeze(hostCapabilities); frozen.HasError())
             return frozen;
-        const std::vector<GameplayServiceId> serviceIds = ServiceIds(*services);
-        const std::vector<GameplayCapabilityId> capabilities = CombinedCapabilities(hostCapabilities, *services);
-        if (Result<void> frozen = systems->Freeze(serviceIds, capabilities); frozen.HasError())
+        const std::vector<GameplayServiceId> serviceIds = ServiceIds(*registries.services);
+        const std::vector<GameplayCapabilityId> capabilities = CombinedCapabilities(hostCapabilities, *registries.services);
+        if (Result<void> frozen = registries.systems->Freeze(serviceIds, capabilities); frozen.HasError())
             return frozen;
+        if (Result<void> frozen = registries.replication->Freeze(registries.components->Descriptors(), registries.registry->Registrations(),
+                                                                 registries.services->Registrations());
+            frozen.HasError())
+            return frozen;
+        Detail::GenerationLeaseBinding::Bind(*registries.registry, *registries.systems, weak_from_this(), runtimeLeaseAdmission);
+        Detail::GenerationLeaseBinding::Bind(*registries.replication, weak_from_this(), runtimeLeaseAdmission);
         if (Result<void> frozen =
-                stateRegistrations.replication->Freeze(components->Descriptors(), registry->Registrations(), services->Registrations());
+                registries.persistence->Freeze(registries.registry->Registrations(), registries.services->Registrations());
             frozen.HasError())
             return frozen;
-        Detail::GenerationLeaseBinding::Bind(*registry, *systems, weak_from_this(), runtimeLeaseAdmission);
-        Detail::GenerationLeaseBinding::Bind(*stateRegistrations.replication, weak_from_this(), runtimeLeaseAdmission);
-        if (Result<void> frozen = stateRegistrations.persistence->Freeze(registry->Registrations(), services->Registrations());
-            frozen.HasError())
-            return frozen;
+        registries.events->Freeze();
+        Detail::GenerationLeaseBinding::Bind(*registries.events, weak_from_this(), runtimeLeaseAdmission);
 
-        auto activated = GameplayServiceRuntime::Create(*services, GameplayServiceScope::Project, {{}, hostCapabilities});
+        auto activated = GameplayServiceRuntime::Create(*registries.services, GameplayServiceScope::Project, {{}, hostCapabilities});
         if (activated.HasError())
             return Result<void>::Failure(activated.ErrorValue());
         projectServices = std::move(activated).Value();
@@ -144,17 +149,18 @@ namespace Horo::Gameplay {
         if (gameplayModule != nullptr && startAttempted)
             gameplayModule->Stop(runtimeContext);  // NOSONAR: exact-generation module boundary; path analysis is unrelated.
         projectServices.reset();
-        assetTypes.reset();
-        stateRegistrations.replication.reset();
-        stateRegistrations.persistence.reset();
+        registries.assetTypes.reset();
+        registries.replication.reset();
+        registries.events.reset();
+        registries.persistence.reset();
         if (gameplayModule != nullptr) {
             destroy(gameplayModule);
             gameplayModule = nullptr;
         }
-        registry.reset();
-        systems.reset();
-        services.reset();
-        components.reset();
+        registries.registry.reset();
+        registries.systems.reset();
+        registries.services.reset();
+        registries.components.reset();
         library.reset();
         if (removeArtifactOnUnload) {
             std::error_code ignored;

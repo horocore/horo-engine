@@ -32,6 +32,7 @@ namespace Horo::Audio {
 
         /** @brief Keep actual output and its held discontinuity origin in one amplitude history. */
         struct FadeSamples final {
+            float playbackGain{1.0F};
             std::array<float, 64> last{};
             std::array<float, 64> held{};
         };
@@ -47,7 +48,7 @@ namespace Horo::Audio {
             const auto &descriptor = config.plan.Descriptor();
             return descriptor.stage == AudioResamplerStage::ClipToMix && source.planes.size() == descriptor.channels &&
                    ValidLoop(config.loop, source.frames) && config.rampFrames > 0 && config.rampFrames <= 16384 &&
-                   std::ranges::all_of(source.planes, [source](const auto plane) {
+                   std::isfinite(config.gain) && config.gain >= 0.0F && std::ranges::all_of(source.planes, [source](const auto plane) {
                 return plane.size() >= source.frames && (source.frames == 0 || plane.data() != nullptr);
             });
         }
@@ -118,7 +119,7 @@ namespace Horo::Audio {
               const AudioResamplerInput source)
             : registry(owner), converter(std::move(prepared)), plan(config.plan),
               pcm(static_cast<std::size_t>(source.frames) * plan.Descriptor().channels), sourceFrames(source.frames), loop(config.loop),
-              rampFrames(config.rampFrames) {
+              rampFrames(config.rampFrames), amplitudes{.playbackGain = config.gain} {
             for (std::uint32_t channel = 0; channel < plan.Descriptor().channels; ++channel) {
                 std::ranges::copy(source.planes[channel].first(source.frames),
                                   pcm.begin() + static_cast<std::size_t>(channel) * source.frames);
@@ -159,17 +160,27 @@ namespace Horo::Audio {
         /** @brief Commit a bounded held-sample ramp's deferred state change exactly once. */
         bool Commit() noexcept {
             using enum AudioVoiceControl;
+            using enum AudioVoiceState;
             if (pending == Stop) {
-                (void)registry.TryTransition(voice, AudioVoiceState::Stopped);
+                (void)registry.TryTransition(voice, Stopped);
                 converter.Reset();
                 return true;
             }
             if (pending == Pause) {
-                (void)registry.TryTransition(voice, AudioVoiceState::Paused);
+                (void)registry.TryTransition(voice, Paused);
                 return false;
             }
             if (pending == Seek)
                 cursor.frame = target.frame;
+            if (pending == Restart) {
+                cursor.frame = 0;
+                AudioVoiceState current{};
+                (void)registry.CheckState(voice, current);
+                if (current == Paused)
+                    (void)registry.TryTransition(voice, Playing);
+                if (current == Ready)
+                    (void)StartOrResume(AudioVoiceControl::Start, current);
+            }
             if (pending == SetLoop)
                 loop = target.loop;
             Reset();
@@ -315,7 +326,7 @@ namespace Horo::Audio {
         void RenderPcm(const AudioResamplerOutput output, const std::uint32_t frame) noexcept {
             const float gain = fadeIn == 0 ? 1.0F : static_cast<float>(rampFrames - --fadeIn) / static_cast<float>(rampFrames);
             for (std::size_t channel = 0; channel < output.planes.size(); ++channel) {
-                amplitudes.last[channel] = ApplyGain(outputCells[channel].samples[0], gain);
+                amplitudes.last[channel] = ApplyGain(ApplyGain(outputCells[channel].samples[0], amplitudes.playbackGain), gain);
                 output.planes[channel][frame] = amplitudes.last[channel];
             }
             Advance();
@@ -415,6 +426,16 @@ namespace Horo::Audio {
         if (state_->remaining != 0 && request.control != AudioVoiceControl::Stop)
             return &AudioErrors::VoiceInvalidTransition;
         return state_->ApplyControl(request, current);
+    }
+
+    /** @copydoc AudioVoicePlayback::CheckRestart */
+    const ErrorCodeDescriptor *AudioVoicePlayback::CheckRestart(const AudioVoiceHandle voice) const noexcept {
+        if (!state_)
+            return &AudioErrors::RuntimeInactive;
+        AudioVoiceState current{};
+        if (const auto *error = state_->Check(voice, current))
+            return error;
+        return Controllable(current) && state_->remaining == 0 ? nullptr : &AudioErrors::VoiceInvalidTransition;
     }
 
     /** @copydoc AudioVoicePlayback::SwapPitch */

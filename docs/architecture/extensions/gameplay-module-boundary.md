@@ -452,7 +452,9 @@ after dependent behaviors, systems, and jobs are drained.
 
 ## Canonical Runtime Persistence
 
-SDK boundary 7 exposes `GameRegistrationContext::persistence`. Registration
+SDK boundary 8 exposes both `GameRegistrationContext::events` and
+`GameRegistrationContext::persistence`; boundary-7 event-only and persistence-only
+layouts require a rebuild and are rejected before activation. Registration
 copies inert canonical metadata and exact-generation runtime sources; freeze
 resolves behavior/service ownership before `Start` and invokes no state callback.
 The host explicitly calls `LoadedGameModule::AcquirePersistence` and registers the

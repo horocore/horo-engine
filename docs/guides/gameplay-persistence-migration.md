@@ -1,7 +1,9 @@
 # Gameplay runtime persistence migration
 
-SDK boundary 7 adds `GameRegistrationContext::persistence`. Rebuild native
-modules and generated bundles against the current SDK; boundary-6 artifacts are
+SDK boundary 8 combines `GameRegistrationContext::events` and
+`GameRegistrationContext::persistence`. The two independently developed boundary-7
+layouts are not interchangeable. Rebuild native modules and generated bundles
+against the current SDK; boundary-6 and boundary-7 artifacts are
 rejected before project factories run. No authored scenes or durable archive wire
 formats change.
 

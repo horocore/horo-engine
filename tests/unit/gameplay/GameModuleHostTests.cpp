@@ -3,6 +3,7 @@
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameAssetTypeRegistry.h"
+#include "Horo/Gameplay/GameEventRegistry.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayRegistrationRuntime.h"
@@ -187,6 +188,8 @@ TEST_CASE("loaded gameplay declarations participate in durable capture and aggre
     auto loadedResult = moduleHost.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
     REQUIRE(loadedResult.HasValue());
     auto loaded = std::move(loadedResult).Value();
+    auto event = loaded->Events().Acquire(90, 1, 91, 1, loaded->Cancellation());
+    REQUIRE(event.HasValue());
     CanonicalStateParticipantRegistry registry;
     NoSaveOperations operations;
     auto participationResult =
@@ -202,6 +205,8 @@ TEST_CASE("loaded gameplay declarations participate in durable capture and aggre
     auto receipts = StageDurableParticipants(adapters, snapshot);
     RequireRestartRequired(loaded->PrepareReload());
     RequireRestartRequired(loaded->AcquirePersistence(adapters.front()->Descriptor().participant.participant));
+    CHECK(loaded->Events().Acquire(90, 1, 91, 1, loaded->Cancellation()).HasError());
+    CHECK(event.Value()->Invoke({}) == GameplayEventOutcome::CapabilityUnavailable);
     REQUIRE(participation.Close().HasValue());
     loaded.reset();
     auto operation = CreateSaveOperation({.operation = 1436, .kind = SaveOperationKind::Load, .maximumCompletionCallbacks = 4}).Value();
@@ -378,14 +383,16 @@ TEST_CASE("persistence SDK boundary rejects previous native registration layouts
     };
     REQUIRE(ValidateGameModuleDescriptor(descriptor, expected).HasValue());
     REQUIRE(ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected).HasValue());
-    descriptor.sdkBoundaryVersion = 6;
-    storage.bundle.sdkBoundaryVersion = 6;
-    const auto oldModule = ValidateGameModuleDescriptor(descriptor, expected);
-    const auto oldBundle = ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected);
-    REQUIRE(oldModule.HasError());
-    REQUIRE(oldBundle.HasError());
-    CHECK(oldModule.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
-    CHECK(oldBundle.ErrorValue().code.Value() == GameplayErrors::InvalidGeneratedDescriptorBundle.code.Value());
+    for (const std::uint32_t previousLayout : {6U, 7U}) {
+        descriptor.sdkBoundaryVersion = previousLayout;
+        storage.bundle.sdkBoundaryVersion = previousLayout;
+        const auto oldModule = ValidateGameModuleDescriptor(descriptor, expected);
+        const auto oldBundle = ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected);
+        REQUIRE(oldModule.HasError());
+        REQUIRE(oldBundle.HasError());
+        CHECK(oldModule.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
+        CHECK(oldBundle.ErrorValue().code.Value() == GameplayErrors::InvalidGeneratedDescriptorBundle.code.Value());
+    }
 }
 
 TEST_CASE("generated gameplay bundle validation rejects incomplete bindings and bounded diagnostics") {
@@ -408,4 +415,27 @@ TEST_CASE("generated gameplay bundle validation rejects incomplete bindings and 
     const auto diagnostics = ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected);
     REQUIRE(diagnostics.HasError());
     REQUIRE(diagnostics.ErrorValue().code.Value() == GameplayErrors::GeneratedDescriptorDiagnosticsPresent.code.Value());
+}
+
+TEST_CASE("event registration SDK rejects prior generation descriptors and bundles") {
+    ValidBundleStorage storage;
+    const GameModuleLoadExpectation expected{
+        .moduleId = "game.tests",
+        .buildFingerprint = CurrentGameplayBuildFingerprint(),
+        .descriptorRevision = 7,
+    };
+    GameModuleDescriptor descriptor{
+        .moduleId = "game.tests",
+        .buildFingerprint = CurrentGameplayBuildFingerprint().data(),
+    };
+    REQUIRE(ValidateGameModuleDescriptor(descriptor, expected).HasValue());
+    REQUIRE(ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected).HasValue());
+    descriptor.sdkBoundaryVersion = GameplaySdkBoundaryVersion - 1;
+    const auto module = ValidateGameModuleDescriptor(descriptor, expected);
+    REQUIRE(module.HasError());
+    CHECK(module.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
+    storage.bundle.sdkBoundaryVersion = GameplaySdkBoundaryVersion - 1;
+    const auto bundle = ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected);
+    REQUIRE(bundle.HasError());
+    CHECK(bundle.ErrorValue().code.Value() == GameplayErrors::InvalidGeneratedDescriptorBundle.code.Value());
 }
