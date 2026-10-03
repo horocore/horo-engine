@@ -1,6 +1,7 @@
 #include "Horo/Cinematic/SequenceEvaluation.h"
 
 #include "Horo/Cinematic/SequenceEvaluationErrors.h"
+#include "SequenceFrameBlend.h"
 
 #include <algorithm>
 #include <array>
@@ -363,23 +364,10 @@ namespace Horo::Cinematic {
                    (cursor.pingPongDirection == 1 || cursor.pingPongDirection == -1) && rate.denominator != 0;
         }
 
-        [[nodiscard]] Result<void> SampleTrackValues(const std::span<const SequenceFrameTrackDescriptor> tracks,
-                                                     const SequenceTime position, const std::span<SequenceSampledValue> values) {
-            for (std::size_t index = 0; index < tracks.size(); ++index) {
-                auto sampled = tracks[index].sample(tracks[index].context, position);
-                if (sampled.HasError())
-                    return Result<void>::Failure(sampled.ErrorValue());
-                values[index] = {tracks[index].track, tracks[index].stage, sampled.Value()};
-            }
-            return Result<void>::Success();
-        }
-
         void ApplyAndDispatch(const std::span<const SequenceFrameTrackDescriptor> tracks, const SequenceFrameScratch &scratch,
                               const SequenceFrameHooks &hooks, const StagedOccurrenceCounts &counts) noexcept {
             for (std::size_t index = 0; index < tracks.size(); ++index)
                 tracks[index].apply(tracks[index].context, scratch.values[index].value);
-            for (std::size_t index = 0; index < counts.events; ++index)
-                hooks.eventHook(hooks.eventContext, scratch.events[index]);
             for (std::size_t index = 0; index < counts.cameraCuts; ++index)
                 hooks.cameraHook(hooks.cameraContext, scratch.cameraCuts[index]);
         }
@@ -459,6 +447,13 @@ namespace Horo::Cinematic {
                                                                                 const SequenceTime sourceDelta, SequenceFrameCursor &cursor,
                                                                                 const SequenceFrameScratch &scratch,
                                                                                 const SequenceFrameHooks &hooks) const {
+        return EvaluatePrepared(player, sourceDelta, cursor, scratch, hooks, true);
+    }
+
+    /** @copydoc SequenceFrameEvaluationPlan::EvaluatePrepared */
+    Result<SequenceFrameEvaluationResult> SequenceFrameEvaluationPlan::EvaluatePrepared(
+        const SequencePlayerSnapshot &player, const SequenceTime sourceDelta, SequenceFrameCursor &cursor,
+        const SequenceFrameScratch &scratch, const SequenceFrameHooks &hooks, const bool publish) const {
         if (!ValidCursor(cursor, duration_, player.rate) || player.duration != duration_)
             return Failed<SequenceFrameEvaluationResult>(SequenceEvaluationErrors::Malformed);
         if (player.handle != cursor.controlFence.handle || player.controlRevision != cursor.controlFence.controlRevision)
@@ -469,6 +464,8 @@ namespace Horo::Cinematic {
             return Failed<SequenceFrameEvaluationResult>(SequenceEvaluationErrors::RevisionExhausted);
         if (scratch.values.size() < tracks_.size())
             return Failed<SequenceFrameEvaluationResult>(SequenceEvaluationErrors::CapacityExceeded);
+        if (!ValidFrameBlendScratch(scratch, tracks_.size()))
+            return Failed<SequenceFrameEvaluationResult>(SequenceEvaluationErrors::Malformed);
 
         auto advanced = Advance(cursor, player.rate, sourceDelta, duration_, loopMode_, maximumLoopCrossings_);
         if (advanced.HasError())
@@ -478,16 +475,23 @@ namespace Horo::Cinematic {
         auto staged = StageOccurrences(player.handle, events_, cameraCuts_, segments, scratch);
         if (staged.HasError())
             return Result<SequenceFrameEvaluationResult>::Failure(staged.ErrorValue());
-        if ((staged.Value().events != 0 && hooks.eventHook == nullptr) || (staged.Value().cameraCuts != 0 && hooks.cameraHook == nullptr))
+        if ((staged.Value().events != 0 && hooks.eventStage == nullptr) || (staged.Value().cameraCuts != 0 && hooks.cameraHook == nullptr))
             return Failed<SequenceFrameEvaluationResult>(SequenceEvaluationErrors::HookUnavailable);
 
-        if (auto sampled = SampleTrackValues(tracks_, advanced.Value().cursor.position, scratch.values); sampled.HasError())
+        if (auto sampled = SampleFrameValues(tracks_, player, advanced.Value().cursor.position, scratch); sampled.HasError())
             return Result<SequenceFrameEvaluationResult>::Failure(sampled.ErrorValue());
+
+        if (staged.Value().events != 0) {
+            auto admitted = hooks.eventStage(hooks.eventContext, scratch.events.first(staged.Value().events));
+            if (admitted.HasError())
+                return Result<SequenceFrameEvaluationResult>::Failure(admitted.ErrorValue());
+        }
 
         SequenceFrameCursor committed = advanced.Value().cursor;
         ++committed.evaluationRevision;
         cursor = committed;
-        ApplyAndDispatch(tracks_, scratch, hooks, staged.Value());
+        if (publish)
+            ApplyAndDispatch(tracks_, scratch, hooks, staged.Value());
         const bool reachedEnd =
             loopMode_ == SequenceLoopMode::Once && player.rate.numerator != 0 &&
             ((player.rate.numerator > 0 && cursor.position == duration_) || (player.rate.numerator < 0 && cursor.position == 0));
@@ -496,9 +500,20 @@ namespace Horo::Cinematic {
                                                                staged.Value().cameraCuts, reachedEnd});
     }
 
+    /** @copydoc SequenceFrameEvaluationPlan::PublishPrepared */
+    void SequenceFrameEvaluationPlan::PublishPrepared(const SequenceFrameScratch &scratch, const SequenceFrameHooks &hooks,
+                                                      const SequenceFrameEvaluationResult &result) const noexcept {
+        ApplyAndDispatch(std::span{tracks_}.first(result.sampledValues), scratch, hooks, {result.firedEvents, result.cameraCuts});
+    }
+
     /** @copydoc SequenceFrameEvaluationPlan::TrackCount */
     std::size_t SequenceFrameEvaluationPlan::TrackCount() const noexcept {
         return tracks_.size();
+    }
+
+    /** @copydoc SequenceFrameEvaluationPlan::Tracks */
+    std::span<const SequenceFrameTrackDescriptor> SequenceFrameEvaluationPlan::Tracks() const noexcept {
+        return tracks_;
     }
 
     /** @copydoc SequenceFrameEvaluationPlan::Duration */
@@ -509,6 +524,11 @@ namespace Horo::Cinematic {
     /** @copydoc SequenceFrameEvaluationPlan::EventCount */
     std::size_t SequenceFrameEvaluationPlan::EventCount() const noexcept {
         return events_.size();
+    }
+
+    /** @copydoc SequenceFrameEvaluationPlan::EventKeys */
+    std::span<const SequenceFrameEventKey> SequenceFrameEvaluationPlan::EventKeys() const noexcept {
+        return events_;
     }
 
     /** @copydoc SequenceFrameEvaluationPlan::CameraCutCount */

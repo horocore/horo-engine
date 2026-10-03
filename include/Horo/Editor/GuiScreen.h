@@ -134,8 +134,12 @@ namespace Horo::Editor {
         /** @brief Updates screen-local simulation and time-dependent logic. */
         virtual void OnUpdate(float dt) = 0;
 
+        /** @brief Captures current routed input after the host commits its snapshot and before fixed updates. */
+        virtual void OnInputSnapshot() {}
+
         /** @brief Advances one fixed simulation tick for screens that own an isolated play session. */
-        virtual void OnFixedUpdate(double fixedDeltaSeconds) {
+        virtual void OnFixedUpdate(std::uint64_t simulationTick, double fixedDeltaSeconds) {
+            static_cast<void>(simulationTick);
             static_cast<void>(fixedDeltaSeconds);
         }
 

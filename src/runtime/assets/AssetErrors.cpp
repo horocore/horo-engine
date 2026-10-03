@@ -128,6 +128,9 @@ namespace Horo::Assets::CookErrors {
     const ErrorCodeDescriptor OutputIdentityExhausted{kCookDomain, ErrorCode{"asset.cook.output_identity_exhausted"}, kCookError,
                                                       "The build-output session identity space is exhausted.",
                                                       "Restart the owning project session before submitting more cook work."};
+    const ErrorCodeDescriptor OperationAdmissionFailed{kCookDomain, ErrorCode{"asset.cook.operation_admission_failed"}, kCookError,
+                                                       "The operation store cannot admit another cook operation.",
+                                                       "Wait for an active cook operation to finish before retrying."};
 }  // namespace Horo::Assets::CookErrors
 
 namespace Horo::Assets::ImportErrors {
@@ -148,4 +151,10 @@ namespace Horo::Assets::ImportErrors {
                                               "The import operation was cancelled.", "Retry if the owning operation is still active."};
     const ErrorCodeDescriptor ObjParseWarning{kImportDomain, ErrorCode{"asset.import.obj.warning"}, ErrorSeverity::Warning,
                                               "OBJ parse warning.", "Review the import diagnostics."};
+    const ErrorCodeDescriptor PreFracturedSourceInvalid{kImportDomain, ErrorCode{"asset.import.prefractured.invalid"}, kImportError,
+                                                        "Pre-fractured FBX source geometry is invalid.",
+                                                        "Repair the named source node and re-import."};
+    const ErrorCodeDescriptor PreFracturedSourceLimit{kImportDomain, ErrorCode{"asset.import.prefractured.limit"}, kImportError,
+                                                      "Pre-fractured FBX exceeds a finite import limit.",
+                                                      "Reduce source complexity before import."};
 }  // namespace Horo::Assets::ImportErrors

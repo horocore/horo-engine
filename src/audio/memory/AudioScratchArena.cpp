@@ -1,5 +1,6 @@
 #include "AlignedAudioStorage.h"
 #include "Horo/Audio/AudioMemory.h"
+#include "Horo/Audio/Internal/AudioCallbackSafetyHooks.h"
 
 #include <algorithm>
 #include <array>
@@ -36,6 +37,7 @@ namespace Horo::Audio {
         if (capacityBytes > MaximumAudioMemoryBytes) {
             return Result<AudioScratchArena>::Failure(MakeError(AudioErrors::MemoryBudgetExceeded));
         }
+        Safety::OnAudioAllocationAttempt();
         try {
             return Result<AudioScratchArena>::Success(AudioScratchArena{std::make_unique<State>(owner, capacityBytes)});
         } catch (const std::bad_alloc &) {

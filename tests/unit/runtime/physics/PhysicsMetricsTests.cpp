@@ -4,6 +4,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <condition_variable>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -17,13 +18,40 @@ namespace Horo::Physics {
     namespace {
         class CollectingSink final : public Telemetry::ISink {
         public:
+            explicit CollectingSink(const bool pauseExports = false) : pauseExports_(pauseExports) {}
+
             void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *descriptor) override {
+                {
+                    std::unique_lock lock(gateMutex_);
+                    exportStarted_ = true;
+                    gate_.notify_all();
+                    gate_.wait(lock, [this] {
+                        return !pauseExports_;
+                    });
+                }
+                if (descriptor == nullptr)
+                    return;
                 std::lock_guard lock(mutex_);
                 records_.push_back(record);
                 descriptors_.push_back(*descriptor);
             }
 
             void Flush() override {}
+
+            [[nodiscard]] bool WaitForExport() {
+                std::unique_lock lock(gateMutex_);
+                return gate_.wait_for(lock, std::chrono::seconds{2}, [this] {
+                    return exportStarted_;
+                });
+            }
+
+            void ReleaseExports() {
+                {
+                    std::lock_guard lock(gateMutex_);
+                    pauseExports_ = false;
+                }
+                gate_.notify_all();
+            }
 
             [[nodiscard]] std::vector<Telemetry::Record> Records() const {
                 std::lock_guard lock(mutex_);
@@ -36,6 +64,11 @@ namespace Horo::Physics {
             }
 
         private:
+            // Test-owned gate parks the consumer outside runtime locks; release before runtime shutdown.
+            std::mutex gateMutex_;
+            std::condition_variable gate_;
+            bool pauseExports_{};
+            bool exportStarted_{};
             mutable std::mutex mutex_;
             std::vector<Telemetry::Record> records_;
             std::vector<Telemetry::InstrumentDescriptor> descriptors_;
@@ -43,14 +76,28 @@ namespace Horo::Physics {
 
         class TelemetryGuard final {
         public:
-            explicit TelemetryGuard(const Telemetry::MetricCollectionLevel level, const std::size_t capacity = 512)
-                : sink(std::make_shared<CollectingSink>()) {
+            explicit TelemetryGuard(const Telemetry::MetricCollectionLevel level, const std::size_t capacity = 512,
+                                    const bool pauseExports = false)
+                : sink(std::make_shared<CollectingSink>(pauseExports)) {
                 static_cast<void>(Telemetry::Runtime::Shutdown());
                 REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = capacity, .metricCollectionLevel = level}, sink));
             }
 
             ~TelemetryGuard() {
+                sink->ReleaseExports();
                 static_cast<void>(Telemetry::Runtime::Shutdown());
+            }
+
+            /** @brief Holds the consumer outside runtime locks before bounded metric admission. */
+            [[nodiscard]] bool StartPausedCollection() {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+                bool started{};
+                do {
+                    started = Telemetry::Runtime::EmitEvent("physics", "test.export_gate", Log::Level::Info, "Start collecting metrics");
+                    if (!started)
+                        std::this_thread::yield();
+                } while (!started && std::chrono::steady_clock::now() < deadline);
+                return started && sink->WaitForExport();
             }
 
             std::shared_ptr<CollectingSink> sink;
@@ -178,9 +225,12 @@ namespace Horo::Physics {
     }
 
     TEST_CASE("Physics publishes the complete closed metric family with stable kinds units and dimensions", "[physics][metrics]") {
-        TelemetryGuard telemetry{Telemetry::MetricCollectionLevel::Detailed};
+        TelemetryGuard telemetry{Telemetry::MetricCollectionLevel::Detailed, 512, true};
         auto binding = AvailableBinding(Telemetry::MetricCollectionLevel::Detailed);
         REQUIRE(binding.HasValue());
+        // Best-effort producers may drop on queue contention. Park the consumer in the sink
+        // before this bounded admission test so all 480 metrics fit without competing for the queue.
+        REQUIRE(telemetry.StartPausedCollection());
         const auto before = Telemetry::Runtime::GetStatistics();
         for (std::uint64_t revision = 4; revision < 36; ++revision) {
             auto snapshot = Snapshot();
@@ -190,6 +240,7 @@ namespace Horo::Physics {
             REQUIRE(result.HasValue());
             REQUIRE(result.Value() == PhysicsMetricPublishDisposition::Submitted);
         }
+        telemetry.sink->ReleaseExports();
         REQUIRE(Telemetry::Runtime::Flush(std::chrono::seconds{2}));
 
         const auto records = telemetry.sink->Records();
@@ -201,18 +252,20 @@ namespace Horo::Physics {
             REQUIRE(descriptor.subsystem == "physics");
             if (descriptor.name.ends_with("duration")) {
                 REQUIRE(descriptor.kind == Telemetry::InstrumentKind::Histogram);
-                REQUIRE(descriptor.unit == "seconds");
+                REQUIRE(descriptor.unit == Telemetry::MetricUnit::Seconds);
             } else if (descriptor.kind == Telemetry::InstrumentKind::Gauge) {
-                REQUIRE(descriptor.unit == "items");
+                REQUIRE(descriptor.unit == Telemetry::MetricUnit::Count);
             } else {
                 REQUIRE(descriptor.kind == Telemetry::InstrumentKind::Counter);
-                REQUIRE(descriptor.unit == "events");
+                REQUIRE(descriptor.unit == Telemetry::MetricUnit::Count);
             }
             const auto &metric = std::get<Telemetry::MetricRecord>(records[index].payload);
             observedSeries.emplace(descriptor.name, metric.dimensionCount == 0 ? 0 : metric.dimensionValueIds[0]);
         }
         REQUIRE(observedSeries.size() == 15);
         const auto after = Telemetry::Runtime::GetStatistics();
+        REQUIRE(after.acceptedRecords - before.acceptedRecords == 32 * 15);
+        REQUIRE(after.droppedRecords == before.droppedRecords);
         REQUIRE(after.acceptedRecords - before.acceptedRecords + after.droppedRecords - before.droppedRecords == 32 * 15);
     }
 

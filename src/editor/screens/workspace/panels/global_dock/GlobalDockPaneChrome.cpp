@@ -128,9 +128,13 @@ namespace Horo::Editor {
         drawList->AddLine({origin.x, origin.y + height - 1.0F}, {origin.x + width, origin.y + height - 1.0F}, Theme::U32(Theme::Border()));
     }
 
-    void DrawGlobalDockTableRowSurface(const ImVec2 origin, const float width, const float height, const bool hovered) {
+    void DrawGlobalDockTableRowSurface(const ImVec2 origin, const float width, const float height, const bool hovered,
+                                       const bool selected) {
         ImDrawList *drawList = ImGui::GetWindowDrawList();
-        if (hovered)
+        if (selected)
+            drawList->AddRectFilled(origin, {origin.x + width, origin.y + height},
+                                    Theme::U32(Theme::Mix(Theme::Hover(), Theme::Accent(), 0.16F)));
+        else if (hovered)
             drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, Theme::U32(Theme::Hover()));
         drawList->AddLine({origin.x, origin.y + height - 1.0F}, {origin.x + width, origin.y + height - 1.0F},
                           Theme::U32(Theme::ConsoleRowBorder()));
@@ -229,31 +233,6 @@ namespace Horo::Editor {
                                           Theme::U32(GlobalDockToneColor(GlobalDockTone::Positive)), Theme::U32(Theme::Accent()));
     }
 
-    void DrawGlobalDockFooterSurface(const ImVec2 origin, const float width, const float height) {
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
-        drawList->AddRectFilled(origin, {origin.x + width, origin.y + height}, Theme::U32(Theme::BottomDockToolbarSurface()));
-        drawList->AddLine(origin, {origin.x + width, origin.y}, Theme::U32(Theme::Border()));
-    }
-
-    void DrawGlobalDockStatusFooter(const ImVec2 origin, const float width, const std::span<const std::string_view> segments,
-                                    const std::string_view status, const Theme::Fonts &fonts) {
-        const float scale = std::max(Theme::GetActiveTokens().sizes.uiScale, 0.01F);
-        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
-        const float footerY = origin.y + (metrics.footerHeight - Theme::TextPx::Caption()) * 0.5F;
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
-        DrawGlobalDockFooterSurface(origin, width, metrics.footerHeight);
-        float footerX = origin.x + metrics.contentPadding;
-        for (const std::string_view segment : segments) {
-            drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {footerX, footerY}, Theme::U32(Theme::Muted()), segment.data(),
-                              segment.data() + segment.size());
-            footerX += MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Caption(), segment) + 10.0F * scale;
-        }
-        const float statusX =
-            origin.x + width - metrics.contentPadding - MeasureGlobalDockTextWidth(fonts.sansCompact, Theme::TextPx::Caption(), status);
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {statusX, footerY}, Theme::U32(Theme::Muted()), status.data(),
-                          status.data() + status.size());
-    }
-
     float MeasureGlobalDockToolbarChip(const GlobalDockToolbarChipProps &props, const Theme::Fonts &fonts) {
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const float fontSize = Theme::TextPx::Label();
@@ -335,6 +314,26 @@ namespace Horo::Editor {
             return;
         drawList.PushClipRect(minimum, maximum, true);
         drawList.AddText(ResolveFont(font), fontSize, minimum, Theme::U32(color), text.data(), text.data() + text.size());
+        drawList.PopClipRect();
+    }
+
+    void DrawGlobalDockEllipsizedText(ImDrawList &drawList, ImFont *font, const float fontSize, const ImVec2 minimum, const ImVec2 maximum,
+                                      const ImVec4 color, const std::string_view text) {
+        if (text.empty() || maximum.x <= minimum.x)
+            return;
+        if (MeasureGlobalDockTextWidth(font, fontSize, text) <= maximum.x - minimum.x) {
+            DrawGlobalDockClippedText(drawList, font, fontSize, minimum, maximum, color, text);
+            return;
+        }
+        constexpr std::string_view ellipsis = "…";
+        const float ellipsisWidth = MeasureGlobalDockTextWidth(font, fontSize, ellipsis);
+        if (ellipsisWidth >= maximum.x - minimum.x)
+            return;
+        const ImVec2 textMaximum{maximum.x - ellipsisWidth, maximum.y};
+        DrawGlobalDockClippedText(drawList, font, fontSize, minimum, textMaximum, color, text);
+        drawList.PushClipRect(minimum, maximum, true);
+        drawList.AddText(ResolveFont(font), fontSize, {textMaximum.x, minimum.y}, Theme::U32(color), ellipsis.data(),
+                         ellipsis.data() + ellipsis.size());
         drawList.PopClipRect();
     }
 }  // namespace Horo::Editor

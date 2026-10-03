@@ -188,6 +188,32 @@ namespace Horo::Cinematic {
         CHECK(Tests::AllocationProbe::Count() == before);
     }
 
+    TEST_CASE("Scalar curve replay is order independent within the zero-allocation budget", "[unit][cinematic][curve][qualification]") {
+        const auto keys = RepeatabilityFixture();
+        const auto admitted = ScalarCurveView::Create(keys, {CurveBoundaryMode::Repeat, CurveBoundaryMode::PingPong});
+        REQUIRE(admitted.HasValue());
+        const ScalarCurveView &curve = admitted.Value();
+        std::array<ScalarCurveSample, 256> baseline{};
+        for (std::size_t index = 0; index < baseline.size(); ++index) {
+            const CurveTime time = static_cast<CurveTime>((index * 73U) % 511U) - 255;
+            const auto sample = curve.Sample(time);
+            REQUIRE(sample.HasValue());
+            baseline[index] = sample.Value();
+        }
+
+        const std::size_t before = Tests::AllocationProbe::Count();
+        for (std::size_t replay = 0; replay < 16; ++replay) {
+            for (std::size_t offset = 0; offset < baseline.size(); ++offset) {
+                const std::size_t index = (offset * 73U + replay) % baseline.size();
+                const CurveTime time = static_cast<CurveTime>((index * 73U) % 511U) - 255;
+                const auto sample = curve.Sample(time);
+                REQUIRE(sample.HasValue());
+                CHECK(sample.Value() == baseline[index]);
+            }
+        }
+        CHECK(Tests::AllocationProbe::Count() == before);
+    }
+
     TEST_CASE("Scalar curve admits the exact key ceiling and rejects one over", "[unit][cinematic][curve][capacity]") {
         std::vector<ScalarCurveKey> keys(MaximumScalarCurveKeys + 1);
         for (std::size_t index = 0; index < keys.size(); ++index)

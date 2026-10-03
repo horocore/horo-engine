@@ -13,8 +13,12 @@
 #include <Jolt/Core/Memory.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/Shape/CompoundShape.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <string>
 #include <thread>
 #include <vector>
@@ -108,8 +112,8 @@ namespace Horo::Physics::Detail {
         }
     }
 
-    TEST_CASE("Canonical world admission rejects unsupported resource policies before allocation", "[physics][native][lifecycle]") {
-        SECTION("world preflight rejects missing runtime and unimplemented containment before allocation") {
+    TEST_CASE("Canonical world admission validates resources and supports quarantine policy", "[physics][native][lifecycle]") {
+        SECTION("world preflight rejects a missing runtime and admits quarantine") {
             const auto settings = Test::SmallWorldSettings();
             REQUIRE(CreateCanonicalWorld({}, settings).ErrorValue().code.Value() == PhysicsErrors::InvalidState.code.Value());
             REQUIRE(InspectCanonicalResources({}) == CanonicalResourceCounts{});
@@ -120,9 +124,9 @@ namespace Horo::Physics::Detail {
             descriptor.nonFinitePolicy = PhysicsNonFinitePolicy::QuarantineBody;
             const auto quarantine = PhysicsWorldSettings::Capture(descriptor);
             REQUIRE(quarantine.HasValue());
-            const auto rejected = CreateCanonicalWorld(runtime.handle, quarantine.Value());
-            REQUIRE(rejected.HasError());
-            REQUIRE(rejected.ErrorValue().code.Value() == PhysicsErrors::OperationUnsupported.code.Value());
+            const auto admitted = CreateCanonicalWorld(runtime.handle, quarantine.Value());
+            REQUIRE(admitted.HasValue());
+            DestroyCanonicalWorld(admitted.Value());
             REQUIRE(InspectCanonicalResources(runtime.handle) == CanonicalResourceCounts{});
         }
 
@@ -246,8 +250,9 @@ namespace Horo::Physics::Detail {
         PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
         const CanonicalContactSink sink{.context = &projection, .append = CaptureProjection};
         projection.BeginTick(1);
-        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, false, false, sink));
-        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, false, true, sink));
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, sink, {}));
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, sink,
+                                                         CanonicalContactTestOptions{.persisted = true}));
         const auto completed = projection.CompleteTick(1);
         REQUIRE(completed.HasValue());
         REQUIRE(completed.Value().publishedRecordCount == 1);
@@ -260,9 +265,82 @@ namespace Horo::Physics::Detail {
         REQUIRE(record.firstMaterial->assetGeneration == 4);
         REQUIRE(record.firstMaterial->slot == PhysicsMaterialSlotId::FromValue(7));
         REQUIRE_FALSE(record.secondMaterial.has_value());
-        REQUIRE(record.contact.position == Math::Vec3{0.0F, 0.0F, 0.0F});
-        REQUIRE(record.contact.normal == Math::Vec3{0.0F, 1.0F, 0.0F});
-        REQUIRE(record.contact.penetrationDepthMeters == 0.1F);
+        REQUIRE(record.contact.pointCount == 1);
+        REQUIRE(record.contact.omittedPointCount == 0);
+        REQUIRE(record.contact.points[0].positionOnFirst == Math::Vec3{0.0F, 0.0F, 0.0F});
+        REQUIRE(record.contact.points[0].positionOnSecond == Math::Vec3{0.0F, 0.0F, 0.0F});
+        REQUIRE(record.contact.points[0].normal == Math::Vec3{0.0F, 1.0F, 0.0F});
+        REQUIRE(record.contact.points[0].penetrationDepthMeters == 0.1F);
+        REQUIRE_FALSE(record.contact.points[0].normalImpulseEstimateNewtonSeconds.has_value());
+    }
+
+    TEST_CASE("Canonical contact callbacks select a bounded deterministic manifold prefix", "[physics][native][events][manifold]") {
+        const RuntimeOwner runtime{CreateCanonicalRuntime().Value()};
+        const WorldOwner world{CreateCanonicalWorld(runtime.handle, Test::SmallWorldSettings()).Value()};
+        const auto owner = PhysicsWorldId::Create(902).Value();
+        const auto first = CreateCanonicalQueryFixture(world.handle, owner, ContactFixture({0.0F, 0.0F, 0.0F})).Value();
+        const auto second = CreateCanonicalQueryFixture(world.handle, owner, ContactFixture({2.0F, 0.0F, 0.0F})).Value();
+        PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
+        const CanonicalContactSink sink{.context = &projection, .append = CaptureProjection};
+
+        projection.BeginTick(1);
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first, second, 1, sink,
+                                                         CanonicalContactTestOptions{.contactPointCount = 6}));
+        REQUIRE(projection.CompleteTick(1).HasValue());
+        const auto &contact = projection.PublishedEvents().front().contact;
+        REQUIRE(contact.pointCount == MaximumPhysicsContactPoints);
+        REQUIRE(contact.omittedPointCount == 2);
+        for (std::uint32_t index = 0; index < contact.pointCount; ++index) {
+            REQUIRE(contact.points[index].positionOnFirst.x == static_cast<float>(index));
+            REQUIRE(contact.points[index].positionOnSecond.x == static_cast<float>(index));
+            REQUIRE_FALSE(contact.points[index].normalImpulseEstimateNewtonSeconds.has_value());
+        }
+        REQUIRE_FALSE(InvokeCanonicalContactCallbackForTesting(world.handle, first, second, 2, sink,
+                                                               CanonicalContactTestOptions{.contactPointCount = 0}));
+        REQUIRE_FALSE(InvokeCanonicalContactCallbackForTesting(world.handle, first, second, 2, sink,
+                                                               CanonicalContactTestOptions{.contactPointCount = 65}));
+    }
+
+    TEST_CASE("Canonical compound callback copies stable child identity and material", "[physics][native][events][compound]") {
+        const auto created = CreateCanonicalRuntime();
+        REQUIRE(created.HasValue());
+        const RuntimeOwner runtime{created.Value()};
+        const auto prepared = CreateCanonicalWorld(runtime.handle, Test::SmallWorldSettings());
+        REQUIRE(prepared.HasValue());
+        const WorldOwner world{prepared.Value()};
+        const auto identity = PhysicsWorldId::Create(902).Value();
+        auto descriptor = ContactFixture({0, 0, 0});
+        descriptor.subshape.reset();
+        const auto material = PhysicsQueryMaterial{Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value(), 9,
+                                                   PhysicsMaterialSlotId::FromValue(3)};
+        const PhysicsCompoundChild child{.geometry = PhysicsSphereShape{0.5F},
+                                         .subshape = PhysicsShapeSubresourceId::FromValue(77),
+                                         .material = material,
+                                         .layer = descriptor.layer,
+                                         .profile = descriptor.profile,
+                                         .channel = descriptor.channel};
+        descriptor.shape = PhysicsCompoundShapeDescriptor{{child}};
+        const auto first = CreateCanonicalQueryFixture(world.handle, identity, descriptor);
+        const auto second = CreateCanonicalQueryFixture(world.handle, identity, ContactFixture({2, 0, 0}));
+        REQUIRE(first.HasValue());
+        REQUIRE(second.HasValue());
+        auto &nativeWorld = *static_cast<CanonicalWorld *>(world.handle.value);
+        const auto &nativeFixture = nativeWorld.query.fixtures.front();
+        REQUIRE(ResolveCanonicalFixtureChild(nativeFixture, JPH::SubShapeID{}) != nullptr);
+        PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
+        projection.BeginTick(1);
+        const CanonicalContactSink sink{.context = &projection, .append = CaptureProjection};
+        REQUIRE(InvokeCanonicalContactCallbackForTesting(world.handle, first.Value(), second.Value(), 1, sink,
+                                                         CanonicalContactTestOptions{.contactPointCount = 6}));
+        REQUIRE(projection.CompleteTick(1).Value().publishedRecordCount == 1);
+        const auto &event = projection.PublishedEvents().front();
+        REQUIRE(event.pair.first.subshape == child.subshape);
+        REQUIRE(event.firstMaterial.has_value());
+        REQUIRE(event.firstMaterial->assetGeneration == material.assetGeneration);
+        REQUIRE(event.firstMaterial->slot == material.slot);
+        REQUIRE(event.contact.pointCount == MaximumPhysicsContactPoints);
+        REQUIRE(event.contact.omittedPointCount == 2);
+        REQUIRE(event.contact.points[0].positionOnFirst == Math::Vec3{0.0F, 0.0F, 0.0F});
     }
 
     TEST_CASE("Canonical diagnostic callbacks are restored after runtime shutdown", "[physics][native][diagnostics][shutdown]") {
@@ -324,5 +402,57 @@ namespace Horo::Physics::Detail {
         REQUIRE(contactPolicy() == JPH::ValidateResult::RejectAllContactsForThisBodyPair);
         REQUIRE(DestroyCanonicalSceneConstraint(world.handle, fixed).HasValue());
         REQUIRE(contactPolicy() == JPH::ValidateResult::AcceptAllContactsForThisBodyPair);
+    }
+
+    TEST_CASE("Canonical single-axis joints preserve hard limits and signed runtime coordinates", "[physics][native][constraint]") {
+        const RuntimeOwner runtime{CreateCanonicalRuntime().Value()};
+        const WorldOwner world{CreateCanonicalWorld(runtime.handle, Test::SmallWorldSettings()).Value()};
+        const auto owner = PhysicsWorldId::Create(602).Value();
+        const ShapeHandle shape = CreateCanonicalSceneShape(world.handle, owner, PhysicsBoxShape{}).Value();
+        PhysicsBodyDescriptor body;
+        body.shape = shape;
+        body.motion = PhysicsMotionType::Static;
+        body.mass = PhysicsNoMass{};
+        const BodyHandle first = CreateCanonicalSceneBody(world.handle, owner, {body, false}).Value();
+        body.pose.translation = {2.0F, 0.0F, 0.0F};
+        body.motion = PhysicsMotionType::Dynamic;
+        body.mass = PhysicsMass{1.0F};
+        const BodyHandle second = CreateCanonicalSceneBody(world.handle, owner, {body, false}).Value();
+        auto &canonical = *static_cast<CanonicalWorld *>(world.handle.value);
+
+        PhysicsConstraintDescriptor descriptor;
+        descriptor.first = {first, {}};
+        descriptor.second = PhysicsBodyAnchor{second, {}};
+        descriptor.parameters = PhysicsHingeConstraint{-0.5F, 0.75F};
+        const ConstraintHandle hinge = CreateCanonicalSceneConstraint(world.handle, owner, descriptor).Value();
+        const auto *nativeHinge = static_cast<const JPH::HingeConstraint *>(canonical.scene.constraints.back().constraint.GetPtr());
+        REQUIRE(nativeHinge->HasLimits());
+        REQUIRE(nativeHinge->GetLimitsMin() == -0.5F);
+        REQUIRE(nativeHinge->GetLimitsMax() == 0.75F);
+
+        descriptor.parameters = PhysicsSliderConstraint{-3.0F, 4.0F};
+        const ConstraintHandle slider = CreateCanonicalSceneConstraint(world.handle, owner, descriptor).Value();
+        const auto *nativeSlider = static_cast<const JPH::SliderConstraint *>(canonical.scene.constraints.back().constraint.GetPtr());
+        REQUIRE(nativeSlider->HasLimits());
+        REQUIRE(nativeSlider->GetLimitsMin() == -3.0F);
+        REQUIRE(nativeSlider->GetLimitsMax() == 4.0F);
+        REQUIRE(ReadCanonicalSceneJointState(world.handle, slider).Value().coordinate == 2.0F);
+
+        canonical.native.system->GetBodyInterface().SetPosition(canonical.scene.bodies[1].nativeBody, JPH::RVec3{-2.0F, 0.0F, 0.0F},
+                                                                JPH::EActivation::DontActivate);
+        const auto negative = ReadCanonicalSceneJointState(world.handle, slider);
+        REQUIRE(negative.HasValue());
+        REQUIRE(negative.Value().kind == PhysicsJointCoordinateKind::PositionMeters);
+        REQUIRE(negative.Value().coordinate == -2.0F);
+        canonical.native.system->GetBodyInterface().SetRotation(canonical.scene.bodies[1].nativeBody,
+                                                                JPH::Quat::sRotation(JPH::Vec3::sAxisY(), 0.25F),
+                                                                JPH::EActivation::DontActivate);
+        REQUIRE(std::abs(ReadCanonicalSceneJointState(world.handle, hinge).Value().coordinate - 0.25F) < 0.0001F);
+        canonical.native.system->GetBodyInterface().SetRotation(canonical.scene.bodies[1].nativeBody,
+                                                                JPH::Quat::sRotation(JPH::Vec3::sAxisY(), -0.25F),
+                                                                JPH::EActivation::DontActivate);
+        REQUIRE(std::abs(ReadCanonicalSceneJointState(world.handle, hinge).Value().coordinate + 0.25F) < 0.0001F);
+        REQUIRE(DestroyCanonicalSceneConstraint(world.handle, hinge).HasValue());
+        REQUIRE(DestroyCanonicalSceneConstraint(world.handle, slider).HasValue());
     }
 }  // namespace Horo::Physics::Detail

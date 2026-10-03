@@ -201,8 +201,9 @@ ad hoc JSON parsing:
 ```cpp
 struct ModuleConfigurationContribution {
     ModuleId module;
-    std::span<const SettingDescriptor> settings;
-    std::span<const EnvironmentVariableBinding> environmentBindings;
+    std::string ownerPrefix;
+    std::vector<SettingDescriptor> settings;
+    std::vector<EnvironmentVariableBinding> environmentBindings;
 };
 ```
 
@@ -220,6 +221,24 @@ The host validates contributions before snapshot resolution:
 
 This keeps the editor modular without creating separate configuration systems
 for GUI, CLI, MCP, game projects, and extensions.
+
+The composition root explicitly passes a contribution to `ModuleHost::Register`
+with its module descriptor. Registration copies the metadata and rejects malformed
+settings, duplicate keys, overlapping dotted owner prefixes, and repeated
+environment names with typed errors before activation. It never invokes module
+callbacks. The host exposes a schema containing active modules' contributions in
+stable module-ID and setting-key order, plus stable environment bindings. The
+editor supplies its persisted appearance defaults through the
+`horo.editor.services` contribution and consumes the host's schema when
+constructing its `ConfigurationService`. The same Foundation resolver supplies
+values and provenance for every key. Contributions for unselected modules are
+rejected by the common application composition root.
+
+`DeactivateAll` excludes stopped modules from newly built schemas and binding
+lists. A `ConfigurationService` constructed earlier owns its sealed schema, and
+snapshots already issued by it retain their captured values through shutdown.
+Host owners must stop publishing the service when its module closure shuts down;
+there is no independent live single-module unload operation in `ModuleHost`.
 
 ## Immutable Snapshots
 
@@ -275,6 +294,51 @@ struct ConfigurationChangedEvent {
 
 Subscribers query the authoritative snapshot. The event does not carry the
 entire configuration or secrets.
+
+For dynamic reload, the host captures all sources and calls `StageReload` off
+the frame and job hot paths. Staging runs the canonical resolver over the whole
+input, including shadowed values. A failed parse or validation is returned with
+diagnostics and cancels the pending candidate; it cannot change the active
+revision. Repeated valid stages replace the pending candidate, so a watch storm
+before activation commits only the newest complete snapshot. If host file read,
+environment capture, or document parsing fails before `StageReload`, the host
+calls `CancelPendingReload` before surfacing the original diagnostic. This also
+invalidates any resolution still in flight. The host serializes capture attempts
+in source-change order so an older failure cannot cancel a newer candidate.
+Staging also precomputes the sorted changed-key set and next revision so
+activation does not copy the resolved map at the synchronization point.
+
+The host calls `ActivateReload` at its owned synchronization point. A candidate
+waits until **all** changed descriptors permit that point; mixed-policy changes
+are never partially activated. `Immediate` admits the next explicit host safe
+point. `NextFrame` requires a frame boundary; `NextOperation` requires the host's
+operation-submission boundary, after current operations have captured their
+configuration. Neither boundary implies the other. `NextFrameAndOperation` is
+available when both conditions hold. Project reopen and process restart satisfy
+the earlier boundaries. Already-running operations retain their captured
+snapshot. Equal resolved values and provenance are a no-op. An explicit
+`Commit` or `ResolveAndCommit` invalidates an older pending reload. Concurrent stages are generation-checked so
+an earlier, slower resolution cannot replace newer input.
+
+One event with sorted changed keys is enqueued after a successful snapshot swap.
+The process-owned `EngineDataBus` delivers it only when its owner calls
+`DispatchQueued`, on that owner's thread and outside the configuration lock.
+The bus enqueue itself is queue-only and does not invoke subscribers; the
+service still releases its lock before enqueueing.
+
+Concurrent `ActivateReload`, explicit `Commit`, and `ResolveAndCommit` calls may
+enqueue after another commit has advanced the active revision. Notifications
+identify the snapshot that committed, but cross-thread delivery is not
+monotonic. Subscribers compare the event revision with a freshly queried
+snapshot and ignore older revisions; events never authorize replaying an older
+value. The bus may also drop events under backpressure, so revision polling is
+required where missing a transition would matter.
+
+Hosts must budget the bounded bus queue for their maximum activation rate and
+inspect queue-drop counters; activation and event dispatch must not run inside
+render or job hot paths. The existing explicit draft `Commit` remains a
+synchronous editor transaction; its subscribers receive its event on the caller
+thread. Hosts that need deferred reload use the staged path.
 
 ## Settings Modal
 

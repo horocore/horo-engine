@@ -108,6 +108,32 @@ namespace Horo::Physics {
             }
         }
 
+        TEST_CASE("Physics hinge and slider limits respect signed axis zero and solver bounds", "[physics][constraint]") {
+            auto descriptor = MakeConstraint();
+            const auto world = descriptor.first.body.world;
+            descriptor.parameters = PhysicsHingeConstraint{};
+            REQUIRE(ValidatePhysicsConstraintDescriptor(descriptor, world).HasValue());
+            descriptor.parameters = PhysicsHingeConstraint{-0.5F, 0.75F};
+            REQUIRE(ValidatePhysicsConstraintDescriptor(descriptor, world).HasValue());
+            for (const auto hinge :
+                 {PhysicsHingeConstraint{0.1F, 1.0F}, PhysicsHingeConstraint{-1.0F, -0.1F}, PhysicsHingeConstraint{-4.0F, 1.0F},
+                  PhysicsHingeConstraint{-1.0F, std::numeric_limits<float>::infinity()},
+                  PhysicsHingeConstraint{std::numeric_limits<float>::quiet_NaN(), 1.0F}}) {
+                descriptor.parameters = hinge;
+                RequireConstraintError(descriptor, world, PhysicsErrors::DescriptorInvalid);
+            }
+            descriptor.parameters = PhysicsSliderConstraint{};
+            REQUIRE(ValidatePhysicsConstraintDescriptor(descriptor, world).HasValue());
+            descriptor.parameters = PhysicsSliderConstraint{-2.0F, 3.0F};
+            REQUIRE(ValidatePhysicsConstraintDescriptor(descriptor, world).HasValue());
+            for (const auto slider : {PhysicsSliderConstraint{0.1F, 3.0F}, PhysicsSliderConstraint{-3.0F, -0.1F},
+                                      PhysicsSliderConstraint{-1.0F, std::numeric_limits<float>::infinity()},
+                                      PhysicsSliderConstraint{std::numeric_limits<float>::quiet_NaN(), 1.0F}}) {
+                descriptor.parameters = slider;
+                RequireConstraintError(descriptor, world, PhysicsErrors::DescriptorInvalid);
+            }
+        }
+
         TEST_CASE("Physics joint collision policy is explicit and rejects unknown values", "[physics][constraint]") {
             auto descriptor = MakeConstraint();
             descriptor.second = PhysicsBodyAnchor{{descriptor.first.body.world, {1, 1}}, {}};

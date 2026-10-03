@@ -168,10 +168,10 @@ namespace Horo::Editor {
             jobs_.SubmitResult({.parentCancellation = cancellation_.Token()},
                                [request = std::move(request_), completion](const CancellationToken &cancellation) mutable {
             if (cancellation.IsCancellationRequested())
-                return Result<void>::Success();
+                return JobCancelled();
             Result<SceneDocumentComparison> compared = LoadSceneDocumentComparison(request);
             if (cancellation.IsCancellationRequested())
-                return Result<void>::Success();
+                return JobCancelled();
 
             std::lock_guard lock(completion->mutex);
             if (compared.HasError())

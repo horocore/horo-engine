@@ -10,15 +10,25 @@
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/Configuration.h"
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <iosfwd>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <variant>
 #include <vector>
+
+namespace Horo {
+    class IOperationQuery;
+    class JobSystem;
+}  // namespace Horo
 
 namespace Horo::Cli {
     /** @brief Non-zero host-issued identity for one CLI invocation. */
@@ -74,6 +84,24 @@ namespace Horo::Cli {
         std::string message; /**< Optional safe presentation message. */
     };
 
+    /** @brief Polls authoritative bounded operation/job snapshots for one correlated invocation. */
+    class CliProgressProjection final {
+    public:
+        /** @param operations Optional application operation store. @param jobs Optional scheduler job store.
+         * @param correlation Immutable invocation identities selected by the application. */
+        CliProgressProjection(const IOperationQuery *operations, const JobSystem *jobs, CliExecutionCorrelation correlation);
+        /** @brief Returns a changed bounded event, preferring the operation record over its child job. */
+        [[nodiscard]] std::optional<CliProgressEvent> Poll();
+
+    private:
+        const IOperationQuery *operations_{};
+        const JobSystem *jobs_{};
+        CliExecutionCorrelation correlation_;
+        std::uint64_t operationRevision_{};
+        std::uint64_t jobRevision_{};
+        bool operationSeen_{};
+    };
+
     /** @brief Invocation-scoped progress destination owned by the host presentation layer. */
     class ICliProgressSink {
     public:
@@ -84,6 +112,102 @@ namespace Horo::Cli {
          * @param event Event valid only for the duration of this call.
          */
         virtual void Report(const CliProgressEvent &event) = 0;
+    };
+
+    /** @brief Host-level stop trigger; it does not redefine application failure semantics. */
+    enum class CliStopReason : std::uint8_t {
+        None,
+        Interrupted,
+        TimedOut,
+        Shutdown,
+        ParentCancelled
+    };
+
+    /** @brief Invocation-owned cooperative/forced tokens; platform signal bridges call Interrupt, never signal handlers here. */
+    class CliInvocationStopController final {
+    public:
+        /** @brief Starts one finite deadline and optional parent cancellation chain. @param timeout Zero disables the deadline.
+         * @param parent Optional host/task-group cancellation ancestry. */
+        explicit CliInvocationStopController(std::chrono::milliseconds timeout, CancellationToken parent = {});
+        ~CliInvocationStopController() = default;
+        CliInvocationStopController(const CliInvocationStopController &) = delete;
+        CliInvocationStopController &operator=(const CliInvocationStopController &) = delete;
+        /** @brief First interrupt cancels cooperatively; a repeated interrupt requests forced process termination. */
+        void Interrupt() noexcept;
+        /** @brief Host shutdown requests cooperative cancellation without a native signal. */
+        void Shutdown() noexcept;
+        /** @brief Returns the invocation/task-group/process cancellation ancestry. */
+        [[nodiscard]] CancellationToken Token() const noexcept;
+        /** @brief Returns the repeated-interrupt escalation token for owned process requests. */
+        [[nodiscard]] CancellationToken ForceToken() const noexcept;
+        /** @brief Returns the first terminal stop trigger, including parent cancellation. */
+        [[nodiscard]] CliStopReason Reason() const noexcept;
+
+    private:
+        void Request(CliStopReason reason) noexcept;
+        CancellationToken parent_;
+        CancellationSource cancellation_;
+        CancellationSource force_;
+        std::atomic<CliStopReason> reason_{CliStopReason::None};
+        std::atomic<unsigned> interrupts_{};
+        std::condition_variable_any deadlineWake_;
+        std::mutex deadlineMutex_;
+        std::jthread deadlineWorker_;
+    };
+
+    /** @brief One-slot coalescing progress destination; slow consumers never hold an operation worker. */
+    class CliProgressMailbox final : public ICliProgressSink {
+    public:
+        /** @copydoc ICliProgressSink::Report */
+        void Report(const CliProgressEvent &event) override;
+        /** @brief Takes the most recent update, discarding superseded intermediate values. */
+        [[nodiscard]] std::optional<CliProgressEvent> Take();
+
+    private:
+        std::mutex mutex_;
+        std::optional<CliProgressEvent> latest_;
+    };
+
+    /** @brief Presentation-independent cadence for TTY or rate-limited non-TTY human progress. */
+    class CliProgressCadence final {
+    public:
+        explicit CliProgressCadence(bool tty, std::chrono::milliseconds minimumInterval = std::chrono::seconds{1});
+        /** @brief Accepts changed TTY progress immediately; non-TTY accepts phase changes or elapsed cadence. */
+        [[nodiscard]] bool ShouldPresent(const CliProgressEvent &event, std::chrono::steady_clock::time_point now);
+
+    private:
+        bool tty_{};
+        std::chrono::milliseconds minimumInterval_{};
+        std::optional<std::chrono::steady_clock::time_point> last_;
+        std::string phase_;
+        std::string message_;
+        float completion_{};
+    };
+
+    /** @brief Selects where progress records may be presented. */
+    enum class CliProgressOutputMode : std::uint8_t {
+        Human,
+        Json,
+        JsonLines
+    };
+
+    /** @brief Presentation-thread writer for coalesced progress; never called by an operation worker. */
+    class CliProgressPresenter final {
+    public:
+        /** @param mailbox Invocation-owned coalescing source. @param output Structured stdout.
+         * @param diagnostics Human stderr. @param mode Requested output mode. @param tty Whether diagnostics is a terminal. */
+        CliProgressPresenter(CliProgressMailbox &mailbox, std::ostream &output, std::ostream &diagnostics, CliProgressOutputMode mode,
+                             bool tty);
+        /** @brief Consumes at most one pending update and writes it only when the mode and cadence permit. */
+        void Pump(std::chrono::steady_clock::time_point now);
+
+    private:
+        CliProgressMailbox *mailbox_{};
+        std::ostream *output_{};
+        std::ostream *diagnostics_{};
+        CliProgressOutputMode mode_{};
+        bool tty_{};
+        CliProgressCadence cadence_;
     };
 
     /** @brief Typed scalar emitted by a command adapter for later host presentation. */
@@ -120,12 +244,14 @@ namespace Horo::Cli {
 
     /** @brief Explicit host-owned values used to construct one invocation scope. */
     struct CliInvocationContext final {
-        CliInvocationId invocation;                   /**< Required non-zero invocation identity. */
-        const ConfigurationSnapshot *configuration{}; /**< Required immutable invocation snapshot. */
-        CancellationToken cancellation;               /**< Cooperative host/signal cancellation chain. */
-        ICliProgressSink *progress{};                 /**< Optional synchronous presentation sink. */
-        std::optional<CliSafeProjectContext> project; /**< Optional application-approved safe identity. */
-        std::uint64_t timeoutMilliseconds{};          /**< Zero selects the descriptor default. */
+        CliInvocationId invocation;                       /**< Required non-zero invocation identity. */
+        const ConfigurationSnapshot *configuration{};     /**< Required immutable invocation snapshot. */
+        CancellationToken cancellation;                   /**< Cooperative host/signal cancellation chain. */
+        CancellationToken forceCancellation;              /**< Optional repeated-interrupt process escalation. */
+        const CliInvocationStopController *stopControl{}; /**< Optional owning host stop authority for exact timeout classification. */
+        CliProgressMailbox *progress{};                   /**< Optional bounded coalescing progress destination. */
+        std::optional<CliSafeProjectContext> project;     /**< Optional application-approved safe identity. */
+        std::uint64_t timeoutMilliseconds{};              /**< Zero selects the descriptor default. */
     };
 
     /**
@@ -140,6 +266,11 @@ namespace Horo::Cli {
         [[nodiscard]] const ConfigurationSnapshot &Configuration() const noexcept;
         /** @brief Returns the immutable invocation cancellation token. @return Cooperative token. */
         [[nodiscard]] const CancellationToken &Cancellation() const noexcept;
+        /** @brief Returns the owned-subprocess escalation token, without exposing native signal APIs. */
+        [[nodiscard]] const CancellationToken &ForceCancellation() const noexcept;
+        /** @brief Returns the time left before the descriptor deadline, rounded up to one millisecond.
+         * @return No value when unlimited; zero when expired. Adapters cap injected process requests to this bound. */
+        [[nodiscard]] std::optional<std::chrono::milliseconds> RemainingTimeout() const noexcept;
         /** @brief Returns exact descriptor-declared grants only. @return Invocation-scoped capability identities. */
         [[nodiscard]] std::span<const CliCapabilityId> GrantedCapabilities() const noexcept;
         /** @brief Tests one exact capability identity. @param capability Candidate identity. @return Whether it was declared and granted.
@@ -165,7 +296,8 @@ namespace Horo::Cli {
 
         const ConfigurationSnapshot *configuration_{};
         CancellationToken cancellation_;
-        ICliProgressSink *progress_{};
+        CancellationToken forceCancellation_;
+        CliProgressMailbox *progress_{};
         std::span<const CliCapabilityId> capabilities_;
         const CliExecutionLimits *limits_{};
         std::optional<std::chrono::steady_clock::time_point> deadline_;

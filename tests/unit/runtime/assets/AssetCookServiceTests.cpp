@@ -4,10 +4,14 @@
 #include "Horo/Assets/CookCatalog.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Foundation/Sha256.h"
 
 #include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -36,6 +40,17 @@ namespace {
         auto parsed = AssetCookTargetId::Parse(value);
         REQUIRE((parsed.HasValue()));
         return parsed.Value();
+    }
+
+    AssetRecord TestMeshRecord() {
+        const auto sourcePath = ProjectPath::Parse("assets/test_mesh.fbx");
+        const auto metadataPath = ProjectPath::Parse("assets/test_mesh.fbx.horo");
+        REQUIRE(sourcePath.HasValue());
+        REQUIRE(metadataPath.HasValue());
+        return AssetRecord{.id = Id("00000000-0000-0000-0000-0000000000a1"),
+                           .type = Type("core.mesh"),
+                           .sourcePath = sourcePath.Value(),
+                           .metadataPath = metadataPath.Value()};
     }
 
     struct TempDir {
@@ -91,6 +106,104 @@ namespace {
             WriteFile(std::string(sourceFile.string()) + ".horo", sidecarBytes);
         }
     };
+
+    /** @brief Adds a second distinct source asset for concurrent cancellation checks. */
+    AssetRecord AddSecondMesh(TestProject &project) {
+        const std::filesystem::path sourceFile = project.assetsDir / "second_mesh.fbx";
+        std::filesystem::copy_file(project.sourceFile, sourceFile);
+        const std::string sidecarJson = SidecarJson("00000000-0000-0000-0000-0000000000a2", "core.mesh");
+        const auto sidecarBytes =
+            std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(sidecarJson.data()), sidecarJson.size());
+        WriteFile(std::string(sourceFile.string()) + ".horo", sidecarBytes);
+        AssetRecord record = TestMeshRecord();
+        record.id = Id("00000000-0000-0000-0000-0000000000a2");
+        record.sourcePath = ProjectPath::Parse("assets/second_mesh.fbx").Value();
+        record.metadataPath = ProjectPath::Parse("assets/second_mesh.fbx.horo").Value();
+        return record;
+    }
+
+    /** @brief Requests cancellation while returning either an acknowledged cook cancellation or a real failure. */
+    class CancellingCooker final : public ICookerStrategy {
+    public:
+        CancellingCooker(CancellationSource &source, const bool fail) : source_(source), fail_(fail) {}
+
+        [[nodiscard]] Result<CookOutputSink> Cook(const CookSourceView &, const CancellationToken &) const override {
+            source_.RequestCancellation();
+            return Result<CookOutputSink>::Failure(Error{ErrorCode{fail_ ? "test.cook.failed" : "asset.cook.cancelled"}});
+        }
+
+    private:
+        CancellationSource &source_;
+        bool fail_;
+    };
+
+    /** @brief Test strategy whose effective settings must participate in AST cache admission. */
+    class SettingsCooker final : public ICookerStrategy {
+    public:
+        explicit SettingsCooker(const std::uint8_t setting) : setting_(setting) {}
+
+        [[nodiscard]] CookerCacheIdentity CacheIdentity() const noexcept override {
+            const std::array<std::byte, 1> bytes{static_cast<std::byte>(setting_)};
+            return {.version = "test.1", .settingsDigest = ComputeSha256(bytes), .settingsSchemaVersion = 1};
+        }
+
+        [[nodiscard]] Result<CookOutputSink> Cook(const CookSourceView &, const CancellationToken &) const override {
+            return Result<CookOutputSink>::Success(CookOutputSink{.payload = {setting_}});
+        }
+
+        [[nodiscard]] Result<void> ValidateCookedPayload(const CookSourceView &,
+                                                         const std::span<const std::uint8_t> payload) const override {
+            return payload.size() == 1 && payload.front() == setting_
+                       ? Result<void>::Success()
+                       : Result<void>::Failure(Error{ErrorCode{"test.cook.payload_mismatch"}});
+        }
+
+    private:
+        std::uint8_t setting_{};
+    };
+
+    /** @brief Verifies that the initial cook and later cache hit retain source attribution. */
+    void AssertCachedCookOutput(const BuildOutputSnapshot &first, const BuildOutputSnapshot &second,
+                                const std::filesystem::path &sourcePath) {
+        const auto cached = std::ranges::find_if(second.records, [](const BuildOutputRecord &record) {
+            return record.code.Value() == "asset.cook.cache_hit";
+        });
+        REQUIRE((cached != second.records.end()));
+        REQUIRE((cached->result == BuildOutputResult::Cached));
+        REQUIRE(cached->source.has_value());
+        REQUIRE(cached->source->absolutePath == sourcePath.string());
+        REQUIRE(cached->sessionId.has_value());
+        REQUIRE((cached->sessionId == second.records.back().sessionId));
+        REQUIRE((second.records.back().result == BuildOutputResult::Succeeded));
+
+        const auto cooked = std::ranges::find_if(first.records, [](const BuildOutputRecord &record) {
+            return record.code.Value() == "asset.cook.asset_cooked";
+        });
+        REQUIRE(cooked != first.records.end());
+        REQUIRE(cooked->result == BuildOutputResult::Succeeded);
+        REQUIRE(cooked->source.has_value());
+        REQUIRE(cooked->source->absolutePath == sourcePath.string());
+    }
+
+    /** @brief Checks that both a failed or cancelled cook and its cancelled sibling retain source attribution. */
+    void AssertCancelledSiblingOutput(const BuildOutputSnapshot &snapshot, const OperationRecord &operation, const TestProject &project,
+                                      const bool fail) {
+        REQUIRE(snapshot.records.back().result == (fail ? BuildOutputResult::Failed : BuildOutputResult::Cancelled));
+        const auto assetFailure = std::ranges::find_if(snapshot.records, [](const BuildOutputRecord &record) {
+            return record.source.has_value();
+        });
+        REQUIRE(assetFailure != snapshot.records.end());
+        REQUIRE(assetFailure->result == (fail ? BuildOutputResult::Failed : BuildOutputResult::Cancelled));
+        REQUIRE(assetFailure->source->absolutePath == project.sourceFile.string());
+        REQUIRE(assetFailure->operationId == operation.id);
+        REQUIRE(assetFailure->sessionId == snapshot.records.back().sessionId);
+        const std::filesystem::path secondSource = project.assetsDir / "second_mesh.fbx";
+        REQUIRE(std::ranges::count_if(snapshot.records, [&](const BuildOutputRecord &record) {
+            const bool expectedTerminalResult =
+                record.result == BuildOutputResult::Cancelled || (fail && record.result == BuildOutputResult::Failed);
+            return record.source.has_value() && record.source->absolutePath == secondSource.string() && expectedTerminalResult;
+        }) == 1);
+    }
 
 }  // namespace
 
@@ -186,6 +299,52 @@ TEST_CASE("AssetCookService honours cancellation before work", "[native]") {
     REQUIRE((result.HasError()));
 }
 
+TEST_CASE("AssetCookService keeps cook cancellation separate from concurrent failure", "[native]") {
+    for (const bool fail : {false, true}) {
+        TestProject project;
+        TempDir cacheDir;
+        TempDir cookedDir;
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 4}};
+        CancellationSource source;
+
+        AssetRegistry registry;
+        REQUIRE(registry.Publish({TestMeshRecord(), AddSecondMesh(project)}).status == AssetRegistryBuildStatus::Complete);
+
+        CookerCatalog catalog;
+        REQUIRE(catalog
+                    .Register(CookerContribution{.contributionId = "test.cancelling",
+                                                 .assetType = Type("core.mesh"),
+                                                 .targets = {Target("headless-null")},
+                                                 .strategy = std::make_shared<const CancellingCooker>(source, fail)})
+                    .HasValue());
+        const auto catalogSnapshot = catalog.Publish();
+        REQUIRE(catalogSnapshot.HasValue());
+        AssetCookService service(jobs, catalogSnapshot.Value());
+        BuildOutputStore output{16};
+        OperationStore operations{4, 4};
+        AssetCookRequest request{.sourceRoot = project.dir.path,
+                                 .cacheRoot = cacheDir.path,
+                                 .cookedRoot = cookedDir.path,
+                                 .registry = registry.Snapshot(),
+                                 .target = Target("headless-null"),
+                                 .buildOutputStore = &output,
+                                 .operationStore = &operations};
+
+        const auto result = service.Cook(request, source.Token());
+        REQUIRE(result.HasError());
+        REQUIRE(result.ErrorValue().code.Value() == (fail ? "test.cook.failed" : "asset.cook.cancelled"));
+        if (!fail)
+            REQUIRE(ErrorChainContains(result.ErrorValue(), ErrorDomainId{"horo.foundation.jobs"}, ErrorCode{"job.cancelled"}));
+        const auto operationSnapshot = operations.SnapshotIfChanged(0);
+        REQUIRE(operationSnapshot.has_value());
+        REQUIRE(operationSnapshot->operations.front().state == (fail ? OperationState::Failed : OperationState::Cancelled));
+        const auto outputSnapshot = output.SnapshotIfChanged(0);
+        REQUIRE(outputSnapshot.has_value());
+        AssertCancelledSiblingOutput(*outputSnapshot, operationSnapshot->operations.front(), project, fail);
+        jobs.Shutdown(ShutdownPolicy::Drain);
+    }
+}
+
 TEST_CASE("AssetCookService publishes cache hits as cached scoped results", "[native]") {
     TestProject project;
     TempDir cacheDir;
@@ -225,12 +384,150 @@ TEST_CASE("AssetCookService publishes cache hits as cached scoped results", "[na
     REQUIRE(service.Cook(request, cancellation).HasValue());
     const auto secondSnapshot = buildOutput.SnapshotIfChanged(firstSnapshot->revision);
     REQUIRE(secondSnapshot.has_value());
-    const auto cached = std::ranges::find_if(secondSnapshot->records, [](const BuildOutputRecord &record) {
-        return record.code.Value() == "asset.cook.cache_hit";
-    });
-    REQUIRE((cached != secondSnapshot->records.end()));
-    REQUIRE((cached->result == BuildOutputResult::Cached));
-    REQUIRE(cached->sessionId.has_value());
-    REQUIRE((cached->sessionId == secondSnapshot->records.back().sessionId));
-    REQUIRE((secondSnapshot->records.back().result == BuildOutputResult::Succeeded));
+    AssertCachedCookOutput(*firstSnapshot, *secondSnapshot, project.sourceFile);
+}
+
+TEST_CASE("AssetCookService isolates cache entries by exact strategy settings", "[native]") {
+    TestProject project;
+    TempDir cacheDir;
+    TempDir cookedDir;
+    JobSystem jobs;
+    AssetRegistry registry;
+    REQUIRE(registry.Publish({TestMeshRecord()}).status == AssetRegistryBuildStatus::Complete);
+
+    const auto target = Target("headless-null");
+    AssetCookRequest request{
+        .sourceRoot = project.dir.path,
+        .cacheRoot = cacheDir.path,
+        .cookedRoot = cookedDir.path,
+        .registry = registry.Snapshot(),
+        .target = target,
+    };
+    const auto cookWithSetting = [&](const std::uint8_t setting) {
+        CookerCatalog catalog;
+        REQUIRE(catalog
+                    .Register(CookerContribution{
+                        .contributionId = "test.settings-cooker",
+                        .assetType = Type("core.mesh"),
+                        .targets = {target},
+                        .strategy = std::make_shared<const SettingsCooker>(setting),
+                    })
+                    .HasValue());
+        auto snapshot = catalog.Publish();
+        REQUIRE(snapshot.HasValue());
+        AssetCookService service(jobs, snapshot.Value());
+        return service.Cook(request, CancellationToken{});
+    };
+
+    auto first = cookWithSetting(1);
+    REQUIRE(first.HasValue());
+    CHECK(first.Value().cookedAssets == 1);
+    auto different = cookWithSetting(2);
+    REQUIRE(different.HasValue());
+    CHECK(different.Value().cookedAssets == 1);
+    CHECK(different.Value().cacheHits == 0);
+    auto sameAgain = cookWithSetting(2);
+    REQUIRE(sameAgain.HasValue());
+    CHECK(sameAgain.Value().cookedAssets == 0);
+    CHECK(sameAgain.Value().cacheHits == 1);
+    jobs.Shutdown(ShutdownPolicy::Drain);
+}
+
+TEST_CASE("AssetCookService reports source admission failures with navigable diagnostics", "[native]") {
+    TestProject project;
+    TempDir cacheDir;
+    TempDir cookedDir;
+    JobSystem jobs;
+    AssetRegistry registry;
+    REQUIRE(registry.Publish({TestMeshRecord()}).status == AssetRegistryBuildStatus::Complete);
+    CookerCatalog catalog;
+    const auto catalogSnapshot = catalog.Publish();
+    REQUIRE(catalogSnapshot.HasValue());
+    AssetCookService service(jobs, catalogSnapshot.Value());
+    BuildOutputStore output{8};
+    OperationStore operations{4, 4};
+    AssetCookRequest request{.sourceRoot = project.dir.path,
+                             .cacheRoot = cacheDir.path,
+                             .cookedRoot = cookedDir.path,
+                             .registry = registry.Snapshot(),
+                             .target = Target("headless-null"),
+                             .buildOutputStore = &output,
+                             .operationStore = &operations};
+    CancellationToken cancellation;
+
+    const auto result = service.Cook(request, cancellation);
+    REQUIRE(result.HasError());
+    REQUIRE(result.ErrorValue().code.Value() == "asset.cook.cooker_missing");
+    const auto snapshot = output.SnapshotIfChanged(0);
+    REQUIRE(snapshot.has_value());
+    REQUIRE(snapshot->records.size() == 3);
+    REQUIRE(snapshot->records[1].code.Value() == "asset.cook.cooker_missing");
+    REQUIRE(snapshot->records[1].source.has_value());
+    REQUIRE(snapshot->records[1].source->absolutePath == project.sourceFile.string());
+    REQUIRE(snapshot->records[1].result == BuildOutputResult::Failed);
+    REQUIRE(snapshot->records[2].result == BuildOutputResult::Failed);
+}
+
+TEST_CASE("AssetCookService reports unreadable source paths without publishing a generation", "[native]") {
+    TestProject project;
+    TempDir cacheDir;
+    TempDir cookedDir;
+    JobSystem jobs;
+    AssetRegistry registry;
+    REQUIRE(registry.Publish({TestMeshRecord()}).status == AssetRegistryBuildStatus::Complete);
+    CookerCatalog catalog;
+    REQUIRE(RegisterHeadlessMeshCooker(catalog).HasValue());
+    const auto catalogSnapshot = catalog.Publish();
+    REQUIRE(catalogSnapshot.HasValue());
+    AssetCookService service(jobs, catalogSnapshot.Value());
+    BuildOutputStore output{8};
+    AssetCookRequest request{.sourceRoot = project.dir.path,
+                             .cacheRoot = cacheDir.path,
+                             .cookedRoot = cookedDir.path,
+                             .registry = registry.Snapshot(),
+                             .target = Target("headless-null"),
+                             .buildOutputStore = &output};
+    REQUIRE(std::filesystem::remove(project.sourceFile));
+    CancellationToken cancellation;
+
+    const auto result = service.Cook(request, cancellation);
+    REQUIRE(result.HasError());
+    const auto snapshot = output.SnapshotIfChanged(0);
+    REQUIRE(snapshot.has_value());
+    REQUIRE(snapshot->records.size() == 3);
+    REQUIRE(snapshot->records[1].code.Value() == result.ErrorValue().code.Value());
+    REQUIRE(snapshot->records[1].source.has_value());
+    REQUIRE(snapshot->records[1].source->absolutePath == project.sourceFile.string());
+    REQUIRE_FALSE(std::filesystem::exists(cookedDir.path / "current.json"));
+}
+
+TEST_CASE("AssetCookService rejects cook when operation admission is full", "[native]") {
+    TestProject project;
+    TempDir cacheDir;
+    TempDir cookedDir;
+    JobSystem jobs;
+    AssetRegistry registry;
+    CookerCatalog catalog;
+    REQUIRE(RegisterHeadlessMeshCooker(catalog).HasValue());
+    const auto catalogSnapshot = catalog.Publish();
+    REQUIRE(catalogSnapshot.HasValue());
+    AssetCookService service(jobs, catalogSnapshot.Value());
+    BuildOutputStore output{8};
+    OperationStore operations{1, 4};
+    const auto occupied = operations.Begin(OperationDescriptor{.kind = OperationKind::Cook, .title = "Other cook"});
+    REQUIRE(occupied.has_value());
+    AssetCookRequest request{.sourceRoot = project.dir.path,
+                             .cacheRoot = cacheDir.path,
+                             .cookedRoot = cookedDir.path,
+                             .registry = registry.Snapshot(),
+                             .target = Target("headless-null"),
+                             .buildOutputStore = &output,
+                             .operationStore = &operations};
+    CancellationToken cancellation;
+
+    const auto result = service.Cook(request, cancellation);
+    REQUIRE(result.HasError());
+    REQUIRE(result.ErrorValue().code.Value() == "asset.cook.operation_admission_failed");
+    REQUIRE_FALSE(output.SnapshotIfChanged(0).has_value());
+    REQUIRE_FALSE(std::filesystem::exists(cookedDir.path / "current.json"));
 }

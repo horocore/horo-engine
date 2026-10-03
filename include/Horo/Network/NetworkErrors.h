@@ -8,6 +8,14 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::Network::NetworkErrors {
+    /** @brief A host mode plan or participant graph violates the closed composition matrix. */
+    extern const ErrorCodeDescriptor NetworkModeInvalid;
+    /** @brief A required host participant is not installed or failed before publication. */
+    extern const ErrorCodeDescriptor NetworkModeUnavailable;
+    /** @brief A role, Scene, session or authority generation was replaced. */
+    extern const ErrorCodeDescriptor NetworkModeStale;
+    /** @brief A mode composition has stopped accepting startup, travel or gameplay work. */
+    extern const ErrorCodeDescriptor NetworkModeShuttingDown;
     /** @brief Endpoint text is malformed or has an ambiguous non-canonical representation. */
     extern const ErrorCodeDescriptor NetworkAddressInvalid;
     /** @brief Endpoint text uses a deliberately unsupported scheme, zone, or IDNA representation. */
@@ -18,6 +26,24 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor TransportHandleInvalid;
     /** @brief A reclaimed handle slot cannot advance its generation without wrapping. */
     extern const ErrorCodeDescriptor TransportGenerationExhausted;
+    /** @brief Backend composition identity, descriptor, or operation is malformed. */
+    extern const ErrorCodeDescriptor TransportBackendInvalid;
+    /** @brief The exact requested backend is not installed in this host composition. */
+    extern const ErrorCodeDescriptor TransportBackendUnavailable;
+    /** @brief An installed backend is not supported on this host. */
+    extern const ErrorCodeDescriptor TransportBackendUnsupported;
+    /** @brief An installed backend has no admitted complete configuration. */
+    extern const ErrorCodeDescriptor TransportBackendNotConfigured;
+    /** @brief A backend identity was already registered or another backend selected. */
+    extern const ErrorCodeDescriptor TransportBackendConflict;
+    /** @brief The host's finite backend registration capacity is exhausted. */
+    extern const ErrorCodeDescriptor TransportBackendCapacityExceeded;
+    /** @brief A factory returned no instance or threw before activation. */
+    extern const ErrorCodeDescriptor TransportBackendFactoryFailed;
+    /** @brief Backend selection or activation was cancelled by the composition owner. */
+    extern const ErrorCodeDescriptor TransportBackendCancelled;
+    /** @brief Backend composition has entered terminal shutdown. */
+    extern const ErrorCodeDescriptor TransportBackendShuttingDown;
     /** @brief A replicated authority epoch or object slot/generation is malformed. */
     extern const ErrorCodeDescriptor NetworkObjectIdentityInvalid;
     /** @brief A retired replicated-object slot cannot advance without generation wrap. */
@@ -54,6 +80,10 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor NetworkProjectSettingsStale;
     /** @brief Project-settings publication is closed and rejects late commands. */
     extern const ErrorCodeDescriptor NetworkProjectSettingsShuttingDown;
+    /** @brief Product target capability manifest has an unknown version, field or incoherent claim. */
+    extern const ErrorCodeDescriptor NetworkTargetManifestInvalid;
+    /** @brief Product target capability manifest exceeds its finite byte or provider bound. */
+    extern const ErrorCodeDescriptor NetworkTargetManifestCapacityExceeded;
     /** @brief Replication descriptor metadata is malformed or exceeds its declared bounds. */
     extern const ErrorCodeDescriptor ReplicationDescriptorInvalid;
     /** @brief Schema, field, or tombstone identities collide in one candidate snapshot. */
@@ -76,6 +106,16 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor RpcCapacityExceeded;
     /** @brief An RPC parameter has no exact accepted typed codec metadata. */
     extern const ErrorCodeDescriptor RpcParameterUnsupported;
+    /** @brief Dispatch has no host-approved implementation of the declared caller policy. */
+    extern const ErrorCodeDescriptor RpcPermissionUnsupported;
+    /** @brief The current admitted caller or owner publication denies an RPC. */
+    extern const ErrorCodeDescriptor RpcPermissionDenied;
+    /** @brief The caller/RPC or active work budget is exhausted. */
+    extern const ErrorCodeDescriptor RpcRateLimited;
+    /** @brief A canonical typed parameter violates an owner constraint. */
+    extern const ErrorCodeDescriptor RpcParameterInvalid;
+    /** @brief A permitted Gameplay invocation failed; the original cause is retained. */
+    extern const ErrorCodeDescriptor RpcGameplayFailed;
     /** @brief Serializer metadata, quantization policy, or typed value representation is malformed. */
     extern const ErrorCodeDescriptor ReplicationSerializerInvalid;
     /** @brief Multiple serializers claim the same owner, semantic type, and codec identity. */
@@ -138,6 +178,12 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor TransportOperationCancelled;
     /** @brief Caller-owned shutdown state rejected transport admission before queue mutation. */
     extern const ErrorCodeDescriptor TransportShuttingDown;
+    /** @brief Native transport initialization, bind, or connect could not establish the requested endpoint. */
+    extern const ErrorCodeDescriptor TransportNativeUnavailable;
+    /** @brief A native connection ended before an owner-controlled close completed. */
+    extern const ErrorCodeDescriptor TransportConnectionFailed;
+    /** @brief Native receive data violated the bounded packet contract. */
+    extern const ErrorCodeDescriptor TransportMalformedPacket;
     /** @brief Host-scoped network I/O service construction or call bounds are invalid. */
     extern const ErrorCodeDescriptor NetworkIoServiceInvalid;
     /** @brief Prepared network I/O service storage could not be allocated. */
@@ -162,6 +208,14 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor NetworkLifecycleTransitionInvalid;
     /** @brief A completion names a retired handle or asynchronous operation generation. */
     extern const ErrorCodeDescriptor NetworkLifecycleOperationStale;
+    /** @brief Fixed-tick alignment policy, sample, or advance order is malformed. */
+    extern const ErrorCodeDescriptor NetworkClockInvalid;
+    /** @brief A clock sample names an old connection, session, epoch, sequence, or server tick. */
+    extern const ErrorCodeDescriptor NetworkClockSampleStale;
+    /** @brief Mapping is unavailable before the first sample or outside an active session. */
+    extern const ErrorCodeDescriptor NetworkClockUnavailable;
+    /** @brief A clock epoch or tick cannot advance without wrapping. */
+    extern const ErrorCodeDescriptor NetworkClockOverflow;
     /** @brief Protocol identity contributions or version ranges are malformed. */
     extern const ErrorCodeDescriptor ProtocolIdentityDescriptorInvalid;
     /** @brief A protocol-scoped stable identity is registered more than once. */
@@ -178,6 +232,16 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor HandshakeIncompatible;
     /** @brief A handshake operation is not legal from the current terminal or negotiating state. */
     extern const ErrorCodeDescriptor HandshakeStateInvalid;
+    /** @brief Host admission security limits are malformed or a charge has invalid metadata. */
+    extern const ErrorCodeDescriptor AdmissionPolicyInvalid;
+    /** @brief A challenge does not match the exact canonical negotiated transcript. */
+    extern const ErrorCodeDescriptor AdmissionBindingInvalid;
+    /** @brief The negotiated protocol version falls below the host security floor. */
+    extern const ErrorCodeDescriptor AdmissionDowngradeRejected;
+    /** @brief A recent client or server nonce was reused for another admission. */
+    extern const ErrorCodeDescriptor AdmissionReplayRejected;
+    /** @brief Pre-active peer, source, or global work exceeded a finite host limit. */
+    extern const ErrorCodeDescriptor AdmissionLimitExceeded;
     /** @brief Authentication policy, challenge, evidence, proof framing, or authority output is malformed. */
     extern const ErrorCodeDescriptor AuthenticationInvalid;
     /** @brief Authentication input conflicts with the immutable challenge or exposure security floor. */
@@ -208,6 +272,16 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor MessageEnvelopeTimedOut;
     /** @brief Caller-owned shutdown state rejected message codec admission. */
     extern const ErrorCodeDescriptor MessageEnvelopeShuttingDown;
+    /** @brief Delivery policy, generation, clock, sequence, or channel metadata is malformed. */
+    extern const ErrorCodeDescriptor MessageDeliveryInvalid;
+    /** @brief The same message replay key was already admitted on its channel. */
+    extern const ErrorCodeDescriptor MessageDeliveryDuplicate;
+    /** @brief An arrival violates ordered/sequenced policy or the finite replay window. */
+    extern const ErrorCodeDescriptor MessageDeliveryOutOfOrder;
+    /** @brief A message reached the application boundary at or after its expiry tick. */
+    extern const ErrorCodeDescriptor MessageDeliveryExpired;
+    /** @brief Admission is closed for this session generation. */
+    extern const ErrorCodeDescriptor MessageDeliveryTerminal;
     /** @brief A terminal failure record is malformed or uses an incompatible layer/kind/context combination. */
     extern const ErrorCodeDescriptor TerminalRecordInvalid;
     /** @brief A second terminal completion attempted to replace the immutable first result. */

@@ -1,197 +1,53 @@
 #include "Horo/Runtime/Save/SaveArchiveReader.h"
 
-#include "Horo/Foundation/Utf8.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "SaveArchiveReaderInternal.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <format>
 #include <limits>
 #include <new>
 #include <string>
-#include <string_view>
-#include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime {
     namespace {
-        constexpr std::array<std::byte, 8> ArchiveMagic{std::byte{'H'}, std::byte{'O'}, std::byte{'R'}, std::byte{'O'},
-                                                        std::byte{'S'}, std::byte{'A'}, std::byte{'V'}, std::byte{'E'}};
         constexpr std::array<std::byte, 8> ContainerMagic{std::byte{'H'}, std::byte{'S'}, std::byte{'C'}, std::byte{'T'},
                                                           std::byte{'N'}, std::byte{'R'}, std::byte{'1'}, std::byte{0}};
-        constexpr std::size_t SignatureHashByteLength = 32;
-        constexpr std::size_t SignatureKeyIdByteLength = 16;
-        constexpr std::size_t SignatureDescriptorByteLength = 20;
         constexpr std::size_t MaximumContainerNestingDepth = 32;
+        using SaveArchiveReaderDetail::IsZero;
         using SaveArchiveReaderDetail::RawEntry;
+        using SaveArchiveReaderDetail::ReadArray;
         using SaveArchiveReaderDetail::ReaderError;
-
-        template <typename Value>
-        [[nodiscard]] bool ReadLittleEndian(const std::span<const std::byte> bytes, std::size_t &offset, Value &value) noexcept {
-            static_assert(std::is_unsigned_v<Value>);
-            if (offset > bytes.size() || sizeof(Value) > bytes.size() - offset)
-                return false;
-            value = 0;
-            for (std::size_t index = 0; index < sizeof(Value); ++index)
-                value |= static_cast<Value>(std::to_integer<std::uint8_t>(bytes[offset + index])) << (index * 8U);
-            offset += sizeof(Value);
-            return true;
-        }
-
-        [[nodiscard]] bool ReadArray(const std::span<const std::byte> bytes, std::size_t &offset,
-                                     const std::span<std::uint8_t> destination) noexcept {
-            if (offset > bytes.size() || destination.size() > bytes.size() - offset)
-                return false;
-            for (std::size_t index = 0; index < destination.size(); ++index)
-                destination[index] = std::to_integer<std::uint8_t>(bytes[offset + index]);
-            offset += destination.size();
-            return true;
-        }
-
-        [[nodiscard]] bool IsZero(
-            const std::span<const std::uint8_t> bytes) noexcept {  // NOSONAR(cpp:S1144) -- identity fields use uint8_t storage.
-            return std::ranges::all_of(bytes, [](const std::uint8_t value) {
-                return value == 0;
-            });
-        }
+        using SaveArchiveReaderDetail::ReadLittleEndian;
 
         [[nodiscard]] bool HasValidArchiveLimits(const SaveArchiveReaderLimits &limits) noexcept {
             return limits.maximumArchiveBytes != 0 && limits.maximumStoredPayloadBytes != 0 &&
-                   limits.maximumStoredPayloadBytes <= limits.maximumArchiveBytes && limits.maximumDecodedBytes != 0;
+                   limits.maximumStoredPayloadBytes <= limits.maximumArchiveBytes && limits.maximumDecodedBytes != 0 &&
+                   limits.maximumArchiveBytes <= (4ULL << 30U) && limits.maximumDecodedBytes <= (1ULL << 30U) &&
+                   limits.maximumReadWorkBytes != 0 && limits.maximumReadWorkBytes <= (16ULL << 30U);
         }
 
         [[nodiscard]] bool HasValidStructuralLimits(const SaveArchiveReaderLimits &limits) noexcept {
             return limits.maximumEntries != 0 && limits.maximumNestingDepth != 0 &&
-                   limits.maximumNestingDepth <= MaximumContainerNestingDepth && limits.maximumExpansionRatio != 0;
+                   limits.maximumNestingDepth <= MaximumContainerNestingDepth && limits.maximumExpansionRatio != 0 &&
+                   limits.maximumExpansionRatio <= 64 && limits.maximumEntries <= 65'536;
         }
 
         [[nodiscard]] bool HasValidNestedLimits(const SaveArchiveReaderLimits &limits) noexcept {
-            return limits.metadata.maximumNestingDepth <= limits.maximumNestingDepth &&
+            return limits.metadata.maximumNestingDepth <= limits.maximumNestingDepth && limits.metadata.maximumHeaderBytes <= (1U << 20U) &&
+                   limits.metadata.maximumManifestBytes <= (4U << 20U) && limits.metadata.maximumTextBytes <= 4'096 &&
+                   limits.metadata.maximumParticipants <= 4'096 && limits.metadata.maximumTotalChunks <= limits.maximumEntries &&
                    limits.chunks.maximumEntries <= limits.maximumEntries &&
                    limits.chunks.maximumPayloadBytes <= limits.maximumStoredPayloadBytes &&
-                   limits.chunks.maximumDecodedChunkBytes <= limits.maximumDecodedBytes;
+                   limits.chunks.maximumStoredChunkBytes <= limits.maximumStoredPayloadBytes && limits.chunks.maximumExpansionRatio != 0 &&
+                   limits.chunks.maximumExpansionRatio <= 64 && limits.chunks.maximumDecodedChunkBytes <= limits.maximumDecodedBytes;
         }
 
         [[nodiscard]] bool ValidLimits(const SaveArchiveReaderLimits &limits) noexcept {
             return HasValidArchiveLimits(limits) && HasValidStructuralLimits(limits) && HasValidNestedLimits(limits);
-        }
-
-        struct EnvelopeFields final {
-            std::uint32_t archiveVersion{};
-            std::uint32_t flags{};
-            std::uint64_t payloadLength{};
-            std::uint32_t trailerLength{};
-        };
-
-        [[nodiscard]] Result<EnvelopeFields> ReadEnvelopeHeader(const std::span<const std::byte> archive) {
-            if (archive.size() < SaveArchivePreambleByteLength || !std::equal(ArchiveMagic.begin(), ArchiveMagic.end(), archive.begin()))
-                return Result<EnvelopeFields>::Failure(ReaderError(SaveErrors::ArchiveEnvelopeInvalid, 0, "envelope"));
-            std::size_t offset = ArchiveMagic.size();
-            EnvelopeFields fields;
-            std::uint32_t reserved{};
-            if (!ReadLittleEndian(archive, offset, fields.archiveVersion) || !ReadLittleEndian(archive, offset, fields.flags) ||
-                !ReadLittleEndian(archive, offset, fields.payloadLength) || !ReadLittleEndian(archive, offset, fields.trailerLength) ||
-                !ReadLittleEndian(archive, offset, reserved))
-                return Result<EnvelopeFields>::Failure(ReaderError(SaveErrors::ArchiveEnvelopeInvalid, offset, "envelope/fields"));
-            if (fields.flags != 0 || reserved != 0)
-                return Result<EnvelopeFields>::Failure(ReaderError(SaveErrors::ArchiveEnvelopeInvalid, 12, "envelope/reserved"));
-            return Result<EnvelopeFields>::Success(fields);
-        }
-
-        [[nodiscard]] Result<void> ValidateEnvelopeHeader(const EnvelopeFields &fields, const SaveArchiveReaderLimits &limits) {
-            if (fields.archiveVersion == 0)
-                return Result<void>::Failure(ReaderError(SaveErrors::ArchiveEnvelopeInvalid, 8, "envelope/archiveFormatVersion"));
-            if (fields.archiveVersion > 1)
-                return Result<void>::Failure(ReaderError(SaveErrors::VersionUnsupportedNewer, 8, "envelope/archiveFormatVersion"));
-            if (fields.payloadLength > limits.maximumStoredPayloadBytes || fields.payloadLength > std::numeric_limits<std::size_t>::max())
-                return Result<void>::Failure(ReaderError(SaveErrors::ArchiveFramingLimitExceeded, 16, "envelope/payloadLength"));
-            if (fields.trailerLength != SaveArchiveUnsignedTrailerByteLength && fields.trailerLength != SaveArchiveSignedTrailerByteLength)
-                return Result<void>::Failure(ReaderError(SaveErrors::ArchiveFramingLimitExceeded, 24, "envelope/trailerLength"));
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<std::pair<std::size_t, std::size_t>> ValidateEnvelopeLength(const EnvelopeFields &fields,
-                                                                                         const std::span<const std::byte> archive) {
-            const auto payloadSize = static_cast<std::size_t>(fields.payloadLength);
-            const auto trailerSize = static_cast<std::size_t>(fields.trailerLength);
-            if (payloadSize > archive.size() - SaveArchivePreambleByteLength ||
-                trailerSize > archive.size() - SaveArchivePreambleByteLength - payloadSize ||
-                SaveArchivePreambleByteLength + payloadSize + trailerSize != archive.size())
-                return Result<std::pair<std::size_t, std::size_t>>::Failure(
-                    ReaderError(SaveErrors::ArchivePayloadTruncated, 16, "envelope/fileLength"));
-            return Result<std::pair<std::size_t, std::size_t>>::Success({payloadSize, trailerSize});
-        }
-
-        [[nodiscard]] Result<void> ValidateSignatureDescriptor(const SaveArchiveSignatureAlgorithm algorithm, const std::size_t trailerSize,
-                                                               const std::uint16_t signatureLength,
-                                                               const std::span<const std::uint8_t> keyId, const std::size_t offset) {
-            if (algorithm == SaveArchiveSignatureAlgorithm::None) {
-                if (trailerSize != SaveArchiveUnsignedTrailerByteLength || signatureLength != 0 || !IsZero(keyId))
-                    return Result<void>::Failure(ReaderError(SaveErrors::ArchiveEnvelopeInvalid, offset, "trailer/unsigned"));
-            } else if (algorithm == SaveArchiveSignatureAlgorithm::Ed25519) {
-                if (trailerSize != SaveArchiveSignedTrailerByteLength || signatureLength != 64 || IsZero(keyId))
-                    return Result<void>::Failure(ReaderError(SaveErrors::ArchiveEnvelopeInvalid, offset, "trailer/signed"));
-            } else {
-                return Result<void>::Failure(
-                    ReaderError(SaveErrors::ArchiveEnvelopeInvalid, offset - SignatureDescriptorByteLength, "trailer/signatureAlgorithm"));
-            }
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<std::pair<SaveArchiveSignatureInfo, Sha256Digest>> ReadTrailer(const std::span<const std::byte> trailer,
-                                                                                            const std::size_t trailerOffsetInArchive) {
-            std::size_t offset = 0;
-            std::array<std::uint8_t, SignatureHashByteLength> digestBytes{};
-            std::uint16_t signatureAlgorithmValue{};
-            std::array<std::uint8_t, SignatureKeyIdByteLength> keyId{};
-            std::uint16_t signatureByteLength{};
-            if (!ReadArray(trailer, offset, digestBytes) || !ReadLittleEndian(trailer, offset, signatureAlgorithmValue) ||
-                !ReadArray(trailer, offset, keyId) || !ReadLittleEndian(trailer, offset, signatureByteLength) ||
-                signatureByteLength > trailer.size() - offset || signatureByteLength != trailer.size() - offset)
-                return Result<std::pair<SaveArchiveSignatureInfo, Sha256Digest>>::Failure(
-                    ReaderError(SaveErrors::ArchiveEnvelopeInvalid, trailerOffsetInArchive, "trailer/fields"));
-            const auto algorithm = static_cast<SaveArchiveSignatureAlgorithm>(signatureAlgorithmValue);
-            if (auto valid = ValidateSignatureDescriptor(algorithm, trailer.size(), signatureByteLength, keyId, offset); valid.HasError())
-                return Result<std::pair<SaveArchiveSignatureInfo, Sha256Digest>>::Failure(valid.ErrorValue());
-            return Result<std::pair<SaveArchiveSignatureInfo, Sha256Digest>>::Success(
-                {{.algorithm = algorithm, .signerKeyId = keyId, .signatureByteLength = signatureByteLength}, {.bytes = digestBytes}});
-        }
-
-        [[nodiscard]] Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>> ReadEnvelope(
-            const std::span<const std::byte> archive, const SaveArchiveReaderLimits &limits, SaveArchiveSignatureInfo &signature) {
-            if (archive.size() > limits.maximumArchiveBytes)
-                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(
-                    ReaderError(SaveErrors::ArchiveFramingLimitExceeded, 0, "envelope/archiveBytes"));
-            auto fields = ReadEnvelopeHeader(archive);
-            if (fields.HasError())
-                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(fields.ErrorValue());
-            if (auto valid = ValidateEnvelopeHeader(fields.Value(), limits); valid.HasError())
-                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(valid.ErrorValue());
-            auto lengths = ValidateEnvelopeLength(fields.Value(), archive);
-            if (lengths.HasError())
-                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(lengths.ErrorValue());
-            const auto [payloadSize, trailerSize] = lengths.Value();
-            auto trailer = ReadTrailer(archive.subspan(SaveArchivePreambleByteLength + payloadSize, trailerSize),
-                                       SaveArchivePreambleByteLength + payloadSize);
-            if (trailer.HasError())
-                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(trailer.ErrorValue());
-            auto [trailerSignature, trailerDigest] = std::move(trailer).Value();
-            auto version = ArchiveFormatVersion::Create(fields.Value().archiveVersion);
-            if (version.HasError())
-                return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Failure(
-                    ReaderError(SaveErrors::ArchiveEnvelopeInvalid, 8, "envelope/archiveFormatVersion"));
-            signature = std::move(trailerSignature);
-            SaveArchivePreamble preamble{.archiveFormatVersion = std::move(version).Value(),
-                                         .flags = fields.Value().flags,
-                                         .payloadByteLength = fields.Value().payloadLength,
-                                         .trailerByteLength = fields.Value().trailerLength};
-            SaveArchiveIntegrityManifest integrity{.algorithm = {},
-                                                   .archiveContent = {.value = std::move(trailerDigest)},
-                                                   .preambleByteLength = SaveArchivePreambleByteLength,
-                                                   .payloadByteLength = fields.Value().payloadLength,
-                                                   .trailerByteLength = fields.Value().trailerLength};
-            return Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>>::Success({std::move(preamble), integrity});
         }
 
         struct ContainerInfo final {
@@ -223,8 +79,9 @@ namespace Horo::Runtime {
             return Result<ContainerHeader>::Success(header);
         }
 
-        [[nodiscard]] Result<void> ValidateContainerHeader(const ContainerHeader &header, const SaveArchiveReaderLimits &limits) {
-            if (header.version != 1 || header.flags != 0 || header.reserved != 0 ||
+        [[nodiscard]] Result<void> ValidateContainerHeader(const ContainerHeader &header, const SaveArchiveReaderLimits &limits,
+                                                           const std::uint32_t archiveVersion) {
+            if (header.version != archiveVersion || header.flags != 0 || header.reserved != 0 ||
                 header.recordSize != SaveArchiveContainerEntryByteLength)
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveContainerInvalid, 8, "container/header"));
             if (header.count == 0 || header.count > limits.maximumEntries || header.count > limits.chunks.maximumEntries ||
@@ -245,11 +102,11 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] Result<ContainerInfo> ReadContainerInfo(const std::span<const std::byte> payload,
-                                                              const SaveArchiveReaderLimits &limits) {
+                                                              const SaveArchiveReaderLimits &limits, const std::uint32_t archiveVersion) {
             auto header = ReadContainerHeader(payload);
             if (header.HasError())
                 return Result<ContainerInfo>::Failure(header.ErrorValue());
-            if (auto valid = ValidateContainerHeader(header.Value(), limits); valid.HasError())
+            if (auto valid = ValidateContainerHeader(header.Value(), limits, archiveVersion); valid.HasError())
                 return Result<ContainerInfo>::Failure(valid.ErrorValue());
             return MakeContainerInfo(header.Value(), payload);
         }
@@ -307,7 +164,8 @@ namespace Horo::Runtime {
             return Result<RawEntry>::Success(std::move(entry));
         }
 
-        [[nodiscard]] Result<void> ValidateEntryKindValue(const RawEntry &entry, const std::size_t recordOffset) {
+        [[nodiscard]] Result<void> ValidateEntryKindValue(const RawEntry &entry, const std::size_t recordOffset,
+                                                          const std::uint32_t archiveVersion) {
             using enum SaveArchiveEntryKind;
             if (entry.ownerLength > entry.owner.size())
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveStringInvalid, recordOffset, "entry/ownerLength"));
@@ -315,7 +173,8 @@ namespace Horo::Runtime {
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveExtensionInvalid, recordOffset, "entry/extension"));
             if (entry.kind != Header && entry.kind != Manifest && entry.kind != Chunk)
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveEntryInvalid, recordOffset, "entry/kind"));
-            if (entry.codec != static_cast<std::uint16_t>(SaveChunkCodec::Raw))
+            if (entry.codec != static_cast<std::uint16_t>(SaveChunkCodec::Raw) &&
+                (entry.kind != Chunk || archiveVersion < 2 || entry.codec != static_cast<std::uint16_t>(SaveChunkCodec::Deflate)))
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveCodecUnsupported, recordOffset, "entry/codec"));
             return Result<void>::Success();
         }
@@ -334,8 +193,9 @@ namespace Horo::Runtime {
                                                            const std::span<const std::byte> payload, const std::size_t dataOffset,
                                                            const std::size_t recordOffset) {
             if (entry.storedByteLength == 0 || entry.decodedByteLength == 0 || entry.storedByteLength > payload.size() - dataOffset ||
-                entry.storedByteLength != entry.decodedByteLength || entry.alignment == 0 || !std::has_single_bit(entry.alignment) ||
-                entry.alignment > limits.chunks.maximumAlignment)
+                entry.storedByteLength > limits.chunks.maximumStoredChunkBytes ||
+                (entry.codec == static_cast<std::uint16_t>(SaveChunkCodec::Raw) && entry.storedByteLength != entry.decodedByteLength) ||
+                entry.alignment == 0 || !std::has_single_bit(entry.alignment) || entry.alignment > limits.chunks.maximumAlignment)
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveEntryInvalid, recordOffset, "entry/bounds"));
             return Result<void>::Success();
         }
@@ -363,52 +223,56 @@ namespace Horo::Runtime {
             return Result<std::size_t>::Success(expectedRelativeOffset + static_cast<std::size_t>(entry.storedByteLength));
         }
 
+        struct ContainerReadState final {
+            std::size_t expectedRelativeOffset{};
+            std::uint64_t decodedTotal{};
+            bool sawChunk{};
+        };
+
         [[nodiscard]] Result<RawEntry> ReadContainerEntry(const std::span<const std::byte> payload, const SaveArchiveReaderLimits &limits,
-                                                          const ContainerInfo &info, const std::size_t index,
-                                                          std::size_t &expectedRelativeOffset, bool &sawChunk,
-                                                          std::uint64_t &decodedTotal) {
+                                                          const ContainerInfo &info, const std::size_t index, ContainerReadState &state,
+                                                          const std::uint32_t archiveVersion) {
             const std::size_t recordOffset = SaveArchiveContainerHeaderByteLength + index * SaveArchiveContainerEntryByteLength;
             auto entry = ReadRawEntry(payload, recordOffset);
             if (entry.HasError())
                 return Result<RawEntry>::Failure(entry.ErrorValue());
             auto parsedEntry = std::move(entry).Value();
-            if (auto valid = ValidateEntryKindValue(parsedEntry, recordOffset); valid.HasError())
+            if (auto valid = ValidateEntryKindValue(parsedEntry, recordOffset, archiveVersion); valid.HasError())
                 return Result<RawEntry>::Failure(valid.ErrorValue());
-            if (auto valid = ValidateEntryIdentity(parsedEntry, recordOffset, sawChunk); valid.HasError())
+            if (auto valid = ValidateEntryIdentity(parsedEntry, recordOffset, state.sawChunk); valid.HasError())
                 return Result<RawEntry>::Failure(valid.ErrorValue());
             if (auto valid = ValidateStoredEntrySize(parsedEntry, limits, payload, info.dataOffset, recordOffset); valid.HasError())
                 return Result<RawEntry>::Failure(valid.ErrorValue());
             if (auto valid = ValidateEntryExpansion(parsedEntry, limits, recordOffset); valid.HasError())
                 return Result<RawEntry>::Failure(valid.ErrorValue());
-            auto validatedRange = ValidateEntryRange(parsedEntry, payload, info.dataOffset, expectedRelativeOffset, recordOffset);
+            auto validatedRange = ValidateEntryRange(parsedEntry, payload, info.dataOffset, state.expectedRelativeOffset, recordOffset);
             if (validatedRange.HasError())
                 return Result<RawEntry>::Failure(validatedRange.ErrorValue());
-            expectedRelativeOffset = std::move(validatedRange).Value();
-            sawChunk |= parsedEntry.kind == SaveArchiveEntryKind::Chunk;
-            if (decodedTotal > limits.maximumDecodedBytes - parsedEntry.decodedByteLength)
+            state.expectedRelativeOffset = std::move(validatedRange).Value();
+            state.sawChunk |= parsedEntry.kind == SaveArchiveEntryKind::Chunk;
+            if (state.decodedTotal > limits.maximumDecodedBytes - parsedEntry.decodedByteLength)
                 return Result<RawEntry>::Failure(
                     ReaderError(SaveErrors::ArchiveDecompressionLimitExceeded, recordOffset, "container/decodedBytes"));
-            decodedTotal += parsedEntry.decodedByteLength;
+            state.decodedTotal += parsedEntry.decodedByteLength;
             return Result<RawEntry>::Success(std::move(parsedEntry));
         }
 
         [[nodiscard]] Result<std::vector<RawEntry>> ReadContainer(const std::span<const std::byte> payload,
-                                                                  const SaveArchiveReaderLimits &limits) {
-            auto info = ReadContainerInfo(payload, limits);
+                                                                  const SaveArchiveReaderLimits &limits,
+                                                                  const std::uint32_t archiveVersion) {
+            auto info = ReadContainerInfo(payload, limits, archiveVersion);
             if (info.HasError())
                 return Result<std::vector<RawEntry>>::Failure(info.ErrorValue());
             std::vector<RawEntry> entries;
             entries.reserve(info.Value().entryCount);
-            std::uint64_t decodedTotal = 0;
-            std::size_t expectedRelativeOffset = 0;
-            bool sawChunk = false;
+            ContainerReadState state;
             for (std::size_t index = 0; index < info.Value().entryCount; ++index) {
-                auto entry = ReadContainerEntry(payload, limits, info.Value(), index, expectedRelativeOffset, sawChunk, decodedTotal);
+                auto entry = ReadContainerEntry(payload, limits, info.Value(), index, state, archiveVersion);
                 if (entry.HasError())
                     return Result<std::vector<RawEntry>>::Failure(entry.ErrorValue());
                 entries.push_back(std::move(entry).Value());
             }
-            if (expectedRelativeOffset != payload.size() - info.Value().dataOffset || entries.size() < 3 ||
+            if (state.expectedRelativeOffset != payload.size() - info.Value().dataOffset || entries.size() < 3 ||
                 entries[0].kind != SaveArchiveEntryKind::Header || entries[1].kind != SaveArchiveEntryKind::Manifest)
                 return Result<std::vector<RawEntry>>::Failure(
                     ReaderError(SaveErrors::ArchiveDirectoryInvalid, info.Value().dataOffset, "container/data"));
@@ -430,12 +294,16 @@ namespace Horo::Runtime {
                     if (envelope.HasError())
                         return Result<ValidatedSaveArchive>::Failure(envelope.ErrorValue());
                     auto [preamble, integrity] = std::move(envelope).Value();
+                    // The integrity pass, container/metadata pass and directory pass can each
+                    // inspect the stored archive once. Reserve that cumulative work up front.
+                    if (archive.size() > limits.maximumReadWorkBytes / 3)
+                        return Result<ValidatedSaveArchive>::Failure(ReadWorkError(0, "envelope/readWork"));
                     if (auto verified = VerifySaveArchiveIntegrity(integrity, archive); verified.HasError())
                         return Result<ValidatedSaveArchive>::Failure(verified.ErrorValue());
 
                     const auto payload =
                         archive.subspan(SaveArchivePreambleByteLength, static_cast<std::size_t>(preamble.payloadByteLength));
-                    auto rawEntries = ReadContainer(payload, limits);
+                    auto rawEntries = ReadContainer(payload, limits, preamble.archiveFormatVersion.Value());
                     if (rawEntries.HasError())
                         return Result<ValidatedSaveArchive>::Failure(rawEntries.ErrorValue());
                     const auto &entries = rawEntries.Value();
@@ -447,6 +315,8 @@ namespace Horo::Runtime {
                     if (validatedDirectory.HasError())
                         return Result<ValidatedSaveArchive>::Failure(validatedDirectory.ErrorValue());
                     auto validated = std::move(validatedDirectory).Value();
+                    auto remainingReadWork = std::make_shared<std::atomic<std::uint64_t>>(limits.maximumReadWorkBytes -
+                                                                                          static_cast<std::uint64_t>(archive.size()) * 3);
                     return Result<ValidatedSaveArchive>::Success(
                         ValidatedSaveArchive{ValidatedSaveArchive::Contents{.archive = archive,
                                                                             .ownedArchive = std::move(ownedArchive),
@@ -455,7 +325,8 @@ namespace Horo::Runtime {
                                                                             .signature = signature,
                                                                             .header = std::move(metadataValue.header),
                                                                             .manifest = std::move(metadataValue.manifest),
-                                                                            .directory = std::move(validated)}});
+                                                                            .directory = std::move(validated),
+                                                                            .remainingReadWork = std::move(remainingReadWork)}});
                 } catch (const std::bad_alloc &) {
                     return Result<ValidatedSaveArchive>::Failure(MakeError(SaveErrors::ArchiveAllocationFailed));
                 }
@@ -467,7 +338,8 @@ namespace Horo::Runtime {
         : archive_(contents.archive), ownedArchive_(std::move(contents.ownedArchive)), preamble_(std::move(contents.preamble)),
           integrity_(std::move(contents.integrity)), signature_(std::move(contents.signature)), header_(std::move(contents.header)),
           manifest_(std::move(contents.manifest)), directory_(std::move(contents.directory)),
-          payload_(archive_.subspan(SaveArchivePreambleByteLength, static_cast<std::size_t>(preamble_.payloadByteLength))) {}
+          payload_(archive_.subspan(SaveArchivePreambleByteLength, static_cast<std::size_t>(preamble_.payloadByteLength))),
+          remainingReadWork_(std::move(contents.remainingReadWork)) {}
 
     const SaveArchivePreamble &ValidatedSaveArchive::Preamble() const noexcept {
         return preamble_;
@@ -497,8 +369,136 @@ namespace Horo::Runtime {
         return payload_;
     }
 
-    Result<std::optional<std::span<const std::byte>>> ValidatedSaveArchive::SelectChunk(const SaveRecordId record) const {
+    Result<std::optional<std::vector<std::byte>>> ValidatedSaveArchive::SelectChunk(const SaveRecordId record) const {
+        const auto entries = directory_.Entries();
+        if (const auto found = std::ranges::lower_bound(entries, record, {}, &SaveChunkDirectoryEntry::record);
+            found != entries.end() && found->record == record) {
+            std::uint64_t remaining = remainingReadWork_->load(std::memory_order_relaxed);
+            while (true) {
+                const std::uint64_t work = found->storedByteLength + (found->codec == SaveChunkCodec::Raw ? 0 : found->decodedByteLength);
+                if (work < found->storedByteLength || work > remaining)
+                    return Result<std::optional<std::vector<std::byte>>>::Failure(
+                        SaveArchiveReaderDetail::ReadWorkError(found->offset, "chunk/readWork"));
+                if (remainingReadWork_->compare_exchange_weak(remaining, remaining - work, std::memory_order_relaxed))
+                    break;
+            }
+        }
         return SelectSaveChunkPayload(payload_, directory_, record);
+    }
+
+    namespace {
+        /** @brief Verifies one opaque optional owner's chunks and records its explicit disposition. */
+        [[nodiscard]] Result<void> CollectUnknownParticipant(const ValidatedSaveArchive &archive,
+                                                             const SaveManifestParticipant &participant,
+                                                             const SaveCompatibilityPolicy &policy,
+                                                             const std::uint64_t maximumPreservedBytes, std::uint64_t &retainedBytes,
+                                                             SaveUnknownDataReport &report) {
+            if (std::ranges::binary_search(policy.droppableUnknownParticipants, participant.participant)) {
+                for (const SaveRecordId &record : participant.chunks) {
+                    auto verified = archive.SelectChunk(record);
+                    if (verified.HasError())
+                        return Result<void>::Failure(verified.ErrorValue());
+                    if (!verified.Value())
+                        return Result<void>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
+                }
+                report.dropped.push_back(participant.participant);
+                return Result<void>::Success();
+            }
+            for (const SaveRecordId &record : participant.chunks) {
+                const auto entries = archive.Directory().Entries();
+                const auto found = std::ranges::lower_bound(entries, record, {}, &SaveChunkDirectoryEntry::record);
+                if (found == entries.end() || found->record != record || found->owner != participant.participant)
+                    return Result<void>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
+                if (found->storedByteLength > maximumPreservedBytes - retainedBytes)
+                    return Result<void>::Failure(
+                        MakeError(SaveErrors::ArchiveMetadataLimitExceeded, "Unknown optional data exceeds the preservation budget."));
+                auto verified = archive.SelectChunk(record);
+                if (verified.HasError())
+                    return Result<void>::Failure(verified.ErrorValue());
+                if (!verified.Value())
+                    return Result<void>::Failure(MakeError(SaveErrors::ArchiveDirectoryInvalid));
+                const auto stored =
+                    archive.Payload().subspan(static_cast<std::size_t>(found->offset), static_cast<std::size_t>(found->storedByteLength));
+                report.preserved.push_back({.entry = *found, .storedBytes = {stored.begin(), stored.end()}});
+                retainedBytes += found->storedByteLength;
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
+    /** @copydoc ValidatedSaveArchive::InspectUnknownData */
+    Result<SaveUnknownDataReport> ValidatedSaveArchive::InspectUnknownData(const SaveCompatibilityPolicy &policy,
+                                                                           const std::uint64_t maximumPreservedBytes) const {
+        if (const SaveCompatibilityDecision decision =
+                EvaluateSaveCompatibility(preamble_.archiveFormatVersion, header_, manifest_, policy);
+            decision.disposition == SaveCompatibilityDisposition::Rejected) {
+            using enum SaveCompatibilityReason;
+            std::string reason = "Save cannot be restored: ";
+            if (decision.reason == UnknownRequiredParticipant && decision.participant)
+                reason += std::format("required module or content participant '{}' is unavailable.", decision.participant->Value());
+            else if (decision.reason == UnsupportedParticipantSchema && decision.participant)
+                reason += std::format("participant '{}' needs a supported module version or a migration.", decision.participant->Value());
+            else if (decision.reason == MissingRequiredParticipant && decision.participant)
+                reason += std::format("required participant '{}' is absent from the archive.", decision.participant->Value());
+            else if (decision.reason == UnsupportedFeature)
+                reason += std::format("unsupported required feature flags {}.", header_.featureFlags & ~policy.supportedFeatureFlagsMask);
+            else
+                reason += std::format("compatibility preflight rejected the archive (reason {}).", static_cast<unsigned>(decision.reason));
+            return Result<SaveUnknownDataReport>::Failure(MakeError(SaveErrors::MigrationSourceUnsupported, std::move(reason)));
+        }
+
+        SaveUnknownDataReport report;
+        std::uint64_t retainedBytes = 0;
+        try {
+            for (const SaveManifestParticipant &participant : manifest_.participants) {
+                const auto installed =
+                    std::ranges::lower_bound(policy.participants, participant.participant, {}, &SaveParticipantCompatibility::participant);
+                if (const bool supported =
+                        installed != policy.participants.end() && installed->participant == participant.participant &&
+                        (installed->versions.direct.Contains(participant.schemaVersion) ||
+                         (installed->versions.migrationSource && installed->versions.migrationSource->Contains(participant.schemaVersion)));
+                    supported)
+                    continue;
+                if (participant.required)
+                    return Result<SaveUnknownDataReport>::Failure(
+                        MakeError(SaveErrors::MigrationSourceUnsupported,
+                                  "Required module or content participant '" + participant.participant.Value() + "' is unavailable."));
+                if (auto collected = CollectUnknownParticipant(*this, participant, policy, maximumPreservedBytes, retainedBytes, report);
+                    collected.HasError())
+                    return Result<SaveUnknownDataReport>::Failure(collected.ErrorValue());
+            }
+            std::ranges::sort(report.preserved, {}, [](const PreservedSaveChunk &chunk) {
+                return chunk.entry.record;
+            });
+            return Result<SaveUnknownDataReport>::Success(std::move(report));
+        } catch (const std::bad_alloc &) {
+            return Result<SaveUnknownDataReport>::Failure(MakeError(SaveErrors::ArchiveAllocationFailed));
+        }
+    }
+
+    /** @copydoc VerifyUnknownDataRoundTrip */
+    Result<void> VerifyUnknownDataRoundTrip(const ValidatedSaveArchive &source, const ValidatedSaveArchive &destination,
+                                            const SaveCompatibilityPolicy &policy, const std::uint64_t maximumPreservedBytes) {
+        auto expected = source.InspectUnknownData(policy, maximumPreservedBytes);
+        if (expected.HasError())
+            return Result<void>::Failure(expected.ErrorValue());
+        auto actual = destination.InspectUnknownData(policy, maximumPreservedBytes);
+        if (actual.HasError())
+            return Result<void>::Failure(actual.ErrorValue());
+        const auto &actualChunks = actual.Value().preserved;
+        for (const PreservedSaveChunk &chunk : expected.Value().preserved) {
+            const auto found = std::ranges::lower_bound(actualChunks, chunk.entry.record, {}, [](const PreservedSaveChunk &value) {
+                return value.entry.record;
+            });
+            if (found == actualChunks.end() || found->entry.record != chunk.entry.record || found->entry.owner != chunk.entry.owner ||
+                found->entry.codec != chunk.entry.codec || found->entry.storedByteLength != chunk.entry.storedByteLength ||
+                found->entry.decodedByteLength != chunk.entry.decodedByteLength || found->entry.alignment != chunk.entry.alignment ||
+                found->entry.decodedHash != chunk.entry.decodedHash || found->storedBytes != chunk.storedBytes)
+                return Result<void>::Failure(MakeError(SaveErrors::MigrationCandidateInvalid,
+                                                       "Save copy or migration lost preservable optional data: participant '" +
+                                                           chunk.entry.owner.Value() + "', record " + chunk.entry.record.ToString() + "."));
+        }
+        return Result<void>::Success();
     }
 
     SaveArchiveReader::SaveArchiveReader(SaveArchiveReaderLimits limits) : limits_(std::move(limits)) {}

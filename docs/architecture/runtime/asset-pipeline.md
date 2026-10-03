@@ -1563,6 +1563,41 @@ Shared-machine, CI/network cache transport, eviction, and signing are future
 policies. They may move immutable entries but cannot weaken key construction,
 verification, or generation publication authority.
 
+### Immutable Runtime Payload Ownership
+
+`AssetPayloadCache` is the AssetPipeline-owned bounded in-memory byte allocation
+owner used by the canonical `core.navmesh` runtime adapter. It computes content
+SHA-256 from admitted immutable bytes and compares complete bytes on a matching
+digest. It introduces no AssetId catalog, persistent cache tuple or cooked
+publication authority. Persisted `AssetCookCache` eviction remains a separate
+future policy.
+
+Admission/eviction run on one host owner thread; copied immutable leases may
+cross query workers. Weak index entries keep deduplication available while an
+evicted allocation remains externally pinned. Eviction and shutdown release
+cache pins, while an atomic lifetime counter refunds the vector capacity only
+on final allocation destruction. Snapshot accounting distinguishes resident
+payload capacity from all physically retained payload capacity and fixed index
+bookkeeping; allocator/control-block overhead is excluded. Cache destruction
+cannot invalidate an existing lease. Entry and retained-byte capacity limits
+include externally pinned allocations, so eviction cannot falsely create budget
+for another allocation.
+
+Scene definition construction automatically projects enabled navigation surface
+definition identities as `core.navmesh` dependencies. The navigation host adapter
+consumes the same generic registry, Scene `AssetLoadService` preparation and
+verified AssetCook envelopes used by filesystem and packaged archive providers.
+The single canonical NavigationCookedTileSet codec consumes the complete
+definition-rooted tile closure written by NavigationBakeService through existing
+AssetCookCache and durable AssetCook publication. Runtime validates the envelope
+source fingerprint and exact canonical tile identities; authored source dependency
+evidence remains in cook inputs rather than a competing runtime asset manifest. Disabled surfaces require no artifact;
+missing, corrupt or stale required content preserves the previous active Scene.
+The native provider and its retained-world allocation reservation remain
+Navigation host ownership, independently of shared tile byte accounting. See
+[canonical NavMesh runtime loading](navigation-and-ai-architecture.md#canonical-navmesh-runtime-asset-loading)
+for producer wire format, migration and lifetime contracts.
+
 ### Future Cache Locations And Sharing
 
 The following deployment and retention policies are outside AST-001C:
@@ -1581,6 +1616,15 @@ replace `current.json`, or relax digest and envelope verification on a later hit
 ## Errors And Diagnostics
 
 Import and cook errors are surfaced as structured diagnostics:
+
+The current asset cook service also publishes typed `BuildOutputStore` records
+under one session and, when operation admission succeeds, one `OperationId`.
+Cache reuse and successful cooks have distinct per-asset results; missing
+cookers, unreadable sources, and cooker failures carry the resolved source path
+for editor navigation. A terminal build-output record is published before the
+matching operation becomes terminal. If the operation store cannot admit the
+cook, the service rejects it before doing asset work or publishing output.
+Records remain subject to the store's bounded retention policy.
 
 ```cpp
 struct ImportDiagnostic {
@@ -1702,8 +1746,8 @@ adapters only; they do not own pipeline policy.
   Terrain import/cook contribution, cache, publication and generation-pinning boundary.
 - [Release Architecture](../release/release.md): packaging and verification.
 - [Horo Package System](../packages/package-system.md): bulk asset import from packages.
-- [Asset Import Modal](./asset-import-modal.html): HTML reference design for the
+- [Asset Import Modal](../../../mock-studio/designs.md#architecture-runtime-asset-import-modal): React mock design for the
   import queue, diagnostics, and per-importer settings.
-- [Asset Browser](../editor/asset-browser.html): HTML reference design for the main asset
+- [Asset Browser](../../../mock-studio/designs.md#architecture-editor-asset-browser): React mock design for the main asset
   browser with folder tree, grid/list views, and preview pane.
 - [Testing Architecture](../delivery/testing-architecture.md): import and cook tests.

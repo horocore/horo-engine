@@ -7,6 +7,8 @@
 #include "Horo/Physics/PhysicsIdentity.h"
 #include "Horo/Physics/PhysicsPose.h"
 
+#include <limits>
+#include <numbers>
 #include <variant>
 
 namespace Horo::Physics {
@@ -36,6 +38,30 @@ namespace Horo::Physics {
         float maximumMeters{1.0F};
     };
 
+    /** @brief Rotation about each anchor frame's local +Y axis; local +X defines zero angle. */
+    struct PhysicsHingeConstraint final {
+        float minimumRadians{-std::numbers::pi_v<float>};
+        float maximumRadians{std::numbers::pi_v<float>};
+    };
+
+    /** @brief Translation along each anchor frame's local +X axis; local +Y fixes orientation. */
+    struct PhysicsSliderConstraint final {
+        float minimumMeters{-std::numeric_limits<float>::max()};
+        float maximumMeters{std::numeric_limits<float>::max()};
+    };
+
+    /** @brief Kind of single-axis coordinate returned by a resident joint. */
+    enum class PhysicsJointCoordinateKind : std::uint8_t {
+        AngleRadians,
+        PositionMeters
+    };
+
+    /** @brief Non-owning owner-thread snapshot of a hinge angle or slider displacement. */
+    struct PhysicsJointState final {
+        PhysicsJointCoordinateKind kind;
+        float coordinate{};
+    };
+
     /** @brief Whether two body endpoints may generate contacts while their joint exists. */
     enum class PhysicsJointCollisionPolicy : std::uint8_t {
         DisableBetweenBodies,
@@ -46,10 +72,8 @@ namespace Horo::Physics {
      * @brief Owned structural runtime request; contains no native state, resource lease or published constraint identity.
      *
      * The first endpoint is always a body; the second is a body or an explicit world anchor.
-     * Defaults deliberately leave the first handle invalid. Fixed and distance parameters are the
-     * initial descriptor vocabulary implemented by the canonical scene runtime.
-     * Hinge/slider/cone-twist/six-DOF and drive/break policies belong to subsequent typed contracts;
-     * they must not be approximated by one of these alternatives.
+     * Defaults deliberately leave the first handle invalid. Fixed, distance, hinge and slider
+     * are canonical runtime operations. Drive, break, spring and other joint kinds need separate policies.
      *
      * These published-handle requests are not serializable scene authoring or detached scene-plan
      * references. Candidate construction uses private resolved plan indexes until aggregate publication.
@@ -57,12 +81,12 @@ namespace Horo::Physics {
     struct PhysicsConstraintDescriptor final {
         PhysicsBodyAnchor first;
         std::variant<PhysicsBodyAnchor, PhysicsWorldAnchor> second{PhysicsWorldAnchor{}};
-        std::variant<PhysicsFixedConstraint, PhysicsDistanceConstraint> parameters;
+        std::variant<PhysicsFixedConstraint, PhysicsDistanceConstraint, PhysicsHingeConstraint, PhysicsSliderConstraint> parameters;
         PhysicsJointCollisionPolicy collisionPolicy{PhysicsJointCollisionPolicy::DisableBetweenBodies};
     };
 
     /**
-     * @brief Validates endpoint ownership, distinct bodies, finite unit frames and distance interval representation.
+     * @brief Validates endpoint ownership, distinct bodies, finite unit frames and joint limits.
      * @param descriptor Immutable runtime request; validation neither repairs frames nor creates missing bodies.
      * @param expectedWorld Published world generation receiving the request.
      * @return Success or a stable Physics handle/world/descriptor error with actionable context.

@@ -2,8 +2,11 @@
 
 #include "Horo/Physics/PhysicsErrors.h"
 
+#include <algorithm>
 #include <cmath>
+#include <ranges>
 #include <tuple>
+#include <type_traits>
 
 namespace Horo::Physics {
     namespace {
@@ -180,13 +183,56 @@ namespace Horo::Physics {
                     MakeError(PhysicsErrors::DescriptorInvalid, "Material evidence requires exact asset, generation and slot identity."));
             return Result<void>::Success();
         }
+
+        /** @brief Validates each immutable child and its unique authoring identity. */
+        [[nodiscard]] Result<void> ValidateCompoundShape(const PhysicsCompoundShapeDescriptor &compound) {
+            if (compound.children.empty())
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "A compound requires at least one child."));
+            if (compound.children.size() > 256)
+                return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded, "A compound exceeds 256 direct children."));
+            std::vector<std::uint64_t> identities;
+            identities.reserve(compound.children.size());
+            for (const PhysicsCompoundChild &child : compound.children) {
+                if (!child.subshape.IsValid())
+                    return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Compound child ID must be non-zero."));
+                if (const auto valid = ValidatePhysicsShapeDescriptor(child.geometry); valid.HasError())
+                    return valid;
+                if (std::holds_alternative<PhysicsStaticPlaneShape>(child.geometry))
+                    return Result<void>::Failure(
+                        MakeError(PhysicsErrors::OperationUnsupported, "Static planes are not admitted as compound query children."));
+                if (const auto pose = ValidatePhysicsPose(child.localPose); pose.HasError())
+                    return pose;
+                if (!child.layer.IsValid() || !child.profile.IsValid() || !child.channel.IsValid())
+                    return Result<void>::Failure(
+                        MakeError(PhysicsErrors::DescriptorInvalid, "Compound child filter identities must be valid."));
+                if (static_cast<std::uint8_t>(child.response) > static_cast<std::uint8_t>(PhysicsQueryFixtureResponse::Block))
+                    return Result<void>::Failure(
+                        MakeError(PhysicsErrors::OperationUnsupported, "Compound child query response is unknown."));
+                if (child.material.has_value() &&
+                    (!child.material->asset.IsValid() || child.material->assetGeneration == 0 || !child.material->slot.IsValid()))
+                    return Result<void>::Failure(
+                        MakeError(PhysicsErrors::DescriptorInvalid, "Compound child material evidence is incomplete."));
+                identities.push_back(child.subshape.Value());
+            }
+            std::ranges::sort(identities);
+            if (std::ranges::adjacent_find(identities) != identities.end())
+                return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Compound child IDs must be unique."));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc ValidatePhysicsQueryFixtureDescriptor */
     Result<void> ValidatePhysicsQueryFixtureDescriptor(const PhysicsQueryFixtureDescriptor &fixture, const PhysicsWorldId expectedWorld) {
         if (!expectedWorld.IsValid())
             return Result<void>::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        if (const auto shape = ValidatePhysicsShapeDescriptor(fixture.shape); shape.HasError())
+        if (const auto shape = std::visit(
+                []<typename Geometry>(const Geometry &geometry) -> Result<void> {
+            if constexpr (!std::is_same_v<Geometry, PhysicsCompoundShapeDescriptor>)
+                return ValidatePhysicsShapeDescriptor(PhysicsShapeDescriptor{geometry});
+            else
+                return ValidateCompoundShape(geometry);
+        }, fixture.shape);
+            shape.HasError())
             return shape;
         if (const auto pose = ValidatePhysicsPose(fixture.pose); pose.HasError())
             return pose;
@@ -200,6 +246,16 @@ namespace Horo::Physics {
         if (fixture.material.has_value() &&
             (!fixture.material->asset.IsValid() || fixture.material->assetGeneration == 0 || !fixture.material->slot.IsValid()))
             return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Fixture material evidence is incomplete."));
+        if (const auto *compound = std::get_if<PhysicsCompoundShapeDescriptor>(&fixture.shape)) {
+            if (fixture.subshape.has_value() || fixture.material.has_value())
+                return Result<void>::Failure(
+                    MakeError(PhysicsErrors::DescriptorInvalid, "Compound child identity and material must be specified on each child."));
+            if (std::ranges::any_of(compound->children, [&fixture](const PhysicsCompoundChild &child) {
+                return child.trigger != fixture.trigger;
+            }))
+                return Result<void>::Failure(
+                    MakeError(PhysicsErrors::OperationUnsupported, "A native compound body cannot mix trigger and solid children."));
+        }
         return Result<void>::Success();
     }
 

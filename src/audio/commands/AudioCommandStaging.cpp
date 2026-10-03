@@ -1,5 +1,7 @@
 #include "Horo/Audio/AudioCommandStaging.h"
 
+#include "Horo/Audio/Internal/AudioCallbackSafetyHooks.h"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -181,7 +183,8 @@ namespace Horo::Audio {
     AudioCommandStagingStatus AudioCommandStaging::RegisterScene(const AudioSceneContextHandle scene) noexcept {  // NOSONAR
         using enum AudioCommandStagingStatus;
         return WithState(state_.get(), Inactive, [scene](State &state) {  // NOSONAR - one cohesive locked state transition.
-            const std::unique_lock lock(state.mutex, std::try_to_lock);   // NOSONAR - lock covers the complete transition.
+            Safety::OnAudioLockAttempt();
+            const std::unique_lock lock(state.mutex, std::try_to_lock);  // NOSONAR - lock covers the complete transition.
             if (!lock.owns_lock()) {  // NOSONAR - moving the lock into this if would end protection too early.
                 return Busy;
             }
@@ -216,6 +219,7 @@ namespace Horo::Audio {
                 !std::ranges::all_of(valid, std::identity{})) {
                 return AudioCommandAdmission{.status = InvalidCommand};
             }
+            Safety::OnAudioLockAttempt();
             const std::unique_lock lock(state.mutex, std::try_to_lock);  // NOSONAR - lock covers the complete transition.
             if (!lock.owns_lock()) {  // NOSONAR - moving the lock into this if would end protection too early.
                 return AudioCommandAdmission{.status = Busy};
@@ -243,7 +247,8 @@ namespace Horo::Audio {
     AudioCommandAdmission AudioCommandStaging::StageSceneUnload(const AudioSceneContextHandle scene) noexcept {  // NOSONAR
         using enum AudioCommandStagingStatus;
         return WithState(state_.get(), AudioCommandAdmission{}, [scene](State &state) {  // NOSONAR - cohesive barrier transition.
-            const std::unique_lock lock(state.mutex, std::try_to_lock);                  // NOSONAR - lock covers the complete transition.
+            Safety::OnAudioLockAttempt();
+            const std::unique_lock lock(state.mutex, std::try_to_lock);  // NOSONAR - lock covers the complete transition.
             if (!lock.owns_lock()) {  // NOSONAR - moving the lock into this if would end protection too early.
                 return AudioCommandAdmission{.status = Busy};
             }
@@ -275,6 +280,7 @@ namespace Horo::Audio {
         const std::uint64_t sequence) noexcept {  // NOSONAR
         using enum AudioCommandStagingStatus;
         return WithState(state_.get(), Inactive, [scene, sequence](State &state) {
+            Safety::OnAudioLockAttempt();
             const std::unique_lock lock(state.mutex, std::try_to_lock);  // NOSONAR - lock covers the complete transition.
             if (!lock.owns_lock()) {  // NOSONAR - moving the lock into this if would end protection too early.
                 return Busy;
@@ -296,7 +302,8 @@ namespace Horo::Audio {
     AudioCommandAdmission AudioCommandStaging::StageReset() noexcept {  // NOSONAR - mutates owned state through the pimpl.
         using enum AudioCommandStagingStatus;
         return WithState(state_.get(), AudioCommandAdmission{}, [](State &state) {  // NOSONAR - cohesive reset transition.
-            const std::unique_lock lock(state.mutex, std::try_to_lock);             // NOSONAR - lock covers the complete transition.
+            Safety::OnAudioLockAttempt();
+            const std::unique_lock lock(state.mutex, std::try_to_lock);  // NOSONAR - lock covers the complete transition.
             if (!lock.owns_lock()) {  // NOSONAR - moving the lock into this if would end protection too early.
                 return AudioCommandAdmission{.status = Busy};
             }
@@ -322,6 +329,7 @@ namespace Horo::Audio {
     AudioCommandPumpResult AudioCommandStaging::Pump(const std::uint32_t maximumRecords) noexcept {  // NOSONAR
         using enum AudioCommandPublishStatus;
         return WithState(state_.get(), AudioCommandPumpResult{}, [maximumRecords](State &state) {  // NOSONAR - cohesive pump step.
+            Safety::OnAudioLockAttempt();
             const std::unique_lock lock(state.mutex, std::try_to_lock);  // NOSONAR - lock covers the complete pump step.
             if (!lock.owns_lock()) {  // NOSONAR - moving the lock into this if would end protection too early.
                 return AudioCommandPumpResult{.status = AudioCommandStagingStatus::Busy};
@@ -351,6 +359,7 @@ namespace Horo::Audio {
     AudioCommandStagingStatus AudioCommandStaging::Close() noexcept {  // NOSONAR - mutates owned state through the pimpl.
         using enum AudioCommandStagingStatus;
         return WithState(state_.get(), Inactive, [](State &state) {
+            Safety::OnAudioLockAttempt();
             const std::unique_lock lock(state.mutex, std::try_to_lock);  // NOSONAR - lock covers the complete transition.
             if (!lock.owns_lock()) {  // NOSONAR - moving the lock into this if would end protection too early.
                 return Busy;
@@ -373,5 +382,14 @@ namespace Horo::Audio {
         return WithState(state_.get(), true, [](const State &state) {
             return state.output.IsDrained();
         });
+    }
+
+    /** @copydoc AudioCommandStaging::Stats */
+    std::optional<AudioCommandStagingStats> AudioCommandStaging::Stats() const noexcept {
+        if (!state_)
+            return std::nullopt;
+        if (const std::unique_lock lock(state_->mutex, std::try_to_lock); lock.owns_lock())
+            return AudioCommandStagingStats{.ingressDepth = state_->count, .callbackDepth = state_->output.Depth()};
+        return std::nullopt;
     }
 }  // namespace Horo::Audio

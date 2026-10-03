@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -277,6 +278,38 @@ namespace {
         CHECK(tampered.ErrorValue().code.Value() == "save.migration.plan_invalid");
     }
 
+    TEST_CASE("Migration steps consume one cumulative work budget", "[runtime][save][migration]") {
+        bool sawBudgetContext = false;
+        auto first = ArchiveStep("archive.1_to_2", 1, 2);
+        first.migrate = [&sawBudgetContext](SaveMigrationCandidate candidate, const SaveMigrationStepContext &context) {
+            sawBudgetContext = context.remainingWorkBytes != 0 && context.maximumArchiveBytes != 0 &&
+                               context.maximumParticipantPayloadBytes != 0 && context.maximumTotalPayloadBytes != 0;
+            return BumpArchive(2, "archive.1_to_2")(std::move(candidate), context);
+        };
+        auto registry =
+            SaveMigrationRegistry::Create(std::vector<SaveMigrationDefinition>{std::move(first), ArchiveStep("archive.2_to_3", 2, 3)});
+        REQUIRE(registry.HasValue());
+        auto snapshot = registry.Value().Snapshot();
+        REQUIRE(snapshot.HasValue());
+        auto plan = snapshot.Value().Plan(Source(), Support(3, 1, 1, 1));
+        REQUIRE(plan.HasValue());
+        SaveMigrationLimits limits;
+        limits.maximumCumulativeWorkBytes = 200;
+        CHECK(SaveMigrationExecutor::Migrate(Source(), plan.Value(), limits).HasValue());
+        CHECK(sawBudgetContext);
+        limits.maximumCumulativeWorkBytes = 100;
+        const auto exhausted = SaveMigrationExecutor::Migrate(Source(), plan.Value(), limits);
+        REQUIRE(exhausted.HasError());
+        CHECK(exhausted.ErrorValue().code.Value() == SaveErrors::MigrationLimitExceeded.code.Value());
+        REQUIRE(exhausted.ErrorValue().diagnostics.size() == 1);
+        CHECK(exhausted.ErrorValue().diagnostics.front().code.Value() == "save.migration.limit.cumulative_work");
+        limits.maximumCumulativeWorkBytes = std::numeric_limits<std::uint64_t>::max();
+        CHECK(SaveMigrationExecutor::Migrate(Source(), plan.Value(), limits).HasError());
+        limits = {};
+        limits.maximumPlanSteps = MaximumSaveMigrationPlanSteps + 1;
+        CHECK(SaveMigrationExecutor::Migrate(Source(), plan.Value(), limits).HasError());
+    }
+
     TEST_CASE("Executor rejects participant steps that modify unrelated state", "[runtime][save][migration]") {
         auto invalidParticipant = ParticipantStep("scene.1_to_2", "horo.scene.core.v1", 1, 2);
         invalidParticipant.migrate = [](SaveMigrationCandidate candidate, const SaveMigrationStepContext &) {
@@ -312,6 +345,129 @@ namespace {
         const auto result = SaveMigrationExecutor::Migrate(Source(), plan.Value());
         REQUIRE(result.HasError());
         CHECK(result.ErrorValue().code.Value() == "save.migration.candidate_invalid");
+    }
+
+    TEST_CASE("Save-schema migration retains unknown optional bytes and integrity evidence", "[runtime][save][migration]") {
+        auto source = Source();
+        auto unknown = ParticipantState("project.future.dlc.v1", 9, false, "opaque");
+        const auto stored = Bytes("wire");
+        unknown.preservedChunks.push_back({.entry = {.record = Id<SaveRecordId>(31),
+                                                     .owner = unknown.participant,
+                                                     .storedByteLength = stored.size(),
+                                                     .decodedByteLength = stored.size(),
+                                                     .decodedHash = ComputeSha256(stored)},
+                                           .storedBytes = stored});
+        source.participants.push_back(std::move(unknown));
+        std::ranges::sort(source.participants, {}, &SaveMigrationParticipantState::participant);
+
+        auto support = Support(1, 1, 1, 1);
+        support.compatibility.saveSchemaVersions = DirectAndMigratable<SaveSchemaVersionTag>(2, 1);
+        SaveSchemaMigrationStep step{.id = SaveMigrationId{.value = "schema.1_to_2"},
+                                     .from = V<SaveSchemaVersion>(1),
+                                     .to = V<SaveSchemaVersion>(2),
+                                     .migrate = [](SaveMigrationCandidate candidate, const SaveMigrationStepContext &) {
+            candidate.saveSchemaVersion = V<SaveSchemaVersion>(2);
+            return Result<SaveMigrationCandidate>::Success(std::move(candidate));
+        }};
+        auto registry = SaveMigrationRegistry::Create(std::vector<SaveMigrationDefinition>{step});
+        REQUIRE(registry.HasValue());
+        auto snapshot = registry.Value().Snapshot();
+        REQUIRE(snapshot.HasValue());
+        auto plan = snapshot.Value().Plan(source, support);
+        REQUIRE(plan.HasValue());
+        auto noEvidence = source;
+        const auto missingEvidence =
+            std::ranges::find(noEvidence.participants, Participant("project.future.dlc.v1"), &SaveMigrationParticipantState::participant);
+        missingEvidence->preservedChunks.clear();
+        CHECK(snapshot.Value().Plan(noEvidence, support).HasError());
+        auto droppable = support;
+        droppable.compatibility.droppableUnknownParticipants = {Participant("project.future.dlc.v1")};
+        CHECK(snapshot.Value().Plan(noEvidence, droppable).HasValue());
+        const auto migrated = SaveMigrationExecutor::Migrate(source, plan.Value());
+        REQUIRE(migrated.HasValue());
+        const auto unknownId = Participant("project.future.dlc.v1");
+        const auto retained = std::ranges::find(migrated.Value().participants, unknownId, &SaveMigrationParticipantState::participant);
+        REQUIRE(retained != migrated.Value().participants.end());
+        CHECK(retained->preservedChunks ==
+              std::ranges::find(source.participants, unknownId, &SaveMigrationParticipantState::participant)->preservedChunks);
+    }
+
+    TEST_CASE("Newer optional participant schema stays opaque unless required by another owner", "[runtime][save][migration]") {
+        auto source = Source();
+        auto unknown = ParticipantState("project.future.dlc.v1", 9, false, "opaque");
+        const auto stored = Bytes("wire");
+        unknown.preservedChunks.push_back({.entry = {.record = Id<SaveRecordId>(31),
+                                                     .owner = unknown.participant,
+                                                     .storedByteLength = stored.size(),
+                                                     .decodedByteLength = stored.size(),
+                                                     .decodedHash = ComputeSha256(stored)},
+                                           .storedBytes = stored});
+        source.participants.push_back(std::move(unknown));
+        std::ranges::sort(source.participants, {}, &SaveMigrationParticipantState::participant);
+        auto support = Support(1, 1, 1, 1);
+        support.compatibility.saveSchemaVersions = DirectAndMigratable<SaveSchemaVersionTag>(2, 1);
+        SaveSchemaMigrationStep step{.id = SaveMigrationId{.value = "schema.1_to_2"},
+                                     .from = V<SaveSchemaVersion>(1),
+                                     .to = V<SaveSchemaVersion>(2),
+                                     .migrate = [](SaveMigrationCandidate candidate, const SaveMigrationStepContext &) {
+            candidate.saveSchemaVersion = V<SaveSchemaVersion>(2);
+            return Result<SaveMigrationCandidate>::Success(std::move(candidate));
+        }};
+        auto registry = SaveMigrationRegistry::Create(std::vector<SaveMigrationDefinition>{step});
+        REQUIRE(registry.HasValue());
+        auto snapshot = registry.Value().Snapshot();
+        REQUIRE(snapshot.HasValue());
+        const auto unknownId = Participant("project.future.dlc.v1");
+        auto skewSupport = support;
+        const auto supportedV1 = V<ParticipantSchemaVersion>(1);
+        skewSupport.compatibility.participants.push_back(
+            {.participant = unknownId, .versions = {.direct = {.minimum = supportedV1, .maximum = supportedV1}}, .required = false});
+        std::ranges::sort(skewSupport.compatibility.participants, {}, &SaveParticipantCompatibility::participant);
+        const auto skewPlan = snapshot.Value().Plan(source, skewSupport);
+        REQUIRE(skewPlan.HasValue());
+        const auto skewTarget =
+            std::ranges::find(skewPlan.Value().participantTargets, unknownId, &SaveMigrationParticipantTarget::participant);
+        REQUIRE(skewTarget != skewPlan.Value().participantTargets.end());
+        CHECK(skewTarget->preserveUnknown);
+        CHECK(SaveMigrationExecutor::Migrate(source, skewPlan.Value()).HasValue());
+        skewSupport.compatibility.participants.front().requiredDependencies = {unknownId};
+        CHECK(snapshot.Value().Plan(source, skewSupport).HasError());
+    }
+
+    TEST_CASE("Save-schema migration refuses to publish changed opaque optional bytes", "[runtime][save][migration]") {
+        auto source = Source();
+        auto unknown = ParticipantState("project.future.dlc.v1", 9, false, "opaque");
+        const auto stored = Bytes("wire");
+        unknown.preservedChunks.push_back({.entry = {.record = Id<SaveRecordId>(31),
+                                                     .owner = unknown.participant,
+                                                     .storedByteLength = stored.size(),
+                                                     .decodedByteLength = stored.size(),
+                                                     .decodedHash = ComputeSha256(stored)},
+                                           .storedBytes = stored});
+        source.participants.push_back(std::move(unknown));
+        std::ranges::sort(source.participants, {}, &SaveMigrationParticipantState::participant);
+        auto support = Support(1, 1, 1, 1);
+        support.compatibility.saveSchemaVersions = DirectAndMigratable<SaveSchemaVersionTag>(2, 1);
+        const auto unknownId = Participant("project.future.dlc.v1");
+        SaveSchemaMigrationStep step{.id = SaveMigrationId{.value = "schema.1_to_2"},
+                                     .from = V<SaveSchemaVersion>(1),
+                                     .to = V<SaveSchemaVersion>(2),
+                                     .migrate = [unknownId](SaveMigrationCandidate candidate, const SaveMigrationStepContext &) {
+            candidate.saveSchemaVersion = V<SaveSchemaVersion>(2);
+            const auto found = std::ranges::find(candidate.participants, unknownId, &SaveMigrationParticipantState::participant);
+            found->preservedChunks[0].storedBytes[0] = std::byte{'X'};
+            found->preservedChunks[0].entry.decodedHash = ComputeSha256(found->preservedChunks[0].storedBytes);
+            return Result<SaveMigrationCandidate>::Success(std::move(candidate));
+        }};
+        auto badRegistry = SaveMigrationRegistry::Create(std::vector<SaveMigrationDefinition>{step});
+        REQUIRE(badRegistry.HasValue());
+        auto badSnapshot = badRegistry.Value().Snapshot();
+        REQUIRE(badSnapshot.HasValue());
+        const auto badPlan = badSnapshot.Value().Plan(source, support);
+        REQUIRE(badPlan.HasValue());
+        const auto lost = SaveMigrationExecutor::Migrate(source, badPlan.Value());
+        REQUIRE(lost.HasError());
+        CHECK(lost.ErrorValue().message.find("project.future.dlc.v1") != std::string::npos);
     }
 
     TEST_CASE("Migration errors are exposed through typed save diagnostics", "[runtime][save][migration]") {

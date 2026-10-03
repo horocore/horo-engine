@@ -312,5 +312,133 @@ namespace Horo::WorldStreaming {
             REQUIRE(provider.Shutdown(owner).HasValue());
             REQUIRE(provider.State() == FallbackStreamingProviderState::Closed);
         }
+
+        TEST_CASE("Partition qualification rejects malformed identity and descriptor inputs without borrowing caller state",
+                  "[unit][world_streaming][qualification][headless][identity][descriptor][failure]") {
+            const auto partition = World(42);
+            const auto layer = Layer(2);
+            RequireError(DeserializeWorldPartitionId({}), WorldStreamingErrors::SerializedIdentityInvalid);
+            RequireError(DeserializeStreamingSourceId({}), WorldStreamingErrors::SerializedIdentityInvalid);
+            RequireError(DeserializeStreamingLayerId({0xff, 0xff}), WorldStreamingErrors::SerializedIdentityInvalid);
+            RequireError(NextPartitionEpoch({}), WorldStreamingErrors::IdentityInvalid);
+            RequireError(NextPartitionEpoch(IdentityFrom<PartitionEpoch>(std::numeric_limits<std::uint64_t>::max())),
+                         WorldStreamingErrors::GenerationExhausted);
+
+            const std::array layers{
+                WorldLayerDescriptor{layer, "base", WorldLayerOwnership::WorldStreaming, WorldLayerFlags::Persistent, 1.0F}};
+            std::array cells{WorldPartitionCellDescriptor{{0, 0, 0, 0, layer}, {Asset(1)}}};
+            const WorldPartitionBounds bounds{Math::WorldCoordinate64::FromMillimeters(0, 0, 0),
+                                              Math::WorldCoordinate64::FromMillimeters(999, 999, 999)};
+            const auto grid = WorldCellQuantizationPolicy::Create({}, 1'000, {0, 0, 0, 0, 0, 0}, 1).Value();
+            auto owned = WorldPartitionDescriptor::Create({}, partition, bounds, grid, layers, cells, {1, 1, 32});
+            REQUIRE(owned.HasValue());
+            cells[0].package.chunkAsset = Asset(2);
+            REQUIRE(owned.Value().Cells()[0].package.chunkAsset == Asset(1));
+
+            RequireError(WorldPartitionDescriptor::Create({2, 0}, partition, bounds, grid, layers, cells, {1, 1, 32}),
+                         WorldStreamingErrors::PartitionVersionUnsupported);
+            RequireError(WorldPartitionDescriptor::Create({}, partition, bounds, grid, layers, cells, {1, 0, 32}),
+                         WorldStreamingErrors::PartitionDescriptorInvalid);
+            RequireError(WorldPartitionDescriptor::Create({}, partition, bounds, grid, layers, cells, {1, 1, 3}),
+                         WorldStreamingErrors::PartitionCapacityExceeded);
+            const std::array duplicateCells{cells[0], cells[0]};
+            RequireError(WorldPartitionDescriptor::Create({}, partition, bounds, grid, layers, duplicateCells, {1, 2, 32}),
+                         WorldStreamingErrors::PartitionIdentityConflict);
+            REQUIRE(cells[0].package.chunkAsset == Asset(2));
+            REQUIRE(owned.Value().Cells()[0].package.chunkAsset == Asset(1));
+        }
+
+        TEST_CASE("Partition qualification fences queries and preserves every output slot on failure",
+                  "[unit][world_streaming][qualification][headless][registry][query][failure]") {
+            const auto partition = World(42);
+            const auto owner = RuntimeOwner(partition);
+            auto registry = WorldPartitionRegistry::Create(IdentityFrom<WorldPartitionRegistryId>(51), owner, {4, 4}).Value();
+            auto descriptor = QualificationDescriptor(partition).Value();
+            REQUIRE(registry->Publish(std::move(descriptor), IdentityFrom<WorldPartitionRegistryRevision>(1)).HasValue());
+            const auto first = registry->Snapshot().Value();
+            const auto handle = first.Find({0, 0, 0, 0, Layer(2)}).Value();
+            const auto sentinel = WorldPartitionCellHandle{first.Binding(), 99, handle.cell};
+            std::array output{sentinel, sentinel};
+            const WorldPartitionBounds whole{Math::WorldCoordinate64::FromMillimeters(-2'000, -1'000, -1'000),
+                                             Math::WorldCoordinate64::FromMillimeters(1'999, 1'999, 999)};
+            RequireError(first.Query({whole, std::nullopt, std::nullopt}, output), WorldStreamingErrors::PartitionRegistryCapacityExceeded);
+            REQUIRE(output[0] == sentinel);
+            REQUIRE(output[1] == sentinel);
+            RequireError(first.Query({whole, Layer(99), 0}, output), WorldStreamingErrors::PartitionRegistryUnsupported);
+            RequireError(first.Query({whole, Layer(2), 2}, output), WorldStreamingErrors::PartitionRegistryUnsupported);
+            RequireError(first.Query({{whole.maximum, whole.minimum}, Layer(2), 0}, output),
+                         WorldStreamingErrors::PartitionRegistryInvalid);
+            REQUIRE(output[0] == sentinel);
+            REQUIRE(output[1] == sentinel);
+
+            const auto exactEdge =
+                first.Query({{Math::WorldCoordinate64::FromMillimeters(999, 0, 0), Math::WorldCoordinate64::FromMillimeters(999, 0, 0)},
+                             Layer(2),
+                             0},
+                            output);
+            REQUIRE(exactEdge.HasValue());
+            REQUIRE(exactEdge.Value().matches == 1);
+            REQUIRE(output[0].cell == handle.cell);
+            REQUIRE(output[1] == sentinel);
+            REQUIRE(exactEdge.Value().binding == first.Binding());
+
+            auto candidate = QualificationDescriptor(partition, 20).Value();
+            RequireError(registry->Publish(std::move(candidate), IdentityFrom<WorldPartitionRegistryRevision>(3)),
+                         WorldStreamingErrors::PartitionRegistryStale);
+            REQUIRE(candidate.Cells().size() == 4);
+            REQUIRE(registry->Snapshot().Value().Binding() == first.Binding());
+            REQUIRE(registry->Publish(std::move(candidate), IdentityFrom<WorldPartitionRegistryRevision>(2)).HasValue());
+            const auto second = registry->Snapshot().Value();
+            RequireError(second.Resolve(handle), WorldStreamingErrors::PartitionRegistryStale);
+            REQUIRE(first.Resolve(handle).Value()->package.chunkAsset == Asset(2));
+            registry->BeginCancellation();
+            RequireError(registry->Snapshot(), WorldStreamingErrors::PartitionRegistryLifecycleUnavailable);
+            registry->Shutdown();
+            REQUIRE(first.Resolve(handle).Value()->package.chunkAsset == Asset(2));
+            REQUIRE(second.Find(handle.cell).HasValue());
+        }
+
+        TEST_CASE("Partition qualification keeps fallback demand transactional through replacement and teardown",
+                  "[unit][world_streaming][qualification][headless][fallback][provider][lifecycle]") {
+            const auto owner = SourceOwner(World(44));
+            const auto firstCell = StreamingCellId{0, 0, 0, 0, Layer(2)};
+            const auto secondCell = StreamingCellId{1, 0, 0, 0, Layer(2)};
+            RequireError(FallbackStreamingProvider::Create({owner, IdentityFrom<StreamingSourceRevision>(1),
+                                                            static_cast<FallbackStreamingProviderMode>(255), firstCell, 1}),
+                         WorldStreamingErrors::FallbackProviderUnsupported);
+            RequireError(FallbackStreamingProvider::Create(
+                             {owner, IdentityFrom<StreamingSourceRevision>(1), FallbackStreamingProviderMode::SingleCell, std::nullopt, 1}),
+                         WorldStreamingErrors::FallbackProviderInvalid);
+            auto provider = FallbackStreamingProvider::Create(
+                                {owner, IdentityFrom<StreamingSourceRevision>(1), FallbackStreamingProviderMode::SingleCell, firstCell, 1})
+                                .Value();
+            const auto originalDemand = provider.DesiredCells();
+            REQUIRE(originalDemand.size() == 1);
+            RequireError(provider.Replace(
+                             {owner, IdentityFrom<StreamingSourceRevision>(2), FallbackStreamingProviderMode::SingleCell, secondCell, 0}),
+                         WorldStreamingErrors::FallbackProviderCapacityExceeded);
+            REQUIRE(provider.Revision().Value() == 1);
+            REQUIRE(provider.DesiredCells().front() == firstCell);
+            REQUIRE(originalDemand.front() == firstCell);
+            RequireError(provider.Replace(
+                             {owner, IdentityFrom<StreamingSourceRevision>(1), FallbackStreamingProviderMode::SingleCell, secondCell, 1}),
+                         WorldStreamingErrors::FallbackProviderStale);
+            RequireError(provider.RequestCancellation(owner, IdentityFrom<StreamingSourceRevision>(2)),
+                         WorldStreamingErrors::FallbackProviderStale);
+            REQUIRE(provider.DesiredCells().front() == firstCell);
+            REQUIRE(
+                provider
+                    .Replace({owner, IdentityFrom<StreamingSourceRevision>(2), FallbackStreamingProviderMode::SingleCell, secondCell, 1})
+                    .HasValue());
+            REQUIRE(provider.DesiredCells().front() == secondCell);
+            REQUIRE(provider.RequestCancellation(owner, IdentityFrom<StreamingSourceRevision>(2)).HasValue());
+            REQUIRE(provider.DesiredCells().empty());
+            RequireError(provider.Replace(
+                             {owner, IdentityFrom<StreamingSourceRevision>(3), FallbackStreamingProviderMode::Null, std::nullopt, 0}),
+                         WorldStreamingErrors::FallbackProviderLifecycleUnavailable);
+            REQUIRE(provider.Shutdown(owner).HasValue());
+            REQUIRE(provider.Shutdown(owner).HasValue());
+            REQUIRE(provider.DesiredCells().empty());
+        }
     }  // namespace
 }  // namespace Horo::WorldStreaming

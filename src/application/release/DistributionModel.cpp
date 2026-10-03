@@ -60,6 +60,10 @@ namespace Horo::Release {
                                                {false, false, true},
                                                {Layout::SystemManaged, Capability::Supported, Capability::Supported, Capability::Required,
                                                 Capability::Supported, Capability::Required, Capability::Unsupported}},
+                              FormatDescriptor{DistributionPackageFormat::DeltaZipArchive,
+                                               {true, true, true},
+                                               {Layout::Portable, Capability::Unsupported, Capability::Unsupported, Capability::Unsupported,
+                                                Capability::Supported, Capability::Supported, Capability::Supported}},
                               FormatDescriptor{DistributionPackageFormat::StorePackage,
                                                {true, true, true},
                                                {Layout::StoreManaged, Capability::Supported, Capability::Required, Capability::Required,
@@ -136,7 +140,7 @@ namespace Horo::Release {
 
         [[nodiscard]] bool SupportsRendererComponentFormat(const DistributionPackageFormat format) noexcept {
             using enum DistributionPackageFormat;
-            return format == ZipArchive || format == TarGzip;
+            return format == ZipArchive || format == TarGzip || format == DeltaZipArchive;
         }
 
         [[nodiscard]] bool SupportsDedicatedServerFormat(const DistributionPackageFormat format) noexcept {

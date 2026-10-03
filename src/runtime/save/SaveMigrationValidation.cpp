@@ -34,7 +34,12 @@ namespace Horo::Runtime::SaveMigrationDetail {
         [[nodiscard]] Result<void> ValidateParticipantPolicyEntry(const SaveParticipantCompatibility &entry, const std::size_t index,
                                                                   const SaveCompatibilityPolicy &policy) {
             if (!entry.participant.IsValid() || !IsValidSupport(entry.versions) ||
-                (index != 0 && policy.participants[index - 1].participant == entry.participant))
+                (index != 0 && policy.participants[index - 1].participant == entry.participant) ||
+                !std::ranges::is_sorted(entry.requiredDependencies) ||
+                std::ranges::adjacent_find(entry.requiredDependencies) != entry.requiredDependencies.end() ||
+                std::ranges::any_of(entry.requiredDependencies, [&entry](const SaveParticipantId &id) {
+                return !id.IsValid() || id == entry.participant;
+            }))
                 return Result<void>::Failure(MigrationError(SaveErrors::MigrationDefinitionInvalid,
                                                             "Save migration participant policy contains an invalid or duplicate entry."));
             return Result<void>::Success();
@@ -68,12 +73,34 @@ namespace Horo::Runtime::SaveMigrationDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Accounts for canonical owned records while preserving their source identity. */
+        [[nodiscard]] Result<void> ValidateOwnedRecords(const SaveMigrationParticipantState &participant, const SaveMigrationLimits &limits,
+                                                        std::uint64_t &totalPayloadBytes) {
+            SaveRecordId previousOwnedRecord;
+            for (const SaveMigrationRecordState &record : participant.records) {
+                if (!record.record.IsValid() || !record.schemaVersion.IsValid() || record.sourceParticipant != participant.participant ||
+                    record.sourceRecord != record.record || !record.sourceSchemaVersion.IsValid() ||
+                    (previousOwnedRecord.IsValid() && previousOwnedRecord >= record.record))
+                    return Result<void>::Failure(
+                        MigrationError(SaveErrors::MigrationCandidateInvalid,
+                                       "Detached participant records have invalid identity, provenance, or order."));
+                if (record.payload.size() > limits.maximumParticipantPayloadBytes ||
+                    record.payload.size() > limits.maximumTotalPayloadBytes - totalPayloadBytes)
+                    return Result<void>::Failure(MigrationError(SaveErrors::MigrationLimitExceeded,
+                                                                "Detached participant records exceed the migration payload budget."));
+                totalPayloadBytes += record.payload.size();
+                previousOwnedRecord = record.record;
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ValidateParticipantState(const SaveMigrationParticipantState &participant, const std::size_t index,
                                                             const SaveMigrationState &state, const SaveMigrationLimits &limits,
                                                             std::uint64_t &totalPayloadBytes) {
             if (!participant.participant.IsValid() || !participant.schemaVersion.IsValid() ||
                 (index != 0 && state.participants[index - 1].participant == participant.participant) ||
                 participant.payload.size() > limits.maximumParticipantPayloadBytes ||
+                participant.records.size() > limits.maximumRecordsPerParticipant ||
                 participant.payload.size() > std::numeric_limits<std::uint64_t>::max() - totalPayloadBytes)
                 return Result<void>::Failure(MigrationError(SaveErrors::MigrationCandidateInvalid,
                                                             "Detached save migration state contains an invalid or duplicate participant."));
@@ -82,14 +109,36 @@ namespace Horo::Runtime::SaveMigrationDetail {
                 return Result<void>::Failure(
                     MigrationError(SaveErrors::MigrationLimitExceeded,
                                    "Detached save migration state exceeds its aggregate participant payload limit."));
+            if (auto owned = ValidateOwnedRecords(participant, limits, totalPayloadBytes); owned.HasError())
+                return owned;
+            SaveRecordId previousRecord;
+            for (const PreservedSaveChunk &chunk : participant.preservedChunks) {
+                if (!chunk.entry.record.IsValid() || chunk.entry.owner != participant.participant ||
+                    std::ranges::binary_search(participant.records, chunk.entry.record, {}, &SaveMigrationRecordState::record) ||
+                    (previousRecord.IsValid() && previousRecord >= chunk.entry.record) ||
+                    chunk.entry.storedByteLength != chunk.storedBytes.size() || chunk.storedBytes.empty() ||
+                    chunk.entry.decodedByteLength == 0 || chunk.entry.codec > SaveChunkCodec::Deflate ||
+                    (chunk.entry.codec == SaveChunkCodec::Raw &&
+                     (chunk.entry.decodedByteLength != chunk.storedBytes.size() ||
+                      ComputeSha256(std::span<const std::byte>{chunk.storedBytes}) != chunk.entry.decodedHash)))
+                    return Result<void>::Failure(
+                        MigrationError(SaveErrors::MigrationCandidateInvalid,
+                                       "Detached unknown save chunk has invalid ownership or integrity metadata."));
+                if (chunk.storedBytes.size() > limits.maximumTotalPayloadBytes - totalPayloadBytes)
+                    return Result<void>::Failure(MigrationError(SaveErrors::MigrationLimitExceeded,
+                                                                "Detached unknown save chunks exceed the migration payload budget."));
+                totalPayloadBytes += chunk.storedBytes.size();
+                previousRecord = chunk.entry.record;
+            }
             return Result<void>::Success();
         }
     }  // namespace
 
     Result<void> ValidateDefinition(const SaveMigrationDefinition &definition, const SaveMigrationLimits &limits) {
         const StepView step = View(definition);
-        if (step.axis >= SaveMigrationAxis::Count || step.kind >= SaveMigrationStepKind::Count || !step.id.IsValid() || !step.migrate ||
-            step.estimatedWork == 0 || step.from == 0 || step.to == 0)
+        if (step.axis >= SaveMigrationAxis::Count || step.kind >= SaveMigrationStepKind::Count || !step.id.IsValid() ||
+            ((!step.migrate || !*step.migrate) && (!step.migrateRecord || !*step.migrateRecord)) || step.estimatedWork == 0 ||
+            step.from == 0 || step.to == 0)
             return Result<void>::Failure(MigrationError(SaveErrors::MigrationDefinitionInvalid,
                                                         "Migration definition has an invalid identity, range, callback, or kind."));
         if (step.from >= step.to)
@@ -100,6 +149,19 @@ namespace Horo::Runtime::SaveMigrationDetail {
         if (step.participant && !step.participant->IsValid())
             return Result<void>::Failure(MigrationError(SaveErrors::MigrationDefinitionInvalid,
                                                         "Participant migration definition has an invalid participant identity."));
+        if (step.crossParticipantTransforms) {
+            const auto &contracts = *step.crossParticipantTransforms;
+            if (contracts.size() > limits.maximumParticipants ||
+                !std::ranges::is_sorted(contracts, {}, &SaveMigrationTransformContract::target) ||
+                std::ranges::adjacent_find(contracts, {}, &SaveMigrationTransformContract::target) != contracts.end() ||
+                std::ranges::any_of(contracts, [&step](const SaveMigrationTransformContract &contract) {
+                return !contract.target.IsValid() || !contract.targetSchemaVersion.IsValid() ||
+                       (step.participant && contract.target == *step.participant);
+            }))
+                return Result<void>::Failure(
+                    MigrationError(SaveErrors::MigrationDefinitionInvalid,
+                                   "Participant cross-transform contracts must name distinct sorted other owners."));
+        }
         return ValidateCheckpointMetadata(step, limits);
     }
 
@@ -133,6 +195,19 @@ namespace Horo::Runtime::SaveMigrationDetail {
             support.checkpoints.size() > limits.maximumDefinitions)
             return Result<void>::Failure(
                 MigrationError(SaveErrors::MigrationDefinitionInvalid, "Save migration support ranges or participant policy are invalid."));
+        if (!std::ranges::is_sorted(support.compatibility.droppableUnknownParticipants) ||
+            std::ranges::adjacent_find(support.compatibility.droppableUnknownParticipants) !=
+                support.compatibility.droppableUnknownParticipants.end())
+            return Result<void>::Failure(
+                MigrationError(SaveErrors::MigrationDefinitionInvalid, "Droppable unknown participant policy must be unique and sorted."));
+        for (const SaveParticipantId &id : support.compatibility.droppableUnknownParticipants) {
+            if (!id.IsValid() || FindPolicyParticipant(support.compatibility, id) != nullptr ||
+                std::ranges::any_of(support.compatibility.participants, [&id](const SaveParticipantCompatibility &entry) {
+                return entry.required && std::ranges::binary_search(entry.requiredDependencies, id);
+            }))
+                return Result<void>::Failure(MigrationError(SaveErrors::MigrationDefinitionInvalid,
+                                                            "Droppable unknown participant policy contains a known or invalid owner."));
+        }
         for (std::size_t index = 0; index < support.compatibility.participants.size(); ++index) {
             if (const auto validation =
                     ValidateParticipantPolicyEntry(support.compatibility.participants[index], index, support.compatibility);

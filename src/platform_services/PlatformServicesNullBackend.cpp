@@ -94,8 +94,13 @@ namespace Horo::PlatformServices {
     }
 
     /** @copydoc ICloudService::WriteCloudObject */
-    Result<PlatformRequestHandle<void>> NullPlatformServicesBackend::WriteCloudObject(CloudWriteRequest) {  // NOSONAR
-        return NullProviderFailure<PlatformRequestHandle<void>>();
+    Result<PlatformRequestHandle<CloudMutationResult>> NullPlatformServicesBackend::WriteCloudObject(CloudBlobWriteRequest) {
+        return NullProviderFailure<PlatformRequestHandle<CloudMutationResult>>();
+    }
+
+    /** @copydoc ICloudService::DeleteCloudObject */
+    Result<PlatformRequestHandle<CloudMutationResult>> NullPlatformServicesBackend::DeleteCloudObject(CloudBlobDeleteRequest) {
+        return NullProviderFailure<PlatformRequestHandle<CloudMutationResult>>();
     }
 
     /** @copydoc IPresenceService::SetPresence */

@@ -71,6 +71,48 @@ namespace {
         ModalStats &m_stats;
     };
 
+    struct WorkspaceCaptureOwner final : Input::IInputCaptureOwner {
+        explicit WorkspaceCaptureOwner(const ModalStats &stats) : stats(stats) {}
+
+        void OnInputCaptureCancelled(const Input::CaptureCancellationReason value) noexcept override {
+            reason = value;
+            cancelledBeforeModalOpen = stats.openCalls == 0;
+        }
+
+        const ModalStats &stats;
+        std::optional<Input::CaptureCancellationReason> reason;
+        bool cancelledBeforeModalOpen{false};
+    };
+
+    TEST_CASE("Modal activation cancels workspace capture before open and blocks close-frame input", "[unit][editor][input]") {
+        Input::InputService input;
+        input.BeginFrame(1);
+        input.Collector().SetKey(Input::Key::A, true);
+        static_cast<void>(input.CommitFrame());
+        auto workspace = input.Router().PushContext(Input::InputContextId{"workspace"}, Input::InputContextKind::EditorWorkspace);
+        EditorDataBus events;
+        ModalStats stats;
+        EditorModalHost host(events, input.Router());
+        WorkspaceCaptureOwner owner(stats);
+        auto capture = input.Router().CapturePointer(workspace, Input::PointerButton::Primary, owner);
+        REQUIRE(capture.HasValue());
+
+        REQUIRE(host.OpenRoot(std::make_unique<RecordingModal>(1, stats)).HasValue());
+        REQUIRE(owner.reason == Input::CaptureCancellationReason::ModalOpened);
+        REQUIRE(owner.cancelledBeforeModalOpen);
+        REQUIRE_FALSE(input.Router().ConsumeKey(workspace, Input::Key::A));
+        host.OnUpdate(0.0F);
+        REQUIRE(stats.openCalls == 1);
+        REQUIRE(host.RequestClose(ModalId{1}, ModalCloseReason::Cancelled).HasValue());
+        host.OnUpdate(0.0F);
+        REQUIRE_FALSE(input.Router().ConsumeKey(workspace, Input::Key::A));
+
+        input.BeginFrame(2);
+        input.Collector().SetKey(Input::Key::A, false);
+        static_cast<void>(input.CommitFrame());
+        REQUIRE(input.Router().IsContextActive(workspace));
+    }
+
     TEST_CASE("Accepted Root Gates Interaction Before Its First Open Boundary", "[unit][editor]") {
         EditorDataBus events;
         Input::InputRouter input;

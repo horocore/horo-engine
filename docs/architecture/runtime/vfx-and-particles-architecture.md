@@ -412,6 +412,20 @@ admission boundary and stable ties, never renderer traversal order. If retiremen
 not yield immediately reusable logical capacity, the incoming request is rejected or
 uses its one bounded declared fallback.
 
+`Horo/Vfx/EffectInstancePool.h` is the prepared, scene-owner-thread logical slot
+boundary for one compiled effect. Its effective slot count is the minimum of authored
+concurrency and the host's reserved instance, emitter and byte slices; byte charges
+include fixed control/delay records and declared per-instance payload. The host must
+materialize and reserve that payload before activation, not on `Play`. The pool
+implements default incoming rejection and opt-in bounded FIFO cosmetic delay; other
+ADR-128 modes belong to the cooked binding/budget planner and are not silently
+substituted by this pool. A stopped slot remains charged through explicit reader/job/
+snapshot/GPU retention acknowledgements. Restart is only permitted for a quiescent
+live slot and advances its identity generation. Scene teardown closes admission but
+must retain the pool and host ledger until `Quiescent` after final retirement. The
+VfxWorld composition, request pipeline and global multi-effect ledger remain their
+respective owners; this pool does not register a service or own renderer resources.
+
 ## Scene And Cell Teardown
 
 Effect/request handles include scene incarnation, slot generation and owner identity.
@@ -1174,7 +1188,7 @@ architecture-only change:
   Normative semantic binding, allocation-free playback, budget, overload and sleep/wake contract.
 - [ADR-129: VFX Editor Document, Live Preview and Module Authoring](../../adr/129-vfx-editor-document-live-preview-and-module-authoring.md):
   Normative effect document, stack/graph authoring, preview parity and decal editor contract.
-- [Particle Editor UI Reference](./particle-editor.html): Emitter stack, curve editing,
+- [Particle Editor UI Reference](../../../mock-studio/designs.md#architecture-runtime-particle-editor): Emitter stack, curve editing,
   and live preview panel.
 - [Material And Shader Model](./material-and-shader-model.md): Particle and decal materials.
 - [Rendering Architecture](./rendering-architecture.md): Render graph and pass extraction.

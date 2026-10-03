@@ -11,10 +11,10 @@ permissions:
 
 concurrency:
   group: sonar-${{ github.workflow }}-${{ github.ref }}
-  # A newer main commit supersedes an older push analysis just like a newer PR
-  # commit supersedes its previous analysis. Avoid running stale Sonar scans in
-  # parallel when several PRs are merged in quick succession.
-  cancel-in-progress: true
+  # Let the active main scan finish and refresh SonarCloud's branch cache.
+  # GitHub replaces a pending main run with the latest merge, so a burst needs
+  # at most the active scan and one follow-up. Supersede stale PR scans.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   sonar:
@@ -22,14 +22,13 @@ jobs:
     runs-on: ubuntu-24.04
     # A cold build, coverage pass, and CFamily scan can exceed 40 minutes. Keep a
     # bounded margin so the scan and Quality Gate wait can finish and publish the
-    # analysis cache instead of timing out at the save boundary.
+    # server-side analysis cache instead of timing out at the scan boundary.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_DIR: ${{ github.workspace }}/.sonar/ccache
       CCACHE_COMPRESS: 'true'
       CCACHE_MAXSIZE: 2G
-      CACHE_SCOPE: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
       FETCHCONTENT_BASE_DIR: ${{ github.workspace }}/.cmake/fetchcontent
       SONAR_USER_HOME: ${{ github.workspace }}/.sonar/user-home
 
@@ -68,35 +67,30 @@ jobs:
         with:
           path: |
             ${{ github.workspace }}/.sonar/ccache
-          key: sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-${{ env.CACHE_SCOPE }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-${{ env.CACHE_SCOPE }}-
             sonar-v2-gcc-${{ runner.os }}-${{ runner.arch }}-main-
             sonar-v1-gcc-${{ runner.os }}-${{ runner.arch }}-refs/heads/main-
 
-      - name: Restore Sonar caches
-        id: sonar_cache
+      - name: Restore Sonar scanner downloads
+        id: scanner_cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
-            .sonar/cfamily-cache
             ${{ github.workspace }}/.sonar/user-home/cache
             ${{ github.workspace }}/.sonar/user-home/sonar-scanner-7.2.0.5079-linux-x64
-          key: sonar-v2-analysis-${{ runner.os }}-${{ runner.arch }}-${{ env.CACHE_SCOPE }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            sonar-v2-analysis-${{ runner.os }}-${{ runner.arch }}-${{ env.CACHE_SCOPE }}-
-            sonar-v2-analysis-${{ runner.os }}-${{ runner.arch }}-main-
-            sonar-v1-analysis-${{ runner.os }}-${{ runner.arch }}-refs/heads/main-
+          key: sonar-v3-scanner-7.2.0.5079-${{ runner.os }}-${{ runner.arch }}
 
       - name: Report cache restores
         env:
           COMPILER_CACHE_KEY: ${{ steps.compiler.outputs.cache-matched-key }}
           DEPENDENCY_CACHE_KEY: ${{ steps.deps.outputs.cache-matched-key }}
-          SONAR_CACHE_KEY: ${{ steps.sonar_cache.outputs.cache-matched-key }}
+          SCANNER_CACHE_KEY: ${{ steps.scanner_cache.outputs.cache-matched-key }}
         run: |
           echo "FetchContent cache: ${DEPENDENCY_CACHE_KEY:-cold start}"
           echo "Compiler cache: ${COMPILER_CACHE_KEY:-cold start}"
-          echo "Sonar cache: ${SONAR_CACHE_KEY:-cold start}"
+          echo "Scanner downloads cache: ${SCANNER_CACHE_KEY:-cold start}"
+          echo 'CFamily analysis cache: SonarCloud server (main branch; PRs use target branch)'
 
       - name: Install Linux dependencies
         id: install
@@ -106,7 +100,7 @@ jobs:
             sudo apt-get update
           fi
           sudo apt-get install -y --no-install-recommends \
-            ninja-build ccache unzip python3-venv xvfb xauth \
+            ninja-build ccache unzip python3-venv xvfb xauth libssl-dev \
             libwayland-dev wayland-protocols libxkbcommon-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
             libxext-dev libxss-dev libxtst-dev libxxf86vm-dev \
@@ -130,13 +124,14 @@ jobs:
             -DHORO_ENABLE_GPU_SMOKE_TESTS=ON \
             -DHORO_BUILD_RENDER_VULKAN=ON \
             -DHORO_ENABLE_TELEMETRY=ON \
-            -DHORO_ENABLE_OPENTELEMETRY=ON
+            -DHORO_ENABLE_OPENTELEMETRY=ON \
+            -DHORO_BUILD_NETWORK_GNS=ON
           cmake --build build/sonar --parallel
 
       # Checkpoint build inputs before coverage and analysis. A later scan timeout
       # must not discard the dependency and compiler work needed by the next run.
       - name: Save FetchContent dependencies
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.deps.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.build.outcome == 'success' && steps.deps.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
@@ -144,7 +139,7 @@ jobs:
           key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Save compiler cache
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.compiler.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.build.outcome == 'success' && steps.compiler.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
@@ -155,10 +150,13 @@ jobs:
         id: coverage
         run: |
           xvfb-run -a ctest --test-dir build/sonar --output-on-failure -LE 'gui|editor'
+          build/sonar/tests/HoroCinematicPropertyIntegrationTests
           xvfb-run -a build/sonar/tests/HoroEditorPresentationTests
           xvfb-run -a build/sonar/tests/HoroEditorUiAutomationTests '~[native]'
           xvfb-run -a build/sonar/tests/HoroSourceFileOpenServiceTests
           xvfb-run -a build/sonar/tests/HoroEditorWorkspaceControllerTests
+          xvfb-run -a build/sonar/tests/HoroEditorUserStateMigrationTests
+          build/sonar/tests/HoroConfiguredEditorUpdateBackendTests
           /tmp/horo-gcovr/bin/coverage run --source=scripts -m pytest tests/python --quiet
           /tmp/horo-gcovr/bin/coverage xml -o build/sonar/python-coverage.xml
           gcovr_started=$SECONDS
@@ -169,6 +167,10 @@ jobs:
             --filter "$GITHUB_WORKSPACE/include" \
             --filter "$GITHUB_WORKSPACE/src" \
             --filter "$GITHUB_WORKSPACE/apps/common" \
+            --filter "$GITHUB_WORKSPACE/apps/horo-engine" \
+            --filter "$GITHUB_WORKSPACE/apps/horo-package" \
+            --filter "$GITHUB_WORKSPACE/apps/HoroEditor/app/EditorUserStateMigration.cpp" \
+            --filter "$GITHUB_WORKSPACE/apps/HoroEditor/app/ConfiguredEditorUpdateBackend.cpp" \
             --exclude-throw-branches \
             --exclude-unreachable-branches \
             --exclude-noncode-lines \
@@ -182,7 +184,7 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/.sonar/cfamily-cache" "$SONAR_USER_HOME"
+          mkdir -p "$SONAR_USER_HOME"
           if [ ! -x "$SONAR_USER_HOME/sonar-scanner-7.2.0.5079-linux-x64/bin/sonar-scanner" ]; then
             curl --proto "=https" --proto-redir "=https" --retry 3 -fsSL https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-7.2.0.5079-linux-x64.zip -o /tmp/sonar-scanner.zip
             unzip -q /tmp/sonar-scanner.zip -d "$SONAR_USER_HOME"
@@ -194,17 +196,18 @@ jobs:
             -Dsonar.cfamily.compile-commands=build/sonar/compile_commands.json \
             -Dsonar.coverageReportPaths=build/sonar/coverage.xml \
             -Dsonar.python.coverage.reportPaths=build/sonar/python-coverage.xml \
-            -Dsonar.cfamily.analysisCache.mode=fs \
-            -Dsonar.cfamily.analysisCache.path="$GITHUB_WORKSPACE/.sonar/cfamily-cache" \
+            -Dsonar.cfamily.analysisCache.mode=server \
             -Dsonar.qualitygate.wait=true \
             -Dsonar.qualitygate.timeout=300
 
-      - name: Save Sonar caches
-        if: ${{ !cancelled() && (steps.scan.outcome == 'success' || steps.scan.outcome == 'failure') && steps.sonar_cache.outputs.cache-hit != 'true' }}
+      # Scanner binaries/plugins change only with the pinned scanner or server
+      # version. Keep one main-scoped copy for PR restores; CFamily analysis
+      # results live on SonarCloud and never compete for Actions cache space.
+      - name: Save Sonar scanner downloads
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && (steps.scan.outcome == 'success' || steps.scan.outcome == 'failure') && steps.scanner_cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
-            .sonar/cfamily-cache
             ${{ github.workspace }}/.sonar/user-home/cache
             ${{ github.workspace }}/.sonar/user-home/sonar-scanner-7.2.0.5079-linux-x64
-          key: ${{ steps.sonar_cache.outputs.cache-primary-key }}
+          key: ${{ steps.scanner_cache.outputs.cache-primary-key }}

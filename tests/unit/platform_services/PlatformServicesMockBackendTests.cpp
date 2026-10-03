@@ -29,9 +29,13 @@ namespace Horo::PlatformServices::TestSupport {
 
             MockPlatformServicesResponse voidResponse;
             for (const auto operation : {MockPlatformServicesOperation::UnlockAchievement, MockPlatformServicesOperation::SubmitScore,
-                                         MockPlatformServicesOperation::WriteStat, MockPlatformServicesOperation::WriteCloudObject,
-                                         MockPlatformServicesOperation::SetPresence, MockPlatformServicesOperation::ClearPresence})
+                                         MockPlatformServicesOperation::WriteStat, MockPlatformServicesOperation::SetPresence,
+                                         MockPlatformServicesOperation::ClearPresence})
                 REQUIRE(backend.SetResponse(operation, voidResponse).HasValue());
+
+            MockPlatformServicesResponse writeResponse;
+            writeResponse.payload = CloudMutationResult{};
+            REQUIRE(backend.SetResponse(MockPlatformServicesOperation::WriteCloudObject, std::move(writeResponse)).HasValue());
 
             MockPlatformServicesResponse cloudResponse;
             cloudResponse.payload = CloudReadResult{.object = {11}, .bytes = {std::byte{0x2a}}};
@@ -318,7 +322,8 @@ namespace Horo::PlatformServices::TestSupport {
 
         REQUIRE(backend.ExpectSequence({MockPlatformServicesOperation::WriteCloudObject}).HasValue());
         ActivateMock(backend);
-        CloudWriteRequest request{.object = {1}, .bytes = std::vector<std::byte>(MockPlatformServicesBackend::MaximumPayloadBytes + 1)};
+        const std::vector<std::byte> bytes(MockPlatformServicesBackend::MaximumPayloadBytes + 1);
+        CloudBlobWriteRequest request{.bytes = CloudBlobOwnedBytes::Copy(bytes).Value()};
         CHECK(backend.WriteCloudObject(std::move(request)).HasError());
         CHECK(HasDiagnostic(backend, MockDiagnosticKind::InvalidRequest));
         CHECK(backend.Requests().RecordCount() == 0);

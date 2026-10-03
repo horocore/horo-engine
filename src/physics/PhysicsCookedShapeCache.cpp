@@ -2,6 +2,7 @@
 
 #include "Horo/Physics/PhysicsConvexHullCook.h"
 #include "Horo/Physics/PhysicsErrors.h"
+#include "Horo/Physics/PhysicsHeightFieldCook.h"
 #include "Horo/Physics/PhysicsTriangleMeshCook.h"
 
 #include <cassert>
@@ -15,7 +16,8 @@
 
 namespace Horo::Physics {
     namespace Detail {
-        using PhysicsCookedShapeData = std::variant<LoadedPhysicsConvexHull, LoadedPhysicsTriangleMesh>;
+        using PhysicsCookedShapeData =
+            std::variant<LoadedPhysicsConvexHull, LoadedPhysicsTriangleMesh, LoadedPhysicsHeightField, LoadedPhysicsCompound>;
 
         struct PhysicsCookedShapeResource final {
             PhysicsCookedShapeDescriptor descriptor;
@@ -135,6 +137,18 @@ namespace Horo::Physics {
             });
         }
 
+        [[nodiscard]] Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>> ConstructHeightFieldResource(
+            const PhysicsCookedShapeDescriptor &descriptor, const PhysicsShapeCookTargetDigest &target,
+            const std::span<const std::uint8_t> payload) {
+            return FinishConstruction(descriptor, LoadCookedPhysicsHeightField(descriptor, target, payload),
+                                      [](std::uint64_t &bytes, const LoadedPhysicsHeightField &shape) {
+                return AddBytes(bytes, shape.samples.size(), sizeof(float)) &&
+                       AddBytes(bytes, shape.cellHoles.size(), sizeof(std::uint8_t)) &&
+                       AddBytes(bytes, shape.cellMaterials.size(), sizeof(PhysicsMaterialSlotId)) &&
+                       AddBytes(bytes, shape.materialSlots.size(), sizeof(PhysicsMaterialSlotId));
+            });
+        }
+
         [[nodiscard]] Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>> ConstructResource(
             const PhysicsCookedShapeDescriptor &descriptor, const PhysicsShapeCookTargetDigest &target,
             const std::span<const std::uint8_t> payload) {
@@ -145,10 +159,18 @@ namespace Horo::Physics {
                 case TriangleMesh:
                     return ConstructTriangleResource(descriptor, target, payload);
                 case HeightField:
+                    return ConstructHeightFieldResource(descriptor, target, payload);
                 case Compound:
-                    return Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>>::Failure(
-                        CacheError(PhysicsErrors::OperationUnsupported,
-                                   "The cooked shape cache supports only qualified ConvexHull and TriangleMesh artifact contracts."));
+                    return FinishConstruction(descriptor, LoadCookedPhysicsCompound(descriptor, target, payload),
+                                              [](std::uint64_t &bytes, const LoadedPhysicsCompound &shape) {
+                        if (!AddBytes(bytes, shape.children.size(), sizeof(LoadedPhysicsCompoundChild)))
+                            return false;
+                        for (const auto &child : shape.children)
+                            if (!AddBytes(bytes, child.hull.vertices.size(), sizeof(Math::Vec3)) ||
+                                !AddBytes(bytes, child.hull.triangleIndices.size(), sizeof(std::uint32_t)))
+                                return false;
+                        return true;
+                    });
             }
             return Result<std::shared_ptr<const Detail::PhysicsCookedShapeResource>>::Failure(
                 CacheError(PhysicsErrors::OperationUnsupported, "The cooked shape cache received an unknown shape kind."));
@@ -277,6 +299,19 @@ namespace Horo::Physics {
         if (resource_ == nullptr)
             return nullptr;
         return std::get_if<LoadedPhysicsTriangleMesh>(&resource_->data);
+    }
+
+    const LoadedPhysicsHeightField *PhysicsCookedShapeLease::HeightField() const noexcept {
+        if (resource_ == nullptr)
+            return nullptr;
+        return std::get_if<LoadedPhysicsHeightField>(&resource_->data);
+    }
+
+    /** @copydoc PhysicsCookedShapeLease::Compound */
+    const LoadedPhysicsCompound *PhysicsCookedShapeLease::Compound() const noexcept {
+        if (resource_ == nullptr)
+            return nullptr;
+        return std::get_if<LoadedPhysicsCompound>(&resource_->data);
     }
 
     bool PhysicsCookedShapeLease::SharesResourceWith(const PhysicsCookedShapeLease &other) const noexcept {

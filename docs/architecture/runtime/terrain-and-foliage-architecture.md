@@ -110,6 +110,71 @@ read instead of substituting a generic dirty flag. Bounded catalog validation pe
 no registration, I/O, backend selection or ambient mutation and rejects malformed,
 duplicate, foreign-dataset and over-capacity candidates transactionally.
 
+### TRF-001.5 Async Preparation Boundary
+
+`TerrainAsyncJobs` is the first `TerrainRuntime` implementation slice. The host
+injects its Foundation `JobSystem`, an exact runtime/registry/revision fence,
+finite work limits and explicit capability grants. Cook, load and edit-preview
+requests enter through distinct `SubmitCook`, `SubmitLoad` and
+`SubmitEditPreview` operations and submit immutable-input preparation to durable Foundation jobs with
+captured parent cancellation, operation correlation and optional configuration.
+Callbacks own their candidate values or leases; worker callbacks never publish
+Terrain state or touch Scene, editor or native consumer owners.
+
+The Terrain owner calls `Advance` at a safe point. Only a successful prepared job
+whose complete captured fence still equals the current fence may run its atomic
+publication callback. A `JobCancelled()` publication result remains cancellation
+with its typed cause and is never retried; other failures retain their original
+typed errors. Owner publication rejects reentrant fence replacement or nested
+`Advance`, so its validated fence cannot change inside that callback. A queued or
+running cancellation, replacement, capability revision or shutdown prevents
+publication and terminates as cancellation, with stale revision retained as a
+typed cause. A new fence cancels outstanding candidates without changing the
+previous publication. Each accepted item has one immutable terminal outcome;
+records remain bounded and durable until the owner explicitly forgets them.
+Shutdown closes admission and publication, requests cancellation and reports
+whether workers have drained without blocking the owner thread. Host code retains
+candidate/provider dependencies until that drain and any downstream consumer
+retirement are acknowledged. This slice does not create a second cell scheduler,
+cache authority or generic Foundation terrain dependency.
+Concrete height/weight tile cook and cache producers remain TRF-002.2/002.3/002.5,
+tile residency/resource loading remains TRF-002.6/002.7, and authored preview
+producers remain TRF-006.2 and later. Those producers compose this lifecycle
+boundary when their typed payloads and owners exist; this slice does not claim
+to cook, decode or preview terrain assets by itself.
+
+### TRF-001.6 Product Composition Boundary
+
+`TerrainComposition` is an inert, fixed-size `TerrainApi` decision, not a service
+installer. A host provides exactly one typed availability fact and implementation
+revision for every closed Terrain/Foliage capability. The exact Null, Headless,
+Editor, Runtime or Unsupported policy resolves each fact to omitted, unavailable
+or bound. Missing required capabilities fail composition; optional capabilities
+remain explicitly unavailable. Null and Unsupported bind nothing even if a host
+has implementations installed elsewhere. Unsupported is inspectable but rejects
+work with a typed error.
+Foliage runtime requires effective Terrain runtime, and CPU/GPU culling or wind
+cannot report an effective grant without the required render/foliage path. Such
+dependent optional grants report unavailable rather than pretending to run.
+
+Headless omits all render extraction, culling, wind and authoring grants; Runtime
+requires render extraction but omits authoring; Editor requires both authoring
+grants while render extraction remains optional. Profile names do not select a
+renderer, create an authoring document, choose a provider, or imply tier fallback.
+The host alone owns construction and lifetime of any concrete service. New
+TerrainAuthoring and FoliageAuthoring capability bits append to the existing
+closed vocabulary without changing prior bit identities.
+
+One immutable decision carries a non-wrapping `TerrainCapabilityRevision` and
+source revisions for bound facts. Work admission checks the current revision,
+explicit lifecycle and exact required grants; replacement returns a detached
+newer decision and never mutates the old one on failure. Cancelling, shutdown,
+stale and unsupported-profile paths have typed results. Existing registry and
+async-job users may continue to supply their exact grants, but hosts that select
+a product profile must derive those grants from the resolved decision, not from
+profile-name strings or ambient discovery. No public contract gains a native
+handle, renderer dependency or implicit global ownership.
+
 ## Terrain System
 
 ### Heightfield Model
@@ -180,6 +245,33 @@ Terrain schemas and algorithm versions, and generic target/toolchain envelope id
 Paths, timestamps, locale, job order and runtime/provider handles are excluded. Native
 GPU resources, solver objects and navigation-provider tiles remain separately keyed and
 owned by Render, Physics and Navigation.
+
+### TRF-002.3 Deterministic Tile Cook Slice
+
+`HoroEngine::TerrainCook` accepts one detached TRF-002.2 canonical source, an exact
+provider-neutral tier/policy, verified dependency artifact digests and host-supplied
+target/toolchain identities. It performs no file I/O, cache lookup, registration,
+runtime activation or atomic publication. Assets owns those operations. Its schema-v1
+little-endian payloads each cover one tile and LOD, including finite meter heights,
+normalized layer weights, binary holes, source/coordinate metadata and complete
+provenance. The sorted manifest binds typed signed world-tile addresses, exact payload
+sizes/digests and four edge signatures. A host checks the requested cook fingerprint,
+manifest digest and every independently readable payload before publication or reuse.
+
+Tile bounds partition the entire source sample grid, retaining the exact final sample
+on partial edges; adjacent tiles share the same boundary samples. LODs subsample at a
+fixed power-of-two stride and retain the final edge sample, so partial edges never
+silently drop data. World-tile coordinates floor-quantize the finite source origin
+against that LOD's physical tile span, preserving negative addresses without paths or
+presentation state. A seam signature binds ordered boundary height/weight/hole samples,
+channel count, axis and LOD stride, but not placement or unrelated interior samples.
+
+Source, dependency and policy inputs are canonically encoded before hashing; dependency
+input order is normalized and duplicates fail. Profile ceilings cannot exceed the
+selected tier's finite limits. Corrupt prior candidates fail closed, cancelled or
+over-budget work returns no output, and old detached results remain valid across a
+replacement attempt. Incremental reuse is an optional optimization over identical
+verified tile bytes, never a second cache/publication authority.
 
 ### Terrain Collision
 

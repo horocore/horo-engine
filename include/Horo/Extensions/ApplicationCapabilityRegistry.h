@@ -137,6 +137,13 @@ namespace Horo::Extensions {
                                                                          std::string_view extensionId, std::string_view moduleId,
                                                                          std::uint64_t activationGeneration) const;
 
+        /** @brief Resolves only the named provider publication, never another compatible provider. */
+        [[nodiscard]] Result<ApplicationCapabilityProviderLease> ResolveExact(const ExtensionCapabilityHandle &authority,
+                                                                              const ApplicationCapabilityVersionRange &versions,
+                                                                              const ApplicationCapabilityProviderIdentity &identity,
+                                                                              std::string_view extensionId, std::string_view moduleId,
+                                                                              std::uint64_t activationGeneration) const;
+
         /** @brief Idempotently closes registration and resolution and revokes all publications. */
         void BeginShutdown() noexcept;
 

@@ -427,6 +427,51 @@ charged owner and explicit leases; a cell may reference them without charging th
 same allocation twice. Configuration uses checked byte arithmetic (MiB conversion
 is explicit); reservation sums cannot underflow the general pool.
 
+`SharedAssetResidencyLedger` is the authority-side accounting seam for cache-owned
+shared allocations. The exact `AssetId` plus immutable content revision names one
+multidimensional charge; each cell/provider consumer holds its own partition-, epoch- and
+generation-fenced lease. A second consumer neither creates another charge nor
+acquires cache ownership. The Asset Pipeline/cache still owns bytes, lookup,
+eviction and actual destruction. Releasing the final consumer does not return
+budget credit while the cache retains the allocation: the owner first closes
+new leases, then acknowledges actual retirement with a non-reused charge-incarnation
+ticket before the authority removes the charge. A delayed old acknowledgement cannot
+release a successor allocation with the same logical asset revision. Cancellation,
+partition replacement and shutdown close admission while
+old exact leases and retirement acknowledgements remain routable to their original
+ledger. Host composition must drain that ledger before destroying its cache owner.
+
+`StreamingFeatureBudgetReservations` owns the WST-003.4 aggregate reservation
+boundary. It creates one `WorldStreamingRuntimeComposition` with the existing canonical
+scheduler and one shared-residency ledger, exposing both children read-only. A complete
+peak plan names Terrain, Foliage, Navigation, Physics and General across all seven
+independent resource axes. Four immutable feature slices are deducted from each global
+hard limit with checked subtraction; General receives exactly the remainder. A feature
+cannot borrow another slice merely because aggregate capacity remains available.
+The existing budget model retains soft-target/service-window evaluation; this authority
+enforces admitted hard capacity and does not create another clock or pressure policy.
+
+Admission checks current owner, immutable policy, authority revision and the host's
+canonical cell-attempt fence before accepting any peak or canonical operation. Growth
+must be admitted before allocation. Realizing a new shared allocation transfers its
+exact reserved portion into one cache charge in the original feature; it never adds
+that physical charge again. Cache reuse may resolve an explicitly reserved duplicate
+peak, or use an explicit zero portion for already-known reuse. It creates only another
+lease and retains the original charge's slice. Unknown costs are not zero: all plan
+features and resource axes must be explicitly present. Scratch/upload copies outside
+the realized charge remain reserved until their operation's acknowledged retirement.
+
+Cancellation, failure, replacement and shutdown retain outstanding peaks. Terminal
+operation release removes only unrealized portions; unleased and retiring cache
+allocations remain charged until the cache owner acknowledges actual retirement.
+Non-reused scheduler reservations, charge incarnations and outer authority revisions
+prevent stale completions from freeing successors. Borrowed service replacement is
+blocked while either operations or cache charges remain. Shutdown closes both child
+admission seams and reaches Closed only when both have drained. Policy/partition
+replacement uses a new non-reused owner and routes old acknowledgements to the original
+authority rather than resetting retained usage. See the
+[feature reservation migration guide](../../guides/world-streaming-feature-budget-migration.md).
+
 GPU reservation realization follows
 [ADR-034](../../adr/034-gpu-memory-and-residency-ownership.md): the host-composed
 provider adapter obtains a renderer claim against the host GPU envelope before
@@ -464,6 +509,39 @@ closes new admission first and reaches Closed only after retained reservations d
 The ledger is confined to StreamingAuthorityRole and must be drained or transferred
 before its owner is destroyed. WST-003.3 defines the multidimensional CPU, I/O,
 memory, and frame-time policy that supplies these bounded admission charges.
+
+`StreamingConcurrencyPolicy` is the WST-003.6 stage/profile policy owned by that
+same scheduler ledger. Host composition supplies one exact `WorldPartitionProjectProfile`,
+one non-zero immutable revision, and complete independent Load, Activate and Retire
+ceilings. A stage is the existing operation kind, not a transient execution phase:
+Activate includes preparation/publication, and interrupted Load/Activate work keeps
+its original slot through rollback. Explicit Retire work uses the retirement ceiling.
+Cleanup of accepted work never acquires a second slot or waits for new admission.
+This bounds all retained attempts without creating a competing cleanup scheduler.
+
+There is no inferred per-profile numerical table or activation default. The baseline
+four-load/four-retirement guidance below remains configurable host policy; zero
+explicitly disables admission of that kind. The total-operation and generic-capacity
+ceilings still apply independently. Each submission captures the current typed policy
+revision. Unknown profiles/kinds, disabled stages, malformed limits, stale revisions
+and exhausted ceilings fail before accepting work or changing any charge.
+
+Policy replacement is owner-thread, same-profile, strictly-newer and transactional.
+Lowering a ceiling below retained usage closes new admission for that stage until
+acknowledged terminal reservations actually release. Replacement never edits accepted
+operation state or invalidates its exact old reservation token. Cancellation, failure,
+replacement and shutdown retain stage slots until matching retirement acknowledgement
+and explicit release. Moving the unique ledger closes the source; move assignment is
+not supported because it could discard outstanding ownership.
+
+WST-003.6 intentionally tightens the public admission contract: callers constructing
+`StreamingSchedulerAdmissionLimits` (runtime composition and diagnostic snapshots)
+must now supply the complete `concurrency` policy, and `TryAdmit` requires the captured
+`StreamingConcurrencyRevision`. Existing callers migrate by supplying their explicit
+host profile and existing numerical allowances; omitted policy is rejected. The public
+header remains owned by HoroWorldStreaming and introduces no cross-target dependency.
+Regression coverage exercises every profile/kind, exact ceilings, stale/disabled/invalid
+inputs, policy replacement, all interrupted outcomes, release and moved-owner shutdown.
 
 `StreamingBudgetModel` is the inert WST-003.3 policy and observation boundary.
 Every amount vector explicitly carries exactly one known value for CPU-resident,
@@ -597,6 +675,37 @@ waiting work, not a budget bypass or an unconditional admission deadline. Hosts 
 the ranked prefix to the separate scheduler/budget authority, which remains
 responsible for capacity, pins, required content and retirement.
 
+`StreamingFairQueue` is the authority-owned WST-003.7 pending-work contract.
+It captures exact operation/cell-generation fences and source descriptors in bounded
+preallocated storage, and uses the existing numerical priority policy unchanged.
+The host issues a non-reused queue lifetime identity; a queue owns one immutable
+priority publication and mounted partition epoch. Replacement of that policy or
+partition composes a new queue lifetime after explicitly withdrawing old pending work.
+All commands and complete eligibility snapshots carry the current non-wrapping queue
+revision and monotonic unscaled service time. The authority validates source freshness,
+required content and budget feasibility before supplying each exact operation's typed
+Admissible/Deferred decision. Eligibility is evaluated at the same authority safe point
+as the later scheduler admission; the queue cannot override that decision.
+
+After at most the configured number of successful score-first dispatches (default
+three), one fair dispatch chooses the oldest admissible pending entry. Enqueue time
+is captured by the owner; same-time arrival order is stable. A same-cell successor
+attempt replaces metadata without resetting its wait order. With N older continuously
+admissible entries, pending work progresses within (N+1)*(burst+1) successful
+dispatches despite continuously arriving higher-scored work. Deferred entries do not
+block feasible work; no wall-clock deadline or progress under impossible budgets is
+promised. Numerical age boost remains capped and never becomes a budget bypass.
+
+Selection publishes a revision-fenced proposal while retaining the pending entry.
+Only after successful atomic scheduler admission does CommitDispatch remove that
+exact proposal and advance fairness credit. A failed reservation leaves pending work
+and fairness credit intact. A fresh selection replaces the old proposal, including
+an all-deferred snapshot that revokes it. Malformed, duplicate, stale or oversized
+snapshots preserve the prior publication. Enqueue, replacement, queued cancellation,
+failure withdrawal and shutdown revoke proposals explicitly. Terminal shutdown
+clears only pending metadata idempotently; admitted operations and actual reservations
+remain owned by the scheduler ledger and its ordinary retirement lifecycle.
+
 Loss of all demands starts the configured linger timer; new demand cancels linger.
 `StreamingCellStabilityPolicy` makes that rule an explicit pure per-cell transition
 contract. A cell enters only at or inside the inclusive enter margin, remains held
@@ -629,6 +738,30 @@ Failed remains until that change or explicit retry. Volume exit/reentry alone do
 not reset the counter; this replaces the ambiguous "volume cooldown trigger" and
 prevents camera flapping from creating endless retry storms. Diagnostics expose
 attempt count, next retry time and terminal cause.
+
+`StreamingFailurePolicy` and immutable authority-owned `StreamingFailureRecord`
+implement WST-003.12 at that boundary. `RecordFailure` accepts only a canonical
+failed terminal after retirement acknowledgement, then starts the cooldown from
+that safe point. Producers distinguish transient I/O/provider causes from permanent
+integrity, schema, missing-required-provider and permanently oversized causes;
+ordinary budget pressure stays in scheduler admission and never creates a failure.
+
+Eligibility is a pure observation. `IssueRetry` consumes it once for an exact queued
+Load operation with a distinct operation identity and strictly greater generation.
+The authority publishes that successor together with async requeue, then obtains
+fresh ordinary scheduler and multidimensional budget admission before starting work.
+Failed admission leaves that same queued retry pending, without consuming another
+allowance. No sleeps, ambient clocks, allocation or backend selection occur here.
+
+The record retains attempt count and cause through demand loss and issued work.
+Newer content/provider publications or explicit host authorization start a fresh
+series; older publications, replaced policy/partition facts, duplicate completions,
+and backward clocks fail without mutation. Cancellation/shutdown closes new policy
+work while canonical retirement drains separately. Only canonical Active residency of the exact issued
+generation authorizes releasing the record; demand exit, cancellation and policy
+replacement do not. The authority retains quarantine tombstones under the configured
+record ceiling for the mounted epoch, preventing eviction from resetting failures.
+Unrepresentable cooldown deadlines return a typed time-exhaustion error.
 
 ## Bounded Diagnostic Projection And Decision Evidence
 
@@ -1528,6 +1661,25 @@ cannot publish an older candidate. This boundary performs no I/O, decompression,
 provider invocation, owner-thread transition or partial publication. The owner revalidates the exact
 operation fence before the later atomic commit.
 
+`ParseStreamingCellArtifact` supplies that same candidate boundary directly from
+canonical `HOROCELL` bytes. Caller ceilings bound the encoded input before hashing
+and the TOC count/decoded total before allocation. Hashing uses cancellable 64 KiB
+units; authenticated rows have contained canonical ranges, zero padding and an
+aggregate CRC combined without decompressing optional blocks. Both the header hash
+and the existing manifest hash must match before header controls are interpreted.
+The parser owns temporary rows only, never retains borrowed bytes, invokes providers
+or publishes live state. Success returns the existing candidate with its captured
+operation fence; cancellation, closed admission, malformed bytes, capacity overflow
+and unsupported controls return typed failures without changing the manifest.
+Encryption and noncanonical coordinate systems are explicitly unsupported by this
+entry point until their owning adapters are available. Independent block decode and
+per-entry decoded CRC verification remain the next preparation phase.
+
+This entry point preserves the version-one wire format and provider-owned schema
+authority. No older supported artifact schema or migration step is currently
+specified: major versions still require recooking, and optional same-major forward
+payload compatibility does not constitute an older-artifact migration.
+
 `StreamingCellAssetRequest` is the WST-005.4 asynchronous ownership boundary. It
 resolves the candidate package followed by canonical hard-dependency packages against
 the same immutable manifest and asset-registry revision, validates the complete bounded
@@ -1620,3 +1772,10 @@ See [Coordinate Precision And Origin Rebasing](./coordinate-precision-and-origin
 - [Concurrency And Job System](../foundation/concurrency-and-jobs.md): Job workers, cancellation tokens, and thread roles.
 - [Error And Diagnostics](../foundation/error-and-diagnostics.md): Fallible `Result<T, Error>` contracts and diagnostic codes.
 - [Editor Document Model](../editor/editor-document-model.md): Multi-layer authoring documents and offline cell baking.
+
+An issued retry that is cancelled, replaced or shut down remains charged to the
+retry allowance. After its exact canonical terminal proves cleanup, an active
+(resumed) authority calls `ReconcileInterruption` to retain the cause/count and
+begin the next cooldown or quarantine. Duplicate acknowledgements and live
+retirement snapshots are rejected. A closed authority simply retains history
+until teardown; it admits no new retry work.

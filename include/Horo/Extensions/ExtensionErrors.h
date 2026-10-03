@@ -19,6 +19,24 @@ namespace Horo::Extensions::ExtensionErrors {
     extern const ErrorCodeDescriptor EditorSurfaceContextCapacityExceeded;
     /** @brief Surface context attachment and access admission are closed. */
     extern const ErrorCodeDescriptor EditorSurfaceContextShutdown;
+    /** @brief An external panel/tab registry descriptor, provider key, or bound is malformed. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryInvalid;
+    /** @brief An external panel/tab contribution identity is already published. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryDuplicate;
+    /** @brief The bounded external panel/tab registry is full. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryCapacityExceeded;
+    /** @brief External panel/tab registration and lifecycle admission are closed. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryShutdown;
+    /** @brief The requested external panel/tab is not registered or no longer available. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryUnknown;
+    /** @brief The external panel/tab provider is present but disabled by host policy. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryProviderDisabled;
+    /** @brief The external panel/tab provider is missing, revoked, or unloaded. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryProviderMissing;
+    /** @brief A focus request targeted a registered surface that is currently closed. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistrySurfaceClosed;
+    /** @brief Persisted external panel/tab state is malformed or exceeds host bounds. */
+    extern const ErrorCodeDescriptor EditorSurfaceRegistryStateInvalid;
     /** @brief A command contribution is malformed or violates its surface contract. */
     extern const ErrorCodeDescriptor EditorCommandInvalid;
     /** @brief A command identity is already published by another contribution. */
@@ -119,6 +137,20 @@ namespace Horo::Extensions::ExtensionErrors {
     extern const ErrorCodeDescriptor CapabilityRegistryCapacityExceeded;
     /** @brief The application capability registry is shutting down. */
     extern const ErrorCodeDescriptor CapabilityRegistryShutdown;
+    /** @brief A process observer descriptor, event, or host allowlist is invalid. */
+    extern const ErrorCodeDescriptor ProcessObserverInvalid;
+    /** @brief A process observer identity is already published. */
+    extern const ErrorCodeDescriptor ProcessObserverDuplicate;
+    /** @brief The bounded process observer registry is full. */
+    extern const ErrorCodeDescriptor ProcessObserverCapacityExceeded;
+    /** @brief Process observer registration and dispatch are closed. */
+    extern const ErrorCodeDescriptor ProcessObserverShutdown;
+    /** @brief Process observer dispatch used the wrong thread. */
+    extern const ErrorCodeDescriptor ProcessObserverThreadViolation;
+    /** @brief Process observer dispatch recursively entered itself. */
+    extern const ErrorCodeDescriptor ProcessObserverReentrant;
+    /** @brief One attributed process observer callback failed. */
+    extern const ErrorCodeDescriptor ProcessObserverCallbackFailed;
     /** @brief A backend-service descriptor or requested identity is malformed. */
     extern const ErrorCodeDescriptor BackendServiceInvalid;
     /** @brief A backend service identity already has a published provider. */

@@ -207,69 +207,6 @@ namespace Horo::AI::AIErrors {
         .retryable = true,
         .userActionable = false,
     };
-    const ErrorCodeDescriptor PerceptionDescriptorInvalid{
-        .domain = AiDomain,
-        .code = ErrorCode{"ai.perception.descriptor_invalid"},
-        .defaultSeverity = ErrorSeverity::Error,
-        .summary = "A perception descriptor has invalid identity, source, version, capability, or dependency metadata.",
-        .remediationHint = "Correct the typed descriptor metadata before composing the SceneRuntime perception registry.",
-        .retryable = false,
-        .userActionable = true,
-    };
-    const ErrorCodeDescriptor PerceptionDescriptorLimitExceeded{
-        .domain = AiDomain,
-        .code = ErrorCode{"ai.perception.descriptor_limit_exceeded"},
-        .defaultSeverity = ErrorSeverity::Error,
-        .summary = "The perception descriptor registry exceeds a configured bounded capacity.",
-        .remediationHint = "Reduce or partition perception contributions before SceneRuntime activation.",
-        .retryable = false,
-        .userActionable = true,
-    };
-    const ErrorCodeDescriptor PerceptionDescriptorConflict{
-        .domain = AiDomain,
-        .code = ErrorCode{"ai.perception.descriptor_conflict"},
-        .defaultSeverity = ErrorSeverity::Error,
-        .summary = "Multiple perception descriptors claim the same stable type identity.",
-        .remediationHint = "Assign one globally unique stable identity to each sense, stimulus, and listener type.",
-        .retryable = false,
-        .userActionable = true,
-    };
-    const ErrorCodeDescriptor PerceptionDependencyMissing{
-        .domain = AiDomain,
-        .code = ErrorCode{"ai.perception.dependency_missing"},
-        .defaultSeverity = ErrorSeverity::Error,
-        .summary = "A required perception listener dependency is not registered.",
-        .remediationHint = "Register the exact referenced sense and stimulus descriptors or make the listener optional.",
-        .retryable = false,
-        .userActionable = true,
-    };
-    const ErrorCodeDescriptor PerceptionDescriptorIncompatible{
-        .domain = AiDomain,
-        .code = ErrorCode{"ai.perception.descriptor_incompatible"},
-        .defaultSeverity = ErrorSeverity::Error,
-        .summary = "A perception sense or stimulus descriptor version is incompatible with its listener.",
-        .remediationHint = "Install a descriptor version inside the listener's declared inclusive compatibility interval.",
-        .retryable = false,
-        .userActionable = true,
-    };
-    const ErrorCodeDescriptor PerceptionCapabilityUnavailable{
-        .domain = AiDomain,
-        .code = ErrorCode{"ai.perception.capability_unavailable"},
-        .defaultSeverity = ErrorSeverity::Error,
-        .summary = "The composition root cannot satisfy a required perception listener capability.",
-        .remediationHint = "Provide the declared gameplay query service or disable the dependent listener explicitly.",
-        .retryable = false,
-        .userActionable = true,
-    };
-    const ErrorCodeDescriptor PerceptionRegistryStorageUnavailable{
-        .domain = AiDomain,
-        .code = ErrorCode{"ai.perception.registry_storage_unavailable"},
-        .defaultSeverity = ErrorSeverity::Critical,
-        .summary = "Storage for an immutable perception descriptor registry is unavailable.",
-        .remediationHint = "Release memory pressure and retry registry composition before SceneRuntime activation.",
-        .retryable = true,
-        .userActionable = false,
-    };
     const ErrorCodeDescriptor BehaviorTreeSchemaInvalid{
         .domain = AiDomain,
         .code = ErrorCode{"ai.behavior_tree.schema_invalid"},

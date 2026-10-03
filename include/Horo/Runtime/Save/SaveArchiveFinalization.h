@@ -71,7 +71,7 @@ namespace Horo::Runtime {
 
         /**
          * @brief Validates metadata and directory admission before any payload allocation.
-         * @param preamble Final v1 preamble bytes selected by the archive serializer.
+         * @param preamble Final v1 raw or v2 compressed-capable preamble bytes selected by the archive serializer.
          * @param manifest Validated save manifest describing every required chunk.
          * @param directory Manifest-owned contiguous directory in record order.
          * @param limits Trusted construction bounds.
@@ -82,7 +82,7 @@ namespace Horo::Runtime {
                                                                  const SaveArchiveFinalizationLimits &limits = {});
 
         /**
-         * @brief Appends one complete raw chunk to detached staging.
+         * @brief Appends one complete stored chunk after bounded decode and canonical hash verification.
          * @param record Expected next record identity from the validated directory.
          * @param bytes Borrowed chunk bytes; never retained by the caller.
          * @return Success or a typed ordering, length, hash, budget, or allocation failure.

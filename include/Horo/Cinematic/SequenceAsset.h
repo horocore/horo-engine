@@ -92,6 +92,8 @@ namespace Horo::Cinematic {
         SequenceClockSource clockSource{SequenceClockSource::CommittedSimulation};
         SequencePausePolicy pausePolicy{SequencePausePolicy::FollowGameplay};
         SequenceDilationPolicy dilationPolicy{SequenceDilationPolicy::SourceNative};
+        bool pauseGameplay{}; /**< Requests a scoped host gameplay-pause token during playback. */
+        bool hideHud{};       /**< Requests a scoped Runtime UI HUD suppression token during playback. */
         constexpr auto operator<=>(const SequencePlaybackSettings &) const noexcept = default;
     };
 

@@ -1,10 +1,38 @@
 #include "SdlInputBackend.h"
 
 #include <algorithm>
+#include <optional>
 #include <unordered_map>
 
 namespace Horo::Input {
     namespace {
+        /** @brief Returns the exact SDL window for a window-local input event, or no ID for global device events. */
+        std::optional<SDL_WindowID> EventWindowId(const SDL_Event &event) noexcept {
+            switch (event.type) {
+                case SDL_EVENT_KEY_DOWN:
+                case SDL_EVENT_KEY_UP:
+                    return event.key.windowID;
+                case SDL_EVENT_TEXT_INPUT:
+                    return event.text.windowID;
+                case SDL_EVENT_TEXT_EDITING:
+                    return event.edit.windowID;
+                case SDL_EVENT_MOUSE_MOTION:
+                    return event.motion.windowID;
+                case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                case SDL_EVENT_MOUSE_BUTTON_UP:
+                    return event.button.windowID;
+                case SDL_EVENT_MOUSE_WHEEL:
+                    return event.wheel.windowID;
+                case SDL_EVENT_WINDOW_FOCUS_GAINED:
+                case SDL_EVENT_WINDOW_FOCUS_LOST:
+                case SDL_EVENT_WINDOW_MOUSE_ENTER:
+                case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+                    return event.window.windowID;
+                default:
+                    return std::nullopt;
+            }
+        }
+
         const ErrorDomainId SdlInputDomain{"horo.input.sdl"};
         const ErrorCodeDescriptor HapticsStaleDevice{SdlInputDomain,
                                                      ErrorCode{"input.haptics.stale_device"},
@@ -184,6 +212,8 @@ namespace Horo::Input {
         RawInputCollector collector;
         std::unordered_map<SDL_JoystickID, Device> devices;
         WindowInputState windowState{};
+        SDL_WindowID windowId{0};
+        bool neutralizeOnBeginFrame{false};
 
         void HandleKeyboardEvent(const SDL_Event &event);
         void HandlePointerEvent(const SDL_Event &event);
@@ -377,9 +407,24 @@ namespace Horo::Input {
 
     void SdlInputBackend::BeginFrame(const FrameNumber frame) {
         impl_->collector.BeginFrame(frame);
+        if (impl_->neutralizeOnBeginFrame) {
+            impl_->collector.Neutralize();
+            impl_->neutralizeOnBeginFrame = false;
+        }
+    }
+
+    /** @copydoc SdlInputBackend::BindWindow */
+    void SdlInputBackend::BindWindow(const SDL_WindowID windowId) noexcept {
+        if (impl_->windowId == windowId)
+            return;
+        impl_->collector.Neutralize();
+        impl_->windowId = windowId;
+        impl_->neutralizeOnBeginFrame = true;
     }
 
     void SdlInputBackend::ProcessEvent(const SDL_Event &event) {
+        if (const auto eventWindow = EventWindowId(event); eventWindow && (impl_->windowId == 0 || *eventWindow != impl_->windowId))
+            return;
         switch (event.type) {
             case SDL_EVENT_KEY_DOWN:
             case SDL_EVENT_KEY_UP:
@@ -438,6 +483,25 @@ namespace Horo::Input {
     /** @copydoc SdlInputBackend::Haptics */
     IGamepadHaptics *SdlInputBackend::Haptics() noexcept {
         return this;
+    }
+
+    /** @copydoc SdlInputBackend::StartTextInput */
+    bool SdlInputBackend::StartTextInput(SDL_Window *window, const SdlTextInputArea area) const noexcept {
+        return SetTextInputArea(window, area) && SDL_StartTextInput(window);
+    }
+
+    /** @copydoc SdlInputBackend::SetTextInputArea */
+    bool SdlInputBackend::SetTextInputArea(SDL_Window *window, const SdlTextInputArea area) const noexcept {
+        if (window == nullptr || impl_->windowId == 0 || SDL_GetWindowID(window) != impl_->windowId || area.width <= 0 || area.height <= 0)
+            return false;
+        const SDL_Rect nativeArea{area.x, area.y, area.width, area.height};
+        return SDL_SetTextInputArea(window, &nativeArea, 0);
+    }
+
+    /** @copydoc SdlInputBackend::StopTextInput */
+    void SdlInputBackend::StopTextInput(SDL_Window *window) const noexcept {
+        if (window != nullptr && impl_->windowId != 0 && SDL_GetWindowID(window) == impl_->windowId)
+            SDL_StopTextInput(window);
     }
 
     Result<void> SdlInputBackend::PlayRumble(const GamepadDeviceId id, const RumbleEffect effect) {

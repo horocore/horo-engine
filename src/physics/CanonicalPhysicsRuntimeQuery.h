@@ -30,6 +30,10 @@ namespace Horo::Physics::Detail {
         JPH::Ref<JPH::Shape> shape;
     };
 
+    /** @brief Resolves a native compound path to copied stable child metadata; null for a primitive or invalid path. */
+    [[nodiscard]] const PhysicsCompoundChild *ResolveCanonicalFixtureChild(const CanonicalQueryFixtureRecord &fixture,
+                                                                           JPH::SubShapeID subshape) noexcept;
+
     /** @brief Fixed native collector storage reused by one owner-thread canonical world. */
     struct CanonicalQueryStorage final {
         std::array<JPH::CastRayCollector::ResultType, MaximumPhysicsQueryHits> rayQueryResults{};

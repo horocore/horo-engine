@@ -2,6 +2,7 @@
 
 #include "Horo/Extensions/ExtensionManifest.h"
 #include "Horo/Extensions/ExtensionModuleResolution.h"
+#include "Horo/Extensions/ExtensionPlatformProvider.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Foundation/TransparentString.h"
 #include "Horo/Platform/DynamicLibrary.h"
@@ -24,6 +25,7 @@ namespace Horo::Extensions {
         ExtensionManifest manifest;
         std::vector<std::shared_ptr<ExtensionModuleLifetime>> lifetimes;
         std::vector<std::string> moduleIds;
+        ExtensionPlatformProviderPublication platformProvider;
     };
 
     /**
@@ -42,12 +44,13 @@ namespace Horo::Extensions {
          * @param artifactGate Mandatory host-composed integrity, trust, and signature gate. Null composition fails closed before native
          * load.
          * @param libraryLoader Explicit native loader boundary; empty uses the platform loader after security verification.
+         * @param platformProviderCommit Optional host-owned commit for one staged provider-only extension.
          */
         explicit ExtensionManager(Assets::AssetImporterCatalog *importerCatalog = nullptr,
                                   ExtensionHostProfile hostProfile = ExtensionHostProfile::Interactive,
                                   std::vector<std::string> hostCapabilities = {},
                                   std::shared_ptr<const Security::NativeArtifactGate> artifactGate = {},
-                                  NativeLibraryLoader libraryLoader = {});
+                                  NativeLibraryLoader libraryLoader = {}, ExtensionPlatformProviderCommit platformProviderCommit = {});
         ~ExtensionManager();
         ExtensionManager(const ExtensionManager &) = delete;
         ExtensionManager &operator=(const ExtensionManager &) = delete;
@@ -84,6 +87,7 @@ namespace Horo::Extensions {
         std::vector<std::string> m_hostCapabilities;
         std::shared_ptr<const Security::NativeArtifactGate> m_artifactGate;
         NativeLibraryLoader m_libraryLoader;
+        ExtensionPlatformProviderCommit m_platformProviderCommit;
         TransparentStringMap<std::unique_ptr<LoadedExtension>> m_loadedExtensions;
     };
 

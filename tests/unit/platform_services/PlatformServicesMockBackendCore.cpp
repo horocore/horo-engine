@@ -123,10 +123,11 @@ namespace Horo::PlatformServices::TestSupport {
             case MockPlatformServicesOperation::UnlockAchievement:
             case MockPlatformServicesOperation::SubmitScore:
             case MockPlatformServicesOperation::WriteStat:
-            case MockPlatformServicesOperation::WriteCloudObject:
             case MockPlatformServicesOperation::SetPresence:
             case MockPlatformServicesOperation::ClearPresence:
                 return std::holds_alternative<std::monostate>(response.payload);
+            case MockPlatformServicesOperation::WriteCloudObject:
+                return std::holds_alternative<CloudMutationResult>(response.payload);
             case MockPlatformServicesOperation::ReadCloudObject: {
                 const auto *payload = std::get_if<CloudReadResult>(&response.payload);
                 return payload != nullptr && payload->bytes.size() <= MockPlatformServicesBackend::MaximumPayloadBytes;

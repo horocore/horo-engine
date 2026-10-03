@@ -112,6 +112,7 @@ namespace Horo::Audio {
 
     /** @brief Fixed-size observable pressure counters; every counter saturates instead of wrapping. */
     struct AudioEventQueueStats final {
+        std::uint32_t depth{};              /**< Approximate live SPSC occupancy at the control sampling point. */
         std::uint32_t terminalEvents{};     /**< Successfully published terminal operation results. */
         std::uint32_t deviceEvents{};       /**< Successfully published callback/device facts. */
         std::uint32_t droppedTelemetry{};   /**< Best-effort underrun records dropped at ordinary capacity. */

@@ -279,13 +279,14 @@ namespace Horo::Tests {
     }
 
     void FullEditorUiTestHost::AdvanceFixedTicks(const std::size_t count) {
+        state_->screenHost->OnInputSnapshot();
         for (std::size_t index = 0; index < count; ++index) {
             const CancellationToken token = state_->runtimeCancellation.Token();
             const Runtime::FixedStepContext context{++state_->runtimeSimulationTick, Duration::FromNanoseconds(16'666'667), token};
             const Result<void> advanced = state_->runtimeScene.OnFixedUpdate(context);
             if (advanced.HasError())
                 throw std::runtime_error(advanced.ErrorValue().message);
-            state_->screenHost->OnFixedUpdate(1.0 / 60.0);
+            state_->screenHost->OnFixedUpdate(context.simulationTick, 1.0 / 60.0);
         }
     }
 

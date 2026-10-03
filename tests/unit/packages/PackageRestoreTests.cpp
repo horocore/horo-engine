@@ -99,10 +99,10 @@ namespace {
     }
 
     struct ServiceFixture final {
-        explicit ServiceFixture(std::vector<std::byte> sourceBytes)
+        explicit ServiceFixture(std::vector<std::byte> sourceBytes, PackagePublisherVerificationService *publisherVerification = nullptr)
             : cache(CreateCache(files, temporary.Path() / "cache")), jobs({.workerCount = 2, .maxQueuedJobs = 8}),
               source(std::move(sourceBytes)) {
-            auto created = PackageRestoreService::Create(jobs, files, cache, &source);
+            auto created = PackageRestoreService::Create(jobs, files, cache, &source, publisherVerification);
             REQUIRE(created.HasValue());
             service.emplace(std::move(created).Value());
         }
@@ -159,6 +159,64 @@ namespace {
         CHECK(graph->packages.front().lock.package == fixture.package);
         CHECK(graph->packages.front().archive->Digest() == fixture.archive.Digest());
         CHECK_FALSE(graph->packages.front().cacheHit);
+        CHECK_FALSE(graph->packages.front().publisher.has_value());
+    }
+
+    TEST_CASE("Package restore fails closed when release requires unavailable publisher evidence", "[packages][restore][release]") {
+        RestoreFixture fixture;
+        ServiceFixture service(fixture.bytes);
+        auto request = fixture.Request();
+        request.requirePublisherVerification = true;
+
+        const auto snapshot = StartAndWait(service, std::move(request));
+        REQUIRE(snapshot.outcome == PackageRestoreOutcome::Failed);
+        REQUIRE(snapshot.diagnostic.has_value());
+        CHECK(snapshot.diagnostic->code.Value() == PackageRestoreErrors::InvalidInput.code.Value());
+        CHECK_FALSE(service.service->ActiveGraph());
+    }
+
+    TEST_CASE("Release restore rejects unsigned publisher policy even when normal restore permits it", "[packages][restore][release]") {
+        RestoreFixture fixture;
+        PackagePublisherVerificationPolicy policy;
+        policy.allowUnsigned = true;
+        auto created = PackagePublisherVerificationService::Create(std::move(policy), nullptr);
+        REQUIRE(created.HasValue());
+        auto verifier = std::move(created).Value();
+        ServiceFixture service(fixture.bytes, &verifier);
+
+        auto request = fixture.Request();
+        request.requirePublisherVerification = true;
+        const auto snapshot = StartAndWait(service, std::move(request));
+        REQUIRE(snapshot.outcome == PackageRestoreOutcome::Failed);
+        REQUIRE(snapshot.diagnostic.has_value());
+        CHECK(snapshot.diagnostic->code.Value() == PackageRestoreErrors::PublisherRejected.code.Value());
+        CHECK_FALSE(service.service->ActiveGraph());
+    }
+
+    TEST_CASE("Package restore retains publisher evidence in its immutable graph", "[packages][restore][publisher]") {
+        RestoreFixture fixture;
+        PackagePublisherVerificationPolicy policy;
+        policy.allowUnsigned = true;
+        auto created = PackagePublisherVerificationService::Create(std::move(policy), nullptr);
+        REQUIRE(created.HasValue());
+        auto verifier = std::move(created).Value();
+        ServiceFixture service(fixture.bytes, &verifier);
+
+        RestoreReady(service, fixture.Request());
+        const auto graph = service.service->ActiveGraph();
+        REQUIRE(graph);
+        REQUIRE(graph->packages.size() == 1U);
+        REQUIRE(graph->packages.front().publisher.has_value());
+        CHECK(graph->packages.front().publisher->outcome == PackagePublisherVerificationOutcome::Unsigned);
+        CHECK(graph->packages.front().publisher->artifactDigest == fixture.archive.Digest());
+
+        auto releaseRequest = fixture.Request();
+        releaseRequest.requirePublisherVerification = true;
+        const auto release = StartAndWait(service, std::move(releaseRequest));
+        REQUIRE(release.outcome == PackageRestoreOutcome::Failed);
+        REQUIRE(release.diagnostic.has_value());
+        CHECK(release.diagnostic->code.Value() == PackageRestoreErrors::PublisherRejected.code.Value());
+        CHECK(service.source.calls == 2U);
     }
 
     TEST_CASE("Package restore is offline-aware and reuses only the verified cache", "[packages][restore][offline]") {

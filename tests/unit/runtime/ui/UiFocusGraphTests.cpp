@@ -168,6 +168,25 @@ namespace Horo::Runtime::Ui {
             ExpectError(graph.PopModal(opened.Value().modal), UiErrors::FocusModalStale);
         }
 
+        TEST_CASE("Runtime UI modal focus stays within its player presentation scope", "[runtime_ui][focus][modal]") {
+            const UiOwnershipGeneration owner = Owner();
+            auto nodes = ModalNodes(owner);
+            auto first = CreateGraph(Descriptor(Context(73, 3, 1), Stable<UiElementId>(2)), nodes);
+            auto second = CreateGraph(Descriptor(Context(73, 3, 2), Stable<UiElementId>(3)), nodes);
+
+            const auto opened = first.PushModal({nodes[3].element, nodes[3].id, nodes[4].id});
+            REQUIRE(opened.HasValue());
+            REQUIRE(first.CurrentFocus().HasValue());
+            CHECK(first.CurrentFocus().Value()->id == nodes[4].id);
+            REQUIRE(second.CurrentFocus().HasValue());
+            CHECK(second.CurrentFocus().Value()->id == nodes[2].id);
+            CHECK_FALSE(second.Snapshot().Value().activeModal.has_value());
+
+            REQUIRE(first.PopModal(opened.Value().modal).HasValue());
+            CHECK(first.CurrentFocus().Value()->id == nodes[1].id);
+            CHECK(second.CurrentFocus().Value()->id == nodes[2].id);
+        }
+
         TEST_CASE("Focus graph reload reconciles stable IDs transactionally and fences stale revisions", "[runtime_ui][focus][reload]") {
             const UiOwnershipGeneration owner = Owner();
             auto nodes = BasicNodes(owner);

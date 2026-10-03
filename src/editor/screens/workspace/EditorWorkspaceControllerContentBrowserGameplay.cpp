@@ -1,5 +1,6 @@
 #include "Horo/Editor/ProjectIntegrityValidatorService.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Foundation/Paths.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EditorWorkspaceControllerContentBrowserInternal.h"
 #include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
@@ -26,8 +27,8 @@ namespace Horo::Editor {
         }
 
         const std::filesystem::path projectRoot = NormalizeAbsolute(m_viewModel.projectRoot);
-        const std::filesystem::path assetsRoot = projectRoot / "assets";
-        const std::filesystem::path scriptsRoot = assetsRoot / "scripts";
+        const std::filesystem::path assetsRoot = ProjectLayout::AssetRoot(projectRoot);
+        const std::filesystem::path scriptsRoot = ProjectLayout::ScriptsRoot(projectRoot);
         const std::filesystem::path requestedDirectory = NormalizeAbsolute(request.destination);
         std::filesystem::path directory;
         if (nativeBehavior)

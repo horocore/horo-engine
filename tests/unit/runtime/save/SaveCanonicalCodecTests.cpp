@@ -149,6 +149,34 @@ namespace {
         CHECK(reader.RequireFinished().HasValue());
     }
 
+    TEST_CASE("Canonical child readers share a cumulative read work budget", "[runtime][save][canonical-codec]") {
+        const auto child = EncodeUInt32(42);
+        const auto parent = Wrap(CompositeKind::Sequence, child);
+        CanonicalCodecLimits limits;
+        limits.maximumReadWorkBytes = parent.Bytes().size() + child.Bytes().size();
+        auto root = ReaderFor(parent, limits);
+        auto values = root.ReadSequence();
+        REQUIRE(values.HasValue());
+        REQUIRE(values.Value().size() == 1);
+        auto first = values.Value().front().OpenReader();
+        REQUIRE(first.HasValue());
+        auto firstReader = std::move(first).Value();
+        CHECK(firstReader.ReadUInt32().Value() == 42);
+        auto reopened = values.Value().front().OpenReader();
+        REQUIRE(reopened.HasValue());
+        auto reopenedReader = std::move(reopened).Value();
+        const auto exhausted = reopenedReader.ReadUInt32();
+        REQUIRE(exhausted.HasError());
+        CHECK(exhausted.ErrorValue().code.Value() == SaveErrors::CanonicalCodecLimitExceeded.code.Value());
+        REQUIRE(exhausted.ErrorValue().diagnostics.size() == 1);
+        CHECK(exhausted.ErrorValue().diagnostics.front().code.Value() == "save.canonical_codec.limit.read_work");
+
+        limits.maximumReadWorkBytes = std::numeric_limits<std::size_t>::max();
+        const auto unbounded = CanonicalValueReader::Create(parent.Bytes(), limits);
+        REQUIRE(unbounded.HasError());
+        CHECK(unbounded.ErrorValue().code.Value() == SaveErrors::CanonicalCodecConfigurationInvalid.code.Value());
+    }
+
     TEST_CASE("Canonical fixed-width and math values round trip", "[runtime][save][canonical-codec]") {
         CanonicalValueWriter writer;
         REQUIRE(writer.WriteUInt8(std::numeric_limits<std::uint8_t>::max()).HasValue());

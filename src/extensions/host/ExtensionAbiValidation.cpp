@@ -10,7 +10,8 @@ namespace Horo::Extensions {
             return requirements.structSize == sizeof(HoroExtensionRequirements) && requirements.abiMajorVersion == host.abiVersion &&
                    requirements.minimumHostMinor <= host.abiMinorVersion && requirements.requiredHostApiSize >= legacyHostSize &&
                    requirements.requiredHostApiSize <= host.structSize && requirements.reserved == 0 &&
-                   (requirements.requiredFunctions & ~uint32_t{HORO_EXTENSION_REQUIRES_ASSET_IMPORTER}) == 0;
+                   (requirements.requiredFunctions &
+                    ~uint32_t{HORO_EXTENSION_REQUIRES_ASSET_IMPORTER | HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER}) == 0;
         }
     }  // namespace
 
@@ -29,6 +30,9 @@ namespace Horo::Extensions {
         if (!HasSupportedRequirements(requirements, host))
             return HORO_EXTENSION_ERROR_VERSION_MISMATCH;
         if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_ASSET_IMPORTER) != 0 && host.registerAssetImporter == nullptr)
+            return HORO_EXTENSION_ERROR_INVALID_ARGS;
+        if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER) != 0 &&
+            (host.structSize < sizeof(HoroExtensionHostApi) || host.registerPlatformServicesProvider == nullptr))
             return HORO_EXTENSION_ERROR_INVALID_ARGS;
         return HORO_EXTENSION_SUCCESS;
     }

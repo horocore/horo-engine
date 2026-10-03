@@ -21,7 +21,6 @@ namespace Horo::Editor {
         [[nodiscard]] float DrawMetrics(const ImVec2 &origin, float width, const EditorGuiContext &context) const;
         void DrawBusTable(const ImVec2 &origin, float width, float height, const EditorGuiContext &context);
         void DrawBusRow(std::size_t index, float width, const TableLayout &layout, const EditorGuiContext &context);
-        void DrawFooter(const ImVec2 &origin, float width, const EditorGuiContext &context) const;
 
         std::array<char, 256> m_search{};
         std::array<bool, 4> m_muted{};

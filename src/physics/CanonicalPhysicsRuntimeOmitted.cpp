@@ -2,6 +2,11 @@
 #include "Horo/Physics/PhysicsErrors.h"
 
 namespace Horo::Physics::Detail {
+    /** @copydoc ProjectCanonicalDebug */
+    CanonicalDebugProjection ProjectCanonicalDebug(const CanonicalWorldHandle, const PhysicsDebugBudget &) {
+        return {};
+    }
+
     /** @copydoc CreateCanonicalRuntime */
     Result<CanonicalRuntimeHandle> CreateCanonicalRuntime(const CanonicalFailurePoint) {
         return Result<CanonicalRuntimeHandle>::Failure(
@@ -40,6 +45,60 @@ namespace Horo::Physics::Detail {
             MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
     }
 
+    /** @copydoc ResolveCanonicalBodyMutation */
+    Result<PhysicsBodyDescriptor> ResolveCanonicalBodyMutation(const CanonicalWorldHandle, const PhysicsWorldId,
+                                                               const PhysicsBodyMutation &) {
+        return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc ApplyCanonicalBodyMutation */
+    Result<void> ApplyCanonicalBodyMutation(const CanonicalWorldHandle, const PhysicsWorldId, const PhysicsBodyMutation &) {
+        return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc ReadCanonicalSceneBodyPolicy */
+    Result<PhysicsBodyDescriptor> ReadCanonicalSceneBodyPolicy(const CanonicalWorldHandle, const PhysicsWorldId, const BodyHandle) {
+        return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc ReadCanonicalSceneBodyReconciliation */
+    Result<PhysicsBodyReconciliation> ReadCanonicalSceneBodyReconciliation(const CanonicalWorldHandle, const PhysicsWorldId,
+                                                                           const BodyHandle) {
+        return Result<PhysicsBodyReconciliation>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc ReadCanonicalSceneActivation */
+    Result<PhysicsActivationObservation> ReadCanonicalSceneActivation(const CanonicalWorldHandle, const PhysicsWorldId) {
+        return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc CanonicalSceneEntity */
+    std::uint64_t CanonicalSceneEntity(const CanonicalWorldHandle, const BodyHandle) noexcept {
+        return 0;
+    }
+
+    /** @copydoc SetCanonicalSceneEntity */
+    void SetCanonicalSceneEntity(const CanonicalWorldHandle, const BodyHandle, const std::uint64_t) noexcept {}
+
+    /** @copydoc FindCanonicalNonFiniteBody */
+    std::optional<CanonicalNonFiniteBody> FindCanonicalNonFiniteBody(const CanonicalWorldHandle, const bool, std::size_t &) noexcept {
+        return std::nullopt;
+    }
+
+    /** @copydoc CanonicalQueryFixtureUsesBodyHandle */
+    bool CanonicalQueryFixtureUsesBodyHandle(const CanonicalWorldHandle, const BodyHandle) noexcept {
+        return false;
+    }
+
+    /** @copydoc QuarantineCanonicalSceneBody */
+    void QuarantineCanonicalSceneBody(const CanonicalWorldHandle, const BodyHandle, const CanonicalRetirementSink &) noexcept {}
+
+    /** @copydoc InjectCanonicalNonFiniteBodyForTesting */
+    bool InjectCanonicalNonFiniteBodyForTesting(const CanonicalWorldHandle, const BodyHandle, const float, const std::uint8_t,
+                                                const bool) noexcept {
+        return false;
+    }
+
     /** @copydoc CreateCanonicalSceneConstraint */
     Result<ConstraintHandle> CreateCanonicalSceneConstraint(const CanonicalWorldHandle, const PhysicsWorldId,
                                                             const PhysicsConstraintDescriptor &) {
@@ -50,6 +109,12 @@ namespace Horo::Physics::Detail {
     /** @copydoc DestroyCanonicalSceneConstraint */
     Result<void> DestroyCanonicalSceneConstraint(const CanonicalWorldHandle, const ConstraintHandle) {
         return Result<void>::Failure(
+            MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
+    }
+
+    /** @copydoc ReadCanonicalSceneJointState */
+    Result<PhysicsJointState> ReadCanonicalSceneJointState(const CanonicalWorldHandle, const ConstraintHandle) {
+        return Result<PhysicsJointState>::Failure(
             MakeError(PhysicsErrors::CapabilityUnavailable, "Canonical Physics was omitted from this product composition."));
     }
 
@@ -82,7 +147,7 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc InvokeCanonicalContactCallbackForTesting */
     bool InvokeCanonicalContactCallbackForTesting(const CanonicalWorldHandle, const PhysicsQueryFixture &, const PhysicsQueryFixture &,
-                                                  const std::uint64_t, const bool, const bool, const CanonicalContactSink) {
+                                                  const std::uint64_t, const CanonicalContactSink, const CanonicalContactTestOptions) {
         return false;
     }
 

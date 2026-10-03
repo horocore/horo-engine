@@ -217,7 +217,63 @@ bindings. Active text widgets consume editing commands before global shortcuts.
 IME composition is owned by the focused text surface and is cancelled or
 committed according to platform policy when focus scope changes.
 
+The Input router grants text focus to one eligible GUI, modal, or native-dialog
+context. Committed text is taken at most once in its collection frame; a context
+without text focus, including gameplay, cannot take it. A text-focus transfer,
+context destruction, window-focus loss, or modal preemption cancels the old
+pre-edit and discards already-collected committed text for that frame. Pre-edit
+is never copied to the new owner: only a subsequent native composition update
+can establish it there. A native commit clears the previous pre-edit. The raw
+snapshot remains immutable evidence, not permission to deliver text to a widget.
+
+SDL hosts that own their own text surfaces start native text input and update its
+candidate area in logical window coordinates through `SdlInputBackend`; they stop
+it when focus leaves that window. The SDL collector is bound to one exact window
+ID and discards keyboard, pointer, text, and focus events from other windows.
+HoroEditor's ImGui SDL adapter already owns
+those native start/stop and candidate-position hooks for editor fields, so the
+editor does not also invoke the Input SDL hook on the same window. The editor
+forwards all non-committed-text SDL events to ImGui unchanged; committed text
+enters ImGui once from the bounded Input snapshot, where ImGui selects its
+focused editor field.
+
+The target-private `HoroRuntimeUiInput` adapter is the downstream composition
+seam for Runtime UI text controls: it requires both the router's exact text-focus
+context and an exact `UiActionSource`, then passes committed text to the focused
+`UiControlStateMachine` only. It exposes pre-edit evidence to its caller without
+pretending that the control model owns native candidate presentation. No packaged
+Runtime UI host is currently composed; a future host must bind this seam to its
+presented focus, modal transitions, native text-input lifecycle, and candidate
+geometry rather than bypassing Input or adding an Input-to-RuntimeUi dependency.
+
 ## Gameplay Input Frames
+
+### RUI-005.8 Navigation composition
+
+`HoroEngine::RuntimeUiInput` also owns the public `UiNavigationInput` adapter over
+the existing Input router, focus graph and action queue. Hosts install canonical
+keyboard/D-pad/left-stick action descriptors explicitly. The adapter reads routed
+semantic values with exact gamepad generation and post-filter meaningful evidence;
+it never tests backend identities or device names. Canonical glyph IDs and static
+label fallback belong to Input. Missing icon packs do not affect navigation;
+unmapped/raw bindings return typed unsupported capability evidence.
+
+One adapter belongs to one exact Input token and UI player/layer owner generation.
+It emits at most one focus step and one queued submit/cancel action per frame;
+simultaneous cancel takes precedence. Held repeat uses an owner-supplied monotonic
+unscaled clock and never catches up a missed interval. Modality hysteresis changes
+only presentation. It never rewrites focus, modal restoration, controls or pending
+owner actions. Foreign players, consumed presses, pointer hover, noise and blocked
+contexts cannot establish modality or start navigation.
+
+Creation/rebind validate finite bounds of 512 action definitions, 512 overrides,
+32 effective bindings per navigation action, 64 Input contexts and 16 current or
+previous gamepads. Successful pumping allocates no storage; collection/commit and
+load-time action configuration remain outside that guarantee. Preemption, host
+suspension, modal/assignment changes, disconnect and reload disarm held input until
+neutral. Configuration replacement returns `NeedsRebind`; stale UI owner evidence
+fails closed. Hosts retain the existing presentation and retirement responsibilities;
+this adapter does not implicitly compose a packaged UI host.
 
 The runtime transforms action state into a simulation input frame:
 
@@ -235,6 +291,54 @@ One fixed tick consumes one assigned input frame. When several simulation ticks
 run during one presentation frame, edge-triggered actions are consumed according
 to the action's declared policy and do not fire accidentally on every catch-up
 tick.
+
+`GameplayInputFrameBuilder` is owned per player by the host input boundary. After
+the snapshot is committed and higher-priority UI consumers have updated the
+consumption ledger, the host calls `Capture(router, gameplayContext, player)`
+once, before `FixedUpdate`. Fixed simulation calls only `Consume(simulationTick)`
+and receives a value frame; it never receives the router, collector, snapshot,
+or mutable device state. `Consume` is allocation-free and uses the scheduler's
+one-based tick ordinal. The host must call it once for each attempted tick in
+strict tick order, and owns retry/rollback policy if a fixed-update participant
+fails.
+
+Held axes use the latest admitted capture for every catch-up tick. Press edges
+are latched across presentation frames with no fixed tick, then assigned to the
+next tick exactly once. A second capture of the same committed snapshot is
+ignored. Losing focus or gameplay context ownership clears both held values and
+pending edges so input cannot leak through a modal or resume later. `Reset()`
+clears a builder at player/session ownership changes. Recording stores the
+already assigned value frames; replay feeds those frames directly to simulation,
+without repeating action routing or OS events.
+
+The concrete frame also carries the move action's `down`, `pressed`, and
+`released` bits. These preserve existing semantic callbacks even when opposing
+movement bindings cancel the axis value; their edges follow the same once-per-
+tick latch policy.
+
+Migration from the initial `Consume(router, context, tick, player)` API: move
+routing to the host's pre-fixed-update phase using `Capture`, then replace the
+fixed-update call with `Consume(tick)`. No production caller of the initial API
+existed when this contract was qualified; the input unit test was updated. The
+editor play screen also moves its old fixed-update `ReadAction` call to a
+pre-fixed `OnInputSnapshot` callback and passes the scheduler tick through
+`GuiScreenHost::OnFixedUpdate`. Screen implementations overriding that callback
+must accept the new tick argument.
+
+### INP-001.5 qualification
+
+| Acceptance criterion | Executable or audit evidence |
+| --- | --- |
+| Recorded replay has identical commands | `Gameplay Commands Survive Zero Tick Frames And Match Different Presentation Cadences` records and replays the full tick-stamped sequence; `Recording Replays Exactly` covers cursor exhaustion/reset. |
+| Tick assignment is cadence-independent | The same test compares a zero-tick-then-catch-up schedule against one tick per presentation. `Actions And Fixed Tick Edges Resolve Once` checks held/edge behavior across two catch-up ticks. |
+| Move semantic transitions survive projection | `Tick Frames Preserve Move Action Edges When Opposing Axes Cancel` checks pressed/released independently of net movement. |
+| Fixed simulation does not read raw device state | `GameplayInputFrameBuilder::Consume` takes only `SimulationTick`; the router is limited to `Capture`. An audit of `src/runtime`, `src/editor`, `apps`, and `tests/fixtures/gameplay_e2e` found raw input collection in adapters/router/editor presentation only, not fixed-update implementations. The editor play screen's former fixed-update `ReadAction` call was moved to `OnInputSnapshot`. `Gameplay Capture Uses The Consumption Ledger Before Tick Production` verifies the routing boundary. |
+
+The focused local command is `ctest --test-dir build/skeleton -R
+'^(HoroInputTests|HoroGuiScreenHostLifecycleTests|HoroEditorPlaySessionControllerTests)::'
+--output-on-failure --parallel 2` (35/35 on Linux). The hosted current-head
+status remains the source of truth for the full platform matrix; see the PR
+checks rather than preserving a stale status in this document.
 
 This representation supports recording, replay, tests, and future networking
 without replaying OS events.
@@ -526,6 +630,27 @@ string-based shortcut authority.
 
 ## Testing
 
+### INP-001.3 Context, Focus, Capture, and Modal Evidence
+
+The editor router admits exactly one highest-priority, most-recent context for
+keyboard focus and pointer acquisition at a time. The Runtime UI focus graph
+retains one target per exact player/presentation scope, so a modal in one
+split-screen scope does not overwrite another player's focus. There is no
+process-global focus pointer. A modal's router token and the editor screen
+host's disabled presentation/menu gate block workspace handlers before
+dispatch; gameplay action reads are neutral while their context is ineligible.
+
+| Acceptance criterion | Executable evidence |
+|---|---|
+| Modal/native-dialog transitions never reach lower contexts, including open/close frames | `InputContextTests`, `EditorModalHostTests`, `GuiScreenHostLifecycleTests` |
+| One eligible focus/capture owner and owner/context destruction safety | `InputContextTests`, `UiFocusGraphTests` |
+| Release, Escape, focus/device loss, modal open, preemption, owner removal, context removal, and explicit cancellation | `InputTests`, `InputContextTests`, `ViewportPanelRenderTests` |
+| Workspace gesture cancelled before modal `OnOpen` | `EditorModalHostTests`, `ViewportPanelRenderTests` |
+
+The PR's current-head [GitHub checks](https://github.com/horocore/horo-engine/pulls?q=is%3Apr+HORO-1792)
+provide Linux/macOS/Windows and hosted quality-gate evidence; this document
+does not assert a platform result before those checks complete.
+
 Required tests cover:
 
 - pressed/released frame semantics
@@ -551,7 +676,7 @@ Required tests cover:
 
 ## Related Documents
 
-- [Input Mapping Editor UI Reference](./input-mapping-editor.html): action maps, bindings, device preview, and conflict detection panel.
+- [Input Mapping Editor UI Reference](../../../mock-studio/designs.md#architecture-runtime-input-mapping-editor): action maps, bindings, device preview, and conflict detection panel.
 
 - [Input Layer and Modal Ownership](./input-layer-ownership.md): layer ownership table, context kind priority, `EditorInteractionScope` mapping, frame-order invariants, and per-layer testing obligations.
 - [Runtime Lifecycle](./runtime-lifecycle.md)

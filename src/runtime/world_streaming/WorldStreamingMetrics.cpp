@@ -32,13 +32,14 @@ namespace Horo::WorldStreaming {
             return {.key = std::move(key), .allowedValues = std::move(allowedValues)};
         }
 
-        [[nodiscard]] Telemetry::InstrumentDescriptor Descriptor(Telemetry::InstrumentKind kind, std::string name, std::string unit,
-                                                                 std::string description, Telemetry::MetricCollectionLevel level,
+        [[nodiscard]] Telemetry::InstrumentDescriptor Descriptor(Telemetry::InstrumentKind kind, std::string name,
+                                                                 const Telemetry::MetricUnit unit, std::string description,
+                                                                 Telemetry::MetricCollectionLevel level,
                                                                  std::optional<Telemetry::DimensionDescriptor> dimension = std::nullopt) {
             Telemetry::InstrumentDescriptor descriptor{.kind = kind,
                                                        .name = std::move(name),
                                                        .subsystem = "world_streaming",
-                                                       .unit = std::move(unit),
+                                                       .unit = unit,
                                                        .description = std::move(description),
                                                        .minimumCollectionLevel = level};
             if (dimension.has_value()) {
@@ -211,37 +212,37 @@ namespace Horo::WorldStreaming {
         };
 
         handles.operationLatency = Telemetry::Runtime::RegisterHistogram(
-            Descriptor(Telemetry::InstrumentKind::Histogram, "horo.world_streaming.operation.duration", "seconds",
+            Descriptor(Telemetry::InstrumentKind::Histogram, "horo.world_streaming.operation.duration", Telemetry::MetricUnit::Seconds,
                        "Complete World Streaming authority operation latency.", Core));
 
-        auto byteRoot = Telemetry::Runtime::RegisterCounter(Descriptor(Telemetry::InstrumentKind::Counter, "horo.world_streaming.bytes",
-                                                                       "bytes", "World Streaming byte movement by closed flow category.",
-                                                                       Core, Dimension("flow", kByteFlowValues)));
+        auto byteRoot = Telemetry::Runtime::RegisterCounter(
+            Descriptor(Telemetry::InstrumentKind::Counter, "horo.world_streaming.bytes", Telemetry::MetricUnit::Bytes,
+                       "World Streaming byte movement by closed flow category.", Core, Dimension("flow", kByteFlowValues)));
         bindHandles(handles.bytes, byteRoot, "flow", kByteFlowValues);
 
-        auto queueRoot = Telemetry::Runtime::RegisterGauge(Descriptor(Telemetry::InstrumentKind::Gauge, "horo.world_streaming.queue.depth",
-                                                                      "items", "Current bounded World Streaming queue depth.", Core,
-                                                                      Dimension("queue", kQueueValues)));
+        auto queueRoot = Telemetry::Runtime::RegisterGauge(
+            Descriptor(Telemetry::InstrumentKind::Gauge, "horo.world_streaming.queue.depth", Telemetry::MetricUnit::Count,
+                       "Current bounded World Streaming queue depth.", Core, Dimension("queue", kQueueValues)));
         bindHandles(handles.queueDepth, queueRoot, "queue", kQueueValues);
 
         auto residencyRoot = Telemetry::Runtime::RegisterGauge(
-            Descriptor(Telemetry::InstrumentKind::Gauge, "horo.world_streaming.residency.count", "cells",
+            Descriptor(Telemetry::InstrumentKind::Gauge, "horo.world_streaming.residency.count", Telemetry::MetricUnit::Count,
                        "Current aggregate cell residency count.", Core, Dimension("state", kResidencyValues)));
         bindHandles(handles.residency, residencyRoot, "state", kResidencyValues);
 
-        auto dropRoot = Telemetry::Runtime::RegisterCounter(Descriptor(Telemetry::InstrumentKind::Counter, "horo.world_streaming.drop",
-                                                                       "events", "World Streaming observation and admission drops.", Core,
-                                                                       Dimension("reason", kDropValues)));
+        auto dropRoot = Telemetry::Runtime::RegisterCounter(
+            Descriptor(Telemetry::InstrumentKind::Counter, "horo.world_streaming.drop", Telemetry::MetricUnit::Count,
+                       "World Streaming observation and admission drops.", Core, Dimension("reason", kDropValues)));
         bindHandles(handles.drops, dropRoot, "reason", kDropValues);
 
         auto failureRoot = Telemetry::Runtime::RegisterCounter(
-            Descriptor(Telemetry::InstrumentKind::Counter, "horo.world_streaming.failure", "events",
+            Descriptor(Telemetry::InstrumentKind::Counter, "horo.world_streaming.failure", Telemetry::MetricUnit::Count,
                        "Terminal World Streaming failures by closed cause.", Core, Dimension("reason", kFailureValues)));
         bindHandles(handles.failures, failureRoot, "reason", kFailureValues);
 
         if (level == Detailed) {
             auto stageRoot = Telemetry::Runtime::RegisterHistogram(
-                Descriptor(Telemetry::InstrumentKind::Histogram, "horo.world_streaming.stage.duration", "seconds",
+                Descriptor(Telemetry::InstrumentKind::Histogram, "horo.world_streaming.stage.duration", Telemetry::MetricUnit::Seconds,
                            "World Streaming pipeline stage latency.", Detailed, Dimension("stage", kStageValues)));
             bindHandles(handles.stageLatencies, stageRoot, "stage", kStageValues);
         }

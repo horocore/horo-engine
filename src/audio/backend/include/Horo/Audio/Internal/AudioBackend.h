@@ -10,6 +10,9 @@
 #include "Horo/Audio/AudioPlanarBlock.h"
 
 namespace Horo::Audio::Backend {
+    struct AudioCallbackViolation;
+    struct AudioCallbackViolationDrain;
+
     /** @brief Runtime-local, non-wrapping operation identity; sequence zero is invalid. */
     struct OperationId final {
         AudioRuntimeId owner;
@@ -295,5 +298,12 @@ namespace Horo::Audio::Backend {
          * retained. Old generations are reported faithfully, not relabeled as the current epoch.
          */
         [[nodiscard]] virtual std::size_t DrainEvents(std::span<Event> output) noexcept = 0;
+
+        /**
+         * @brief Drain development callback safety facts on the control thread, never on the callback.
+         * @param output Caller-owned fixed storage for a bounded prefix.
+         * @return Copied count and saturation/rate-limiting totals since the prior drain.
+         */
+        [[nodiscard]] virtual AudioCallbackViolationDrain DrainSafetyViolations(std::span<AudioCallbackViolation> output) noexcept = 0;
     };
 }  // namespace Horo::Audio::Backend

@@ -78,6 +78,10 @@ activation stage that consumes this descriptor contract. A composition root:
 1. Registers each selected descriptor explicitly with `ModuleHost::Register`.
    Registration is inert: it performs only local metadata checks and never
    invokes a callback or inspects the full graph.
+   The composition root may also pass owned settings metadata through the
+   `ModuleHost::Register` overload. This validates setting ownership and
+   conflicts immediately without changing `ModuleDescriptor` construction or
+   validation semantics.
 2. Calls `ModuleHost::ActivateRegistered`, which validates the complete graph,
    builds an immutable candidate error-code registry, then activates modules in
    the validated provider-before-dependant order,

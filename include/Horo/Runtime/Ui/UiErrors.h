@@ -264,8 +264,30 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor ActionHandlerFailed;
     /** @brief The Runtime UI action router is retiring, stopped, or dispatching reentrantly. */
     extern const ErrorCodeDescriptor ActionLifecycleUnavailable;
+    /** @brief All bounded asynchronous slots remain retained or leased. */
+    extern const ErrorCodeDescriptor AsyncActionCapacityExceeded;
+    /** @brief The source already has a pending operation or retention was released before terminal. */
+    extern const ErrorCodeDescriptor AsyncActionBusy;
+    /** @brief Progress is outside its finite bound or moves backwards within a phase. */
+    extern const ErrorCodeDescriptor AsyncActionProgressInvalid;
+    /** @brief A completion/progress publication arrived after the operation became terminal. */
+    extern const ErrorCodeDescriptor AsyncActionAlreadyTerminal;
+    /** @brief An immutable failure is absent, malformed or exceeds the diagnostic budget. */
+    extern const ErrorCodeDescriptor AsyncActionFailureInvalid;
     /** @brief A default navigation command or result has invalid focus evidence. */
     extern const ErrorCodeDescriptor NavigationInvalid;
+    /** @brief Canonical navigation or glyph capability is unsupported by the supplied action bindings. */
+    extern const ErrorCodeDescriptor NavigationCapabilityUnsupported;
+    /** @brief A semantic Runtime UI feedback intent or producer outcome is malformed. */
+    extern const ErrorCodeDescriptor FeedbackInvalid;
+    /** @brief Feedback source or audience belongs to another presented owner generation. */
+    extern const ErrorCodeDescriptor FeedbackSourceStale;
+    /** @brief The preallocated semantic feedback queue is full. */
+    extern const ErrorCodeDescriptor FeedbackCapacityExceeded;
+    /** @brief The semantic feedback queue is retiring or stopped. */
+    extern const ErrorCodeDescriptor FeedbackLifecycleUnavailable;
+    /** @brief An optional host feedback realizer failed or threw. */
+    extern const ErrorCodeDescriptor FeedbackConsumerFailed;
     /** @brief A route-stack descriptor or operation request is malformed. */
     extern const ErrorCodeDescriptor RouteStackInvalid;
     /** @brief A route operation has invalid fields or targets an unsupported route. */
@@ -394,6 +416,10 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor BindingUpdatePolicyInvalid;
     /** @brief A binding descriptor or provider schema exceeds its finite construction bounds. */
     extern const ErrorCodeDescriptor BindingCapacityExceeded;
+    /** @brief A runtime binding value violates its declared type, range, or byte limit. */
+    extern const ErrorCodeDescriptor BindingValueInvalid;
+    /** @brief A retained binding owner or exact provider registration is closed. */
+    extern const ErrorCodeDescriptor BindingLifecycleUnavailable;
     /** @brief An accessibility semantic schema value is malformed or unsupported. */
     extern const ErrorCodeDescriptor AccessibilitySchemaInvalid;
     /** @brief An accessibility node role is unknown or incompatible with its control data. */

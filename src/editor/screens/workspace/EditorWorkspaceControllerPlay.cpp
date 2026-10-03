@@ -82,6 +82,7 @@ namespace Horo::Editor {
         if (playWhenReady) {
             m_prePlayDocumentPanelId = m_viewModel.activeDocumentPanelId;
             m_viewModel.activeDocumentPanelId = "horo.game";
+            SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
             m_viewModel.playState = EditorPlayState::Starting;
             m_viewModel.playError.clear();
         }
@@ -161,6 +162,7 @@ namespace Horo::Editor {
             m_viewModel.playError = diagMsg;
             m_prePlayDocumentPanelId = m_viewModel.activeDocumentPanelId;
             m_viewModel.activeDocumentPanelId = "horo.game";
+            SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
             m_notifications.Publish("gameplay", NotificationSeverity::Error, diagMsg, "Play session blocked", "play_blocked", 0.0F,
                                     {{"Open logs", "open_logs"}});
             return;
@@ -173,6 +175,7 @@ namespace Horo::Editor {
         const Result<void> started = m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(),
                                                          m_gameplayRegistry->Components(), std::move(preparedScene));
         m_viewModel.activeDocumentPanelId = "horo.game";
+        SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
         if (started.HasError())
             LOG_ERROR("editor.play_mode", "Play Mode failed to start: %s", started.ErrorValue().message.c_str());
         RefreshPlayStateProjection();
@@ -191,6 +194,7 @@ namespace Horo::Editor {
         m_viewModel.playError.clear();
         m_viewModel.playState = EditorPlayState::Idle;
         m_viewModel.activeDocumentPanelId = m_prePlayDocumentPanelId.empty() ? "horo.viewport" : m_prePlayDocumentPanelId;
+        SyncPanelHost(WorkspaceDockArea::Document, m_viewModel.activeDocumentPanelId);
         m_activeRuntimeRevision = {};
     }
 

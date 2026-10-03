@@ -7,6 +7,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Foundation/Time.h"
 #include "Horo/Physics/CharacterControllerContracts.h"
+#include "Horo/Physics/CharacterMetrics.h"
 
 #include <compare>
 #include <cstdint>
@@ -55,6 +56,7 @@ namespace Horo::Character {
         Duration fixedDelta{};              /**< Positive immutable host quantum. */
         CharacterTickObserver observer;     /**< Optional synchronous observation. */
         CharacterPhysicsQueryContext query; /**< Optional read-only Physics snapshot for Horo movement resolution. */
+        CharacterMetricCapture *metrics{};  /**< Optional caller-owned attempt capture, written synchronously only. */
     };
 
     /** @brief Coherent publication marker for the last successfully scheduled Character tick. */

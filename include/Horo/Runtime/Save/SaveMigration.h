@@ -8,6 +8,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Runtime/Save/SaveArchiveMetadata.h"
+#include "Horo/Runtime/Save/SaveArchiveReader.h"
 
 #include <compare>
 #include <cstddef>
@@ -66,12 +67,26 @@ namespace Horo::Runtime {
         Count,
     };
 
+    /** @brief One canonical record and its immutable source identity during detached migration. */
+    struct SaveMigrationRecordState final {
+        SaveRecordId record;
+        ParticipantSchemaVersion schemaVersion;
+        SaveParticipantId sourceParticipant;
+        SaveRecordId sourceRecord;
+        ParticipantSchemaVersion sourceSchemaVersion;
+        std::vector<std::byte> payload;
+
+        [[nodiscard]] auto operator<=>(const SaveMigrationRecordState &) const noexcept = default;
+    };
+
     /** @brief Bounded detached bytes for one participant during migration staging. */
     struct SaveMigrationParticipantState final {
         SaveParticipantId participant;
         ParticipantSchemaVersion schemaVersion;
         bool required{true};
         std::vector<std::byte> payload;
+        std::vector<SaveMigrationRecordState> records;   /**< Stable record order; provenance survives every step. */
+        std::vector<PreservedSaveChunk> preservedChunks; /**< Exact verified unknown records and integrity evidence. */
 
         [[nodiscard]] auto operator<=>(const SaveMigrationParticipantState &) const noexcept = default;
     };
@@ -98,12 +113,55 @@ namespace Horo::Runtime {
     /** @brief Owned candidate returned by a migration operation. */
     using SaveMigrationCandidate = SaveMigrationState;
 
+    /**
+     * @brief Attaches integrity-verified unknown optional records to detached migration staging.
+     * @param archive Verified source archive.
+     * @param policy Sealed policy deciding explicit optional drops.
+     * @param source Detached state with matching manifest participant identities and schemas; unchanged on failure.
+     * @param maximumPreservedBytes Finite aggregate opaque-byte budget.
+     * @return Success or a typed compatibility, mismatch, integrity, or limit error.
+     */
+    [[nodiscard]] Result<void> RetainUnknownSaveData(const ValidatedSaveArchive &archive, const SaveCompatibilityPolicy &policy,
+                                                     SaveMigrationSource &source, std::uint64_t maximumPreservedBytes);
+
     /** @brief Context identifying the definition currently transforming detached state. */
     struct SaveMigrationStepContext final {
         SaveMigrationId id;
         SaveMigrationAxis axis{SaveMigrationAxis::ArchiveFormat};
         SaveMigrationStepKind kind{SaveMigrationStepKind::Sequential};
         std::optional<SaveParticipantId> participant;
+        std::uint64_t remainingWorkBytes{};  /**< Remaining operation work before callback expansion; output is charged on return. */
+        std::uint64_t maximumArchiveBytes{}; /**< Trusted archive candidate ceiling. */
+        std::uint64_t maximumParticipantPayloadBytes{}; /**< Trusted per-participant candidate ceiling. */
+        std::uint64_t maximumTotalPayloadBytes{};       /**< Trusted aggregate participant candidate ceiling. */
+    };
+
+    /** @brief Immutable scope and limits supplied to a participant-owned record transform. */
+    struct SaveMigrationRecordContext final {
+        SaveMigrationId step;
+        SaveParticipantId participant;
+        SaveRecordId record;
+        ParticipantSchemaVersion from;
+        ParticipantSchemaVersion to;
+        std::uint64_t maximumOutputBytes{};
+
+        /** @brief Creates a field-specific error preserving step, schema, participant and record context.
+         * @param cause Typed reason for the failed field transform.
+         * @param field Canonical bounded field path within the record.
+         * @return Contextual error that a record transform may return.
+         */
+        [[nodiscard]] Error Fail(Error cause, std::string_view field) const;
+    };
+
+    /** @brief Transforms one borrowed record payload into detached bytes; the executor owns version and provenance. */
+    using SaveMigrationRecordFn =
+        std::function<Result<std::vector<std::byte>>(std::span<const std::byte>, const SaveMigrationRecordContext &)>;
+
+    /** @brief Explicit permission for one participant step to change another participant's payload or records. */
+    struct SaveMigrationTransformContract final {
+        SaveParticipantId target;
+        ParticipantSchemaVersion targetSchemaVersion; /**< Exact target version admitted for this transform. */
+        [[nodiscard]] auto operator<=>(const SaveMigrationTransformContract &) const noexcept = default;
     };
 
     /** @brief Function receiving ownership of the current detached candidate and returning its replacement. */
@@ -141,6 +199,8 @@ namespace Horo::Runtime {
         SaveMigrationFn migrate;
         std::vector<SaveMigrationId> equivalentSequentialSteps;
         std::uint64_t estimatedWork{1};
+        SaveMigrationRecordFn migrateRecord; /**< When set, runs once per owned record before the candidate callback. */
+        std::vector<SaveMigrationTransformContract> crossParticipantTransforms; /**< Sorted explicit target grants. */
     };
 
     /** @brief Variant containing every supported migration edge kind. */
@@ -165,6 +225,7 @@ namespace Horo::Runtime {
         SaveParticipantId participant;
         ParticipantSchemaVersion schemaVersion;
         bool required{true};
+        bool preserveUnknown{}; /**< Unknown optional source owner must remain byte-for-byte unchanged. */
 
         [[nodiscard]] auto operator<=>(const SaveMigrationParticipantTarget &) const noexcept = default;
     };
@@ -194,10 +255,22 @@ namespace Horo::Runtime {
         std::size_t maximumDefinitions{MaximumSaveMigrationDefinitions};
         std::size_t maximumPlanSteps{MaximumSaveMigrationPlanSteps};
         std::size_t maximumParticipants{256};
+        std::size_t maximumRecordsPerParticipant{4'096};
         std::uint64_t maximumArchiveBytes{4ULL * 1024ULL * 1024ULL * 1024ULL};
         std::uint64_t maximumParticipantPayloadBytes{MaximumSaveMigrationParticipantPayloadBytes};
         std::uint64_t maximumTotalPayloadBytes{MaximumSaveMigrationTotalPayloadBytes};
+        std::uint64_t maximumCumulativeWorkBytes{8ULL * 1024ULL * 1024ULL * 1024ULL}; /**< Source, step input/output and declared work. */
     };
+
+    /** @brief Copies selected known participant records from a verified archive into detached migration state.
+     * @param archive Integrity-verified archive whose trusted-signature policy has already been checked by the caller.
+     * @param policy Sealed current release compatibility policy; unknown or unsupported optional owners stay opaque.
+     * @param source Matching detached source state, changed only after every selected record passes validation.
+     * @param limits Finite record-count, decoded-byte and aggregate work ceilings.
+     * @return Success or a typed mismatch, read, integrity, allocation, or limit failure.
+     */
+    [[nodiscard]] Result<void> RetainVerifiedSaveRecords(const ValidatedSaveArchive &archive, const SaveCompatibilityPolicy &policy,
+                                                         SaveMigrationSource &source, const SaveMigrationLimits &limits = {});
 
     /** @brief Registration evidence tied to the mutable registry generation. */
     struct SaveMigrationRegistration final {

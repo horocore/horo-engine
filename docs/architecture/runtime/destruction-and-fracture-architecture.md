@@ -164,6 +164,25 @@ snapshot. Replacement admits only the next generation and resets its state at re
 one, invalidating all previous completions. Shutdown closes preparation, commit and
 replacement admission without discarding the last published snapshot.
 
+`Horo/Destruction/DestructionDamageRuntime.h` is the DFR-003.2 fixed-tick owner value
+over that state machine and the typed command boundary. Each safe-point context names
+the current target, cooked content, configuration and capability revisions, authority
+grant, limits, simulation tick and typed pre/post-Physics safe point. Collision damage
+requires the post-Physics phase. Preparation admits the complete command, rejects
+older or conflicting command identities and older fixed ticks, checks the authored cooldown against the last
+committed damage tick, and delegates the health/phase decision to the canonical state
+machine. An exact latest-command retry returns the previous typed success without a
+second revision or cooldown charge. Cooldown counts fixed ticks between committed
+damage commands; zero disables it, equality admits, and explicit fracture is exempt.
+No candidate mutates the published value. Commit rechecks current evidence and the
+detached successor before returning a new value with its typed terminal result. The
+host publishes that value only with the aggregate Scene/Physics/Render transition.
+Collision commands are admitted only from frozen post-step evidence at the later
+Destruction safe point; a prepared candidate may commit at a later aggregate safe point.
+Physics callbacks never call this owner or change health.
+Replacement clears command and cooldown history; shutdown closes both preparation and
+commit while preserving the last snapshot.
+
 ## Pre-Fractured Geometry
 
 Pre-fractured meshes are authored and cooked offline through ADR-145:
@@ -199,11 +218,59 @@ submesh or native shape ID. DFR owns canonical interior classification, winding,
 material slots and UV policy. Render cannot reclassify faces, and Physics cannot change
 chunk membership while realizing collision.
 
+`Horo/Destruction/StructuralGraphCook.h` defines the DFR-002.6 companion graph cook
+over an exact immutable chunk mesh. The request binds fracture content, mesh integrity
+digest, owner revision and nonzero structural-policy revision. Its chunk intent is
+aligned to the stable-ID-ordered mesh table; contacts use checked canonical table
+indices and finite
+positive weights. Unsorted or duplicate contacts, invalid indices, parent cycles,
+unsupported feature requirements and required chunks disconnected from every anchor
+fail with typed, contextual diagnostics. Undirected contact cycles are valid. The
+detached result contains stable-order adjacency, summed contact support weights,
+anchor/required/initial-support flags, deterministic island numbers and finite
+validation counts. It carries no native handle or runtime mutation authority.
+The single-thread owner accepts a complete graph only for the exact current owner,
+content, mesh and policy revisions; cancellation, invalidation, replacement and
+shutdown preserve the last published immutable snapshot.
+
 The DFR cook fingerprint includes normalized source/recipe/dependency digests,
 algorithm/version/seed, coordinate/tolerance/repair policy, interior/material/UV and
 connectivity rules, selected tier/limits and artifact/toolchain schemas. Physics and
 Render add their own native target fingerprints to the accepted DFR artifact identity;
 a solver/backend upgrade invalidates its derived product without changing DFR topology.
+
+The DFR-002.3 offline Voronoi cook entry point accepts a closed, outward-wound
+normalized source, exact source digest/revision and recipe/toolchain provenance. It
+partitions a non-convex source along its deterministic surface-plane arrangement into
+bounded convex regions, then clips each region against every ordered site bisector.
+The result contains closed solver-neutral convex collision pieces under stable semantic
+chunk IDs, visible exterior/interior faces, per-face material slots, volume/center-of-
+mass inputs and site-neighbor connectivity. If the finite region, work or output budget
+cannot hold the complete result, generation fails before publication. The detached
+candidate is for later Assets publication and separate Physics/Render derived cooking;
+runtime composition has no call into this cook entry point.
+
+`Horo/Destruction/ChunkMeshCook.h` defines the DFR-002.4 portable surface product.
+The cook consumes a sealed offline Voronoi candidate or a validated pre-fractured
+import candidate and exact fracture-content identity. The content digest binds
+the prior semantic fingerprint or normalized imported geometry, source identity
+and revision, logical material IDs and revision digests, explicit interior
+classification, the two finite planar UV scales and this mesh schema. Every
+referenced exterior and interior slot must have a binding. Imported cut faces
+must have an exact opposite-wound triangle in another chunk; differing cut
+triangulations require explicit source normalization before cook. Missing
+material, altered candidate geometry, invalid cut-plane pairing, non-finite
+face basis/UV or over-limit output fails without publication. Each face retains its
+interior flag and material slot; face-local vertices carry Horo-space normals,
+handed tangents and UVs. Each chunk records stable ID, finite bounds, volume and
+first moment for later density-aware Physics mass realization. The artifact
+records the exact admitted feature tier and produced pre-cooked capability,
+with no tier substitution. The output owns no
+native handles or mutable runtime state. A single-thread owner accepts only an
+immutable, integrity-checked candidate from the captured revision; invalidation
+cancels prior work, and replacement or shutdown leaves the last published snapshot
+available to existing readers. Mesh/Render may lower this product but cannot change
+its DFR face classification or material attribution.
 
 ## Runtime Pre-Cooked Fracture
 
@@ -372,6 +439,26 @@ Destruction state is replicated through the normal authority and replication bou
 - Cosmetic chunks/debris may simulate client-side but cannot affect gameplay, saves or
   canonical hashes
 
+The DFR-006.4 adapter contributes one exact Network schema (version 1.0) whose ten
+required, server-only fields have stable numeric IDs: `1` exact DFR handle, `2`
+fracture-content identity, `3` configuration revision, `4` authority epoch, `5`
+semantic revision, `6` phase and unsigned Q16.16 health, `7` versioned seed/cursor,
+`8` four content-scoped bit masks, `9` sorted stable support-anchor IDs plus
+progress cursor, and `10` resolved closed capability bits. Authoritative replication
+must be explicitly present; renderer tier cannot infer it. Integers use network byte
+order; masks use bit zero for the first entry in the exact immutable artifact chunk
+table. A record carries all fields in
+ascending ID order, with no optional default or unknown-field fallback in v1.0.
+`NetworkRuntime` supplies outer session/object/tick/baseline framing and pins the
+descriptor/serializer generation. The DFR adapter validates the trusted exact-content
+chunk table, counts, high bits, active/dormant disjointness, required broken membership,
+anchor membership, authority, exact configuration revision and resolved capabilities,
+and replacement fences before returning an owned apply candidate. It never directly
+commits `DestructionWorld`, duplicates paired Physics
+motion, or transmits transient presentation and native state. Dropping a failed or
+cancelled candidate leaves prior owner state untouched; aggregate publication remains
+the DFR/Scene/Physics owner's safe-point responsibility.
+
 ## Editor Authoring
 
 Fracture authoring tools:
@@ -381,6 +468,19 @@ Fracture authoring tools:
 - Fracture preview (play fracture animation in editor viewport)
 - Chunk connectivity visualization
 - Damage threshold and behavior configuration
+
+The DFR-002.2 importer reads an FBX mesh occurrence named
+`HoroChunk_<nonzero decimal ID>` with an optional `__display_label` suffix.
+The numeric token is an explicit authored semantic chunk ID; the display label,
+FBX element position and source path are not identities. The token must be
+canonical decimal without leading zeroes and unique within the source. Mesh
+ancestors define the imported chunk hierarchy. Assets copies normalized
+world-space geometry, transform evidence and material assignment into a bounded
+detached source under normalization schema 1. Destruction Cook schema 1 validates
+the complete closed triangle topology,
+IDs, hierarchy, finite transforms, material coverage and profile limits before
+returning a sorted detached candidate. Import does not infer absent IDs, weld
+surfaces, invent materials, publish an artifact, or activate a runtime world.
 
 Each asset opens as one persistent `FractureAssetDocument` rooted at stable asset and
 accepted source revision. The document owns working recipe/source/graph intent, typed
@@ -486,7 +586,7 @@ work, preview isolation, cancellation and repeated shutdown.
 
 ## Related Documents
 
-- [Destruction Setup UI Reference](./destruction-setup.html)
+- [Destruction Setup UI Reference](../../../mock-studio/designs.md#architecture-runtime-destruction-setup)
 - [Destruction Product Composition Migration](../../guides/destruction-product-composition-migration.md)
 
 - [Physics Architecture](./physics-architecture.md): fracture chunk physics
@@ -516,3 +616,29 @@ work, preview isolation, cancellation and repeated shutdown.
 - [ADR-149](../../adr/149-destruction-persistence-replication-streaming-and-authority.md):
   canonical save/network state, server authority, paired Physics motion, late join,
   durable streaming handoff and compatibility
+
+### DFR-002.5 Collision Artifact Integration
+
+The implementation retains neutral collision pieces in `ChunkMeshArtifact` schema 2,
+with geometry-derived stable chunk-local region identity. The offline
+`DestructionPhysicsCook` adapter consumes an exact sealed mesh generation, explicit
+Physics material-slot bindings and a complete Physics target/settings snapshot. It
+validates each closed convex region before calling Physics convex and flat compound
+cook contracts. It never calls Jolt or derives an enclosing hull for concave imported
+geometry. Voronoi decomposition is retained rather than reconstructed from render faces.
+
+Physics compound envelopes embed exact verified convex artifacts and stable child/slot
+identity in one baked local coordinate space. Nested compounds, non-convex leaves,
+missing slots and excessive limits fail explicitly. The source-free DestructionCollisionArtifacts target encodes all chunks as one
+asset bundle and validates its exact content/mesh/target/configuration plus every
+embedded Physics product. Runtime loads those bytes through the production Assets
+archive provider and Physics cache without DFR source geometry or a cook service. Assets owns durable
+publication/package storage; the adapter's immutable result is a detached dependency
+closure, not a second disk cache or native world readiness receipt.
+
+The synchronous cook admits bounded region-plane and hull face/vertex work before
+execution, checks cancellation between validation triangles and Physics calls, and
+returns original Physics errors. The owner checks content, mesh, target, complete
+settings/material fingerprint and generation before replacement. Failed or stale work
+retains the prior closure; shutdown closes admission, cancels retained tokens and leaves
+existing reader snapshots/Physics cache leases valid until their owners release them.

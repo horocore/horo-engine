@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Audio/Internal/AudioBackend.h"
+#include "Horo/Audio/Internal/AudioCallbackWatchdog.h"
 
 #include <cstdint>
 #include <memory>
@@ -71,6 +72,8 @@ namespace Horo::Audio::Backend {
         [[nodiscard]] Result<void> CommitRendering(const AudioDeviceEpoch &epoch) override;
         /** @copydoc AudioBackend::DrainEvents */
         [[nodiscard]] std::size_t DrainEvents(std::span<Event> output) noexcept override;
+        /** @copydoc AudioBackend::DrainSafetyViolations */
+        [[nodiscard]] AudioCallbackViolationDrain DrainSafetyViolations(std::span<AudioCallbackViolation> output) noexcept override;
 
     private:
         struct Impl;

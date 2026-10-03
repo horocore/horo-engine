@@ -67,7 +67,7 @@ namespace Horo::Editor {
                                                         preflight](const CancellationToken &cancellation) {
                 for (std::size_t index = lane; index < sharedRoots->size(); index += concurrency) {
                     if (cancellation.IsCancellationRequested())
-                        return Result<void>::Success();
+                        return JobCancelled();
                     const auto &[rootText, root] = (*sharedRoots)[index];
                     ProjectOpenPreflightSnapshot inspected = preflight->Inspect(root);
                     RecentProjectCompatibilityProjection projection{.projectVersion =

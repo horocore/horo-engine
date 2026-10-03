@@ -356,6 +356,11 @@ namespace Horo::PlatformServices {
         return services_;
     }
 
+    /** @copydoc PlatformProjectConfiguration::SelectedServices */
+    std::span<const bool> PlatformProjectConfiguration::SelectedServices() const noexcept {
+        return selectedServices_;
+    }
+
     /** @copydoc PlatformProjectConfiguration::BackendConfig */
     PlatformServicesBackendConfig PlatformProjectConfiguration::BackendConfig() const noexcept {
         PlatformServicesBackendConfig config;
@@ -389,6 +394,9 @@ namespace Horo::PlatformServices {
         result.selectedProviderKey_ = std::move(data.selectedProviderKey);
         result.selectedModule_ = std::move(data.selectedModule);
         result.services_ = candidate.services;
+        for (const auto &contribution : contributions)
+            if (result.selectedProvider_ == contribution.provider)
+                result.selectedServices_ = contribution.supportedServices;
         result.fingerprint_ = data.fingerprint;
         return Result<PlatformProjectConfiguration>::Success(std::move(result));
     }

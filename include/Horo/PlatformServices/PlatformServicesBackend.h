@@ -70,6 +70,7 @@ namespace Horo::PlatformServices {
         LeaderboardQueryCapabilities leaderboardQueries;
         std::optional<PlatformServiceBindingId> binding;
         std::optional<PlatformServiceUnavailableReason> unavailableReason;
+        std::optional<CloudMutationCapability> cloudMutation;
     };
 
     /** @brief Exact versioned capability truth copied from one provider candidate. */
@@ -167,7 +168,9 @@ namespace Horo::PlatformServices {
         /** @copydoc ICloudService::ReadCloudObject */
         [[nodiscard]] Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) override;
         /** @copydoc ICloudService::WriteCloudObject */
-        [[nodiscard]] Result<PlatformRequestHandle<void>> WriteCloudObject(CloudWriteRequest request) override;
+        [[nodiscard]] Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest request) override;
+        /** @copydoc ICloudService::DeleteCloudObject */
+        [[nodiscard]] Result<PlatformRequestHandle<CloudMutationResult>> DeleteCloudObject(CloudBlobDeleteRequest request) override;
         /** @copydoc IPresenceService::SetPresence */
         [[nodiscard]] Result<PlatformRequestHandle<void>> SetPresence(PresenceUpdateRequest request) override;
         /** @copydoc IPresenceService::ClearPresence */

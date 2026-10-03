@@ -51,6 +51,7 @@ namespace Horo::Runtime {
         std::size_t maximumCollectionElements{1024 * 1024}; /**< Maximum sequence, map, or set count. */
         std::size_t maximumFields{4096};                    /**< Maximum record field count. */
         std::size_t maximumNestingDepth{32};                /**< Maximum composite nodes along any path. */
+        std::size_t maximumReadWorkBytes{64 * 1024 * 1024}; /**< Cumulative bytes inspected by a root and every reopened child. */
     };
 
     /** @brief Sealed canonical bytes with proven structural depth. */
@@ -280,6 +281,7 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<std::vector<CanonicalDecodedValue>> ReadValueCollection(ValueCollectionOrder order);
         [[nodiscard]] Result<void> AdmitComposite() const;
         [[nodiscard]] Result<void> Charge(std::size_t bytes) const;
+        [[nodiscard]] Result<void> ChargeReadWork(std::size_t bytes) const;
         [[nodiscard]] Result<void> ChargeElements(std::size_t count, std::size_t elementSize) const;
         [[nodiscard]] Result<void> AdmitElements(std::size_t count, std::size_t elementSize, std::size_t minimumWireBytesPerElement) const;
         [[nodiscard]] Error ErrorAt(const ErrorCodeDescriptor &descriptor) const;

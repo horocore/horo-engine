@@ -31,12 +31,20 @@ namespace Horo::Assets {
 
     CookerCatalogSnapshot::CookerCatalogSnapshot(std::vector<CookerContribution> entries) : entries_(std::move(entries)) {}
 
-    const ICookerStrategy *CookerCatalogSnapshot::Find(const AssetTypeId &type, const AssetCookTargetId &target) const noexcept {
+    /** @copydoc CookerCatalogSnapshot::FindContribution */
+    const CookerContribution *CookerCatalogSnapshot::FindContribution(const AssetTypeId &type,
+                                                                      const AssetCookTargetId &target) const noexcept {
         for (const auto &entry : entries_) {
             if (entry.Handles(type, target))
-                return entry.strategy.get();
+                return &entry;
         }
         return nullptr;
+    }
+
+    /** @copydoc CookerCatalogSnapshot::Find */
+    const ICookerStrategy *CookerCatalogSnapshot::Find(const AssetTypeId &type, const AssetCookTargetId &target) const noexcept {
+        const auto *contribution = FindContribution(type, target);
+        return contribution ? contribution->strategy.get() : nullptr;
     }
 
     // ---------------------------------------------------------------------------

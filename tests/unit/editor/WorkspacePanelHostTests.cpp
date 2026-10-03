@@ -43,12 +43,24 @@ namespace {
         REQUIRE((!host.ClosePanel("missing").Succeeded()));
     }
 
-    TEST_CASE("Creates A Split Without Losing The Target Node", "[unit][editor]") {
+    TEST_CASE("Document dock accepts tabs but never another dock", "[unit][editor]") {
         WorkspacePanelHost host;
-        REQUIRE((host.DockPanel("horo.global_dock", "workspace.document", WorkspacePanelHost::DropKind::SplitBottom).Succeeded()));
-        REQUIRE((host.Layout().FindNode("workspace.document") != nullptr));
-        REQUIRE((host.Layout().FindNode("workspace.document.split.horo.global_dock") != nullptr));
+        REQUIRE((!host.DockPanel("horo.global_dock", "workspace.document", WorkspacePanelHost::DropKind::SplitBottom).Succeeded()));
+        REQUIRE((host.DockPanel("horo.global_dock", "workspace.document", WorkspacePanelHost::DropKind::TabCenter).Succeeded()));
+        REQUIRE((host.Layout().FindTabStack("workspace.document")->tabs.size() == 2));
+        REQUIRE((host.Layout().FindNode("workspace.document.split.horo.global_dock") == nullptr));
         REQUIRE((host.Layout().Validate().empty()));
+    }
+
+    TEST_CASE("Closing the last document tab leaves its fixed stack available", "[unit][editor]") {
+        WorkspacePanelHost host;
+        REQUIRE(host.ClosePanel("horo.viewport").Succeeded());
+        const TabStackNode *document = host.Layout().FindTabStack("workspace.document");
+        REQUIRE(document != nullptr);
+        REQUIRE(document->tabs.empty());
+        REQUIRE_FALSE(document->activeTab.has_value());
+        REQUIRE(host.OpenPanel("horo.viewport", "workspace.document").Succeeded());
+        REQUIRE(document->activeTab == "horo.viewport");
     }
 
     TEST_CASE("Opens typed document tabs once and guards dirty close", "[unit][editor][documents]") {

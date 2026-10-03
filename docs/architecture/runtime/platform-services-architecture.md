@@ -61,6 +61,18 @@ makes the Platform Offline Queue the single durable owner for eligible progressi
 opted-in expiring presence intent. Durable acceptance precedes provider submission,
 while cloud upload/delete remains exclusively in Save's coordinator journal.
 
+PLS-007.2 provides the `Horo::PlatformOfflineQueue::PlatformOfflineQueueStorage`
+boundary. It persists one bounded versioned document per opaque subject partition,
+encodes only provider-neutral Horo intent, verifies a SHA-256 body digest and rejects
+corrupt, truncated, oversized, duplicate or unsupported-version documents. Records
+carry the provider-neutral operation class and bounded canonical Horo payload bytes;
+semantic owners provide those bytes, and the storage adapter treats them as opaque.
+The storage contract has no cloud-archive operation. Publication uses the host
+`DurableFileSystem` lock, prepared file and same-filesystem atomic replacement; a
+failed replacement is reported as storage-unknown and never treated as an empty queue.
+The storage boundary does not admit credentials, raw provider account identifiers or
+live subject handles.
+
 ## Scope
 
 Platform services covered here:
@@ -122,6 +134,146 @@ credentials, error translation and certification policy and exposes only the Hor
 `platform.services.provider` C ABI profile.
 
 ## Provider Package And Composition Boundary
+
+### PLS-002.3 provider contribution admission
+
+The additive extension ABI 1.2 host-table tail adds
+`registerPlatformServicesProvider`. A module may require that function during
+inert ABI negotiation; 1.0/1.1 modules keep their earlier table prefix and
+remain loadable. The version-1 provider profile copies a bounded descriptor
+with stable provider key/ID, exact OS and product-profile masks, service bits in
+`PlatformServiceKind` order, approved permission IDs, backend interface version,
+and semantic factory contract version. The profile supplies opaque candidate
+create/retire/destroy callbacks. It deliberately exposes no native service
+operations or C++ backend object across the ABI; a later operation profile must
+version those calls separately.
+
+`HoroPlatformServicesExtension` is the host composition bridge and depends on
+both the generic Extensions registry and Platform Services contracts. Neither
+lower target gains a reverse dependency or a second provider registry.
+`BackendServiceRegistry` stages the one-shot candidate factory under an exact
+generation. `ApplicationCapabilityRegistry` publishes the matching capability
+last. A factory resolve requires that exact capability lease, so no reader can
+call the staged factory. All fallible allocation of the publication owner happens
+before capability publication. Failure revokes the staged service without
+exposing a partial generation. After publication, the manager's RAII owner
+revokes it even if manager storage allocation or insertion fails.
+
+For this first profile a package declares exactly one provider-only contribution.
+Mixing importers or other contribution points in the same package is rejected
+before native load: their independent registries do not yet offer an atomic
+cross-catalog commit. Existing importer-only packages follow the unchanged path.
+Provider modules receive the provider registration callback only when the host
+explicitly exposes `platform.services.provider`; the provider's requested
+permissions must pass the host's sealed admission policy before publication.
+This profile supplies no service-import call table, so provider modules requiring
+service imports are not admitted until a versioned import ABI exists.
+
+On unload, the publication closes capability resolution first, then retires the
+factory. Each provider generation has its own retirement state. Backend and
+request leases retain the module code; the host admission owns pending retirement
+after the manager releases its publication. The recorded owner thread retries
+deferred factory shutdown in `BackendServiceRegistry`, then `retireCandidate`
+through `FinalizeOnOwnerThread` after leases drain. `BUSY`
+never invokes `destroyCandidate` or releases native code. A non-BUSY failure
+requires restart; if composition itself ends with a pending candidate, a bounded
+process-lifetime quarantine self-retains that generation and its code rather
+than force-unloading it; owner-thread retirement breaks the quarantine when it
+eventually completes. A foreign-thread final release does not run native
+retirement, so composition must keep admission alive to perform the owner-thread
+pass. The quarantine is a last-resort safety path, not a substitute for drain.
+The next provider generation can be admitted independently after a completed
+retirement.
+
+### PLS-002.4 bounded operation and lifecycle host
+
+Extension ABI minor 1.3 keeps the 1.0/1.1 host prefixes and the 1.2 provider
+registration function. Provider descriptor version 1 is accepted at its original
+prefix size and remains factory/lifetime-only. Descriptor version 2 appends a
+copied, separately versioned operation table. A version-1 provider can still be
+admitted and retired, but exact service-host startup fails with
+`platform.lifecycle.unsupported_profile`; it never pretends to support operations.
+The new profile supplies Horo-only bounded request/completion envelopes and a
+stable host-owned callback sink. Providers do not retain borrowed request payloads
+or completion buffers. They may retain the sink pointer until close-ingress and
+drain both succeed; they must not call it after successful drain.
+
+`PlatformProviderLifecycleHost` selects the exact module, provider key, identity
+and generation from the immutable `PlatformProjectConfiguration` and admitted
+publication. It never resolves the highest compatible alternative. Native service
+initialization returns an available-service mask constrained by the trusted claim
+and required project services. Session observation and completion ingress start in
+that order. The host returns its handle only after all three stages succeed; any
+failure tears down attempted stages in reverse order while keeping the sink and
+module lease if native drain is still BUSY.
+
+At shutdown, the owner lane closes request admission, revokes callback ingress,
+requests cancellation for outstanding operations, and asks the provider to drain.
+Only successful drain permits request-store teardown, session stop, service
+shutdown and candidate lease release. BUSY retains the callback context and code
+for a later owner-lane retry; destruction without a successful retry quarantines
+that generation rather than freeing memory reachable by a native callback.
+Native callbacks only copy bounded evidence into the host queue. An owner-lane
+dispatch turn commits terminal request state and invokes deferred observers.
+Each request and completion carries the captured session revision; a later
+session revision fences an in-flight success from publication.
+The first typed operation is an achievement unlock carrying one canonical Horo
+stable ID for the active provider session. Other service payload schemas and
+complete product-profile routing remain separate follow-on work.
+
+### PLS-002.5 product composition
+
+`PlatformServicesComposition` is a host-owned, load-time boundary in the standalone
+`HoroEngine::PlatformServices` target. It does not link editor, renderer, overlay,
+Extensions or proprietary SDK targets. A host injects one exact factory with exclusive
+backend ownership and copied matching session evidence. No process-global provider or
+implicit module registration is introduced.
+
+| Product profile | Existing provider ABI admission profile | Provider policy |
+|---|---|---|
+| Editor / development game | InteractiveDevelopment | Trusted exact provider or explicit Null |
+| Shipping game | Certification | Exact signed-product evidence or explicit optional Null; no development/fixture fallback |
+| Headless / dedicated server | HeadlessServer | Explicit Null by default; exact server-manifest provider requires server-specific session/credential policy |
+| Test | InteractiveDevelopment | Explicit public test fixture or Null; private providers excluded |
+| Unsupported platform | Cook | Explicit absence or Null; provider factories never run |
+
+Product profiles are distinct typed values; the existing four-bit provider ABI and
+project configuration schema remain unchanged. Product-manifest verification remains
+with the application/package trust owner. It supplies provenance, the exact immutable
+configuration fingerprint, a fresh provider generation and an explicit service
+allowlist. Shipping evidence means the signed manifest's exact package/module hashes,
+ABI, SDK runtime and entitlements were verified before composition. This boundary
+cannot discover, verify or load arbitrary packages. Host integration must supply a
+factory bound to the configuration's exact selected module/provider; the composition
+revalidates the returned Horo identity, generation, manifest claims and session.
+
+Null and absence allocate no backend and never invoke a factory. Null returns
+`platform.provider.null` when acquiring a request surface; absence returns typed
+unavailability. Neither acknowledges service writes. Required services fail project
+validation with Null, and product allowlists cannot suppress a required service.
+Provider-reported capabilities outside selected manifest claims fail startup. The
+frontend operation policy intersects enabled project services and the product allowlist;
+public diagnostics expose only admitted Horo availability/reasons and provider identity,
+without binding tokens, sessions, native SDK strings or internal limits.
+
+A transition validates the new selection first, then closes the old frontend before
+invoking a new factory. All generations, including Null and absence, strictly advance.
+Retained old frontend leases remain closed; the old provider/session cannot authorize
+new work. Failed new startup leaves the owner explicitly closed. Failed old shutdown
+retains the owner, revokes capability truth and blocks replacement until host recovery
+or restart. Concrete adapters remain responsible for retaining callback/code resources
+when native teardown cannot finish, as required by ADR-130/131. No normal transition
+reuses a backend or session from another product policy.
+
+Contribution admission/factory retirement and native operation lifecycle are separate
+translation units within `HoroPlatformServicesExtension`. One target-private candidate
+state definition preserves their existing shared ownership and synchronization boundary;
+no new cross-target interface or public ABI is introduced.
+
+The native operation lifecycle also checks that the immutable configuration profile
+matches its admission owner and the selected contribution's profile mask before invoking
+a candidate factory. This prevents reusing a development configuration through an
+already admitted headless or certification owner.
 
 Provider discovery reads only verified `.horopkg` install records and inert manifests;
 it never probes PATH or loads candidates to discover capabilities. Package/Trust
@@ -211,9 +363,9 @@ Implementation status on 10 September 2026: PLS-001.2 provides the standalone
 `HoroEngine::PlatformServices` target and the typed `PlatformRequestStore` foundation.
 It owns bounded active/terminal records, generation-fenced move-only handles, immutable
 typed terminal snapshots, idempotent cancellation intent, and deferred at-most-once
-`OnComplete` subscriptions. Provider routing, the SDK evidence queue, timeout policy,
-provider cancellation, normalized provider errors, and host-wide frontend composition
-remain the later PLS-001.3 through PLS-001.8 slices; callers must not treat the request
+`OnComplete` subscriptions. The later PLS-001.3 through PLS-001.6 slices add routing,
+the provider evidence queue, request finalization and normalized provider errors.
+Host-wide frontend composition remains separate; callers must not treat the request
 store as a provider backend or bypass those owners.
 
 PLS-001.3 adds the generation-fenced `PlatformServicesFrontend` routing boundary.
@@ -223,6 +375,19 @@ unavailable/Null, stale-session, malformed-ID and over-bound requests before bac
 invocation. Routing and idempotent `Close` are serialized by the composition owner;
 `Close` publishes closed admission before invoking backend shutdown. The completion
 queue and provider-to-frontend request-store handoff remain PLS-001.4 scope.
+
+PLS-001.5 gives the version-2 provider lifecycle host a finite per-service request
+policy (30 seconds by default, at most 24 hours), queued owner-lane submission and
+explicit caller cancellation. Existing direct host callers must pump
+`DispatchCompletions` on the owner lane regularly to start queued work, apply ingress,
+evaluate deadlines and deliver terminal observers; without that pump neither launch
+nor timeout advances. `RequestCancel` before the first turn completes the request
+without a native call. Executing cancellation queues one native best-effort
+request for the next owner-lane turn and waits for completion or the admission deadline. The host processes copied
+completion ingress observed by the deadline before its timeout sweep. At timeout it
+publishes the immutable caller result and dispatches observers even when native cancel
+is unsupported. Native leases remain bounded and generation-fenced until a late
+completion or safe provider drain retires them; neither path rewrites the result.
 
 ```cpp
 template <typename T>
@@ -359,6 +524,26 @@ later completion callback may enqueue new work; it cannot recursively drain comp
 or change the published terminal record. Callback exceptions are caught at the engine
 executor boundary and do not change the platform request result.
 
+Implementation status for PLS-001.4: `PlatformRequestStore::CompletionSink(handle)`
+issues a copyable Horo-owned SDK ingress token with a weak store lease and the exact
+request type and generation. `Complete(Result<T>)` and `AcknowledgeCancellation`
+copy/move normalized outcomes into a finite FIFO; they neither mutate terminal
+state nor invoke observers. Admission captures diagnostic context, restored for
+engine-side terminal publication and deferred observer delivery. Duplicate queued
+or terminal evidence is an idempotent no-op and consumes no extra queue slot.
+Capacity rejection leaves that request eligible for a later retry.
+
+`DrainProviderCompletions(maxCount)` runs only on the thread that constructed the
+store, commits at most the given number of evidence records, and reports applied
+and discarded evidence. `DispatchCompletions` remains a separate later owner-thread
+turn; observer callbacks cannot recursively drain SDK evidence. Timeout or another
+terminal publication supersedes queued native evidence without changing the retained
+result. Session replacement closes the old store and composes a new generation;
+`Shutdown` atomically closes ingress and discards pending evidence. Tokens retained
+past store destruction return typed unavailable results without retaining provider
+or frontend lifetimes. This extends the existing request API without changing direct
+owner-lane completion, cancellation, or handle retention contracts.
+
 ### Timeouts, Retry, And Throttling
 
 The frontend captures one finite monotonic deadline at admission. Valid completion
@@ -403,6 +588,12 @@ platform.stats.coalesced_writes     -- stat writes merged by frontend
 platform.leaderboards.deferred_submits -- submissions delayed by debounce
 ```
 
+The request store also accepts `RecordRetryScheduled` and `RecordThrottled`
+observations for a current nonterminal request. They publish one bounded Horo
+counter after the owning policy schedules a retry or normalizes provider rate-limit
+evidence. They do not schedule work, change request state, or retain provider error
+text, retry-after values, payloads, or subject identity.
+
 ### Result And Errors
 
 Submission and terminal snapshots use typed `Result`/`Error` contracts. Errors are
@@ -432,9 +623,19 @@ platform.offline.abandoned          -- authorized audited stop with no false rol
 
 `platform.provider.failed` carries one normalized category: `Offline`, `NotSignedIn`,
 `Forbidden`, `RateLimited`, `PreconditionFailed`, `QuotaExceeded`, `InvalidResponse`,
-`TransientFailure` or `PermanentFailure`. Bounded redacted native codes may appear as
-diagnostic/cause evidence but never as branching identity. Capability absence, Null,
+`TransientFailure` or `PermanentFailure`. Provider-native codes stay private; stable
+category causes and safe request correlation provide diagnostic evidence. Capability absence, Null,
 cancellation and timeout are never remapped into provider failure.
+
+The `horo.platform.service` error domain registers the provider failure and category
+descriptors at host module composition. `platform.provider.failed` owns one typed
+category cause; an unrecognized provider result maps to `Unknown`, never to an
+invented code. The cause carries only a frontend request ID and generation for
+correlation. Provider callbacks send Horo result codes, not native codes or text;
+failure payload bytes are discarded before entering the request record. Applications
+and hosts use `ClassifyPlatformServiceError` and `PlatformProviderCategory` for
+behavior. They do not inspect provider prose or SDK codes. A cancelled or timed-out
+completion retains its dedicated request state and error code.
 
 ### Ordering And Coalescing
 
@@ -633,6 +834,34 @@ Cloud save is authenticated transport of opaque complete objects. It is not a
 replacement for the local save system and owns no local generation, archive parsing,
 lineage, merge, winner, retention or conflict policy.
 
+Implementation status for PLS-005.2: `PlatformCloudObjects.h` publishes the bounded
+provider-neutral metadata/list/read contract. Object keys, prefixes, cursors and
+provider revisions are distinct opaque value types; capability limits are validated
+against finite Horo ceilings before admission. List pages are session-tagged,
+strictly key-ordered and duplicate-free. Complete read evidence owns bounded bytes,
+requires an exact size and optional SHA-256 transport digest, and must pass the
+captured-subject/session-generation fence before it can be published. The existing
+`PlatformRequestHandle` lifecycle supplies cooperative cancellation and shutdown
+retirement; unsupported older providers return a typed capability failure rather than
+falling back to another provider or exposing a partial result.
+
+PLS-005.3 migration: the earlier `CloudWriteRequest`/`WriteCloudObject(CloudWriteRequest)`
+route has been removed because it could publish without a revision precondition. Its
+only in-tree callers were frontend/backend contract tests. New callers supply a
+`CloudBlobWriteRequest` with a complete immutable byte owner, SHA-256 digest, exact
+`CloudCreateIfAbsent` or `CloudMatchProviderRevision`, and coordinator-owned
+`CloudMutationId`; deletion supplies the exact revision and mutation ID. The selected
+provider must declare finite `CloudMutationCapability` facts including atomic
+create/replace/delete and durable deduplication as one inseparable capability, or
+frontend admission fails with `UnsupportedCapability`. Adapters own atomic commit
+ordering and durable mutation-ID lookup: the expected revision check and complete
+publication occur at one native commit point, with staging hidden at the public key.
+Frontend validation cannot emulate either with a local read or mutex. Exact
+retries must return the original semantic outcome, and a changed intent with the same
+ID is `IdempotencyConflict`. Completion validation checks subject/session, key, ID,
+size, revision and digest before success publication. Advisory quota observations do
+not reserve provider capacity; `QuotaExceeded` remains possible at commit.
+
 ```cpp
 struct CloudSaveObjectKey { BoundedOpaqueBytes value; };
 struct CloudSaveObjectPrefix { BoundedOpaqueBytes value; };
@@ -796,6 +1025,19 @@ ADR-132 registry/mapping pipeline. Optional detail is bounded untrusted presenta
 data. Publication requires a current subject plus `PresencePublish` access, and the
 captured session/access generations are revalidated before provider submission and
 observable completion.
+
+Implementation status for PLS-006.5: `PlatformPresenceCoordinator` resolves every set
+status through the immutable presence-definition registry, enforces the registered
+detail policy and valid UTF-8 bounds, and captures the exact subject/session/access
+authority. It retains one latest-wins pending desired state, never replaces an
+in-flight provider operation, applies a bounded publication interval, and invalidates
+pending/in-flight state on sign-out, session/access replacement or close. Provider
+adapters receive only a Horo-owned publication token and normalized completion result;
+provider strings, native values and implicit status fallback are not representable.
+`SubmitClear` borrows its small request by const reference; existing source callers can
+pass the same lvalue or temporary, but binary consumers of the earlier by-value
+signature must rebuild with the updated public header. Set requests remain owned by
+value so bounded detail bytes can move into the retained intent.
 
 PLS-003.4 also publishes the immutable `PresenceDefinitionRegistry`. Every active
 presence-status identity has exactly one definition fixing whether free detail is
@@ -975,6 +1217,24 @@ provider mapping revision and product/target profile as one generation. It resol
 keys/aliases once and emits typed IDs into provider-neutral artifacts; provider
 manifests are deterministic derived outputs from that same snapshot. Any revision
 change invalidates the candidate.
+
+PLS-003.6 implements a bounded synchronous cook over immutable validated snapshots.
+It emits two version-1, big-endian byte streams: a provider-neutral stream containing
+the project identity, host profile, registry/policy/definition fingerprints, service
+requirements and complete ID-sorted semantic definitions; and a mapping handoff
+containing the same registry/policy fingerprints, exact selected Horo provider,
+mapping revision, required-kind policy and kind/ID-sorted opaque provider-value
+digests. Every variable-length text field has a 32-bit big-endian byte length. A
+domain-separated SHA-256 over the two length-prefixed streams binds them into one
+cook generation. Adapter-owned native values and reverse maps are never part of
+either stream. The private adapter uses the handoff to verify and generate its own
+native manifest without loading an SDK during this common cook step. Explicit Null
+emits a zero-provider, zero-revision, empty mapping stream. A project configuration
+with explicit Null and any Required service is rejected before cook, and mapping
+policy cannot override that rule. Cook returns detached owned bytes only after all
+validation and cancellation checks, including one after final fingerprinting, pass;
+the host must recheck cancellation and source revisions before atomically publishing
+both streams or discarding both.
 
 Runtime loads bounded sorted tables with the expected fingerprint and performs only
 typed numeric lookup. It never hashes strings, reads editor aliases or asks a provider
@@ -1201,6 +1461,14 @@ session generation increases on bind, sign-out, account switch/invalidation and
 provider replacement. Subject-preserving access changes increment the access revision;
 identity uncertainty closes/rebinds a new generation.
 
+Implementation status for PLS-006.3: `PlatformSessionObserver` binds dispatch to the
+engine thread that composes it. Provider callbacks only enqueue copied revisioned
+snapshots into a finite ordered queue; they never run observer code. Dispatch sorts
+out-of-order revisions, evicts pending snapshots from older session generations when
+a replacement arrives, rejects late stale evidence, and invokes callbacks outside the
+state lock. Move-only subscriptions revoke safely during or between dispatch turns;
+recursive dispatch, queue pressure, wrong-thread calls and shutdown are typed outcomes.
+
 The private identity/profile service maps a provider stable authenticated subject to a
 pseudonymous product/provider-scoped binding, ADR-113 `LocalUserStorageId` and explicit
 `GameProfileId`. Raw account ID, gamertag, email, native handle or credentials do not
@@ -1343,22 +1611,26 @@ recorded outcome without duplicating cancellation or native teardown.
 
 ## Observability
 
-Platform services emit bounded metrics:
+The frontend and request store emit bounded metrics through Foundation Telemetry:
 
 ```text
-platform.request.pending_count           -- in-flight requests
-platform.request.completed_count         -- completed by service and backend
-platform.request.failed_count            -- by error category
-platform.request.latency_ms              -- end-to-end latency
-platform.offline.pending                 -- aggregate pending by service/state
-platform.offline.reconciling             -- aggregate remote-ambiguity count
-platform.offline.storage_bytes           -- bounded queue storage utilization
-platform.session.signed_in               -- 0/1 gauge
-platform.capability.available            -- gauge per service per backend
+horo.platform_services.request.lifecycle       -- accepted/rejected/terminal outcome
+horo.platform_services.request.queue_admission -- accepted/capacity/shutdown/config admission outcome
+horo.platform_services.request.retry_scheduled -- explicit Horo retry scheduling signal
+horo.platform_services.request.throttled       -- normalized throttling signal
+horo.platform_services.capability.checks       -- service and bounded capability outcome
+horo.platform_services.session.checks          -- service and bounded session outcome, including stale session
+horo.platform_services.frontend.shutdown       -- frontend shutdown success/failure
 ```
 
-No platform SDK logging or network callbacks run on the audio or render
-threads.
+Dimensions use only the finite Horo service and outcome vocabularies. Metrics never
+include request or session IDs, provider IDs/names, account identity, subject handles,
+payloads, provider error text, or retry-after values. Queue replay/storage and
+service-specific coalescing metrics remain with their respective owners; this request
+store reports only its bounded admission outcomes. Retry and throttling metrics report
+explicit observations and do not drive retry or rate policy.
+
+No platform SDK logging or network callbacks run on the audio or render threads.
 
 ## Editor And Runtime UI Surfaces
 
@@ -1640,7 +1912,7 @@ Platform-specific backend tests live in the private platform repositories.
 - [ADR-136](../../adr/136-platform-offline-queue-ownership-replay-and-cloud-intent-boundary.md):
   single-owner offline durability, admission/replay/expiry/shutdown semantics and the
   Save-owned cloud intent boundary.
-- [Platform Services Config UI Reference](./platform-services-config.html): achievements, leaderboards, cloud saves, presence, and platform adapters panel.
+- [Platform Services Config UI Reference](../../../mock-studio/designs.md#architecture-runtime-platform-services-config): achievements, leaderboards, cloud saves, presence, and platform adapters panel.
 
 - [Audio Architecture](./audio-architecture.md)
 - [Input Architecture](./input-architecture.md)
@@ -1653,3 +1925,10 @@ Platform-specific backend tests live in the private platform repositories.
   bytes, bounded local admission, credential isolation and save tool policy.
 - [Extension System](../extensions/plugin-system.md)
 - [Release Security](../release/release-security.md)
+
+Candidate rollback failures preserve the composition-owned backend and typed
+shutdown error. The composition stays closed and rejects replacement generations
+until the host restarts; subsequent Close calls do not retry or discard the
+undrained candidate. Standard and non-standard adapter exceptions become typed
+unavailability, and concrete adapters retain native code/resources when final
+destruction cannot safely drain them.

@@ -69,10 +69,10 @@ namespace Horo::Editor {
                                                    [absoluteProjectRoot, absoluteScenePath, generation,
                                                     completion](const CancellationToken &cancellation) {
             if (cancellation.IsCancellationRequested())
-                return Result<void>::Success();
+                return JobCancelled();
             Result<SceneFileFingerprint> inspected = InspectProjectSceneFingerprint(absoluteProjectRoot, absoluteScenePath);
             if (cancellation.IsCancellationRequested())
-                return Result<void>::Success();
+                return JobCancelled();
 
             SceneFileWatchUpdate update{.generation = generation};
             if (inspected.HasError())

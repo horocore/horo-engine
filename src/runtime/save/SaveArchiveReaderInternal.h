@@ -11,6 +11,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace Horo::Runtime::SaveArchiveReaderDetail {
@@ -27,6 +29,51 @@ namespace Horo::Runtime::SaveArchiveReaderDetail {
              std::string{path}});
         return error;
     }
+
+    /** @brief Reports a bounded archive read-work failure with its stable diagnostic code. */
+    [[nodiscard]] inline Error ReadWorkError(const std::size_t offset, const std::string_view path) {
+        Error error = ReaderError(SaveErrors::ArchiveFramingLimitExceeded, offset, path);
+        error.diagnostics.front().code = DiagnosticCode{"save.archive.limit.read_work"};
+        error.diagnostics.front().message = "Archive read work budget exceeded.";
+        return error;
+    }
+
+    /** @brief Reads one little-endian unsigned field without advancing past the input. */
+    template <typename Value>
+    [[nodiscard]] bool ReadLittleEndian(const std::span<const std::byte> bytes, std::size_t &offset, Value &value) noexcept {
+        static_assert(std::is_unsigned_v<Value>);
+        if (offset > bytes.size() || sizeof(Value) > bytes.size() - offset)
+            return false;
+        value = 0;
+        for (std::size_t index = 0; index < sizeof(Value); ++index)
+            value |= static_cast<Value>(std::to_integer<std::uint8_t>(bytes[offset + index])) << (index * 8U);
+        offset += sizeof(Value);
+        return true;
+    }
+
+    /** @brief Reads a fixed-size byte field without advancing past the input. */
+    [[nodiscard]] inline bool ReadArray(const std::span<const std::byte> bytes, std::size_t &offset,
+                                        const std::span<std::uint8_t> destination) noexcept {
+        if (offset > bytes.size() || destination.size() > bytes.size() - offset)
+            return false;
+        for (std::size_t index = 0; index < destination.size(); ++index)
+            destination[index] = std::to_integer<std::uint8_t>(bytes[offset + index]);
+        offset += destination.size();
+        return true;
+    }
+
+    /** @brief Checks whether a fixed-size identity or key is entirely zero. */
+    [[nodiscard]] inline bool IsZero(
+        const std::span<const std::uint8_t> bytes) noexcept {  // NOSONAR(cpp:S1144) -- identity fields use uint8_t storage.
+        return std::ranges::all_of(bytes, [](const std::uint8_t value) {
+            return value == 0;
+        });
+    }
+
+    /** @brief Parses and validates the versioned envelope and trailer before container admission. */
+    [[nodiscard]] Result<std::pair<SaveArchivePreamble, SaveArchiveIntegrityManifest>> ReadEnvelope(std::span<const std::byte> archive,
+                                                                                                    const SaveArchiveReaderLimits &limits,
+                                                                                                    SaveArchiveSignatureInfo &signature);
 
     struct RawEntry final {
         SaveArchiveEntryKind kind{};

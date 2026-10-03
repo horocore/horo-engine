@@ -58,6 +58,15 @@ context after every callback. Priority, general main-thread continuation
 pumping, job aggregation, wait reasons and revision events remain later work;
 examples of those capabilities below otherwise describe the target.
 
+JOB-001.3 completes the cancellation terminal contract. A cancellation request
+revokes queued work before it can start and sets the token for running work. A
+running callback returns `JobCancelled()` to acknowledge an aborted operation;
+it may attach its original typed reason as a cause. A successful callback remains
+`Succeeded` even if cancellation was requested while it ran, because it may have
+committed work. A callback failure remains `Failed` even if cancellation was
+requested; only the exact Foundation `job.cancelled` identity is an acknowledged
+cancellation. A late request cannot change a published terminal result.
+
 ```cpp
 class JobSystem {
 public:
@@ -169,6 +178,14 @@ requests sibling cancellation on the first observed failure; `CollectAll` joins
 all accepted children without early sibling cancellation. Destruction closes
 admission, requests cancellation and joins every accepted child.
 
+`TaskGroup::Outcome()` is absent until a complete join and then immutable:
+`Completed` if all children succeeded, `Failed` if any child failed, and
+`Cancelled` if at least one child cancelled and none failed. The first failure
+in spawn order is the returned error; cancellation is returned only in the
+absence of child failure. Fail-fast reacts only to failure, never to a child
+that acknowledges cancellation. A bounded wait interruption leaves the group
+without a terminal outcome until a later join drains it.
+
 `Join(options)` applies one monotonic deadline across all children. A forbidden,
 capacity-deadlock, or timeout result leaves the group closed but not finalized,
 so the owner can cancel and retry the join. A completed bounded join records the
@@ -199,6 +216,14 @@ Cancellation tokens are cheap to query and propagate from:
 Jobs check cancellation at bounded intervals and before committing persistent
 or authoritative state. Cancellation after an irreversible commit returns the
 committed result rather than falsely reporting cancellation.
+
+Existing `Result<void>` callbacks that abort cooperatively should return
+`JobCancelled()` (optionally with the feature's cancellation error as a typed
+cause). A feature-specific error returned directly remains a failure at the
+scheduler boundary; consumers that need to preserve the feature error can read
+the cause of the `job.cancelled` result. Callers that need a cancelled terminal
+state use `SubmitResult` or a context-aware result callback; the void `Submit`
+adapter reports a normal return as success.
 
 External subprocesses receive graceful termination first, then a bounded
 forced-termination policy owned by the platform process service.

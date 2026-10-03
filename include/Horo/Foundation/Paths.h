@@ -2,8 +2,10 @@
 
 #include "Horo/Foundation/Result.h"
 
+#include <filesystem>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace Horo {
@@ -65,5 +67,35 @@ namespace Horo {
     namespace ProjectLayout {
         /** @brief Derived asset registry index rebuilt from authoritative asset data. */
         inline constexpr std::string_view AssetIndexPath = ".horo/asset_index.json";
+
+        /** @brief Locates the asset root using the directory's actual spelling for legacy projects. */
+        [[nodiscard]] inline std::filesystem::path AssetRoot(const std::filesystem::path &projectRoot) {
+            std::filesystem::path legacyRoot;
+            std::error_code error;
+            for (std::filesystem::directory_iterator it{projectRoot, error}, end; !error && it != end; it.increment(error)) {
+                const auto name = it->path().filename();
+                if (name != "Assets" && name != "assets")
+                    continue;
+                std::error_code typeError;
+                if (!it->is_directory(typeError) || typeError)
+                    continue;
+                if (name == "Assets")
+                    return it->path();
+                legacyRoot = it->path();
+            }
+            return legacyRoot.empty() ? projectRoot / "Assets" : legacyRoot;
+        }
+
+        /** @brief Returns the scene directory for the project's asset-root spelling. */
+        [[nodiscard]] inline std::filesystem::path ScenesRoot(const std::filesystem::path &projectRoot) {
+            const auto assetRoot = AssetRoot(projectRoot);
+            return assetRoot / (assetRoot.filename() == "Assets" ? "Scenes" : "scenes");
+        }
+
+        /** @brief Returns the script directory for the project's asset-root spelling. */
+        [[nodiscard]] inline std::filesystem::path ScriptsRoot(const std::filesystem::path &projectRoot) {
+            const auto assetRoot = AssetRoot(projectRoot);
+            return assetRoot / (assetRoot.filename() == "Assets" ? "Scripts" : "scripts");
+        }
     }  // namespace ProjectLayout
 }  // namespace Horo

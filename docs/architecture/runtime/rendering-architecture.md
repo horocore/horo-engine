@@ -1509,6 +1509,13 @@ host-declared render-capable thread. Replacement never retargets existing
 dependents. Handle state is validated when the frontend accepts a queued
 request, not when a producer constructs it.
 
+Resource admission failures retain their typed error code. The RenderApi
+descriptor diagnostic helpers format the rejected request and the specific
+capability checks that failed. Frontend and concrete backends add their own
+operation context to that returned error; the host logs the propagated error
+once. These helpers are additive and do not change resource handles, admission
+policy, or caller error-code handling.
+
 Asset IDs and render handles remain distinct. The asset system owns persistent
 logical asset identity; the renderer owns one resident realization. Reload,
 resize, replacement, and backend recreation publish new generations instead of
@@ -1795,7 +1802,7 @@ Required tests cover:
 
 - [Coordinate Precision And Origin Rebasing](./coordinate-precision-and-origin-rebasing.md)
 - [ADR-026: Large-World Precision and Floating Origin Strategy](../../adr/026-large-world-precision-and-floating-origin-strategy.md)
-- [Render Settings UI Reference](./render-settings.html): quality presets, render feature toggles, resolution, and GPU profiler panel.
+- [Render Settings UI Reference](../../../mock-studio/designs.md#architecture-runtime-render-settings): quality presets, render feature toggles, resolution, and GPU profiler panel.
 - [Render Backend Parity Contract](./render-backend-parity-contract.md)
 - [Renderer Distribution And Availability](./renderer-distribution-and-availability.md)
 - [Renderer Module Package Manifest](./renderer-module-package-manifest.md)

@@ -1,8 +1,11 @@
+#include "Horo/Audio/AudioCommandStaging.h"
+#include "Horo/Audio/AudioMemory.h"
 #include "Horo/Audio/Internal/NullAudioBackend.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
+#include <optional>
 
 namespace Horo::Audio::Backend {
     namespace {
@@ -28,6 +31,20 @@ namespace Horo::Audio::Backend {
             return {.plannedEpoch = Epoch(), .format = FormatRequest(), .access = AccessMode::Shared};
         }
 
+        AudioCommandStagingDescriptor StagingDescriptor() {
+            return {.callback = {.owner = Owner(),
+                                 .storageIdentity = AudioMemoryPoolId::Create(21).Value(),
+                                 .epoch = 5,
+                                 .slots = 4,
+                                 .criticalSlots = 2,
+                                 .budgetBytes = 4096},
+                    .ingressIdentity = AudioMemoryPoolId::Create(22).Value(),
+                    .ingressSlots = 4,
+                    .criticalSlots = 2,
+                    .sceneSlots = 4,
+                    .ingressBudgetBytes = 4096};
+        }
+
         struct RenderTrace final {
             std::array<RenderPhase, 16> phases{};
             std::array<std::uint64_t, 16> frames{};
@@ -35,6 +52,12 @@ namespace Horo::Audio::Backend {
             AudioProcessingFormat expected;
             std::size_t count{};
             bool planesAligned{true};
+            bool emitSafetyHooks{};
+            bool attemptOwnedOperations{};
+            bool allocationSucceeded{};
+            AudioCommandStagingStatus lockStatus{AudioCommandStagingStatus::Inactive};
+            AudioCommandStaging *staging{};
+            std::optional<AudioScratchArena> arena; /**< Retains the allocation for control-side destruction. */
         };
 
         RenderTrace Trace() {
@@ -51,6 +74,18 @@ namespace Horo::Audio::Backend {
             trace.frames[trace.count] = invocation.sampleFrame;
             trace.times[trace.count] = invocation.startedAt.nanoseconds;
             ++trace.count;
+            if (trace.emitSafetyHooks) {
+                AudioCallbackWatchdog::OnAllocationAttempt();
+                AudioCallbackWatchdog::OnLockAttempt();
+            }
+            if (trace.attemptOwnedOperations) {
+                trace.attemptOwnedOperations = false;
+                auto arena = AudioScratchArena::Create(Owner(), AudioMemoryAlignment);
+                trace.allocationSucceeded = arena.HasValue();
+                if (arena.HasValue())
+                    trace.arena.emplace(std::move(arena).Value());
+                trace.lockStatus = trace.staging->RegisterScene({.owner = Owner(), .slot = 1, .generation = 1});
+            }
             for (auto *plane : invocation.output.planes) {
                 void *storage = plane;
                 std::size_t space = 64;
@@ -112,6 +147,53 @@ namespace Horo::Audio::Backend {
             const auto started = Complete(backend, Start{Epoch(), {&trace, Render}});
             REQUIRE(std::holds_alternative<Started>(started.outcome));
             REQUIRE(backend.State() == NullAudioBackendState::Priming);
+        }
+
+        TEST_CASE("Null audio callback safety hooks drain only on control without reading wall time",
+                  "[unit][audio][null_backend][watchdog]") {
+            auto backend = Backend();
+            auto trace = Trace();
+            trace.emitSafetyHooks = true;
+            OpenAndStart(*backend, trace);
+            REQUIRE(backend->AdvanceCallback().HasValue());
+            std::array<AudioCallbackViolation, 4> records{};
+            const auto drained = backend->DrainSafetyViolations(records);
+#if !defined(NDEBUG)
+            REQUIRE(drained.count == 2);
+            CHECK(records[0].kind == AudioCallbackViolationKind::AllocationAttempt);
+            CHECK(records[1].kind == AudioCallbackViolationKind::LockAttempt);
+            CHECK(records[0].epoch == Epoch());
+#else
+            REQUIRE(drained.count == 0);
+#endif
+            CHECK(backend->DrainSafetyViolations(records).count == 0);
+        }
+
+        TEST_CASE("Null callback detects actual Horo audio allocation and ingress lock attempts", "[unit][audio][null_backend][watchdog]") {
+            auto stagingResult = AudioCommandStaging::Create(StagingDescriptor());
+            REQUIRE(stagingResult.HasValue());
+            auto staging = std::move(stagingResult).Value();
+            auto backend = Backend();
+            auto trace = Trace();
+            trace.attemptOwnedOperations = true;
+            trace.staging = &staging;
+            OpenAndStart(*backend, trace);
+            std::array<AudioCallbackViolation, 4> records{};
+            REQUIRE(backend->DrainSafetyViolations(records).count == 0);
+            REQUIRE(backend->AdvanceCallback().HasValue());
+            CHECK(trace.allocationSucceeded);
+            CHECK(trace.lockStatus == AudioCommandStagingStatus::Ok);
+            const auto drained = backend->DrainSafetyViolations(records);
+#if !defined(NDEBUG)
+            REQUIRE(drained.count == 2);
+            CHECK(records[0].kind == AudioCallbackViolationKind::AllocationAttempt);
+            CHECK(records[1].kind == AudioCallbackViolationKind::LockAttempt);
+            CHECK(records[0].epoch == Epoch());
+            CHECK(records[1].sampleFrame == 0);
+#else
+            REQUIRE(drained.count == 0);
+#endif
+            CHECK(backend->DrainSafetyViolations(records).count == 0);
         }
 
         TEST_CASE("Null audio lifecycle and sample clock are deterministic without wall time or hardware", "[unit][audio][null_backend]") {

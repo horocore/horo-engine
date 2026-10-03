@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Runtime/Ui/UiAccessibility.h"
+#include "Horo/Runtime/Ui/UiFocusGraph.h"
 
 #include <atomic>
 #include <cstddef>
@@ -28,12 +29,17 @@ namespace Horo::Runtime::Ui {
         std::vector<UiAccessibilityRelation> relations;
         std::vector<UiAccessibilityAction> actions;
         std::vector<char> text;
+        std::vector<UiAccessibilityNodeId> readingOrder;
+        std::vector<UiAccessibilityNodeId> focusOrder;
+        std::optional<UiFocusSnapshot> focusState;
 
         explicit Storage(const UiAccessibilityLimits &limits);
 
         void ResolveParents(const UiElementTree &tree, AccessibilityInternal::ProjectionLookup lookup);
         void Publish(const UiElementTree &tree, const UiAccessibilitySnapshotDescriptor &sourceDescriptor,
                      const UiAccessibilityProjection &projection, AccessibilityInternal::ProjectionLookup lookup);
+        /** @brief Copies bounded authoritative focus evidence into the unpublished snapshot slot. */
+        void PublishFocus(std::span<const UiFocusTarget> order, const UiFocusSnapshot *state);
     };
 
     struct UiAccessibilityExtractor::Storage final {
@@ -44,6 +50,14 @@ namespace Horo::Runtime::Ui {
         UiAccessibilitySemanticRevision lastRevision;
         std::vector<std::uint8_t> cycleScratch;
         std::vector<AccessibilityInternal::ProjectionLookupEntry> lookupScratch;
+        std::vector<UiElementHandle> preorderScratch;
+        std::vector<UiAccessibilityNodeInput> readingScratch;
+        std::vector<UiAccessibilityNodeInput> focusProjectionScratch;
+        std::vector<UiFocusTarget> focusOrderScratch;
+        std::optional<UiFocusScope> focusScope;
+        /** @brief Validates a complete candidate and prepares retained reading/relationship evidence before leasing a slot. */
+        [[nodiscard]] Result<void> PrepareReading(const UiElementTree &tree, const UiAccessibilitySnapshotDescriptor &source,
+                                                  const UiAccessibilityProjection &projection);
 
         explicit Storage(const UiAccessibilityExtractorDescriptor &source);
 

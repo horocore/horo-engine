@@ -1,6 +1,7 @@
 #include "HostModuleComposition.h"
 
 #include "Horo/Foundation/ErrorCode.h"
+#include "Horo/PlatformServices/PlatformServiceErrors.h"
 
 #include <algorithm>
 #include <array>
@@ -35,6 +36,12 @@ namespace Horo::Application::Internal {
             return descriptor;
         }
 
+        [[nodiscard]] ModuleDescriptor DescribePlatformServices() {
+            ModuleDescriptor descriptor = Describe("horo.platform.services", {"horo.foundation", "horo.platform"});
+            descriptor.errorDomains.push_back(PlatformServices::PlatformServiceErrorDomain());
+            return descriptor;
+        }
+
         /**
          * @brief Creates a typed failure for an unsupported host composition selection.
          * @tparam T Success value type expected by the caller.
@@ -58,6 +65,7 @@ namespace Horo::Application::Internal {
                 Describe("horo.application", {"horo.foundation"}),
                 Describe("horo.application.project_migrations", {"horo.application"}),
                 Describe("horo.platform", {"horo.foundation"}),
+                DescribePlatformServices(),
                 Describe("horo.runtime", {"horo.foundation"}),
                 Describe("horo.assets", {"horo.foundation"}),
                 Describe("horo.input", {"horo.foundation"}),
@@ -100,10 +108,11 @@ namespace Horo::Application::Internal {
                     "The current headless host does not link an interactive renderer or OpenTelemetry module.");
             }
             std::vector<ModuleDescriptor> modules;
-            modules.reserve(7);
+            modules.reserve(8);
             modules.push_back(Describe("horo.foundation"));
             modules.push_back(Describe("horo.security", {"horo.foundation"}));
             modules.push_back(Describe("horo.platform", {"horo.foundation", "horo.security"}));
+            modules.push_back(DescribePlatformServices());
             modules.push_back(Describe("horo.assets", {"horo.foundation"}));
             modules.push_back(Describe("horo.application", {"horo.foundation"}));
             modules.push_back(Describe("horo.extensions", {"horo.foundation", "horo.platform", "horo.assets", "horo.security"}));
@@ -144,14 +153,31 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc ComposeHostModules */
-    Result<std::unique_ptr<ModuleHost>> ComposeHostModules(const HostModuleSelection &selection) {
+    Result<std::unique_ptr<ModuleHost>> ComposeHostModules(const HostModuleSelection &selection,
+                                                           const std::span<const ModuleConfigurationContribution> contributions) {
         auto described = DescribeHostModules(selection);
         if (described.HasError())
             return Result<std::unique_ptr<ModuleHost>>::Failure(described.ErrorValue());
 
+        for (const ModuleConfigurationContribution &contribution : contributions) {
+            if (std::ranges::count_if(described.Value(),
+                                      [&contribution](const ModuleDescriptor &descriptor) {
+                return descriptor.id == contribution.module;
+            }) != 1 ||
+                std::ranges::count_if(contributions, [&contribution](const ModuleConfigurationContribution &other) {
+                return other.module == contribution.module;
+            }) != 1)
+                return InvalidSelection<std::unique_ptr<ModuleHost>>("Settings contribution requires exactly one selected module: " +
+                                                                     contribution.module.value);
+        }
         auto host = std::make_unique<ModuleHost>();
         for (const ModuleDescriptor &descriptor : described.Value()) {
-            if (const Result<void> registered = host->Register(descriptor); registered.HasError())
+            const auto contribution = std::ranges::find_if(contributions, [&descriptor](const ModuleConfigurationContribution &candidate) {
+                return candidate.module == descriptor.id;
+            });
+            const Result<void> registered =
+                contribution == contributions.end() ? host->Register(descriptor) : host->Register(descriptor, *contribution);
+            if (registered.HasError())
                 return Result<std::unique_ptr<ModuleHost>>::Failure(registered.ErrorValue());
         }
         if (const Result<std::size_t> activated = host->ActivateRegistered(nullptr); activated.HasError())

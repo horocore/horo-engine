@@ -237,6 +237,32 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
         std::mutex callMutex_;
     };
 
+    class CancellationWaitingProcessRunner final : public IExternalProcessRunner {
+    public:
+        Result<ExternalProcessResult> Run(const ExternalProcessRequest &, const CancellationToken &cancellation) override {
+            {
+                std::lock_guard lock(mutex_);
+                running_ = true;
+            }
+            condition_.notify_one();
+            while (!cancellation.IsCancellationRequested())
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            return Result<ExternalProcessResult>::Success({ProcessTerminationReason::Cancelled, 1});
+        }
+
+        [[nodiscard]] bool WaitUntilRunning() {
+            std::unique_lock lock(mutex_);
+            return condition_.wait_for(lock, std::chrono::seconds{30}, [this] {
+                return running_;
+            });
+        }
+
+    private:
+        std::mutex mutex_;
+        std::condition_variable condition_;
+        bool running_{};
+    };
+
     template <typename ProcessRunner> class GameplayBuildFixture final {
     public:
         explicit GameplayBuildFixture(ProcessRunner &runner, const std::size_t workerCount = 1U, const std::size_t queueCapacity = 4U,
@@ -295,82 +321,23 @@ HORO_BEHAVIOR(Movement, "game.tests.build_movement")
         REQUIRE(snapshot.records.back().result == expectedResult);
         REQUIRE(snapshot.records.back().code.Value() == expectedCode);
     }
+
+    /** @brief Verifies navigable location data from a real failed gameplay compilation. */
+    void AssertCompilerErrorLocation(const BuildOutputSnapshot &snapshot, const GameplayBuildSnapshot &failure,
+                                     const std::filesystem::path &sourcePath) {
+        const auto compilerError = std::ranges::find_if(snapshot.records, [&](const BuildOutputRecord &record) {
+            return record.operationId == failure.operationId && record.code.Value() == "gameplay.build.compiler_error" &&
+                   record.source.has_value() &&
+                   std::filesystem::path{record.source->absolutePath}.lexically_normal() == sourcePath.lexically_normal();
+        });
+        REQUIRE((compilerError != snapshot.records.end()));
+        REQUIRE((compilerError->severity == DiagnosticSeverity::Error));
+        REQUIRE((compilerError->source->line == 1U));
+#if !defined(_WIN32)
+        REQUIRE((compilerError->source->column > 0U));
+#endif
+    }
 }  // namespace
-
-TEST_CASE("Compiler diagnostic parser supports GCC Clang and MSVC output", "[unit][gameplay][build][diagnostics]") {
-    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path() / "horo parser project";
-
-    SECTION("relative GCC warning preserves source and warning code") {
-        const auto diagnostic =
-            ParseCompilerDiagnostic("source/gameplay/Player Move.cpp:12:7: warning: deprecated declaration [-Wdeprecated-declarations]",
-                                    projectRoot);
-        REQUIRE(diagnostic.has_value());
-        REQUIRE((diagnostic->format == CompilerDiagnosticFormat::ClangOrGcc));
-        REQUIRE((diagnostic->severity == DiagnosticSeverity::Warning));
-        REQUIRE((diagnostic->source.absolutePath == (projectRoot / "source/gameplay/Player Move.cpp").lexically_normal().string()));
-        REQUIRE((diagnostic->source.line == 12U));
-        REQUIRE((diagnostic->source.column == 7U));
-        REQUIRE((diagnostic->message == "deprecated declaration [-Wdeprecated-declarations]"));
-        REQUIRE((diagnostic->compilerCode == "-Wdeprecated-declarations"));
-    }
-
-    SECTION("absolute Clang error preserves non-ASCII source") {
-        const std::filesystem::path source = projectRoot / "kaynak/oyuncu_hareketi_ş.cpp";
-        const auto diagnostic = ParseCompilerDiagnostic(source.string() + ":42:3: error: expected expression", projectRoot);
-        REQUIRE(diagnostic.has_value());
-        REQUIRE((diagnostic->severity == DiagnosticSeverity::Error));
-        REQUIRE((diagnostic->source.absolutePath == source.lexically_normal().string()));
-        REQUIRE((diagnostic->source.line == 42U));
-        REQUIRE((diagnostic->source.column == 3U));
-        REQUIRE_FALSE(diagnostic->compilerCode.has_value());
-    }
-
-    SECTION("MSVC error supports drive letters spaces and compiler codes") {
-        const auto diagnostic =
-            ParseCompilerDiagnostic("C:\\Horo Project\\source\\Player.cpp(27,11): error C2143: syntax error: missing ';' before '}'",
-                                    projectRoot);
-        REQUIRE(diagnostic.has_value());
-        REQUIRE((diagnostic->format == CompilerDiagnosticFormat::Msvc));
-        REQUIRE((diagnostic->severity == DiagnosticSeverity::Error));
-        REQUIRE((diagnostic->source.line == 27U));
-        REQUIRE((diagnostic->source.column == 11U));
-        REQUIRE((diagnostic->compilerCode == "C2143"));
-        REQUIRE((diagnostic->message == "syntax error: missing ';' before '}'"));
-    }
-}
-
-TEST_CASE("Compiler diagnostic parser accepts omitted columns", "[unit][gameplay][build][diagnostics]") {
-    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path() / "horo parser project";
-
-    const auto gcc = ParseCompilerDiagnostic("source/gameplay/Player.cpp:31: error: expected declaration", projectRoot);
-    REQUIRE(gcc.has_value());
-    REQUIRE((gcc->source.line == 31U));
-    REQUIRE((gcc->source.column == 0U));
-
-    const auto msvc = ParseCompilerDiagnostic("source\\Player.cpp(19): warning C4100: unreferenced parameter", projectRoot);
-    REQUIRE(msvc.has_value());
-    REQUIRE((msvc->source.line == 19U));
-    REQUIRE((msvc->source.column == 0U));
-    REQUIRE((msvc->compilerCode == "C4100"));
-}
-
-TEST_CASE("Compiler diagnostic parser rejects malformed and oversized input safely", "[unit][gameplay][build][diagnostics]") {
-    const std::filesystem::path projectRoot = std::filesystem::temp_directory_path();
-
-    REQUIRE_FALSE(ParseCompilerDiagnostic("not a diagnostic", projectRoot).has_value());
-    REQUIRE_FALSE(ParseCompilerDiagnostic("file.cpp:0:2: error: invalid line", projectRoot).has_value());
-    REQUIRE_FALSE(ParseCompilerDiagnostic("file.cpp:2:nope: warning: invalid column", projectRoot).has_value());
-    REQUIRE_FALSE(ParseCompilerDiagnostic("file.cpp(nope): error C1000: invalid line", projectRoot).has_value());
-    REQUIRE_FALSE(ParseCompilerDiagnostic(std::string(MaximumCompilerDiagnosticLineBytes + 1U, 'x'), projectRoot).has_value());
-
-    const std::string prefix = "file.cpp:1:1: warning: ";
-    const std::string longMessage(MaximumCompilerDiagnosticMessageBytes + 5U, 'm');
-    const auto truncated = ParseCompilerDiagnostic(prefix + longMessage, projectRoot, true);
-    REQUIRE(truncated.has_value());
-    REQUIRE(truncated->inputTruncated);
-    REQUIRE(truncated->messageTruncated);
-    REQUIRE((truncated->message.size() == MaximumCompilerDiagnosticMessageBytes));
-}
 
 TEST_CASE("Gameplay build service consumes exported SDK and preserves last success on failure", "[integration][gameplay][build]") {
     CountingExternalProcessRunner processes;
@@ -415,6 +382,7 @@ TEST_CASE("Gameplay build service consumes exported SDK and preserves last succe
     REQUIRE(failedOutput.has_value());
     REQUIRE(successfulOutputSession.has_value());
     AssertFailedBuildOutput(*failedOutput, *successfulOutputSession, failure);
+    AssertCompilerErrorLocation(*failedOutput, failure, project.root / "source/gameplay/Movement.cpp");
     REQUIRE(Read(successfulState) == beforeFailure);
     REQUIRE(std::filesystem::is_regular_file(project.root / ".horo/local/gameplay_module.json"));
     REQUIRE_FALSE(service.IsUpToDate(request));
@@ -466,13 +434,12 @@ TEST_CASE("Gameplay build output classifies bounded GCC and Clang diagnostics", 
 }
 
 TEST_CASE("Gameplay build service maps cancellation to one correlated terminal record", "[unit][gameplay][build][cancellation]") {
-    TerminalProcessRunner processes{ProcessTerminationReason::Cancelled};
+    CancellationWaitingProcessRunner processes;
     GameplayBuildFixture fixture{processes};
 
     const auto started = fixture.service.Start(fixture.Request(std::chrono::seconds{1}));
     REQUIRE(started.HasValue());
-    REQUIRE(processes.WaitForCall(std::chrono::seconds{30}));
-    REQUIRE((processes.calls.load(std::memory_order_relaxed) == 1U));
+    REQUIRE(processes.WaitUntilRunning());
     REQUIRE(fixture.service.RequestCancel(started.Value()));
     const GameplayBuildSnapshot terminal = AwaitTerminal(fixture.service, started.Value());
     REQUIRE(terminal.state == GameplayBuildState::Cancelled);
@@ -481,6 +448,87 @@ TEST_CASE("Gameplay build service maps cancellation to one correlated terminal r
     REQUIRE(snapshot.has_value());
     AssertTerminalOutput(*snapshot, terminal, BuildOutputResult::Cancelled, "gameplay.build.cancelled");
     AssertTerminalOperation(fixture.operations, terminal, OperationState::Cancelled);
+    REQUIRE_FALSE(fixture.service.RequestCancel(started.Value()));
+}
+
+TEST_CASE("Gameplay build shutdown joins active work and publishes terminal output before returning", "[unit][gameplay][build][shutdown]") {
+    CancellationWaitingProcessRunner processes;
+    GameplayBuildFixture fixture{processes};
+    const auto started = fixture.service.Start(fixture.Request());
+    REQUIRE(started.HasValue());
+    REQUIRE(processes.WaitUntilRunning());
+
+    fixture.service.Shutdown();
+
+    const std::optional<GameplayBuildSnapshot> terminal = fixture.service.Query(started.Value());
+    REQUIRE(terminal.has_value());
+    REQUIRE(terminal->state == GameplayBuildState::Cancelled);
+    const std::optional<BuildOutputSnapshot> output = fixture.output.SnapshotIfChanged(0);
+    REQUIRE(output.has_value());
+    AssertTerminalOutput(*output, *terminal, BuildOutputResult::Cancelled, "gameplay.build.cancelled");
+    AssertTerminalOperation(fixture.operations, *terminal, OperationState::Cancelled);
+    REQUIRE_FALSE(fixture.service.RequestCancel(started.Value()));
+}
+
+TEST_CASE("Gameplay build cancellation and shutdown publish one terminal outcome", "[unit][gameplay][build][shutdown][race]") {
+    CancellationWaitingProcessRunner processes;
+    GameplayBuildFixture fixture{processes};
+    const auto started = fixture.service.Start(fixture.Request());
+    REQUIRE(started.HasValue());
+    REQUIRE(processes.WaitUntilRunning());
+
+    std::thread cancellation{[&fixture, id = started.Value()] {
+        static_cast<void>(fixture.service.RequestCancel(id));
+    }};
+    fixture.service.Shutdown();
+    cancellation.join();
+
+    const std::optional<GameplayBuildSnapshot> terminal = fixture.service.Query(started.Value());
+    REQUIRE(terminal.has_value());
+    REQUIRE(terminal->state == GameplayBuildState::Cancelled);
+    const std::optional<BuildOutputSnapshot> output = fixture.output.SnapshotIfChanged(0);
+    REQUIRE(output.has_value());
+    AssertTerminalOutput(*output, *terminal, BuildOutputResult::Cancelled, "gameplay.build.cancelled");
+    AssertTerminalOperation(fixture.operations, *terminal, OperationState::Cancelled);
+}
+
+TEST_CASE("Active gameplay build projection survives readers and clears at cancellation", "[unit][gameplay][build][cancellation]") {
+    CancellationWaitingProcessRunner processes;
+    GameplayBuildFixture fixture{processes};
+    const auto started = fixture.service.Start(fixture.Request());
+    REQUIRE(started.HasValue());
+    REQUIRE(processes.WaitUntilRunning());
+
+    const auto active = fixture.service.QueryActiveProject(fixture.project.root);
+    REQUIRE(active.has_value());
+    REQUIRE(active->id == started.Value());
+    REQUIRE(active->startedAt <= std::chrono::steady_clock::now());
+    REQUIRE(active->progress.has_value());
+    REQUIRE(*active->progress > 0.0F);
+    REQUIRE_FALSE(active->cancellationRequested);
+    REQUIRE_FALSE(fixture.service.QueryActiveProject(fixture.project.root / "other-project").has_value());
+
+    std::atomic<bool> reading{true};
+    std::atomic<bool> invalidSnapshot{false};
+    std::thread reader{[&] {
+        while (reading.load(std::memory_order_relaxed)) {
+            const auto snapshot = fixture.service.QueryActiveProject(fixture.project.root);
+            if (snapshot.has_value() && (snapshot->id != started.Value() || snapshot->state == GameplayBuildState::Cancelled))
+                invalidSnapshot.store(true, std::memory_order_relaxed);
+        }
+    }};
+    const bool requested = fixture.service.RequestCancel(active->id);
+    const auto cancelling = fixture.service.QueryActiveProject(fixture.project.root);
+    const bool duplicateRequest = fixture.service.RequestCancel(active->id);
+    reading.store(false, std::memory_order_relaxed);
+    reader.join();
+    REQUIRE(requested);
+    if (cancelling.has_value())
+        REQUIRE(cancelling->cancellationRequested);
+    REQUIRE_FALSE(duplicateRequest);
+    REQUIRE_FALSE(invalidSnapshot.load(std::memory_order_relaxed));
+    REQUIRE(AwaitTerminal(fixture.service, active->id).state == GameplayBuildState::Cancelled);
+    REQUIRE_FALSE(fixture.service.QueryActiveProject(fixture.project.root).has_value());
 }
 
 TEST_CASE("Gameplay build service maps process timeout to one correlated terminal record", "[unit][gameplay][build][timeout]") {

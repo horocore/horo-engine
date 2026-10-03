@@ -13,6 +13,7 @@
 #include <optional>
 
 namespace Horo::Network {
+    class NetworkMetrics;
     /** @brief Owner-visible gameplay session lifecycle above transport connectivity. */
     enum class PeerSessionState : std::uint8_t {
         Created,
@@ -86,10 +87,11 @@ namespace Horo::Network {
          * @param connection Exact connected transport generation.
          * @param sessionGeneration Non-zero gameplay session generation.
          * @param deadlines Ordered positive absolute deadlines and finite inactivity window.
+         * @param metrics Optional owner-thread observer; host must keep it alive beyond this lifecycle.
          * @return Prepared lifecycle or typed malformed failure.
          */
         [[nodiscard]] static Result<PeerSessionLifecycle> Create(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration,
-                                                                 const PeerSessionDeadlines &deadlines);
+                                                                 const PeerSessionDeadlines &deadlines, NetworkMetrics *metrics = nullptr);
 
         /** @brief Enters negotiation. @return Success or typed stale/state/timeout failure. */
         [[nodiscard]] Result<void> BeginNegotiation(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration,
@@ -164,7 +166,7 @@ namespace Horo::Network {
 
     private:
         PeerSessionLifecycle(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration,
-                             const PeerSessionDeadlines &deadlines) noexcept;
+                             const PeerSessionDeadlines &deadlines, NetworkMetrics *metrics) noexcept;
         [[nodiscard]] bool Owns(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration) const noexcept;
         [[nodiscard]] Result<void> MutableOperation(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration) const;
         [[nodiscard]] Result<void> PublishTerminal(PeerSessionTerminalKind kind, std::uint64_t nowTick,
@@ -183,5 +185,6 @@ namespace Horo::Network {
         PeerSessionTerminalKind pendingCloseKind_{PeerSessionTerminalKind::Count};
         CloseReasonId pendingCloseReason_{};
         PeerSessionState state_{PeerSessionState::Created};
+        NetworkMetrics *metrics_{};
     };
 }  // namespace Horo::Network

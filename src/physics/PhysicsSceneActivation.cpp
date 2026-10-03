@@ -42,7 +42,7 @@ namespace Horo::Physics::Detail {
                 const auto &world = std::get<Runtime::PhysicsConstraintWorldEndpoint>(planned.authored.second);
                 result.second = PhysicsWorldAnchor{{world.frame.translation, world.frame.rotation}};
             }
-            using RuntimeParameters = std::variant<PhysicsFixedConstraint, PhysicsDistanceConstraint>;
+            using RuntimeParameters = decltype(result.parameters);
             result.parameters = std::visit([]<typename Parameter>(const Parameter &parameter) {
                 using ParameterType = std::decay_t<Parameter>;
                 if constexpr (std::is_same_v<ParameterType, Runtime::PhysicsFixedConstraint>)
@@ -65,6 +65,7 @@ namespace Horo::Physics::Detail {
             shapeBindings.reserve(shapeCount);
             bodyHandles.reserve(plan.bodies.size());
             for (const PlannedBody &body : plan.bodies) {
+                const std::size_t firstShapeBinding = shapeBindings.size();
                 std::vector<PhysicsSceneShapeInstance> instances;
                 instances.reserve(body.colliders.size());
                 for (const PlannedCollider &collider : body.colliders) {
@@ -90,12 +91,15 @@ namespace Horo::Physics::Detail {
                                                        .linearVelocity = body.authored.initialLinearVelocity,
                                                        .angularVelocity = body.authored.initialAngularVelocity,
                                                        .motionSafety = body.authored.motionSafety};
-                const Result<BodyHandle> nativeBody = physics.CreateSceneBody({descriptor, body.sensor});
+                const Result<BodyHandle> nativeBody =
+                    physics.CreateSceneBody({.body = descriptor, .sensor = body.sensor, .sceneEntity = body.object.value});
                 if (nativeBody.HasError())
                     return Result<void>::Failure(
                         AddActivationContext(nativeBody.ErrorValue(), "body", body.object, body.component.value, std::nullopt));
                 bodyHandles.emplace_back(nativeBody.Value());
                 bodyBindings.emplace_back(body.object, body.slot, nativeBody.Value());
+                for (std::size_t index = firstShapeBinding; index < shapeBindings.size(); ++index)
+                    shapeBindings[index].body = nativeBody.Value();
             }
             return Result<void>::Success();
         }
@@ -158,6 +162,10 @@ namespace Horo::Physics {
         if (const std::array valid{runtime_->State() == PhysicsRuntimeState::Ready, scene.IsCurrent(), scene.RuntimeId().IsValid()};
             !std::ranges::all_of(valid, std::identity{}))
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        if (const std::array matches{definition.Id() == scene.DefinitionId(), definition.Revision() == scene.DefinitionRevision()};
+            !std::ranges::all_of(matches, std::identity{}))
+            return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(
+                MakeError(PhysicsErrors::QuerySnapshotStale, "The Physics definition does not match the resolved scene generation."));
 
         try {
             if (const Result<void> capabilities = Detail::RequirePhysicsSceneCapabilities(*runtime_, definition); capabilities.HasError())
@@ -185,6 +193,7 @@ namespace Horo::Physics {
             Detail::StagedPhysicsScene resources = std::move(staged).Value();
             auto candidate = PhysicsSceneActivationCandidate::Create({.physics = std::move(resources.physics),
                                                                       .character = std::move(resources.character),
+                                                                      .runtime = runtime_,
                                                                       .authority = authority_,
                                                                       .evidence = evidence,
                                                                       .bodyBindings = std::move(resources.bodyBindings),

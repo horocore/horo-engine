@@ -29,11 +29,18 @@ namespace Horo::PlatformServices {
             return !available || limits.maxConcurrentRequests != 0;
         }
 
-        [[nodiscard]] bool ValidateCapability(const PlatformServiceCapability &capability) noexcept {
+        [[nodiscard]] bool ValidateCapability(const PlatformServiceCapability &capability) {
             if (!IsKnown(capability.service) || !IsKnown(capability.availability))
                 return false;
             const bool available = capability.availability == PlatformServiceAvailability::Available;
             if (!ValidateLimits(capability.limits, available))
+                return false;
+            if (capability.cloudMutation.has_value() &&
+                (!available || capability.service != PlatformServiceKind::Cloud ||
+                 capability.cloudMutation->maxConcurrentMutations > capability.limits.maxConcurrentRequests ||
+                 ValidateCloudMutationCapability(*capability.cloudMutation, {.maxPageEntries = capability.limits.maxPageEntries,
+                                                                             .maxObjectBytes = capability.limits.maxPayloadBytes})
+                     .HasError()))
                 return false;
             if (const bool leaderboardService = capability.service == PlatformServiceKind::LeaderboardsAndStats;
                 (!leaderboardService || !available) && capability.leaderboardQueries.HasAny())

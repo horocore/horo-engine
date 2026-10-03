@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Network/TransportBackendInstance.h"
 #include "Horo/Network/TransportBudget.h"
 
 #include <compare>
@@ -15,6 +16,7 @@
 #include <span>
 
 namespace Horo::Network {
+    class NetworkMetrics;
     /** @brief Closed deterministic transport behavior selected by host composition. */
     enum class DeterministicTransportMode : std::uint8_t {
         RejectAll, /**< Network-disabled facade rejects every connection. */
@@ -88,8 +90,12 @@ namespace Horo::Network {
     /** @brief Caller-thread deterministic transport with fully prepared bounded storage. */
     class DeterministicTransport final {
     public:
-        /** @brief Validates the descriptor and prepares all storage. @return Transport or typed invalid/capacity failure. */
-        [[nodiscard]] static Result<DeterministicTransport> Create(const DeterministicTransportDescriptor &descriptor);
+        /** @brief Validates and prepares storage, optionally borrowing host-owned metrics through shutdown.
+         * @param descriptor Finite storage, budget and impairment configuration.
+         * @param metrics Optional collector kept alive through transport shutdown.
+         * @return Prepared transport or typed invalid/capacity failure. */
+        [[nodiscard]] static Result<DeterministicTransport> Create(const DeterministicTransportDescriptor &descriptor,
+                                                                   NetworkMetrics *metrics = nullptr);
 
         /** @brief Opens an exact connection generation. @param connection Owner-issued handle. @param state Operation state.
          * @return Success or typed disabled, stale, capacity, cancelled, or shutdown failure. */
@@ -157,7 +163,8 @@ namespace Horo::Network {
         };
 
         DeterministicTransport(DeterministicTransportDescriptor descriptor, TransportBudgetController budget,
-                               std::unique_ptr<ScheduledDelivery[]> deliveries, std::unique_ptr<std::byte[]> payloadStorage) noexcept;
+                               std::unique_ptr<ScheduledDelivery[]> deliveries, std::unique_ptr<std::byte[]> payloadStorage,
+                               NetworkMetrics *metrics) noexcept;
         [[nodiscard]] std::uint64_t NextRandom() noexcept;
         [[nodiscard]] bool Draw(std::uint16_t rate) noexcept;
         [[nodiscard]] std::uint64_t DeliveryTick() noexcept;
@@ -185,5 +192,13 @@ namespace Horo::Network {
         std::uint64_t sequence_{};
         std::uint64_t tick_{};
         bool shuttingDown_{};
+        NetworkMetrics *metrics_{};
     };
+
+    /**
+     * @brief Construct the explicit headless Null composition without native transport code.
+     * @param descriptor Fully bounded deterministic transport configuration.
+     * @return Unique backend lifetime or the underlying typed descriptor/storage failure.
+     */
+    [[nodiscard]] Result<TransportBackendInstance> CreateDeterministicTransportBackend(const DeterministicTransportDescriptor &descriptor);
 }  // namespace Horo::Network

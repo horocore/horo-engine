@@ -1,5 +1,6 @@
 #include "Horo/Cinematic/CinematicIdentity.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
@@ -76,6 +77,23 @@ namespace Horo::Cinematic {
         for (std::size_t index = 0; index < sizeof(std::uint64_t); ++index)
             bytes[index] = 0;
         CHECK(DeserializeCinematicIdentity<SequenceIdentityTag>(bytes).HasError());
+    }
+
+    TEST_CASE("Cinematic identity wire order is independent of host byte order", "[unit][cinematic][identity][qualification]") {
+        constexpr SerializedCinematicIdentity wire{0x80, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0xff, 0x81, 0x02, 0x03, 0xfe};
+        const auto decoded = DeserializeCinematicIdentity<SequenceIdentityTag>(wire);
+        REQUIRE(decoded.HasValue());
+        CHECK(decoded.Value().stableValue == 0x80010203040506ffULL);
+        CHECK(decoded.Value().generation == 0x810203feU);
+        CHECK(SerializeCinematicIdentity(decoded.Value()) == wire);
+
+        auto reversed = wire;
+        std::reverse(reversed.begin(), reversed.begin() + 8);
+        std::reverse(reversed.begin() + 8, reversed.end());
+        const auto wrongOrder = DeserializeCinematicIdentity<SequenceIdentityTag>(reversed);
+        REQUIRE(wrongOrder.HasValue());
+        CHECK(wrongOrder.Value() != decoded.Value());
+        CHECK(SerializeCinematicIdentity(wrongOrder.Value()) == reversed);
     }
 
     TEST_CASE("Cinematic null and deterministic compositions are inert and reproducible", "[unit][cinematic][identity]") {

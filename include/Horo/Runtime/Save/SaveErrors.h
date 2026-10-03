@@ -122,6 +122,12 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor ArchiveEntryInvalid;
     /** @brief A save archive declares a codec this backend does not implement. */
     extern const ErrorCodeDescriptor ArchiveCodecUnsupported;
+    /** @brief A trusted compression policy requested an invalid level or impossible required choice. */
+    extern const ErrorCodeDescriptor ArchiveCompressionPolicyInvalid;
+    /** @brief A supported encoder failed to produce a complete bounded stored chunk. */
+    extern const ErrorCodeDescriptor ArchiveCompressionFailed;
+    /** @brief Compressed chunk bytes are malformed or do not decode to their declared exact length. */
+    extern const ErrorCodeDescriptor ArchiveChunkDecodeFailed;
     /** @brief A save archive exceeds its decoded-byte or expansion budget. */
     extern const ErrorCodeDescriptor ArchiveDecompressionLimitExceeded;
     /** @brief A save archive exceeds its bounded structural nesting budget. */
@@ -204,6 +210,22 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor SlotIndexLimitExceeded;
     /** @brief Private slot-index candidate or diagnostic storage could not be allocated. */
     extern const ErrorCodeDescriptor SlotIndexAllocationFailed;
+    /** @brief Cloud metadata schema, scope, state, or provider evidence is malformed. */
+    extern const ErrorCodeDescriptor CloudMetadataInvalid;
+    /** @brief Cloud metadata names a different local index revision or slot generation. */
+    extern const ErrorCodeDescriptor CloudMetadataStale;
+    /** @brief Cloud metadata exceeds a finite record, object-key, or revision bound. */
+    extern const ErrorCodeDescriptor CloudMetadataLimitExceeded;
+    /** @brief A bounded cloud metadata snapshot could not be allocated. */
+    extern const ErrorCodeDescriptor CloudMetadataAllocationFailed;
+    /** @brief Save-manager source, revision, filter, or command arguments are invalid. */
+    extern const ErrorCodeDescriptor ManagerProjectionInvalid;
+    /** @brief Save-manager source or page request exceeds a qualified finite bound. */
+    extern const ErrorCodeDescriptor ManagerProjectionLimitExceeded;
+    /** @brief A page cursor, assessment, or command no longer matches the current publication. */
+    extern const ErrorCodeDescriptor ManagerProjectionStale;
+    /** @brief Detached save-manager presentation storage could not be allocated. */
+    extern const ErrorCodeDescriptor ManagerProjectionAllocationFailed;
     /** @brief A local storage operation request, address, payload, or configured limit is invalid. */
     extern const ErrorCodeDescriptor StorageOperationInvalid;
     /** @brief The selected storage provider does not implement the requested operation. */
@@ -214,6 +236,8 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor StorageAllocationFailed;
     /** @brief A slot-generation transaction or persisted journal is malformed or contradictory. */
     extern const ErrorCodeDescriptor SlotCommitInvalid;
+    /** @brief The supplied base slot publication no longer matches the selected generation. */
+    extern const ErrorCodeDescriptor SlotCommitGenerationStale;
     /** @brief Atomic catalog publication may have selected the new generation and requires reconciliation. */
     extern const ErrorCodeDescriptor SlotCommitOutcomeUnknown;
     /** @brief Journal replay could not prove or converge to a safe old-or-new generation. */
@@ -304,4 +328,22 @@ namespace Horo::Runtime::SaveErrors {
     extern const ErrorCodeDescriptor DiagnosticUnsupported;
     /** @brief Diagnostic correlation does not match the expected active save generations. */
     extern const ErrorCodeDescriptor DiagnosticCorrelationStale;
+    /** @brief A protection descriptor is malformed or exceeds finite bounds. */
+    extern const ErrorCodeDescriptor ProtectionInvalid;
+    /** @brief Trusted policy forbids plaintext or a protection downgrade. */
+    extern const ErrorCodeDescriptor ProtectionRequired;
+    /** @brief The selected provider or algorithm is unsupported. */
+    extern const ErrorCodeDescriptor ProtectionUnsupported;
+    /** @brief The selected protection provider is unavailable. */
+    extern const ErrorCodeDescriptor ProtectionUnavailable;
+    /** @brief The selected key was rotated and cannot open this generation. */
+    extern const ErrorCodeDescriptor ProtectionKeyRotated;
+    /** @brief The selected key was revoked. */
+    extern const ErrorCodeDescriptor ProtectionKeyRevoked;
+    /** @brief Authentication failed without exposing plaintext. */
+    extern const ErrorCodeDescriptor ProtectionAuthenticationFailed;
+    /** @brief Host policy requires a signature but the archive is unsigned. */
+    extern const ErrorCodeDescriptor SignatureRequired;
+    /** @brief Host policy forbids a present signature in unsigned-only mode. */
+    extern const ErrorCodeDescriptor SignatureDisallowed;
 }  // namespace Horo::Runtime::SaveErrors

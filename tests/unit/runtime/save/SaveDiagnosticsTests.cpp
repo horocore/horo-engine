@@ -86,6 +86,7 @@ namespace Horo::Runtime {
                 std::pair{&SaveErrors::ParticipantRegistryAllocationFailed, SaveFailureCategory::Quota},
                 std::pair{&SaveErrors::OperationAllocationFailed, SaveFailureCategory::Quota},
                 std::pair{&SaveErrors::ArchiveChunkHashMismatch, SaveFailureCategory::Corruption},
+                std::pair{&SaveErrors::ArchiveChunkDecodeFailed, SaveFailureCategory::Corruption},
                 std::pair{&SaveErrors::ParticipantDependencyMissing, SaveFailureCategory::Participant},
                 std::pair{&SaveErrors::ParticipantDependencyPhaseIncompatible, SaveFailureCategory::Participant},
                 std::pair{&SaveErrors::ParticipantRegistryClosed, SaveFailureCategory::Lifecycle},
@@ -111,6 +112,13 @@ namespace Horo::Runtime {
                 REQUIRE(record.HasValue());
                 REQUIRE(record.Value().Stage() == stage);
             }
+        }
+
+        TEST_CASE("Stale slot commit generations report a validation failure", "[save][diagnostics]") {
+            const auto record = Record(MakeError(SaveErrors::SlotCommitGenerationStale));
+            REQUIRE(record.HasValue());
+            CHECK(record.Value().Category() == SaveFailureCategory::Validation);
+            CHECK(record.Value().Code().Value() == SaveErrors::SlotCommitGenerationStale.code.Value());
         }
 
         TEST_CASE("Runtime Save diagnostics categorize slot recovery failures", "[save][diagnostics]") {

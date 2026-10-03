@@ -79,6 +79,11 @@ namespace Horo::Extensions {
         }
 
         [[nodiscard]] Result<void> EvaluateEntry(const ExtensionCapabilityRequest &entry, const ExtensionAdmissionPolicy &policy) {
+            if (entry.capability.value == "horo.process.observe" &&
+                !Contains(entry.requiredPermissions, ExtensionPermissionId{"process.observe"})) {
+                return Result<void>::Failure(MakeError(ExtensionErrors::CapabilityAdmissionInvalid,
+                                                       "Process observation requires its declared process.observe permission."));
+            }
             if (!Contains(policy.availableCapabilities, entry.capability)) {
                 return Result<void>::Failure(MakeError(ExtensionErrors::CapabilityUnavailable,
                                                        "Required host capability is unavailable: " + entry.capability.value));

@@ -80,8 +80,10 @@ namespace Horo::Navigation {
             CheckWorldOwnedHandle<NavRequestHandle>();
             CheckWorldOwnedHandle<NavigationObstacleHandle>();
             CheckWorldOwnedHandle<CrowdAgentHandle>();
+            CheckWorldOwnedHandle<PathId>();
             static_assert(!std::is_same_v<NavRequestHandle, NavigationObstacleHandle>);
             static_assert(!std::is_same_v<NavigationObstacleHandle, CrowdAgentHandle>);
+            static_assert(!std::is_same_v<PathId, NavRequestHandle>);
         }
 
         TEST_CASE("Provider handles reject replacement worlds and topology generations", "[unit][navigation][identity]") {

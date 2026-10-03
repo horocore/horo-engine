@@ -19,6 +19,7 @@
 #include <span>
 
 namespace Horo::Network {
+    class NetworkMetrics;
     /** @brief Absolute prepared completion capacity accepted by one host-scoped service. */
     inline constexpr std::size_t MaximumNetworkIoQueuedCompletions = 4096;
     /** @brief Absolute normalized completion budget accepted by one backend poll. */
@@ -173,10 +174,13 @@ namespace Horo::Network {
          * @brief Prepares one service and binds its owner to the calling thread.
          * @param backend Unique backend polling implementation; native types remain behind this interface.
          * @param limits Positive finite queue and work bounds.
+         * @param metrics Optional owner-thread observer. Host shuts down and destroys this service before metrics;
+         *                late producers retain only a separate admission flag, never this pointer.
          * @return Stable-address unique service or typed invalid/capacity/allocation failure.
          */
         [[nodiscard]] static Result<std::unique_ptr<NetworkIoService>> Create(std::unique_ptr<INetworkIoPollSource> backend,
-                                                                              const NetworkIoServiceLimits &limits);
+                                                                              const NetworkIoServiceLimits &limits,
+                                                                              NetworkMetrics *metrics = nullptr);
         ~NetworkIoService();
         NetworkIoService(const NetworkIoService &) = delete;
         NetworkIoService &operator=(const NetworkIoService &) = delete;
@@ -209,12 +213,13 @@ namespace Horo::Network {
 
     public:
         /** @internal Factory-only constructor exposed for std::make_unique access. */
-        NetworkIoService(ConstructionKey, std::unique_ptr<INetworkIoPollSource> backend,
-                         std::shared_ptr<NetworkIoServiceState> state) noexcept;
+        NetworkIoService(ConstructionKey, std::unique_ptr<INetworkIoPollSource> backend, std::shared_ptr<NetworkIoServiceState> state,
+                         NetworkMetrics *metrics) noexcept;
 
     private:
         std::unique_ptr<INetworkIoPollSource> backend_;
         std::shared_ptr<NetworkIoServiceState> state_;
         std::mutex pollMutex_;
+        NetworkMetrics *metrics_{};
     };
 }  // namespace Horo::Network

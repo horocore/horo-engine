@@ -118,6 +118,33 @@ namespace Horo::Physics {
         bool hasPublishedSnapshot{};       /**< Whether lastPublishedTick names a readable dynamic snapshot. */
     };
 
+    /** @brief Owned completed-tick poses for presentation; no authority or solver storage is borrowed. */
+    struct PhysicsInterpolationEndpoints final {
+        BodyHandle body;
+        std::uint64_t sceneGeneration{};
+        std::uint64_t originGeneration{};
+        PhysicsPose previousPose;
+        PhysicsPose currentPose;
+        std::uint64_t previousTick{};
+        std::uint64_t currentTick{};
+        bool hasPreviousTick{}; /**< False after first publication or a discontinuity. */
+    };
+
+    /** @brief Cause for discarding interpolation continuity without changing authoritative body state. */
+    enum class PhysicsInterpolationResetReason : std::uint8_t {
+        Teleport,
+        Restore,
+        Reload
+    };
+
+    /**
+     * @brief Evaluates a copied completed-tick pose pair without accessing live Physics state.
+     * @param endpoints Owned snapshot returned by InterpolationEndpoints.
+     * @param alpha Finite presentation fraction in [0, 1]; no extrapolation is permitted.
+     * @return Interpolated pose, or current pose when history is insufficient, or a typed malformed-input error.
+     */
+    [[nodiscard]] Result<PhysicsPose> EvaluatePhysicsInterpolation(const PhysicsInterpolationEndpoints &endpoints, float alpha);
+
     /** @brief Per-tick counts proving which authority operations were applied at the pre-step boundary. */
     struct PhysicsTransformTickResult final {
         std::uint64_t simulationTick{};
@@ -300,6 +327,36 @@ namespace Horo::Physics {
          * @return Success or a typed authority/stale/order/lifecycle error; authoredPose is untouched.
          */
         [[nodiscard]] Result<void> PublishDynamicSnapshot(const PhysicsDynamicTransformSnapshot &snapshot);
+
+        /**
+         * @brief Atomically commits all bodies' completed-tick poses after solver publication.
+         * @param completedTick Exact tick last applied; every dynamic body must have its own solver snapshot for it.
+         * @return Success, or a typed missing-snapshot, ordering or lifecycle error without changing interpolation history.
+         */
+        [[nodiscard]] Result<void> CommitInterpolationTick(std::uint64_t completedTick);
+
+        /**
+         * @brief Copies one body's immutable committed endpoints for any-thread presentation evaluation.
+         * @param body Exact body in this world generation.
+         * @return Owned endpoints, or typed lifecycle, handle or missing-completed-tick error.
+         * @pre Owner thread; call after CommitInterpolationTick, never during pre-step or partial solver publication.
+         */
+        [[nodiscard]] Result<PhysicsInterpolationEndpoints> InterpolationEndpoints(const BodyHandle &body) const;
+
+        /**
+         * @brief Drops continuity after a teleport, restore or reload without altering body authority.
+         * @param reason Known discontinuity requiring the next completed tick to start a new history pair.
+         * @return Success or a typed lifecycle/unsupported-reason error.
+         */
+        [[nodiscard]] Result<void> ResetInterpolationHistory(PhysicsInterpolationResetReason reason);
+
+        /**
+         * @brief Rebases both completed endpoints and runtime pose at a host-coordinated origin safe point.
+         * @param delta Finite local-origin translation to subtract from each pose.
+         * @param newOriginGeneration Monotonically increasing origin identity; not a solver rebase operation.
+         * @return Success or a typed malformed, stale-generation or lifecycle error without partial mutation.
+         */
+        [[nodiscard]] Result<void> RebaseInterpolationHistory(Math::Vec3 delta, std::uint64_t newOriginGeneration);
 
         /**
          * @brief Rejects a direct host write with a stable authority diagnostic before mutation.

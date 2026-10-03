@@ -93,7 +93,7 @@ namespace Horo::Audio {
             REQUIRE_FALSE(ValidateAudioDSPProcess(descriptor, process));
 
             parameters[0].identity = AudioParameterId::Create(11).Value();
-            process.stateStorage = std::span<std::byte>{state}.subspan(1, 64);
+            process.stateStorage = std::span<std::byte>{state}.subspan(1);
             REQUIRE_FALSE(ValidateAudioDSPProcess(descriptor, process));
         }
 

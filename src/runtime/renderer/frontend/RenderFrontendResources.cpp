@@ -1,6 +1,6 @@
+#include "Horo/Runtime/Render/RenderCapabilities.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "RenderFrontendErrors.h"
-#include "RenderFrontendResourceAccess.h"
 #include "RenderResourceOperations.h"
 #include "RenderResourceRegistry.h"
 #include "RenderResourceUploadQueue.h"
@@ -215,11 +215,13 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A buffer cannot be created during an active frame."));
         if (ValidateRenderBufferDescriptor(descriptor).HasError())
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
-                MakeFrontendError(FrontendErrors::InvalidBufferDescriptor, "The buffer descriptor is structurally invalid."));
+                MakeFrontendError(FrontendErrors::InvalidBufferDescriptor,
+                                  "The buffer descriptor is structurally invalid: " + DescribeRenderBufferRequest(descriptor)));
         if (AdmitCurrentBufferDescriptor(descriptor) == ResourceDescriptorAdmission::Unsupported)
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
-                                  "The current renderer frontend does not implement this buffer usage combination."));
+                                  "The current renderer frontend does not implement this buffer usage combination: " +
+                                      DescribeRenderBufferRequest(descriptor)));
         if (!backend_->Capabilities().supportsBufferResources)
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported, "The active renderer backend does not support generic buffers."));
@@ -311,11 +313,13 @@ namespace Horo::Render {
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture cannot be created during an active frame."));
         if (ValidateRenderTextureDescriptor(descriptor).HasError())
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
-                MakeFrontendError(FrontendErrors::InvalidTextureDescriptor, "The texture descriptor is structurally invalid."));
+                MakeFrontendError(FrontendErrors::InvalidTextureDescriptor,
+                                  "The texture descriptor is structurally invalid: " + DescribeRenderTextureRequest(descriptor)));
         if (AdmitCurrentTextureDescriptor(descriptor) == ResourceDescriptorAdmission::Unsupported)
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,
-                                  "The current renderer frontend does not implement this texture descriptor combination."));
+                                  "The current renderer frontend does not implement this texture descriptor combination: " +
+                                      DescribeRenderTextureRequest(descriptor)));
         if (!backend_->Capabilities().supportsTextureResources)
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported, "The active renderer backend does not support generic textures."));
@@ -475,41 +479,6 @@ namespace Horo::Render {
         return Result<std::size_t>::Success(completedRequests);
     }
 
-    /** @copydoc RenderFrontend::UploadSnapshot */
-    RenderResourceUploadSnapshot RenderFrontend::UploadSnapshot() const noexcept {
-        return resourceUploadQueue_->Snapshot();
-    }
-
-    /** @copydoc RenderFrontend::ResourceState(RenderBufferHandle) */
-    Result<RenderResourceState> RenderFrontend::ResourceState(const RenderBufferHandle buffer) const {
-        return resourceRegistry_->State(Detail::RenderResourceClass::Buffer, Identity(buffer));
-    }
-
-    /** @copydoc RenderFrontend::ResourceState(RenderMeshHandle) */
-    Result<RenderResourceState> RenderFrontend::ResourceState(const RenderMeshHandle mesh) const {
-        return resourceRegistry_->State(Detail::RenderResourceClass::Mesh, Identity(mesh));
-    }
-
-    /** @copydoc RenderFrontend::ResourceState(RenderTextureHandle) */
-    Result<RenderResourceState> RenderFrontend::ResourceState(const RenderTextureHandle texture) const {
-        return resourceRegistry_->State(Detail::RenderResourceClass::Texture, Identity(texture));
-    }
-
-    /** @copydoc RenderFrontend::ResourceState(RenderTextureViewHandle) */
-    Result<RenderResourceState> RenderFrontend::ResourceState(const RenderTextureViewHandle view) const {
-        return resourceRegistry_->State(Detail::RenderResourceClass::TextureView, Identity(view));
-    }
-
-    /** @copydoc RenderFrontend::ResourceState(RenderTargetHandle) */
-    Result<RenderResourceState> RenderFrontend::ResourceState(const RenderTargetHandle target) const {
-        return resourceRegistry_->State(Detail::RenderResourceClass::RenderTarget, Identity(target));
-    }
-
-    /** @copydoc RenderFrontend::ResourceOperationResult */
-    Result<void> RenderFrontend::ResourceOperationResult(const ResourceOperationId operation) const {
-        return resourceRegistry_->OperationResult(operation);
-    }
-
     /** @copydoc RenderFrontend::ReleaseBuffer */
     Result<void> RenderFrontend::ReleaseBuffer(const RenderBufferHandle buffer) {
         if (activeFrameScope_ != nullptr) {
@@ -561,179 +530,4 @@ namespace Horo::Render {
         return released;
     }
 
-    Result<void> RenderFrontend::ValidateMeshDependencies(const RenderMeshDescriptor &descriptor) const {
-        const auto vertex = resourceRegistry_->State(Detail::RenderResourceClass::Buffer, Identity(descriptor.vertexBuffer));
-        if (vertex.HasError()) {
-            return Result<void>::Failure(vertex.ErrorValue());
-        }
-        const auto index = resourceRegistry_->State(Detail::RenderResourceClass::Buffer, Identity(descriptor.indexBuffer));
-        if (index.HasError()) {
-            return Result<void>::Failure(index.ErrorValue());
-        }
-        if (vertex.Value() != RenderResourceState::Ready || index.Value() != RenderResourceState::Ready) {
-            return Result<void>::Failure(
-                MakeFrontendError(FrontendErrors::ResourceDependencyNotReady, "Mesh creation requires ready vertex and index buffers."));
-        }
-        return Result<void>::Success();
-    }
-
-    bool RenderFrontend::IsMeshBufferLayoutCompatible(const RenderMeshDescriptor &descriptor) const noexcept {
-        if (descriptor.vertexBuffer.slot >= buffers_.size() || descriptor.indexBuffer.slot >= buffers_.size()) {
-            return false;
-        }
-        const BufferRecord &vertex = buffers_[descriptor.vertexBuffer.slot];
-        const BufferRecord &index = buffers_[descriptor.indexBuffer.slot];
-        const std::uint32_t indexSize = descriptor.indexFormat == RenderIndexFormat::UInt16 ? 2U : 4U;
-        const bool recordsMatch =
-            vertex.generation == descriptor.vertexBuffer.generation && index.generation == descriptor.indexBuffer.generation;
-        return recordsMatch && HasBufferUsage(vertex.descriptor.usage, RenderBufferUsage::Vertex) &&
-               HasBufferUsage(index.descriptor.usage, RenderBufferUsage::Index) &&
-               FitsBuffer(descriptor.vertexStride, descriptor.vertexCount, vertex.descriptor.byteSize) &&
-               FitsBuffer(indexSize, descriptor.indexCount, index.descriptor.byteSize);
-    }
-
-    Result<void> RenderFrontend::ValidateTextureViewDependency(const RenderTextureViewDescriptor &descriptor) const {
-        const auto textureState = resourceRegistry_->State(Detail::RenderResourceClass::Texture, Identity(descriptor.texture));
-        if (textureState.HasError())
-            return Result<void>::Failure(textureState.ErrorValue());
-        if (textureState.Value() != RenderResourceState::Ready) {
-            return Result<void>::Failure(
-                MakeFrontendError(FrontendErrors::ResourceDependencyNotReady, "Texture-view creation requires a ready texture."));
-        }
-        if (descriptor.texture.slot >= textures_.size()) {
-            return Result<void>::Failure(
-                MakeFrontendError(FrontendErrors::InvalidTextureViewDescriptor, "Texture-view source metadata is unavailable."));
-        }
-        if (const TextureRecord &texture = textures_[descriptor.texture.slot];
-            texture.generation != descriptor.texture.generation ||
-            ValidateRenderTextureViewCompatibility(texture.descriptor, descriptor).HasError()) {
-            return Result<void>::Failure(MakeFrontendError(FrontendErrors::InvalidTextureViewDescriptor,
-                                                           "Texture-view format, range, or aspect is incompatible with its texture."));
-        }
-        return Result<void>::Success();
-    }
-
-    Result<void> RenderFrontend::ValidateRenderTargetDependencies(const RenderTargetDescriptor &descriptor) const {
-        if (const Result<void> color = ValidateRenderTargetAttachment(descriptor.colorAttachment, RenderTextureAspect::Color,
-                                                                      descriptor.extent, descriptor.sampleCount);
-            color.HasError())
-            return color;
-        if (const Result<void> depth = ValidateRenderTargetAttachment(descriptor.depthAttachment, RenderTextureAspect::Depth,
-                                                                      descriptor.extent, descriptor.sampleCount);
-            depth.HasError())
-            return depth;
-        return Result<void>::Success();
-    }
-
-    Result<void> RenderFrontend::ValidateRenderTargetAttachment(const RenderTextureViewHandle handle,
-                                                                const RenderTextureAspect requiredAspect, const FramebufferExtent extent,
-                                                                const std::uint32_t sampleCount) const {
-        if (!handle.IsValid())
-            return Result<void>::Success();
-        const auto state = resourceRegistry_->State(Detail::RenderResourceClass::TextureView, Identity(handle));
-        if (state.HasError())
-            return Result<void>::Failure(state.ErrorValue());
-        if (state.Value() != RenderResourceState::Ready)
-            return Result<void>::Failure(
-                MakeFrontendError(FrontendErrors::ResourceDependencyNotReady, "Render-target creation requires ready attachment views."));
-        if (handle.slot >= textureViews_.size())
-            return Result<void>::Failure(
-                MakeFrontendError(FrontendErrors::InvalidRenderTargetDescriptor, "Render-target attachment metadata is unavailable."));
-        const TextureViewRecord &view = textureViews_[handle.slot];
-        if (const bool aspectCompatible = requiredAspect == RenderTextureAspect::Color
-                                              ? view.descriptor.aspect == RenderTextureAspect::Color
-                                              : view.descriptor.aspect != RenderTextureAspect::Color;
-            view.generation != handle.generation || !aspectCompatible || view.descriptor.texture.slot >= textures_.size())
-            return Result<void>::Failure(
-                MakeFrontendError(FrontendErrors::InvalidRenderTargetDescriptor, "Render-target attachment aspect is incompatible."));
-        const TextureRecord &texture = textures_[view.descriptor.texture.slot];
-        if (const std::array compatible{
-                texture.descriptor.extent == extent,
-                texture.descriptor.sampleCount == sampleCount,
-                HasTextureUsage(texture.descriptor.usage, RenderTextureUsage::RenderAttachment),
-            };
-            !std::ranges::all_of(compatible, std::identity{}))
-            return Result<void>::Failure(MakeFrontendError(FrontendErrors::InvalidRenderTargetDescriptor,
-                                                           "Render-target attachment extent, samples, or usage is incompatible."));
-        return Result<void>::Success();
-    }
-
-    bool RenderFrontend::IsLiveTarget(const RenderTargetHandle target, const FramebufferExtent extent) const noexcept {
-        const auto state =
-            resourceRegistry_->State(Detail::RenderResourceClass::RenderTarget, {target.owner, target.slot, target.generation});
-        return state.HasValue() && state.Value() == RenderResourceState::Ready && target.slot < targets_.size() &&
-               targets_[target.slot].extent.width == extent.width && targets_[target.slot].extent.height == extent.height;
-    }
-
-    Result<std::uint64_t> RenderFrontend::BackendInstance(const RenderBufferHandle buffer) const {
-        return resourceRegistry_->BackendInstance(Detail::RenderResourceClass::Buffer, Identity(buffer));
-    }
-
-    Result<std::uint64_t> RenderFrontend::BackendInstance(const RenderMeshHandle mesh) const {
-        return resourceRegistry_->BackendInstance(Detail::RenderResourceClass::Mesh, Identity(mesh));
-    }
-
-    Result<std::uint64_t> RenderFrontend::BackendInstance(const RenderTextureViewHandle view) const {
-        return resourceRegistry_->BackendInstance(Detail::RenderResourceClass::TextureView, Identity(view));
-    }
-
-    Result<std::uint64_t> RenderFrontend::BackendInstance(const RenderTargetHandle target) const {
-        return resourceRegistry_->BackendInstance(Detail::RenderResourceClass::RenderTarget, Identity(target));
-    }
-
-    Result<std::uint64_t> Detail::RenderFrontendResourceAccess::BackendInstance(const RenderFrontend &frontend,
-                                                                                const RenderBufferHandle buffer) {
-        return frontend.BackendInstance(buffer);
-    }
-
-    Result<std::uint64_t> Detail::RenderFrontendResourceAccess::BackendInstance(const RenderFrontend &frontend,
-                                                                                const RenderMeshHandle mesh) {
-        return frontend.BackendInstance(mesh);
-    }
-
-    Result<std::uint64_t> Detail::RenderFrontendResourceAccess::BackendInstance(const RenderFrontend &frontend,
-                                                                                const RenderTextureViewHandle view) {
-        return frontend.BackendInstance(view);
-    }
-
-    Result<std::uint64_t> Detail::RenderFrontendResourceAccess::BackendInstance(const RenderFrontend &frontend,
-                                                                                const RenderTargetHandle target) {
-        return frontend.BackendInstance(target);
-    }
-
-    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderBufferHandle buffer,
-                                                                       const RenderTimelinePoint completion) {
-        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::Buffer, Identity(buffer), completion);
-    }
-
-    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderMeshHandle mesh,
-                                                                       const RenderTimelinePoint completion) {
-        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::Mesh, Identity(mesh), completion);
-    }
-
-    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderTextureHandle texture,
-                                                                       const RenderTimelinePoint completion) {
-        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::Texture, Identity(texture), completion);
-    }
-
-    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderTextureViewHandle view,
-                                                                       const RenderTimelinePoint completion) {
-        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::TextureView, Identity(view), completion);
-    }
-
-    Result<void> Detail::RenderFrontendResourceAccess::TrackSubmission(RenderFrontend &frontend, const RenderTargetHandle target,
-                                                                       const RenderTimelinePoint completion) {
-        return frontend.resourceRegistry_->TrackSubmission(RenderResourceClass::RenderTarget, Identity(target), completion);
-    }
-
-    Result<std::size_t> Detail::RenderFrontendResourceAccess::AcknowledgeCompletion(RenderFrontend &frontend,
-                                                                                    const RenderTimelinePoint completion) {
-        auto acknowledged = frontend.resourceRegistry_->AcknowledgeCompletion(completion);
-        if (acknowledged.HasError()) {
-            return acknowledged;
-        }
-        static_cast<void>(frontend.resourceRegistry_->DrainRetirements());
-        static_cast<void>(frontend.memoryBudget_->ReclaimEmptyBlocks(frontend.memoryConfig_.maximumEmptyBlocksReclaimedPerDrain));
-        return acknowledged;
-    }
 }  // namespace Horo::Render

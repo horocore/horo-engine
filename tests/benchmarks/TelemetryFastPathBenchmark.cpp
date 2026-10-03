@@ -63,7 +63,7 @@ int main() {
     const Horo::Telemetry::Counter instrument = Horo::Telemetry::Runtime::RegisterCounter({
         .name = "benchmark.records",
         .subsystem = "Foundation.Telemetry",
-        .unit = "records",
+        .unit = Horo::Telemetry::MetricUnit::Count,
         .dimensions = {{.key = "backend", .allowedValues = {"null"}}},
         .maxSeries = 1,
     });

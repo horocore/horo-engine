@@ -202,6 +202,15 @@ obstacles, topology/overlay/profile/origin generations and stable agent IDs. It
 excludes an agent's own blocker identity and deterministically clamps malformed or
 out-of-envelope input before provider invocation or rejects the batch.
 
+Avoidance layer identity is project-stable and distinct from obstacle/query layers.
+An owner-safe-point capture validates the complete layer table and each enabled
+agent's directed avoid mask and finite [0, 1] right-of-way priority together with
+motion facts. Directed masks may be non-reciprocal. Priority biases the optional
+sampler's preference for its own desired velocity, while every admitted neighbor
+still receives conservative collision validation. Neither mask nor priority grants
+gameplay/network authority, changes scheduling priority, or weakens Character/
+Physics movement authority. A failed capture publishes no partial tick policy.
+
 `DeterministicQualified` processes every required agent each tick; if the exact
 declared work cannot be admitted, the mode fails rather than time-slicing.
 `BestEffortBounded` selects at most the scale limit by authored priority class,

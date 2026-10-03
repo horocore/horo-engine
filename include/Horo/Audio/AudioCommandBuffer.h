@@ -81,6 +81,8 @@ namespace Horo::Audio {
          * @return True only when closed and all published records consumed, or when moved-from/inert.
          */
         [[nodiscard]] bool IsDrained() const noexcept;
+        /** @brief Samples bounded SPSC occupancy without blocking either owner. @return Approximate queued records, or zero when inert. */
+        [[nodiscard]] std::uint32_t Depth() const noexcept;
 
     private:
         struct State;

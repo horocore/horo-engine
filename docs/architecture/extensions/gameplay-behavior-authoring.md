@@ -109,6 +109,21 @@ fifteen-minute timeout, and cancellation escalates from a two-second graceful
 window to forced tree termination while stdout and stderr remain continuously
 drained.
 
+The service exposes a project-scoped, owned snapshot of the active build for
+presentation clients. A workspace may detach and reopen its Build Output panel
+without owning or cancelling the session. The snapshot includes its monotonic
+start time so elapsed time is derived by the reader; cancellation always routes
+through the service using the session ID. Terminal results remain in Build Output
+and Operations rather than in the active-session projection.
+
+The Build Output panel filters its retained snapshot by status, severity,
+stage, session, and case-insensitive text without changing either producer
+store. Clear Output records the newest visible sequence as a view cutoff;
+future records remain visible and historical operation results remain intact.
+The panel shows the store's dropped-record count separately from this view
+cutoff. New records follow the tail only while the reader is already at the
+tail, so a manually inspected earlier row keeps its scroll position.
+
 Freshness is a SHA-256 identity over project CMake files, native sources and
 headers, declared extra inputs, SDK fingerprint, selected configuration,
 generator/toolset/platform, and compiler identity. Compiler binary SHA-256 is
@@ -951,10 +966,10 @@ play-session or process restart rather than attempting unsafe live mutation.
 
 ## Related Documents
 
-- [Gameplay Behavior Editor](./gameplay-behavior-editor.html): HTML reference
+- [Gameplay Behavior Editor](../../../mock-studio/designs.md#architecture-extensions-gameplay-behavior-editor): React mock reference
   design for the node-based behavior graph editor (behavior tree, state machine,
   and visual scripting surfaces).
-- [Editor Workspace Layout](../editor/editor-workspace.html): HTML reference design for
+- [Editor Workspace Layout](../../../mock-studio/designs.md#architecture-editor-editor-workspace): React mock design for
   the embedded Inspector dock and behavior component fields.
 - [Gameplay Module Overview](./gameplay-module.md)
 - [Gameplay Module Boundary](./gameplay-module-boundary.md)

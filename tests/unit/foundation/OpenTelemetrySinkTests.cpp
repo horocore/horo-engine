@@ -173,7 +173,7 @@ TEST_CASE("OpenTelemetry sink maps unified records to OTLP off the producer thre
     const auto unboundCounter =
         Horo::Telemetry::Runtime::RegisterCounter({.name = "jobs.completed",
                                                    .subsystem = "foundation.jobs",
-                                                   .unit = "operations",
+                                                   .unit = Horo::Telemetry::MetricUnit::Count,
                                                    .dimensions = {{.key = "result", .allowedValues = {"ok", "error"}}},
                                                    .maxSeries = 2});
     const std::array dimensions{Horo::Telemetry::DimensionValue{.key = "result", .value = "ok"}};
@@ -256,8 +256,8 @@ TEST_CASE("OpenTelemetry flushes sparse metrics without filling a batch", "[foun
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 16, .sinkFlushInterval = std::chrono::milliseconds{5}, .enabled = true},
                                                  sink));
 
-    const auto gauge =
-        Horo::Telemetry::Runtime::RegisterGauge({.name = "horo.test.sparse", .subsystem = "foundation.tests", .unit = "items"});
+    const auto gauge = Horo::Telemetry::Runtime::RegisterGauge(
+        {.name = "horo.test.sparse", .subsystem = "foundation.tests", .unit = Horo::Telemetry::MetricUnit::Count});
     REQUIRE(gauge);
     const std::uint64_t acceptedBefore = Horo::Telemetry::Runtime::GetStatistics().acceptedRecords;
     for (int attempt = 0; attempt < 10'000 && Horo::Telemetry::Runtime::GetStatistics().acceptedRecords == acceptedBefore; ++attempt) {
@@ -321,13 +321,14 @@ TEST_CASE("OpenTelemetry preserves counter gauge histogram and timing signal sha
     REQUIRE(sink != nullptr);
     REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 16, .enabled = true}, sink));
 
-    const auto counter =
-        Horo::Telemetry::Runtime::RegisterCounter({.name = "test.counter", .subsystem = "Foundation.Tests", .unit = "items"});
-    const auto gauge = Horo::Telemetry::Runtime::RegisterGauge({.name = "test.gauge", .subsystem = "Foundation.Tests", .unit = "items"});
-    const auto histogram =
-        Horo::Telemetry::Runtime::RegisterHistogram({.name = "test.histogram", .subsystem = "Foundation.Tests", .unit = "milliseconds"});
-    const auto timing =
-        Horo::Telemetry::Runtime::RegisterTiming({.name = "test.timing", .subsystem = "Foundation.Tests", .unit = "ignored"});
+    const auto counter = Horo::Telemetry::Runtime::RegisterCounter(
+        {.name = "test.counter", .subsystem = "Foundation.Tests", .unit = Horo::Telemetry::MetricUnit::Count});
+    const auto gauge = Horo::Telemetry::Runtime::RegisterGauge(
+        {.name = "test.gauge", .subsystem = "Foundation.Tests", .unit = Horo::Telemetry::MetricUnit::Count});
+    const auto histogram = Horo::Telemetry::Runtime::RegisterHistogram(
+        {.name = "test.histogram", .subsystem = "Foundation.Tests", .unit = Horo::Telemetry::MetricUnit::Seconds});
+    const auto timing = Horo::Telemetry::Runtime::RegisterTiming(
+        {.name = "test.timing", .subsystem = "Foundation.Tests", .unit = Horo::Telemetry::MetricUnit::Count});
     REQUIRE(counter);
     REQUIRE(gauge);
     REQUIRE(histogram);
@@ -367,8 +368,47 @@ TEST_CASE("OpenTelemetry preserves counter gauge histogram and timing signal sha
     REQUIRE(metrics.at(2).contains("histogram"));
     REQUIRE(metrics.at(2).at("histogram").at("dataPoints").at(0).at("count") == "1");
     REQUIRE(metrics.at(3).contains("histogram"));
-    REQUIRE(metrics.at(3).at("unit") == "seconds");
+    REQUIRE(metrics.at(3).at("unit") == "s");
     REQUIRE(metrics.at(3).at("histogram").at("dataPoints").at(0).at("sum") == 0.012);
+}
+
+static void RequireExportedGaugeUnit(const char *name, const Horo::Telemetry::MetricUnit unit, const char *symbol, const double value) {
+    RuntimeGuard runtimeGuard;
+    auto transport = std::make_shared<CapturingTransport>();
+    Horo::Telemetry::OpenTelemetryConfiguration configuration;
+    configuration.maxBatchRecords = 1;
+    configuration.maxBufferedRecords = 1;
+    configuration.maxAttempts = 1;
+    configuration.exportApproved = true;
+    const auto sink = Horo::Telemetry::OpenTelemetrySink::Create(configuration, transport);
+    REQUIRE(sink != nullptr);
+    REQUIRE(Horo::Telemetry::Runtime::Initialize({.queueCapacity = 8, .enabled = true}, sink));
+
+    const auto gauge = Horo::Telemetry::Runtime::RegisterGauge({.name = name, .subsystem = "Foundation.Tests", .unit = unit});
+    REQUIRE(gauge);
+    const auto acceptedBefore = Horo::Telemetry::Runtime::GetStatistics().acceptedRecords;
+    for (int attempt = 0; attempt < 10'000 && Horo::Telemetry::Runtime::GetStatistics().acceptedRecords == acceptedBefore; ++attempt) {
+        gauge.Set(value);
+        std::this_thread::yield();
+    }
+    REQUIRE(Horo::Telemetry::Runtime::GetStatistics().acceptedRecords > acceptedBefore);
+    REQUIRE(Horo::Telemetry::Runtime::Shutdown());
+
+    const auto calls = transport->Snapshot();
+    REQUIRE(calls.size() == 1);
+    const nlohmann::json payload = nlohmann::json::parse(calls.front().payload);
+    const auto &metric = payload.at("resourceMetrics").at(0).at("scopeMetrics").at(0).at("metrics").at(0);
+    REQUIRE(metric.at("name") == name);
+    REQUIRE(metric.at("unit") == symbol);
+    REQUIRE(metric.at("gauge").at("dataPoints").at(0).at("asDouble") == value);
+}
+
+TEST_CASE("OpenTelemetry exports millisecond gauges with the OTLP ms unit", "[foundation][observability][opentelemetry][metrics]") {
+    RequireExportedGaugeUnit("test.rtt_ms", Horo::Telemetry::MetricUnit::Milliseconds, "ms", 37.0);
+}
+
+TEST_CASE("OpenTelemetry exports audio sample rate with the OTLP Hz unit", "[foundation][observability][opentelemetry][metrics]") {
+    RequireExportedGaugeUnit("audio.device.sample_rate", Horo::Telemetry::MetricUnit::Hertz, "Hz", 48'000.0);
 }
 
 TEST_CASE("OpenTelemetry retries are bounded and exporter failure remains isolated from producers",

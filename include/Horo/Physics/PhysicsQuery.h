@@ -15,6 +15,7 @@
 #include <optional>
 #include <span>
 #include <variant>
+#include <vector>
 
 namespace Horo::Physics {
     inline constexpr std::uint32_t MaximumPhysicsQueryHits = 1024;
@@ -118,15 +119,44 @@ namespace Horo::Physics {
     };
 
     /**
+     * @brief One owned analytic child with stable authoring identity and copied per-shape metadata.
+     * @note Children are immutable after fixture admission. IDs are unique within the compound, never native indexes.
+     */
+    struct PhysicsCompoundChild final {
+        PhysicsShapeDescriptor geometry;
+        PhysicsPose localPose;
+        PhysicsShapeSubresourceId subshape;
+        std::optional<PhysicsQueryMaterial> material;
+        CollisionLayerId layer;
+        CollisionProfileId profile;
+        PhysicsQueryChannelId channel;
+        PhysicsQueryFixtureResponse response{PhysicsQueryFixtureResponse::Block};
+        bool trigger{};
+    };
+
+    /** @brief Bounded owned compound of at most 256 direct analytic children; no nested or plane children. */
+    struct PhysicsCompoundShapeDescriptor final {
+        std::vector<PhysicsCompoundChild> children;
+    };
+
+    /** @brief Analytic fixture geometry or a compound whose children own their metadata. */
+    using PhysicsQueryFixtureShape =
+        std::variant<PhysicsBoxShape, PhysicsSphereShape, PhysicsCapsuleShape, PhysicsStaticPlaneShape, PhysicsCompoundShapeDescriptor>;
+
+    /**
      * @brief Complete owner-thread fixture input used to admit a queryable native body.
      *
      * This is deliberately a narrow runtime admission value, not a replacement for authored
      * scene conversion. It lets hosts and canonical fixtures install one explicit analytic
-     * collider while the scene activation path is being assembled. The fixture owns no native
-     * resource; the receiving world retains that resource until destruction or unload.
+     * collider while the scene activation path is being assembled. For primitive geometry, the
+     * top-level filter, response, subshape and material fields are authoritative. For a compound,
+     * each child owns those fields; top-level filter IDs must still be valid but are ignored by
+     * query/event projection, and top-level subshape/material must be absent. A compound has one
+     * uniform trigger policy because the native body is the sensor owner. The request owns its
+     * child array; the world copies it at admission and retires it with the fixture.
      */
     struct PhysicsQueryFixtureDescriptor final {
-        PhysicsShapeDescriptor shape;
+        PhysicsQueryFixtureShape shape;
         PhysicsPose pose;
         CollisionLayerId layer;
         CollisionProfileId profile;

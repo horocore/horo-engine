@@ -8,9 +8,11 @@
 #include "Horo/Physics/PhysicsBodyDescriptor.h"
 #include "Horo/Physics/PhysicsCapabilities.h"
 #include "Horo/Physics/PhysicsConstraintDescriptor.h"
+#include "Horo/Physics/PhysicsDebugSnapshot.h"
 #include "Horo/Physics/PhysicsDiagnostics.h"
 #include "Horo/Physics/PhysicsIdentity.h"
 #include "Horo/Physics/PhysicsQuery.h"
+#include "Horo/Physics/PhysicsQueryEventCapability.h"
 #include "Horo/Physics/PhysicsShapeDescriptor.h"
 #include "Horo/Physics/PhysicsTickPipeline.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
@@ -27,6 +29,10 @@ namespace Horo {
 
 namespace Horo::Physics {
     class PhysicsSceneActivationParticipant;
+
+    namespace Detail {
+        struct CanonicalRetirementSink;
+    }
 
     /** @brief Explicit process composition; headless hosts use Canonical when simulation is required. */
     enum class PhysicsRuntimeMode : std::uint8_t {
@@ -62,6 +68,8 @@ namespace Horo::Physics {
     };
 
     class PhysicsWorld;
+    class PhysicsSceneActivationCandidate;
+    struct PhysicsWorldContainmentTestAccess;
 
     /**
      * @brief One immutable analytic child shape bound to a body-local pose while a scene candidate is staged.
@@ -74,10 +82,38 @@ namespace Horo::Physics {
         PhysicsPose localPose;
     };
 
+    /** @brief Initial moving-body activity; static bodies always remain static. */
+    enum class PhysicsInitialBodyActivity : std::uint8_t {
+        Awake,
+        Sleeping
+    };
+
+    /** @brief Copied owner-thread scene-body counts; query fixtures are excluded. */
+    struct PhysicsActivationObservation final {
+        PhysicsWorldId world;         /**< Exact world generation observed; no lifetime is retained. */
+        std::uint32_t staticBodies{}; /**< Bodies outside the solver activation/sleep lifecycle. */
+        std::uint32_t awakeMovingBodies{};
+        std::uint32_t sleepingMovingBodies{};
+        std::optional<std::uint32_t> islands; /**< Absent: island observations are unsupported, never an available zero. */
+    };
+
     /** @brief Complete body request for scene activation, including the uniform sensor policy admitted by the native body. */
     struct PhysicsSceneBodyDescriptor final {
         PhysicsBodyDescriptor body;
         bool sensor{};
+        PhysicsInitialBodyActivity initialActivity{PhysicsInitialBodyActivity::Awake};
+        /**< Moving bodies start awake by default. Sleeping requires zero velocities and world sleeping enabled. */
+        std::uint64_t sceneEntity{}; /**< Stable authored scene object identity, or zero for direct world admission. */
+    };
+
+    /** @brief Owner-thread reconciliation of retained policy against current native body evidence. */
+    struct PhysicsBodyReconciliation final {
+        PhysicsBodyDescriptor policy;                                /**< Last applied intent; pose and velocities are not live values. */
+        PhysicsBodyState state;                                      /**< Current solver pose, velocity and activity. */
+        PhysicsMotionType observedMotion{PhysicsMotionType::Static}; /**< Native motion mode translated to Horo. */
+        ShapeHandle observedShape;                                   /**< Resident Horo shape matching the native shape object. */
+        std::optional<float> observedMassKilograms;                  /**< Native dynamic mass when translation is unlocked. */
+        Math::Vec3 observedBoundsExtent;                             /**< Native broadphase AABB full extents in world units. */
     };
 
     /**
@@ -123,7 +159,7 @@ namespace Horo::Physics {
         [[nodiscard]] PhysicsAvailability Availability() const noexcept;
         /** @brief Reports current implemented support; Null reports every known feature Unsupported.
          * @param capability Known Horo feature to inspect.
-         * @return WorldCreation, rigid bodies, immutable analytic shapes, constraints and immediate queries
+         * @return WorldCreation, rigid bodies, body mutation, immutable analytic shapes, constraints and immediate queries
          * are available only while Canonical is ready; snapshot, origin-rebasing and other future features remain unsupported.
          */
         [[nodiscard]] PhysicsCapabilitySupport Capability(PhysicsCapability capability) const noexcept;
@@ -177,10 +213,10 @@ namespace Horo::Physics {
         [[nodiscard]] const PhysicsWorldSettings &Settings() const noexcept;
         /** @brief Reads the most recent explicit lifecycle cause. @return None before the first reset, failure or retirement. */
         [[nodiscard]] PhysicsWorldLifecycleCause LifecycleCause() const noexcept;
-        /** @brief Reads the retained fatal/reset failure. @return Typed terminal error, or empty outside Failed. */
+        /** @brief Reads the first terminal failure through teardown until explicit reset. @return Typed terminal error, if any. */
         [[nodiscard]] const std::optional<Error> &LastFailure() const noexcept;
-        /** @brief Reads the latest bounded solver diagnostic retained by this world.
-         * @return Owned inert evidence, or empty before a solver finding and after reset/retirement.
+        /** @brief Reads the latest bounded input-boundary or solver diagnostic retained by this world.
+         * @return Owned inert evidence, or empty before a solver finding and after reset/non-fatal retirement.
          * @note A diagnostic is evidence only. LastFailure and State remain control-flow authority.
          */
         [[nodiscard]] const std::optional<PhysicsDiagnosticRecord> &LastDiagnostic() const noexcept;
@@ -190,8 +226,31 @@ namespace Horo::Physics {
          * Destruction may consume the reserved final slot; if completely full it returns DestructionRetryRequired
          * and is never silently dropped. Commands carry their exact future tick and are canonically sorted at that tick;
          * admission or worker completion order has no semantic authority.
+         * A Change/Body command may own a PhysicsBodyMutation. It is validated against the resident
+         * body on admission between ticks, applied before the native step, and revalidated at that safe point.
          */
         [[nodiscard]] Result<PhysicsCommandAdmission> QueueStructuralCommand(const PhysicsStructuralCommand &command);
+        /** @brief Reads the last applied policy for a resident scene body on the owner thread.
+         * @param body Exact current world-scoped body handle.
+         * @return Owned descriptor reflecting completed body mutations, or a typed lifecycle/handle error.
+         * The pose and velocities in this policy are creation intent, not a live solver-state snapshot.
+         */
+        [[nodiscard]] Result<PhysicsBodyDescriptor> ReadSceneBodyPolicy(BodyHandle body) const;
+        /** @brief Reconciles one exact resident body against owner-thread native solver state.
+         * @param body Exact current world-scoped body handle.
+         * @return Owned policy and observed state, or a typed lifecycle, handle or native-consistency error.
+         * @pre Owner thread, active canonical world, outside a fixed step. This is not a cross-thread snapshot.
+         */
+        [[nodiscard]] Result<PhysicsBodyReconciliation> ReadSceneBodyReconciliation(BodyHandle body) const;
+        /**
+         * @brief Copies current scene-body activation counts without exposing solver islands or retaining resources.
+         * @return Owned world identity and counts, or a typed lifecycle/affinity/capability/native-consistency error.
+         * @pre Owner thread, active canonical world, outside a fixed step. Counts reflect current state, not a tick snapshot.
+         * @post No activity changes. Island membership, stable island IDs and island counts are unsupported.
+         * Work is bounded by resident scene bodies and performs no successful-path allocation.
+         */
+        [[nodiscard]] Result<PhysicsActivationObservation> ReadSceneActivation() const;
+
         /**
          * @brief Admits one explicit analytic query fixture on the owner thread.
          * @param fixture Complete geometry, pose and stable query-filter evidence.
@@ -231,7 +290,7 @@ namespace Horo::Physics {
          */
         [[nodiscard]] Result<BodyHandle> CreateSceneBody(const PhysicsSceneBodyDescriptor &descriptor) const;
         /**
-         * @brief Stages one fixed or distance constraint after its body endpoints are resident.
+         * @brief Stages one fixed, distance, hinge or slider constraint after its body endpoints are resident.
          * @param descriptor World-scoped body anchors and typed constraint policy.
          * @return World-scoped constraint identity or a typed validation/capacity/native error.
          * @pre Active canonical world, owner-thread scene preparation, and every body endpoint is resident.
@@ -247,6 +306,14 @@ namespace Horo::Physics {
          */
         [[nodiscard]] Result<void> DestroySceneConstraint(ConstraintHandle constraint) const;
         /**
+         * @brief Reads the current signed coordinate of one resident hinge or slider joint.
+         * @param constraint Exact generation-scoped joint identity.
+         * @return Angle in radians or displacement in meters; typed lifecycle, affinity, stale-handle or
+         * OperationUnsupported error for a fixed/distance joint.
+         * @pre Active canonical world on its owner thread, outside a fixed tick. This copy retains no joint lease.
+         */
+        [[nodiscard]] Result<PhysicsJointState> ReadSceneJointState(ConstraintHandle constraint) const;
+        /**
          * @brief Executes one immediate query against the current owner-thread broadphase.
          * @param descriptor Exact world/scene query request.
          * @param hits Caller-owned bounded hit storage; no world or native lifetime is retained.
@@ -254,6 +321,21 @@ namespace Horo::Physics {
          * @pre Active canonical world, outside a fixed-step execution, and owner-thread affinity.
          */
         [[nodiscard]] Result<PhysicsQueryResult> Query(const PhysicsQueryDescriptor &descriptor, std::span<PhysicsQueryHit> hits) const;
+        /** @brief Issues one revocable access identity for an active canonical world.
+         * @return Independent capability state or typed unavailable, lifecycle, affinity or capacity error.
+         * @note The caller chooses who receives this capability; Physics applies no module policy.
+         */
+        [[nodiscard]] Result<PhysicsQueryEventCapability> IssueQueryEventCapability();
+        /** @brief Revokes every copy of one issued capability before its client or world retires.
+         * @param capability Capability issued by this exact world.
+         * @return Success, or a typed foreign/stale identity or owner-thread error.
+         */
+        [[nodiscard]] Result<void> RevokeQueryEventCapability(const PhysicsQueryEventCapability &capability) const;
+        /** @brief Executes at most one admitted query batch at an explicit owner-thread safe point.
+         * @return Success, or a typed affinity or lifecycle error. Per-batch failures publish to its handle.
+         * @pre Outside fixed-tick execution. No solver state is accessed from another thread.
+         */
+        [[nodiscard]] Result<void> ProcessQueryBatch();
         /** @brief Executes one exact host-issued fixed tick and publishes its results atomically.
          * @param input One-based next tick, exact immutable world delta and optional synchronous observer.
          * @return Success or typed affinity/lifecycle/sequence/delta/job/native-capacity error without partial publication.
@@ -267,12 +349,46 @@ namespace Horo::Physics {
          * @pre The caller keeps this PhysicsWorld alive for the complete call; the snapshot lock does not extend object lifetime.
          */
         [[nodiscard]] PhysicsPublishedTick PublishedTick() const noexcept;
+        /**
+         * @brief Copies optional backend-neutral debug evidence for the current completed tick.
+         * @param budget Explicit bounded category filters and payload limits.
+         * @return Independent immutable snapshot or a typed affinity, lifecycle, stale, or malformed error.
+         * @pre Active canonical world, owner thread, after successful AdvanceFixedTick and before the
+         * next tick or mutation. Physics projects only currently observable categories.
+         * @post No world or native storage is retained by the returned snapshot.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const PhysicsDebugSnapshot>> CaptureDebugSnapshot(const PhysicsDebugBudget &budget) const;
         /** @brief Reads allocation-free cumulative pipeline metrics. @return Owner-thread value snapshot. */
         [[nodiscard]] PhysicsTickStatistics TickStatistics() const noexcept;
 
     private:
+        friend struct PhysicsWorldContainmentTestAccess;
+        friend class PhysicsSceneActivationCandidate;
         friend class PhysicsRuntime;
+        friend class PhysicsQueryEventCapability;
         struct Impl;
+        friend struct Detail::CanonicalRetirementSink;
+
+        /** @brief Borrowed typed owner-thread receiver; Physics never owns or deletes the target. */
+        class QuarantineSink {
+        public:
+            /** @brief Retires one authored body and its collider bindings after native removal. */
+            virtual void Retire(BodyHandle body) noexcept = 0;
+            /** @brief Retires one authored constraint binding after native removal. */
+            virtual void Retire(ConstraintHandle constraint) noexcept = 0;
+
+        protected:
+            QuarantineSink() = default;
+            QuarantineSink(const QuarantineSink &) = delete;
+            QuarantineSink &operator=(const QuarantineSink &) = delete;
+            ~QuarantineSink() = default;
+        };
+
+        /** @brief Binds aggregate scene tables to native quarantine retirement on the owner thread. */
+        void SetQuarantineSink(QuarantineSink &sink) const noexcept;
+        /** @brief Injects deterministic corruption through the private native test seam. */
+        [[nodiscard]] bool InjectNonFiniteBodyForTesting(BodyHandle body, float value, std::uint8_t component,
+                                                         bool postStep) const noexcept;
         /** @brief Takes one prepared world's ownership. @param impl Owned isolated world state. */
         explicit PhysicsWorld(std::unique_ptr<Impl> impl) noexcept;
         std::unique_ptr<Impl> impl_;

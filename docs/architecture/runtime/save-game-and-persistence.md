@@ -318,6 +318,13 @@ retry counts and stage/readback/signing deadlines. Aggregate admission counts ol
 and new snapshots/runtimes/retired resources together; declared local participant
 limits are not extra capacity. Exceeding a bound fails or defers explicitly, never
 silently unbounds a worker or guarantees a frame-time target.
+Parser profile overrides may lower or raise individual bounds only within compiled
+secure ceilings. Archive admission reserves cumulative validation work before hashing
+and shares the remaining allowance with repeated chunk selections. Canonical child
+readers share decoded-memory and byte-inspection counters even when reopened; migration
+charges source staging and each step's input, declared work, and output against one
+operation budget. A bounded failure reports a stable category and trusted structural
+location, never untrusted text or payload bytes.
 Serialization, compression, hashing, signing, quota queries, directory scans, flush,
 AtomicReplace, deletion and cleanup run on admitted worker/storage roles. No normal
 owner/render/transport frame waits for them. ADR-010 governs allowed teardown drains.
@@ -367,6 +374,56 @@ sealed snapshot exposes no participant adapter, so background encoding, cancella
 cleanup and shutdown can observe only immutable payload segments and stable capture
 provenance. No borrowed span, mutable runtime pointer or module-owned container
 allocator crosses the safe-point boundary.
+
+### Save-safe quiescence authority
+
+`SaveCaptureBarrier` supplies the bounded SAV-005.3 owner-thread authority before
+`RuntimeSaveCaptureBuilder`. The session registers stable owners for all four
+required domains: fixed simulation, jobs that mutate canonical state, deferred
+scene structural mutation, and subsystem semantic roots. Every capture binding
+in the pinned registry must have a corresponding registered barrier owner.
+Even an empty job/structural domain publishes an explicit ready epoch; absence is
+not readiness. Host-only domain owners do not become serialized records.
+
+A producer acquires an exact authority/index/serial mutation ticket before writing
+canonical state. Starting a mutation invalidates its prior ready epoch. The host
+finishes the ticket only after its work commits, publishing the exact semantic
+capture epoch; independently prepared immutable versions use `PublishReadiness`.
+Worker jobs never call the barrier: their owner-thread completion handoff publishes
+readiness after completion, without a nested join or wait. Adapters remain responsible
+for the semantic correctness and immutability of their supplied roots.
+
+`Request` exposes a pending operation/generation fence. A pending request permits
+normal simulation and mutation between frames. At `CommitDeferredLifecycleChanges`,
+after structural publication and before the next simulation step, the host invokes
+`CaptureAtSafePoint` with current provenance and its pinned registry. A busy or
+wrong-epoch participant returns typed pending evidence without invoking any adapter;
+an explicit denial or quiesce deadline returns Deferred or Failed according to the
+admitted policy. The host acknowledges terminal evidence and may schedule a new
+request with current state; the barrier does not retry, replace operations, or reuse
+a stale tick automatically. Scene/session replacement cancels the old request and
+creates a new exact generation request. Incorrect-generation capture is rejected.
+
+The readiness check and closing of mutation admission are serial on the same owner
+thread. During the synchronous builder capture, reentrant mutation/readiness/lifecycle
+calls reject explicitly. On success, typed failure, budget rejection or unexpected
+exception, admission reopens before return. The result hands off only the builder's
+sealed immutable snapshot. Background serialization, signing and storage never extend
+the barrier. Shutdown closes new admission and cancels pending requests; already
+issued mutation tickets may finish so their owners can drain safely.
+
+The polling projection measures elapsed request time and synchronous capture duration
+with an injected monotonic clock. Finite positive quiesce and capture budgets have
+compiled ceilings. A capture exceeding its synchronous budget is discarded and
+reported with `CaptureBudgetExceeded`; the clock measures actual completion rather
+than promising preemption of arbitrary adapter code. Adapters must honor their bounded
+owner-work contracts. Backward samples cannot reduce already observed duration.
+
+Migration: existing `SaveSafePointCoordinator` users retain its operation/worker
+lifecycle fencing. Capture executors route their concrete immutable cut through
+`SaveCaptureBarrier`, register all canonical mutation owners, and publish readiness
+at each current committed epoch. Phase membership alone no longer proves participant
+quiescence. Restore publication keeps its existing prepared-candidate transaction.
 
 ### Thumbnail Capture
 
@@ -457,9 +514,20 @@ relative offset, stored/decoded lengths, alignment and decoded SHA-256. Header a
 manifest records are first, followed by manifest-owned chunk records in stable
 record order; their data ranges must be contiguous from the first data byte through
 the exact payload end. v1 rejects extension records and codecs other than raw before
-any decompression or participant decode. The reader verifies the finalized envelope
+any decompression or participant decode. Archive/container v2 retains that exact
+framing and adds codec ID 1 (`Deflate`, zlib-wrapped DEFLATE) for chunk records only;
+header and manifest stay raw. Both version fields must agree. Readers of v1 still
+reject Deflate rather than silently changing old-format interpretation. The built-in
+codec inventory declares supported levels 1–9 and no dictionary capability. Writer
+policy retains metadata and small/ineffective chunks raw, with explicit required
+codec failure rather than silent fallback. Per-chunk stored and decoded lengths,
+expansion ratio and total decode work are checked before output allocation. Unknown
+required codec IDs fail as a typed compatibility error. The reader verifies the finalized envelope
 hash first, then uses the existing metadata and chunk-directory validators and
-returns only an immutable detached view; it owns no filesystem, module callback or
+returns only an immutable detached view. Selected chunks now return owned decoded
+bytes (including v1 raw selections) rather than a borrowed archive span; callers
+must consume or move that owned value, and no selected bytes outlive their own
+result accidentally. The reader owns no filesystem, module callback or
 gameplay activation authority.
 
 | Logical payload entry | Content |
@@ -547,6 +615,36 @@ anti-rollback require separately trusted generation/anti-replay state, not a
 timestamp inside the attacker-controlled file. The archive is not encrypted by this
 protocol.
 
+### Optional Authenticated-Encryption Provider Boundary
+
+`SaveArchiveProtection.h` defines a host-composed seam outside the v1 archive
+format. `UnencryptedLocal` is an explicit local policy; `RequireAuthenticatedEncryption`
+rejects plaintext without a fallback. The host selects an opaque provider ID and
+non-secret key reference, supplies bounded associated data binding the namespace,
+slot, generation and protection format, and composes a provider that mints a fresh
+nonce and authenticates the complete sealed bytes before returning plaintext.
+The protected admission function checks finite lengths, provider identity and
+capabilities before invoking that provider; only its successful authenticated
+plaintext reaches the bounded v1 reader. It does not treat `ArchiveContentHash`
+as authentication. Provider error text and key material cannot enter the returned
+diagnostic; stable unavailable, rotated, revoked, unsupported and authentication
+failures remain distinguishable.
+
+`SaveArchiveAuthenticity.h` adds the separate v1 signature-verifier seam.
+Disabled rejects signed input, Optional verifies every present signature, and
+Required rejects missing signatures. A bounded trailer preflight constructs the
+exact ADR-112 Ed25519 signature message and calls a host-selected verifier with
+host-selected scope before the archive reader can decode metadata. The reader
+then checks the signed `ArchiveContentHash` against exact bytes before decode.
+The verifier owns trusted roots, key rotation/revocation and cryptographic work;
+Runtime Save exposes no public key source supplied by the archive. This does not
+add a signing backend or make a signed archive fresh or semantically valid.
+
+This seam is not a `.horosave` encryption format, key store, production crypto
+backend or encrypted storage integration. A separately reviewed envelope and
+vetted platform/credential provider are required before shipping encrypted saves;
+the existing v1 writer and reader remain unencrypted and unchanged.
+
 ### Untrusted Input And Threat Policy
 
 Every archive begins as untrusted bytes, including a file already present in the
@@ -598,6 +696,15 @@ scope, capture revision, chunk hashes, lengths and signature metadata internally
 The storage adapter resolves paths, performs quota checks and reserves peak space
 for old file, temporary file and any required recovery copy. Quota estimates do not
 replace handling a later disk-full/write error.
+
+The local archive file primitive maps only typed namespace and slot identities below
+the resolved product root. It holds directory handles across reads and publication,
+rejects redirected directory entries, reparse/symlink targets, hard-linked archives,
+and case aliases where the platform folds names. It writes a complete temporary
+archive through the held slot directory before replacing a generation. Callers must
+still hold the namespace and per-slot lease and reconcile a reported error after
+the atomic rename, because a post-publication durability failure cannot restore
+the previous generation by assumption.
 
 Cancellation is cooperative until the worker atomically enters CommitStarted after
 its final cancellation check and before replacement. That gate is the practical point
@@ -911,6 +1018,39 @@ non-equivalent checkpoints. `SaveMigrationExecutor` copies the validated source
 into bounded detached staging and returns a new candidate; callbacks cannot
 receive a mutable source or live runtime reference, and the source is checked
 again before success.
+The step context carries remaining operation work and candidate byte ceilings so
+callbacks can reject expansion before allocating. The executor charges source
+staging, each step's input and declared work, and each bounded output against one
+operation budget.
+
+Participant steps may also register a record callback. A detached participant's
+records are sorted by `SaveRecordId`; each carries its own schema version and the
+verified source participant, record ID, and schema provenance. The executor passes
+only borrowed bytes for one owned record to that callback, checks its output byte
+limit, advances its schema, and retains its identity and provenance. Record callbacks
+may return a field-specific error through `SaveMigrationRecordContext::Fail`, which
+adds step, source/target schema, participant, record, and field context while
+preserving the typed cause. A participant step cannot change another owner's
+payload or records unless its registered definition names that owner in a sorted,
+unique `crossParticipantTransforms` contract bound to the target schema. The contract permits data transforms
+only; target identity, schema, requiredness, record identities and provenance stay
+fixed. An absent optional target is harmless when the callback skips it; a missing
+required target is rejected by compatibility planning. Save-schema steps remain the whole-save composition boundary. Existing
+participant callbacks without record callbacks must advance any populated record
+schemas themselves. Existing payload-only callers need no migration. Failure at any
+record or later validation stage discards the detached candidate and leaves the
+verified source unchanged.
+`RetainVerifiedSaveRecords` stages recognized manifest chunks through the bounded
+archive reader and supplies their initial provenance; it commits to the detached
+source only after every selected chunk succeeds. Callers still use
+`RetainUnknownSaveData` for unsupported optional owners and must finalize and
+verify any durable replacement before the slot commit transaction.
+The catalog and route identity domains advance to v2 because participant step
+identity now includes record-transform presence and exact cross-owner grants. Release
+composition must regenerate its migration-catalog identity; archive wire versions
+and existing source files do not change. Existing payload-only definitions may be
+registered unchanged, while record-aware definitions supply the new callback and
+cross-owner descriptors explicitly.
 
 Compatibility preflight proceeds through framing/limits, archive version, outer
 integrity/signature, save schema, required participant set/schema, then semantic
@@ -920,6 +1060,34 @@ is allowed only when every required axis is in a declared migration-source range
 the sealed registry has one complete path to current directly readable writer
 versions. Unknown optional participants may be skipped only when no required
 participant depends on them. Missing/unknown required participants reject.
+
+An unknown participant marked required in the manifest blocks restore before any
+participant callback; the diagnostic names its stable owner so the host can direct
+the user to missing content, DLC, or a module. Unknown required feature bits also
+block restore with the unsupported bit mask. An unknown optional participant is
+preservable by default. A sealed release policy may list stable optional owner IDs
+that are explicitly droppable; the list is sorted, unique, and disjoint from installed
+participants. An absent entry is never permission to discard it. Before migration or
+save-copy publication, the reader verifies every retained chunk and copies its exact
+stored bytes plus codec, lengths, alignment, and decoded digest into bounded detached
+staging. A changed archive may relocate an entry, but must retain those bytes and
+integrity fields. A known optional owner with an unsupported newer participant schema
+is treated as opaque under the same preservation rule. If a required participant
+declares a dependency on either unknown owner or unsupported schema, preflight blocks
+load and names the dependency. The migration executor rejects candidate output that changes a
+preservable unknown participant, and a repack/copy must compare source and candidate
+opaque records before commit. The source remains available on any failure. This
+policy does not grant permission to interpret unknown payload schemas or bypass the
+archive's integrity/signature and size checks.
+
+For callers migrating from the earlier API, empty droppable and dependency lists
+retain the conservative behavior. Code that constructs `SaveMigrationSource` from a
+validated archive must call `RetainUnknownSaveData` before planning; planning now
+rejects an unknown preservable owner without verified chunk evidence. Repack/copy
+callers must carry those records into the destination and use
+`VerifyUnknownDataRoundTrip` before the commit gate. The new policy fields are host
+declarations, not archive-provided permissions, so existing v1/v2 files need no wire
+rewrite.
 
 Any newer archive format, save schema, required participant schema or product
 compatibility version outside the declared range fails with a typed unsupported-newer
@@ -1033,6 +1201,28 @@ namespace. Records include address, category, bounded presentation metadata, cur
 generation/content/state identities and lifecycle state. UI retains addresses and
 expected catalog revisions; it never loads/deletes by label, timestamp or row index.
 
+`SaveManagerProjection` is the read-only presentation boundary over a published
+`SaveSlotIndex`, the active namespace binding, host-provided opaque profile summaries,
+generation-specific compatibility/integrity assessments, operation progress, and
+typed diagnostic categories. The producer deep-copies bounded values into a shared
+const publication before an editor, runtime UI, CLI, or test adapter can retain it.
+It never retains archive bytes, storage providers, account handles, live operation
+handles, mutable index objects, paths, or raw terminal error text. Profile display
+metadata and account authority remain with the profile owner; this projection exposes
+only typed namespace IDs and availability. A host increments the publication revision
+for any changed row, assessment, operation or diagnostic, even when the catalog itself
+does not change.
+
+Queries use stable slot-identity order, bounded exact-byte filters and pages. A
+continuation cursor binds the exact namespace/binding/catalog/publication revisions
+and filter; a changed publication requires a fresh query. Load/delete intents carry
+those same revisions plus the selected slot's exact generation. The latest view
+revalidates them before dispatch, and the owning service **also** revalidates under
+its mutation lease; a view check alone is never commit authority. The public header
+is owned by `HoroRuntime` in the header-ownership registry. Existing catalog/storage
+callers need no migration; presentation adapters should replace retained catalog or
+storage objects with this immutable view and command preconditions.
+
 ### Physical mapping and safety
 
 Platform Abstraction resolves a product state root for the validated
@@ -1070,6 +1260,65 @@ that no-follow/containment/outcome guarantees exist. SaveStorageAdapter must imp
 and qualify them before production saves are enabled. Profile/account storage, cloud
 retry journals, editor recovery, authored projects and PIE sandboxes remain distinct
 sibling/virtual namespaces with separate schemas and mutation leases.
+
+### Local operation ordering and process ownership
+
+The local filesystem foundation supports one live storage owner per physical namespace.
+`SaveFilesystemStorage::Open` acquires a nonblocking exclusive kernel lock on the
+handle-relative `.namespace.lock` file in the slot directory (`flock` on POSIX,
+`LockFileEx` on Windows). A competing owner, including another open in the same
+process, returns `save.operation.in_progress`. Separate profiles/environments remain
+independent. Unsupported lock facilities fail closed; no unlocked fallback is allowed.
+The namespace lock is retained across moves until close. The file is persistent and
+never removed, and PID/timestamp contents never establish ownership. Process termination
+releases the kernel lock, so stale unlocked files need no destructive recovery sweep.
+Inherited POSIX handles retain ownership until all holders close; close-on-exec prevents
+ordinary child executables from extending the lease. All participants must cooperate
+with this protocol; arbitrary external edits are not qualified concurrent access.
+
+Within one owner, the filesystem byte primitive serializes worker read selection and
+replacements across the namespace. A read pins the immutable file before releasing the
+operation mutex and reading bytes, so later replacements cannot change that selected
+inode/handle. It returns one complete old or new archive; a returned byte vector remains
+immutable to later publication. The target-private pinned-file mechanism owns the selected native handle
+independently of directory replacement/deletion or storage-owner shutdown and closes
+it through RAII after byte I/O. Its deterministic regression uses a deliberate,
+non-installed internal test interface; the public storage contract remains `Read`.
+Windows publication uses `FileRenameInformationEx` with replace-existing and POSIX
+semantics so open readers continue using the previous immutable file while new opens
+select the replacement. This requires Windows 10 version 1709+ and filesystem support;
+unsupported publication fails closed rather than switching to destructive replacement.
+No lock is held by
+a polling UI getter.
+`Replace` itself is a low-level byte operation, not generation compare-and-swap.
+
+`SaveSlotCommitTransaction` acquires a non-null exclusive store operation lease before
+journal inspection, base-generation comparison, preparation or replay, and retains it
+through publication/outcome reporting and journal retirement. The store must share one
+lock domain across all instances addressing the same namespace/slot. Coarse namespace
+serialization is supported; finer per-slot concurrency must still serialize catalog
+publication and source/destination operations in a stable typed-address order. Read/list
+providers take snapshots under that same domain: each result sees a complete old or new
+catalog, and separate calls need not select the same revision. Callers must pin the exact
+generation when relating metadata and archive reads. Recovery obtains the lease before
+inspecting or removing evidence and never steals a live owner's work.
+
+Generation preconditions are checked under the lease. An absent previous entry means
+create-if-absent; an existing entry must match the selected publication exactly. Two
+writes from the same base cannot both publish: a busy lease returns
+`save.operation.in_progress`, and a later stale base returns `save.slot_commit.generation_stale`
+before journal creation. Admission ordering follows lock acquisition, not wall clocks
+or thread arrival; callers may retry a busy operation through their bounded scheduler.
+The store's namespace binding is revalidated under its lease. Shutdown closes admission
+and settles accepted work before releasing storage or lease authority.
+
+Migration: implementations of `ISaveSlotCommitStore` must now implement `AcquireLease`
+and return an owned non-null RAII guard. The existing fake store is the only current
+implementation; no production catalog store is claimed. This deliberate source contract
+change removes reliance on undocumented caller locking. Existing public headers remain
+owned by `HoroRuntime`; affected consumer and transaction coverage must compile with the
+new seam. Filesystem byte callers must share one opened namespace capability instead of
+opening competing owners for each request.
 
 ### Profile-switch transaction
 
@@ -1114,6 +1363,31 @@ raw platform handle crosses the surface. The save/cloud coordinator derives a bo
 Platform Services treats that key and finalized archive bytes as opaque and cannot
 edit local storage. The application/profile-owned `CloudSaveCoordinator` is the one
 sync state authority; Platform Services and UI are transport/presentation adapters.
+
+The coordinator's versioned `SaveCloudRevisionMetadata` sidecar is scoped by the
+complete local `SaveNamespaceId` plus distinct provider and account identities. Each
+record names one current slot generation and exact `ArchiveContentHash`, with bounded
+opaque provider object key, optional CAS revision, typed sync state and last confirmed
+mutation. Provider revisions are not ordered and are never substituted for generation
+or archive identity. The sidecar is not an archive field or a credential store.
+The older `SaveSlotPublicationMetadata.cloudState` is only a non-causal catalog
+listing hint; it cannot override this generation-bound coordinator state or grant a
+remote mutation. Presentation adapters derive current sync status from a validated
+coordinator snapshot instead of treating that hint as a second authority.
+
+The local storage authority persists the sidecar and matching `SaveSlotIndex` as one
+atomic catalog publication under the namespace/slot lease. Readers expose only a
+validated immutable pair; a mismatched index revision, generation, hash, scope,
+schema or limit is not a usable cloud state. A missing or stale sidecar is rebuilt
+from the authoritative local index: exact same-scope generation/hash rows may retain
+confirmed evidence even when another slot advanced the index. Changed rows become
+`Unknown`; sidecars naming a newer index than the local input are rejected rather than
+rolled back. In-flight upload/download
+states return to `Unknown` for journal reconciliation after restart. Missing rows
+never imply deletion; `Deleted` explicitly describes a confirmed remote state for a
+still-named local generation, with durable deletion intent owned by the separate sync
+journal. Existing catalogs need no archive migration: first open creates an all-unknown
+sidecar before cloud scheduling. No cloud failure changes local-save success.
 
 Automatic remote mutation requires provider-enforced conditional revision. A read
 followed by unconditional write, a process-local mutex, advisory lease or provider

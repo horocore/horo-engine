@@ -2,6 +2,8 @@
 #include "Horo/Physics/PhysicsTransformAuthority.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
+#include <initializer_list>
 #include <limits>
 #include <thread>
 
@@ -225,6 +227,10 @@ namespace Horo::Physics {
         REQUIRE(authority->BodyTransform(body).Value().authoredPose == Pose(1));
 
         auto invalid = Snapshot(body, 2, 9);
+        invalid.state.activity = PhysicsBodyActivity::Static;
+        RequireCode(ValidatePhysicsDynamicTransformSnapshot(invalid, World(), 9, 2), PhysicsErrors::DescriptorInvalid);
+        invalid.state.activity = PhysicsBodyActivity::Sleeping;
+        REQUIRE(ValidatePhysicsDynamicTransformSnapshot(invalid, World(), 9, 2).HasValue());
         invalid.state.pose.translation.x = std::numeric_limits<float>::quiet_NaN();
         RequireCode(ValidatePhysicsDynamicTransformSnapshot(invalid, World(), 9, 2), PhysicsErrors::DescriptorInvalid);
     }
@@ -255,5 +261,172 @@ namespace Horo::Physics {
         authority->Shutdown();
         REQUIRE(authority->State() == PhysicsTransformAuthorityState::Destroyed);
         RequireCode(authority->BodyTransform(body), PhysicsErrors::InvalidState);
+    }
+
+    TEST_CASE("Completed Physics pose pairs render equivalent motion at independent presentation rates",
+              "[physics][transform][interpolation]") {
+        auto authority = Prepared();
+        const auto dynamic = Body(1);
+        const auto kinematic = Body(2);
+        const auto staticBody = Body(3);
+        Register(*authority, dynamic, PhysicsMotionType::Dynamic);
+        Register(*authority, kinematic, PhysicsMotionType::Kinematic);
+        Register(*authority, staticBody, PhysicsMotionType::Static);
+        REQUIRE(authority->Activate().HasValue());
+        RequireCode(authority->InterpolationEndpoints(dynamic), PhysicsErrors::QuerySnapshotStale);
+
+        REQUIRE(authority->ApplyPreStep(1).HasValue());
+        RequireCode(authority->CommitInterpolationTick(1), PhysicsErrors::QuerySnapshotStale);
+        REQUIRE(authority->PublishDynamicSnapshot(Snapshot(dynamic, 1, 0)).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(1).HasValue());
+        const auto first = authority->InterpolationEndpoints(dynamic).Value();
+        REQUIRE_FALSE(first.hasPreviousTick);
+        REQUIRE(EvaluatePhysicsInterpolation(first, 0.75F).Value() == Pose(0));
+
+        REQUIRE(authority->QueueTransformCommand(KinematicCommand(kinematic, 2, 20)).HasValue());
+        REQUIRE(authority->ApplyPreStep(2).HasValue());
+        REQUIRE(authority->PublishDynamicSnapshot(Snapshot(dynamic, 2, 10)).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(2).HasValue());
+        const auto dynamicPair = authority->InterpolationEndpoints(dynamic).Value();
+        const auto kinematicPair = authority->InterpolationEndpoints(kinematic).Value();
+        REQUIRE(dynamicPair.hasPreviousTick);
+        REQUIRE(dynamicPair.previousTick == 1);
+        REQUIRE(dynamicPair.currentTick == 2);
+        REQUIRE(kinematicPair.hasPreviousTick);
+        for (const float alpha : {0.0F, 0.25F, 0.5F, 0.75F, 1.0F}) {
+            REQUIRE(EvaluatePhysicsInterpolation(dynamicPair, alpha).Value().translation.x == 10.0F * alpha);
+            REQUIRE(EvaluatePhysicsInterpolation(kinematicPair, alpha).Value().translation.x == 20.0F * alpha);
+        }
+        REQUIRE(authority->BodyTransform(dynamic).Value().authoredPose == Pose(0));
+        REQUIRE(authority->DynamicSnapshot(dynamic).Value().pose == Pose(10));
+
+        REQUIRE(authority->QueueTransformCommand(StaticCommand(staticBody, 3, 5, PhysicsStaticTransformUpdatePolicy::UpdateBroadphase))
+                    .HasValue());
+        REQUIRE(authority->ApplyPreStep(3).HasValue());
+        REQUIRE(authority->PublishDynamicSnapshot(Snapshot(dynamic, 3, 20)).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(3).HasValue());
+        REQUIRE(EvaluatePhysicsInterpolation(dynamicPair, 0.5F).Value() == Pose(5));
+        REQUIRE(EvaluatePhysicsInterpolation(authority->InterpolationEndpoints(dynamic).Value(), 0.5F).Value() == Pose(15));
+        const auto staticPair = authority->InterpolationEndpoints(staticBody).Value();
+        REQUIRE_FALSE(staticPair.hasPreviousTick);
+        REQUIRE(EvaluatePhysicsInterpolation(staticPair, 0.5F).Value() == Pose(5));
+    }
+
+    TEST_CASE("Physics presentation uses spherical rotation interpolation", "[physics][transform][interpolation]") {
+        auto authority = Prepared();
+        const auto dynamic = Body();
+        Register(*authority, dynamic, PhysicsMotionType::Dynamic);
+        REQUIRE(authority->Activate().HasValue());
+        REQUIRE(authority->ApplyPreStep(1).HasValue());
+        REQUIRE(authority->PublishDynamicSnapshot(Snapshot(dynamic, 1, 20)).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(1).HasValue());
+
+        REQUIRE(authority->ApplyPreStep(2).HasValue());
+        auto rotated = Snapshot(dynamic, 2, 30);
+        rotated.state.pose.rotation = {0, 0, 1, 0};
+        REQUIRE(authority->PublishDynamicSnapshot(rotated).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(2).HasValue());
+        const auto midpoint = EvaluatePhysicsInterpolation(authority->InterpolationEndpoints(dynamic).Value(), 0.5F).Value();
+        REQUIRE(midpoint.translation.x == 25.0F);
+        REQUIRE(std::abs(midpoint.rotation.z - 0.70710678F) < 1.0e-5F);
+        REQUIRE(std::abs(midpoint.rotation.w - 0.70710678F) < 1.0e-5F);
+    }
+
+    TEST_CASE("Teleport restore reload and origin shift never interpolate across a discontinuity",
+              "[physics][transform][interpolation][lifecycle]") {
+        auto authority = Prepared();
+        const auto body = Body();
+        Register(*authority, body, PhysicsMotionType::Dynamic, 1);
+        REQUIRE(authority->Activate().HasValue());
+        REQUIRE(authority->ApplyPreStep(1).HasValue());
+        REQUIRE(authority->PublishDynamicSnapshot(Snapshot(body, 1, 0)).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(1).HasValue());
+        REQUIRE(authority->ApplyPreStep(2).HasValue());
+        REQUIRE(authority->PublishDynamicSnapshot(Snapshot(body, 2, 10)).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(2).HasValue());
+
+        REQUIRE(authority->RebaseInterpolationHistory({100, 0, 0}, 2).HasValue());
+        auto pair = authority->InterpolationEndpoints(body).Value();
+        REQUIRE(pair.originGeneration == 2);
+        REQUIRE(pair.previousPose == Pose(-100));
+        REQUIRE(pair.currentPose == Pose(-90));
+        REQUIRE(EvaluatePhysicsInterpolation(pair, 0.5F).Value() == Pose(-95));
+
+        REQUIRE(authority
+                    ->QueueTransformCommand(
+                        DynamicCommand(body, 3, 100, PhysicsDynamicTransformOperation::Teleport, PhysicsTeleportVelocityPolicy::Reset))
+                    .HasValue());
+        REQUIRE(authority->ApplyPreStep(3).HasValue());
+        REQUIRE(authority->InterpolationEndpoints(body).Value().currentTick == 2);
+        REQUIRE(authority->PublishDynamicSnapshot(Snapshot(body, 3, 100)).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(3).HasValue());
+        pair = authority->InterpolationEndpoints(body).Value();
+        REQUIRE_FALSE(pair.hasPreviousTick);
+        REQUIRE(EvaluatePhysicsInterpolation(pair, 0.5F).Value() == Pose(100));
+
+        REQUIRE(authority->ApplyPreStep(4).HasValue());
+        REQUIRE(authority->PublishDynamicSnapshot(Snapshot(body, 4, 110)).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(4).HasValue());
+        REQUIRE(EvaluatePhysicsInterpolation(authority->InterpolationEndpoints(body).Value(), 0.5F).Value() == Pose(105));
+        REQUIRE(authority->ResetInterpolationHistory(PhysicsInterpolationResetReason::Restore).HasValue());
+        RequireCode(authority->InterpolationEndpoints(body), PhysicsErrors::QuerySnapshotStale);
+
+        REQUIRE(authority->ApplyPreStep(5).HasValue());
+        REQUIRE(authority->PublishDynamicSnapshot(Snapshot(body, 5, 200)).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(5).HasValue());
+        REQUIRE_FALSE(authority->InterpolationEndpoints(body).Value().hasPreviousTick);
+        REQUIRE(authority->ResetInterpolationHistory(PhysicsInterpolationResetReason::Reload).HasValue());
+        RequireCode(authority->InterpolationEndpoints(body), PhysicsErrors::QuerySnapshotStale);
+        authority->Shutdown();
+        RequireCode(authority->InterpolationEndpoints(body), PhysicsErrors::InvalidState);
+    }
+
+    TEST_CASE("Interpolation rejects malformed cadence and preserves the last complete pose pair on failure",
+              "[physics][transform][interpolation][failure]") {
+        auto authority = Prepared();
+        const auto body = Body();
+        Register(*authority, body, PhysicsMotionType::Dynamic);
+        REQUIRE(authority->Activate().HasValue());
+        REQUIRE(authority->ApplyPreStep(1).HasValue());
+        REQUIRE(authority->PublishDynamicSnapshot(Snapshot(body, 1, 0)).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(1).HasValue());
+        const auto copied = authority->InterpolationEndpoints(body).Value();
+        RequireCode(EvaluatePhysicsInterpolation(copied, -0.1F), PhysicsErrors::DescriptorInvalid);
+        RequireCode(EvaluatePhysicsInterpolation(copied, 1.1F), PhysicsErrors::DescriptorInvalid);
+        RequireCode(EvaluatePhysicsInterpolation(copied, std::numeric_limits<float>::quiet_NaN()), PhysicsErrors::DescriptorInvalid);
+        auto malformed = copied;
+        malformed.hasPreviousTick = true;
+        malformed.previousTick = 1;
+        RequireCode(EvaluatePhysicsInterpolation(malformed, 0.5F), PhysicsErrors::DescriptorInvalid);
+        RequireCode(authority->CommitInterpolationTick(1), PhysicsErrors::CommandOrderInvalid);
+
+        REQUIRE(authority->ApplyPreStep(2).HasValue());
+        RequireCode(authority->CommitInterpolationTick(2), PhysicsErrors::QuerySnapshotStale);
+        RequireCode(authority->ResetInterpolationHistory(PhysicsInterpolationResetReason::Restore), PhysicsErrors::InvalidState);
+        REQUIRE(authority->InterpolationEndpoints(body).Value().currentTick == 1);
+        REQUIRE(authority->PublishDynamicSnapshot(Snapshot(body, 2, 10)).HasValue());
+        REQUIRE(authority->CommitInterpolationTick(2).HasValue());
+        RequireCode(authority->PublishDynamicSnapshot(Snapshot(body, 2, 11)), PhysicsErrors::CommandOrderInvalid);
+        RequireCode(authority->RebaseInterpolationHistory({std::numeric_limits<float>::infinity(), 0, 0}, 2),
+                    PhysicsErrors::DescriptorInvalid);
+        REQUIRE(authority->InterpolationEndpoints(body).Value().originGeneration == 1);
+        RequireCode(authority->RebaseInterpolationHistory({1, 0, 0}, 1), PhysicsErrors::DescriptorInvalid);
+        RequireCode(authority->ResetInterpolationHistory(static_cast<PhysicsInterpolationResetReason>(255)),
+                    PhysicsErrors::OperationUnsupported);
+        RequireCode(authority->InterpolationEndpoints(Body(9)), PhysicsErrors::HandleStale);
+        REQUIRE(authority
+                    ->QueueTransformCommand(
+                        DynamicCommand(body, 3, 20, PhysicsDynamicTransformOperation::Teleport, PhysicsTeleportVelocityPolicy::Reset))
+                    .HasValue());
+        RequireCode(authority->RebaseInterpolationHistory({1, 0, 0}, 2), PhysicsErrors::InvalidState);
+
+        bool rejectedForeignRead = false;
+        std::thread foreign([&] {
+            const auto result = authority->InterpolationEndpoints(body);
+            rejectedForeignRead =
+                result.HasError() && result.ErrorValue().code.Value() == PhysicsErrors::ThreadAffinityViolation.code.Value();
+        });
+        foreign.join();
+        REQUIRE(rejectedForeignRead);
     }
 }  // namespace Horo::Physics

@@ -42,6 +42,55 @@ Character checkpoint.
 - **Typed Runtime Mode Plan**: ADR-102 separates package-supported modes from the one standalone, client, listen-server or dedicated-server plan selected before world publication. Gameplay receives world/session-generation-scoped roles and capabilities; process globals, locality and headless state never grant authority.
 - **Shared Typed Configuration**: ADR-103 applies ADR-009 once across editor, CLI, MCP, CI and packaged hosts. Project defaults, preview preferences, release role, host requests and credential bindings retain distinct owners; product capability/security floors constrain runtime selection.
 
+### Host mode composition boundary
+
+`ResolveNetworkModePlan` consumes one admitted `AssessNetworkTarget` result and its
+exact selection. It validates the closed Standalone/Client/ListenServer/
+DedicatedServer world shape, distinct Scene instances, server-only authority epoch,
+and host presentation selection before any factory runs. A mode plan is immutable
+for its host generation; neither listener presence nor a renderer/headless state
+can create authority. The application composition root supplies concrete factories
+for the required transport, session, replication, Scene, Physics and optional
+presentation/local-player participants. `NetworkRuntime` owns no concrete factory.
+
+`NetworkModeComposition` prepares the complete selected participant set, activates
+it through the same ordered lifecycle, and publishes world-scoped role evidence
+only after all participants succeed. Standalone invokes no transport, session or
+replication factory. Dedicated uses the same authority-world Scene/Physics and
+network participant contract as listen mode, with no GUI, renderer, audio, input
+or local-player participant. Absent presentation participants are no-ops in the
+canonical `RuntimePhase` schedule, not an alternative headless scheduler. The
+runtime host, not this contract, drives `FrameScheduler` and supplies concrete
+Scene/Physics implementations.
+
+The headless `horo-engine --run-network-product` path is an application-owned
+composition consumer. Its product declaration is baked into that executable;
+package inventory is derived from its actual optional GNS link edge, never from
+the selected mode. The no-GNS artifact declares standalone only and invokes no
+transport factory. The GNS artifact may select client, listen or dedicated only
+with explicit bind/connect endpoints; it does not substitute Null or loopback for
+an unavailable production provider. `NetworkProductHost` applies target admission
+before factory invocation and installs the mode as a `RuntimeHost` participant, so
+all modes execute the same canonical phases. `HeadlessNetworkServices` supplies
+the same runtime Scene and canonical Physics world construction to standalone,
+listen and dedicated worlds; dedicated selects no presentation or local-player
+factory. This built-in minimal Scene is not a general authored-project loader.
+The reference executable has no installed credential/trust authorities: native
+`Accepted` and `Connected` events are bounded by its transport poll and explicitly
+closed, never admitted as gameplay sessions. A policy-backed transport-to-session
+path and player roster belong to NET-007.3; typed project/map server launch
+configuration belongs to NET-007.4. Neither is implied by this reference path.
+
+Client session exposure requires `PeerSessionLifecycle::AdmitGameplay` for the
+exact connection and generation; pre-Active transport connectivity is invisible
+to gameplay. Disconnect revokes only the matching client session and never
+promotes it to standalone or transfers the listen server's authority. Aggregate
+travel prepares all replacement Scene/Physics/local-player participants, then
+swaps fresh Scene and authority identities at `CommitDeferredLifecycleChanges`;
+failure retains the old pair. Shutdown revokes role views first and releases
+participants in reverse construction order. Host-provided factories remain
+responsible for their concrete worker, lease, and native-resource teardown.
+
 ## Target Topology and Module Ownership
 
 The network subsystem is organized into four distinct CMake targets with strict compile-time boundaries:
@@ -136,6 +185,25 @@ To maintain portability, compile speed, and memory safety, public headers under 
 ## Host Composition and Transport Ownership
 
 The host composition root selects and instantiates the backend. `NetworkRuntime` never links `NetworkTransportNull` or `NetworkTransportGNS`.
+
+The implemented `TransportBackendComposition` is the bounded, host-owned
+registration and selection seam for this decision. The host registers inert
+`TransportBackendDescriptor` values and factories only for backends its target
+actually links. A status reports installed, host-supported, configured,
+selected, and active independently. Exact selection fails with a typed result
+when an ID is absent, unsupported, or unconfigured; it never substitutes Null.
+Only activation invokes the selected factory. Cancellation closes activation
+and asks an active backend to stop; shutdown releases it before the host unloads
+factory code. Dynamic extension factories need an external code lease through
+the approved application-capability/provider boundary before registration.
+
+The `DISABLED` and `HEADLESS_NULL` target profiles have configure-time
+transitive-link checks against production transport libraries. The Null profile
+can explicitly create a bounded `DeterministicTransport` lifetime without a
+production backend. The GNS profile fails configuration until the separate
+GNS implementation target is installed. This composition lifetime is not yet
+the future packet-level `INetworkTransport`/`NetworkRuntimeCoordinator` handoff;
+adding that handoff must preserve the exact-selection and optional-link rules.
 
 ```cpp
 auto transport = CreateGnsTransport(config); // or CreateNullTransport(config)
@@ -470,6 +538,26 @@ Every other terminal path publishes once, clears gameplay admission and rejects 
 messages/callbacks or replacement generations. Transport close remains externally
 owned and cannot rewrite the session snapshot.
 
+`NetworkTickAlignment` is a NetworkRuntime owner-thread projection for one admitted
+connection/session generation. The host supplies committed local fixed ticks and
+owner-stamped round-trip samples expressed in negotiated fixed-tick units; wall
+time never assigns simulation ticks. A sample estimates receive-time server tick
+from send tick plus ceiling of half the bounded measured round trip; that
+symmetry assumption is quality evidence, not gameplay authority. Its fixed
+eight-sample ceiling produces a
+median server-tick estimate and immutable quality/drift evidence. Each local
+fixed-tick advance maps to at most two projected server ticks (or holds one
+server tick), bounding correction to one tick without invoking additional
+fixed updates. The mapper does not own an input journal, canonical state,
+checkpoint, restore, or rollback path: those remain under ADR-100's declared
+prediction/provider contracts. Pause and host suspension freeze projection,
+increment a local sample epoch, and discard old samples. Reconnect accepts an
+explicit newly admitted handle (same-slot reuse requires its exact next
+generation) and a different session generation; a new admitted session on the
+same connection is also fenced. Loss ages
+quality to stale while projection advances ordinarily; it never silently
+expands history or simulation catch-up limits.
+
 The canonical hello exchange includes:
 
 - Product/protocol family identity and minimum/maximum wire versions.
@@ -526,6 +614,29 @@ parsing and compatibility checks precede expensive verification. Timeout,
 cancellation or shutdown invalidates the admission generation, so late transport
 or verifier completion cannot activate a session.
 
+`AdmissionProtection` is the host-owned, owner-thread ledger for NET-002.9. The
+host selects its protocol security floor and finite pending, per-source, work,
+byte and diagnostic limits before accepting connections. It derives a stable
+source bucket from transport evidence, calls
+`ComputeAdmissionTranscriptDigest` over the selected
+protocol/version/schema/features/transport, both fresh nonces and exact
+connection/session generations, then calls `Begin` after handshake
+selection and before constructing authentication. The host must use an
+unpredictable nonce generator and its credential authority must verify the proof
+against that same transcript; the bounded recent-nonce ledger is an additional
+replay fence, not a replacement for cryptographic freshness. It charges hostile
+bytes and parse failures before parsing, passes the ledger into
+`AuthenticationSessionAdapter` to charge attempts and each verifier call, and
+charges diagnostic events before emitting them. A rejected charge closes the
+specific admission and transport connection; the owner calls `End` on success,
+failure, timeout, cancellation or disconnect, and `Shutdown` before releasing
+the host policy or authority providers. The ledger uses fixed 64-slot peer,
+source and recent-nonce storage with no per-attempt allocation. A full source
+ledger rejects new sources until its accounting window expires. This public
+contract is additive: existing authentication callers remain valid, while
+production session composition must pass the shared ledger to enforce global
+limits. It stays in `NetworkRuntime`; transports and gameplay never own it.
+
 ## Delivery Semantics and Backpressure
 
 [ADR-070](../../adr/070-capture-and-voice-io-ownership.md) keeps voice packet policy
@@ -541,6 +652,84 @@ Delivery policies:
 - **UnreliableSequenced**: Discards out-of-order packets; only newer packets are accepted.
 - **ReliableOrdered**: Guaranteed delivery in order (e.g., game events, inventory actions, chat).
 - **ReliableUnordered**: Guaranteed delivery without strict ordering constraints.
+
+The session owner admits each decoded message through a generation-fenced,
+single-owner message delivery gate immediately before calling an application
+handler. Each explicitly configured channel is an independent sequence/replay
+scope; unrelated command, snapshot, and control work needs separate negotiated
+channels to avoid head-of-line coupling. Sequence keys start at one and never
+wrap within a session. Ordered channels require the next key, sequenced and
+replaceable snapshot channels discard older keys, and unordered channels keep
+a fixed 64-key replay window and reject older arrivals. Absolute owner-clock
+expiry is checked before replay state or gameplay mutation; equal to the expiry
+tick is expired. Disconnect/shutdown permanently closes the gate, and a new
+session generation receives new state. The gate is backend-neutral and uses
+the already admitted transport capability snapshot; it never silently changes
+delivery policy. The owner supplies metadata derived from the validated
+transport event and decoded envelope, not untrusted application payload fields.
+Admission consumes a replay key before handler invocation. Typed handler failure
+is propagated and an exception escapes to the owner boundary; neither permits
+ambiguous replay of a handler that may already have mutated state. The gate
+allocates only when configured, not on its admitted-message path; handler work
+has its own budget and error contract.
+This adds a NetworkApi-owned optional policy seam; existing envelope, transport,
+and session callers retain their contracts. A host adding gameplay dispatch
+must construct the gate after session admission, derive its inputs from the
+validated event/envelope, call `Apply` at the owner safe point, and shut it down
+before retiring that session. It does not replace the owner-thread routing and
+handler registry work tracked separately by NET-002.7.
+
+`InboundMessageDispatcher` is the NetworkRuntime owner-thread route for NET-002.7.
+A host supplies its transport and immutable codec snapshot, registers only an
+already-Active `PeerSessionLifecycle` issued by its trust/admission authority,
+and transfers a generation-matched delivery gate. `RunNetworkPoll` stages
+transport events first; only after `PollEvents` returns does it decode bounded
+envelopes and call an exact protocol/message handler through the gate. Handler
+ownership is weak, work is rate-bounded and restricted to `NetworkPoll`, and
+absent, revoked, expired, malformed or overloaded work never reaches gameplay.
+Queue overflow closes the entire route rather than silently dropping an ordered
+packet. The minimal headless product still has no credential authority and
+deliberately closes native peers; connectivity alone cannot register gameplay.
+
+`RpcGameplayDispatch` is the NET-004.9 owner-thread RPC handler composed behind
+an exact admitted `InboundMessageDispatcher` message binding. Its bounded payload
+format is little-endian `RpcId:u64, authorityEpoch:u64, objectSlot:u64,
+objectGeneration:u32, schemaMajor:u16, schemaMinor:u16, logicalSequence:u64,
+recipientPeer:u64, parameterCount:u16`, followed by ascending distinct
+`RpcParameterId:u32, byteLength:u32, canonicalBytes` records. Recipient is zero
+for client-to-authority calls and the exact host-bound local peer for
+authority-to-client calls. Framing, descriptor compatibility, canonical typed
+decoding, live object/role/session authority and reliable logical replay are
+checked before queuing. The transport delivery class comes from admitted context,
+and a reliable declaration cannot arrive through an unreliable lane. Each invocation
+has a finite host-selected wire and retained-value byte ceiling, including optional
+defaults; pending storage is bounded by that ceiling times the command capacity,
+plus at most 64 typed-value slots per command. The fixed-step Gameplay drain repeats mutable checks
+while retaining world, handler and module leases through the callback. Host composition
+must supply an exact module-generation lease with every executable binding. Binding
+compaction retires serializers before releasing their original code lease, and
+serializer callbacks are pinned and revalidated after return. The registration
+call takes its handler pin by value and moves both that pin and the
+module lease into ordered local owners before validation. This prevents implicit
+derived-to-interface smart-pointer temporaries or parameter teardown from retiring
+code before a handler destructor. Existing call expressions remain source-compatible;
+consumers of this new RPC API must rebuild for the updated function signature.
+The factory-only
+construction path uses private admission keys with standard smart-pointer
+factories; consumers cannot bypass descriptor/capacity validation. Standard allocation
+and callback exceptions become typed terminal failures. A final catch-all is required
+at each untrusted module boundary because C++ callbacks can throw non-standard values;
+removing it would let hostile module code escape the host's lifecycle contract.
+The host retires the
+network mapping before destroying its Scene entity; the Gameplay handler resolves
+the generation-qualified entity again before staging its transaction. Handler
+mutation is an all-or-nothing Gameplay transaction; failed or thrown callbacks
+are terminal and never replayed. Binding replacement retains replay high-water
+for the active connection and object occurrence. Peer, object or handler
+revocation cannot erase replay high-water for the same generation; a new
+connection or object generation creates a distinct scope. Unsupported custom caller
+permissions fail closed until a host-approved policy is composed. Rate-limit
+enforcement is owned by NET-004.10.
 
 ### Backpressure and Overload Policies
 
@@ -628,6 +817,47 @@ tiers. Runtime mode/provider/exposure changes require ADR-102 host recomposition
 existing sessions keep their negotiated generations until bounded replacement or
 shutdown.
 
+The portable `NetworkProjectSettings` codec accepts a closed, bounded JSON object.
+Version 2 adds a canonical optional default endpoint and a public numeric credential
+requirement ID. Version 1 documents omit those two fields; pure migration supplies
+an absent endpoint and no credential requirement before complete validation. Unknown
+fields, duplicate keys, malformed integers, and future versions fail. The codec
+never stores a private credential binding or secret. Default construction creates
+a standalone-only policy with finite scheduling limits; projects must explicitly
+declare network roles and required transport capability evidence before packaging
+or activation. `PreflightNetworkProjectSettings` validates the selected role and
+exact transport evidence before an operation publishes state.
+
+`NetworkTargetCapabilities` is the product-target admission boundary. The
+packager/release plan supplies an immutable version-one manifest for a specific
+build and platform; final package verification supplies a separate inventory of
+the roles, runtime, provider artifacts/capabilities and protocol actually present. The host composition root supplies a fresh,
+provider-mapped snapshot of registered transports, host support, configuration,
+runtime presence and protocol support. The project/release supplies required
+roles and an optional exact provider; the invocation selects one role, provider
+and protocol version. The pure assessment exposes package, installed,
+host-supported, project-required and selected facts separately and rejects the
+first missing capability with a typed remediation. A declaration alone cannot
+prove that a runtime or provider was packaged. The host must not synthesize
+`NetworkTargetHostFacts` from the product manifest or a renderer/device tier.
+Native provider names, factories and credentials remain in host-private mappings.
+`CaptureNetworkTargetHostFacts` reads sealed `TransportBackendComposition`
+registrations through an explicit typed provider-to-backend mapping; it never
+calls a factory and preserves absent/unsupported/unconfigured distinctions.
+Only an admitted, build-identity/revision-fenced assessment may precede activation; it does not
+activate anything itself. Standalone requires no provider or protocol selection.
+
+The manifest codec accepts only bounded, closed version-one JSON with non-zero
+build/revision/profile IDs, a typed platform and role set, exact protocol/schema
+range, and at most eight provider capability descriptors. It rejects duplicate
+keys, unknown fields and future versions. Migrated version-one project settings
+still pass through the same package/host assessment after their documented
+version-two normalization; migration never manufactures packaged capabilities.
+Automation must use this same assessment and final inventory evidence rather
+than inferring server support from a build variant or headless mode. Producers
+must bump product, host or project revisions on replacement and re-assess before
+publication; cancellation and shutdown deny admission.
+
 ## Optional Composition and Product Configurations
 
 Horo Engine products declare only the modes and network targets they can realize:
@@ -663,10 +893,71 @@ Networking integrates with Horo's diagnostic and metric infrastructure:
   cancellation, shutdown, and success use the same publication gate. Replacement
   requires the exact next non-wrapping handle generation, so late callbacks cannot
   terminate a new connection.
+- Hosts compose one `NetworkLogStream` per admitted connection/session generation
+  with a borrowed, host-owned `INetworkLogSink` (normally a
+  `NetworkTelemetryLogSink`). The stream consumes
+  canonical `NetworkTerminalRecord` failures and owner-published
+  `PeerSessionTerminalSnapshot` lifecycle outcomes; its closed categories and fields
+  carry host-operation, connection slot/generation, session, optional runtime-scene
+  instance, host-issued ephemeral player pseudonym, and owner-clock tick. The
+  pseudonym issuer never accepts an account/player identifier. Ordinary payloads,
+  private backend text, credentials, addresses, and authenticated principals are
+  absent from the log record type and telemetry projection. The adapter submits an
+  empty diagnostic context instead of inheriting potentially sensitive ambient
+  thread-local context. Network feature code does
+  not initialize the process logger or choose a persistence backend.
+- Peer-controlled failures have a fixed per-kind, per-window first-occurrence
+  allowance (1..8) and one aggregate suppression record at window retirement or
+  terminalization. The aggregate retains only a saturating count and latest tick.
+  Stream state is fixed-size; disabled instrumentation needs no sink and cannot
+  call one even when provided.
+  Exact connection/session generations and monotonic ticks fence late callbacks;
+  replacement requires the next connection generation after terminal publication.
+  Hosts must bound admitted streams with their connection capacity. A saturating
+  generation-scoped sink-failure count preserves evidence when an export throws,
+  resets on connection replacement, and never changes the network result. This
+  additive `NetworkRuntime` public
+  header has no migration requirement for existing callers; hosts opt in by
+  composing the stream at their connection owner boundary.
 
 - **Counters**: `net.bytes_sent`, `net.bytes_received`, `net.packets_lost`, `net.packets_dropped`.
 - **Gauges**: `net.active_connections`, `net.inbound_queue_depth`, `net.outbound_queue_depth`, `net.rtt_ms`.
+- `net.rtt_ms` uses the appended `MetricUnit::Milliseconds` descriptor, exported as
+  OTLP unit `ms`. Existing metric-unit numeric identities are unchanged; hosts
+  using typed descriptors need no migration.
 - **Tracing**: Transport connection events and session handshakes log to the `LogCategory::Network` category. Payloads are scrubbed of sensitive data by default.
+
+The host may compose `NetworkMetrics` with the selected transport, I/O service,
+peer-session lifecycle, and replication-world lifecycle. A metrics owner outlives
+those services and shuts them down before closing or destroying the collector.
+Only the owning network thread records measurements. I/O producers retain a
+separate shared admission flag, not the collector, so a late completion cannot
+access a retired metric owner. Closing the collector disables producer-side
+capacity-drop accounting immediately. The host calls `Publish` at a network
+safe point; `Snapshot` returns the last coherent fixed-size value to editor,
+headless, or other readers without touching in-flight network state. Process
+composition alone registers telemetry descriptors and passes pre-bound handles
+to `NetworkMetricPublisher`; no network component chooses an exporter.
+
+Transport-category outbound counts are admitted send requests; inbound counts
+are delivered normalized transport events. The deterministic transport counts
+each emitted fragment as a received event and its actual emitted bytes; seeded
+loss does not fabricate receive traffic.
+Additional closed control/replication/RPC categories are semantic observations,
+not partitions of those wire totals. Replication mapping counters count only
+successful register/retire operations, not unimplemented wire spawns or updates.
+`net.packets_lost` is qualified by `lossAvailable`: a backend without an actual
+loss counter does not turn absence of evidence into zero loss. RTT is the mean
+of owner-observed finite connection samples in one publication window and is
+unavailable when that window contains none. Queue and connection gauges are
+owner-safe-point values. Every series name and category is compiled from a
+closed vocabulary; peer handles, addresses, protocol IDs, message IDs, payloads,
+and native diagnostics never become metric dimensions. Saturation clamps
+counters and marks the snapshot; instrumentation failure never affects network
+admission, send, terminal state, or replication authority.
+The new observer parameters on existing network factories default to null;
+existing callers keep their behavior and need no migration. Hosts opting in
+must enforce the documented owner and shutdown order.
 
 ## Testing and Verification Strategy
 
@@ -729,5 +1020,5 @@ The networking subsystem requires targeted automated verification:
 - [Multiplayer Replication Architecture](./multiplayer-replication-architecture.md)
 - [Runtime Lifecycle](./runtime-lifecycle.md)
 - [Concurrency And Job System](../foundation/concurrency-and-jobs.md)
-- [Network Debugger UI Reference](./network-debugger.html)
+- [Network Debugger UI Reference](../../../mock-studio/designs.md#architecture-runtime-network-debugger)
 - [Application Security Architecture](../security/application-security.md)

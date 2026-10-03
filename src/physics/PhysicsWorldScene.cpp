@@ -42,9 +42,18 @@ namespace Horo::Physics {
             return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
         if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
             return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::InvalidState));
-        if (const Result<void> valid = ValidatePhysicsBodyDescriptor(descriptor.body, impl_->identity); valid.HasError())
+        if (const Result<void> valid = ValidatePhysicsBodyDescriptor(descriptor.body, impl_->identity); valid.HasError()) {
+            impl_->RecordAdmissionDiagnostic(valid.ErrorValue(), descriptor.sceneEntity);
             return Result<BodyHandle>::Failure(valid.ErrorValue());
-        return Detail::CreateCanonicalSceneBody(impl_->native, impl_->identity, descriptor);
+        }
+        if (const auto capacity = impl_->CheckPublicationRevisionCapacity(); capacity.HasError())
+            return Result<BodyHandle>::Failure(capacity.ErrorValue());
+        auto created = Detail::CreateCanonicalSceneBody(impl_->native, impl_->identity, descriptor);
+        if (created.HasValue()) {
+            Detail::SetCanonicalSceneEntity(impl_->native, created.Value(), descriptor.sceneEntity);
+            impl_->InvalidateQueryEventPublication();
+        }
+        return created;
     }
 
     /** @copydoc PhysicsWorld::CreateSceneConstraint */
@@ -76,5 +85,29 @@ namespace Horo::Physics {
         if (const Result<void> valid = ValidatePhysicsHandleOwner(constraint, impl_->identity); valid.HasError())
             return valid;
         return Detail::DestroyCanonicalSceneConstraint(impl_->native, constraint);
+    }
+
+    /** @copydoc PhysicsWorld::ReadSceneActivation */
+    Result<PhysicsActivationObservation> PhysicsWorld::ReadSceneActivation() const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->runtime->state != PhysicsRuntimeState::Ready || impl_->stepping)
+            return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::InvalidState));
+        return Detail::ReadCanonicalSceneActivation(impl_->native, impl_->identity);
+    }
+
+    /** @copydoc PhysicsWorld::ReadSceneJointState */
+    Result<PhysicsJointState> PhysicsWorld::ReadSceneJointState(const ConstraintHandle constraint) const {
+        if (impl_->runtime->ownerThread != std::this_thread::get_id())
+            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
+        if (impl_->state == PhysicsWorldState::ActiveNull)
+            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl_->state != PhysicsWorldState::ActiveSolver || impl_->stepping)
+            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (const Result<void> valid = ValidatePhysicsHandleOwner(constraint, impl_->identity); valid.HasError())
+            return Result<PhysicsJointState>::Failure(valid.ErrorValue());
+        return Detail::ReadCanonicalSceneJointState(impl_->native, constraint);
     }
 }  // namespace Horo::Physics

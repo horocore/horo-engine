@@ -12,12 +12,15 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Horo {
     /**
      * @file Platform.h
      * @brief Narrow operating-system service contracts selected by a host composition root.
      */
+
+    class NativeExternalProcessRunner;
 
     /** @brief Reports availability of optional platform facilities for a composed host. */
     struct PlatformCapabilities {
@@ -57,6 +60,31 @@ namespace Horo {
         std::unique_ptr<State> state_;
     };
 
+    /** @brief Move-only shared product-launch or exclusive maintenance lease for one installation. */
+    class ProductLaunchLease {
+    public:
+        struct State;
+
+        ProductLaunchLease() noexcept;
+        ProductLaunchLease(const ProductLaunchLease &) = delete;
+        ProductLaunchLease &operator=(const ProductLaunchLease &) = delete;
+        ProductLaunchLease(ProductLaunchLease &&) noexcept;
+        ProductLaunchLease &operator=(ProductLaunchLease &&) noexcept;
+        ~ProductLaunchLease();
+
+        /** @brief Reports whether this object currently holds the native lease. */
+        [[nodiscard]] explicit operator bool() const noexcept;
+
+    private:
+        friend class NativeDurableFileSystem;
+        friend class NativeExternalProcessRunner;
+        explicit ProductLaunchLease(std::unique_ptr<State> state) noexcept;
+        [[nodiscard]] bool IsMaintenance() const noexcept;
+        [[nodiscard]] std::uintptr_t NativeHandle() const noexcept;
+        [[nodiscard]] static ProductLaunchLease AdoptMaintenanceNative(std::uintptr_t native);
+        std::unique_ptr<State> state_;
+    };
+
     /** @brief Cross-platform durable filesystem primitives for user-data transactions. */
     class DurableFileSystem {
     public:
@@ -91,12 +119,35 @@ namespace Horo {
     public:
         [[nodiscard]] Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path,
                                                                     std::string_view ownerMetadata) override;
+        /** @brief Holds a shared launch lease until the product process exits; fails while maintenance is active. */
+        [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductLaunch(const std::filesystem::path &installationRoot) const;
+        /** @brief Holds an exclusive maintenance gate; fails while any product launch lease is active. */
+        [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductMaintenance(const std::filesystem::path &installationRoot) const;
+        /**
+         * @brief Adopts an OS-inherited exclusive lease only after matching its native file identity to this installation.
+         * @param installationRoot Exact absolute installation root selected by the trusted product host.
+         * @return Owned lease or an I/O failure when the inherited capability is absent, malformed, or for another installation.
+         */
+        [[nodiscard]] Result<ProductLaunchLease> AdoptInheritedProductMaintenance(const std::filesystem::path &installationRoot) const;
         [[nodiscard]] Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override;
         [[nodiscard]] Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override;
+        /**
+         * @brief Creates a new private file at offset zero or appends to one regular, single-link file at an exact offset.
+         * @param path Host-owned private file path; parent directory already exists and is protected from concurrent mutation.
+         * @param expectedOffset Required current file length; zero requires the file to be absent.
+         * @param bytes Nonempty bytes to append and flush durably.
+         * @return Success after file and directory durability, or typed I/O failure without publishing a checkpoint.
+         */
+        [[nodiscard]] Result<void> AppendPrivateDurable(const std::filesystem::path &path, std::uint64_t expectedOffset,
+                                                        std::span<const std::byte> bytes);
         [[nodiscard]] Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override;
         [[nodiscard]] Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override;
         [[nodiscard]] Result<void> RemoveDurable(const std::filesystem::path &path) override;
         [[nodiscard]] Result<void> SyncDirectory(const std::filesystem::path &path) override;
+
+    private:
+        [[nodiscard]] Result<ProductLaunchLease> TryAcquireProductLease(const std::filesystem::path &installationRoot,
+                                                                        bool maintenance) const;
     };
 
     /** @brief Provides monotonic time for scheduling without exposing wall-clock time. */
@@ -170,7 +221,17 @@ namespace Horo {
     };
 
     class CredentialStore;
-    class NativeDialogs;
+
+    /** @brief Optional host-owned native file picker; calls run synchronously on the UI thread. */
+    class NativeDialogs {
+    public:
+        virtual ~NativeDialogs() = default;
+
+        /** @brief Opens a multi-file picker. @param title Localized window title. @return Selected native paths, empty on cancellation. */
+        [[nodiscard]] virtual std::vector<std::filesystem::path> ChooseOpenFiles(std::string_view title) = 0;
+        /** @brief Opens a folder picker. @param title Localized window title. @return Selected native path, or none on cancellation. */
+        [[nodiscard]] virtual std::optional<std::filesystem::path> ChooseFolder(std::string_view title) = 0;
+    };
     class CrashService;
 
     /** @brief Explicitly composed baseline and optional platform services for one host lifetime. */

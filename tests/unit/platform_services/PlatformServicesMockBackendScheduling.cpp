@@ -302,8 +302,9 @@ namespace Horo::PlatformServices::TestSupport {
         return impl_->Submit<CloudReadResult>(MockPlatformServicesOperation::ReadCloudObject);
     }
 
-    Result<PlatformRequestHandle<void>> MockPlatformServicesBackend::WriteCloudObject(CloudWriteRequest request) {
-        return impl_->Submit<void>(MockPlatformServicesOperation::WriteCloudObject, request.bytes.size() <= MaximumPayloadBytes);
+    Result<PlatformRequestHandle<CloudMutationResult>> MockPlatformServicesBackend::WriteCloudObject(CloudBlobWriteRequest request) {
+        return impl_->Submit<CloudMutationResult>(MockPlatformServicesOperation::WriteCloudObject,
+                                                  request.bytes.Bytes().size() <= MaximumPayloadBytes);
     }
 
     Result<PlatformRequestHandle<void>> MockPlatformServicesBackend::SetPresence(PresenceUpdateRequest request) {

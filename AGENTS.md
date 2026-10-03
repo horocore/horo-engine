@@ -264,30 +264,50 @@ actually configured and run.
 
 ## Sonar Validation
 
-After modifying C/C++ source or header files, use the SonarQube CLI as the single
-local-analysis path. Follow `.github/instructions/sonarqube_mcp.instructions.md`
-for the repository policy and use the setup/troubleshooting guidance in
-[Local analysis with the SonarQube CLI](docs/guides/sonarqube-mcp-local-analysis.md).
+Before opening or preparing any pull request, automatically apply
+`.codex/skills/quality-preflight/SKILL.md`; the user need not request it separately.
+Run the full Sonar IDE, CLI secrets and Codacy preflight on the actual PR worktree
+against its target branch, even when only non-C/C++ files changed. Run after the
+final edits and repeat the same scope after fixes. An earlier report with changed
+inputs cannot satisfy this step. Record the command, findings, incomplete checks
+and report path in the PR validation summary. Resolve newly introduced findings
+within the authorized scope; preserve contextual findings rather than treating
+them as proven pre-existing. An exit `2` or stale report leaves this required
+validation incomplete; resolve or explicitly report the blocker before opening
+the PR. This rule does not grant commit, push or PR creation permission.
 
-- Run `sonar analyze --format json --depth STANDARD` from the worktree being
-  reviewed, passing the resolved project key with `--project` when discovery is
-  not configured locally.
-- The default change set includes staged, unstaged, and untracked files. Use
-  `--staged`, `--base`, or `--file` only when that narrower scope is intentional.
-- Report secrets and Agentic/Vortex results separately, including skipped files,
-  failures, and any `globalError`. An empty issue list is not clean when files
-  were skipped or analysis was forbidden.
-- Exclude deleted files, generated output, and `deprecated/` unless explicitly
-  in scope; verify that the CLI result contains the intended C/C++ files.
-- Report findings by severity with the rule, location, and reason. Fix newly
-  introduced issues when safe and within scope. Request approval before a Sonar
-  fix changes existing behavior unless that behavior change is already authorized.
-- Re-run the same CLI command after an authorized fix and report remaining
-  findings. Local results do not resolve server issues or replace the CI gate.
-- Do not use the VS Code SonarQube for IDE bridge, SonarQube MCP IDE tools, or
-  `sonar-scanner` as a substitute for this local workflow. If authentication,
-  project access, or Vortex entitlement is unavailable, report the exact failure
-  and do not claim a clean Sonar result.
+After modifying C/C++ files, run the worktree-aware local preflight:
+
+```bash
+python3 scripts/quality_preflight.py check --base <PR-target-ref>
+```
+
+Use `--dirty` for only staged, unstaged and untracked edits. The base scope also
+includes uncommitted edits. The managed Sonar IDE bridge is the supported local
+C/C++ path. Vortex analysis and entitlement probes are outside this workflow.
+It requires Linux, a display, VS Code,
+SonarQube for IDE and connected-mode authentication. The helper owns isolated
+profiles, verifies listener process identity and C++ sensor execution, and keeps
+new analysis builds/reports outside the source tree (a verified existing
+worktree build may be reused). Do not use unverified explicit ports,
+IDE Model Context Protocol (MCP) calls, or `sonar-scanner` as substitutions.
+
+- Follow `.github/instructions/sonarqube_mcp.instructions.md` and
+  [the local-analysis guide](docs/guides/sonarqube-mcp-local-analysis.md).
+- Report Sonar IDE, CLI secrets and Codacy results separately. Use
+  `doctor` to check local prerequisites and Codacy cloud configuration drift.
+- Verify submitted files, C++ execution evidence, skipped files, errors and
+  freshness. Exit `2` means incomplete; an empty issue list alone is insufficient.
+- Keep all findings on changed files; changed-line overlap is presentation
+  context, not proof that other findings predate the change. Report severity,
+  rule, file, line and reason. Raw cyclomatic complexity (CCN) and copy-paste detection (CPD) metrics
+  are advisory estimates.
+- Exclude generated output and `deprecated/` unless explicitly in scope. Fix
+  newly introduced findings when safe and authorized; behavior-changing fixes
+  still require authorization unless already covered by the task.
+- Rerun the same scope after fixes. Local results do not resolve server issues
+  or replace CI quality gates. Do not upload source/results or change rules,
+  cloud configuration, issue status or Git history as part of this check.
 
 ## Review Mindset
 

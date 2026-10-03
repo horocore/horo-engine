@@ -503,6 +503,22 @@ baseline contains no source path, cache key, native format, decoder pointer or l
 audio handle; import, codec selection, cooking and runtime streaming remain separate
 responsibilities.
 
+The initial `HoroAudioCook` contribution consumes the bounded WAV/Ogg importer
+through an invocation-scoped AST source view and emits a versioned PCM binary32
+payload with an exact-target compatibility manifest. Its resolved profile records
+container/codec, exact binary32 quality, sample rate, semantic layout, compression, resident/stream threshold,
+stream chunk size, encoder delay/padding and target-override provenance. The
+built-in encoder currently supports uncompressed PCM at the decoded source rate
+and layout; requests for another codec, compression or unavailable rate/layout
+conversion fail planning with a typed error rather than silently falling back.
+PCM output has zero encoder delay/padding. The manifest preserves effective
+settings and target-override provenance alongside source container/codec,
+decoder, toolchain and configuration digests. A streamed choice yields bounded
+seekable PCM chunks inside the logical AST payload; it does not create a second
+Audio cache or publication authority. AST owns generic artifact staging and
+publication, while the Audio strategy validates its manifest on both fresh cooks
+and exact cache hits.
+
 ### Loudness And Metering Metadata
 
 Cooked audio assets carry loudness metadata for mixing, normalization, and
@@ -520,6 +536,30 @@ platform compliance:
 The mixer may use this data to auto-level sources or to report loudness to
 platform certification tooling. Loudness values are computed during import/cook,
 not on the real-time path.
+
+The Audio import worker derives a bounded multiresolution min/max waveform,
+unweighted RMS, sample peak, and EBU R128/ITU-R BS.1770 gated integrated and
+terminal-three-second loudness and true peak from the decoded source blocks.
+Unavailable measurements (for example, integrated loudness of silence or a
+short-term window on a clip under three seconds) stay absent; they are not
+manufactured from RMS or sample peak. Normalization gain targets -23 LUFS only
+when integrated loudness is available. The pinned analysis implementation is a
+private AudioImport dependency, never a public or callback dependency.
+
+Cook schema v2 embeds the analysis result alongside the PCM payload in one AST
+artifact. The analysis has its own version and digest; cooked inspection validates
+the bounded waveform pyramid and finite measurements before exposing it to editor
+or runtime callers. Inspection receives only cooked bytes and never opens or
+re-decodes the source. Resident PCM, import decode-block, and waveform storage
+estimates are derived from admitted counts, not observed allocator usage. Existing
+schema v1 artifacts require an ordinary AST recook; there is no parallel Audio
+metadata cache or source-of-truth sidecar.
+
+The importer result now groups its former flat `waveform`, `loudness`, and
+`samplePeak` members under `analysis`, including the waveform pyramid and byte
+estimates. The only in-tree consumer of that result is the Audio cooker; it was
+migrated with the schema change. Downstream source import clients must read the
+new grouped value rather than maintain parallel flat metadata fields.
 
 ### Decoder Plugin Interface
 
@@ -696,6 +736,62 @@ fader taps into compiled storage; a destination clears its own accumulator, then
 pulls completed source taps in canonical route order. Sources never push into a
 destination accumulator, so destination clearing cannot erase upstream signal.
 
+`HoroEngine::AudioMixer` owns `Audio/MixerGraphCompiler.h` and the private
+compiler/executor. It consumes the existing MixerAsset, AudioDsp and AudioCommands
+contracts; there is no backend or core-node implementation dependency. Compilation
+copies all retained metadata, uses stable-ID Kahn order and sorted incoming route
+tables, and reserves disjoint pre-fader, post-fader and insert-work planes. DSP
+state is per insert; scratch is reused only across sequential inserts. Profile
+limits bound schema sizes, frames, voice count, fan-in/out, aligned backing storage,
+scratch and declared callback work before preparation succeeds.
+
+The initial capability admits matching semantic layouts, one main input/output
+per insert, and zero declared latency. Conversion, sidechain/auxiliary/control
+dependencies and latency compensation fail explicitly until their owning contracts
+exist. An explicit control-only factory translates persisted effects into owned
+prepared `IAudioDSPNode` strategies and declares bounded operations per frame;
+returned nodes retain their provider/code leases. A missing factory never silently
+skips an authored effect. Bounded insert history survives ordinary blocks; graph
+replacement and shutdown explicitly cancel that generation's tails, with no
+implicit overlap, migration or compensation. Pause suppresses direct voice input
+but preserves routing; the voice owner remains responsible for paused clocks.
+
+`MixerGraphRuntime` retains at most one active and one pending plan, with a combined
+backing-byte budget. The control owner submits the existing `AudioSwapGraphCommand`
+through scene-gated `AudioCommandStaging`. The host dispatcher passes its consumed
+graph record to `Render` at the beginning of a whole processing block and dispatches
+all other command kinds to their own executors. Queue consumption is not execution
+proof. Runtime/epoch/context, pinned revisions, monotonic generation, exact storage
+handle and accepted sequence must match. Rejected, stale or saturated publication
+retains caller ownership and leaves the active generation intact. The callback
+never looks up a registry or rebuilds topology. Direct voice inputs use already
+resolved bus indices and exact graph generations in stable voice-slot order;
+Return buses reject direct voices. The host retains and validates voice resources.
+
+A lock-free sequentially consistent pending-plan mailbox publishes only fully
+prepared storage. The callback performs at most three atomic operations per block
+boundary, with no atomic operation in the sample loops; stronger ordering keeps
+publication and completed-block reclamation in one total order.
+The callback publishes a sequence acknowledgement after all sample/node accesses
+in the block end. Control `Reconcile` can then destroy the replaced generation.
+Future stale commands cannot obtain a retired slot pointer from that mailbox.
+Rendering faults produce complete admitted silence, reset insert history and
+retain the active ownership island for control recovery. `Close` rejects new
+publication and requests callback quiescence; active and queued plan ownership
+remains retained until the owning host validates exact-epoch native stop/join,
+including completion of every in-flight reader and impossible future entry, and
+passes that proof to `CompleteShutdown`. A final graph-local silent callback is
+unnecessary after this proof; parent lifecycle matching quiescence and detachment
+remain mandatory at their owning boundary. `Close`, queue consumption, silence,
+or timeout alone never authorize release. Partial startup follows the same
+explicit detached cleanup. Runtime destruction itself requires stopped/joined
+callback and reconciled transport work; no destructor joins a device.
+
+Contract fixtures use absolute sample tolerance `2e-6` for analytical gain/send
+signals and verify canonical order, immutable tap retention, failed preparation,
+saturated retry, stale handles/voices, fault silence and guarded lease retirement.
+General allocation and deallocation counters cover the actual render call.
+
 [ADR-066](../../adr/066-spatial-provider-and-required-capability.md) is the single
 normative owner of spatial provider identity, typed capabilities, profile
 resolution, activation preflight, fallback, runtime failure, and observability.
@@ -796,6 +892,32 @@ on the real-time path and must not allocate, block, log, access files, or invoke
 unbounded user callbacks. Nodes that do not declare this contract at graph
 build time are rejected by the mixer graph validator.
 
+`HoroEngine::AudioDsp` now supplies `Audio/CoreAudioDSPNode.h` on the prepared
+`AudioDSPNode.h` contract: gain, mono/stereo pan, and matched-exponential first-order
+low/high-pass filters. Gain and filters preserve all admitted speaker, discrete,
+and canonical Ambisonic layouts. Pan explicitly accepts Mono/Stereo speaker inputs
+and emits Stereo; it performs equal-power mono pan or stereo balance with unity
+center, without inventing multichannel/spatial routing.
+
+Construction owns immutable descriptors on control; preparation binds the declared
+bounded aligned host state and selected frame bound. Process/Reset allocate no
+storage and never retain block/parameter views. Parameter snapshots carry explicit
+linear segments in descriptor order: the first sample advances one ramp step,
+zero ramp uses the target immediately, and control supplies the next segment's
+start and remaining duration. Filter history survives blocks; reset clears it;
+copy/silence bypass freezes it. Exact corresponding-plane in-place processing is
+admitted, while partial/cross-plane aliases fail before mutation. Nonfinite input
+or output faults clear output/history; finite internal headroom is preserved.
+
+The one-pole coefficient is `exp(-2*pi*cutoff/sampleRate)`; high-pass is the input
+minus the matched low-pass. Cutoff admission is 1 Hz through 0.45 times sample
+rate. Filters declare a conservative 32-time-constant tail at the minimum cutoff;
+the node reports the remaining budget and clears exhausted history, while the
+graph owns explicit silent input and tail scheduling. Numerical fixtures use
+absolute sample tolerance 2e-6 and steady-state frequency-response tolerance 2e-4.
+These baseline primitives do not install a mixer, schedule automation, or deliver
+extension/procedural graph execution.
+
 Graph validation runs whenever a mixer graph is built or modified:
 
 - in the editor when a bus graph or effect chain is authored
@@ -893,6 +1015,83 @@ a project needs broadcast-style auto-ducking.
 
 ## Voice Model
 
+### AUD-003.3 resident playback controls
+
+`HoroEngine::AudioPlayback` owns `AudioVoicePlayback`, the resident PCM execution
+path over the canonical `AudioVoiceStateMachine` and `AudioResampler`. Control
+copies admitted decoded planar PCM into owned storage, reserves DSP/history and
+coefficient banks, and acquires one canonical voice handle in Ready state. It
+then transfers the registry and playback owners together to the exclusive render
+lane at a quiescent boundary. This introduces no concurrent registry access:
+callback validation/transitions use fixed static error descriptors, while general
+`Result` diagnostics, admission, release, moves and destruction stay on detached
+control. The callback produces voice-state facts; control still owns runtime,
+device, scene and operation reconciliation under ADR-062.
+
+`AudioVoiceControlRequest` is an AudioApi-owned value carried by the ordinary
+AudioCommands staging/SPSC/scheduled-batch path. Stop and Cancel reserve critical
+capacity; controls never coalesce or bypass FIFO order. A render-core composition
+validates the published epoch/context, resolves the retained playback owner, and
+calls Apply at the admitted sample/buffer boundary. The existing start/stop values
+remain valid and map to the corresponding typed operation. Controls do not select
+a device, find an asset, or call a scene. Null and interactive backends use the
+same retained render-port composition; the Null integration test executes actual
+PCM and controls through the production SPSC buffer.
+
+| Control | Preconditions and committed behavior |
+|---|---|
+| Start | Ready only; passes Scheduled to Playing at the admitted boundary, retaining the current cursor. Terminal voices require a new generation. |
+| Pause | Playing only; fades the held last output to zero, then enters Paused. Cursor, resampler fraction, look-ahead and history remain frozen. |
+| Resume | Paused only; returns Playing and fades new PCM from zero, preserving fractional position/history. |
+| Stop | Ready, Playing or Paused; enters Stopping and then Stopped, discarding DSP tail. Overrides a pending discontinuity using the current held amplitude. |
+| Seek | Ready, Playing or Paused; source integer frame in `[0, sourceFrames]`, or strictly below enabled loop end. After fade-out, commits the target and resets history, look-ahead, end marker and fractional phase. |
+| SetLoop | Same states; disabled intervals have zero endpoints, enabled intervals satisfy `begin < end <= sourceFrames`. After fade-out, resets DSP; a cursor at/after the new end moves to begin. |
+| Pitch | A fresh ClipToMix resampler is prepared off-callback with the same input/output rates, channels, quality and block bound. At the boundary SwapPitch exchanges retained banks without freeing, then performs the seek-style reset at the integer cursor. Control retires the old bank after acknowledgement/detachment. |
+| Playback speed | Unity is a no-op in a controllable state. Every other value, including non-finite/negative/zero, returns `audio.operation.unsupported`: no time-stretch provider is implemented or implicitly substituted. |
+| Cancel | Any nonterminal voice; publishes Cancelled immediately, suppresses queued ramps and retains memory until detached control reclamation. |
+
+Every ramp has an explicit positive output-frame length of at most 16,384 frames.
+Start/resume and post-reset fade-in use gains `1/N ... 1`. Discontinuity fade-out
+holds the last actual output sample with gains `(N-1)/N ... 0`; it does not consume
+old PCM or advance time. Seek/loop targets commit only at the zero sample. Pitch
+exchanges its prepared converter immediately but processes no new PCM until that
+zero boundary. Ready/Paused resets commit immediately because they emit silence.
+Other controls during a pending fade fail transactionally except Stop/Cancel.
+Zero-length render calls advance neither ramps nor PCM. Malformed buffers leave
+output and state untouched; inactive/paused/terminal output is positive-zero
+silence. Rejected handles and controls allocate nothing and change no state.
+
+The audible cursor separates a bounded integer source frame and `[0,1)` fraction
+from decoder/resampler look-ahead consumption. Each emitted PCM frame advances by
+the admitted input/output-rate ratio times pitch. Loop intervals are exclusive at
+end, permit an intro before begin, and wrap modulo interval length, including
+multiple wraps at high pitch. The resampler receives continuously wrapped PCM
+without an end marker or history reset. Discontinuous seek/loop/pitch resets
+discard fractional phase intentionally. Non-looping EOF clamps the audible cursor
+at sourceFrames while the existing resampler drains its bounded finite tail; only
+then does the canonical voice become Finished. Empty/end-seek voices finish without
+PCM. Render exposes a terminal fact once; the registry retains its exact disposition
+until detached control reconciles and releases it. Shutdown/cancellation already
+committed in the registry is observed without generating a second terminal state.
+
+Preparation admits copied PCM plus fixed owner/scratch bytes separately from the
+resampler's history/work and coefficient reservations. Render is bounded by the
+plan's channels, taps and output limit: one output frame uses at most
+`taps/2 + 66` demand-driven one-frame resampler calls, with prealigned source/output
+scratch. There are no allocations, frees, locks, callback waits, I/O or ordinary
+logs. This conservative scalar composition has no measured aggregate deadline
+qualification; hosts must budget its buffer validation, feed and ramp costs in
+addition to sample products before admitting a device voice workload. It does not
+implement streaming fills/underruns, mixer routing, spatialization, virtualization
+or an application audio service; those retain their declared owning tickets.
+
+This is an additive execution contract. Existing registry callers keep their
+control-only APIs; hosts opting into playback link AudioPlayback and keep its
+borrowed canonical registry alive through detachment and terminal reconciliation.
+The new AudioCommandPayload alternative requires exhaustive visitors to handle
+AudioVoiceControlRequest; in-tree normalization covers it. The generated Api,
+Dsp, Commands and Playback public-header consumers enforce each staged boundary.
+
 A voice represents one active playback instance with:
 
 - clip, stream, or prepared sound-generator handle
@@ -909,6 +1108,48 @@ configured reject, replace, or virtualize policy deterministically.
 Voice priority and virtualization are core features. A low-priority distant SFX
 may be virtualized or rejected before a high-priority UI or voice line. Policy
 decisions are observable through metrics.
+
+### Scoped concurrency eligibility
+
+`AudioConcurrencyGroup` in `HoroAudioApi` owns the authored group identity,
+global/emitter/owner scope, instance ceiling and sample-frame retrigger window.
+Zero ceiling is unlimited; zero window disables cooldown. Group scope is shared
+by every source using that group. `AudioConcurrencyPolicy` on a sound remains
+its source-local admission action/ceiling; the admission layer must evaluate all
+applicable constraints rather than silently override an authored group.
+
+`MakeAudioConcurrencyKey` partitions buckets by runtime generation and, for
+scoped groups, the complete generation-safe emitter or playback-owner handle.
+Unused dimensions are canonicalized away. Names, addresses and scene entity
+indices are not identities. The Audio control owner assigns these handles and
+owns the group registry and bucket projections; no native backend participates.
+
+`EvaluateAudioConcurrency` is a linear, read-only eligibility primitive with no
+allocation for valid inputs. Typed malformed-input errors are control-thread work. The control owner supplies the complete bucket as unique voice
+snapshots in strictly increasing handle order, bounded by `MaximumAudioVoiceSlots`.
+Created, Ready, Scheduled, Playing and Stopping reserve an instance. Paused and
+Virtual count by default and can each be excluded explicitly. Terminal voices
+never count, even before slot release. Invalid states, terminal reasons, duplicate
+or unsorted records, foreign runtimes and wrong buckets fail with typed errors.
+The registry remains authoritative for handle liveness; callers must refresh the
+projection after transitions and cannot reuse an old snapshot for a new admission.
+
+Cooldown measures elapsed sample frames since the last **successful** admission
+in the exact bucket, including after that voice finishes. Boundary equality is
+eligible; checked subtraction avoids timestamp overflow. A non-reused timeline
+token changes whenever the underlying sample clock resets or becomes discontinuous.
+Mismatched tokens and future history fail explicitly. Paused sample time does not
+advance cooldown. Runtime, emitter and owner retirement discard their buckets;
+shutdown stops admission before projections are released.
+
+The control owner serializes evaluation, voice admission and projection updates.
+It records a successful reservation and its sample time before evaluating the
+next request; rejection or failed reservation never moves the retrigger window.
+Identical projections, sample times and request order therefore yield identical
+eligibility. Instance-limit and cooldown evidence are both retained, with the
+instance-limit reason taking precedence. This contract does not choose a stealing
+victim, change voice state, or implement one-shot variation; those are admission
+and playback policy responsibilities.
 
 ## 2D And 3D Playback
 
@@ -961,6 +1202,27 @@ public:
 The interface is an internal semantic sketch. Package providers use their typed
 ADR-069 acoustic capability and may not expose Physics/native types through Audio.
 
+`AudioAcousticQuery.h` is the implemented AUD-006.1 **control-side contract**,
+not an implementation of the sketch's virtual callback. The host first admits a
+versioned, bounded capability declaration, binds generation-safe source handles,
+and prepares one typed query per source at a permitted control-update cadence.
+It dispatches queries to a selected provider only during scene extraction or a
+non-real-time audio update, never from `RenderPort` or an audio callback. Provider
+results carry the exact query, provider generation, source and listener identity,
+feature, and a terminal value or typed failure. The fixed-capacity ledger rejects
+malformed, late, duplicate, retired-source, reused-slot, and superseded-provider
+results before any numeric value can be staged as an ordinary bounded audio
+command. It retains the highest retired source generation; no same-generation
+rebinding is allowed. The result's smoothing hint comes from the admitted query,
+not from untrusted provider output. The ledger is single-control-owner state and
+has no provider function pointer, callback access, Physics dependency, or native
+API types.
+
+This is an additive Audio API contract with no existing caller migration. Actual
+physics-backed raycasts, zone extraction, deadline/fallback policy, provider
+selection, and host-to-runtime command composition remain later AUD-006 work;
+admitting a provider or query here does not claim those capabilities are active.
+
 The 1.0 baseline ships a null/reference provider plus a qualified basic physics-
 backed raycast provider. It may raycast outside the real-time callback, then feed
 the result back at most one game frame later as ramped gain, filter, or send
@@ -988,6 +1250,60 @@ SetBusGain(Music, -6 dB, fade = 250 ms)
 SetVoicePitch(voice, 0.8, fade = 100 ms)
 SetLowPassCutoff(SFX, 1200 Hz, fade = 500 ms)
 ```
+
+### AUD-004.8 bounded parameter automation
+
+`HoroEngine::AudioCommands` owns the additive `AudioParameterAutomation.h`
+contract. Control prepares up to 64 immutable parameter bindings and seals the
+engine before transferring exclusive ownership to the callback. Addresses retain
+stable parameter, bus/route/effect identities, the exact runtime, voice handle
+where applicable, and a non-reused binding generation. The host validates actual
+voice/graph liveness and retains physical bindings through callback detachment;
+structural normalization does not establish liveness. No callback registry,
+string lookup, dynamic allocation, lock, or application callback is introduced.
+
+Producers submit `AudioAutomateParameterCommand` and
+`AudioCancelAutomationCommand` through the existing staging/SPSC FIFO and retained
+scheduled-batch path. Automation commands are never coalesced. After normal
+consumption, the host dispatches `Apply`; it must retain or explicitly reconcile
+rejected work rather than silently dropping it. `ApplyBatch` provides bounded
+all-or-nothing admission for automation-only batches at their exact dispatched
+boundary. It rejects mixed host-owned payloads without mutation: aggregate mixed
+batch admission remains the host's responsibility. Batch transactions use one
+fixed engine-sized stack copy, not heap storage. Ordinary queue and engine
+capacity rejection preserve request IDs and all previously accepted state.
+
+Sample targets use the shipping sample-clock mapping, exact epoch, clock and
+discontinuity generations. Late work is rejected. The host advances the engine
+at each rendered sample and copies the corresponding value into its prepared
+voice, bus, send or DSP binding; sampling once per block is insufficient for the
+continuity contract. Block partition does not change interpolation. Pause rejects
+advancement without consuming queued work. Discontinuity, graph/voice replacement
+or reset requires closing/detaching the old engine and preparing new bindings;
+old addresses never rebind by stable-ID coincidence.
+
+Each parameter supplies finite model-unit range, initial value, minimum smoothing
+frames and a positive maximum per-sample delta. Linear and monotone cubic
+smoothstep curves have exact endpoints. Durations conservatively bound the entire
+admitted range divided by the delta (smoothstep multiplies by 1.5 for its maximum
+derivative), including unknown future overlap anchors. Too-short explicit ramps
+are rejected. Immediate intent starts at the earliest admitted boundary and uses
+mandatory linear smoothing with the same range-derived duration; it never means
+an uncontrolled value jump. Floating-point quantization remains bounded by the
+model range's binary32 rounding error; the numeric delta is not a universal
+perceptual audibility threshold. Model owners choose limits appropriate to gain,
+pitch, cutoff or other units.
+
+Up to 128 queued requests execute by start frame, then increasing admitted request
+ID for equal frames. IDs strictly increase within one engine, including cancelled
+requests. A new overlap replaces the older trajectory from its evaluated value at
+the exact start sample, preserving continuity and reaching the latest target.
+Cancellation removes one pending request or holds the active request at the last
+advanced sample; later requests remain queued. Cancellation of a completed or
+replaced request is explicitly `NotFound`. Matching unload/reset barriers close
+admission and discard automation; control still owns transport draining, callback
+detachment and resource reclamation. Existing last-value voice snapshots retain
+their contract; hosts opt into this new explicit automation path.
 
 The core supports simple audio snapshots as named mixer-state presets:
 
@@ -1321,6 +1637,19 @@ an optional Post-1.0 extension.
 
 Streaming uses worker or I/O jobs to fill preallocated ring buffers. The audio
 callback consumes available frames without waiting.
+
+`Horo/Audio/AudioStreamDecoder.h` is the worker-side runtime decode session
+contract, distinct from source import decoding. A host first validates the cooked
+media generation and prepares an exact codec, ADR-063 format, frame count, block
+limit, and scratch budget. It then supplies a provider whose context is owned by
+the accepted session. One worker serializes bounded `Decode` and `Seek` calls into
+caller-owned interleaved output and scratch spans; control may request cooperative
+cancellation concurrently. Provider failure or inconsistent progress discards the
+candidate block and closes admission. The host joins worker work before releasing
+the provider, and only the Audio control owner publishes prepared blocks or ring
+generations at the ADR-062 boundary. This contract neither performs file I/O nor
+invokes a codec from the callback; concrete codec providers and stream-ring
+publication are separate integration work.
 
 Underrun behavior:
 
@@ -1821,6 +2150,44 @@ per-platform profiles for editor preview and packaged games. The same page
 defaults mute-on-minimize on most desktop hosts, pause-gameplay-buses for
 mobile focus loss, and continue-everything for dedicated audio preview windows.
 
+The AUD-007.9 control contract is `AudioFocusController`, owned by
+`HoroAudioCommands`. A host chooses an explicit preview, play-in-editor, or
+packaged-game profile and supplies complete focus, minimize, host-suspend, and
+device-interruption facts on the Audio control thread. The controller prepares
+one FIFO policy transition at a time, closes ordinary admission immediately for
+suspension/interruption, and commits only after exact callback/device-epoch
+acknowledgement. Resume also requires a fresh clock-discontinuity revision;
+an interruption-end fact alone never resumes output. Recovery may adopt a new
+validated device epoch without resuming automatically. This boundary is
+backend-neutral and does not move native pause/resume authority into editor,
+scene, or callback code. Concrete host composition supplies the ordered callback
+work and acknowledgement when the parent Audio Runtime is assembled.
+
+## Typed Failure And Recovery Boundary
+
+`HoroAudioApi` publishes an additive `AudioFailureRecovery` control-side contract.
+It classifies exact declared `horo.audio` codes from assets, codecs, streams,
+queues, voices, mixer candidates, devices, providers, middleware and memory into
+an affected-operation state, a proposed control/host action, and an active-epoch
+disposition. Existing `Result` callers do not change; adapters that need recovery
+policy can adopt the classifier without parsing messages. Foreign or undeclared
+codes fail closed to host policy with retained callback-visible ownership.
+
+Classification is a pure value operation, never an executor. The control caller
+must identify whether a request/candidate or the active epoch failed; even a
+candidate device/backend failure preserves the active epoch. Request and candidate
+failures preserve the active mixer and voice state. Stream underrun may
+render only admitted silence while control refills; ordinary queue saturation
+retains the producer's request and cannot consume the critical reserve. Device
+loss closes device-dependent admission and enters ADR-062 recovery through a
+quiescence barrier. A callback fault always enters the fatal retained-epoch path,
+regardless of the enclosed code. Control reconciles operations and proves native
+detachment before releasing state; the process host alone chooses product-level
+fallback or termination. Optional provider policy is never inferred from an error
+code, and no middleware fallback is automatic. Codes reserved for not-yet-built
+stream, graph, provider and middleware producers define stable output identities,
+not evidence that those producers or recovery executors are implemented.
+
 ## Metrics
 
 [AUD-010](https://github.com/HoroCore/horo-engine/issues/626) delivers the
@@ -1848,6 +2215,98 @@ Audio exposes:
 - variation container selection telemetry (optional)
 
 No ordinary log formatting occurs on the callback thread.
+
+### AUD-010.1 metric bridge
+
+`HoroAudioMetrics` owns the additive `Horo/Audio/AudioMetrics.h` contract. A
+control owner samples the actual `AudioEventQueue::Stats`,
+`AudioCommandStaging::Stats`, and complete set of `AudioMemoryStats`; it classifies
+consumed callback facts and explicit command admission/pump outcomes. The callback
+never registers instruments, formats labels, locks the bridge, or exports data.
+The host registers the fixed `audio.*` catalog once at activation and publishes
+only safe-point snapshot deltas through Foundation Telemetry; editor, headless,
+local sinks and opt-in OTLP consume the same numeric snapshot/descriptor contract.
+One owner generation cannot be reset in place, and a closed owner cannot publish
+new values. Existing audio callers need no migration; hosts adopting this optional
+bridge must retain the source owners through each control safe point.
+Within one owner generation, the host assigns strictly increasing, non-reused
+source generations to event-queue and memory-pool/arena replacements. The bridge
+retains cumulative drop and failure totals after a source retires, rejects stale
+source replay and same-source counter rollback, and bounds simultaneously live
+memory sources to sixteen. Source generations are internal comparison facts,
+never metric labels.
+
+### AUD-010.2 callback extraction
+
+`Horo/Audio/AudioMetricExtraction.h` is the narrow additive callback-to-control
+contract, owned by `HoroAudioMetrics`. Hosts prepare one bounded, exact-epoch
+SPSC queue off-callback and retain it until callback detachment and control
+drain. The callback admits only fixed numeric records: callback/mixer/effect/
+spatial cost or deadline/allocation/lock diagnostics. It calls `Flush` at each
+callback boundary. A fixed per-kind pending slot coalesces repeated observations
+within that boundary, retaining the worst duration and a bounded sample count.
+The callback never allocates, locks, formats a string, invokes an exporter or
+reaches the OBS bridge. Capacity, storage-byte budget and diagnostic frame
+interval are set before callback activation; the ring cannot grow. Full-ring
+source observations increment a cumulative dropped counter; diagnostic records
+filtered by the rate policy increment a separate rate-limited counter. Neither
+is silently interpreted as a zero measurement. There is no dynamic metric label.
+The producer keeps per-observation counters thread-local, publishing cumulative
+atomic snapshots only at `Flush`. Shared ring cursors and snapshots use
+sequentially consistent atomics: a consumer that sees an advanced write cursor
+also sees the completed fixed record, and a producer that sees an advanced read
+cursor may reuse that slot. This stronger order costs shared atomic operations
+per published record and per callback boundary, not per source observation;
+no throughput or deadline improvement is claimed without measurement.
+
+The creating control thread alone drains fixed records and samples queue stats
+at a safe point. `AudioMetrics` projects records and cumulative pressure into
+the same fixed OBS catalog, using a non-reused source generation so replacement
+does not reset lifetime totals. Callback epochs prevent old-device records from
+entering a new queue. The host must call `Close` on the callback, detach/join,
+then drain; queue destruction or movement while either side runs is forbidden.
+Existing `AudioEventQueue` lifecycle facts and the development watchdog remain
+separate; this queue does not replace their critical-delivery semantics.
+
+The catalog has no dynamic dimensions or per-device, bus, voice, asset or user
+labels; each named instrument has one series. Counters include callback underruns,
+command-queue admission rejections and retained retries, actual event-queue
+telemetry drops, allocation and backend failures, voice
+rejections, spatial fallbacks and stable-ID lookup failures. Gauges include queue
+depths, voice counts, stream fill, memory, device format, callback budget,
+occlusion staleness and bus levels. Callback/mixer/effect/spatial costs are
+seconds-valued histograms. Sample rate uses the additive `Hertz` telemetry unit,
+exported as OTLP `Hz`; other units are count, bytes, ratio and seconds. A metric
+without a measured source observation is unavailable, not a fabricated zero.
+Callback underruns count consumed facts; separately measured telemetry drops
+explain records lost under event-queue pressure. Critical retries are not called
+drops, because the caller retains the work.
+
+### Development callback safety watchdog
+
+The build-tree-only `AudioCallbackWatchdog` instruments each SDL3 Horo render-port
+invocation when `NDEBUG` is not defined. Its deadline is the negotiated block
+period (`callbackFrames / sampleRate`); it measures preparation, Horo render work,
+conversion and SDL stream submission, not downstream device/driver latency. The
+callback publishes only fixed
+epoch/sample-frame facts to a 64-slot SPSC ring, plus lock-free sampled-count and
+latest-duration summaries. Per-kind records are limited to
+one per sample-rate worth of frames; overflow and rate-limited counts remain
+observable. `AudioBackend::DrainSafetyViolations` runs only on audio control and
+returns caller-owned values for subsequent OBS formatting/storage. Callback
+detachment must precede watchdog destruction. NullAudio retains deterministic
+simulated time: it participates in explicit forbidden-operation hooks but has
+no physical deadline samples.
+
+Explicit callback-safety hooks run immediately before heap construction in the
+Horo audio memory pool and scratch arena, and before each ingress staging mutex
+attempt. These are control-only operations under the normal ownership contract;
+if a supplied render port invokes one from a callback, the active backend scope
+records the forbidden attempt. The hooks do not globally interpose C++/C
+allocation or third-party/native locks; such operations require separate platform
+or sanitizer qualification. They are inert outside the instrumented callback
+scope and in `NDEBUG` builds. No callback log, exception, heap fallback, blocking
+wait, or unbounded scan is added by the instrumentation itself.
 
 ## Testing
 
@@ -2033,7 +2492,7 @@ or feature plan must be updated in the same change.
 
 ## Related Documents
 
-- [Audio Mixer UI Reference](./audio-mixer.html): bus routing, DSP chains, meters, and middleware bridge status panel.
+- [Audio Mixer UI Reference](../../../mock-studio/designs.md#architecture-runtime-audio-mixer): bus routing, DSP chains, meters, and middleware bridge status panel.
 
 - [Asset Pipeline](./asset-pipeline.md)
 - [Runtime Lifecycle](./runtime-lifecycle.md)

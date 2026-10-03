@@ -25,8 +25,12 @@
   "schemas": ["share/horo/extension-sdk/extension-manifest-v1.schema.json"],
   "tools": [
     "bin/horo-extension-validate@CMAKE_EXECUTABLE_SUFFIX@",
-    "bin/horo-scaffold-extension.py"
+    "bin/horo-extension-conformance@CMAKE_EXECUTABLE_SUFFIX@",
+    "bin/horo-package@CMAKE_EXECUTABLE_SUFFIX@",
+    "bin/horo-scaffold-extension.py",
+    "bin/horo-extension-author-ci.py"
   ],
+  "ciTemplate": "share/horo/extension-sdk/ci/extension-author-ci.yml",
   "entryPoints": [
     "horo_extension_query",
     "horo_extension_load",

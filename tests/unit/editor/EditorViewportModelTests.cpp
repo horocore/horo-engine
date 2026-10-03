@@ -1,8 +1,10 @@
 #include "editor/project_model/EditorViewportModel.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -40,6 +42,40 @@ namespace {
         REQUIRE((viewport.Current().camera.target == target));
         REQUIRE((viewport.Current().camera.IsValid()));
         REQUIRE((!NearlyEqual(viewport.Current().camera.position.x, 0.0F)));
+    }
+
+    TEST_CASE("Compass axis alignment preserves target and lets both vertical views navigate", "[unit][editor]") {
+        using namespace Horo::Editor;
+        using Horo::Math::Vec3;
+        EditorDataBus events;
+        EditorViewportModel viewport{events};
+        constexpr std::array views{
+            std::pair{EditorViewportAxisView::PositiveX, Vec3{1.0F, 0.0F, 0.0F}},
+            std::pair{EditorViewportAxisView::NegativeX, Vec3{-1.0F, 0.0F, 0.0F}},
+            std::pair{EditorViewportAxisView::PositiveY, Vec3{0.0F, 1.0F, 0.0F}},
+            std::pair{EditorViewportAxisView::NegativeY, Vec3{0.0F, -1.0F, 0.0F}},
+            std::pair{EditorViewportAxisView::PositiveZ, Vec3{0.0F, 0.0F, 1.0F}},
+            std::pair{EditorViewportAxisView::NegativeZ, Vec3{0.0F, 0.0F, -1.0F}},
+        };
+        const Vec3 target = viewport.Current().camera.target;
+        const float distance = Horo::Math::Length(viewport.Current().camera.position - target);
+        for (const auto &[view, direction] : views) {
+            REQUIRE(viewport.AlignToAxis(view).HasValue());
+            const EditorViewportCamera &camera = viewport.Current().camera;
+            REQUIRE(camera.IsValid());
+            REQUIRE(camera.target == target);
+            REQUIRE(NearlyEqual(Horo::Math::Length(camera.position - target), distance));
+            REQUIRE(camera.position == target + direction * distance);
+        }
+        for (const EditorViewportAxisView vertical : {EditorViewportAxisView::PositiveY, EditorViewportAxisView::NegativeY}) {
+            REQUIRE(viewport.AlignToAxis(vertical).HasValue());
+            REQUIRE(viewport.Navigate({.moveRight = 0.25F}).HasValue());
+            REQUIRE(viewport.Navigate({.pitchRadians = 0.2F, .orbit = true}).HasValue());
+            REQUIRE(viewport.Current().camera.IsValid());
+        }
+        const ViewportRevision beforeInvalid = viewport.Current().revision;
+        REQUIRE(viewport.AlignToAxis(static_cast<EditorViewportAxisView>(255)).HasError());
+        REQUIRE(viewport.Current().revision == beforeInvalid);
     }
 
     TEST_CASE("Empty And Invalid Navigation Do Not Publish Or Mutate", "[unit][editor]") {

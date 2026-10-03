@@ -97,6 +97,11 @@ namespace Horo::Destruction::DestructionErrors {
                                             .defaultSeverity = ErrorSeverity::Error,
                                             .summary = "The destruction damage command is zero, negative, or non-finite.",
                                             .remediationHint = "Submit finite positive canonical health units."};
+    const ErrorCodeDescriptor DamageCooldownActive{.domain = DestructionDomain,
+                                                   .code = ErrorCode{"destruction.damage.cooldown_active"},
+                                                   .defaultSeverity = ErrorSeverity::Warning,
+                                                   .summary = "The destructible has not reached its next admitted damage tick.",
+                                                   .remediationHint = "Retry at or after the configured fixed-tick interval."};
     const ErrorCodeDescriptor DuplicateCommand{.domain = DestructionDomain,
                                                .code = ErrorCode{"destruction.command.duplicate_conflict"},
                                                .defaultSeverity = ErrorSeverity::Warning,
@@ -185,4 +190,33 @@ namespace Horo::Destruction::DestructionErrors {
                                                .defaultSeverity = ErrorSeverity::Warning,
                                                .summary = "The destruction composition revision was replaced.",
                                                .remediationHint = "Discard captured work and resolve the current immutable composition."};
+    const ErrorCodeDescriptor ReplicationInvalid{.domain = DestructionDomain,
+                                                 .code = ErrorCode{"destruction.replication.invalid"},
+                                                 .defaultSeverity = ErrorSeverity::Error,
+                                                 .summary = "Destruction replication fields or semantic state are malformed.",
+                                                 .remediationHint = "Reject the complete record and request a compatible server baseline."};
+    const ErrorCodeDescriptor
+        ReplicationInvalidChunkMask{.domain = DestructionDomain,
+                                    .code = ErrorCode{"destruction.replication.invalid_chunk_mask"},
+                                    .defaultSeverity = ErrorSeverity::Error,
+                                    .summary = "Destruction chunk masks violate their exact content-scoped bounds or set invariants.",
+                                    .remediationHint = "Reject the record and verify the published fracture artifact chunk table."};
+    const ErrorCodeDescriptor
+        ReplicationLimitExceeded{.domain = DestructionDomain,
+                                 .code = ErrorCode{"destruction.replication.limit_exceeded"},
+                                 .defaultSeverity = ErrorSeverity::Error,
+                                 .summary = "Destruction replication state exceeds finite product work or byte limits.",
+                                 .remediationHint = "Reduce admitted chunk/support state or negotiate a compatible product profile."};
+    const ErrorCodeDescriptor ReplicationIncompatible{.domain = DestructionDomain,
+                                                      .code = ErrorCode{"destruction.replication.incompatible"},
+                                                      .defaultSeverity = ErrorSeverity::Error,
+                                                      .summary = "Destruction replication schema or fracture content is incompatible.",
+                                                      .remediationHint =
+                                                          "Negotiate the exact DFR schema and published fracture artifact before joining."};
+    const ErrorCodeDescriptor ReplicationStaleAuthority{.domain = DestructionDomain,
+                                                        .code = ErrorCode{"destruction.replication.stale_authority"},
+                                                        .defaultSeverity = ErrorSeverity::Warning,
+                                                        .summary = "Destruction replication data belongs to a retired authority epoch.",
+                                                        .remediationHint =
+                                                            "Discard stale network work and request the current authoritative baseline."};
 }  // namespace Horo::Destruction::DestructionErrors

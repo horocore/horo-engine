@@ -1,5 +1,6 @@
 #include "Horo/Audio/AudioEventQueue.h"
 
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <limits>
@@ -258,7 +259,11 @@ namespace Horo::Audio {
     AudioEventQueueStats AudioEventQueue::Stats() const noexcept {
         if (!state_)
             return {};
-        return {.terminalEvents = state_->terminalEvents.load(),
+        // Read the consumer cursor first: the producer cannot be behind that observation.
+        const auto consumed = state_->read.load();
+        const auto published = state_->write.load();
+        return {.depth = std::min(published - consumed, state_->descriptor.slots),
+                .terminalEvents = state_->terminalEvents.load(),
                 .deviceEvents = state_->deviceEvents.load(),
                 .droppedTelemetry = state_->droppedTelemetry.load(),
                 .criticalRetries = state_->criticalRetries.load(),

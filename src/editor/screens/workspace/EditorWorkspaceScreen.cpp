@@ -14,11 +14,13 @@
 #include "Horo/Editor/ScreenRegistry.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Foundation/BuildOutputStore.h"
+#include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/PathUtils.h"
+#include "Horo/Foundation/Paths.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
 #include "editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.h"
@@ -45,6 +47,7 @@ namespace Horo::Editor {
             IEditorViewportRenderer *viewportRenderer{nullptr};
             const Log::IStructuredLogQuery *logQuery{nullptr};
             const IBuildOutputQuery *buildOutputQuery{nullptr};
+            const Application::GameplayBuildService *gameplayBuilds{nullptr};
             const IOperationQuery *operationQuery{nullptr};
             IOperationControl *operationControl{nullptr};
         };
@@ -82,8 +85,8 @@ namespace Horo::Editor {
                                                                                               const std::string &requestedDirectory) {
             using enum GameplayBehaviorKind;
             const std::filesystem::path normalizedProjectRoot = NormalizeAbsolutePath(projectRoot);
-            const std::filesystem::path assetsRoot = normalizedProjectRoot / "assets";
-            const std::filesystem::path scriptsRoot = assetsRoot / "scripts";
+            const std::filesystem::path assetsRoot = ProjectLayout::AssetRoot(normalizedProjectRoot);
+            const std::filesystem::path scriptsRoot = ProjectLayout::ScriptsRoot(normalizedProjectRoot);
             const std::filesystem::path requested = NormalizeAbsolutePath(requestedDirectory);
             std::filesystem::path destination;
             if (kind == Native) {
@@ -135,6 +138,7 @@ namespace Horo::Editor {
                       .viewportRenderer = services.TryGet<IEditorViewportRenderer>(),
                       .logQuery = services.TryGetConst<Log::IStructuredLogQuery>(),
                       .buildOutputQuery = services.TryGetConst<IBuildOutputQuery>(),
+                      .gameplayBuilds = services.TryGetConst<Application::GameplayBuildService>(),
                       .operationQuery = services.TryGetConst<IOperationQuery>(),
                       .operationControl = services.TryGet<IOperationControl>(),
                   },
@@ -204,6 +208,8 @@ namespace Horo::Editor {
                     .workspaceInputContext = &workspaceInputContext_,
                     .logQuery = panelServices_.logQuery,
                     .buildOutputQuery = panelServices_.buildOutputQuery,
+                    .gameplayBuilds = panelServices_.gameplayBuilds,
+                    .projectRoot = controller_->ViewModel().projectRoot,
                     .operationQuery = panelServices_.operationQuery,
                     .operationControl = panelServices_.operationControl,
                     // Built-in panels have no extension activation identity; extension hosts inject
@@ -236,18 +242,27 @@ namespace Horo::Editor {
                 }
             }
 
-            void OnFixedUpdate(const double fixedDeltaSeconds) override {
+            void OnInputSnapshot() override {
+                if (!controller_ || (controller_->ViewModel().playState != EditorPlayState::Playing &&
+                                     controller_->ViewModel().playState != EditorPlayState::Paused)) {
+                    gameplayInputFrames_.Reset();
+                    return;
+                }
+                gameplayInputFrames_.Capture(inputRouter_, workspaceInputContext_);
+            }
+
+            void OnFixedUpdate(const std::uint64_t simulationTick, const double fixedDeltaSeconds) override {
                 if (!controller_ || (controller_->ViewModel().playState != EditorPlayState::Playing &&
                                      controller_->ViewModel().playState != EditorPlayState::Paused)) {
                     return;
                 }
-                const Input::ActionValue move = inputRouter_.ReadAction(workspaceInputContext_, Input::ActionId{kGameplayMoveAction});
+                const Input::GameplayInputFrame command = gameplayInputFrames_.Consume(simulationTick);
                 const Gameplay::GameplayInputAction action{Gameplay::GameplayActionId{kGameplayMoveAction},
-                                                           move.x,
-                                                           move.y,
-                                                           move.down,
-                                                           move.pressed,
-                                                           move.released};
+                                                           command.moveX,
+                                                           command.moveY,
+                                                           command.moveDown,
+                                                           command.movePressed,
+                                                           command.moveReleased};
                 controller_->UpdatePlayFixed({&action, 1}, fixedDeltaSeconds);
                 PublishViewportSceneIfChanged();
             }
@@ -321,7 +336,9 @@ namespace Horo::Editor {
             }
 
             bool HandleMenuInvocation(const EditorMenuInvocation &invocation) override {
-                const EditorMenuAction action = invocation.action;
+                EditorMenuAction action = invocation.action;
+                if (controller_ && action == EditorMenuAction::SaveScene && !controller_->CurrentScenePath().has_value())
+                    action = EditorMenuAction::SaveSceneAs;
                 if (controller_ && action == EditorMenuAction::CreatePrimitive && invocation.primitive.has_value()) {
                     EditorWorkspaceViewCommandData command;
                     command.command = EditorWorkspaceViewCommand::CreatePrimitive;
@@ -333,11 +350,8 @@ namespace Horo::Editor {
                 }
                 if (controller_ && (action == EditorMenuAction::SaveSceneAs || action == EditorMenuAction::SaveSceneCopyAs)) {
                     const auto &currentPath = controller_->CurrentScenePath();
-                    if (!currentPath.has_value()) {
-                        LOG_ERROR("editor.scene_document", "Scene destination dialog rejected because the "
-                                                           "active scene path is unavailable.");
-                        return true;
-                    }
+                    const std::filesystem::path projectRoot{controller_->ViewModel().projectRoot};
+                    const std::filesystem::path suggestedPath = currentPath.value_or(ProjectLayout::ScenesRoot(projectRoot) / "main.horo");
 
                     auto nativeDialogContext = inputRouter_.PushContext(Input::InputContextId{"editor.native_dialog.scene_save"},
                                                                         Input::InputContextKind::NativeDialog);
@@ -346,9 +360,9 @@ namespace Horo::Editor {
                     // portable-file-dialogs forwards this value to AppleScript's
                     // `default name`, where a full path is interpreted as a literal
                     // filename and its separators become colons.
-                    const std::string dialogDefault = currentPath->filename().string();
+                    const std::string dialogDefault = suggestedPath.filename().string();
 #else
-                    const std::string dialogDefault = currentPath->string();
+                    const std::string dialogDefault = suggestedPath.string();
 #endif
                     pfd::save_file dialog(std::string{context_.localization.Get("editor", copyOnly ? "workspace.scene_save_copy_as.title"
                                                                                                    : "workspace.scene_save_as.title")},
@@ -643,6 +657,7 @@ namespace Horo::Editor {
             EditorStatusItemRegistry &statusItems_;
             Input::InputRouter &inputRouter_;
             Input::InputContextToken workspaceInputContext_;
+            Input::GameplayInputFrameBuilder gameplayInputFrames_{Input::ActionId{kGameplayMoveAction}, {}, {}, {}};
             EditorWorkspaceView view_;
             EditorViewportSceneState &viewportSceneState_;
             Runtime::RuntimeSceneService &runtimeScene_;

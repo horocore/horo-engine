@@ -39,6 +39,13 @@ namespace Horo::Assets {
         std::vector<std::string> diagnostics; /**< Human-readable diagnostic messages. */
     };
 
+    /** @brief Stable byte-affecting strategy inputs supplied to the generic cache key. */
+    struct CookerCacheIdentity {
+        std::string_view version{"1.0.0"};
+        Sha256Digest settingsDigest{};
+        std::uint32_t settingsSchemaVersion{};
+    };
+
     /**
      * @brief Abstract cooker strategy.
      * @details Both built-in cookers and C-ABI adapters implement this interface.
@@ -47,6 +54,24 @@ namespace Horo::Assets {
     class ICookerStrategy {
     public:
         virtual ~ICookerStrategy() = default;
+
+        /** @brief Returns deterministic strategy version and effective settings for cache isolation. */
+        [[nodiscard]] virtual CookerCacheIdentity CacheIdentity() const noexcept {
+            return {};
+        }
+
+        /**
+         * @brief Validates domain compatibility for fresh and cached logical payloads.
+         * @param source Exact admitted source identity and target.
+         * @param payload Borrowed domain payload bytes; never retained.
+         * @return Success or a typed domain compatibility error before publication.
+         */
+        [[nodiscard]] virtual Result<void> ValidateCookedPayload(const CookSourceView &source,
+                                                                 std::span<const std::uint8_t> payload) const {
+            (void)source;
+            (void)payload;
+            return Result<void>::Success();
+        }
 
         /**
          * @brief Cook the source asset into its target-specific payload.
@@ -95,6 +120,9 @@ namespace Horo::Assets {
          * @return Strategy pointer, or nullptr when no matching contribution exists.
          */
         [[nodiscard]] const ICookerStrategy *Find(const AssetTypeId &type, const AssetCookTargetId &target) const noexcept;
+
+        /** @brief Finds the exact registered contribution, including its stable cache identity. */
+        [[nodiscard]] const CookerContribution *FindContribution(const AssetTypeId &type, const AssetCookTargetId &target) const noexcept;
 
     private:
         friend class CookerCatalog;

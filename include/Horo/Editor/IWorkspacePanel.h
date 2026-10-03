@@ -6,6 +6,7 @@
 #include "Horo/Runtime/Input.h"
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct ImDrawList;
@@ -15,6 +16,10 @@ using ImU32 = unsigned int;
 namespace Horo::Log {
     class IStructuredLogQuery;
 }  // namespace Horo::Log
+
+namespace Horo::Application {
+    class GameplayBuildService;
+}  // namespace Horo::Application
 
 namespace Horo {
     class IBuildOutputQuery;
@@ -38,6 +43,8 @@ namespace Horo::Editor {
         Input::InputContextToken *workspaceInputContext{nullptr};
         const Log::IStructuredLogQuery *logQuery{nullptr};
         const IBuildOutputQuery *buildOutputQuery{nullptr};
+        const Application::GameplayBuildService *gameplayBuilds{nullptr};
+        std::string_view projectRoot;
         const IOperationQuery *operationQuery{nullptr};
         IOperationControl *operationControl{nullptr};
         EditorSurfaceEventContext *surfaceEvents{nullptr};

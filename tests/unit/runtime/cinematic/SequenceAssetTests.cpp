@@ -91,11 +91,32 @@ namespace Horo::Cinematic {
         const SequenceAssetData &data = parsed.Value().Data();
         CHECK(data.name == "Intro");
         CHECK(data.playback.clockSource == SequenceClockSource::CommittedSimulation);
+        CHECK_FALSE(data.playback.pauseGameplay);
+        CHECK_FALSE(data.playback.hideHud);
         REQUIRE(data.tracks.size() == 1);
         CHECK(data.tracks.front().type == SequenceTrackType::Audio);
         CHECK(data.tracks.front().keyframeCount == 2);
         REQUIRE(data.tracks.front().references.size() == 1);
         CHECK(data.tracks.front().references.front() == SequenceAssetReference{Asset('2'), SequenceReferenceKind::AudioClip});
+    }
+
+    TEST_CASE("Sequence parser admits optional gameplay pause and HUD settings", "[unit][cinematic][sequence-parser]") {
+        std::string source = ValidJson();
+        ReplaceFirst(source, R"("clockSource":"committedSimulation","pausePolicy":"followGameplay")",
+                     R"("clockSource":"unscaledFixedControl","pausePolicy":"playerOnly")");
+        ReplaceFirst(source, R"("dilationPolicy":"sourceNative")",
+                     R"("dilationPolicy":"sourceNative","pauseGameplay":true,"hideHUD":true)");
+        auto parsed = ParseSequenceAsset(source);
+        REQUIRE(parsed.HasValue());
+        CHECK(parsed.Value().Data().playback.pauseGameplay);
+        CHECK(parsed.Value().Data().playback.hideHud);
+
+        std::string invalid = source;
+        ReplaceFirst(invalid, R"("hideHUD":true)", R"("hideHUD":"yes")");
+        RequireError(ParseSequenceAsset(invalid), CinematicErrors::SequenceSchemaMalformed);
+        invalid = source;
+        ReplaceFirst(invalid, R"("pausePolicy":"playerOnly")", R"("pausePolicy":"followGameplay")");
+        RequireError(ParseSequenceAsset(invalid), CinematicErrors::SequenceSchemaMalformed);
     }
 
     TEST_CASE("Sequence parser rejects malformed duplicate and unknown source fields", "[unit][cinematic][sequence-parser]") {
@@ -118,6 +139,41 @@ namespace Horo::Cinematic {
         std::string invalidTrack = ValidJson();
         ReplaceFirst(invalidTrack, R"("type":"audio")", R"("type":"native-backend")");
         RequireError(ParseSequenceAsset(invalidTrack), CinematicErrors::SequenceSchemaMalformed);
+    }
+
+    TEST_CASE("Sequence source rejects path-shaped dependencies and hostile numeric encodings",
+              "[unit][cinematic][sequence-parser][qualification]") {
+        const std::array invalidAssets{"../Audio/intro.wav", R"(C:\\Cinematics\\intro.wav)", "/assets/cinematics/intro.wav",
+                                       "assets/\xc3\xbc"
+                                       "ber/intro.wav",
+                                       "00000000-0000-0000-0000-00000000000A"};
+        for (const std::string &candidate : invalidAssets) {
+            std::string source = ValidJson();
+            ReplaceFirst(source, "00000000-0000-0000-0000-000000000002", candidate);
+            RequireError(ParseSequenceAsset(source), CinematicErrors::SequenceSchemaMalformed);
+        }
+
+        const std::array invalidNumbers{std::pair{R"("durationFrames":240)", R"("durationFrames":-1)"},
+                                        std::pair{R"("durationFrames":240)", R"("durationFrames":1.5)"},
+                                        std::pair{R"("durationFrames":240)", R"("durationFrames":18446744073709551616)"},
+                                        std::pair{R"("numerator":24)", R"("numerator":4294967296)"},
+                                        std::pair{R"("keyframeCount":2)", R"("keyframeCount":65537)"}};
+        for (const auto &[from, to] : invalidNumbers) {
+            std::string source = ValidJson();
+            ReplaceFirst(source, from, to);
+            const auto parsed = ParseSequenceAsset(source);
+            REQUIRE(parsed.HasError());
+            CHECK((parsed.ErrorValue().code.Value() == CinematicErrors::SequenceSchemaMalformed.code.Value() ||
+                   parsed.ErrorValue().code.Value() == CinematicErrors::SequenceSchemaLimitExceeded.code.Value()));
+        }
+
+        std::string embeddedNull = ValidJson();
+        ReplaceFirst(embeddedNull, R"("name":"Intro")", R"("name":"Intro\u0000Extra")");
+        RequireError(ParseSequenceAsset(embeddedNull), CinematicErrors::SequenceSchemaMalformed);
+
+        std::string invalidUtf8 = ValidJson();
+        ReplaceFirst(invalidUtf8, "Intro", std::string{"\xff"});
+        RequireError(ParseSequenceAsset(invalidUtf8), CinematicErrors::SequenceSchemaMalformed);
     }
 
     TEST_CASE("Sequence parser rejects oversized and deeply nested hostile input", "[unit][cinematic][sequence-parser]") {
@@ -179,6 +235,9 @@ namespace Horo::Cinematic {
 
         data = ValidData();
         data.playback.pausePolicy = SequencePausePolicy::PlayerOnly;
+        RequireError(SequenceAsset::Create(data), CinematicErrors::SequenceSchemaMalformed);
+        data = ValidData();
+        data.playback.pauseGameplay = true;
         RequireError(SequenceAsset::Create(data), CinematicErrors::SequenceSchemaMalformed);
         data = ValidData();
         data.playback.clockSource = SequenceClockSource::External;

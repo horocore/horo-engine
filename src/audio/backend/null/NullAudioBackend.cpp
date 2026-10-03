@@ -68,7 +68,7 @@ namespace Horo::Audio::Backend {
 
     /** @copydoc NullAudioBackend::SampleFrame */
     std::uint64_t NullAudioBackend::SampleFrame() const noexcept {
-        return sampleFrame_;
+        return clock_.sampleFrame;
     }
 
     Result<void> NullAudioBackend::ValidateOpenRequest(const Open &request) const {
@@ -129,7 +129,7 @@ namespace Horo::Audio::Backend {
     Result<OperationId> NullAudioBackend::Begin(const Request &request, const AudioMonotonicTimestamp &deadline) {
         if (pendingOperation_ || completion_)
             return Result<OperationId>::Failure(MakeError(AudioErrors::HandleCapacityExhausted));
-        if (deadline.clockDomain != config_.clockDomain || deadline.nanoseconds < clockNanoseconds_)
+        if (deadline.clockDomain != config_.clockDomain || deadline.nanoseconds < clock_.nanoseconds)
             return Result<OperationId>::Failure(MakeError(AudioErrors::IdentityInvalid));
         try {
             if (const auto validation = ValidateRequest(request); validation.HasError())
@@ -170,7 +170,7 @@ namespace Horo::Audio::Backend {
         negotiated.nativeChannelForHoro.resize(channels);
         std::iota(negotiated.nativeChannelForHoro.begin(), negotiated.nativeChannelForHoro.end(), std::uint8_t{0});
         const AudioDeviceTimingReport timing{.epoch = epoch_,
-                                             .capturedAt = {config_.clockDomain, clockNanoseconds_},
+                                             .capturedAt = {config_.clockDomain, clock_.nanoseconds},
                                              .hardwareLatency = UnsupportedDuration(),
                                              .endToEndLatency = UnsupportedDuration()};
         state_ = NullAudioBackendState::Opened;
@@ -191,11 +191,10 @@ namespace Horo::Audio::Backend {
             ApplyOpen(*open, operation);
         } else if (const auto *start = std::get_if<Start>(&request)) {
             render_ = start->render;
+            watchdog_.Configure(0, format_.sampleRate);
             state_ = NullAudioBackendState::Priming;
             ready_ = false;
-            sampleFrame_ = 0;
-            clockNanoseconds_ = 0;
-            clockRemainder_ = 0;
+            clock_ = {};
             completion_ = Completion{operation, Started{epoch_}};
         } else if (std::holds_alternative<Quiesce>(request)) {
             state_ = NullAudioBackendState::Quiescing;
@@ -289,15 +288,15 @@ namespace Horo::Audio::Backend {
                           .epoch = epoch_.callbackEpoch,
                           .generation = config_.clockGeneration,
                           .discontinuityRevision = config_.discontinuityRevision,
-                          .sampleFrame = sampleFrame_,
+                          .sampleFrame = clock_.sampleFrame,
                           .sampleRate = format_.sampleRate,
-                          .observedAt = {config_.clockDomain, clockNanoseconds_},
+                          .observedAt = {config_.clockDomain, clock_.nanoseconds},
                           .state = running ? AudioSampleClockState::Running : AudioSampleClockState::Paused},
                 .producerClockDomain = config_.clockDomain,
                 .producerGeneration = 1,
-                .producerNanoseconds = clockNanoseconds_,
-                .validFromNanoseconds = clockNanoseconds_,
-                .validThroughNanoseconds = clockNanoseconds_};
+                .producerNanoseconds = clock_.nanoseconds,
+                .validFromNanoseconds = clock_.nanoseconds,
+                .validThroughNanoseconds = clock_.nanoseconds};
     }
 
     RenderPhase NullAudioBackend::CurrentRenderPhase() const noexcept {
@@ -318,9 +317,9 @@ namespace Horo::Audio::Backend {
         });
             !finite || result.disposition == RenderDisposition::Fault) {
             const auto code = finite ? result.fault : AudioCallbackFaultCode::NonFiniteOutput;
-            static_cast<void>(
-                PushEvent({config_.owner,
-                           AudioCallbackEvent{epoch_, sampleFrame_, {config_.clockDomain, clockNanoseconds_}, AudioCallbackFault{code}}}));
+            static_cast<void>(PushEvent(
+                {config_.owner,
+                 AudioCallbackEvent{epoch_, clock_.sampleFrame, {config_.clockDomain, clock_.nanoseconds}, AudioCallbackFault{code}}}));
             return Failure(AudioErrors::BackendFailed);
         }
         const bool expected = (state_ == NullAudioBackendState::Priming && result.disposition == RenderDisposition::Ready) ||
@@ -330,13 +329,13 @@ namespace Horo::Audio::Backend {
     }
 
     Result<void> NullAudioBackend::AdvanceSampleClock() noexcept {
-        const auto elapsedNumerator = clockRemainder_ + static_cast<std::uint64_t>(callbackFrames_) * 1'000'000'000ULL;
-        if (sampleFrame_ > std::numeric_limits<std::uint64_t>::max() - callbackFrames_ ||
-            clockNanoseconds_ > std::numeric_limits<std::uint64_t>::max() - elapsedNumerator / format_.sampleRate)
+        const auto elapsedNumerator = clock_.remainder + static_cast<std::uint64_t>(callbackFrames_) * 1'000'000'000ULL;
+        if (clock_.sampleFrame > std::numeric_limits<std::uint64_t>::max() - callbackFrames_ ||
+            clock_.nanoseconds > std::numeric_limits<std::uint64_t>::max() - elapsedNumerator / format_.sampleRate)
             return Failure(AudioErrors::HandleGenerationExhausted);
-        sampleFrame_ += callbackFrames_;
-        clockNanoseconds_ += elapsedNumerator / format_.sampleRate;
-        clockRemainder_ = elapsedNumerator % format_.sampleRate;
+        clock_.sampleFrame += callbackFrames_;
+        clock_.nanoseconds += elapsedNumerator / format_.sampleRate;
+        clock_.remainder = elapsedNumerator % format_.sampleRate;
         return Result<void>::Success();
     }
 
@@ -345,11 +344,13 @@ namespace Horo::Audio::Backend {
         if (state_ == Priming && !ready_) {
             ready_ = true;
             return PushEvent(
-                {config_.owner, AudioCallbackEvent{epoch_, sampleFrame_, {config_.clockDomain, clockNanoseconds_}, AudioCallbackReady{}}});
+                {config_.owner,
+                 AudioCallbackEvent{epoch_, clock_.sampleFrame, {config_.clockDomain, clock_.nanoseconds}, AudioCallbackReady{}}});
         }
         if (state_ != Quiescing)
             return Result<void>::Success();
-        if (const auto pushed = PushEvent({config_.owner, AudioCallbackEvent{epoch_, sampleFrame_, completedAt, AudioCallbackQuiesced{}}});
+        if (const auto pushed =
+                PushEvent({config_.owner, AudioCallbackEvent{epoch_, clock_.sampleFrame, completedAt, AudioCallbackQuiesced{}}});
             pushed.HasError())
             return pushed;
         state_ = Quiesced;
@@ -368,19 +369,19 @@ namespace Horo::Audio::Backend {
             std::fill_n(plane, callbackFrames_, 0.0F);
         const RenderInvocation invocation{.epoch = epoch_,
                                           .phase = CurrentRenderPhase(),
-                                          .startedAt = {config_.clockDomain, clockNanoseconds_},
-                                          .sampleFrame = sampleFrame_,
+                                          .startedAt = {config_.clockDomain, clock_.nanoseconds},
+                                          .sampleFrame = clock_.sampleFrame,
                                           .output = {.layout = ViewAudioChannelLayout(format_.layout),
                                                      .sampleRate = format_.sampleRate,
                                                      .planes = planes_,
                                                      .validFrames = callbackFrames_,
                                                      .capacityFrames = callbackFrames_}};
-        const auto result = render_.process(render_.context, invocation);
+        const auto result = watchdog_.InvokeWithoutDeadline(render_, invocation);
         if (const auto validated = ValidateRenderResult(result); validated.HasError())
             return Result<AudioClockCorrelationSnapshot>::Failure(validated.ErrorValue());
         if (const auto advanced = AdvanceSampleClock(); advanced.HasError())
             return Result<AudioClockCorrelationSnapshot>::Failure(advanced.ErrorValue());
-        const AudioMonotonicTimestamp completedAt{config_.clockDomain, clockNanoseconds_};
+        const AudioMonotonicTimestamp completedAt{config_.clockDomain, clock_.nanoseconds};
         if (const auto published = PublishCallbackTransition(completedAt); published.HasError())
             return Result<AudioClockCorrelationSnapshot>::Failure(published.ErrorValue());
         return Result<AudioClockCorrelationSnapshot>::Success(ClockSnapshot());
@@ -416,6 +417,11 @@ namespace Horo::Audio::Backend {
                   events_.begin());
         eventCount_ -= count;
         return count;
+    }
+
+    /** @copydoc AudioBackend::DrainSafetyViolations */
+    AudioCallbackViolationDrain NullAudioBackend::DrainSafetyViolations(const std::span<AudioCallbackViolation> output) noexcept {
+        return watchdog_.Drain(output);
     }
 
     /** @copydoc CreateNullAudioBackend */

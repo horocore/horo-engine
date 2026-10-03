@@ -27,6 +27,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@33522472633dbd32578e909b315f5ee43ba878ce
         with:
           key: release-linux
+          save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install system dependencies
         run: |
@@ -43,7 +44,8 @@ jobs:
             libgl1-mesa-dev libglu1-mesa-dev
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        id: dependency_cache
         with:
           path: ~/.cmake/fetchcontent
           key: fetchcontent-release-linux-${{ hashFiles('**/CMakeLists.txt', '**/CMakePresets.json') }}
@@ -56,6 +58,12 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
         env:
           FETCHCONTENT_BASE_DIR: ~/.cmake/fetchcontent
+
+      - name: Verify reviewed release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: python3 scripts/verify_release_notes.py --snapshot build/release/generated/ReleaseNotesSnapshot.json --tag "$RELEASE_TAG"
 
       - name: Build
         run: cmake --build --preset release --target HoroEditor horopak --parallel
@@ -81,6 +89,12 @@ jobs:
             ${VERSION:+--version "$VERSION"} \
             --install-script \
             --desktop-file
+          tar -xzf HoroEngine-linux-x86_64.tar.gz
+          install -m 0644 build/release/generated/ReleaseNotesSnapshot.json HoroEngine-linux-x86_64/release-notes.json
+          tar -czf HoroEngine-linux-x86_64.tar.gz HoroEngine-linux-x86_64
+
+      - name: Verify packaged release notes
+        run: python3 scripts/verify_release_archive.py --snapshot build/release/generated/ReleaseNotesSnapshot.json --archive HoroEngine-linux-x86_64.tar.gz
 
       - name: Verify package
         run: |
@@ -115,6 +129,13 @@ jobs:
           gh release upload "$RELEASE_TAG" HoroEngine-linux-x86_64.tar.gz --clobber
           gh release upload "$RELEASE_TAG" build/release/sbom.spdx.json --clobber
 
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        with:
+          path: ~/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
+
   build-macos:
     name: Build · macOS / Clang
     runs-on: macos-latest
@@ -131,12 +152,14 @@ jobs:
         uses: hendrikmuhs/ccache-action@33522472633dbd32578e909b315f5ee43ba878ce
         with:
           key: release-macos
+          save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Ninja
         run: brew install ninja
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        id: dependency_cache
         with:
           path: ~/.cmake/fetchcontent
           key: fetchcontent-release-macos-${{ hashFiles('**/CMakeLists.txt', '**/CMakePresets.json') }}
@@ -149,6 +172,12 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
         env:
           FETCHCONTENT_BASE_DIR: ~/.cmake/fetchcontent
+
+      - name: Verify reviewed release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: python3 scripts/verify_release_notes.py --snapshot build/release/generated/ReleaseNotesSnapshot.json --tag "$RELEASE_TAG"
 
       - name: Build HoroEditor
         run: cmake --build --preset release --target HoroEditor --parallel
@@ -166,9 +195,13 @@ jobs:
           DIST=HoroEngine-macos-arm64
           mkdir -p "$DIST"
           cp build/release/bin/HoroEditor "$DIST/"
+          cp build/release/generated/ReleaseNotesSnapshot.json "$DIST/release-notes.json"
           cp -r build/release/sdk "$DIST/" 2>/dev/null || true
           cp build/release/sbom.spdx.json "$DIST/" 2>/dev/null || true
           tar -czf "${DIST}.tar.gz" "$DIST"
+
+      - name: Verify packaged release notes
+        run: python3 scripts/verify_release_archive.py --snapshot build/release/generated/ReleaseNotesSnapshot.json --archive HoroEngine-macos-arm64.tar.gz
 
       - name: Upload to release
         env:
@@ -177,6 +210,13 @@ jobs:
         run: |
           gh release upload "$RELEASE_TAG" HoroEngine-macos-arm64.tar.gz --clobber
 
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        with:
+          path: ~/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
+
   build-windows:
     name: Build · Windows / MSVC
     runs-on: windows-latest
@@ -184,6 +224,7 @@ jobs:
       contents: write
     timeout-minutes: 35
     env:
+      SCCACHE_GHA_ENABLED: 'false'
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -195,14 +236,16 @@ jobs:
         uses: mozilla-actions/sccache-action@1583d6b38d7b86129b83e1c73e4d8d455ca32f48
 
       - name: Cache sccache
-        uses: actions/cache@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        id: compiler_cache
         with:
           path: ${{ env.SCCACHE_DIR }}
           key: sccache-release-windows-${{ hashFiles('**/CMakeLists.txt', '**/CMakePresets.json') }}
           restore-keys: sccache-release-windows-
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: fetchcontent-release-windows-${{ hashFiles('**/CMakeLists.txt', '**/CMakePresets.json') }}
@@ -215,6 +258,13 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
         env:
           FETCHCONTENT_BASE_DIR: ${{ github.workspace }}/.cmake/fetchcontent
+
+      - name: Verify reviewed release notes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: python3 scripts/verify_release_notes.py --snapshot build/release-msvc/generated/ReleaseNotesSnapshot.json --tag $env:RELEASE_TAG
 
       - name: Build HoroEditor
         run: cmake --build build/release-msvc --config Release --target HoroEditor --parallel
@@ -234,6 +284,7 @@ jobs:
           $dist = "HoroEngine-windows-x64"
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
           Copy-Item "build\release-msvc\bin\Release\HoroEditor.exe" $dist
+          Copy-Item "build\release-msvc\generated\ReleaseNotesSnapshot.json" "$dist\release-notes.json"
           if (Test-Path "build\release-msvc\sdk") {
             Copy-Item -Recurse "build\release-msvc\sdk" "$dist\sdk"
           }
@@ -241,6 +292,10 @@ jobs:
             Copy-Item "build\release-msvc\sbom.spdx.json" $dist
           }
           Compress-Archive -Path "$dist\*" -DestinationPath "${dist}.zip"
+
+      - name: Verify packaged release notes
+        shell: pwsh
+        run: python3 scripts/verify_release_archive.py --snapshot build/release-msvc/generated/ReleaseNotesSnapshot.json --archive HoroEngine-windows-x64.zip
 
       - name: Upload to release
         shell: pwsh
@@ -253,3 +308,17 @@ jobs:
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats
+
+      - name: Save compiler cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.compiler_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: ${{ steps.compiler_cache.outputs.cache-primary-key }}
+
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}

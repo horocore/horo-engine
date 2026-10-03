@@ -26,7 +26,7 @@ namespace Horo::XR {
     };
 
     /** @brief Current public XRApi contract version. */
-    inline constexpr XRContractVersion CurrentXRContractVersion{1, 0, 0};
+    inline constexpr XRContractVersion CurrentXRContractVersion{1, 1, 0};
 
     /**
      * @brief Validates that a provided XRApi contract can satisfy a required contract.

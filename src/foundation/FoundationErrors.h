@@ -36,6 +36,10 @@ namespace Horo::HashingErrors {
 }  // namespace Horo::HashingErrors
 
 namespace Horo::ModuleDescriptorErrors {
+    extern const ErrorCodeDescriptor InvalidSettingsContribution;
+    extern const ErrorCodeDescriptor DuplicateSetting;
+    extern const ErrorCodeDescriptor SettingOwnerConflict;
+    extern const ErrorCodeDescriptor DuplicateEnvironmentBinding;
     extern const ErrorCodeDescriptor InvalidDescriptor;
     extern const ErrorCodeDescriptor DuplicateModule;
     extern const ErrorCodeDescriptor MissingDependency;
