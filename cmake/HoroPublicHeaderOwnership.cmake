@@ -221,18 +221,20 @@ horo_configure_target_header_boundary(HoroPackageSecurity PUBLIC_HEADERS
     Horo/Packages/PackagePublisherVerificationErrors.h
 )
 horo_configure_target_header_boundary(HoroProjectMigrations)
+horo_configure_target_header_boundary(HoroSaveApi PUBLIC_HEADERS
+    Horo/Runtime/Save/SaveErrors.h
+    Horo/Runtime/Save/SaveIdentity.h
+    Horo/Runtime/Save/SaveParticipantRegistry.h
+)
 horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/FrameScheduler.h
     Horo/Runtime/RuntimeHost.h
     Horo/Runtime/RuntimeLifecycle.h
     Horo/Runtime/Scene/SceneIdentity.h
-    Horo/Runtime/Save/SaveErrors.h
     Horo/Runtime/Save/SaveDiagnostics.h
-    Horo/Runtime/Save/SaveIdentity.h
     Horo/Runtime/Save/SaveRootResolver.h
     Horo/Runtime/Save/SaveFilesystemStorage.h
     Horo/Runtime/Save/SaveNamespace.h
-    Horo/Runtime/Save/SaveParticipantRegistry.h
     Horo/Runtime/Save/SaveParticipation.h
     Horo/Runtime/Save/SaveCaptureSnapshot.h
     Horo/Runtime/Save/SaveRestoreTransaction.h
@@ -352,6 +354,8 @@ horo_configure_target_header_boundary(HoroNetworkTransportNull PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS
     Horo/Gameplay/GameEventRegistry.h
     Horo/Gameplay/Behavior.h
+    Horo/Gameplay/PersistenceSource.h
+    Horo/Gameplay/PersistenceRegistration.h
     Horo/Gameplay/BehaviorTypes.h
     Horo/Gameplay/Component.h
     Horo/Gameplay/ComponentRegistry.h
@@ -375,6 +379,7 @@ horo_configure_target_header_boundary(HoroRuntimeScene PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroGameplayRuntime PUBLIC_HEADERS
     Horo/Gameplay/BehaviorRegistry.h
+    Horo/Gameplay/SaveGameplayPersistence.h
     Horo/Gameplay/BehaviorRuntime.h
     Horo/Gameplay/GameplayRegistrationRuntime.h
 )

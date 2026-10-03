@@ -27,6 +27,7 @@ namespace Horo::Gameplay {
             std::unique_ptr<SystemRegistry> systems;
             std::unique_ptr<ReplicationRegistrationRegistry> replication;
             std::unique_ptr<GameEventRegistry> events;
+            std::unique_ptr<PersistenceRegistrationRegistry> persistence;
         };
 
         struct GenerationLeaseBinding {

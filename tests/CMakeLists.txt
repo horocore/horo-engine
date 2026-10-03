@@ -2233,11 +2233,15 @@ target_compile_features(HoroRuntimeSaveParticipantRegistryTests PRIVATE cxx_std_
 target_include_directories(HoroRuntimeSaveParticipantRegistryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSaveParticipantRegistryTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveCaptureSnapshotTests
+        support/AllocationProbe.cpp
         unit/runtime/save/SaveCaptureSnapshotTests.cpp
         unit/runtime/save/SaveCaptureSnapshotEdgeTests.cpp
+        unit/runtime/save/SaveGameplayPersistenceTests.cpp
+        unit/runtime/save/SaveGameplayPersistenceLifetimeTests.cpp
 )
 target_compile_features(HoroRuntimeSaveCaptureSnapshotTests PRIVATE cxx_std_20)
-target_link_libraries(HoroRuntimeSaveCaptureSnapshotTests PRIVATE HoroEngine::Runtime)
+target_include_directories(HoroRuntimeSaveCaptureSnapshotTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroRuntimeSaveCaptureSnapshotTests PRIVATE HoroEngine::Runtime HoroEngine::GameplayRuntime)
 add_executable(HoroRuntimeSaveRestoreTransactionTests
         support/AllocationProbe.cpp
         unit/runtime/save/SaveRestoreTransactionTests.cpp

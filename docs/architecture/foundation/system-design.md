@@ -305,6 +305,7 @@ HoroEngine::Security
 HoroEngine::Platform
 HoroEngine::PackageSecurity
 HoroEngine::Runtime
+HoroEngine::SaveApi
 HoroEngine::Assets
 HoroEngine::SceneModel
 HoroEngine::RuntimeScene
@@ -388,6 +389,17 @@ alone.
 contracts. It depends one-way on Foundation and Assets for stable primitives and
 canonical asset identity; runtime registries, evaluators, pose storage,
 presentation extraction, and native animation backends must remain downstream.
+
+`HoroEngine::SaveApi` owns canonical save identity, error and inert participant
+descriptor/registry contracts and depends only on Foundation. Runtime consumes
+it for archive/capture/restore execution, and GameplayApi consumes it for explicit
+durable declarations in the exported native SDK. GameplayRuntime owns the
+capture/restore adapter; GameplayModuleHost freezes module registrations and
+issues exact-generation adapter pins only through explicit host composition.
+No dependency from SaveApi or Runtime back to Gameplay is introduced. SDK boundary
+7 requires rebuilding native modules because GameRegistrationContext gains its
+persistence registry; existing Runtime callers retain their header paths through
+the transitive SaveApi dependency. See the gameplay persistence migration guide.
 
 Each target owns an explicit source list and the smallest practical public
 include surface. Production targets are linked into tests; production sources

@@ -357,20 +357,26 @@ target_include_directories(HoroProjectMigrations
 target_link_libraries(HoroProjectMigrations PUBLIC HoroEngine::Application PRIVATE nlohmann_json::nlohmann_json)
 add_dependencies(HoroProjectMigrations HoroProjectMigrationCatalog)
 
+add_library(HoroSaveApi STATIC
+        runtime/save/SaveErrors.cpp
+        runtime/save/SaveIdentity.cpp
+        runtime/save/SaveParticipantRegistry.cpp
+)
+add_library(HoroEngine::SaveApi ALIAS HoroSaveApi)
+target_compile_features(HoroSaveApi PUBLIC cxx_std_20)
+target_link_libraries(HoroSaveApi PUBLIC HoroEngine::Foundation)
+
 add_library(HoroRuntime STATIC
         runtime/frame/FrameScheduler.cpp
         runtime/lifecycle/RuntimeLifecycle.cpp
         runtime/lifecycle/RuntimeHost.cpp
         runtime/lifecycle/RuntimeErrors.cpp
-        runtime/save/SaveErrors.cpp
         runtime/save/SaveStorageErrors.cpp
         runtime/save/SaveProtectionErrors.cpp
         runtime/save/SaveDiagnostics.cpp
-        runtime/save/SaveIdentity.cpp
         runtime/save/SaveRootResolver.cpp
         runtime/save/SaveFilesystemStorage.cpp
         runtime/save/SaveNamespace.cpp
-        runtime/save/SaveParticipantRegistry.cpp
         runtime/save/SaveParticipation.cpp
         runtime/save/SaveCaptureSnapshot.cpp
         runtime/save/SaveRestoreTransaction.cpp
@@ -415,7 +421,7 @@ add_library(HoroRuntime STATIC
 add_library(HoroEngine::Runtime ALIAS HoroRuntime)
 target_compile_features(HoroRuntime PUBLIC cxx_std_20)
 target_include_directories(HoroRuntime PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroRuntime PUBLIC HoroEngine::Foundation PRIVATE nlohmann_json::nlohmann_json utf8proc miniz)
+target_link_libraries(HoroRuntime PUBLIC HoroEngine::Foundation HoroEngine::SaveApi PRIVATE nlohmann_json::nlohmann_json utf8proc miniz)
 
 add_library(HoroNetworkApi STATIC
         runtime/networking/api/MessageCodecRegistry.cpp
@@ -592,6 +598,7 @@ target_compile_features(HoroUiTemplateGraph PUBLIC cxx_std_20)
 target_link_libraries(HoroUiTemplateGraph PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::Packages)
 
 add_library(HoroGameplayApi STATIC
+        gameplay/api/PersistenceRegistration.cpp
         gameplay/api/GameEventRegistry.cpp
         gameplay/api/BehaviorTypes.cpp
         gameplay/api/GameAsset.cpp
@@ -625,7 +632,7 @@ add_library(HoroGameplayApi STATIC
 add_library(HoroEngine::GameplayApi ALIAS HoroGameplayApi)
 target_compile_features(HoroGameplayApi PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayApi PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroGameplayApi PUBLIC HoroEngine::Foundation HoroEngine::NetworkApi)
+target_link_libraries(HoroGameplayApi PUBLIC HoroEngine::Foundation HoroEngine::NetworkApi HoroEngine::SaveApi)
 target_compile_definitions(HoroGameplayApi PRIVATE
         HORO_GAMEPLAY_SDK_FINGERPRINT="${HORO_GAMEPLAY_SDK_FINGERPRINT}"
 )
@@ -670,6 +677,7 @@ target_link_libraries(HoroNetworkRuntime PUBLIC HoroEngine::NetworkApi HoroEngin
 add_library(HoroGameplayRuntime STATIC
         gameplay/runtime/BehaviorRegistry.cpp
         gameplay/runtime/BehaviorRuntime.cpp
+        gameplay/runtime/SaveGameplayPersistence.cpp
         gameplay/runtime/GameplayRegistrationRuntimeDetail.h
         gameplay/runtime/GameplayRuntimeInvocation.h
         gameplay/runtime/GameplayRuntimeInvocation.cpp
@@ -682,7 +690,7 @@ add_library(HoroGameplayRuntime STATIC
 add_library(HoroEngine::GameplayRuntime ALIAS HoroGameplayRuntime)
 target_compile_features(HoroGameplayRuntime PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayRuntime PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroGameplayRuntime PUBLIC HoroEngine::GameplayApi HoroEngine::RuntimeScene)
+target_link_libraries(HoroGameplayRuntime PUBLIC HoroEngine::GameplayApi HoroEngine::RuntimeScene HoroEngine::Runtime)
 
 add_library(HoroGameplayModuleHost STATIC
         gameplay/module/GameModuleHostDetail.h
