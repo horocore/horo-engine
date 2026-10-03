@@ -52,8 +52,9 @@ def test_invalid_counters_are_rejected(line: str, count: object) -> None:
 
 
 def test_empty_reports_fail() -> None:
+    root = Path.cwd()
     with pytest.raises(ValueError):
-        converter.convert({"sources": {}}, Path.cwd())
+        converter.convert({"sources": {}}, root)
 
 
 def test_outside_sources_and_symlinks_fail(tmp_path: Path) -> None:

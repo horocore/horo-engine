@@ -164,3 +164,16 @@ def test_rejects_a_sibling_with_the_same_path_prefix(tmp_path):
     root.mkdir()
     with pytest.raises(ValueError):
         comparison.repository_path(tmp_path / "repo-other" / "output.json", root)
+
+
+def test_invocation_path_uses_cwd_and_rejects_symlink_and_prefix_escapes(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    outside = tmp_path / "repo-other"
+    outside.mkdir()
+    (root / "link").symlink_to(outside, target_is_directory=True)
+    monkeypatch.chdir(root)
+    assert comparison.invocation_path(Path("report.json")) == str(root / "report.json")
+    for path in (outside / "report.json", Path("../repo-other/report.json"), Path("link/report.json")):
+        with pytest.raises(ValueError):
+            comparison.invocation_path(path)

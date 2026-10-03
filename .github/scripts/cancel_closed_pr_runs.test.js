@@ -1,6 +1,28 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const cancelClosedPrRuns = require('./cancel_closed_pr_runs.js');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const workflowPath = path.join(__dirname, '../workflows/cancel-closed-pr.yml');
+const workflow = fs.readFileSync(workflowPath, 'utf8');
+const scriptBlock = workflow.split('          script: |\n')[1];
+assert.ok(scriptBlock, 'The trusted cleanup workflow must contain its inline script');
+const script = scriptBlock.split('\n').map(line => line.slice(12)).join('\n');
+
+/** Exercise the exact checked-in workflow script with bound API mocks, not interpolated event data. */
+function cancelClosedPrRuns({github, context, core}) {
+  return vm.runInNewContext(`(async () => {\n${script}\n})()`, {github, context, core}, {
+    filename: workflowPath,
+    timeout: 1000,
+  });
+}
+
+test('privileged cleanup executes no checked-out source', () => {
+  assert.doesNotMatch(workflow, /actions\/checkout|contents: read/);
+  assert.match(workflow, /pull_request_target:/);
+  assert.match(workflow, /actions: write/);
+});
 
 const context = {
   repo: {owner: 'owner', repo: 'repo'},

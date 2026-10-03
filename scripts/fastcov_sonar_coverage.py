@@ -12,7 +12,7 @@ from compare_sonar_coverage import repository_path
 
 def noncode(text: str) -> bool:
     """Match gcovr's zero-hit comment, brace and standalone else heuristic."""
-    text = re.sub(r"//.*?$", "", text)
+    text = re.sub(r"//.*$", "", text)
     text = re.sub(r"/\*.*?\*/", "", text)
     text = re.sub(r"\s+", "", text)
     return text in {"", "{", "}", "else"}

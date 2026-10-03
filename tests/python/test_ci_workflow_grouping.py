@@ -86,6 +86,6 @@ def test_required_checks_and_sdl_composition_are_preserved() -> None:
     assert "pull_request_target:" in cleanup
     assert "types: [closed]" in cleanup
     assert "actions: write" in cleanup
-    assert "repository: horocore/horo-engine" in cleanup
-    assert "ref: main" in cleanup
-    assert "persist-credentials: false" in cleanup
+    assert "actions/checkout" not in cleanup
+    assert "contents: read" not in cleanup
+    assert "await cancelClosedPrRuns" in cleanup

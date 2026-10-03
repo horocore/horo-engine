@@ -74,10 +74,12 @@ Separate JUnit files preserve per-suite evidence even if another suite fails.
 This reduces the CI plus former Prefab workflow from 16 to 9 runner jobs without
 removing targets or test filters. Hosted timings remain the acceptance evidence.
 
-`cancel-closed-pr.yml` runs on `pull_request_target: closed` from the trusted base
-branch, checking out literal `main` from the explicitly named `horocore/horo-engine` repository. It requests cancellation of active
-`pull_request` runs linked to that PR, with exact repository/branch/SHA matching
-as a fallback for missing API links. Completed runs and main push runs are
-preserved. It handles both merge and manual closure, even after branch deletion.
+`cancel-closed-pr.yml` runs on `pull_request_target: closed`. Its trusted base
+workflow owns the inline script; no repository source is checked out, and only
+`actions: write` is granted. Node regression tests execute that exact script with
+bound API mocks. It requests cancellation of active `pull_request` runs linked
+to that PR, with exact repository/branch/SHA matching as a fallback for missing
+API links. Completed runs and main push runs are preserved. It handles both merge
+and manual closure, even after branch deletion.
 The helper becomes active after landing on the base branch and may itself queue
 while runner capacity is exhausted; it does not instantly release slots at merge.

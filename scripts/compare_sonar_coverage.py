@@ -18,6 +18,16 @@ def repository_path(path: Path, root: Path) -> Path:
     return Path(resolved)
 
 
+def invocation_path(path: Path) -> str:
+    """Validate CLI filesystem access against the trusted invocation directory."""
+    resolved = os.path.realpath(path)
+    base_dir = os.path.realpath(os.getcwd())
+    prefix = base_dir if base_dir.endswith(os.sep) else base_dir + os.sep
+    if resolved != base_dir and not resolved.startswith(prefix):
+        raise ValueError("Path outside invocation directory")
+    return resolved
+
+
 def read_report(path: Path, root: Path) -> dict[tuple[str, int], bool]:
     """Normalize source paths and retain every measured line, including misses."""
     document = element_tree.parse(repository_path(path, root)).getroot()
@@ -112,15 +122,17 @@ def main() -> int:
     try:
         if args.root.resolve() != Path.cwd().resolve():
             raise ValueError("Repository root must be the current working directory")
-        output = repository_path(args.output, args.root)
+        root = Path.cwd().resolve()
+        output = invocation_path(args.output)
         result = compare_reports(
-            read_report(args.gcovr_report, args.root),
-            read_report(args.fastcov_report, args.root),
+            read_report(args.gcovr_report, root),
+            read_report(args.fastcov_report, root),
         )
         result["seconds"] = {
             "gcovr": args.gcovr_seconds, "fastcov": args.fastcov_seconds,
         }
-        output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        with open(output, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(result, indent=2) + "\n")
         print(format_summary(result))
     except (OSError, element_tree.ParseError, DefusedXmlException, ValueError, KeyError) as error:
         parser.exit(2, f"Coverage comparison failed: {error}\n")
