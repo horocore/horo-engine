@@ -30,12 +30,28 @@ namespace Horo::Editor {
         Viewport,
         HierarchyRoot,
         HierarchyChild,
+        HierarchySibling,
+    };
+
+    /** @brief Visual row zone selected while an asset is dragged over one hierarchy object. */
+    enum class HierarchyAssetDropZone : std::uint8_t {
+        BeforeSibling,
+        Child,
+        AfterSibling,
+    };
+
+    /** @brief Parent and semantic target resolved from one hierarchy-row hover position. */
+    struct HierarchyAssetDropPlacement {
+        std::optional<SceneObjectId> parent;
+        AssetSceneDropTarget target{AssetSceneDropTarget::HierarchyChild};
+        HierarchyAssetDropZone zone{HierarchyAssetDropZone::Child};
     };
 
     /** @brief Controller command payload produced by one accepted asset drop. */
     struct AssetSceneDropRequest {
         std::string assetId;
         std::string assetType;
+        std::string absoluteAssetPath; /**< Canonical source path copied from the drag payload. */
         std::optional<SceneObjectId> parent;
         AssetSceneDropTarget target{AssetSceneDropTarget::HierarchyRoot};
         float normalizedX{0.5F};
@@ -92,4 +108,15 @@ namespace Horo::Editor {
 
     /** @brief Resolves surface, XZ work-plane, and camera-front placement without mutating scene state. */
     [[nodiscard]] Result<AssetViewportPlacement> ResolveAssetViewportPlacement(const AssetViewportPlacementRequest &request);
+
+    /** @brief Resolves row-edge sibling placement and row-center child placement. */
+    [[nodiscard]] HierarchyAssetDropPlacement ResolveHierarchyAssetDropPlacement(float normalizedRowY, SceneObjectId hoveredObject,
+                                                                                 std::optional<SceneObjectId> hoveredParent) noexcept;
+
+    /** @brief Replaces the transient, non-pickable asset placement preview in one viewport snapshot. */
+    [[nodiscard]] Result<void> ApplyAssetViewportPlacementPreview(EditorViewportSceneSnapshot &scene, const EditorAssetMeshView &mesh,
+                                                                  const AssetViewportPlacement &placement);
+
+    /** @brief Removes the transient asset placement preview and its orphaned resource view. */
+    [[nodiscard]] bool ClearAssetViewportPlacementPreview(EditorViewportSceneSnapshot &scene) noexcept;
 }  // namespace Horo::Editor

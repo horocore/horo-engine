@@ -1,0 +1,2756 @@
+{
+  "primitives-panel": {
+    "title": "Scene Primitives",
+    "subtitle": "Placement, collider generation, material defaults, and primitive catalog creation",
+    "context": "Scene: Main.scene · Parent: Selection",
+    "actions": [
+      "Reset",
+      "Place Tool",
+      "Create"
+    ],
+    "tabs": [
+      {
+        "title": "Mesh",
+        "blocks": [
+          {
+            "type": "grid",
+            "cards": [
+              {
+                "title": "Mesh Primitive",
+                "rows": [
+                  {
+                    "label": "ID",
+                    "value": "primitive.mesh.box",
+                    "tone": null
+                  },
+                  {
+                    "label": "Generated asset",
+                    "value": "none",
+                    "tone": null
+                  },
+                  {
+                    "label": "Pivot",
+                    "value": "center",
+                    "tone": null
+                  },
+                  {
+                    "label": "Default material",
+                    "value": "core.materials.default",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              },
+              {
+                "title": "Default Policy",
+                "rows": [
+                  {
+                    "label": "Renderable",
+                    "value": "yes",
+                    "tone": "success"
+                  },
+                  {
+                    "label": "Default collider",
+                    "value": "BoxCollider",
+                    "tone": null
+                  },
+                  {
+                    "label": "Physics solid",
+                    "value": "yes",
+                    "tone": "success"
+                  },
+                  {
+                    "label": "Serialization",
+                    "value": "PrimitiveMeshDescriptor",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              }
+            ]
+          },
+          {
+            "type": "preview",
+            "kind": "primitives-panel"
+          }
+        ]
+      },
+      {
+        "title": "Collider",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Collider Shape",
+              "rows": [
+                {
+                  "label": "BoxCollider",
+                  "value": "core",
+                  "tone": "success"
+                },
+                {
+                  "label": "SphereCollider",
+                  "value": "core",
+                  "tone": "success"
+                },
+                {
+                  "label": "CapsuleCollider",
+                  "value": "core",
+                  "tone": "success"
+                },
+                {
+                  "label": "StaticPlaneCollider",
+                  "value": "core",
+                  "tone": "success"
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Generation Rule",
+              "rows": [
+                {
+                  "label": "Cube",
+                  "value": "box collider",
+                  "tone": null
+                },
+                {
+                  "label": "Sphere",
+                  "value": "sphere collider",
+                  "tone": null
+                },
+                {
+                  "label": "Cylinder / Cone",
+                  "value": "none",
+                  "tone": "warning"
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      },
+      {
+        "title": "Scene Object",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Scene Object Primitives",
+              "rows": [
+                {
+                  "label": "Empty Object",
+                  "value": "transform only",
+                  "tone": null
+                },
+                {
+                  "label": "Camera",
+                  "value": "CameraComponent",
+                  "tone": null
+                },
+                {
+                  "label": "Directional Light",
+                  "value": "LightComponent",
+                  "tone": null
+                },
+                {
+                  "label": "Trigger Volume",
+                  "value": "overlap events",
+                  "tone": null
+                },
+                {
+                  "label": "Audio Source",
+                  "value": "AudioSourceComponent",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      },
+      {
+        "title": "Placement",
+        "blocks": [
+          {
+            "type": "grid",
+            "cards": [
+              {
+                "title": "Snap",
+                "rows": [
+                  {
+                    "label": "Grid",
+                    "value": "1.0 m",
+                    "tone": null
+                  },
+                  {
+                    "label": "Rotation",
+                    "value": "15°",
+                    "tone": null
+                  },
+                  {
+                    "label": "Align to surface",
+                    "value": "on",
+                    "tone": "success"
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              },
+              {
+                "title": "Transform",
+                "rows": [
+                  {
+                    "label": "Position",
+                    "value": "viewport hit",
+                    "tone": null
+                  },
+                  {
+                    "label": "Scale",
+                    "value": "1.0",
+                    "tone": null
+                  },
+                  {
+                    "label": "Parent",
+                    "value": "selected node",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "sidebar": [
+      {
+        "type": "heading",
+        "text": "Primitive Catalog"
+      },
+      {
+        "type": "item",
+        "title": "Cube / Box",
+        "subtitle": "1×1×1"
+      },
+      {
+        "type": "item",
+        "title": "Sphere",
+        "subtitle": "r .5"
+      },
+      {
+        "type": "item",
+        "title": "Capsule",
+        "subtitle": "h 2"
+      },
+      {
+        "type": "item",
+        "title": "Cylinder",
+        "subtitle": "h 1"
+      },
+      {
+        "type": "item",
+        "title": "Cone",
+        "subtitle": "h 1"
+      },
+      {
+        "type": "item",
+        "title": "Plane",
+        "subtitle": "10×10"
+      },
+      {
+        "type": "item",
+        "title": "Quad",
+        "subtitle": "1×1"
+      },
+      {
+        "type": "heading",
+        "text": "Creation Mode"
+      },
+      {
+        "type": "row",
+        "label": "Target parent",
+        "value": "Selection",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Commit path",
+        "value": "EditorCommand",
+        "tone": null
+      }
+    ],
+    "details": [
+      {
+        "type": "heading",
+        "text": "Selection"
+      },
+      {
+        "type": "row",
+        "label": "primitive",
+        "value": "Cube / Box",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "id",
+        "value": "primitive.mesh.box",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "category",
+        "value": "Mesh",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "solid default",
+        "value": "yes",
+        "tone": "success"
+      },
+      {
+        "type": "heading",
+        "text": "Create Request"
+      },
+      {
+        "type": "row",
+        "label": "name",
+        "value": "Cube",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "parent",
+        "value": "Selection",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "material",
+        "value": "Default",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "undo",
+        "value": "single command",
+        "tone": null
+      }
+    ],
+    "footer": [
+      "PrimitiveCatalog authoritative",
+      "GUI · CLI · MCP share create use case",
+      "no project AssetId for primitive meshes"
+    ]
+  },
+  "decal-placement": {
+    "title": "Decal Placement",
+    "subtitle": "Decal brush, atlas selection, material domain validation, pooling, and cell ownership",
+    "context": "Scene: Main.scene · Mode: Paint",
+    "actions": [
+      "Refresh",
+      "Pick Surface",
+      "Place Decal"
+    ],
+    "tabs": [
+      {
+        "title": "Brush",
+        "blocks": [
+          {
+            "type": "grid",
+            "cards": [
+              {
+                "title": "Projection",
+                "rows": [
+                  {
+                    "label": "Mode",
+                    "value": "OrientedBox",
+                    "tone": null
+                  },
+                  {
+                    "label": "Extents",
+                    "value": "0.25 × 0.25 × 0.08 m",
+                    "tone": null
+                  },
+                  {
+                    "label": "Blend",
+                    "value": "Translucent",
+                    "tone": null
+                  },
+                  {
+                    "label": "Sort order",
+                    "value": "8",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              },
+              {
+                "title": "Lifetime",
+                "rows": [
+                  {
+                    "label": "Type",
+                    "value": "Runtime pooled",
+                    "tone": null
+                  },
+                  {
+                    "label": "Lifetime",
+                    "value": "12 s",
+                    "tone": null
+                  },
+                  {
+                    "label": "Fade out",
+                    "value": "1.5 s",
+                    "tone": null
+                  },
+                  {
+                    "label": "Ownership",
+                    "value": "transient",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              }
+            ]
+          },
+          {
+            "type": "preview",
+            "kind": "decal-placement"
+          }
+        ]
+      },
+      {
+        "title": "Atlas",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Atlas",
+              "rows": [
+                {
+                  "label": "Atlas asset",
+                  "value": "Decal_Impact_A",
+                  "tone": null
+                },
+                {
+                  "label": "Pages",
+                  "value": "4",
+                  "tone": null
+                },
+                {
+                  "label": "Current region",
+                  "value": "impact_03",
+                  "tone": null
+                },
+                {
+                  "label": "Batch group",
+                  "value": "small_decals",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Budget",
+              "rows": [
+                {
+                  "label": "Draw calls saved",
+                  "value": "18",
+                  "tone": null
+                },
+                {
+                  "label": "Atlas residency",
+                  "value": "resident",
+                  "tone": "success"
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      },
+      {
+        "title": "Material",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Material Domain",
+              "rows": [
+                {
+                  "label": "Material",
+                  "value": "M_Decal_BulletImpact",
+                  "tone": null
+                },
+                {
+                  "label": "Domain",
+                  "value": "Decal",
+                  "tone": "success"
+                },
+                {
+                  "label": "Normal blend",
+                  "value": "0.65",
+                  "tone": null
+                },
+                {
+                  "label": "Roughness contribution",
+                  "value": "0.2",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Validation",
+              "rows": [
+                {
+                  "label": "GBuffer reads",
+                  "value": "allowed",
+                  "tone": "success"
+                },
+                {
+                  "label": "Forward fallback",
+                  "value": "mesh decal",
+                  "tone": "warning"
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      },
+      {
+        "title": "Pooling",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Pool State",
+              "rows": [
+                {
+                  "label": "BulletImpact pool",
+                  "value": "42 / 128",
+                  "tone": null
+                },
+                {
+                  "label": "Recycle policy",
+                  "value": "oldest",
+                  "tone": null
+                },
+                {
+                  "label": "GPU cost",
+                  "value": "0.4 ms",
+                  "tone": null
+                },
+                {
+                  "label": "View budget",
+                  "value": "256 decals",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Culling",
+              "rows": [
+                {
+                  "label": "Frustum",
+                  "value": "enabled",
+                  "tone": "success"
+                },
+                {
+                  "label": "Distance fade",
+                  "value": "64 m",
+                  "tone": null
+                },
+                {
+                  "label": "Cluster merge",
+                  "value": "same material",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      }
+    ],
+    "sidebar": [
+      {
+        "type": "heading",
+        "text": "Brushes"
+      },
+      {
+        "type": "item",
+        "title": "Bullet Impact",
+        "subtitle": "box projection · pooled · 12s fade"
+      },
+      {
+        "type": "item",
+        "title": "Scorch Mark",
+        "subtitle": "stain blend · lifetime 24s"
+      },
+      {
+        "type": "item",
+        "title": "Paint Stripe",
+        "subtitle": "mesh decal · permanent"
+      },
+      {
+        "type": "heading",
+        "text": "Placement"
+      },
+      {
+        "type": "row",
+        "label": "Target layers",
+        "value": "Static + Terrain",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Align normal",
+        "value": "on",
+        "tone": "success"
+      },
+      {
+        "type": "row",
+        "label": "Save to scene",
+        "value": "opt-in",
+        "tone": null
+      }
+    ],
+    "details": [
+      {
+        "type": "heading",
+        "text": "Selected Decal"
+      },
+      {
+        "type": "row",
+        "label": "brush",
+        "value": "Bullet Impact",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "mode",
+        "value": "OrientedBox",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "material",
+        "value": "M_Decal_BulletImpact",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "lifetime",
+        "value": "12 s",
+        "tone": null
+      },
+      {
+        "type": "heading",
+        "text": "Ownership"
+      },
+      {
+        "type": "row",
+        "label": "Runtime",
+        "value": "transient",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Scene save",
+        "value": "opt-in only",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Network",
+        "value": "cosmetic",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Cell owner",
+        "value": "StreamingCell_04",
+        "tone": null
+      }
+    ],
+    "footer": [
+      "Pool 42 / 128",
+      "deferred decals · atlas resident",
+      "GPU 0.4 ms",
+      "dx12_vulkan · forward fallback ready"
+    ]
+  },
+  "destruction-setup": {
+    "title": "Destruction Setup",
+    "subtitle": "Fracture asset setup, support graph, chunk physics, damage validation, and replicated state",
+    "context": "Asset: Wall_Fractured · Authority: Server",
+    "actions": [
+      "Refresh",
+      "Preview Hit",
+      "Apply Setup"
+    ],
+    "tabs": [
+      {
+        "title": "Fracture",
+        "blocks": [
+          {
+            "type": "grid",
+            "cards": [
+              {
+                "title": "Fracture Asset",
+                "rows": [
+                  {
+                    "label": "Source mesh",
+                    "value": "SM_Wall_A",
+                    "tone": null
+                  },
+                  {
+                    "label": "Chunk count",
+                    "value": "64",
+                    "tone": null
+                  },
+                  {
+                    "label": "Method",
+                    "value": "Voronoi",
+                    "tone": null
+                  },
+                  {
+                    "label": "Seed",
+                    "value": "9918",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              },
+              {
+                "title": "Support Graph",
+                "rows": [
+                  {
+                    "label": "Connectivity",
+                    "value": "connected",
+                    "tone": "success"
+                  },
+                  {
+                    "label": "Structural chunks",
+                    "value": "18",
+                    "tone": null
+                  },
+                  {
+                    "label": "Loose islands",
+                    "value": "2",
+                    "tone": "warning"
+                  },
+                  {
+                    "label": "Collapse threshold",
+                    "value": "62%",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              }
+            ]
+          },
+          {
+            "type": "preview",
+            "kind": "destruction-setup"
+          }
+        ]
+      },
+      {
+        "title": "Chunks",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Chunk Physics",
+              "rows": [
+                {
+                  "label": "Collision",
+                  "value": "convex decomposition",
+                  "tone": null
+                },
+                {
+                  "label": "Dynamic bodies",
+                  "value": "activated on fracture",
+                  "tone": null
+                },
+                {
+                  "label": "Sleep freeze",
+                  "value": "enabled",
+                  "tone": "success"
+                },
+                {
+                  "label": "Cleanup delay",
+                  "value": "18 s",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Debris",
+              "rows": [
+                {
+                  "label": "Particle budget",
+                  "value": "256",
+                  "tone": null
+                },
+                {
+                  "label": "Impact decal",
+                  "value": "M_Scorch_Decal",
+                  "tone": null
+                },
+                {
+                  "label": "Audio event",
+                  "value": "destruct.wall.break",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      },
+      {
+        "title": "Damage",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Damage Model",
+              "rows": [
+                {
+                  "label": "Health",
+                  "value": "250",
+                  "tone": null
+                },
+                {
+                  "label": "Damage threshold",
+                  "value": "80",
+                  "tone": null
+                },
+                {
+                  "label": "Impact radius",
+                  "value": "2.5 m",
+                  "tone": null
+                },
+                {
+                  "label": "Cooldown",
+                  "value": "0.25 s",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Triggers",
+              "rows": [
+                {
+                  "label": "Impact",
+                  "value": "enabled",
+                  "tone": "success"
+                },
+                {
+                  "label": "Explosion",
+                  "value": "enabled",
+                  "tone": "success"
+                },
+                {
+                  "label": "Script command",
+                  "value": "allowed",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      },
+      {
+        "title": "Replication",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Network State",
+              "rows": [
+                {
+                  "label": "Authority",
+                  "value": "server",
+                  "tone": null
+                },
+                {
+                  "label": "Replicated state",
+                  "value": "Intact/Damaged/Destroyed",
+                  "tone": null
+                },
+                {
+                  "label": "Chunk transforms",
+                  "value": "not replicated",
+                  "tone": "warning"
+                },
+                {
+                  "label": "Late join",
+                  "value": "reconstructable",
+                  "tone": "success"
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Cosmetic Effects",
+              "rows": [
+                {
+                  "label": "Debris",
+                  "value": "client only",
+                  "tone": null
+                },
+                {
+                  "label": "Audio/VFX",
+                  "value": "event driven",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      }
+    ],
+    "sidebar": [
+      {
+        "type": "heading",
+        "text": "Destructibles"
+      },
+      {
+        "type": "item",
+        "title": "Wall_Fractured",
+        "subtitle": "64 chunks · support graph valid"
+      },
+      {
+        "type": "item",
+        "title": "Crate_Breakable",
+        "subtitle": "12 chunks · debris cosmetic"
+      },
+      {
+        "type": "item",
+        "title": "Concrete_Pillar",
+        "subtitle": "96 chunks · structural"
+      },
+      {
+        "type": "heading",
+        "text": "Validation"
+      },
+      {
+        "type": "row",
+        "label": "Support graph",
+        "value": "valid",
+        "tone": "success"
+      },
+      {
+        "type": "row",
+        "label": "Convex collision",
+        "value": "ready",
+        "tone": "success"
+      },
+      {
+        "type": "row",
+        "label": "Interior material",
+        "value": "assigned",
+        "tone": null
+      }
+    ],
+    "details": [
+      {
+        "type": "heading",
+        "text": "Selected Asset"
+      },
+      {
+        "type": "row",
+        "label": "asset",
+        "value": "Wall_Fractured",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "chunks",
+        "value": "64",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "state",
+        "value": "valid",
+        "tone": "success"
+      },
+      {
+        "type": "row",
+        "label": "tier cap",
+        "value": "dx12: 64",
+        "tone": null
+      },
+      {
+        "type": "heading",
+        "text": "Runtime"
+      },
+      {
+        "type": "row",
+        "label": "Fracture mode",
+        "value": "server-auth",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Physics",
+        "value": "convex chunks",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Debris",
+        "value": "pooled VFX",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Replication",
+        "value": "state only",
+        "tone": null
+      }
+    ],
+    "footer": [
+      "64 chunks · support graph valid",
+      "0 validation errors",
+      "runtime fracture: server-auth",
+      "dx12_vulkan · high_end enables hierarchical fracture"
+    ]
+  },
+  "lod-debugger": {
+    "title": "LOD Debugger",
+    "subtitle": "Mesh LOD, HLOD clusters, impostor bake state, frustum and occlusion diagnostics",
+    "context": "Camera: EditorViewport · Tier: dx12_vulkan",
+    "actions": [
+      "Refresh",
+      "Freeze",
+      "Apply Bias"
+    ],
+    "tabs": [
+      {
+        "title": "LOD",
+        "blocks": [
+          {
+            "type": "grid",
+            "cards": [
+              {
+                "title": "Current LOD",
+                "rows": [
+                  {
+                    "label": "Selected level",
+                    "value": "LOD1",
+                    "tone": null
+                  },
+                  {
+                    "label": "Screen size",
+                    "value": "0.19",
+                    "tone": null
+                  },
+                  {
+                    "label": "Distance",
+                    "value": "34.8 m",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              },
+              {
+                "title": "Chain Cost",
+                "rows": [
+                  {
+                    "label": "LOD0",
+                    "value": "12k tris",
+                    "tone": null
+                  },
+                  {
+                    "label": "LOD1",
+                    "value": "4k tris",
+                    "tone": null
+                  },
+                  {
+                    "label": "LOD2",
+                    "value": "980 tris",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              }
+            ]
+          },
+          {
+            "type": "preview",
+            "kind": "lod-debugger"
+          }
+        ]
+      },
+      {
+        "title": "HLOD",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Cluster Proxy",
+              "rows": [
+                {
+                  "label": "Cluster",
+                  "value": "HLOD_Industrial_A",
+                  "tone": null
+                },
+                {
+                  "label": "Source objects",
+                  "value": "42",
+                  "tone": null
+                },
+                {
+                  "label": "Proxy triangles",
+                  "value": "18.4k",
+                  "tone": null
+                },
+                {
+                  "label": "Transition",
+                  "value": "180 m",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Cluster State",
+              "rows": [
+                {
+                  "label": "Active clusters",
+                  "value": "3",
+                  "tone": null
+                },
+                {
+                  "label": "Streaming cell",
+                  "value": "loaded",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      },
+      {
+        "title": "Impostors",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Impostor Bake",
+              "rows": [
+                {
+                  "label": "Atlas",
+                  "value": "SM_Crate_017_impostor",
+                  "tone": null
+                },
+                {
+                  "label": "Views",
+                  "value": "16 × 8",
+                  "tone": null
+                },
+                {
+                  "label": "Depth parallax",
+                  "value": "available",
+                  "tone": "success"
+                },
+                {
+                  "label": "Last bake",
+                  "value": "00:00.68",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Warnings",
+              "rows": [
+                {
+                  "label": "Foliage billboard set",
+                  "value": "stale",
+                  "tone": "warning"
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      },
+      {
+        "title": "Occlusion",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Culling Pipeline",
+              "rows": [
+                {
+                  "label": "Frustum pass",
+                  "value": "visible",
+                  "tone": "success"
+                },
+                {
+                  "label": "Hi-Z pass",
+                  "value": "pending",
+                  "tone": "warning"
+                },
+                {
+                  "label": "Distance cull",
+                  "value": "117 culled",
+                  "tone": null
+                },
+                {
+                  "label": "Draw mode",
+                  "value": "IndirectDrawBatch",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "GPU Timing",
+              "rows": [
+                {
+                  "label": "Culling CS",
+                  "value": "0.22 ms",
+                  "tone": null
+                },
+                {
+                  "label": "Compact visible list",
+                  "value": "0.08 ms",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      }
+    ],
+    "sidebar": [
+      {
+        "type": "heading",
+        "text": "Selected Renderable"
+      },
+      {
+        "type": "item",
+        "title": "SM_Crate_017",
+        "subtitle": "LOD0/1/2 · hysteresis 8% · bias 0.0"
+      },
+      {
+        "type": "item",
+        "title": "HLOD_Industrial_A",
+        "subtitle": "42 objects · proxy mesh · 180 m cutoff"
+      },
+      {
+        "type": "heading",
+        "text": "Visibility Filters"
+      },
+      {
+        "type": "row",
+        "label": "Show LOD colors",
+        "value": "on",
+        "tone": "success"
+      },
+      {
+        "type": "row",
+        "label": "Show culled bounds",
+        "value": "on",
+        "tone": "success"
+      },
+      {
+        "type": "row",
+        "label": "Freeze culling",
+        "value": "off",
+        "tone": null
+      }
+    ],
+    "details": [
+      {
+        "type": "heading",
+        "text": "Selection"
+      },
+      {
+        "type": "row",
+        "label": "mesh",
+        "value": "SM_Crate_017",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "bounds radius",
+        "value": "1.2 m",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "current LOD",
+        "value": "LOD1",
+        "tone": "success"
+      },
+      {
+        "type": "row",
+        "label": "transition",
+        "value": "cross-fade 42%",
+        "tone": null
+      },
+      {
+        "type": "heading",
+        "text": "Culling"
+      },
+      {
+        "type": "row",
+        "label": "Frustum",
+        "value": "visible",
+        "tone": "success"
+      },
+      {
+        "type": "row",
+        "label": "Occlusion",
+        "value": "tested",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Distance",
+        "value": "inside range",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Draw command",
+        "value": "batch #14",
+        "tone": null
+      }
+    ],
+    "footer": [
+      "84 visible · 117 culled",
+      "HLOD 3 active",
+      "GPU culling: compute",
+      "dx12_vulkan · temporal dither"
+    ]
+  },
+  "navigation-bake": {
+    "title": "Navigation Bake",
+    "subtitle": "NavMesh bake settings, agent profiles, tile diagnostics, and viewport overlay control",
+    "context": "Scene: Main.scene · Surface: GroundNavigation",
+    "actions": [
+      "Refresh",
+      "Preview",
+      "Apply"
+    ],
+    "tabs": [
+      {
+        "title": "Bake",
+        "blocks": [
+          {
+            "type": "grid",
+            "cards": [
+              {
+                "title": "Bake Settings",
+                "rows": [
+                  {
+                    "label": "Tile size",
+                    "value": "32 m",
+                    "tone": null
+                  },
+                  {
+                    "label": "Cell size",
+                    "value": "0.16 m",
+                    "tone": null
+                  },
+                  {
+                    "label": "Region min size",
+                    "value": "8 voxels",
+                    "tone": null
+                  },
+                  {
+                    "label": "Generate links",
+                    "value": "enabled",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              },
+              {
+                "title": "Diagnostics",
+                "rows": [
+                  {
+                    "label": "Walkable tiles",
+                    "value": "128",
+                    "tone": null
+                  },
+                  {
+                    "label": "Blocked overlays",
+                    "value": "12",
+                    "tone": "warning"
+                  },
+                  {
+                    "label": "Off-mesh links",
+                    "value": "4",
+                    "tone": null
+                  },
+                  {
+                    "label": "Last bake",
+                    "value": "00:01.42",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              }
+            ]
+          },
+          {
+            "type": "preview",
+            "kind": "navigation-bake"
+          }
+        ]
+      },
+      {
+        "title": "Agents",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Humanoid Profile",
+              "rows": [
+                {
+                  "label": "Radius",
+                  "value": "0.35 m",
+                  "tone": null
+                },
+                {
+                  "label": "Height",
+                  "value": "1.8 m",
+                  "tone": null
+                },
+                {
+                  "label": "Step height",
+                  "value": "0.35 m",
+                  "tone": null
+                },
+                {
+                  "label": "Max slope",
+                  "value": "45°",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Profile Coverage",
+              "rows": [
+                {
+                  "label": "Reachable area",
+                  "value": "93.4%",
+                  "tone": null
+                },
+                {
+                  "label": "Disconnected islands",
+                  "value": "3",
+                  "tone": "warning"
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      },
+      {
+        "title": "Obstacles",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Dynamic Obstacle Overlay",
+              "rows": [
+                {
+                  "label": "Carving obstacles",
+                  "value": "12 active",
+                  "tone": null
+                },
+                {
+                  "label": "Affected tiles",
+                  "value": "9",
+                  "tone": null
+                },
+                {
+                  "label": "Repath requests",
+                  "value": "18 queued",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Warnings",
+              "rows": [
+                {
+                  "label": "Door_A carved stale tile",
+                  "value": "dirty",
+                  "tone": "warning"
+                },
+                {
+                  "label": "CrateCluster_03",
+                  "value": "ok",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      },
+      {
+        "title": "Overlay",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Viewport Overlay",
+              "rows": [
+                {
+                  "label": "Walkable surface",
+                  "value": "visible",
+                  "tone": "success"
+                },
+                {
+                  "label": "Tile bounds",
+                  "value": "visible",
+                  "tone": "success"
+                },
+                {
+                  "label": "Off-mesh links",
+                  "value": "visible",
+                  "tone": "success"
+                },
+                {
+                  "label": "Agent radius preview",
+                  "value": "Humanoid",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      }
+    ],
+    "sidebar": [
+      {
+        "type": "heading",
+        "text": "Agent Profiles"
+      },
+      {
+        "type": "item",
+        "title": "Humanoid",
+        "subtitle": "radius .35 · height 1.8 · slope 45°"
+      },
+      {
+        "type": "item",
+        "title": "Crawler",
+        "subtitle": "radius .25 · height .6 · slope 60°"
+      },
+      {
+        "type": "item",
+        "title": "Heavy Unit",
+        "subtitle": "radius .65 · height 2.4 · slope 35°"
+      },
+      {
+        "type": "heading",
+        "text": "Source Geometry"
+      },
+      {
+        "type": "row",
+        "label": "Static Mesh Colliders",
+        "value": "128",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Terrain Tiles",
+        "value": "24",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Dynamic Obstacles",
+        "value": "12",
+        "tone": null
+      }
+    ],
+    "details": [
+      {
+        "type": "heading",
+        "text": "Selected Tile"
+      },
+      {
+        "type": "row",
+        "label": "id",
+        "value": "cell 04 02",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "state",
+        "value": "baked",
+        "tone": "success"
+      },
+      {
+        "type": "row",
+        "label": "generation",
+        "value": "17",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "polygons",
+        "value": "384",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "dirty sources",
+        "value": "0",
+        "tone": null
+      },
+      {
+        "type": "heading",
+        "text": "Selected Agent"
+      },
+      {
+        "type": "row",
+        "label": "profile",
+        "value": "Humanoid",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "sample path",
+        "value": "complete · 34.2 m",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "cost filter",
+        "value": "Default",
+        "tone": null
+      }
+    ],
+    "footer": [
+      "NavMesh valid · A* pathfinding",
+      "Perception: enabled",
+      "Behavior: blackboard",
+      "overlay visible · preview not applied"
+    ]
+  },
+  "xr-setup": {
+    "title": "XR Setup",
+    "subtitle": "OpenXR discovery, runtime-driven views, interaction profiles, optional capabilities, privacy, and qualification evidence",
+    "context": "Runtime-selected configuration",
+    "actions": [
+      "Refresh",
+      "Test Session",
+      "Apply"
+    ],
+    "tabs": [
+      {
+        "title": "Runtime",
+        "blocks": [
+          {
+            "type": "grid",
+            "cards": [
+              {
+                "title": "Runtime",
+                "rows": [
+                  {
+                    "label": "API",
+                    "value": "OpenXR",
+                    "tone": null
+                  },
+                  {
+                    "label": "Identity",
+                    "value": "runtime reported",
+                    "tone": null
+                  },
+                  {
+                    "label": "Refresh modes",
+                    "value": "enumerated",
+                    "tone": null
+                  },
+                  {
+                    "label": "Active budget",
+                    "value": "derived",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              },
+              {
+                "title": "Rendering",
+                "rows": [
+                  {
+                    "label": "Configuration",
+                    "value": "runtime selected",
+                    "tone": null
+                  },
+                  {
+                    "label": "View count",
+                    "value": "runtime reported",
+                    "tone": null
+                  },
+                  {
+                    "label": "Per-view extents",
+                    "value": "enumerated",
+                    "tone": null
+                  },
+                  {
+                    "label": "Reprojection",
+                    "value": "runtime owned",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              }
+            ]
+          },
+          {
+            "type": "preview",
+            "kind": "xr-setup"
+          }
+        ]
+      },
+      {
+        "title": "Input",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Motion Controllers",
+              "rows": [
+                {
+                  "label": "Interaction profile",
+                  "value": "runtime resolved",
+                  "tone": null
+                },
+                {
+                  "label": "Bindings schema",
+                  "value": "versioned",
+                  "tone": null
+                },
+                {
+                  "label": "Profile changes",
+                  "value": "observable",
+                  "tone": null
+                },
+                {
+                  "label": "Aim/grip state",
+                  "value": "confidence aware",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Hand Tracking",
+              "rows": [
+                {
+                  "label": "Joint set",
+                  "value": "basic",
+                  "tone": null
+                },
+                {
+                  "label": "Confidence",
+                  "value": "medium",
+                  "tone": "warning"
+                },
+                {
+                  "label": "Gesture",
+                  "value": "pinch ready",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      },
+      {
+        "title": "AR",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Mixed Reality",
+              "rows": [
+                {
+                  "label": "Passthrough",
+                  "value": "granted",
+                  "tone": "success"
+                },
+                {
+                  "label": "Spatial anchors",
+                  "value": "local only",
+                  "tone": null
+                },
+                {
+                  "label": "Plane detection",
+                  "value": "disabled",
+                  "tone": null
+                },
+                {
+                  "label": "Light estimation",
+                  "value": "sampled",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "AR Safety",
+              "rows": [
+                {
+                  "label": "Camera feed storage",
+                  "value": "blocked",
+                  "tone": "success"
+                },
+                {
+                  "label": "Guardian/chaperone",
+                  "value": "visible",
+                  "tone": "success"
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      },
+      {
+        "title": "Privacy",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Privacy Permissions",
+              "rows": [
+                {
+                  "label": "Eye tracking",
+                  "value": "disabled",
+                  "tone": "warning"
+                },
+                {
+                  "label": "Raw camera logging",
+                  "value": "off",
+                  "tone": "success"
+                },
+                {
+                  "label": "Spatial anchors",
+                  "value": "local",
+                  "tone": null
+                },
+                {
+                  "label": "Diagnostics",
+                  "value": "redacted",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Data Retention",
+              "rows": [
+                {
+                  "label": "Pose traces",
+                  "value": "session only",
+                  "tone": null
+                },
+                {
+                  "label": "Crash dumps",
+                  "value": "no camera frames",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      },
+      {
+        "title": "Qualification",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Evidence Identity",
+              "rows": [
+                {
+                  "label": "Headset",
+                  "value": "device reported",
+                  "tone": null
+                },
+                {
+                  "label": "Runtime / version",
+                  "value": "runtime reported",
+                  "tone": null
+                },
+                {
+                  "label": "OS / renderer",
+                  "value": "host snapshot",
+                  "tone": null
+                },
+                {
+                  "label": "Connection mode",
+                  "value": "explicit",
+                  "tone": null
+                },
+                {
+                  "label": "Interaction profile",
+                  "value": "runtime resolved",
+                  "tone": null
+                },
+                {
+                  "label": "Extensions",
+                  "value": "admitted set",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          },
+          {
+            "type": "card",
+            "card": {
+              "title": "Qualification",
+              "rows": [
+                {
+                  "label": "Planning category",
+                  "value": "Reference",
+                  "tone": null
+                },
+                {
+                  "label": "Device evidence",
+                  "value": "not run",
+                  "tone": "warning"
+                },
+                {
+                  "label": "Simulator evidence",
+                  "value": "separate",
+                  "tone": null
+                },
+                {
+                  "label": "Known issues",
+                  "value": "tracked",
+                  "tone": null
+                }
+              ],
+              "headline": "",
+              "summary": ""
+            }
+          }
+        ]
+      }
+    ],
+    "sidebar": [
+      {
+        "type": "heading",
+        "text": "Devices"
+      },
+      {
+        "type": "item",
+        "title": "Selected Runtime",
+        "subtitle": "discovered identity · version · connection"
+      },
+      {
+        "type": "item",
+        "title": "Interaction Profiles",
+        "subtitle": "runtime-resolved · bindings versioned"
+      },
+      {
+        "type": "item",
+        "title": "Tracking Providers",
+        "subtitle": "capability and confidence reported"
+      },
+      {
+        "type": "heading",
+        "text": "Capabilities"
+      },
+      {
+        "type": "row",
+        "label": "View configuration",
+        "value": "admitted",
+        "tone": "success"
+      },
+      {
+        "type": "row",
+        "label": "Foveation",
+        "value": "optional",
+        "tone": "warning"
+      },
+      {
+        "type": "row",
+        "label": "Passthrough",
+        "value": "permission",
+        "tone": "warning"
+      }
+    ],
+    "details": [
+      {
+        "type": "heading",
+        "text": "Session"
+      },
+      {
+        "type": "row",
+        "label": "state",
+        "value": "ready",
+        "tone": "success"
+      },
+      {
+        "type": "row",
+        "label": "view config",
+        "value": "runtime selected",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "refresh",
+        "value": "runtime mode",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "budget",
+        "value": "derived",
+        "tone": null
+      },
+      {
+        "type": "heading",
+        "text": "Privacy"
+      },
+      {
+        "type": "row",
+        "label": "Passthrough",
+        "value": "granted",
+        "tone": "success"
+      },
+      {
+        "type": "row",
+        "label": "Eye tracking",
+        "value": "disabled",
+        "tone": "warning"
+      },
+      {
+        "type": "row",
+        "label": "Diagnostics",
+        "value": "redacted",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Camera logging",
+        "value": "off",
+        "tone": null
+      }
+    ],
+    "footer": [
+      "OpenXR preflight · evidence pending",
+      "View configuration admitted",
+      "Optional features explicit",
+      "renderer · runtime refresh"
+    ]
+  },
+  "build-output": {
+    "title": "Build Output",
+    "subtitle": "Build log, asset cook progress, packaging diagnostics, and release blockers",
+    "context": "",
+    "actions": [
+      "Refresh",
+      "Apply"
+    ],
+    "tabs": [
+      {
+        "title": "Build",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Progress",
+              "rows": [],
+              "headline": "Compiling HoroEditor",
+              "summary": "[42/58] Linking editor target  [43/58] Cooking material permutations  [44/58] Validating package lockfile"
+            }
+          },
+          {
+            "type": "grid",
+            "cards": [
+              {
+                "title": "Warnings",
+                "rows": [],
+                "headline": "12",
+                "summary": "deprecated texture format, missing icon sizes"
+              },
+              {
+                "title": "Errors",
+                "rows": [],
+                "headline": "1",
+                "summary": "PF Door references deleted asset guid"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Cook",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Asset Cook Queue",
+              "rows": [],
+              "headline": "2 jobs pending",
+              "summary": "shader permutations: 842 / 856 cached  material variants: 128 / 128 baked  texture atlas: 4 pages generated"
+            }
+          }
+        ]
+      },
+      {
+        "title": "Package",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Packaging",
+              "rows": [],
+              "headline": "Desktop Standalone",
+              "summary": "platform: linux-x64  compression: lz4  estimated size: 142 MB"
+            }
+          }
+        ]
+      },
+      {
+        "title": "Errors",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Build Errors",
+              "rows": [],
+              "headline": "1 error",
+              "summary": "PF Door references deleted asset guid 01H...A2  Fix: reassign prefab reference or restore asset"
+            }
+          }
+        ]
+      }
+    ],
+    "sidebar": [
+      {
+        "type": "heading",
+        "text": "Build jobs"
+      },
+      {
+        "type": "item",
+        "title": "Editor Debug",
+        "subtitle": "running · 72%"
+      },
+      {
+        "type": "item",
+        "title": "Asset Cook",
+        "subtitle": "queued"
+      },
+      {
+        "type": "item",
+        "title": "Release Package",
+        "subtitle": "blocked"
+      }
+    ],
+    "details": [
+      {
+        "type": "heading",
+        "text": "Selected diagnostic"
+      },
+      {
+        "type": "row",
+        "label": "target",
+        "value": "HoroEditor",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "phase",
+        "value": "asset cook",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "severity",
+        "value": "error",
+        "tone": "error"
+      },
+      {
+        "type": "item",
+        "title": "Fix deleted prefab asset reference before release packaging.",
+        "subtitle": "Fix deleted prefab asset reference before release packaging."
+      }
+    ],
+    "footer": [
+      "CMake: Ninja generator",
+      "Dependencies: vcpkg resolved",
+      "build queue 2 · errors 1 · warnings 12"
+    ]
+  },
+  "save-load-manager": {
+    "title": "Save / Load Manager",
+    "subtitle": "Save slots, metadata, migration, cloud sync, integrity, and tamper diagnostics",
+    "context": "",
+    "actions": [
+      "Refresh",
+      "Apply"
+    ],
+    "tabs": [
+      {
+        "title": "Slots",
+        "blocks": [
+          {
+            "type": "grid",
+            "cards": [
+              {
+                "title": "Cloud Sync",
+                "rows": [
+                  {
+                    "label": "Provider",
+                    "value": "Steam Cloud",
+                    "tone": null
+                  },
+                  {
+                    "label": "Status",
+                    "value": "synced",
+                    "tone": "success"
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              },
+              {
+                "title": "Integrity",
+                "rows": [
+                  {
+                    "label": "Checksum",
+                    "value": "valid",
+                    "tone": "success"
+                  },
+                  {
+                    "label": "Signature",
+                    "value": "platform",
+                    "tone": "success"
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Cloud",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Cloud",
+              "rows": [],
+              "headline": "Content",
+              "summary": "No data available"
+            }
+          }
+        ]
+      },
+      {
+        "title": "Migration",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Migration",
+              "rows": [],
+              "headline": "Content",
+              "summary": "No data available"
+            }
+          }
+        ]
+      },
+      {
+        "title": "Integrity",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Integrity",
+              "rows": [],
+              "headline": "Content",
+              "summary": "No data available"
+            }
+          }
+        ]
+      }
+    ],
+    "sidebar": [
+      {
+        "type": "heading",
+        "text": "Save slots"
+      },
+      {
+        "type": "item",
+        "title": "Autosave 01",
+        "subtitle": "14:22 · DesertRun · scene.room"
+      },
+      {
+        "type": "item",
+        "title": "Manual 03",
+        "subtitle": "yesterday · ArenaPrototype"
+      }
+    ],
+    "details": [
+      {
+        "type": "heading",
+        "text": "Selected slot"
+      },
+      {
+        "type": "row",
+        "label": "schema",
+        "value": "7",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "migration",
+        "value": "none",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "size",
+        "value": "4.2 MB",
+        "tone": null
+      }
+    ],
+    "footer": [
+      "Schema v7 · binary serialization",
+      "Migration: none required",
+      "2 local slots · cloud synced"
+    ]
+  },
+  "virtual-texturing-debug": {
+    "title": "Virtual Texturing Debug",
+    "subtitle": "Page table visualization, feedback requests, cache residency, and asset-provider streaming",
+    "context": "",
+    "actions": [
+      "Refresh",
+      "Apply"
+    ],
+    "tabs": [
+      {
+        "title": "Page Table",
+        "blocks": [
+          {
+            "type": "grid",
+            "cards": [
+              {
+                "title": "Residency",
+                "rows": [
+                  {
+                    "label": "Resident pages",
+                    "value": "1,248",
+                    "tone": null
+                  },
+                  {
+                    "label": "Requests/frame",
+                    "value": "84",
+                    "tone": null
+                  },
+                  {
+                    "label": "Misses",
+                    "value": "3",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              },
+              {
+                "title": "Cache",
+                "rows": [
+                  {
+                    "label": "Provider",
+                    "value": "IAssetProvider",
+                    "tone": null
+                  },
+                  {
+                    "label": "Budget",
+                    "value": "512 MB",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Feedback",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Feedback",
+              "rows": [],
+              "headline": "Content",
+              "summary": "No data available"
+            }
+          }
+        ]
+      },
+      {
+        "title": "Cache",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Cache",
+              "rows": [],
+              "headline": "Content",
+              "summary": "No data available"
+            }
+          }
+        ]
+      },
+      {
+        "title": "Requests",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Requests",
+              "rows": [],
+              "headline": "Content",
+              "summary": "No data available"
+            }
+          }
+        ]
+      }
+    ],
+    "sidebar": [
+      {
+        "type": "heading",
+        "text": "Virtual textures"
+      },
+      {
+        "type": "item",
+        "title": "VT Terrain Desert",
+        "subtitle": "8192² · 128 px pages"
+      },
+      {
+        "type": "item",
+        "title": "VT RockCliff",
+        "subtitle": "4096² · 64 px pages"
+      }
+    ],
+    "details": [
+      {
+        "type": "heading",
+        "text": "Selected page"
+      },
+      {
+        "type": "row",
+        "label": "Mip",
+        "value": "3",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Coord",
+        "value": "42,17",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Status",
+        "value": "resident",
+        "tone": "success"
+      }
+    ],
+    "footer": [
+      "VT cache 384 MB",
+      "Tier: dx12 vulkan",
+      "3 page misses"
+    ]
+  },
+  "post-processing-stack": {
+    "title": "Post-Processing Stack",
+    "subtitle": "Bloom, SSAO, SSR, DoF, motion blur, tonemapping, color grading, and accessibility ordering",
+    "context": "",
+    "actions": [
+      "Refresh",
+      "Apply"
+    ],
+    "tabs": [
+      {
+        "title": "Stack",
+        "blocks": [
+          {
+            "type": "grid",
+            "cards": [
+              {
+                "title": "HDR Chain",
+                "rows": [
+                  {
+                    "label": "SceneColor",
+                    "value": "RGBA16F",
+                    "tone": null
+                  },
+                  {
+                    "label": "Bloom",
+                    "value": "5 mip pyramid",
+                    "tone": null
+                  },
+                  {
+                    "label": "DoF",
+                    "value": "disabled",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              },
+              {
+                "title": "Screen-space Inputs",
+                "rows": [
+                  {
+                    "label": "SSAO",
+                    "value": "GBuffer + depth",
+                    "tone": null
+                  },
+                  {
+                    "label": "SSR",
+                    "value": "normal + roughness",
+                    "tone": null
+                  }
+                ],
+                "headline": "",
+                "summary": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Effects",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Effects",
+              "rows": [],
+              "headline": "Content",
+              "summary": "No data available"
+            }
+          }
+        ]
+      },
+      {
+        "title": "Volumes",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Volumes",
+              "rows": [],
+              "headline": "Content",
+              "summary": "No data available"
+            }
+          }
+        ]
+      },
+      {
+        "title": "Color",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Color",
+              "rows": [],
+              "headline": "Content",
+              "summary": "No data available"
+            }
+          }
+        ]
+      },
+      {
+        "title": "Debug",
+        "blocks": [
+          {
+            "type": "card",
+            "card": {
+              "title": "Debug",
+              "rows": [],
+              "headline": "Content",
+              "summary": "No data available"
+            }
+          }
+        ]
+      }
+    ],
+    "sidebar": [
+      {
+        "type": "heading",
+        "text": "Effect stack"
+      },
+      {
+        "type": "item",
+        "title": "Bloom",
+        "subtitle": "threshold 1.1 · intensity .45"
+      },
+      {
+        "type": "item",
+        "title": "Tone Map",
+        "subtitle": "ACES · exposure 0"
+      },
+      {
+        "type": "item",
+        "title": "Accessibility Color",
+        "subtitle": "after creative grade"
+      }
+    ],
+    "details": [
+      {
+        "type": "heading",
+        "text": "Validation"
+      },
+      {
+        "type": "row",
+        "label": "Ordering",
+        "value": "valid",
+        "tone": "success"
+      },
+      {
+        "type": "row",
+        "label": "Tier",
+        "value": "dx12 vulkan",
+        "tone": null
+      },
+      {
+        "type": "row",
+        "label": "Cost",
+        "value": "1.8 ms",
+        "tone": null
+      }
+    ],
+    "footer": []
+  }
+}

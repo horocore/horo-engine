@@ -169,6 +169,9 @@ namespace Horo::Editor {
             return {UnknownPanel};
         if (m_layout.FindNode(targetNodeId) == nullptr)
             return {UnknownStack};
+        // The document region is one fixed stack. It accepts tabs but never another dock.
+        if (targetNodeId == "workspace.document" && kind != DropKind::TabCenter)
+            return {UnknownStack};
 
         const WorkspaceLayout backup = m_layout;
         const bool alreadyPresent = ContainsPanel(m_layout.root, panelId);

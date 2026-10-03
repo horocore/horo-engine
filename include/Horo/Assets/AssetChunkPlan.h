@@ -48,7 +48,7 @@ namespace Horo::Assets {
         std::vector<AssetId> assets;
         std::vector<AssetChunkId> dependencies;
         std::int32_t mountPriority{};
-        std::optional<Sha256Digest> requiredBaseManifest; /**< Mandatory for DLC; binds it to one base release. */
+        std::optional<Sha256Digest> requiredBaseManifest; /**< Mandatory for DLC, optional for other non-base content. */
     };
 
     /** @brief Finite validation policy for one release content plan. */
@@ -76,4 +76,28 @@ namespace Horo::Assets {
         explicit AssetChunkPlan(std::vector<AssetChunkDefinition> chunks);
         std::vector<AssetChunkDefinition> chunks_;
     };
+
+    /**
+     * @brief Resolves an exact installed selection into deterministic dependency-first mount order.
+     * @param plan Validated release chunk graph.
+     * @param selected Exact chunks to mount, including one base chunk.
+     * @param baseManifest Digest of the verified base release manifest.
+     * @return Ordered IDs or failure for missing dependencies, duplicate selections, incompatible DLC, or invalid mount priority.
+     * @note The caller must verify package signatures and archive bytes before using this plan for mounting.
+     */
+    [[nodiscard]] Result<std::vector<AssetChunkId>> ResolveAssetChunkMountOrder(const AssetChunkPlan &plan,
+                                                                                std::span<const AssetChunkId> selected,
+                                                                                const Sha256Digest &baseManifest);
+
+    /**
+     * @brief Plans removal without allowing a remaining chunk to lose a dependency or its base.
+     * @param plan Validated release chunk graph.
+     * @param installed Exact currently installed selection.
+     * @param removed Chunk requested for removal.
+     * @param baseManifest Digest of the verified base release manifest.
+     * @return Dependency-first order of the remaining chunks; empty only when the last base chunk is removed.
+     */
+    [[nodiscard]] Result<std::vector<AssetChunkId>> PlanAssetChunkRemoval(const AssetChunkPlan &plan,
+                                                                          std::span<const AssetChunkId> installed,
+                                                                          const AssetChunkId &removed, const Sha256Digest &baseManifest);
 }  // namespace Horo::Assets

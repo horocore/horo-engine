@@ -19,6 +19,8 @@
 #include <vector>
 
 namespace Horo::Navigation {
+    struct NavigationBakeJobSnapshot;
+
     namespace NavigationBakeJobDetail {
         struct SharedState;
     }
@@ -76,6 +78,9 @@ namespace Horo::Navigation {
         NavigationBakeJobBudget budget;
         std::vector<NavigationBakeWorkItem> work;
         CancellationToken parentCancellation;
+        std::optional<OperationId> queuedOperation; /**< Host-owned queued operation whose cancellation uses parentCancellation. */
+        std::function<void(const NavigationBakeJobSnapshot &)>
+            observe; /**< Optional non-throwing owned checkpoint consumer; invoked outside locks after store updates. */
     };
 
     /** @brief Immutable polling projection of one accepted navigation bake. */
@@ -124,6 +129,7 @@ namespace Horo::Navigation {
      * @param descriptor Owned stage work, cancellation ancestry and grounded resource budget.
      * @return Non-blocking operation handle, or a typed descriptor/store/scheduler admission error.
      * @pre `operations` and `jobs` outlive the returned operation and all accepted child work.
+     * @pre A queuedOperation is exclusively owned by this admission, used once, and its cancellation callback owns parentCancellation.
      */
     [[nodiscard]] Result<NavigationBakeJobHandle> StartNavigationBakeJob(OperationStore &operations, JobSystem &jobs,
                                                                          NavigationBakeJobDescriptor descriptor);

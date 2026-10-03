@@ -90,3 +90,57 @@ TEST_CASE("Release chunk plan enforces finite bounds", "[assets][release]") {
     CHECK(AssetChunkPlan::Create(std::array{core}, {.maximumChunks = 1U, .maximumAssets = 0U}).HasError());
     CHECK(AssetChunkPlan::Create(std::array{core}, {.maximumChunks = 0U, .maximumAssets = 1U}).HasError());
 }
+
+TEST_CASE("Optional and DLC mounts require exact base and dependency closure", "[assets][release]") {
+    auto core = Definition("core", "00000000-0000-0000-0000-000000000001");
+    auto optional = Definition("optional", "00000000-0000-0000-0000-000000000002", AssetChunkKind::Optional);
+    auto dlc = Definition("dlc", "00000000-0000-0000-0000-000000000003", AssetChunkKind::Dlc);
+    Horo::Sha256Digest base{};
+    base.bytes[0] = 1U;
+    optional.dependencies = {core.id};
+    optional.mountPriority = 1;
+    optional.requiredBaseManifest = base;
+    dlc.dependencies = {optional.id};
+    dlc.mountPriority = 2;
+    dlc.requiredBaseManifest = base;
+    auto plan = AssetChunkPlan::Create(std::array{dlc, optional, core});
+    REQUIRE(plan.HasValue());
+
+    auto mounted = ResolveAssetChunkMountOrder(plan.Value(), std::array{dlc.id, core.id, optional.id}, base);
+    REQUIRE(mounted.HasValue());
+    CHECK(mounted.Value()[0].Value() == "core");
+    CHECK(mounted.Value()[1].Value() == "optional");
+    CHECK(mounted.Value()[2].Value() == "dlc");
+    CHECK(ResolveAssetChunkMountOrder(plan.Value(), std::array{core.id, dlc.id}, base).HasError());
+    CHECK(ResolveAssetChunkMountOrder(plan.Value(), std::array{core.id, core.id}, base).HasError());
+    CHECK(ResolveAssetChunkMountOrder(plan.Value(), std::array{core.id, dlc.id, optional.id}, Horo::Sha256Digest{}).HasError());
+    Horo::Sha256Digest differentBase = base;
+    differentBase.bytes[0] = 2U;
+    CHECK(ResolveAssetChunkMountOrder(plan.Value(), std::array{core.id, dlc.id, optional.id}, differentBase).HasError());
+    CHECK(ResolveAssetChunkMountOrder(plan.Value(), std::array{core.id, optional.id}, differentBase).HasError());
+}
+
+TEST_CASE("Chunk removal preserves mounted dependents and refuses a partial base removal", "[assets][release]") {
+    auto core = Definition("core", "00000000-0000-0000-0000-000000000001");
+    auto optional = Definition("optional", "00000000-0000-0000-0000-000000000002", AssetChunkKind::Optional);
+    optional.dependencies = {core.id};
+    optional.mountPriority = 1;
+    auto plan = AssetChunkPlan::Create(std::array{core, optional});
+    REQUIRE(plan.HasValue());
+    Horo::Sha256Digest base{};
+    base.bytes[0] = 1U;
+    const std::array mounted{core.id, optional.id};
+    CHECK(PlanAssetChunkRemoval(plan.Value(), mounted, core.id, base).HasError());
+    auto withoutOptional = PlanAssetChunkRemoval(plan.Value(), mounted, optional.id, base);
+    REQUIRE(withoutOptional.HasValue());
+    REQUIRE(withoutOptional.Value().size() == 1U);
+    CHECK(withoutOptional.Value().front() == core.id);
+    auto empty = PlanAssetChunkRemoval(plan.Value(), std::array{core.id}, core.id, base);
+    REQUIRE(empty.HasValue());
+    CHECK(empty.Value().empty());
+
+    optional.mountPriority = -1;
+    auto invalidPriority = AssetChunkPlan::Create(std::array{core, optional});
+    REQUIRE(invalidPriority.HasValue());
+    CHECK(ResolveAssetChunkMountOrder(invalidPriority.Value(), mounted, base).HasError());
+}

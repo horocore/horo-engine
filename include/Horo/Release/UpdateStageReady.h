@@ -117,4 +117,17 @@ namespace Horo::Release {
                                                                            NativeDurableFileSystem &files,
                                                                            const Security::ArtifactVerifier &verifier,
                                                                            CancellationToken cancellation);
+    /**
+     * @brief Authenticates and extracts a delta ZIP into a new private tree without publishing a ready marker.
+     * @param request Signed delta ZIP, complete checkpoint, private paths, and archive limits.
+     * @param files Native durable filesystem held alive for this call.
+     * @param verifier Trusted publisher signature verifier.
+     * @param cancellation Cooperative cancellation during indexing and extraction.
+     * @return Exact extracted inventory or failure with the incomplete tree removed.
+     * @note A delta tree is not a complete installation and must never be activated directly.
+     */
+    [[nodiscard]] Result<std::vector<UpdateStagedFile>> StageVerifiedDeltaZipUpdate(const VerifiedZipUpdateRequest &request,
+                                                                                    NativeDurableFileSystem &files,
+                                                                                    const Security::ArtifactVerifier &verifier,
+                                                                                    CancellationToken cancellation);
 }  // namespace Horo::Release

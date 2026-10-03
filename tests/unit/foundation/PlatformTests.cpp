@@ -254,6 +254,51 @@ namespace {
     }
 #endif
 
+    TEST_CASE("Probe lease transfer preserves the maintenance gate and checks installation identity", "[unit][platform][release]") {
+        const auto root = std::filesystem::temp_directory_path() /
+                          ("horo-probe-lease-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const auto other = root / "other";
+        std::error_code ignored;
+        REQUIRE(std::filesystem::create_directories(other));
+        Horo::NativeDurableFileSystem files;
+        Horo::NativeExternalProcessRunner runner;
+        const Horo::ExternalProcessRequest scrubbed{.executable = HORO_PROCESS_TEST_CHILD,
+                                                    .arguments = {"probe-lease-env-absent"},
+                                                    .environment = {.set = {{"HORO_PRODUCT_PROBE_LEASE", "123"}}}};
+        const auto absent = runner.Run(scrubbed, {});
+        REQUIRE(absent.HasValue());
+        CHECK(absent.Value().exitCode == 0);
+        {
+            auto shared = files.TryAcquireProductLaunch(root);
+            REQUIRE(shared.HasValue());
+            const Horo::ExternalProcessRequest denied{.executable = HORO_PROCESS_TEST_CHILD,
+                                                      .arguments = {"adopt-probe-lease", root.string()},
+                                                      .maintenanceLease = &shared.Value()};
+            CHECK(runner.Run(denied, {}).HasError());
+        }
+        {
+            auto maintenance = files.TryAcquireProductMaintenance(root);
+            REQUIRE(maintenance.HasValue());
+            const Horo::ExternalProcessRequest valid{.executable = HORO_PROCESS_TEST_CHILD,
+                                                     .arguments = {"adopt-probe-lease", root.string()},
+                                                     .maintenanceLease = &maintenance.Value()};
+            const auto accepted = runner.Run(valid, {});
+            REQUIRE(accepted.HasValue());
+            CHECK(accepted.Value().reason == Horo::ProcessTerminationReason::Exited);
+            CHECK(accepted.Value().exitCode == 0);
+            CHECK(files.TryAcquireProductLaunch(root).HasError());
+
+            const Horo::ExternalProcessRequest wrongRoot{.executable = HORO_PROCESS_TEST_CHILD,
+                                                         .arguments = {"adopt-probe-lease", other.string()},
+                                                         .maintenanceLease = &maintenance.Value()};
+            const auto rejected = runner.Run(wrongRoot, {});
+            REQUIRE(rejected.HasValue());
+            CHECK(rejected.Value().exitCode == 4);
+        }
+        CHECK(files.TryAcquireProductLaunch(root).HasValue());
+        std::filesystem::remove_all(root, ignored);
+    }
+
     TEST_CASE("Native Durable Filesystem Serializes Locks And Replaces Files", "[unit][foundation]") {
         const auto root = std::filesystem::temp_directory_path() / "horo-platform-durable-test";
         std::error_code ignored;

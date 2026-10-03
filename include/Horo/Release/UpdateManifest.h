@@ -28,6 +28,15 @@ namespace Horo::Release {
         Security::DetachedSignatureEnvelope signature;
     };
 
+    /** @brief Signed delta artifact bound to one full package and exact base, patch, and target file inventories. */
+    struct UpdateDeltaPackageRecord final {
+        UpdatePackageRecord package;
+        DistributionPackageId fullPackage;
+        Sha256Digest baseInventoryDigest;
+        Sha256Digest deltaInventoryDigest;
+        Sha256Digest targetInventoryDigest;
+    };
+
     /** @brief Complete unsigned manifest payload; signature is kept outside these canonical bytes. */
     struct UpdateManifestData final {
         DistributionProductIdentity product;
@@ -43,6 +52,7 @@ namespace Horo::Release {
         std::string releaseNotes;                      /**< Optional signed plain-text notes, bounded to 32 KiB. */
         std::vector<std::string> compatibilityImpacts; /**< Optional signed user-visible impact summaries. */
         std::vector<UpdatePackageRecord> packages;
+        std::vector<UpdateDeltaPackageRecord> deltas; /**< Empty for schema-v1 full-package-only manifests. */
     };
 
     /**
@@ -64,7 +74,7 @@ namespace Horo::Release {
         [[nodiscard]] static Result<SignedUpdateManifest> Create(UpdateManifestData data, Security::DetachedSignatureEnvelope signature);
 
         /**
-         * @brief Parses only exact canonical schema-v1 JSON, rejecting duplicate keys and excess resources.
+         * @brief Parses exact canonical schema-v1 or schema-v2 JSON, rejecting duplicate keys and excess resources.
          * @param bytes Complete signed document bytes.
          * @return Validated document or a typed malformed-metadata error.
          */
@@ -120,6 +130,46 @@ namespace Horo::Release {
                                                     const UpdateTrustRootSnapshot &roots,
                                                     std::shared_ptr<const Security::SignatureProvider> provider,
                                                     UpdateMetadataFreshnessPolicy freshness = {});
+
+    /** @brief Authenticated full package with an optional applicable delta optimization. */
+    struct UpdatePackageCandidates final {
+        UpdatePackageRecord full;
+        std::optional<UpdateDeltaPackageRecord> delta;
+    };
+
+    /** @brief Bounded package-attempt progression after authenticated candidate selection. */
+    enum class UpdatePackageAttempt : std::uint8_t {
+        Initial,
+        AfterDeltaFailure,
+        AfterFullFailure
+    };
+
+    /**
+     * @brief Prefers an applicable delta, then falls back once to its signed allowed full package.
+     * @param candidates Previously authenticated full and optional delta candidates.
+     * @param attempt Initial selection or outcome of the immediately preceding failed attempt.
+     * @return Next package to download or stage; empty after a full-package failure.
+     * @note The host does not call this after cancellation or success. It still owns transfer and staging execution.
+     */
+    [[nodiscard]] std::optional<UpdatePackageRecord> PlanUpdatePackageAttempt(const UpdatePackageCandidates &candidates,
+                                                                              UpdatePackageAttempt attempt);
+
+    /**
+     * @brief Selects a signed full package and only a delta bound to the verified base inventory.
+     * @param manifest Canonical signed update metadata.
+     * @param context Installed product, target, freshness, and rollback admission state.
+     * @param roots Installed versioned trust roots.
+     * @param provider Host-composed signature provider.
+     * @param fullPackage ID of the allowed full package for this installation.
+     * @param baseInventoryDigest Canonical inventory digest of the verified installed base; zero selects full only.
+     * @return Authenticated full candidate and optional applicable delta, or an admission failure.
+     */
+    [[nodiscard]] Result<UpdatePackageCandidates> SelectUpdatePackageCandidates(const SignedUpdateManifest &manifest,
+                                                                                const UpdateAdmissionContext &context,
+                                                                                const UpdateTrustRootSnapshot &roots,
+                                                                                std::shared_ptr<const Security::SignatureProvider> provider,
+                                                                                const DistributionPackageId &fullPackage,
+                                                                                const Sha256Digest &baseInventoryDigest);
 
     /**
      * @brief Verifies exact downloaded bytes against the selected signed package record.

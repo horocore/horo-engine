@@ -85,6 +85,63 @@ TEST_CASE("Release archive is deterministic and provides exact cooked bytes", "[
     CHECK(provider.Load(Id("00000000-0000-0000-0000-000000000003"), cancellation).HasError());
 }
 
+TEST_CASE("Selected release archive exposes only admitted chunk assets", "[assets][release][archive]") {
+    const auto first = Id("00000000-0000-0000-0000-000000000001");
+    const auto second = Id("00000000-0000-0000-0000-000000000002");
+    const auto target = Target("headless-null");
+    const auto plan = Plan(first, second);
+    const auto inputs = std::array{Cooked(first, target, {1U}), Cooked(second, target, {2U})};
+    auto encoded = BuildAssetArchive(plan, target, inputs);
+    REQUIRE(encoded.HasValue());
+    Sha256Digest base{};
+    base.bytes[0] = 1U;
+    const CancellationToken cancellation;
+
+    auto coreOnly = AssetArchiveProvider::OpenSelected(encoded.Value(), target, plan, std::array{Chunk("core")}, base);
+    REQUIRE(coreOnly.HasValue());
+    CHECK(coreOnly.Value().Exists(first, cancellation).Value());
+    CHECK_FALSE(coreOnly.Value().Exists(second, cancellation).Value());
+    CHECK(coreOnly.Value().Load(second, cancellation).HasError());
+
+    auto withOptional = AssetArchiveProvider::OpenSelected(encoded.Value(), target, plan, std::array{Chunk("world"), Chunk("core")}, base);
+    REQUIRE(withOptional.HasValue());
+    CHECK(withOptional.Value().Load(second, cancellation).Value() == inputs[1].bytes);
+    CHECK(AssetArchiveProvider::OpenSelected(encoded.Value(), target, plan, std::array{Chunk("world")}, base).HasError());
+    CHECK(AssetArchiveProvider::OpenSelected(encoded.Value(), target, plan, std::array{Chunk("core"), Chunk("core")}, base).HasError());
+}
+
+TEST_CASE("Selected release archive rejects drift and incompatible DLC", "[assets][release][archive]") {
+    const auto first = Id("00000000-0000-0000-0000-000000000001");
+    const auto second = Id("00000000-0000-0000-0000-000000000002");
+    const auto target = Target("headless-null");
+    Sha256Digest base{};
+    base.bytes[0] = 1U;
+    const std::array definitions{AssetChunkDefinition{.id = Chunk("core"), .assets = {first}},
+                                 AssetChunkDefinition{.id = Chunk("dlc"),
+                                                      .kind = AssetChunkKind::Dlc,
+                                                      .assets = {second},
+                                                      .dependencies = {Chunk("core")},
+                                                      .mountPriority = 1,
+                                                      .requiredBaseManifest = base}};
+    auto plan = AssetChunkPlan::Create(definitions);
+    REQUIRE(plan.HasValue());
+    const auto inputs = std::array{Cooked(first, target, {1U}), Cooked(second, target, {2U})};
+    auto encoded = BuildAssetArchive(plan.Value(), target, inputs);
+    REQUIRE(encoded.HasValue());
+    const std::array selection{Chunk("core"), Chunk("dlc")};
+    auto wrongBase = base;
+    wrongBase.bytes[0] = 2U;
+    CHECK(AssetArchiveProvider::OpenSelected(encoded.Value(), target, plan.Value(), selection, wrongBase).HasError());
+    auto drifted = definitions;
+    drifted[1].mountPriority = 2;
+    auto wrongPlan = AssetChunkPlan::Create(drifted);
+    REQUIRE(wrongPlan.HasValue());
+    CHECK(AssetArchiveProvider::OpenSelected(encoded.Value(), target, wrongPlan.Value(), selection, base).HasError());
+    auto tampered = encoded.Value();
+    tampered[tampered.size() / 2U] ^= 1U;
+    CHECK(AssetArchiveProvider::OpenSelected(tampered, target, plan.Value(), selection, base).HasError());
+}
+
 TEST_CASE("Release archive rejects missing, extra, or wrong-target cooked artifacts", "[assets][release][archive]") {
     const auto first = Id("00000000-0000-0000-0000-000000000001");
     const auto second = Id("00000000-0000-0000-0000-000000000002");

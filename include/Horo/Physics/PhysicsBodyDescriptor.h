@@ -136,7 +136,8 @@ namespace Horo::Physics {
     /** @brief Observable body activity; this is state evidence, not a wake/sleep command. */
     enum class PhysicsBodyActivity : std::uint8_t {
         Awake,
-        Sleeping
+        Sleeping,
+        Static /**< Static bodies do not participate in wake/sleep transitions. */
     };
 
     /**

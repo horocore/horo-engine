@@ -369,6 +369,42 @@ TEST_CASE("Verified ZIP staging extracts bounded content and publishes ready", "
 #endif
 }
 
+TEST_CASE("A verified delta ZIP stays private without an activation ready marker", "[release][update][delta]") {
+    TemporaryStage stage;
+    const auto archive = ZipArchive("bin/editor", "patched editor");
+    auto package = Package(archive);
+    package.selection.format = DistributionPackageFormat::DeltaZipArchive;
+    const auto paths = Paths(stage);
+    {
+        std::ofstream output(paths.partialFile, std::ios::binary);
+        output.write(archive.data(), static_cast<std::streamsize>(archive.size()));
+    }
+    Horo::NativeDurableFileSystem files;
+    constexpr UpdateArchiveLimits limits{.maximumEntries = 4U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 1024U};
+    const auto root = stage.path / "delta";
+    auto extracted =
+        StageVerifiedDeltaZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, root, limits}, files, Verifier(), {});
+    REQUIRE(extracted.HasValue());
+    REQUIRE(extracted.Value().size() == 1U);
+    CHECK(extracted.Value().front().path == "bin/editor");
+    CHECK(std::filesystem::is_regular_file(root / "bin/editor"));
+    CHECK_FALSE(std::filesystem::exists(stage.path / "delta.ready"));
+    CHECK_FALSE(std::filesystem::exists(stage.path / "delta.ready.prepared"));
+    CHECK(StageVerifiedZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, stage.path / "rejected", limits}, files,
+                                 Verifier(), {})
+              .HasError());
+    CHECK_FALSE(std::filesystem::exists(stage.path / "rejected"));
+    {
+        std::ofstream marker(stage.path / "blocked.ready", std::ios::binary);
+        marker << "foreign marker";
+    }
+    CHECK(StageVerifiedDeltaZipUpdate({package, CompleteCheckpoint(package), paths.partialFile, stage.path / "blocked", limits}, files,
+                                      Verifier(), {})
+              .HasError());
+    CHECK_FALSE(std::filesystem::exists(stage.path / "blocked"));
+    CHECK(std::filesystem::is_regular_file(stage.path / "blocked.ready"));
+}
+
 TEST_CASE("Activation admission rejects a changed ready marker", "[release][update]") {
     TemporaryStage stage;
     const std::string content = "verified editor";

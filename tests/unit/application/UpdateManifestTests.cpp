@@ -67,6 +67,23 @@ namespace {
         return data;
     }
 
+    [[nodiscard]] UpdateManifestData DeltaManifestData() {
+        auto data = ManifestData();
+        auto artifact = data.packages.front().selection.artifact;
+        artifact.package = {"editor-delta"};
+        const auto selection = ValidateDistributionPackageSelection(artifact, DistributionPackageFormat::DeltaZipArchive);
+        REQUIRE(selection.HasValue());
+        constexpr std::string_view PatchBytes = "patch";
+        const auto patchDigest = ComputeSha256(Bytes(PatchBytes));
+        data.deltas.push_back({.package = {selection.Value(), "https://example.test/editor-delta.zip", PatchBytes.size(), patchDigest,
+                                           Signature(patchDigest)},
+                               .fullPackage = data.packages.front().selection.artifact.package,
+                               .baseInventoryDigest = ComputeSha256(Bytes("base inventory")),
+                               .deltaInventoryDigest = ComputeSha256(Bytes("delta inventory")),
+                               .targetInventoryDigest = ComputeSha256(Bytes("target inventory"))});
+        return data;
+    }
+
     [[nodiscard]] SignedUpdateManifest SignedManifest(UpdateManifestData data = ManifestData(), const std::string_view keyId = "key-1") {
         auto payload = BuildCanonicalUpdatePayload(data);
         REQUIRE(payload.HasValue());
@@ -124,6 +141,73 @@ TEST_CASE("Signed update manifest is canonical and admits only authenticated mat
     CHECK(VerifyUpdateManifest(manifest, context, roots, nullptr).HasError());
 }
 
+TEST_CASE("Signed update manifest v2 binds delta artifacts to one full package and exact inventories", "[release][update][delta]") {
+    const auto manifest = SignedManifest(DeltaManifestData());
+    CHECK(nlohmann::json::parse(manifest.CanonicalPayload()).at("schemaVersion") == 2);
+    auto parsed = SignedUpdateManifest::ParseCanonical(manifest.CanonicalDocument());
+    REQUIRE(parsed.HasValue());
+    REQUIRE(parsed.Value().Data().deltas.size() == 1U);
+    const auto &delta = parsed.Value().Data().deltas.front();
+    CHECK(delta.fullPackage == parsed.Value().Data().packages.front().selection.artifact.package);
+    CHECK(delta.baseInventoryDigest == ComputeSha256(Bytes("base inventory")));
+    CHECK(delta.deltaInventoryDigest == ComputeSha256(Bytes("delta inventory")));
+    CHECK(delta.targetInventoryDigest == ComputeSha256(Bytes("target inventory")));
+    const auto roots = Root();
+    const auto provider = std::make_shared<TestSignatureProvider>();
+    Security::ArtifactVerifier verifier{provider, roots.Roots()};
+    CHECK(VerifyUpdateManifest(parsed.Value(), Context(), roots, provider).HasValue());
+    CHECK(VerifyUpdatePackage(delta.package, Bytes("patch"), verifier).HasValue());
+    CHECK(VerifyUpdatePackage(delta.package, Bytes("altered"), verifier).HasError());
+    const auto fullId = parsed.Value().Data().packages.front().selection.artifact.package;
+    auto candidates = SelectUpdatePackageCandidates(parsed.Value(), Context(), roots, provider, fullId, delta.baseInventoryDigest);
+    REQUIRE(candidates.HasValue());
+    REQUIRE(candidates.Value().delta.has_value());
+    CHECK(candidates.Value().delta->package.digest == delta.package.digest);
+    auto firstAttempt = PlanUpdatePackageAttempt(candidates.Value(), UpdatePackageAttempt::Initial);
+    REQUIRE(firstAttempt.has_value());
+    CHECK(firstAttempt->selection.artifact.package == delta.package.selection.artifact.package);
+    auto fallback = PlanUpdatePackageAttempt(candidates.Value(), UpdatePackageAttempt::AfterDeltaFailure);
+    REQUIRE(fallback.has_value());
+    CHECK(fallback->selection.artifact.package == fullId);
+    CHECK_FALSE(PlanUpdatePackageAttempt(candidates.Value(), UpdatePackageAttempt::AfterFullFailure).has_value());
+    auto fullOnly =
+        SelectUpdatePackageCandidates(parsed.Value(), Context(), roots, provider, fullId, ComputeSha256(Bytes("another installed base")));
+    REQUIRE(fullOnly.HasValue());
+    CHECK(!fullOnly.Value().delta.has_value());
+    auto fullAttempt = PlanUpdatePackageAttempt(fullOnly.Value(), UpdatePackageAttempt::Initial);
+    REQUIRE(fullAttempt.has_value());
+    CHECK(fullAttempt->selection.artifact.package == fullId);
+    CHECK_FALSE(PlanUpdatePackageAttempt(fullOnly.Value(), UpdatePackageAttempt::AfterDeltaFailure).has_value());
+    CHECK(
+        SelectUpdatePackageCandidates(parsed.Value(), Context(), roots, provider, {"unknown-full"}, delta.baseInventoryDigest).HasError());
+}
+
+TEST_CASE("Delta metadata rejects missing full packages and ambiguous base identities", "[release][update][delta]") {
+    auto data = DeltaManifestData();
+    data.deltas.front().fullPackage = {"missing"};
+    CHECK(BuildCanonicalUpdatePayload(data).HasError());
+
+    data = DeltaManifestData();
+    data.deltas.front().baseInventoryDigest = data.deltas.front().targetInventoryDigest;
+    CHECK(BuildCanonicalUpdatePayload(data).HasError());
+
+    data = DeltaManifestData();
+    data.deltas.front().package.selection.artifact.package = data.packages.front().selection.artifact.package;
+    CHECK(BuildCanonicalUpdatePayload(data).HasError());
+
+    data = DeltaManifestData();
+    data.deltas.push_back(data.deltas.front());
+    CHECK(BuildCanonicalUpdatePayload(data).HasError());
+
+    const auto manifest = SignedManifest(DeltaManifestData());
+    auto document = nlohmann::json::parse(manifest.CanonicalDocument());
+    document["manifest"].erase("deltas");
+    CHECK(SignedUpdateManifest::ParseCanonical(document.dump()).HasError());
+    document = nlohmann::json::parse(manifest.CanonicalDocument());
+    document["manifest"]["deltas"][0]["targetInventorySha256"] = std::string(64U, '0');
+    CHECK(SignedUpdateManifest::ParseCanonical(document.dump()).HasError());
+}
+
 TEST_CASE("Release notes and compatibility impacts are bounded signed manifest content", "[release][update]") {
     auto data = ManifestData();
     data.releaseNotes = "Improved editor stability.\nProject files stay unchanged.";
@@ -151,6 +235,22 @@ TEST_CASE("Release notes and compatibility impacts are bounded signed manifest c
     data.releaseNotes.clear();
     data.compatibilityImpacts = {std::string{"safe\0hidden", 11U}};
     CHECK(BuildCanonicalUpdatePayload(data).HasError());
+}
+
+TEST_CASE("Delta manifests retain signed presentation fields", "[release][update][delta]") {
+    auto data = DeltaManifestData();
+    data.releaseNotes = "Verified delta update.";
+    data.compatibilityImpacts = {"Plugin compatibility must be checked."};
+    data.minimumAllowedVersion = data.version;
+    const auto manifest = SignedManifest(data);
+    auto parsed = SignedUpdateManifest::ParseCanonical(manifest.CanonicalDocument());
+    REQUIRE(parsed.HasValue());
+    CHECK(parsed.Value().Data().releaseNotes == data.releaseNotes);
+    CHECK(parsed.Value().Data().compatibilityImpacts == data.compatibilityImpacts);
+    CHECK(parsed.Value().Data().deltas.size() == 1U);
+    auto document = nlohmann::json::parse(manifest.CanonicalDocument());
+    document["manifest"]["unknown"] = "rejected";
+    CHECK(SignedUpdateManifest::ParseCanonical(document.dump()).HasError());
 }
 
 TEST_CASE("Update metadata rejects stale, wrong-target and rollback candidates", "[release][update]") {

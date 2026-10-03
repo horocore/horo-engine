@@ -789,7 +789,7 @@ through binary floating point.
 
 ## Related Documents
 
-- [Animation Editor UI Reference](./animation-editor.html): clip timeline, state machine, blend tree, events, and skeleton preview panel.
+- [Animation Editor UI Reference](../../../mock-studio/designs.md#architecture-runtime-animation-editor): clip timeline, state machine, blend tree, events, and skeleton preview panel.
 
 - [Rendering Architecture](./rendering-architecture.md): skinned mesh render
   extraction and joint palette binding.

@@ -22,6 +22,7 @@
 #include <signal.h>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
@@ -42,7 +43,9 @@ namespace {
         enum class Reply {
             Ok,
             Redirect,
-            Oversized
+            Oversized,
+            Empty,
+            Unavailable
         };
 
         enum class Protocol {
@@ -66,10 +69,11 @@ namespace {
         ~LoopbackManifestTlsServer() {
             if (listener_ >= 0) {
                 shutdown(listener_, SHUT_RDWR);
-                close(listener_);
             }
             if (worker_.joinable())
                 worker_.join();
+            if (listener_ >= 0)
+                close(listener_);
             std::error_code ignored;
             std::filesystem::remove(certificatePath_, ignored);
             std::filesystem::remove(directory_, ignored);
@@ -181,6 +185,10 @@ namespace {
         [[nodiscard]] std::string Response() const {
             if (reply_ == Reply::Redirect)
                 return "HTTP/1.1 302 Found\r\nLocation: https://127.0.0.1:1/redirected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            if (reply_ == Reply::Unavailable)
+                return "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            if (reply_ == Reply::Empty)
+                return "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             const std::string body = reply_ == Reply::Oversized ? std::string(128U * 1024U + 1U, 'x') : "signed-document";
             return "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) +
                    "\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n" + body;
@@ -232,6 +240,26 @@ TEST_CASE("Editor HTTPS manifest client refuses a TLS 1.2-only server", "[editor
     LoopbackManifestTlsServer server{LoopbackManifestTlsServer::Reply::Ok, LoopbackManifestTlsServer::Protocol::Tls12Only};
     CurlEditorUpdateManifestHttpClient client;
     auto result = client.Get(server.Url(), {.certificateAuthorityBundle = server.CertificatePath()}, {});
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == Release::UpdateTransferErrors::TransportFailed.code.Value());
+}
+
+TEST_CASE("Editor HTTPS manifest client rejects empty metadata and unsuccessful HTTP status", "[editor][update][tls]") {
+    CurlEditorUpdateManifestHttpClient client;
+    for (const auto reply : {LoopbackManifestTlsServer::Reply::Empty, LoopbackManifestTlsServer::Reply::Unavailable}) {
+        LoopbackManifestTlsServer server{reply};
+        const auto result = client.Get(server.Url(), {.certificateAuthorityBundle = server.CertificatePath()}, {});
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == Release::UpdateTransferErrors::InvalidResponse.code.Value());
+    }
+}
+
+TEST_CASE("Editor HTTPS manifest client rejects a trusted certificate for another host", "[editor][update][tls]") {
+    LoopbackManifestTlsServer server{LoopbackManifestTlsServer::Reply::Ok};
+    CurlEditorUpdateManifestHttpClient client;
+    std::string mismatchedUrl = server.Url();
+    mismatchedUrl.replace(mismatchedUrl.find("127.0.0.1"), std::string_view{"127.0.0.1"}.size(), "localhost");
+    const auto result = client.Get(mismatchedUrl, {.certificateAuthorityBundle = server.CertificatePath()}, {});
     REQUIRE(result.HasError());
     CHECK(result.ErrorValue().code.Value() == Release::UpdateTransferErrors::TransportFailed.code.Value());
 }

@@ -276,6 +276,45 @@ namespace Horo::Assets {
                 return Result<ParsedArchiveAsset>::Failure(MakeError(InvalidArchive));
             return Result<ParsedArchiveAsset>::Success({id, offset, static_cast<std::size_t>(byteCount)});
         }
+
+        struct ParsedArchiveContents final {
+            std::vector<AssetChunkDefinition> chunks;
+            std::vector<ParsedArchiveAsset> assets;
+        };
+
+        /** @brief Parses bounded chunk membership and every cooked payload before provider publication. */
+        [[nodiscard]] Result<ParsedArchiveContents> ReadArchiveChunks(Reader &reader, const std::uint32_t count,
+                                                                      const AssetCookTargetId &expectedTarget,
+                                                                      const AssetArchiveLimits &limits) {
+            ParsedArchiveContents parsed;
+            parsed.chunks.reserve(count);
+            for (std::uint32_t chunkIndex = 0; chunkIndex < count; ++chunkIndex) {
+                auto header = ReadChunkHeader(reader);
+                if (header.HasError())
+                    return Result<ParsedArchiveContents>::Failure(std::move(header).ErrorValue());
+                auto chunk = std::move(header).Value();
+                std::uint32_t assets{};
+                if (!reader.U32(assets) || assets == 0U || assets > limits.maximumAssets - parsed.assets.size())
+                    return Result<ParsedArchiveContents>::Failure(MakeError(ArchiveTooLarge));
+                chunk.assets.reserve(assets);
+                for (std::uint32_t index = 0; index < assets; ++index) {
+                    auto asset = ReadArchiveAsset(reader, expectedTarget, limits);
+                    if (asset.HasError())
+                        return Result<ParsedArchiveContents>::Failure(std::move(asset).ErrorValue());
+                    chunk.assets.push_back(asset.Value().id);
+                    parsed.assets.push_back(std::move(asset).Value());
+                }
+                parsed.chunks.emplace_back(std::move(chunk));
+            }
+            return Result<ParsedArchiveContents>::Success(std::move(parsed));
+        }
+
+        /** @brief Compares every authored chunk field against the authenticated release plan. */
+        [[nodiscard]] bool SameChunk(const AssetChunkDefinition &actual, const AssetChunkDefinition &expected) {
+            return actual.id == expected.id && actual.kind == expected.kind && actual.assets == expected.assets &&
+                   actual.dependencies == expected.dependencies && actual.mountPriority == expected.mountPriority &&
+                   actual.requiredBaseManifest == expected.requiredBaseManifest;
+        }
     }  // namespace
 
     /** @copydoc BuildAssetArchive */
@@ -333,11 +372,25 @@ namespace Horo::Assets {
         return Result<std::vector<std::uint8_t>>::Success(std::move(result));
     }
 
-    AssetArchiveProvider::AssetArchiveProvider(std::vector<std::uint8_t> bytes, std::vector<Entry> entries)
-        : bytes_(std::move(bytes)), entries_(std::move(entries)) {}
+    AssetArchiveProvider::AssetArchiveProvider(std::vector<std::uint8_t> bytes, std::vector<Entry> entries,
+                                               std::vector<AssetChunkDefinition> chunks)
+        : bytes_(std::move(bytes)), entries_(std::move(entries)), chunks_(std::move(chunks)) {}
 
+    /** @copydoc AssetArchiveProvider::Open */
     Result<AssetArchiveProvider> AssetArchiveProvider::Open(const std::span<const std::uint8_t> bytes,
                                                             const AssetCookTargetId &expectedTarget, const AssetArchiveLimits &limits) {
+        auto opened = OpenParsed(bytes, expectedTarget, limits);
+        if (opened.HasError())
+            return opened;
+        auto provider = std::move(opened).Value();
+        provider.chunks_ = {};
+        return Result<AssetArchiveProvider>::Success(std::move(provider));
+    }
+
+    /** @copydoc AssetArchiveProvider::OpenParsed */
+    Result<AssetArchiveProvider> AssetArchiveProvider::OpenParsed(const std::span<const std::uint8_t> bytes,
+                                                                  const AssetCookTargetId &expectedTarget,
+                                                                  const AssetArchiveLimits &limits) {
         if (!ValidLimits(limits) || !expectedTarget.IsValid() || bytes.size() > limits.maximumArchiveBytes ||
             bytes.size() < Magic.size() + 4U + 32U)
             return Result<AssetArchiveProvider>::Failure(MakeError(InvalidArchive));
@@ -359,33 +412,52 @@ namespace Horo::Assets {
         if (chunkCount == 0U || chunkCount > limits.maximumChunks)
             return Result<AssetArchiveProvider>::Failure(MakeError(ArchiveTooLarge));
 
-        std::vector<AssetChunkDefinition> chunks;
-        chunks.reserve(chunkCount);
-        std::vector<Entry> entries;
-        for (std::uint32_t chunkIndex = 0; chunkIndex < chunkCount; ++chunkIndex) {
-            auto header = ReadChunkHeader(reader);
-            if (header.HasError())
-                return Result<AssetArchiveProvider>::Failure(std::move(header).ErrorValue());
-            auto chunk = std::move(header).Value();
-            std::uint32_t count{};
-            if (!reader.U32(count) || count == 0U || count > limits.maximumAssets - entries.size())
-                return Result<AssetArchiveProvider>::Failure(MakeError(ArchiveTooLarge));
-            chunk.assets.reserve(count);
-            for (std::uint32_t index = 0; index < count; ++index) {
-                auto parsed = ReadArchiveAsset(reader, expectedTarget, limits);
-                if (parsed.HasError())
-                    return Result<AssetArchiveProvider>::Failure(std::move(parsed).ErrorValue());
-                chunk.assets.push_back(parsed.Value().id);
-                entries.emplace_back(parsed.Value().id, parsed.Value().offset, parsed.Value().size);
-            }
-            chunks.emplace_back(std::move(chunk));
-        }
-        if (!reader.Done() ||
-            AssetChunkPlan::Create(chunks, {.maximumChunks = limits.maximumChunks, .maximumAssets = limits.maximumAssets}).HasError())
+        auto parsed = ReadArchiveChunks(reader, chunkCount, expectedTarget, limits);
+        if (parsed.HasError())
+            return Result<AssetArchiveProvider>::Failure(parsed.ErrorValue());
+        if (!reader.Done())
             return Result<AssetArchiveProvider>::Failure(MakeError(InvalidArchive));
+        auto plan =
+            AssetChunkPlan::Create(parsed.Value().chunks, {.maximumChunks = limits.maximumChunks, .maximumAssets = limits.maximumAssets});
+        if (plan.HasError())
+            return Result<AssetArchiveProvider>::Failure(MakeError(InvalidArchive));
+        std::vector<Entry> entries;
+        entries.reserve(parsed.Value().assets.size());
+        for (const auto &asset : parsed.Value().assets)
+            entries.emplace_back(asset.id, asset.offset, asset.size);
         std::ranges::sort(entries, {}, &Entry::id);
         return Result<AssetArchiveProvider>::Success(
-            AssetArchiveProvider{std::vector<std::uint8_t>(bytes.begin(), bytes.end()), std::move(entries)});
+            AssetArchiveProvider{std::vector<std::uint8_t>(bytes.begin(), bytes.end()), std::move(entries),
+                                 std::vector<AssetChunkDefinition>{plan.Value().Chunks().begin(), plan.Value().Chunks().end()}});
+    }
+
+    /** @copydoc AssetArchiveProvider::OpenSelected */
+    Result<AssetArchiveProvider> AssetArchiveProvider::OpenSelected(const std::span<const std::uint8_t> bytes,
+                                                                    const AssetCookTargetId &expectedTarget,
+                                                                    const AssetChunkPlan &expectedPlan,
+                                                                    const std::span<const AssetChunkId> selected,
+                                                                    const Sha256Digest &baseManifest, const AssetArchiveLimits &limits) {
+        auto opened = OpenParsed(bytes, expectedTarget, limits);
+        if (opened.HasError())
+            return opened;
+        auto provider = std::move(opened).Value();
+        const auto authenticated = expectedPlan.Chunks();
+        if (provider.chunks_.size() != authenticated.size() || !std::ranges::equal(provider.chunks_, authenticated, SameChunk))
+            return Result<AssetArchiveProvider>::Failure(MakeError(InvalidArchive));
+        auto order = ResolveAssetChunkMountOrder(expectedPlan, selected, baseManifest);
+        if (order.HasError())
+            return Result<AssetArchiveProvider>::Failure(order.ErrorValue());
+
+        std::vector<AssetId> visible;
+        for (const auto &chunk : authenticated)
+            if (std::ranges::find(order.Value(), chunk.id) != order.Value().end())
+                visible.insert(visible.end(), chunk.assets.begin(), chunk.assets.end());
+        std::ranges::sort(visible);
+        std::erase_if(provider.entries_, [&visible](const Entry &entry) {
+            return !std::ranges::binary_search(visible, entry.id);
+        });
+        provider.chunks_ = {};
+        return Result<AssetArchiveProvider>::Success(std::move(provider));
     }
 
     Result<bool> AssetArchiveProvider::Exists(const AssetId id, const CancellationToken &cancellation) const {

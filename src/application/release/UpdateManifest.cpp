@@ -72,6 +72,7 @@ namespace Horo::Release {
             std::pair{DistributionPackageFormat::LinuxDeb, std::string_view{"linux-deb"}},
             std::pair{DistributionPackageFormat::LinuxRpm, std::string_view{"linux-rpm"}},
             std::pair{DistributionPackageFormat::StorePackage, std::string_view{"store"}},
+            std::pair{DistributionPackageFormat::DeltaZipArchive, std::string_view{"delta-zip"}},
         };
 
         [[nodiscard]] bool ValidChannel(const std::string_view channel) {
@@ -111,21 +112,24 @@ namespace Horo::Release {
             }, version);
         }
 
+        [[nodiscard]] Json WritePackage(const UpdatePackageRecord &package) {
+            const auto &artifact = package.selection.artifact;
+            return {{"platform", Name(artifact.platform, PlatformNames)},
+                    {"architecture", Name(artifact.architecture, ArchitectureNames)},
+                    {"format", Name(package.selection.format, FormatNames)},
+                    {"packageId", artifact.package.value},
+                    {"installationId", artifact.installation->value},
+                    {"url", package.url},
+                    {"size", package.size},
+                    {"sha256", FormatSha256(package.digest)},
+                    {"signature", WriteEnvelope(package.signature)}};
+        }
+
         [[nodiscard]] Json WritePayload(const UpdateManifestData &data) {
             Json packages = Json::array();
-            for (const auto &package : data.packages) {
-                const auto &artifact = package.selection.artifact;
-                packages.push_back({{"platform", Name(artifact.platform, PlatformNames)},
-                                    {"architecture", Name(artifact.architecture, ArchitectureNames)},
-                                    {"format", Name(package.selection.format, FormatNames)},
-                                    {"packageId", artifact.package.value},
-                                    {"installationId", artifact.installation->value},
-                                    {"url", package.url},
-                                    {"size", package.size},
-                                    {"sha256", FormatSha256(package.digest)},
-                                    {"signature", WriteEnvelope(package.signature)}});
-            }
-            Json payload{{"schemaVersion", 1},
+            for (const auto &package : data.packages)
+                packages.push_back(WritePackage(package));
+            Json payload{{"schemaVersion", data.deltas.empty() ? 1 : 2},
                          {"product", {{"kind", Detail::ProductName(data.product.kind)}, {"componentId", data.product.componentId}}},
                          {"channel", data.channel},
                          {"version", VersionText(data.version)},
@@ -138,11 +142,65 @@ namespace Horo::Release {
                          {"packages", std::move(packages)}};
             if (data.minimumAllowedVersion)
                 payload["minimumAllowedVersion"] = VersionText(*data.minimumAllowedVersion);
+            if (!data.deltas.empty()) {
+                Json deltas = Json::array();
+                for (const auto &delta : data.deltas)
+                    deltas.push_back({{"package", WritePackage(delta.package)},
+                                      {"fullPackageId", delta.fullPackage.value},
+                                      {"baseInventorySha256", FormatSha256(delta.baseInventoryDigest)},
+                                      {"deltaInventorySha256", FormatSha256(delta.deltaInventoryDigest)},
+                                      {"targetInventorySha256", FormatSha256(delta.targetInventoryDigest)}});
+                payload["deltas"] = std::move(deltas);
+            }
             if (!data.releaseNotes.empty())
                 payload["releaseNotes"] = data.releaseNotes;
             if (!data.compatibilityImpacts.empty())
                 payload["compatibilityImpacts"] = data.compatibilityImpacts;
             return payload;
+        }
+
+        [[nodiscard]] bool ZeroDigest(const Sha256Digest &digest) {
+            return std::ranges::all_of(digest.bytes, [](const std::uint8_t byte) {
+                return byte == 0U;
+            });
+        }
+
+        [[nodiscard]] bool ValidPackage(const UpdatePackageRecord &package, const UpdateManifestData &data) {
+            const auto &artifact = package.selection.artifact;
+            return artifact.product == data.product && artifact.version == data.version && artifact.build == data.build &&
+                   artifact.artifactClass == DistributionArtifactClass::InstallableProduct && artifact.installation &&
+                   ValidateDistributionPackageSelection(artifact, package.selection.format).HasValue() && ValidUrl(package.url) &&
+                   package.size != 0U && ValidEnvelope(package.signature, package.digest);
+        }
+
+        [[nodiscard]] bool ValidDeltas(const UpdateManifestData &data) {
+            if (data.deltas.size() > MaximumPackages)
+                return false;
+            for (std::size_t index = 0U; index < data.deltas.size(); ++index) {
+                const auto &delta = data.deltas[index];
+                const auto &artifact = delta.package.selection.artifact;
+                if (const auto full = std::ranges::find_if(data.packages,
+                                                           [&](const UpdatePackageRecord &package) {
+                    return package.selection.artifact.package == delta.fullPackage;
+                });
+                    !ValidPackage(delta.package, data) || delta.package.selection.format != DistributionPackageFormat::DeltaZipArchive ||
+                    full == data.packages.end() || artifact.platform != full->selection.artifact.platform ||
+                    artifact.architecture != full->selection.artifact.architecture ||
+                    artifact.installation != full->selection.artifact.installation || ZeroDigest(delta.baseInventoryDigest) ||
+                    ZeroDigest(delta.deltaInventoryDigest) || ZeroDigest(delta.targetInventoryDigest) ||
+                    delta.baseInventoryDigest == delta.targetInventoryDigest)
+                    return false;
+                for (const auto &package : data.packages)
+                    if (artifact.package == package.selection.artifact.package)
+                        return false;
+                for (std::size_t prior = 0U; prior < index; ++prior) {
+                    const auto &other = data.deltas[prior];
+                    if (artifact.package == other.package.selection.artifact.package ||
+                        (delta.fullPackage == other.fullPackage && delta.baseInventoryDigest == other.baseInventoryDigest))
+                        return false;
+                }
+            }
+            return true;
         }
 
         [[nodiscard]] bool ValidData(const UpdateManifestData &data) {
@@ -160,11 +218,7 @@ namespace Horo::Release {
             }))
                 return false;
             for (const auto &package : data.packages) {
-                const auto &artifact = package.selection.artifact;
-                if (artifact.product != data.product || artifact.version != data.version || artifact.build != data.build ||
-                    artifact.artifactClass != DistributionArtifactClass::InstallableProduct || !artifact.installation ||
-                    ValidateDistributionPackageSelection(artifact, package.selection.format).HasError() || !ValidUrl(package.url) ||
-                    package.size == 0U || !ValidEnvelope(package.signature, package.digest))
+                if (!ValidPackage(package, data) || package.selection.format == DistributionPackageFormat::DeltaZipArchive)
                     return false;
             }
             for (std::size_t left = 0U; left < data.packages.size(); ++left) {
@@ -177,7 +231,7 @@ namespace Horo::Release {
                         return false;
                 }
             }
-            return true;
+            return ValidDeltas(data);
         }
 
         [[nodiscard]] bool ReadVersion(const std::string &text, const DistributionProductKind product, ReleaseProductVersion &version) {
@@ -186,6 +240,85 @@ namespace Horo::Release {
                 return false;
             version = GameProduct(product) ? ReleaseProductVersion{GameProductVersion{parsed.Value()}}
                                            : ReleaseProductVersion{EngineProductVersion{parsed.Value()}};
+            return true;
+        }
+
+        [[nodiscard]] bool ReadPackage(const Json &entry, const UpdateManifestData &data, UpdatePackageRecord &package) {
+            if (!entry.is_object() || entry.size() != 9U)
+                return false;
+            DistributionArtifactIdentity artifact;
+            artifact.product = data.product;
+            artifact.version = data.version;
+            artifact.build = data.build;
+            if (!ParseName(entry.at("platform").get<std::string>(), PlatformNames, artifact.platform) ||
+                !ParseName(entry.at("architecture").get<std::string>(), ArchitectureNames, artifact.architecture))
+                return false;
+            artifact.package = {entry.at("packageId").get<std::string>()};
+            artifact.installation = DistributionInstallationId{entry.at("installationId").get<std::string>()};
+            DistributionPackageFormat format;
+            if (!ParseName(entry.at("format").get<std::string>(), FormatNames, format))
+                return false;
+            auto selection = ValidateDistributionPackageSelection(artifact, format);
+            if (selection.HasError())
+                return false;
+            package.selection = std::move(selection).Value();
+            package.url = entry.at("url").get<std::string>();
+            package.size = entry.at("size").get<std::uint64_t>();
+            auto digest = ParseSha256(entry.at("sha256").get<std::string>());
+            if (digest.HasError())
+                return false;
+            package.digest = digest.Value();
+            return ReadEnvelope(entry.at("signature"), package.digest, package.signature);
+        }
+
+        /** @brief Enforces the exact canonical shape and bounded collection sizes for one schema version. */
+        [[nodiscard]] bool ValidPayloadShape(const Json &json) {
+            if (const std::size_t optionalFields = static_cast<std::size_t>(json.contains("minimumAllowedVersion")) +
+                                                   static_cast<std::size_t>(json.contains("releaseNotes")) +
+                                                   static_cast<std::size_t>(json.contains("compatibilityImpacts"));
+                !json.is_object() || !json.at("schemaVersion").is_number_integer() ||
+                ((json.at("schemaVersion") == 1 && json.size() != 11U + optionalFields) ||
+                 (json.at("schemaVersion") == 2 && json.size() != 12U + optionalFields)) ||
+                (json.at("schemaVersion") != 1 && json.at("schemaVersion") != 2) || !json.at("product").is_object() ||
+                json.at("product").size() != 2U || !json.at("packages").is_array() || json.at("packages").size() > MaximumPackages)
+                return false;
+            return !((json.at("schemaVersion") == 1 && json.contains("deltas")) ||
+                     (json.at("schemaVersion") == 2 && (!json.contains("deltas") || !json.at("deltas").is_array() ||
+                                                        json.at("deltas").empty() || json.at("deltas").size() > MaximumPackages)));
+        }
+
+        /** @brief Parses full package records before dependent delta records. */
+        [[nodiscard]] bool ReadFullPackages(const Json &json, UpdateManifestData &data) {
+            for (const Json &entry : json.at("packages")) {
+                UpdatePackageRecord package;
+                if (!ReadPackage(entry, data, package))
+                    return false;
+                data.packages.push_back(std::move(package));
+            }
+            return true;
+        }
+
+        /** @brief Parses signed delta records with all three canonical inventory digests. */
+        [[nodiscard]] bool ReadDeltaPackages(const Json &json, UpdateManifestData &data) {
+            if (!json.contains("deltas"))
+                return true;
+            for (const Json &entry : json.at("deltas")) {
+                if (!entry.is_object() || entry.size() != 5U)
+                    return false;
+                UpdateDeltaPackageRecord delta;
+                if (!ReadPackage(entry.at("package"), data, delta.package))
+                    return false;
+                delta.fullPackage = {entry.at("fullPackageId").get<std::string>()};
+                auto base = ParseSha256(entry.at("baseInventorySha256").get<std::string>());
+                auto patch = ParseSha256(entry.at("deltaInventorySha256").get<std::string>());
+                auto target = ParseSha256(entry.at("targetInventorySha256").get<std::string>());
+                if (base.HasError() || patch.HasError() || target.HasError())
+                    return false;
+                delta.baseInventoryDigest = base.Value();
+                delta.deltaInventoryDigest = patch.Value();
+                delta.targetInventoryDigest = target.Value();
+                data.deltas.push_back(std::move(delta));
+            }
             return true;
         }
 
@@ -208,12 +341,7 @@ namespace Horo::Release {
         }
 
         [[nodiscard]] bool ReadPayload(const Json &json, UpdateManifestData &data) {
-            if (!json.is_object() ||
-                json.size() != 11U + static_cast<std::size_t>(json.contains("minimumAllowedVersion")) +
-                                   static_cast<std::size_t>(json.contains("releaseNotes")) +
-                                   static_cast<std::size_t>(json.contains("compatibilityImpacts")) ||
-                json.at("schemaVersion") != 1 || !json.at("product").is_object() || json.at("product").size() != 2U ||
-                !json.at("packages").is_array() || json.at("packages").size() > MaximumPackages)
+            if (!ValidPayloadShape(json))
                 return false;
             if (!Detail::ParseProductKind(json.at("product").at("kind").get<std::string>(), data.product.kind))
                 return false;
@@ -233,39 +361,7 @@ namespace Horo::Release {
                     return false;
                 data.minimumAllowedVersion = std::move(minimum);
             }
-            if (!ReadPresentation(json, data))
-                return false;
-            for (const Json &entry : json.at("packages")) {
-                if (!entry.is_object() || entry.size() != 9U)
-                    return false;
-                DistributionArtifactIdentity artifact;
-                artifact.product = data.product;
-                artifact.version = data.version;
-                artifact.build = data.build;
-                if (!ParseName(entry.at("platform").get<std::string>(), PlatformNames, artifact.platform) ||
-                    !ParseName(entry.at("architecture").get<std::string>(), ArchitectureNames, artifact.architecture))
-                    return false;
-                artifact.package = {entry.at("packageId").get<std::string>()};
-                artifact.installation = DistributionInstallationId{entry.at("installationId").get<std::string>()};
-                DistributionPackageFormat format;
-                if (!ParseName(entry.at("format").get<std::string>(), FormatNames, format))
-                    return false;
-                auto selection = ValidateDistributionPackageSelection(artifact, format);
-                if (selection.HasError())
-                    return false;
-                UpdatePackageRecord package;
-                package.selection = std::move(selection).Value();
-                package.url = entry.at("url").get<std::string>();
-                package.size = entry.at("size").get<std::uint64_t>();
-                auto digest = ParseSha256(entry.at("sha256").get<std::string>());
-                if (digest.HasError())
-                    return false;
-                package.digest = digest.Value();
-                if (!ReadEnvelope(entry.at("signature"), package.digest, package.signature))
-                    return false;
-                data.packages.push_back(std::move(package));
-            }
-            return ValidData(data);
+            return ReadPresentation(json, data) && ReadFullPackages(json, data) && ReadDeltaPackages(json, data) && ValidData(data);
         }
 
         [[nodiscard]] Result<SignedUpdateManifest> InvalidManifest() {
@@ -382,6 +478,50 @@ namespace Horo::Release {
              CompareReleaseVersionPrecedence(candidate, std::visit(version, *data.minimumAllowedVersion)) < 0))
             return Result<void>::Failure(MakeError(UpdateManifestErrors::Rollback));
         return Result<void>::Success();
+    }
+
+    /** @copydoc SelectUpdatePackageCandidates */
+    Result<UpdatePackageCandidates> SelectUpdatePackageCandidates(const SignedUpdateManifest &manifest,
+                                                                  const UpdateAdmissionContext &context,
+                                                                  const UpdateTrustRootSnapshot &roots,
+                                                                  std::shared_ptr<const Security::SignatureProvider> provider,
+                                                                  const DistributionPackageId &fullPackage,
+                                                                  const Sha256Digest &baseInventoryDigest) {
+        if (auto authenticated = VerifyUpdateManifest(manifest, context, roots, std::move(provider)); authenticated.HasError())
+            return Result<UpdatePackageCandidates>::Failure(authenticated.ErrorValue());
+        const auto &data = manifest.Data();
+        const auto full = std::ranges::find_if(data.packages, [&](const UpdatePackageRecord &package) {
+            const auto &artifact = package.selection.artifact;
+            return artifact.package == fullPackage && artifact.platform == context.platform &&
+                   artifact.architecture == context.architecture;
+        });
+        if (full == data.packages.end())
+            return Result<UpdatePackageCandidates>::Failure(MakeError(UpdateManifestErrors::Incompatible));
+        UpdatePackageCandidates candidates{*full, std::nullopt};
+        if (const auto delta = std::ranges::find_if(data.deltas,
+                                                    [&](const UpdateDeltaPackageRecord &record) {
+            return record.fullPackage == fullPackage && record.baseInventoryDigest == baseInventoryDigest;
+        });
+            delta != data.deltas.end())
+            candidates.delta = *delta;
+        return Result<UpdatePackageCandidates>::Success(std::move(candidates));
+    }
+
+    /** @copydoc PlanUpdatePackageAttempt */
+    std::optional<UpdatePackageRecord> PlanUpdatePackageAttempt(const UpdatePackageCandidates &candidates,
+                                                                const UpdatePackageAttempt attempt) {
+        using enum UpdatePackageAttempt;
+        switch (attempt) {
+            case Initial:
+                if (candidates.delta)
+                    return candidates.delta->package;
+                return candidates.full;
+            case AfterDeltaFailure:
+                return candidates.delta ? std::optional<UpdatePackageRecord>{candidates.full} : std::nullopt;
+            case AfterFullFailure:
+                return std::nullopt;
+        }
+        return std::nullopt;
     }
 
     /** @copydoc VerifyUpdatePackage */

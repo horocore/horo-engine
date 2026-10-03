@@ -691,6 +691,46 @@ Queue overflow closes the entire route rather than silently dropping an ordered
 packet. The minimal headless product still has no credential authority and
 deliberately closes native peers; connectivity alone cannot register gameplay.
 
+`RpcGameplayDispatch` is the NET-004.9 owner-thread RPC handler composed behind
+an exact admitted `InboundMessageDispatcher` message binding. Its bounded payload
+format is little-endian `RpcId:u64, authorityEpoch:u64, objectSlot:u64,
+objectGeneration:u32, schemaMajor:u16, schemaMinor:u16, logicalSequence:u64,
+recipientPeer:u64, parameterCount:u16`, followed by ascending distinct
+`RpcParameterId:u32, byteLength:u32, canonicalBytes` records. Recipient is zero
+for client-to-authority calls and the exact host-bound local peer for
+authority-to-client calls. Framing, descriptor compatibility, canonical typed
+decoding, live object/role/session authority and reliable logical replay are
+checked before queuing. The transport delivery class comes from admitted context,
+and a reliable declaration cannot arrive through an unreliable lane. Each invocation
+has a finite host-selected wire and retained-value byte ceiling, including optional
+defaults; pending storage is bounded by that ceiling times the command capacity,
+plus at most 64 typed-value slots per command. The fixed-step Gameplay drain repeats mutable checks
+while retaining world, handler and module leases through the callback. Host composition
+must supply an exact module-generation lease with every executable binding. Binding
+compaction retires serializers before releasing their original code lease, and
+serializer callbacks are pinned and revalidated after return. The registration
+call takes its handler pin by value and moves both that pin and the
+module lease into ordered local owners before validation. This prevents implicit
+derived-to-interface smart-pointer temporaries or parameter teardown from retiring
+code before a handler destructor. Existing call expressions remain source-compatible;
+consumers of this new RPC API must rebuild for the updated function signature.
+The factory-only
+construction path uses private admission keys with standard smart-pointer
+factories; consumers cannot bypass descriptor/capacity validation. Standard allocation
+and callback exceptions become typed terminal failures. A final catch-all is required
+at each untrusted module boundary because C++ callbacks can throw non-standard values;
+removing it would let hostile module code escape the host's lifecycle contract.
+The host retires the
+network mapping before destroying its Scene entity; the Gameplay handler resolves
+the generation-qualified entity again before staging its transaction. Handler
+mutation is an all-or-nothing Gameplay transaction; failed or thrown callbacks
+are terminal and never replayed. Binding replacement retains replay high-water
+for the active connection and object occurrence. Peer, object or handler
+revocation cannot erase replay high-water for the same generation; a new
+connection or object generation creates a distinct scope. Unsupported custom caller
+permissions fail closed until a host-approved policy is composed. Rate-limit
+enforcement is owned by NET-004.10.
+
 ### Backpressure and Overload Policies
 
 All transport queues have bounded capacities:
@@ -980,5 +1020,5 @@ The networking subsystem requires targeted automated verification:
 - [Multiplayer Replication Architecture](./multiplayer-replication-architecture.md)
 - [Runtime Lifecycle](./runtime-lifecycle.md)
 - [Concurrency And Job System](../foundation/concurrency-and-jobs.md)
-- [Network Debugger UI Reference](./network-debugger.html)
+- [Network Debugger UI Reference](../../../mock-studio/designs.md#architecture-runtime-network-debugger)
 - [Application Security Architecture](../security/application-security.md)

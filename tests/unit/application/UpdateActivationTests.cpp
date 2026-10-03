@@ -255,6 +255,23 @@ TEST_CASE("Verified update activation atomically selects the healthy staged vers
     CHECK(host.observedTimeout == std::chrono::seconds{2});
 }
 
+TEST_CASE("A delta artifact cannot activate as a complete installation", "[release][update][delta]") {
+    TemporaryInstall install;
+    Horo::NativeDurableFileSystem files;
+    auto verifier = Verifier();
+    auto request = Request(install, files, verifier);
+    const auto selection =
+        ValidateDistributionPackageSelection(request.staged.package.selection.artifact, DistributionPackageFormat::DeltaZipArchive);
+    REQUIRE(selection.HasValue());
+    request.staged.package.selection = selection.Value();
+    Host host;
+    CHECK(ActivateVerifiedUpdate(request, files, verifier, host).HasError());
+    CHECK(host.stops == 0U);
+    auto previous = EncodeActiveUpdateRecord(request.current.package);
+    REQUIRE(previous.HasValue());
+    CHECK(Read(install.root / "active-version") == previous.Value());
+}
+
 TEST_CASE("Failed startup health restores the previous active version", "[release][update]") {
     TemporaryInstall install;
     Horo::NativeDurableFileSystem files;

@@ -16,6 +16,8 @@ namespace Horo::Editor {
         constexpr std::size_t MaximumEndpointBytes = 2048U;
         constexpr std::size_t MaximumEndpoints = 16U;
 
+        using CurlHandle = std::unique_ptr<CURL, decltype(&curl_easy_cleanup)>;
+
         /** @brief An endpoint is a literal HTTPS URL with no userinfo, fragment, or bearer query. */
         [[nodiscard]] bool ValidEndpoint(const std::string_view url) {
             return url.starts_with("https://") && url.size() <= MaximumEndpointBytes && url.size() > 8U &&
@@ -51,8 +53,9 @@ namespace Horo::Editor {
             bool oversized{};
         };
 
+        /** @brief Appends one bounded body chunk without allowing an exception across the C callback. */
         std::size_t ReceiveBody(const char *data, const std::size_t size, const std::size_t count, ManifestResponse &response) noexcept {
-            if (size == 0U || count > std::numeric_limits<std::size_t>::max() / size)
+            if (size == 0U || count > (std::numeric_limits<std::size_t>::max)() / size)
                 return 0U;
             const std::size_t bytes = size * count;
             if (bytes > MaximumManifestBytes - response.body.size()) {
@@ -67,6 +70,7 @@ namespace Horo::Editor {
             return bytes;
         }
 
+        /** @brief Requests transfer termination when the owning job is cancelled. */
         int ReportTransfer(const ManifestResponse &response) noexcept {
             return response.cancellation.IsCancellationRequested() ? 1 : 0;
         }
@@ -78,16 +82,15 @@ namespace Horo::Editor {
             return response == nullptr ? 0U : ReceiveBody(data, size, count, *response);
         };
         constexpr curl_xferinfo_callback ReportTransferCallback = [](auto *context, curl_off_t, curl_off_t, curl_off_t,
-                                                                     curl_off_t) noexcept -> int {
+                                                                     curl_off_t) noexcept {
             const auto *response = static_cast<const ManifestResponse *>(context);
             return response == nullptr ? 0 : ReportTransfer(*response);
         };
 
         /** @brief Configures the exact endpoint with verified TLS and no redirect or ambient credentials. */
-        [[nodiscard]] bool Configure(CURL *curl, const std::string &url, const EditorUpdateManifestHttpPolicy &policy,
+        [[nodiscard]] bool Configure(const CurlHandle &handle, const std::string &url, const EditorUpdateManifestHttpPolicy &policy,
                                      ManifestResponse &response) {
-            if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
-                return false;
+            auto *curl = handle.get();
             return curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_USERAGENT, "horo-update/1") == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https") == CURLE_OK &&
@@ -112,17 +115,19 @@ namespace Horo::Editor {
     Result<std::string> CurlEditorUpdateManifestHttpClient::Get(const std::string &url, const EditorUpdateManifestHttpPolicy &policy,
                                                                 const CancellationToken cancellation) {
         if (!ValidEndpoint(url) || policy.connectTimeoutSeconds == 0U || policy.requestTimeoutSeconds < policy.connectTimeoutSeconds ||
-            policy.requestTimeoutSeconds > static_cast<std::uint64_t>(std::numeric_limits<long>::max()))
+            policy.requestTimeoutSeconds > static_cast<std::uint64_t>((std::numeric_limits<long>::max)()))
             return Result<std::string>::Failure(MakeError(Release::UpdateDiscoveryErrors::InvalidPolicy));
         if (cancellation.IsCancellationRequested())
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::Cancelled));
         if (static const bool CurlReady = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK; !CurlReady)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
-        std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl{curl_easy_init(), &curl_easy_cleanup};
+        CurlHandle curl{curl_easy_init(), &curl_easy_cleanup};
         if (!curl)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
+        if (curl_easy_setopt(curl.get(), CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
+            return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         ManifestResponse response{{}, cancellation};
-        if (!Configure(curl.get(), url, policy, response))
+        if (!Configure(curl, url, policy, response))
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         // libcurl copies CAINFO when the option is set.
         if (const std::string caBundle = policy.certificateAuthorityBundle.string();
@@ -144,6 +149,7 @@ namespace Horo::Editor {
         return Result<std::string>::Success(std::move(response.body));
     }
 
+    /** @copydoc ConfiguredEditorUpdateManifestSource::ConfiguredEditorUpdateManifestSource */
     ConfiguredEditorUpdateManifestSource::ConfiguredEditorUpdateManifestSource(std::vector<EditorUpdateManifestEndpoint> endpoints,
                                                                                EditorUpdateManifestHttpPolicy policy,
                                                                                IEditorUpdateManifestHttpClient &client)

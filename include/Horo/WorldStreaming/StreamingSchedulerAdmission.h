@@ -6,6 +6,7 @@
  */
 
 #include "Horo/WorldStreaming/StreamingCellOperation.h"
+#include "Horo/WorldStreaming/WorldPartitionCapabilityProfile.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +18,8 @@ namespace Horo::WorldStreaming {
         struct StreamingSchedulerLedgerIdTag;
         /** @brief Tag that keeps scheduler reservation identities distinct from operation identities. */
         struct StreamingSchedulerReservationIdTag;
+        /** @brief Tag for immutable concurrency policy publications. */
+        struct StreamingConcurrencyRevisionTag;
     }  // namespace Detail
 
     /** @brief Stable identity for one scheduler-ledger owner lifetime; zero is reserved as invalid. */
@@ -27,6 +30,34 @@ namespace Horo::WorldStreaming {
     using StreamingSchedulerReservationId =
         Foundation::Detail::NonZeroId64<Detail::StreamingSchedulerReservationIdTag, WorldStreamingErrors::IdentityInvalid>;
 
+    /** @brief Non-zero revision of one ledger-owned concurrency policy publication. */
+    using StreamingConcurrencyRevision =
+        Foundation::Detail::NonZeroId64<Detail::StreamingConcurrencyRevisionTag, WorldStreamingErrors::IdentityInvalid>;
+
+    /**
+     * @brief Complete host-supplied stage ceilings for one exact target profile and revision.
+     * @details Stages are operation kinds, not transient execution phases. Interrupted work retains its original
+     *          stage slot through retirement; cleanup never needs a second slot or waits for retirement admission.
+     *          Zero explicitly disables new work of that kind. No profile implies different limits or a fallback.
+     */
+    struct StreamingConcurrencyPolicy final {
+        WorldPartitionProjectProfile profile{WorldPartitionProjectProfile::Count}; /**< Exact host-selected target profile. */
+        StreamingConcurrencyRevision revision;                                     /**< Immutable publication scoped to the ledger owner. */
+        std::uint32_t loads{};                                                     /**< Retained Load operations, including rollback. */
+        std::uint32_t activations{}; /**< Retained Activate operations, including preparation and rollback. */
+        std::uint32_t retirements{}; /**< Retained explicit Retire operations. */
+
+        /** @brief Checks revision and bounded stage ceilings. @return True for a known profile and at least one enabled stage. */
+        [[nodiscard]] bool IsValid() const noexcept;
+        /**
+         * @brief Looks up the exact stage ceiling without changing policy.
+         * @param kind Requested operation kind.
+         * @return Ceiling (zero means disabled), or typed unsupported-kind failure.
+         */
+        [[nodiscard]] Result<std::uint32_t> Limit(StreamingCellOperationKind kind) const;
+        [[nodiscard]] constexpr auto operator<=>(const StreamingConcurrencyPolicy &) const noexcept = default;
+    };
+
     /** @brief Admission lifecycle owned by the partition authority's scheduler ledger. */
     enum class StreamingSchedulerAdmissionState : std::uint8_t {
         Accepting,
@@ -34,15 +65,16 @@ namespace Horo::WorldStreaming {
         Closed,
     };
 
-    /** @brief Bounded scheduler limits independent of the later multidimensional budget policy. */
+    /** @brief Bounded total and stage/profile limits independent of multidimensional byte/time policy. */
     struct StreamingSchedulerAdmissionLimits final {
         /** @brief Mandatory implementation ceiling that bounds preallocated ledger storage. */
         static constexpr std::uint32_t MaximumConcurrentOperations = 1024;
 
-        std::uint32_t concurrentOperations{}; /**< Maximum simultaneously retained operation reservations. */
-        std::uint64_t capacityUnits{};        /**< Generic capacity supplied by the owning host policy. */
+        std::uint32_t concurrentOperations{};   /**< Maximum simultaneously retained operation reservations. */
+        std::uint64_t capacityUnits{};          /**< Generic capacity supplied by the owning host policy. */
+        StreamingConcurrencyPolicy concurrency; /**< Mandatory profile/revision and independent stage ceilings. */
 
-        /** @brief Validates positive bounded limits. @return True when both ceilings can be represented safely. */
+        /** @brief Validates complete bounded limits. @return True for positive total ceilings and a valid stage/profile policy. */
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] constexpr auto operator<=>(const StreamingSchedulerAdmissionLimits &) const noexcept = default;
     };
@@ -68,27 +100,49 @@ namespace Horo::WorldStreaming {
     public:
         StreamingSchedulerAdmissionLedger(const StreamingSchedulerAdmissionLedger &) = delete;
         StreamingSchedulerAdmissionLedger &operator=(const StreamingSchedulerAdmissionLedger &) = delete;
-        StreamingSchedulerAdmissionLedger(StreamingSchedulerAdmissionLedger &&) noexcept = default;
-        StreamingSchedulerAdmissionLedger &operator=(StreamingSchedulerAdmissionLedger &&) noexcept = default;
+        /** @brief Transfers all retained ownership and closes the source admission gate. @param other Unique source owner. */
+        StreamingSchedulerAdmissionLedger(StreamingSchedulerAdmissionLedger &&other) noexcept;
+        StreamingSchedulerAdmissionLedger &operator=(StreamingSchedulerAdmissionLedger &&) = delete;
 
         /**
          * @brief Creates an accepting ledger with bounded preallocated reservation storage.
          * @param owner Unique non-zero identity for this ledger-owner lifetime.
-         * @param limits Positive concurrent-operation and generic-capacity ceilings.
+         * @param limits Positive total ceilings and a complete explicit stage/profile policy.
          * @return Empty ledger or a typed invalid/capacity failure.
          */
         [[nodiscard]] static Result<StreamingSchedulerAdmissionLedger> Create(StreamingSchedulerLedgerId owner,
-                                                                              StreamingSchedulerAdmissionLimits limits);
+                                                                              const StreamingSchedulerAdmissionLimits &limits);
 
         /**
          * @brief Atomically reserves required capacity and admits one exact queued operation.
          * @param operation Queued operation whose canonical admitted successor becomes ledger-owned.
          * @param requiredCapacityUnits Positive generic capacity required before work can start.
+         * @param expectedRevision Exact current concurrency policy revision captured by the submitting owner.
          * @return Exact reservation, or a typed failure without ledger or operation mutation.
          * @pre Called on the owning StreamingAuthorityRole.
          */
         [[nodiscard]] Result<StreamingSchedulerReservation> TryAdmit(const StreamingCellOperation &operation,
-                                                                     std::uint64_t requiredCapacityUnits);
+                                                                     std::uint64_t requiredCapacityUnits,
+                                                                     StreamingConcurrencyRevision expectedRevision);
+
+        /**
+         * @brief Replaces the complete stage policy without altering retained operations or reservations.
+         * @param expectedRevision Exact current policy revision.
+         * @param policy Same target profile with a strictly newer revision and complete bounded ceilings.
+         * @return Success or typed invalid, unsupported, stale, or lifecycle failure without mutation.
+         * @details Lowered ceilings may be below retained counts. New work then waits for real releases;
+         *          existing exact reservation tokens remain routable under their original ownership.
+         * @pre Called on StreamingAuthorityRole while accepting.
+         */
+        [[nodiscard]] Result<void> ReplaceConcurrency(StreamingConcurrencyRevision expectedRevision,
+                                                      const StreamingConcurrencyPolicy &policy);
+
+        /**
+         * @brief Counts retained operations of one kind, including terminal work awaiting explicit release.
+         * @param kind Exact operation kind.
+         * @return Count or typed unsupported-kind failure; performs no allocation.
+         */
+        [[nodiscard]] Result<std::size_t> ReservedCount(StreamingCellOperationKind kind) const;
 
         /**
          * @brief Advances the ledger-owned canonical operation for an exact reservation.
@@ -108,12 +162,16 @@ namespace Horo::WorldStreaming {
          */
         [[nodiscard]] Result<void> Release(const StreamingSchedulerReservation &reservation);
 
+        /** @brief Inspects the ledger-owned operation without permitting caller mutation.
+         * @param reservation Exact retained reservation. @return Canonical snapshot or typed invalid/stale failure. */
+        [[nodiscard]] Result<StreamingCellOperation> Inspect(const StreamingSchedulerReservation &reservation) const;
+
         /** @brief Stops new admission while retained reservations drain. @pre Called on the owning StreamingAuthorityRole. */
         void BeginShutdown() noexcept;
 
         /** @brief Returns the exact ledger-owner identity. @return Non-zero owner lifetime. */
         [[nodiscard]] StreamingSchedulerLedgerId Owner() const noexcept;
-        /** @brief Returns the configured immutable ceilings. @return Ledger limits. */
+        /** @brief Returns the total ceilings and current concurrency publication. @return Ledger limits. */
         [[nodiscard]] StreamingSchedulerAdmissionLimits Limits() const noexcept;
         /** @brief Returns the admission lifecycle. @return Accepting, Draining, or Closed. */
         [[nodiscard]] StreamingSchedulerAdmissionState State() const noexcept;
@@ -123,12 +181,14 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] std::uint64_t ReservedCapacityUnits() const noexcept;
 
     private:
+        [[nodiscard]] Result<std::size_t> FindExact(const StreamingSchedulerReservation &reservation) const;
+
         struct Entry final {
             StreamingSchedulerReservation reservation;
             StreamingCellOperation operation;
         };
 
-        StreamingSchedulerAdmissionLedger(StreamingSchedulerLedgerId owner, StreamingSchedulerAdmissionLimits limits) noexcept;
+        StreamingSchedulerAdmissionLedger(StreamingSchedulerLedgerId owner, const StreamingSchedulerAdmissionLimits &limits) noexcept;
 
         StreamingSchedulerLedgerId owner_{};
         StreamingSchedulerAdmissionLimits limits_{};

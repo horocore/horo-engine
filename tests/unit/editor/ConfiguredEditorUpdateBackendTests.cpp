@@ -2,6 +2,7 @@
 #include "Horo/Release/UpdateTransferErrors.h"
 #include "Horo/Security/SecurityErrors.h"
 #include "HoroEditor/app/ConfiguredEditorUpdateBackend.h"
+#include "HoroEditor/app/ConfiguredEditorUpdateManifestSource.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -117,6 +118,16 @@ namespace {
         }
     };
 
+    class MemoryManifestHttp final : public IEditorUpdateManifestHttpClient {
+    public:
+        std::string requestedUrl;
+
+        Result<std::string> Get(const std::string &url, const EditorUpdateManifestHttpPolicy &, CancellationToken) override {
+            requestedUrl = url;
+            return Result<std::string>::Success(SignedDocument());
+        }
+    };
+
     class MemoryStager final : public IEditorUpdatePackageStager {
     public:
         explicit MemoryStager(const bool failFirst = false) : failFirst(failFirst) {}
@@ -181,6 +192,32 @@ TEST_CASE("Configured editor update backend projects only verified release notes
     CHECK(backend.Activate({}).HasError());
     CHECK(backend.Rollback({}).HasValue());
     CHECK(handoff.rollbackRequests == 1U);
+}
+
+TEST_CASE("Installed manifest source cannot admit a signed document from another selected channel", "[editor][update]") {
+    MemoryManifestHttp http;
+    ConfiguredEditorUpdateManifestSource
+        source{{{{EditorUpdateChannelKind::Stable, {}}, "stable", "https://updates.example.test/stable/manifest.json"},
+                {{EditorUpdateChannelKind::Preview, {}}, "preview", "https://updates.example.test/preview/manifest.json"}},
+               {},
+               http};
+    MemoryStager stager;
+    RecordingHandoff handoff;
+    ConfiguredEditorUpdateBackend backend{Policy(), source, stager, handoff};
+    const auto stable = backend.Check({}, {});
+    REQUIRE(stable.HasValue());
+    REQUIRE(stable.Value().has_value());
+    CHECK(stable.Value()->releaseNotes == "Signed release notes");
+    CHECK(http.requestedUrl == "https://updates.example.test/stable/manifest.json");
+
+    const auto preview = backend.Check({EditorUpdateChannelKind::Preview, {}}, {});
+    REQUIRE(preview.HasError());
+    CHECK(preview.ErrorValue().code.Value() == UpdateManifestErrors::Incompatible.code.Value());
+    CHECK(http.requestedUrl == "https://updates.example.test/preview/manifest.json");
+    CHECK(backend.Prepare(*stable.Value(), {}, {}).HasError());
+    CHECK(backend.Activate({}).HasError());
+    CHECK(stager.requests == 0U);
+    CHECK(handoff.activationRequests == 0U);
 }
 
 TEST_CASE("ZIP editor stager rejects a package of another format before touching download paths", "[editor][update]") {

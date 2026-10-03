@@ -1,3 +1,4 @@
+#include "Horo/Release/UpdateDeltaStaging.h"
 #include "Horo/Release/UpdateStageReady.h"
 #include "Horo/Release/UpdateStagedTree.h"
 #include "Horo/Release/UpdateTransferCheckpointStore.h"
@@ -53,6 +54,8 @@ namespace {
     void WriteFile(const std::filesystem::path &path, const std::string_view bytes) {
         std::ofstream output(path, std::ios::binary);
         output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        output.close();
+        std::filesystem::permissions(path, path.filename() == "game" ? std::filesystem::perms{0755} : std::filesystem::perms{0644});
     }
 
     [[nodiscard]] DistributionPackageSelection Selection() {
@@ -161,7 +164,203 @@ namespace {
         return candidate;
     }
 #endif
+    [[nodiscard]] Sha256Digest InventoryDigest(std::span<const UpdateStagedFile> files, const UpdateArchiveLimits &limits) {
+        auto canonical = BuildCanonicalUpdateFileInventory(files, limits);
+        REQUIRE(canonical.HasValue());
+        return ComputeSha256(std::as_bytes(std::span{canonical.Value()}));
+    }
+
+    [[nodiscard]] UpdateTransferCheckpoint CompleteCheckpoint(const UpdatePackageRecord &package) {
+        const UpdateTransferResponse response{.status = 200U,
+                                              .requestedUrl = package.url,
+                                              .effectiveUrl = package.url,
+                                              .strongEtag = "\"release-1\"",
+                                              .contentLength = package.size};
+        auto transfer = PlanUpdateTransfer(package, response, std::nullopt);
+        REQUIRE(transfer.HasValue());
+        auto checkpoint = AdvanceUpdateTransfer(transfer.Value(), package.size);
+        REQUIRE(checkpoint.HasValue());
+        return std::move(checkpoint).Value();
+    }
+
+    [[nodiscard]] std::string AlternateSignedZip(const std::span<const UpdateStagedFile> target, const UpdateArchiveLimits &limits) {
+        auto inventory = BuildCanonicalUpdateFileInventory(target, limits);
+        REQUIRE(inventory.HasValue());
+        mz_zip_archive writer{};
+        REQUIRE(mz_zip_writer_init_heap(&writer, 0U, 0U));
+        REQUIRE(mz_zip_writer_add_mem(&writer, UpdateFileInventoryPath.data(), inventory.Value().data(), inventory.Value().size(),
+                                      MZ_DEFAULT_COMPRESSION));
+        REQUIRE(mz_zip_writer_add_mem(&writer, "bin/game", "game", 4U, MZ_DEFAULT_COMPRESSION));
+        void *bytes = nullptr;
+        std::size_t size = 0U;
+        REQUIRE(mz_zip_writer_finalize_heap_archive(&writer, &bytes, &size));
+        std::string archive{static_cast<const char *>(bytes), size};
+        mz_free(bytes);
+        mz_zip_writer_end(&writer);
+        return archive;
+    }
+
+    [[nodiscard]] UpdatePackageRecord SignedFullPackage(const std::string &bytes) {
+        UpdatePackageRecord full;
+        full.selection = Selection();
+        full.url = "https://updates.example.test/game.zip";
+        full.size = bytes.size();
+        full.digest = ComputeSha256(std::as_bytes(std::span{bytes}));
+        full.signature = {.publisherId = "com.horo.updates",
+                          .keyId = "key-1",
+                          .artifactDigest = full.digest,
+                          .signature = std::vector<std::byte>(64U, std::byte{1})};
+        return full;
+    }
+
+    [[nodiscard]] std::string ProduceSignedFullZip(const TemporaryDirectory &directory, const std::span<const UpdateStagedFile> target,
+                                                   const UpdateArchiveLimits &limits) {
+        std::vector<ReleaseArtifactRecord> artifacts;
+        for (const auto &file : target)
+            artifacts.emplace_back(file.path, ReleaseArtifactRole::Binary, file.size, file.digest);
+        auto inventory = ReleasePreSignInventory::Create(ReleaseCandidateId{42U}, std::move(artifacts));
+        REQUIRE(inventory.HasValue());
+        UpdateZipPackageProducer producer{limits};
+        auto produced = producer.Produce(
+            {Selection(), inventory.Value(), directory.root / "source", directory.root / "first", "bin/game", {"bin/game"}});
+        REQUIRE(produced.HasValue());
+        return ReadFile(directory.root / "first/update.zip");
+    }
+
+    [[nodiscard]] UpdateDeltaPackageRecord DeltaFor(const UpdatePackageRecord &full, const std::string &bytes,
+                                                    const Sha256Digest &baseDigest, const Sha256Digest &targetDigest) {
+        auto delta = full;
+        auto artifact = full.selection.artifact;
+        artifact.package = {"delta_42"};
+        auto selected = ValidateDistributionPackageSelection(artifact, DistributionPackageFormat::DeltaZipArchive);
+        REQUIRE(selected.HasValue());
+        delta.selection = std::move(selected).Value();
+        delta.url = "https://updates.example.test/delta.zip";
+        delta.size = bytes.size();
+        delta.digest = ComputeSha256(std::as_bytes(std::span{bytes}));
+        delta.signature.artifactDigest = delta.digest;
+        return {delta, full.selection.artifact.package, baseDigest, targetDigest, targetDigest};
+    }
+
+    void PopulateDeltaTree(const TemporaryDirectory &directory) {
+        std::filesystem::create_directories(directory.root / "base/bin");
+        std::filesystem::create_directories(directory.root / "base/assets");
+        std::filesystem::create_directories(directory.root / "patch/bin");
+        std::filesystem::create_directories(directory.root / "patch/assets");
+        std::filesystem::create_directories(directory.root / "source/assets");
+        std::filesystem::create_directories(directory.root / "versions");
+        WriteFile(directory.root / "base/bin/game", "old!");
+        WriteFile(directory.root / "base/assets/keep", "same");
+        WriteFile(directory.root / "base/assets/removed", "gone");
+        WriteFile(directory.root / "patch/bin/game", "game");
+        WriteFile(directory.root / "patch/assets/added", "new!");
+        WriteFile(directory.root / "source/bin/game", "game");
+        WriteFile(directory.root / "source/assets/keep", "same");
+        WriteFile(directory.root / "source/assets/added", "new!");
+    }
+
+    void PopulateSingleDeltaTree(const TemporaryDirectory &directory) {
+        std::filesystem::create_directories(directory.root / "base/bin");
+        std::filesystem::create_directories(directory.root / "versions");
+        WriteFile(directory.root / "base/bin/game", "old!");
+        WriteFile(directory.root / "source/bin/game", "game");
+    }
+
+    void PreloadCompleted(const UpdatePackageRecord &package, const UpdateDownloadPaths &paths, const std::string &bytes,
+                          NativeDurableFileSystem &files) {
+        WriteFile(paths.partialFile, bytes);
+        REQUIRE(SaveUpdateTransferCheckpoint(files, paths.partialFile, paths.checkpointFile, CompleteCheckpoint(package)).HasValue());
+    }
 }  // namespace
+
+TEST_CASE("Selected ZIP delivery uses verified delta then signed full fallback", "[release][update][delta]") {
+    constexpr UpdateArchiveLimits limits{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
+    for (const unsigned scenario : {0U, 1U, 2U}) {
+        const bool forceFallback = scenario != 0U;
+        const bool byteMismatch = scenario == 2U;
+        TemporaryDirectory directory;
+        NativeDurableFileSystem files;
+        PopulateSingleDeltaTree(directory);
+        const std::array base{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"old!", 4U})),
+                                               UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
+        const std::array target{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"game", 4U})),
+                                                 UpdateFileMode::Executable, UpdateFileRole::Entrypoint}};
+        const auto deltaBytes = ProduceSignedFullZip(directory, target, limits);
+        const auto signedBytes = byteMismatch ? AlternateSignedZip(target, limits) : deltaBytes;
+        if (byteMismatch)
+            REQUIRE(signedBytes != deltaBytes);
+        auto full = SignedFullPackage(signedBytes);
+        auto delta = DeltaFor(full, deltaBytes, InventoryDigest(base, limits), InventoryDigest(target, limits));
+        UpdatePackageCandidates candidates{full, delta};
+        const auto versions = directory.root / "versions";
+        const UpdateDownloadPaths deltaPaths{versions / "delta_42.zip", versions / "delta_42.checkpoint"};
+        const UpdateDownloadPaths fullPaths{versions / "package_42.zip", versions / "package_42.checkpoint"};
+        const auto stage = versions / "package_42";
+        const auto deltaStage = versions / "delta_42";
+        PreloadCompleted(delta.package, deltaPaths, deltaBytes, files);
+        if (forceFallback)
+            PreloadCompleted(full, fullPaths, signedBytes, files);
+        const std::span<const UpdateStagedFile> requestedTarget =
+            scenario == 1U ? std::span<const UpdateStagedFile>{base} : std::span<const UpdateStagedFile>{target};
+        const auto baseRoot = directory.root / "base";
+        const UpdateDownloadLimits downloadLimits{.maximumPackageBytes = 4096U};
+        const SelectedZipStagingRequest request{candidates, baseRoot,  base,  requestedTarget, deltaPaths,
+                                                deltaStage, fullPaths, stage, downloadLimits,  limits};
+        auto staged = PrepareSelectedZipUpdateStageHttps(request, files, Verifier(), {});
+        REQUIRE(staged.HasValue());
+        CHECK(staged.Value().usedDelta == !forceFallback);
+        CHECK(ReadFile(fullPaths.partialFile) == signedBytes);
+        CHECK(ReadFile(stage / "bin/game") == "game");
+        CHECK(VerifyReadyUpdateStage(full, staged.Value().checkpoint, fullPaths.partialFile, stage, target, limits, Verifier()).HasValue());
+        if (forceFallback)
+            CHECK_FALSE(std::filesystem::exists(deltaStage));
+    }
+}
+
+TEST_CASE("Delta reconstruction reproduces the exact signed full ZIP before publishing ready", "[release][update][delta]") {
+    TemporaryDirectory directory;
+    constexpr UpdateArchiveLimits limits{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
+    PopulateDeltaTree(directory);
+    const std::array base{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"old!", 4U})), UpdateFileMode::Executable,
+                                           UpdateFileRole::Entrypoint},
+                          UpdateStagedFile{"assets/keep", 4U, ComputeSha256(std::as_bytes(std::span{"same", 4U}))},
+                          UpdateStagedFile{"assets/removed", 4U, ComputeSha256(std::as_bytes(std::span{"gone", 4U}))}};
+    const std::array target{UpdateStagedFile{"bin/game", 4U, ComputeSha256(std::as_bytes(std::span{"game", 4U})),
+                                             UpdateFileMode::Executable, UpdateFileRole::Entrypoint},
+                            UpdateStagedFile{"assets/keep", 4U, ComputeSha256(std::as_bytes(std::span{"same", 4U}))},
+                            UpdateStagedFile{"assets/added", 4U, ComputeSha256(std::as_bytes(std::span{"new!", 4U}))}};
+    const std::array patch{target[0], target[2]};
+    auto plan = PlanUpdateFileDelta(base, target, patch, InventoryDigest(base, limits), InventoryDigest(target, limits),
+                                    InventoryDigest(patch, limits), limits);
+    REQUIRE(plan.HasValue());
+    NativeDurableFileSystem files;
+    const auto stage = directory.root / "versions/package_42";
+    CHECK(VerifyUpdateStagedTree(directory.root / "base", base, limits).HasValue());
+    CHECK(VerifyUpdateStagedTree(directory.root / "patch", patch, limits).HasValue());
+    REQUIRE(ReconstructUpdateFileDeltaStage(plan.Value(), directory.root / "base", directory.root / "patch", stage, limits, files, {})
+                .HasValue());
+
+    const auto signedBytes = ProduceSignedFullZip(directory, target, limits);
+    auto full = SignedFullPackage(signedBytes);
+    const auto packageFile = directory.root / "versions/package_42.zip";
+    const auto checkpointFile = directory.root / "versions/package_42.checkpoint";
+    auto wrong = full;
+    wrong.digest.bytes[0] ^= 1U;
+    wrong.signature.artifactDigest = wrong.digest;
+    CHECK(
+        RepackVerifiedDeltaAsFullZip({wrong, plan.Value(), stage, packageFile, checkpointFile, limits}, files, Verifier(), {}).HasError());
+    CHECK_FALSE(std::filesystem::exists(packageFile));
+    CHECK_FALSE(std::filesystem::exists(checkpointFile));
+    CHECK_FALSE(std::filesystem::exists(stage.string() + ".ready"));
+
+    auto repacked = RepackVerifiedDeltaAsFullZip({full, plan.Value(), stage, packageFile, checkpointFile, limits}, files, Verifier(), {});
+    REQUIRE(repacked.HasValue());
+    CHECK(ReadFile(packageFile) == signedBytes);
+    CHECK(std::filesystem::exists(repacked.Value().readyMarker));
+    CHECK(VerifyReadyUpdateStage(full, repacked.Value().checkpoint, packageFile, stage, target, limits, Verifier()).HasValue());
+    WriteFile(stage / "bin/game", "evil");
+    CHECK(VerifyReadyUpdateStage(full, repacked.Value().checkpoint, packageFile, stage, target, limits, Verifier()).HasError());
+}
 
 TEST_CASE("ZIP producer emits deterministic exact bytes and the staging inventory", "[release][update][package]") {
     TemporaryDirectory directory;
@@ -244,12 +443,12 @@ TEST_CASE("ZIP package producer output stages from a complete durable checkpoint
     NativeDurableFileSystem files;
     const UpdateDownloadPaths paths{directory.root / "first/update.zip", directory.root / "first/update.checkpoint"};
     REQUIRE(SaveUpdateTransferCheckpoint(files, paths.partialFile, paths.checkpointFile, checkpoint.Value()).HasValue());
-    auto staged = PrepareZipUpdateStageHttps({package,
-                                              paths,
-                                              directory.root / "first/candidate",
-                                              {.maximumPackageBytes = 4096U, .reserveBytes = 0U},
-                                              {.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U}},
-                                             files, Verifier(), {});
+    const auto stageRoot = directory.root / "first/candidate";
+    constexpr UpdateDownloadLimits downloadLimits{.maximumPackageBytes = 4096U, .reserveBytes = 0U};
+    constexpr UpdateArchiveLimits archiveLimits{.maximumEntries = 8U, .maximumFileBytes = 1024U, .maximumExpandedBytes = 4096U};
+    const UpdateZipStagingRequest stagingRequest{package, paths, stageRoot, downloadLimits, archiveLimits};
+    auto verifier = Verifier();
+    auto staged = PrepareZipUpdateStageHttps(stagingRequest, files, verifier, {});
     REQUIRE(staged.HasValue());
     CHECK(ReadFile(directory.root / "first/candidate/bin/game") == "game");
 }

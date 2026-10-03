@@ -22,6 +22,8 @@ namespace Horo::Editor {
         [[nodiscard]] float Snap(const float value, const float step) noexcept {
             return std::round(value / step) * step;
         }
+
+        constexpr SceneObjectId AssetPlacementPreviewObject{std::numeric_limits<std::uint64_t>::max()};
     }  // namespace
 
     AssetSceneDragPayload MakeAssetSceneDragPayload(const std::string_view assetId, const std::string_view assetType,
@@ -101,5 +103,69 @@ namespace Horo::Editor {
             result.worldPosition.z = Snap(result.worldPosition.z, request.gridStep);
         }
         return Result<AssetViewportPlacement>::Success(result);
+    }
+
+    HierarchyAssetDropPlacement ResolveHierarchyAssetDropPlacement(const float normalizedRowY, const SceneObjectId hoveredObject,
+                                                                   const std::optional<SceneObjectId> hoveredParent) noexcept {
+        constexpr float siblingEdgeRatio = 0.25F;
+        using enum AssetSceneDropTarget;
+        using enum HierarchyAssetDropZone;
+        if (normalizedRowY <= siblingEdgeRatio)
+            return {hoveredParent, HierarchySibling, BeforeSibling};
+        if (normalizedRowY >= 1.0F - siblingEdgeRatio)
+            return {hoveredParent, HierarchySibling, AfterSibling};
+        return {hoveredObject, HierarchyChild, Child};
+    }
+
+    bool ClearAssetViewportPlacementPreview(EditorViewportSceneSnapshot &scene) noexcept {
+        if (scene.instances.size() != scene.instanceObjects.size() || scene.instances.size() != scene.instancePickable.size())
+            return false;
+
+        std::optional<Render::RenderMeshSourceHandle> previewMesh;
+        bool removed = false;
+        for (std::size_t index = scene.instanceObjects.size(); index > 0; --index) {
+            const std::size_t candidate = index - 1;
+            if (scene.instanceObjects[candidate] != AssetPlacementPreviewObject)
+                continue;
+            previewMesh = scene.instances[candidate].mesh;
+            scene.instances.erase(scene.instances.begin() + static_cast<std::ptrdiff_t>(candidate));
+            scene.instanceObjects.erase(scene.instanceObjects.begin() + static_cast<std::ptrdiff_t>(candidate));
+            scene.instancePickable.erase(scene.instancePickable.begin() + static_cast<std::ptrdiff_t>(candidate));
+            removed = true;
+        }
+        if (!previewMesh.has_value())
+            return removed;
+        if (const bool resourceInUse = std::ranges::any_of(scene.instances,
+                                                           [previewMesh](const EditorViewportInstance &instance) {
+            return instance.mesh == *previewMesh;
+        });
+            !resourceInUse) {
+            std::erase_if(scene.meshResources, [previewMesh](const EditorViewportMeshResourceView &resource) {
+                return resource.handle == *previewMesh;
+            });
+        }
+        return removed;
+    }
+
+    Result<void> ApplyAssetViewportPlacementPreview(EditorViewportSceneSnapshot &scene, const EditorAssetMeshView &mesh,
+                                                    const AssetViewportPlacement &placement) {
+        static_cast<void>(ClearAssetViewportPlacementPreview(scene));
+        if (mesh.mesh == nullptr || !mesh.handle.IsValid() || !mesh.mesh->IsValid() || !Math::IsFinite(placement.worldPosition))
+            return Result<void>::Failure(Error{.message = "Asset placement preview is invalid."});
+        if (scene.instances.size() != scene.instanceObjects.size() || scene.instances.size() != scene.instancePickable.size())
+            return Result<void>::Failure(Error{.message = "Viewport scene identity data is inconsistent."});
+
+        if (std::ranges::find(scene.meshResources, mesh.handle, &EditorViewportMeshResourceView::handle) == scene.meshResources.end()) {
+            scene.meshResources.emplace_back(mesh.handle, mesh.mesh->vertices, mesh.mesh->indices, mesh.mesh->localBounds);
+        }
+        const Math::Transform transform{.translation = placement.worldPosition};
+        scene.instances.emplace_back(mesh.handle, transform.ToMatrix(), mesh.mesh->localBounds, Render::CoreDefaultMaterial,
+                                     Render::RenderInstancePresentation{
+                                         .tint = {0.10F, 0.72F, 1.0F},
+                                         .tintStrength = 0.62F,
+                                     });
+        scene.instanceObjects.push_back(AssetPlacementPreviewObject);
+        scene.instancePickable.push_back(0U);
+        return Result<void>::Success();
     }
 }  // namespace Horo::Editor

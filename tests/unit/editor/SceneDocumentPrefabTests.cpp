@@ -429,4 +429,33 @@ namespace {
         REQUIRE(converted.HasError());
         REQUIRE(converted.ErrorValue().code.Value() == Prefab::PrefabErrors::ObjectCountExceeded.code.Value());
     }
+
+    TEST_CASE("Runtime conversion retains authored scene when the headless hierarchy handoff rejects a required subtree",
+              "[unit][editor][prefab][boundary]") {
+        using namespace Horo;
+        using namespace Horo::Editor;
+        const Assets::AssetId prefab = PrefabAsset(18).Asset();
+        const auto resolver =
+            ScenePrefabResolver(prefab, {{.localId = {}, .name = "Root"},
+                                         {.localId = {7}, .parentLocalId = Prefab::LocalObjectId{}, .name = "Child"},
+                                         {.localId = {90}, .parentLocalId = Prefab::LocalObjectId{7}, .name = "Grandchild"}});
+        const SceneDocumentSnapshot document{.state = DocumentStateId{8},
+                                             .objects = {SceneObjectSnapshot{.id = SceneObjectId{11}, .name = "Authored"}},
+                                             .prefabInstances = {ScenePrefabInstance{Prefab::PrefabInstanceId::Create(4).Value(),
+                                                                                     PrefabAsset(18),
+                                                                                     SceneObjectId{11},
+                                                                                     {}}}};
+        const auto previous = ConvertSceneDocumentToRuntime(document, Runtime::SceneDefinitionId{1}, resolver, ScenePrefabLimits());
+        REQUIRE(previous.HasValue());
+        Prefab::PrefabProjectPolicy policy;
+        policy.maximumHierarchyDepth = 2;
+        const auto rejected = ConvertSceneDocumentToRuntime(document, Runtime::SceneDefinitionId{1}, resolver, ScenePrefabLimits(policy));
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == Prefab::PrefabErrors::HierarchyDepthExceeded.code.Value());
+        CHECK(rejected.ErrorValue().message.find("prefab instance 4") != std::string::npos);
+        CHECK(previous.Value().Entities().size() == 4);
+        CHECK(document.objects.size() == 1);
+        CHECK(document.prefabInstances.front().instanceId == Prefab::PrefabInstanceId::Create(4).Value());
+    }
+
 }  // namespace

@@ -85,6 +85,7 @@
 #include <imgui_impl_sdl3.h>
 #include <memory>
 #include <optional>
+#include <portable-file-dialogs.h>
 #include <span>
 #include <string>
 #include <string_view>
@@ -105,6 +106,35 @@
 namespace Horo::Editor {
     namespace {
         using Theme::Fonts;
+
+        /** @brief Desktop picker adapter composed only by the graphical editor host. */
+        class PfdNativeDialogs final : public NativeDialogs {
+        public:
+            std::vector<std::filesystem::path> ChooseOpenFiles(const std::string_view title) override {
+                std::vector<std::filesystem::path> selected;
+                for (const std::string &utf8Path :
+                     pfd::open_file(std::string{title}, "", {"All Files", "*"}, pfd::opt::multiselect).result())
+                    selected.push_back(FromUtf8(utf8Path));
+                return selected;
+            }
+
+            std::optional<std::filesystem::path> ChooseFolder(const std::string_view title) override {
+                const std::string utf8Path = pfd::select_folder(std::string{title}).result();
+                if (utf8Path.empty())
+                    return std::nullopt;
+                return FromUtf8(utf8Path);
+            }
+
+        private:
+            /** @brief Converts the UTF-8 path returned by the picker to the native path representation. */
+            [[nodiscard]] static std::filesystem::path FromUtf8(const std::string_view utf8Path) {
+                std::u8string bytes;
+                bytes.reserve(utf8Path.size());
+                for (const char byte : utf8Path)
+                    bytes.push_back(static_cast<char8_t>(byte));
+                return std::filesystem::path{bytes};
+            }
+        };
 
         class PreparedAssetRegistryState final : public IPreparedProjectOpenDerivedState {
         public:
@@ -312,21 +342,20 @@ namespace Horo::Editor {
             return f;
         }
 
-        [[nodiscard]] EditorTextures LoadEditorTextures(IEditorGuiRenderer &guiRenderer) {
-            EditorTextures t;
-            auto path = AssetPath("launcher/logo.png");
+        [[nodiscard]] std::uintptr_t LoadEditorTexture(IEditorGuiRenderer &guiRenderer, const char *assetPath) {
+            const std::string path = AssetPath(assetPath);
             int w = 0;
             int h = 0;
             int c = 0;
             auto *px = stbi_load(path.c_str(), &w, &h, &c, 4);
             if (!px) {
-                LOG_WARN("platform.assets", "Logo texture not found at '%s' — sidebar will render without image.", path.c_str());
-                return t;
+                LOG_WARN("platform.assets", "Editor texture not found at '%s'.", path.c_str());
+                return 0;
             }
             if (w <= 0 || h <= 0) {
                 stbi_image_free(px);
-                LOG_WARN("platform.assets", "Logo texture at '%s' has invalid dimensions.", path.c_str());
-                return t;
+                LOG_WARN("platform.assets", "Editor texture at '%s' has invalid dimensions.", path.c_str());
+                return 0;
             }
             const std::span pixels{px, static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4U};
             const Result<std::uintptr_t> uploaded = guiRenderer.CreateTexture(EditorRgba8ImageView{
@@ -336,19 +365,24 @@ namespace Horo::Editor {
             });
             stbi_image_free(px);
             if (uploaded.HasError()) {
-                LOG_WARN("platform.assets", "Logo texture upload failed: %s", uploaded.ErrorValue().message.c_str());
-                return t;
+                LOG_WARN("platform.assets", "Editor texture upload failed for '%s': %s", path.c_str(),
+                         uploaded.ErrorValue().message.c_str());
+                return 0;
             }
-            t.logo = uploaded.Value();
+            return uploaded.Value();
+        }
+
+        [[nodiscard]] EditorTextures LoadEditorTextures(IEditorGuiRenderer &guiRenderer) {
+            EditorTextures t;
+            t.logo = LoadEditorTexture(guiRenderer, "launcher/logo.png");
             return t;
         }
 
         void DestroyEditorTextures(EditorTextures &textures, IEditorGuiRenderer &guiRenderer) noexcept {
-            if (textures.logo == 0) {
-                return;
+            if (textures.logo != 0) {
+                guiRenderer.DestroyTexture(textures.logo);
+                textures.logo = 0;
             }
-            guiRenderer.DestroyTexture(textures.logo);
-            textures.logo = 0;
         }
 
         [[nodiscard]] std::optional<std::string> ReadEnvironmentVariable(const char *name) {
@@ -735,6 +769,11 @@ namespace Horo::Editor {
             Render::RenderTargetHandle viewportTarget;
         };
 
+        struct EditorOperationServices {
+            BuildOutputStore &buildOutputStore;
+            OperationStore &operationStore;
+        };
+
         struct EditorBackgroundServices {
             JobSystem &jobs;
             const EditorUpdateHostServices *updates;
@@ -759,8 +798,7 @@ namespace Horo::Editor {
             Input::SdlInputBackend &inputBackend;
             Input::InputRouter &inputRouter;
             const Log::IStructuredLogQuery &logQuery;
-            BuildOutputStore &buildOutputStore;
-            OperationStore &operationStore;
+            EditorOperationServices operationServices;
             bool healthy{false}; /**< Set only after runtime startup and a normal, completed main-loop closure. */
         };
 
@@ -789,14 +827,9 @@ namespace Horo::Editor {
                         return PollPlatformEvents();
                     case Runtime::RuntimePhase::BuildInputSnapshot:
                         p_->inputRouter.BeginFrame(p_->inputBackend.Commit());
-                        // ImGui owns editor field focus and the native IME lifecycle. Feed its
-                        // committed characters from the same immutable snapshot as Input,
-                        // rather than forwarding SDL text events on a second path.
-                        if (p_->inputRouter.Snapshot().window.focused && !p_->inputRouter.Snapshot().text.empty())
-                            p_->presentation.io.AddInputCharactersUTF8(p_->inputRouter.Snapshot().text.c_str());
+                        screenHost_->OnInputSnapshot();
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::ApplyQueuedOwnerThreadCommands:
-                        screenHost_->OnInputSnapshot();
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::VariableUpdate:
                         return UpdatePresentation(context);
@@ -813,7 +846,6 @@ namespace Horo::Editor {
                     case Runtime::RuntimePhase::CommitDeferredLifecycleChanges:
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::EndFrame:
-                        p_->inputRouter.EndFrame();
                         if (context.frameNumber % 60U == 1U) {
                             p_->telemetry.frameNumber.Set(static_cast<double>(context.frameNumber));
                             p_->telemetry.frameDuration.Set(static_cast<double>(context.variableDelta.ToNanoseconds()) / 1'000'000'000.0);
@@ -860,7 +892,7 @@ namespace Horo::Editor {
                         smoothWheel) {
                         scrollSource_ = event.wheel.which == SDL_TOUCH_MOUSEID ? ImGuiMouseSource_TouchScreen : ImGuiMouseSource_Mouse;
                         scrollSmoother_.Queue(-event.wheel.x, event.wheel.y);
-                    } else if (event.type != SDL_EVENT_TEXT_INPUT) {
+                    } else {
                         ImGui_ImplSDL3_ProcessEvent(&event);
                     }
                     p_->inputBackend.ProcessEvent(event);
@@ -922,6 +954,20 @@ namespace Horo::Editor {
                     return Result<void>::Success();
 
                 screenHost_->Draw();
+                if (const EditorModal *const modal = p_->modalHost.TopModal(); modal != nullptr && modal->Presentation().dimWorkspace) {
+                    const ImGuiViewport *viewport = ImGui::GetMainViewport();
+                    ImGui::SetNextWindowPos(viewport->Pos);
+                    ImGui::SetNextWindowSize(viewport->Size);
+                    ImGui::SetNextWindowBgAlpha(0.58F);
+                    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0F);
+                    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4{0.0F, 0.0F, 0.0F, 1.0F});
+                    ImGui::Begin("##ModalWorkspaceBackdrop", nullptr,
+                                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBringToFrontOnFocus);
+                    ImGui::End();
+                    ImGui::PopStyleColor();
+                    ImGui::PopStyleVar();
+                }
                 p_->modalHost.Draw();
                 ImGui::Render();
 
@@ -1085,8 +1131,9 @@ namespace Horo::Editor {
             EditorViewportSceneState viewportSceneState;
             NativeDurableFileSystem durableFiles;
             NativeExternalProcessRunner externalProcesses;
-            Application::GameplayBuildService gameplayBuildService{externalProcesses, p.background.jobs, durableFiles, &p.buildOutputStore,
-                                                                   &p.operationStore};
+            Application::GameplayBuildService gameplayBuildService{externalProcesses, p.background.jobs, durableFiles,
+                                                                   &p.operationServices.buildOutputStore,
+                                                                   &p.operationServices.operationStore};
             Application::GameplayBuildEnvironment gameplayBuildEnvironment{
                 .gameplaySdkPackage = HORO_GAMEPLAY_SDK_PACKAGE_DIR,
                 .cxxCompiler = std::filesystem::path{HORO_GAMEPLAY_CXX_COMPILER},
@@ -1135,6 +1182,7 @@ namespace Horo::Editor {
             }
             Extensions::ExtensionMarketplaceService extensionMarketplace{p.background.jobs, extensionInventory,
                                                                          Extensions::ExtensionMarketplaceService::DefaultRegistryUrl()};
+            PfdNativeDialogs nativeDialogs;
             GuiScreenHost screenHost{guiContext,
                                      p.modalHost,
                                      p.settings,
@@ -1148,7 +1196,8 @@ namespace Horo::Editor {
                                      std::move(workspacePanelRegistry),
                                      (std::uintptr_t)(void *)(intptr_t)p.textures.logo,
                                      extensionInventoryRefresh.HasValue() ? &extensionInventory : nullptr,
-                                     extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr};
+                                     extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
+                                     &nativeDialogs};
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
@@ -1161,11 +1210,11 @@ namespace Horo::Editor {
             screenHost.Services().Register<ProjectOpenService>(projectOpenService);
             screenHost.Services().Register<RecentProjectInspectionService>(recentProjectInspection);
             screenHost.Services().RegisterConst<Log::IStructuredLogQuery>(p.logQuery);
-            screenHost.Services().RegisterConst<IBuildOutputQuery>(p.buildOutputStore);
-            screenHost.Services().Register<OperationStore>(p.operationStore);
-            screenHost.Services().RegisterConst<IOperationQuery>(p.operationStore);
-            screenHost.Services().Register<IOperationControl>(p.operationStore);
-            if (const Result<void> started = screenHost.Start(std::move(p.initialRoute)); started.HasError()) {
+            screenHost.Services().RegisterConst<IBuildOutputQuery>(p.operationServices.buildOutputStore);
+            screenHost.Services().Register<OperationStore>(p.operationServices.operationStore);
+            screenHost.Services().RegisterConst<IOperationQuery>(p.operationServices.operationStore);
+            screenHost.Services().Register<IOperationControl>(p.operationServices.operationStore);
+            if (const auto started = screenHost.Start(std::move(p.initialRoute)); started.HasError()) {
                 LOG_ERROR("editor.screens", "Initial screen startup failed: %s", started.ErrorValue().message.c_str());
                 screenHost.RequestFatalShutdown();
                 screenHost.Shutdown();
@@ -1255,8 +1304,10 @@ namespace Horo::Editor {
                                                          settingsContributions);
     }
 
-    /** @brief Applies a saved input profile while retaining defaults on load or validation failure. */
-    static void LoadEditorInputProfile(Input::InputRouter &inputRouter) {
+    void ConfigureEditorInput(Input::InputRouter &inputRouter) {
+        if (const Result<void> installedInputActions = inputRouter.SetActionMap(BuildEditorInputActions());
+            installedInputActions.HasError())
+            LOG_CRITICAL("editor.input", "Built-in input action map is invalid: %s", installedInputActions.ErrorValue().message.c_str());
         const std::filesystem::path editorInputProfile = ResolveEditorSettingsHomeDirectory() / ".horo" / "input" / "editor.json";
         if (std::error_code inputProfileError; std::filesystem::exists(editorInputProfile, inputProfileError) && !inputProfileError) {
             const Result<Input::InputBindingProfile> loaded = Input::LoadBindingProfile(editorInputProfile);
@@ -1336,9 +1387,7 @@ namespace Horo::Editor {
     /** @brief Installs editor input actions and a saved profile on the active SDL window. */
     static void ConfigureEditorInput(SDL_Window &window, Input::SdlInputBackend &backend, Input::InputRouter &router) {
         backend.BindWindow(SDL_GetWindowID(&window));
-        if (const Result<void> installed = router.SetActionMap(BuildEditorInputActions()); installed.HasError())
-            LOG_CRITICAL("editor.input", "Built-in input action map is invalid: %s", installed.ErrorValue().message.c_str());
-        LoadEditorInputProfile(router);
+        ConfigureEditorInput(router);
     }
 
     /** @brief Chooses the initial persistent route from validated startup options. */
@@ -1407,8 +1456,7 @@ namespace Horo::Editor {
                                            inputBackend,
                                            inputRouter,
                                            launch.logs,
-                                           launch.buildOutput,
-                                           launch.operations};
+                                           {launch.buildOutput, launch.operations}};
         auto rendererRestart = RunEditorMainLoop(loopParams);
         return {std::move(rendererRestart), loopParams.healthy};
     }

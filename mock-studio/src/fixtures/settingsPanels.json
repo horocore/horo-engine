@@ -1,0 +1,764 @@
+{
+  "architecture/runtime/render-settings.html": {
+    "title": "Render Settings",
+    "subtitle": "Quality presets · feature toggles · frame contract · resource budget · shader pipeline · GPU profiling",
+    "actions": [
+      "Revert",
+      "Apply"
+    ],
+    "topTabs": true,
+    "sidebar": [
+      "Quality Presets",
+      "Feature Toggles",
+      "Frame Contract",
+      "Resource Budget",
+      "Shader Pipeline",
+      "GPU Profiler"
+    ],
+    "tabs": [
+      {
+        "title": "Quality",
+        "cards": [
+          {
+            "title": "Active Preset",
+            "fields": [
+              {
+                "label": "Quality",
+                "kind": "display",
+                "value": "Desktop High"
+              },
+              {
+                "label": "Default",
+                "kind": "display",
+                "value": "Desktop Medium"
+              }
+            ]
+          },
+          {
+            "title": "Per-Platform Overrides",
+            "fields": [
+              {
+                "label": "Windows / Linux",
+                "kind": "display",
+                "value": "Desktop High"
+              },
+              {
+                "label": "macOS",
+                "kind": "display",
+                "value": "Desktop Medium"
+              },
+              {
+                "label": "Mobile",
+                "kind": "display",
+                "value": "Mobile Low"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Features",
+        "cards": [
+          {
+            "title": "Anti-Aliasing",
+            "fields": [
+              {
+                "label": "Method",
+                "kind": "display",
+                "value": "TAA"
+              },
+              {
+                "label": "Upscaling",
+                "kind": "display",
+                "value": "TAAU"
+              }
+            ]
+          },
+          {
+            "title": "Ray Tracing",
+            "fields": [
+              {
+                "label": "Shadows",
+                "kind": "display",
+                "value": "off"
+              },
+              {
+                "label": "Reflections",
+                "kind": "display",
+                "value": "off"
+              }
+            ]
+          },
+          {
+            "title": "HDR",
+            "fields": [
+              {
+                "label": "Output",
+                "kind": "display",
+                "value": "RGBA16F"
+              },
+              {
+                "label": "VRR",
+                "kind": "display",
+                "value": "enabled"
+              }
+            ]
+          },
+          {
+            "title": "Bindless",
+            "fields": [
+              {
+                "label": "Resources",
+                "kind": "display",
+                "value": "enabled"
+              },
+              {
+                "label": "Samplers",
+                "kind": "display",
+                "value": "enabled"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Frame",
+        "cards": [
+          {
+            "title": "Frame Contract",
+            "fields": [
+              {
+                "label": "VSync",
+                "kind": "display",
+                "value": "Every VBlank"
+              },
+              {
+                "label": "Frame Budget",
+                "kind": "display",
+                "value": "16.6 ms (60 FPS)"
+              },
+              {
+                "label": "Max Frame Latency",
+                "kind": "display",
+                "value": "2"
+              }
+            ]
+          },
+          {
+            "title": "Synchronization",
+            "fields": [
+              {
+                "label": "Render Graph",
+                "kind": "display",
+                "value": "enabled"
+              },
+              {
+                "label": "Barrier Scheduling",
+                "kind": "display",
+                "value": "automatic"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Resources",
+        "cards": [
+          {
+            "title": "Memory Budget",
+            "fields": [
+              {
+                "label": "VRAM Budget",
+                "kind": "display",
+                "value": "3.5 GB"
+              },
+              {
+                "label": "Streaming Pool",
+                "kind": "display",
+                "value": "512 MB"
+              }
+            ]
+          },
+          {
+            "title": "Upload Ring",
+            "fields": [
+              {
+                "label": "Size",
+                "kind": "display",
+                "value": "64 MB"
+              },
+              {
+                "label": "Frames in flight",
+                "kind": "display",
+                "value": "2"
+              }
+            ]
+          },
+          {
+            "title": "Descriptors",
+            "fields": [
+              {
+                "label": "Bindless Heap",
+                "kind": "display",
+                "value": "1M descriptors"
+              },
+              {
+                "label": "Sampler Heap",
+                "kind": "display",
+                "value": "2K"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Shaders",
+        "cards": [
+          {
+            "title": "Pipeline State",
+            "fields": [
+              {
+                "label": "Cache",
+                "kind": "display",
+                "value": "enabled (842/856)"
+              },
+              {
+                "label": "Precompile",
+                "kind": "display",
+                "value": "on load"
+              }
+            ]
+          },
+          {
+            "title": "Variant System",
+            "fields": [
+              {
+                "label": "Feature Mask",
+                "kind": "display",
+                "value": "0x1F"
+              },
+              {
+                "label": "Tier",
+                "kind": "display",
+                "value": "dx12 vulkan"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Profiler",
+        "cards": [
+          {
+            "title": "GPU Timing",
+            "fields": [
+              {
+                "label": "Frame",
+                "kind": "display",
+                "value": "16.7 ms"
+              },
+              {
+                "label": "Draw",
+                "kind": "display",
+                "value": "84 calls"
+              },
+              {
+                "label": "Tris",
+                "kind": "display",
+                "value": "124K"
+              }
+            ]
+          },
+          {
+            "title": "Pipeline Stats",
+            "fields": [
+              {
+                "label": "PSO Binds",
+                "kind": "display",
+                "value": "22"
+              },
+              {
+                "label": "Barrier Flushes",
+                "kind": "display",
+                "value": "8"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "status": [
+      "dx12 vulkan · Desktop High",
+      "16.7 ms · 60 FPS",
+      "VRAM 214 MB / 3.5 GB"
+    ]
+  },
+  "architecture/editor/project-settings.html": {
+    "title": "Project Settings",
+    "subtitle": "Project-wide defaults for all platforms and build targets",
+    "actions": [
+      "Revert",
+      "Apply"
+    ],
+    "topTabs": false,
+    "sidebar": [
+      "General",
+      "Tags & Layers",
+      "Physics",
+      "Input",
+      "Quality",
+      "Graphics",
+      "Player",
+      "Gameplay"
+    ],
+    "tabs": [
+      {
+        "title": "General",
+        "cards": [
+          {
+            "title": "Project",
+            "fields": [
+              {
+                "label": "Name",
+                "kind": "display",
+                "value": "DesertRun"
+              },
+              {
+                "label": "Version",
+                "kind": "display",
+                "value": "0.1.0"
+              },
+              {
+                "label": "Default Scene",
+                "kind": "display",
+                "value": "scenes/room.horo"
+              },
+              {
+                "label": "Format Version",
+                "kind": "display",
+                "value": "7"
+              }
+            ]
+          },
+          {
+            "title": "Editor",
+            "fields": [
+              {
+                "label": "Render Backend",
+                "kind": "select",
+                "value": "opengl",
+                "options": [
+                  "vulkan",
+                  "opengl"
+                ]
+              },
+              {
+                "label": "Asset Compression",
+                "kind": "select",
+                "value": "lz4",
+                "options": [
+                  "lz4"
+                ]
+              },
+              {
+                "label": "Texture Compression",
+                "kind": "select",
+                "value": "bc7",
+                "options": [
+                  "bc7"
+                ]
+              }
+            ]
+          },
+          {
+            "title": "Time",
+            "fields": [
+              {
+                "label": "Fixed Timestep",
+                "kind": "display",
+                "value": "16.666 ms (60 Hz)"
+              },
+              {
+                "label": "Max Allowed",
+                "kind": "display",
+                "value": "33.333 ms"
+              },
+              {
+                "label": "Time Scale",
+                "kind": "display",
+                "value": "1.0"
+              }
+            ]
+          },
+          {
+            "title": "Audio",
+            "fields": [
+              {
+                "label": "Sample Rate",
+                "kind": "display",
+                "value": "48 kHz"
+              },
+              {
+                "label": "Voices",
+                "kind": "display",
+                "value": "64"
+              },
+              {
+                "label": "Middleware",
+                "kind": "display",
+                "value": "FMOD 2.4"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Tags & Layers",
+        "cards": [
+          {
+            "title": "Tags",
+            "fields": [],
+            "tags": [
+              "Player",
+              "Enemy",
+              "Terrain",
+              "Untagged",
+              "Respawn",
+              "Finish",
+              "MainCamera",
+              "GameController",
+              "EditorOnly"
+            ]
+          },
+          {
+            "title": "Layer Collision Matrix",
+            "fields": [],
+            "matrix": [
+              [
+                "",
+                "Default",
+                "Player",
+                "Enemy",
+                "Projectile",
+                "Terrain"
+              ],
+              [
+                "Default",
+                "✓",
+                "✓",
+                "✓",
+                "✓",
+                "✓"
+              ],
+              [
+                "Player",
+                "✓",
+                "—",
+                "✓",
+                "✓",
+                "✓"
+              ],
+              [
+                "Enemy",
+                "✓",
+                "✓",
+                "—",
+                "✓",
+                "✓"
+              ],
+              [
+                "Projectile",
+                "✓",
+                "✓",
+                "✓",
+                "—",
+                "✓"
+              ],
+              [
+                "Terrain",
+                "✓",
+                "✓",
+                "✓",
+                "✓",
+                "—"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Physics",
+        "cards": [
+          {
+            "title": "Physics",
+            "fields": [
+              {
+                "label": "Gravity",
+                "kind": "display",
+                "value": "0, −9.81, 0"
+              },
+              {
+                "label": "Fixed Timestep",
+                "kind": "display",
+                "value": "16.666 ms"
+              },
+              {
+                "label": "Solver Iterations",
+                "kind": "display",
+                "value": "8"
+              },
+              {
+                "label": "Bounce Threshold",
+                "kind": "display",
+                "value": "2.0 m/s"
+              }
+            ]
+          },
+          {
+            "title": "Collision",
+            "fields": [
+              {
+                "label": "Default Max Depenetration",
+                "kind": "display",
+                "value": "0.01"
+              },
+              {
+                "label": "Sleep Threshold",
+                "kind": "display",
+                "value": "0.005"
+              },
+              {
+                "label": "Broadphase",
+                "kind": "display",
+                "value": "BVH"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Input",
+        "cards": [
+          {
+            "title": "Action Maps",
+            "fields": [
+              {
+                "label": "Move",
+                "kind": "display",
+                "value": "WASD / Left Stick"
+              },
+              {
+                "label": "Look",
+                "kind": "display",
+                "value": "Mouse / Right Stick"
+              },
+              {
+                "label": "Jump",
+                "kind": "display",
+                "value": "Space / A (South)"
+              },
+              {
+                "label": "Interact",
+                "kind": "display",
+                "value": "E / X (West)"
+              }
+            ]
+          },
+          {
+            "title": "Devices",
+            "fields": [
+              {
+                "label": "Keyboard & Mouse",
+                "kind": "display",
+                "value": "enabled"
+              },
+              {
+                "label": "Gamepad",
+                "kind": "display",
+                "value": "enabled"
+              },
+              {
+                "label": "Touch",
+                "kind": "display",
+                "value": "disabled"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Quality",
+        "cards": [
+          {
+            "title": "Quality Levels",
+            "fields": [
+              {
+                "label": "Active",
+                "kind": "display",
+                "value": "Desktop High"
+              },
+              {
+                "label": "Default",
+                "kind": "display",
+                "value": "Desktop Medium"
+              }
+            ]
+          },
+          {
+            "title": "Per-Platform Overrides",
+            "fields": [
+              {
+                "label": "Windows / Linux",
+                "kind": "display",
+                "value": "Desktop High"
+              },
+              {
+                "label": "macOS",
+                "kind": "display",
+                "value": "Desktop Medium"
+              },
+              {
+                "label": "Mobile",
+                "kind": "display",
+                "value": "Mobile Low"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Graphics",
+        "cards": [
+          {
+            "title": "Rendering",
+            "fields": [
+              {
+                "label": "Shadow Quality",
+                "kind": "display",
+                "value": "High"
+              },
+              {
+                "label": "Anti-Aliasing",
+                "kind": "display",
+                "value": "TAA"
+              },
+              {
+                "label": "VSync",
+                "kind": "display",
+                "value": "Every VBlank"
+              }
+            ]
+          },
+          {
+            "title": "Features",
+            "fields": [
+              {
+                "label": "Ray Tracing",
+                "kind": "display",
+                "value": "disabled"
+              },
+              {
+                "label": "HDR",
+                "kind": "display",
+                "value": "enabled"
+              },
+              {
+                "label": "VRR",
+                "kind": "display",
+                "value": "enabled"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Player",
+        "cards": [
+          {
+            "title": "Player",
+            "fields": [
+              {
+                "label": "Company Name",
+                "kind": "display",
+                "value": "Horo Studio"
+              },
+              {
+                "label": "Product Name",
+                "kind": "display",
+                "value": "DesertRun"
+              },
+              {
+                "label": "Default Icon",
+                "kind": "display",
+                "value": "icon 512.png"
+              }
+            ]
+          },
+          {
+            "title": "Splash",
+            "fields": [
+              {
+                "label": "Show Splash",
+                "kind": "display",
+                "value": "enabled"
+              },
+              {
+                "label": "Background",
+                "kind": "display",
+                "value": "#0a0c0f"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Gameplay",
+        "cards": [
+          {
+            "title": "Gameplay Modules",
+            "fields": [
+              {
+                "label": "Core",
+                "kind": "display",
+                "value": "horo.core@1.0"
+              },
+              {
+                "label": "Physics",
+                "kind": "display",
+                "value": "horo.physics@1.0"
+              },
+              {
+                "label": "Audio",
+                "kind": "display",
+                "value": "horo.audio@1.0"
+              },
+              {
+                "label": "Networking",
+                "kind": "display",
+                "value": "horo.net@1.0"
+              }
+            ]
+          },
+          {
+            "title": "Scripting",
+            "fields": [
+              {
+                "label": "Runtime",
+                "kind": "display",
+                "value": "wasm3"
+              },
+              {
+                "label": "Editor",
+                "kind": "display",
+                "value": "wasm3-debug"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "status": [
+      "Format 7 · 5 layers · 9 tags · vulkan backend · lz4 compression"
+    ]
+  }
+}

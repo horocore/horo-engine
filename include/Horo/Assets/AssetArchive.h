@@ -65,6 +65,21 @@ namespace Horo::Assets {
         [[nodiscard]] static Result<AssetArchiveProvider> Open(std::span<const std::uint8_t> bytes, const AssetCookTargetId &expectedTarget,
                                                                const AssetArchiveLimits &limits = {});
 
+        /**
+         * @brief Opens only dependency-closed selected chunks from an archive matching an authenticated release plan.
+         * @param bytes Complete externally authenticated archive bytes.
+         * @param expectedTarget Exact runtime cook target.
+         * @param expectedPlan Chunk definitions authenticated by the release manifest.
+         * @param selected Exact installed chunk IDs, including their base and dependencies.
+         * @param baseManifest Digest of the authenticated base release manifest.
+         * @param limits Allocation and format bounds.
+         * @return Provider exposing selected assets only, or failure before any asset is visible.
+         * @note The host verifies package signature and owns provider replacement/unmount; this call does not grant package trust.
+         */
+        [[nodiscard]] static Result<AssetArchiveProvider> OpenSelected(
+            std::span<const std::uint8_t> bytes, const AssetCookTargetId &expectedTarget, const AssetChunkPlan &expectedPlan,
+            std::span<const AssetChunkId> selected, const Sha256Digest &baseManifest, const AssetArchiveLimits &limits = {});
+
         [[nodiscard]] Result<bool> Exists(AssetId id, const CancellationToken &cancellation) const override;
         [[nodiscard]] Result<std::vector<std::uint8_t>> Load(AssetId id, const CancellationToken &cancellation) const override;
 
@@ -75,9 +90,14 @@ namespace Horo::Assets {
             std::size_t size{};
         };
 
-        AssetArchiveProvider(std::vector<std::uint8_t> bytes, std::vector<Entry> entries);
+        AssetArchiveProvider(std::vector<std::uint8_t> bytes, std::vector<Entry> entries, std::vector<AssetChunkDefinition> chunks);
+        /** @brief Parses the complete archive and retains its internal graph for selected admission. */
+        [[nodiscard]] static Result<AssetArchiveProvider> OpenParsed(std::span<const std::uint8_t> bytes,
+                                                                     const AssetCookTargetId &expectedTarget,
+                                                                     const AssetArchiveLimits &limits);
 
         std::vector<std::uint8_t> bytes_;
         std::vector<Entry> entries_;
+        std::vector<AssetChunkDefinition> chunks_;
     };
 }  // namespace Horo::Assets

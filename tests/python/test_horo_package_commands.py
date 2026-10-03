@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+import zipfile
 
 
 class PackageCommands(unittest.TestCase):
@@ -22,11 +23,11 @@ class PackageCommands(unittest.TestCase):
         (self.source / "assets" / "payload.txt").write_bytes(b"portable package payload")
         (self.source / "assets" / "café.txt").write_bytes(b"unicode path")
 
-    def run_tool(self, *arguments, tool=None, expected=0):
+    def run_tool(self, *arguments, tool=None, expected=0, env=None):
         # CTest supplies the staged binary; arguments are test-owned and no shell is involved.
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
         result = subprocess.run([str(tool or self.tool), *map(str, arguments)],  # nosec B603
-                                capture_output=True, text=True, check=False)
+                                capture_output=True, text=True, check=False, env=env)
         self.assertEqual(result.returncode, expected, (arguments, result.stdout, result.stderr))
         return result
 
@@ -82,8 +83,15 @@ class PackageCommands(unittest.TestCase):
 
     def test_pack_reproducible_and_source_free_distribution(self):
         first = self.pack("first.horopkg")
+        with zipfile.ZipFile(first) as archive:
+            for entry in archive.infolist():
+                self.assertEqual(entry.date_time, (1980, 1, 1, 0, 0, 0), entry.filename)
+                with first.open("rb") as raw:
+                    raw.seek(entry.header_offset + 10)
+                    self.assertEqual(raw.read(4), b"\x00\x00\x21\x00", entry.filename)
         os.utime(self.source / "assets" / "payload.txt", (time.time() + 60, time.time() + 60))
-        second = self.pack("second.horopkg")
+        second = self.root / "second.horopkg"
+        self.run_tool("pack", self.source, second, env={**os.environ, "TZ": "Pacific/Honolulu"})
         self.assertEqual(first.read_bytes(), second.read_bytes())
         self.assertIn("files=3", self.run_tool("inspect", first).stdout)
         self.assertIn("1.0.0", self.run_tool("--version").stdout)

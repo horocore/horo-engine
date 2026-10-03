@@ -19,6 +19,16 @@
 #include <vector>
 
 namespace Horo::Network {
+    /** @brief Admission evidence derived from the registered session, never from packet payload. */
+    struct InboundMessageContext final {
+        ConnectionHandle connection;
+        NetworkOperationGeneration generation;
+        std::shared_ptr<PeerSessionLifecycle> session;
+        std::uint64_t ownerTick{};
+        CancellationToken cancellation;
+        DeliveryPolicy delivery{DeliveryPolicy::ReliableOrdered}; /**< Admitted transport delivery class, never payload-derived. */
+    };
+
     /** @brief Finite owner-owned storage and work budgets. */
     struct InboundDispatchLimits final {
         std::size_t maximumSessions{64};       /**< Concurrent admitted sessions. */
@@ -34,6 +44,11 @@ namespace Horo::Network {
         virtual ~IInboundMessageHandler() = default;
         /** @brief Handles one fully admitted owned message on the owner thread. @return Typed application result. */
         [[nodiscard]] virtual Result<void> Handle(const MessageEnvelope &message) = 0;
+
+        /** @brief Receives trusted transport/session evidence when the handler needs sender authority. */
+        [[nodiscard]] virtual Result<void> HandleAdmitted(const InboundMessageContext &, const MessageEnvelope &message) {
+            return Handle(message);
+        }
     };
 
     /** @brief Host-owned trust/admission observer invoked only after owner-thread transport polling returns. */
@@ -100,7 +115,21 @@ namespace Horo::Network {
     private:
         struct Session;
         struct Handler;
-        InboundMessageDispatcher(INetworkTransport &transport, const MessageCodecRegistry &codecs, const InboundDispatchLimits &limits);
+
+        class ConstructionKey final {
+            friend class InboundMessageDispatcher;
+            ConstructionKey() = default;
+
+        public:
+            ConstructionKey(const ConstructionKey &) = default;
+        };
+
+    public:
+        /** @internal Factory-only constructor; only Create can produce its admission key. */
+        InboundMessageDispatcher(ConstructionKey, INetworkTransport &transport, const MessageCodecRegistry &codecs,
+                                 const InboundDispatchLimits &limits);
+
+    private:
         void Consume(NetworkTransportEvent event) noexcept override;
         [[nodiscard]] Result<void> Dispatch(NetworkTransportEvent &event, std::uint64_t nowTick);
         [[nodiscard]] Result<void> DispatchPacket(NetworkTransportEvent &event, std::uint64_t nowTick);
