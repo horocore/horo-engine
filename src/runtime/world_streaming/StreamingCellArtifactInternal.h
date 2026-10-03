@@ -11,6 +11,7 @@ namespace Horo::WorldStreaming::Detail {
 
     /** @brief Validates bounded canonical bytes without invoking providers or mutating runtime state. */
     [[nodiscard]] Result<ParsedCellArtifact> ParseCellArtifactBytes(std::span<const std::byte> artifact,
-                                                                    const StreamingCellCandidateContext &context, Sha256Digest expectedHash,
+                                                                    const StreamingCellCandidateContext &context,
+                                                                    const Sha256Digest &expectedHash,
                                                                     const CancellationToken &cancellation);
 }  // namespace Horo::WorldStreaming::Detail

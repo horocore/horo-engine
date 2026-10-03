@@ -26,8 +26,7 @@ namespace Horo::WorldStreaming::Detail {
         /** @brief Computes the wire hash in cancellable bounded units with its digest field zeroed. */
         [[nodiscard]] Result<Sha256Digest> ArtifactHash(const std::span<const std::byte> bytes, const CancellationToken &cancellation) {
             Sha256Builder builder;
-            const std::array<std::byte, 32> zero{};
-            if (!builder.Update(bytes.first(HashOffset)) || !builder.Update(zero))
+            if (const std::array<std::byte, 32> zero{}; !builder.Update(bytes.first(HashOffset)) || !builder.Update(zero))
                 return Fail<Sha256Digest>(WorldStreamingErrors::CellCandidateCapacityExceeded);
             for (std::size_t offset = HeaderBytes; offset < bytes.size();) {
                 if (cancellation.IsCancellationRequested())
@@ -72,10 +71,10 @@ namespace Horo::WorldStreaming::Detail {
         }
 
         /** @brief Checks authenticated fixed-header controls and produces typed wire facts. */
-        [[nodiscard]] Result<StreamingCellHeaderView> ParseHeader(const std::span<const std::byte> bytes, const Sha256Digest hash) {
-            constexpr std::array magic{std::byte{'H'}, std::byte{'O'}, std::byte{'R'}, std::byte{'O'},
-                                       std::byte{'C'}, std::byte{'E'}, std::byte{'L'}, std::byte{'L'}};
-            if (!std::ranges::equal(bytes.first(8), magic) || Read<std::uint32_t>(bytes, 56) != HeaderBytes)
+        [[nodiscard]] Result<StreamingCellHeaderView> ParseHeader(const std::span<const std::byte> bytes, const Sha256Digest &hash) {
+            if (constexpr std::array magic{std::byte{'H'}, std::byte{'O'}, std::byte{'R'}, std::byte{'O'}, std::byte{'C'}, std::byte{'E'},
+                                           std::byte{'L'}, std::byte{'L'}};
+                !std::ranges::equal(bytes.first(8), magic) || Read<std::uint32_t>(bytes, 56) != HeaderBytes)
                 return Fail<StreamingCellHeaderView>(WorldStreamingErrors::CellCandidateInvalid);
             const auto flags = Read<std::uint32_t>(bytes, 12);
             const auto codec = Read<std::uint32_t>(bytes, 32);
@@ -133,8 +132,8 @@ namespace Horo::WorldStreaming::Detail {
                 if (row.offset < end || row.offset - end > 7 || (row.offset & 7U) != 0 || row.offset > bytes.size() ||
                     row.compressedSize > bytes.size() - row.offset || row.uncompressedSize > parsed.header.uncompressedSize - decoded)
                     return Fail<void>(WorldStreamingErrors::CellCandidateInvalid);
-                const auto padding = bytes.subspan(static_cast<std::size_t>(end), static_cast<std::size_t>(row.offset - end));
-                if (!std::ranges::all_of(padding, [](const std::byte value) {
+                if (const auto padding = bytes.subspan(static_cast<std::size_t>(end), static_cast<std::size_t>(row.offset - end));
+                    !std::ranges::all_of(padding, [](const std::byte value) {
                     return value == std::byte{0};
                 }))
                     return Fail<void>(WorldStreamingErrors::CellCandidateInvalid);
@@ -150,7 +149,7 @@ namespace Horo::WorldStreaming::Detail {
 
     /** @copydoc ParseCellArtifactBytes */
     Result<ParsedCellArtifact> ParseCellArtifactBytes(const std::span<const std::byte> artifact,
-                                                      const StreamingCellCandidateContext &context, const Sha256Digest expectedHash,
+                                                      const StreamingCellCandidateContext &context, const Sha256Digest &expectedHash,
                                                       const CancellationToken &cancellation) {
         if (cancellation.IsCancellationRequested())
             return Fail<ParsedCellArtifact>(WorldStreamingErrors::CellCandidateLifecycleUnavailable);
