@@ -1648,8 +1648,121 @@ cancellation concurrently. Provider failure or inconsistent progress discards th
 candidate block and closes admission. The host joins worker work before releasing
 the provider, and only the Audio control owner publishes prepared blocks or ring
 generations at the ADR-062 boundary. This contract neither performs file I/O nor
-invokes a codec from the callback; concrete codec providers and stream-ring
-publication are separate integration work.
+invokes a codec from the callback. `AudioStreamingService` owns bounded stream
+slots and preallocated decode/ring storage. The host supplies a package-generation
+opener keyed by a published `AssetId`; worker jobs open that generation, validate
+its exact decoder facts, and serially fill each ring. Control `Pump` schedules
+bounded jobs by declared priority until the lookahead is met. A single-consumer
+callback port reads only published frames and writes ADR-063 planar output,
+filling missing frames with positive-zero silence. The host detaches a callback
+port before retiring its stream generation; retirement cancels and joins worker
+work before releasing the decoder, package lease, and ring. Source providers
+honor worker cancellation and bounded I/O. Package selection and publication
+remain in Assets without authoring-file fallback.
+
+`MakeCookedAudioStreamSource` in the existing AudioCook contribution target supplies
+the concrete adapter for a host-pinned `FilesystemAssetProvider` or verified
+`AssetArchiveProvider`. Opening occurs inside the fill job and validates the AST
+envelope's identity, type, target and integrity followed by the existing Audio
+cooked inspector. The initial cooked codec is seekable little-endian PCM; the
+worker converts bounded blocks without invoking the source importer. Other cooked
+codecs remain explicit unsupported combinations. The provider must enforce its
+declared per-artifact ceiling before allocating. Stream admission reserves three
+times that ceiling for load, envelope and inspection peak memory in addition to
+ring/decode/scratch storage. This adapter retains the complete bounded cooked
+payload, not a file-range streaming cache. The archive/provider generation itself
+is host-owned and budgeted separately. Hosts link AudioCook explicitly for this
+adapter; AudioApi does not gain a dependency on cook/import code.
+
+One release/acquire cursor publication contains both the produced frame count and
+its terminal marker. The callback cannot observe final data without the matching
+EOF fact. Control retains original worker errors until retirement and projects
+coalesced underrun deltas at a caller-supplied sample-frame interval. Shutdown
+closes admission before cancellation; a join timeout retains storage and permits
+only retirement/shutdown retry. External decoder code is pinned by the source's
+owner lease through decoder destruction. Fixed owner/slot metadata and allocator
+overhead are outside payload byte reservations; no wall-time deadline qualification
+is implied by the deterministic storage and frame limits.
+
+The existing Foundation job boundary contains source-opener exceptions, including
+non-standard exceptions. A worker-owned return marker is read only after terminal
+job synchronization: an opener that did not return produces `audio.stream.read_failed`
+on control with the original scheduler error retained as its typed cause. An opener
+that returned a typed failure retains that failure unchanged. Cause construction
+and diagnostics stay on control; callbacks still only render available frames or
+positive-zero silence.
+
+Decoder publication and cancellation use a separate cross-atomic SC handshake;
+the ring retains its release/acquire guarantees within SC operations. Let P be the worker's SC
+`publishedDecoder` store, A its subsequent SC parent-token load, C control's SC
+cancellation request, and L control's subsequent SC decoder-pointer load. The
+Foundation token walks the job's immutable parent chain using SC loads. If A
+missed C and L missed P, the SC total order would require P < A < C < L < P,
+which is impossible. An already-cancelled child token also takes the worker's
+Cancel branch. Consequently either control calls the published decoder's Cancel,
+or the worker calls Cancel before entering Decode. A provider already blocked in
+Decode observes the decoder's private cancellation flag; it need not poll the
+parent token. These pointer operations happen only on control/worker lanes and
+remain lock-free. The pointer and decoder are retained until worker join, and
+callback ports must already be detached before reclamation. This proof relies on
+Foundation's SC cancellation contract; changing it requires reviewing this
+handshake, not just stress-testing one architecture.
+
+Streaming memory ownership and ordering audit:
+
+| State | Writer / reader | Required ordering and lifetime |
+|---|---|---|
+| Ring samples and combined producer/EOF cursor | Serialized fill worker / sole callback | Worker copies samples before its release publication; callback acquire-loads that exact cursor before reading. Partial reads advance only by available frames, so EOF never hides pending final samples. |
+| Consumer cursor and ring reuse | Sole callback / serialized fill worker | Callback finishes sample reads before release-storing consumption; worker acquire-loads consumption before overwriting reclaimed frames. Control occupancy is a bounded observational snapshot, not an allocation/reclamation authority. |
+| Stop and diagnostic counters | Control or sole callback / control and callback | SC stop publication retains release/acquire visibility. Counters have one callback writer and SC observational reads and writes; counter updates publish no ring storage or rich errors. |
+| Decoder pointer and cancellation | Worker and control | The SC handshake above applies; cooked PCM polls the session's SC private cancellation flag only on the worker, not the callback. |
+| Errors, decoder destruction and source lease | Control after terminal JobSystem synchronization | Rich errors never cross the callback; a missing/nonterminal completion snapshot retains storage. Retire requires host callback detachment and a bounded worker join before decoder release. Shutdown closes admission before stopping all streams and retains failed-join streams for retry. |
+
+Worker, control and callback streaming operations use explicit sequential
+consistency as a conservative policy. The worker's combined producer/EOF SC
+store retains release publication to the callback's SC load; its SC
+consumer-cursor load retains acquisition from the callback's SC store before
+ring reuse. The worker's own producer read
+and its stop checks are also SC. Control lookahead selection, stop publication,
+occupancy/diagnostic snapshots and underrun-report reads are SC observations,
+not coherent multi-atomic snapshots or reclamation authority. Their prior
+release/acquire guarantees are strengthened, not replaced by a new protocol.
+All atomics remain subject to the lock-free static assertions. The ten callback
+operations in Render/RecordUnderrun now use SC while retaining the same bounded
+access count. Decoder publication/cancellation, single-consumer ownership, the
+exact terminal cursor and bounded join retain their existing contracts. This
+policy does not establish a previously missing happens-before edge or claim
+unchanged timing; SC stores may add barriers on every participating lane.
+Device deadline qualification still requires measurements under the host's
+admitted workload and contention; functional stress tests do not prove latency.
+
+The public source factory remains ownership-taking by value, then moves that
+source through private construction without extra shared-lease copies. Const
+service access returns only const stream state; issuing the sole render port and
+advancing report cursors require mutable control access. `AudioStreamDecoderProvider`
+and `AudioStreamPackageSource` use Foundation's `BorrowedCallbackContext`, with
+exact private-type resolution in every operation before dereference or I/O.
+An empty context is rejected at admission; a mismatched type returns a typed
+operation error, and release must not destroy foreign state. This context adds
+no allocation, virtual dispatch or lifetime ownership. Decoder release
+responsibility still transfers only on successful admission, once after worker
+completion; the source's object and code lease remain pinned through that release.
+These in-process callbacks are not a native extension ABI. Provider construction
+and type resolution must remain within the same compiled provider identity.
+See [the callback-context migration](../../guides/audio-streaming-provider-migration.md)
+for changed signatures, affected callers and rejection/ownership coverage.
+
+The service's allocation constructor is publicly declared only to permit
+`std::make_unique`, but takes a private, non-aggregate `ConstructionKey` whose
+default constructor is accessible only to the service. `Create` validates source
+and limits before originating that key. The service remains final; neither
+ordinary construction nor an empty-brace key can bypass admission. Public-header
+consumer assertions compile this boundary independently of test-private headers.
+This follows the existing RuntimeHost/McpController factory authority pattern,
+without making invalid source/limits publicly constructible. Existing host callers
+continue using `Create` with ownership-taking source transfer; no caller migration
+or competing unchecked construction API is introduced. Allocation failures remain
+translated by Create, with partially constructed lease/slot members unwound by RAII.
 
 Underrun behavior:
 
