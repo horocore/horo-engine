@@ -992,6 +992,8 @@ add_library(HoroAI STATIC
         runtime/ai/api/AIIdentity.cpp
         runtime/ai/api/AITaskLifecycle.cpp
         runtime/ai/api/BehaviorTree.cpp
+        runtime/ai/api/BehaviorTreeExecutionPlan.cpp
+        runtime/ai/api/BehaviorTreeInstance.cpp
         runtime/ai/api/BlackboardInstance.cpp
         runtime/ai/api/BlackboardSchema.cpp
         runtime/ai/api/DecisionAssetPlan.cpp

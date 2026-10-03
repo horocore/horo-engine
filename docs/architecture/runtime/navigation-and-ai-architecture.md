@@ -1861,7 +1861,15 @@ Implementation status on 12 September 2026: `HoroEngine::AI` provides the
 generation-fenced `AiTaskLifecycle` contract shared by native, script, and graph
 tasks. It owns the `Idle -> Running -> Succeeded | Failed | Cancelled` transition,
 one immutable terminal result, detached operation context, and post-terminal
-cleanup claim. Decision-plan execution and concrete task adapters remain later work.
+cleanup claim. `BehaviorTreeExecutionPlan` and `BehaviorTreeInstance` now provide
+bounded deterministic core control flow over those admitted decision bindings.
+The executable plan validates typed topology and owns preorder child/subtree and
+service ranges. Instances use contiguous state and bounded iterative traversal,
+with exactly-once descendant cancellation and task cleanup. See the
+[runtime integration guide](../../guides/behavior-tree-runtime-migration.md) for
+explicit parallel, decorator, service, clock, abort and reload semantics.
+Concrete task adapters, dependency-frame execution and aggregate scheduling
+integration remain separate deliveries.
 
 Headless hosts that deliberately omit gameplay AI compose `NullAiRuntime`. Its
 availability is always false and every task admission returns the typed

@@ -546,11 +546,14 @@ target_link_libraries(HoroPhysicsTests PRIVATE HoroEngine::Physics HoroEngine::P
 horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
 
 add_executable(HoroAITests
+        support/AllocationProbe.cpp
         unit/runtime/ai/AIIdentityTests.cpp
         unit/runtime/ai/AISceneActivationTests.cpp
         unit/runtime/ai/AISceneComponentsTests.cpp
         unit/runtime/ai/AITaskLifecycleTests.cpp
         unit/runtime/ai/BehaviorTreeTests.cpp
+        unit/runtime/ai/BehaviorTreeRuntimeTests.cpp
+        unit/runtime/ai/BehaviorTreeLifecycleTests.cpp
         unit/runtime/ai/BlackboardInstanceTests.cpp
         unit/runtime/ai/BlackboardSchemaTests.cpp
         unit/runtime/ai/DecisionAssetValidationTests.cpp
@@ -566,6 +569,7 @@ add_executable(HoroAITests
 target_compile_features(HoroAITests PRIVATE cxx_std_20)
 target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneIntegration HoroEngine::GameplayPerceptionIntegration)
 horo_register_catch_test(HoroAITests LABELS "unit;ai;headless")
+target_include_directories(HoroAITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 
 add_executable(HoroAnimationApiTests
         unit/runtime/animation/AnimationCompressionTests.cpp
