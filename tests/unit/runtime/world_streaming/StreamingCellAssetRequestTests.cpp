@@ -269,7 +269,13 @@ namespace Horo::WorldStreaming {
         DelayedProvider provider;
         LoadHarness loads{provider, 1};
         ReleaseRead release{provider};
-        auto scheduler = StreamingSchedulerAdmissionLedger::Create(IdentityFrom<StreamingSchedulerLedgerId>(1), {1, 5}).Value();
+        auto schedulerResult = StreamingSchedulerAdmissionLedger::Create(IdentityFrom<StreamingSchedulerLedgerId>(1),
+                                                                         {1,
+                                                                          5,
+                                                                          {WorldPartitionProjectProfile::Editor,
+                                                                           IdentityFrom<StreamingConcurrencyRevision>(1), 1, 1, 1}});
+        REQUIRE(schedulerResult.HasValue());
+        auto scheduler = std::move(schedulerResult).Value();
         const auto operation = StreamingCellOperation::Create(CandidateTestSupport::Operation(), StreamingCellOperationKind::Load).Value();
         std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> participants;
         bool published{};
