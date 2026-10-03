@@ -8,6 +8,41 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::WorldStreaming::WorldStreamingErrors {
+    /** @brief Malformed failure-policy facts or identities. */
+    extern const ErrorCodeDescriptor FailurePolicyInvalid;
+    /** @brief Unsupported failure contract version or enum. */
+    extern const ErrorCodeDescriptor FailurePolicyUnsupported;
+    /** @brief Stale failure policy, revision, generation or clock. */
+    extern const ErrorCodeDescriptor FailurePolicyStale;
+    /** @brief Failure history exceeds its bounded record ceiling. */
+    extern const ErrorCodeDescriptor FailurePolicyCapacityExceeded;
+    /** @brief New retry work is closed during cancellation or shutdown. */
+    extern const ErrorCodeDescriptor FailurePolicyLifecycleUnavailable;
+    /** @brief Failure cleanup or retry eligibility is incomplete. */
+    extern const ErrorCodeDescriptor FailurePolicyTransitionInvalid;
+    /** @brief The next monotonic cooldown cannot be represented. */
+    extern const ErrorCodeDescriptor FailurePolicyTimeExhausted;
+
+    /** @brief A feature reservation has malformed owner, complete plan, or mandatory configuration. */
+    extern const ErrorCodeDescriptor FeatureBudgetInvalid;
+    /** @brief A feature reservation names a superseded owner, policy, revision, or operation. */
+    extern const ErrorCodeDescriptor FeatureBudgetStale;
+    /** @brief A feature reservation exceeds global, feature, or bounded metadata capacity. */
+    extern const ErrorCodeDescriptor FeatureBudgetCapacityExceeded;
+    /** @brief A feature reservation uses an unsupported contract version or feature identifier. */
+    extern const ErrorCodeDescriptor FeatureBudgetUnsupported;
+    /** @brief Feature materialization, release, or replacement is unavailable before retirement. */
+    extern const ErrorCodeDescriptor FeatureBudgetLifecycleUnavailable;
+    /** @brief A shared-asset charge, consumer, lease, or limit is malformed. */
+    extern const ErrorCodeDescriptor SharedAssetInvalid;
+    /** @brief A shared-asset claim names another partition incarnation, owner, or released lease. */
+    extern const ErrorCodeDescriptor SharedAssetStale;
+    /** @brief A charged asset revision is requested with conflicting resource cost or duplicate consumer identity. */
+    extern const ErrorCodeDescriptor SharedAssetConflict;
+    /** @brief A new shared charge or lease exceeds a mandatory entry, lease, or resource-axis ceiling. */
+    extern const ErrorCodeDescriptor SharedAssetCapacityExceeded;
+    /** @brief Shared-asset admission is closed or retirement still has consumers. */
+    extern const ErrorCodeDescriptor SharedAssetLifecycleUnavailable;
     /** @brief A streaming trace binding, stage, subject, parent, or terminal request is malformed. */
     extern const ErrorCodeDescriptor TraceInvalid;
     /** @brief A streaming trace stage or terminal status is unknown to this contract version. */
@@ -148,6 +183,10 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
     extern const ErrorCodeDescriptor CellOperationTransitionInvalid;
     /** @brief A scheduler admission ledger, request, or reservation is malformed. */
     extern const ErrorCodeDescriptor SchedulerAdmissionInvalid;
+    /** @brief A scheduler concurrency profile or operation kind is unknown or explicitly disabled. */
+    extern const ErrorCodeDescriptor SchedulerConcurrencyUnsupported;
+    /** @brief A scheduler concurrency request names another profile or an obsolete policy revision. */
+    extern const ErrorCodeDescriptor SchedulerConcurrencyStale;
     /** @brief Scheduler operation count or generic capacity cannot be reserved within configured ceilings. */
     extern const ErrorCodeDescriptor SchedulerCapacityExceeded;
     /** @brief A scheduler operation already owns a reservation in this ledger. */
@@ -450,4 +489,16 @@ namespace Horo::WorldStreaming::WorldStreamingErrors {
     extern const ErrorCodeDescriptor CellAssetRequestNotReady;
     /** @brief The terminal aggregate result was already consumed. */
     extern const ErrorCodeDescriptor CellAssetRequestConsumed;
+    /** @brief A queue owner, context or entry is malformed. */
+    extern const ErrorCodeDescriptor FairQueueInvalid;
+    /** @brief A queue version, eligibility or withdrawal outcome is unsupported. */
+    extern const ErrorCodeDescriptor FairQueueUnsupported;
+    /** @brief A queue command or proposal no longer names current pending work. */
+    extern const ErrorCodeDescriptor FairQueueStale;
+    /** @brief The bounded queue or admission snapshot exceeds its ceiling. */
+    extern const ErrorCodeDescriptor FairQueueCapacityExceeded;
+    /** @brief Pending work repeats an operation or cell identity. */
+    extern const ErrorCodeDescriptor FairQueueIdentityConflict;
+    /** @brief Pending admission is closed by shutdown. */
+    extern const ErrorCodeDescriptor FairQueueLifecycleUnavailable;
 }  // namespace Horo::WorldStreaming::WorldStreamingErrors

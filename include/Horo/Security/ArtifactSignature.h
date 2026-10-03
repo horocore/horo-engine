@@ -117,8 +117,19 @@ namespace Horo::Security {
          */
         [[nodiscard]] Result<VerifiedArtifactEvidence> Verify(std::span<const std::byte> artifact,
                                                               const DetachedSignatureEnvelope &envelope) const;
+        /**
+         * @brief Streams an exact private regular file through SHA-256 before verifying its detached signature.
+         * @param path Quiescent private file; the caller prevents modification until the verified bytes are consumed.
+         * @param expectedBytes Exact expected length, used to reject truncation and growth during the read.
+         * @param envelope Detached signature envelope.
+         * @return Evidence only when the complete file length, digest, trust root, and signature match.
+         */
+        [[nodiscard]] Result<VerifiedArtifactEvidence> VerifyFile(const std::filesystem::path &path, std::uint64_t expectedBytes,
+                                                                  const DetachedSignatureEnvelope &envelope) const;
 
     private:
+        [[nodiscard]] Result<VerifiedArtifactEvidence> VerifyDigest(const Sha256Digest &digest,
+                                                                    const DetachedSignatureEnvelope &envelope) const;
         std::shared_ptr<const SignatureProvider> provider_;
         std::shared_ptr<const TrustedRootStore> trustedRoots_;
     };

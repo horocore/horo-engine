@@ -131,6 +131,36 @@ add_library(HoroThirdPartyMiniaudio INTERFACE)
 add_library(HoroThirdParty::Miniaudio ALIAS HoroThirdPartyMiniaudio)
 target_include_directories(HoroThirdPartyMiniaudio INTERFACE "${miniaudio_SOURCE_DIR}" "${miniaudio_SOURCE_DIR}/extras")
 
+set(HORO_LIBEBUR128_REVISION "67b33abe1558160ed76ada1322329b0e9e058b02")
+FetchContent_Declare(
+    libebur128
+    GIT_REPOSITORY https://github.com/jiixyj/libebur128.git
+    GIT_TAG "${HORO_LIBEBUR128_REVISION}"
+    GIT_SHALLOW FALSE
+    SOURCE_SUBDIR .horo-source-only
+)
+FetchContent_MakeAvailable(libebur128)
+file(READ "${libebur128_SOURCE_DIR}/COPYING" horo_ebur128_license_text)
+string(REPLACE "\r\n" "\n" horo_ebur128_license_text "${horo_ebur128_license_text}")
+string(SHA256 horo_ebur128_license_digest "${horo_ebur128_license_text}")
+if(NOT horo_ebur128_license_digest STREQUAL "d6b4754bb67bdd08b97d5d11b2d7434997a371585a78fe77007149df3af8d09c")
+    message(FATAL_ERROR "Pinned libebur128 license differs from the reviewed MIT notice")
+endif()
+install(FILES "${libebur128_SOURCE_DIR}/COPYING"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/horo-engine/licenses"
+        RENAME "libebur128.txt" COMPONENT Audio)
+
+add_library(HoroThirdPartyEbur128 STATIC "${libebur128_SOURCE_DIR}/ebur128/ebur128.c")
+add_library(HoroThirdParty::Ebur128 ALIAS HoroThirdPartyEbur128)
+target_compile_features(HoroThirdPartyEbur128 PRIVATE c_std_99)
+target_include_directories(HoroThirdPartyEbur128 PUBLIC "${libebur128_SOURCE_DIR}/ebur128")
+target_include_directories(HoroThirdPartyEbur128 PRIVATE "${libebur128_SOURCE_DIR}/ebur128/queue")
+if(MSVC)
+    target_compile_definitions(HoroThirdPartyEbur128 PRIVATE _USE_MATH_DEFINES)
+else()
+    target_link_libraries(HoroThirdPartyEbur128 PUBLIC m)
+endif()
+
 set(HORO_LUA_VERSION "5.4.8")
 FetchContent_Declare(
     lua

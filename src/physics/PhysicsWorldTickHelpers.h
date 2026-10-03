@@ -67,16 +67,7 @@ namespace Horo::Physics::Detail {
     /** @brief Replaces every externally visible publication domain under one synchronization boundary. */
     void CommitPublishedTick(auto &impl, const std::uint64_t tick, const std::uint32_t appliedCommands,
                              const PhysicsEventProjectionResult &eventResult) noexcept {
-        PublicationGuard publicationGuard{impl.publicationLock};
-        const std::uint64_t revision = impl.published.publicationRevision + 1;
-        impl.published = {.completedTick = tick,
-                          .publicationRevision = revision,
-                          .transformTick = tick,
-                          .queryTick = tick,
-                          .eventTick = tick,
-                          .appliedCommands = appliedCommands,
-                          .eventCount = eventResult.publishedRecordCount,
-                          .droppedEventCount = eventResult.droppedRecordCount};
+        impl.publication.Commit(tick, appliedCommands, eventResult);
     }
 
     /** @brief Normalizes and canonicalizes retained commands without frame-hot allocation. */
@@ -94,6 +85,30 @@ namespace Horo::Physics::Detail {
         impl.commandOrderDirty = false;
     }
 
+    /** @brief Validates producer continuity without discarding quarantined ordering reservations. */
+    [[nodiscard]] Result<void> ValidateCommandSources(auto &impl, const std::uint32_t eligible) {
+        std::ranges::sort(impl.sourceOrder.begin(), impl.sourceOrder.begin() + eligible,
+                          [&impl](const std::uint32_t left, const std::uint32_t right) {
+            const PhysicsCommandOrderKey &leftKey = impl.CommandAt(left).order;
+            const PhysicsCommandOrderKey &rightKey = impl.CommandAt(right).order;
+            return std::tie(leftKey.source, leftKey.sourceSequence) < std::tie(rightKey.source, rightKey.sourceSequence);
+        });
+        for (std::uint32_t offset = 0; offset < eligible; ++offset) {
+            const PhysicsCommandOrderKey &key = impl.CommandAt(impl.sourceOrder[offset]).order;
+            const bool startsSource = offset == 0 || impl.CommandAt(impl.sourceOrder[offset - 1]).order.source != key.source;
+            if (startsSource && key.sourceSequence != 1)
+                return Result<void>::Failure(
+                    MakeError(PhysicsErrors::CommandOrderInvalid, "A Physics command source sequence has a missing predecessor."));
+            if (!startsSource) {
+                const std::uint64_t previousSequence = impl.CommandAt(impl.sourceOrder[offset - 1]).order.sourceSequence;
+                if (previousSequence == std::numeric_limits<std::uint64_t>::max() || key.sourceSequence != previousSequence + 1)
+                    return Result<void>::Failure(
+                        MakeError(PhysicsErrors::CommandOrderInvalid, "A Physics command source sequence has a missing predecessor."));
+            }
+        }
+        return Result<void>::Success();
+    }
+
     /** @brief Validates one complete tick frame after canonicalization and before observation. */
     [[nodiscard]] Result<std::uint32_t> ValidateCommandFrame(auto &impl, const PhysicsFixedTickInput &input) {
         std::uint32_t eligible{};
@@ -109,25 +124,8 @@ namespace Horo::Physics::Detail {
                     MakeError(PhysicsErrors::CommandOrderInvalid, "A Physics command targets a stale world or scene generation."));
             impl.sourceOrder[offset] = offset;
         }
-        std::ranges::sort(impl.sourceOrder.begin(), impl.sourceOrder.begin() + eligible,
-                          [&impl](const std::uint32_t left, const std::uint32_t right) {
-            const PhysicsCommandOrderKey &leftKey = impl.CommandAt(left).order;
-            const PhysicsCommandOrderKey &rightKey = impl.CommandAt(right).order;
-            return std::tie(leftKey.source, leftKey.sourceSequence) < std::tie(rightKey.source, rightKey.sourceSequence);
-        });
-        for (std::uint32_t offset = 0; offset < eligible; ++offset) {
-            const PhysicsCommandOrderKey &key = impl.CommandAt(impl.sourceOrder[offset]).order;
-            const bool startsSource = offset == 0 || impl.CommandAt(impl.sourceOrder[offset - 1]).order.source != key.source;
-            if (startsSource && key.sourceSequence != 1)
-                return Result<std::uint32_t>::Failure(
-                    MakeError(PhysicsErrors::CommandOrderInvalid, "A Physics command source sequence has a missing predecessor."));
-            if (!startsSource) {
-                const std::uint64_t previousSequence = impl.CommandAt(impl.sourceOrder[offset - 1]).order.sourceSequence;
-                if (previousSequence == std::numeric_limits<std::uint64_t>::max() || key.sourceSequence != previousSequence + 1)
-                    return Result<std::uint32_t>::Failure(
-                        MakeError(PhysicsErrors::CommandOrderInvalid, "A Physics command source sequence has a missing predecessor."));
-            }
-        }
+        if (const auto sources = ValidateCommandSources(impl, eligible); sources.HasError())
+            return Result<std::uint32_t>::Failure(sources.ErrorValue());
         return Result<std::uint32_t>::Success(eligible);
     }
 
@@ -146,6 +144,8 @@ namespace Horo::Physics::Detail {
             const PhysicsStructuralCommand &command = impl.CommandAt(offset);
             if (const bool selected = selectedKind == Destroy ? command.order.commandKind == Destroy : command.order.commandKind != Destroy;
                 !selected)
+                continue;
+            if (impl.IsRetiredCommand(command.order))
                 continue;
             if (input.observer.command)
                 input.observer.command(input.observer.context, command, safePoint, input.simulationTick);
@@ -214,7 +214,8 @@ namespace Horo::Physics::Detail {
     [[nodiscard]] Result<void> ValidateTickInput(const auto &impl, const PhysicsFixedTickInput &input) {
         if (const auto configuredNanoseconds =
                 static_cast<std::int64_t>(std::llround(impl.settings.Values().world.fixedDeltaSeconds * 1'000'000'000.0));
-            input.simulationTick == 0 || input.sceneGeneration == 0 || input.simulationTick != impl.published.completedTick + 1 ||
+            input.simulationTick == 0 || input.sceneGeneration == 0 ||
+            input.simulationTick != impl.publication.Snapshot().completedTick + 1 ||
             input.fixedDelta.ToNanoseconds() != configuredNanoseconds)
             return Result<void>::Failure(
                 MakeError(PhysicsErrors::DescriptorInvalid, "Physics requires the next one-based tick and the world's exact fixed delta."));
@@ -227,7 +228,7 @@ namespace Horo::Physics::Detail {
             impl.statistics.droppedEventCount =
                 SaturatingAdd(impl.statistics.droppedEventCount, impl.queryEvents.events.DroppedRecordCount());
             if (impl.queryEvents.events.DroppedRecordCount() != 0)
-                impl.RecordEventOverflowDiagnostic(input.sceneGeneration, input.simulationTick);
+                impl.RecordEventDropDiagnostic(input.sceneGeneration, input.simulationTick, true);
             impl.queryEvents.events.AbortTick();
             return result;
         }
@@ -235,7 +236,7 @@ namespace Horo::Physics::Detail {
         impl.statistics.eventDepth = result.Value().publishedRecordCount;
         impl.statistics.maximumEventDepth = std::max(impl.statistics.maximumEventDepth, impl.statistics.eventDepth);
         if (result.Value().droppedRecordCount != 0)
-            impl.RecordEventOverflowDiagnostic(input.sceneGeneration, input.simulationTick);
+            impl.RecordEventDropDiagnostic(input.sceneGeneration, input.simulationTick, result.Value().overflowed);
         return result;
     }
 

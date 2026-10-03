@@ -15,6 +15,7 @@
 #include <span>
 
 namespace Horo::Runtime::Ui {
+    class UiLayoutSnapshot;
     inline constexpr std::uint32_t MaximumUiFocusNodes = 4'096;
     inline constexpr std::uint32_t MaximumUiFocusModalDepth = 64;
     inline constexpr std::uint32_t MaximumUiFocusRestorationDepth = 64;
@@ -103,6 +104,16 @@ namespace Horo::Runtime::Ui {
         ModalClosed,
         Reload,
         Retirement,
+        Spatial,
+        Count,
+    };
+
+    /** @brief Cardinal navigation wraps to the opposite geometric edge only on the selected axes. */
+    enum class UiFocusWrapPolicy : std::uint8_t {
+        None,
+        Horizontal,
+        Vertical,
+        Both,
         Count,
     };
 
@@ -153,9 +164,10 @@ namespace Horo::Runtime::Ui {
         UiFocusOwnerContext owner; /**< Exact runtime/canvas/document/player/layer generation. */
         UiElementId defaultFocus;  /**< Optional stable default target; invalid means no declaration. */
         UiFocusRecoveryPolicy recovery{UiFocusRecoveryPolicy::AncestorThenDefaultThenFirst};
-        std::uint32_t nodeCapacity{};        /**< Maximum nodes copied into the graph. */
-        std::uint32_t modalCapacity{};       /**< Maximum nested modal scopes. */
-        std::uint32_t restorationCapacity{}; /**< Maximum stable restoration entries. */
+        std::uint32_t nodeCapacity{};                    /**< Maximum nodes copied into the graph. */
+        std::uint32_t modalCapacity{};                   /**< Maximum nested modal scopes. */
+        std::uint32_t restorationCapacity{};             /**< Maximum stable restoration entries. */
+        UiFocusWrapPolicy wrap{UiFocusWrapPolicy::None}; /**< Cardinal fallback wrap; authored links always take precedence. */
 
         /** @brief Validates owner evidence and every finite graph bound. @return Whether creation is safe. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -188,6 +200,14 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValid() const noexcept;
     };
 
+    /** @brief Owner-thread participation state for one exact resident element; no topology or geometry ownership. */
+    struct UiFocusParticipation final {
+        UiElementHandle element;
+        bool focusable{true};
+        bool enabled{true};
+        bool visible{true};
+    };
+
     /** @brief Inclusive modal root and optional modal-local default focus declaration. */
     struct UiFocusModalDescriptor final {
         UiElementHandle root;     /**< Exact current root handle; must be resident in the graph. */
@@ -214,6 +234,7 @@ namespace Horo::Runtime::Ui {
         std::optional<UiFocusTarget> focused;
         std::optional<UiFocusModalId> activeModal;
         std::uint32_t modalDepth{};
+        std::optional<UiFocusTarget> modalRoot; /**< Inclusive root of the authoritative top modal, when active. */
 
         /** @brief Validates the snapshot representation. @return Whether the snapshot is complete. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -248,6 +269,13 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiFocusGraphState State() const noexcept;
         /** @brief Returns current focus and modal state without allocating. @return Snapshot or lifecycle failure. */
         [[nodiscard]] Result<UiFocusSnapshot> Snapshot() const;
+        /**
+         * @brief Copies eligible targets in the graph's authored order, restricted to the active modal.
+         * @param output Caller-owned fixed storage; undersized output is left unchanged.
+         * @return Number written or typed lifecycle/capacity failure.
+         * @note Navigation links remain authoritative for directional movement; this is the sequential participation order.
+         */
+        [[nodiscard]] Result<std::size_t> Order(std::span<UiFocusTarget> output) const;
         /** @brief Resolves a stable element identity in the active graph. @return Current handle or typed stale failure. */
         [[nodiscard]] Result<UiElementHandle> Find(UiElementId id) const;
         /** @brief Returns current focus, if any, without allocating. @return Optional target or lifecycle failure. */
@@ -262,6 +290,27 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<UiFocusChange> Reload(const UiFocusGraphDescriptor &descriptor, std::span<const UiFocusNodeDescriptor> nodes);
 
         /**
+         * @brief Atomically copies cardinal navigation geometry from a matching immutable layout generation.
+         * @param layout Borrowed only during this owner-thread call; the owner must admit only successfully presented layout.
+         * @return Success or typed lifecycle, scope, stale source, malformed geometry, or capacity failure.
+         * @details Instance, canvas, document and tree revisions must match. Interaction must equal or advance the graph's
+         *          revision; success adopts it. Missing exact handles have no spatial geometry, including recycled slots.
+         *          Uses preallocated scratch, retains no lease and preserves all prior geometry on failure. Reload clears
+         *          geometry until this call succeeds. Participation is supplied by the owner, not inferred from boxes.
+         */
+        [[nodiscard]] Result<void> UpdateLayout(const UiLayoutSnapshot &layout);
+
+        /**
+         * @brief Updates one element's participation and immediately reconciles invalid focus without allocation.
+         * @param expectedOwner Exact current graph evidence; stale or foreign updates fail without mutation.
+         * @param participation Current generation-checked handle and owner-resolved focusable/enabled/visible state.
+         * @return Focus transition or typed stale, scope, target or lifecycle failure.
+         * @details Owner-thread only. Geometry and links are preserved; hidden/disabled ancestors exclude descendants.
+         */
+        [[nodiscard]] Result<UiFocusChange> SetParticipation(const UiFocusOwnerContext &expectedOwner,
+                                                             const UiFocusParticipation &participation);
+
+        /**
          * @brief Moves focus to one exact current target.
          * @param element Current handle from this graph generation.
          * @return Focus transition or typed target/scope/modal/lifecycle failure.
@@ -270,9 +319,13 @@ namespace Horo::Runtime::Ui {
         /** @brief Applies the active modal or graph default, then deterministic recovery order. @return Focus transition. */
         [[nodiscard]] Result<UiFocusChange> FocusDefault();
         /**
-         * @brief Resolves one explicit authored neighbor or performs bounded invalid-target recovery.
+         * @brief Resolves an authored neighbor, then cardinal geometry when no override exists, or invalid-target recovery.
          * @param direction Next/previous/cardinal focus direction; submit/cancel are action-router commands.
          * @return Focus transition or typed malformed/lifecycle failure.
+         * @details Spatial candidates are inside the active modal and have positive-area hit-test boxes. Ranking prefers
+         *          overlap on the perpendicular axis, then forward doubled-center distance, perpendicular interval gap,
+         *          perpendicular doubled-center distance and stable ID bytes. Wrap searches the opposite center edge on
+         *          enabled axes, then uses perpendicular gap/distance and stable ID. Next/Previous remain authored links.
          */
         [[nodiscard]] Result<UiFocusChange> Move(UiNavigationDirection direction);
 

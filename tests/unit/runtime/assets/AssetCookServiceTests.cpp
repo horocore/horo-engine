@@ -4,10 +4,14 @@
 #include "Horo/Assets/CookCatalog.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Foundation/Sha256.h"
 
 #include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -133,6 +137,31 @@ namespace {
         bool fail_;
     };
 
+    /** @brief Test strategy whose effective settings must participate in AST cache admission. */
+    class SettingsCooker final : public ICookerStrategy {
+    public:
+        explicit SettingsCooker(const std::uint8_t setting) : setting_(setting) {}
+
+        [[nodiscard]] CookerCacheIdentity CacheIdentity() const noexcept override {
+            const std::array<std::byte, 1> bytes{static_cast<std::byte>(setting_)};
+            return {.version = "test.1", .settingsDigest = ComputeSha256(bytes), .settingsSchemaVersion = 1};
+        }
+
+        [[nodiscard]] Result<CookOutputSink> Cook(const CookSourceView &, const CancellationToken &) const override {
+            return Result<CookOutputSink>::Success(CookOutputSink{.payload = {setting_}});
+        }
+
+        [[nodiscard]] Result<void> ValidateCookedPayload(const CookSourceView &,
+                                                         const std::span<const std::uint8_t> payload) const override {
+            return payload.size() == 1 && payload.front() == setting_
+                       ? Result<void>::Success()
+                       : Result<void>::Failure(Error{ErrorCode{"test.cook.payload_mismatch"}});
+        }
+
+    private:
+        std::uint8_t setting_{};
+    };
+
     /** @brief Verifies that the initial cook and later cache hit retain source attribution. */
     void AssertCachedCookOutput(const BuildOutputSnapshot &first, const BuildOutputSnapshot &second,
                                 const std::filesystem::path &sourcePath) {
@@ -170,8 +199,9 @@ namespace {
         REQUIRE(assetFailure->sessionId == snapshot.records.back().sessionId);
         const std::filesystem::path secondSource = project.assetsDir / "second_mesh.fbx";
         REQUIRE(std::ranges::count_if(snapshot.records, [&](const BuildOutputRecord &record) {
-            return record.source.has_value() && record.source->absolutePath == secondSource.string() &&
-                   record.result == BuildOutputResult::Cancelled;
+            const bool expectedTerminalResult =
+                record.result == BuildOutputResult::Cancelled || (fail && record.result == BuildOutputResult::Failed);
+            return record.source.has_value() && record.source->absolutePath == secondSource.string() && expectedTerminalResult;
         }) == 1);
     }
 
@@ -355,6 +385,52 @@ TEST_CASE("AssetCookService publishes cache hits as cached scoped results", "[na
     const auto secondSnapshot = buildOutput.SnapshotIfChanged(firstSnapshot->revision);
     REQUIRE(secondSnapshot.has_value());
     AssertCachedCookOutput(*firstSnapshot, *secondSnapshot, project.sourceFile);
+}
+
+TEST_CASE("AssetCookService isolates cache entries by exact strategy settings", "[native]") {
+    TestProject project;
+    TempDir cacheDir;
+    TempDir cookedDir;
+    JobSystem jobs;
+    AssetRegistry registry;
+    REQUIRE(registry.Publish({TestMeshRecord()}).status == AssetRegistryBuildStatus::Complete);
+
+    const auto target = Target("headless-null");
+    AssetCookRequest request{
+        .sourceRoot = project.dir.path,
+        .cacheRoot = cacheDir.path,
+        .cookedRoot = cookedDir.path,
+        .registry = registry.Snapshot(),
+        .target = target,
+    };
+    const auto cookWithSetting = [&](const std::uint8_t setting) {
+        CookerCatalog catalog;
+        REQUIRE(catalog
+                    .Register(CookerContribution{
+                        .contributionId = "test.settings-cooker",
+                        .assetType = Type("core.mesh"),
+                        .targets = {target},
+                        .strategy = std::make_shared<const SettingsCooker>(setting),
+                    })
+                    .HasValue());
+        auto snapshot = catalog.Publish();
+        REQUIRE(snapshot.HasValue());
+        AssetCookService service(jobs, snapshot.Value());
+        return service.Cook(request, CancellationToken{});
+    };
+
+    auto first = cookWithSetting(1);
+    REQUIRE(first.HasValue());
+    CHECK(first.Value().cookedAssets == 1);
+    auto different = cookWithSetting(2);
+    REQUIRE(different.HasValue());
+    CHECK(different.Value().cookedAssets == 1);
+    CHECK(different.Value().cacheHits == 0);
+    auto sameAgain = cookWithSetting(2);
+    REQUIRE(sameAgain.HasValue());
+    CHECK(sameAgain.Value().cookedAssets == 0);
+    CHECK(sameAgain.Value().cacheHits == 1);
+    jobs.Shutdown(ShutdownPolicy::Drain);
 }
 
 TEST_CASE("AssetCookService reports source admission failures with navigable diagnostics", "[native]") {

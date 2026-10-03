@@ -131,7 +131,7 @@ namespace Horo::Editor {
                 if (active)
                     drawList->AddRectFilled({position.x, position.y + 3.0F}, {position.x + 2.0F, position.y + 27.0F},
                                             Theme::U32(Theme::Accent()), 0.0F);
-                constexpr float iconSize = 16.0F;
+                constexpr float iconSize = 20.0F;
                 const ImVec2 iconPosition{position.x + (width - iconSize) * 0.5F, position.y + (30.0F - iconSize) * 0.5F};
                 const ImU32 iconColor = Theme::U32(active || hovered ? Theme::Text() : Theme::Dim());
                 Ui::DrawEditorIcon(drawList, icons[index], iconPosition, {iconSize, iconSize}, iconColor, context.theme.fonts.icon);
@@ -151,42 +151,6 @@ namespace Horo::Editor {
                 return std::format("{} {}", entry.containedItemCount, unit);
             }
             return entry.assetType;
-        }
-
-        void DrawAssetFooter(const ImVec2 minimum, const float width, const std::size_t visibleCount,
-                             const ContentBrowserDirectory &directory, const ILocalizationService &localization, ImFont *font) {
-            ImDrawList *drawList = ImGui::GetWindowDrawList();
-            const ImVec2 maximum{minimum.x + width, minimum.y + AssetBrowserLayout::FooterHeight};
-            drawList->AddRectFilled(minimum, maximum, Theme::U32(Theme::Mix(Theme::Bg0(), Theme::Bg1(), 0.55F)));
-            drawList->AddLine(minimum, {maximum.x, minimum.y}, Theme::U32(Theme::Border()));
-            const auto directoryCount =
-                static_cast<std::size_t>(std::ranges::count_if(directory.entries, [](const ContentBrowserEntry &entry) {
-                return entry.kind == ContentBrowserEntryKind::Directory;
-            }));
-            const bool onlyDirectories = visibleCount == directoryCount && visibleCount == directory.entries.size();
-            const char *unitKey;
-            if (onlyDirectories)
-                unitKey = visibleCount == 1 ? "workspace.content_browser.count.folder" : "workspace.content_browser.count.folders";
-            else
-                unitKey = visibleCount == 1 ? "workspace.content_browser.count.item" : "workspace.content_browser.count.items";
-            const std::string &unit = localization.Get("editor", unitKey);
-            const std::string count = std::format("{} {}", visibleCount, unit);
-            drawList->AddText(font, AssetBrowserLayout::SecondaryFontSize(), {minimum.x + 16.0F, minimum.y + 7.0F},
-                              Theme::U32(Theme::Dim()), count.c_str());
-
-            const char *statusKey = "workspace.content_browser.ready";
-            if (directory.loadState == ContentBrowserLoadState::Loading)
-                statusKey = "workspace.content_browser.loading";
-            else if (directory.loadState == ContentBrowserLoadState::Error)
-                statusKey = "workspace.content_browser.unavailable";
-            const std::string &status = localization.Get("editor", statusKey);
-            const auto statusSize = font->CalcTextSizeA(AssetBrowserLayout::SecondaryFontSize(), FLT_MAX, 0.0F, status.c_str());
-            const float dotX = maximum.x - 16.0F;
-            drawList->AddText(font, AssetBrowserLayout::SecondaryFontSize(), {dotX - 7.0F - statusSize.x, minimum.y + 7.0F},
-                              Theme::U32(Theme::Dim()), status.c_str());
-            if (directory.loadState == ContentBrowserLoadState::Ready) {
-                drawList->AddCircleFilled({dotX, minimum.y + 14.0F}, 4.0F, Theme::U32(Theme::Ok()), 16);
-            }
         }
 
         [[nodiscard]] const char *EmptyGridMessageKey(const ContentBrowserDirectory &directory) noexcept {
@@ -400,16 +364,13 @@ namespace Horo::Editor {
         ImDrawList *drawList = ImGui::GetWindowDrawList();
         ImFont *font = ResolveFont(context.theme.fonts.sansCompact);
         AssetBrowserInteractionState &state = interactionSession.State();
-        const ILocalizationService &localization = context.localization;
         const ContentBrowserDirectory &directory = viewModel.contentBrowser;
         const float contentHeight = std::max(1.0F, ImGui::GetContentRegionAvail().y);
         const float toolbarHeight = AssetBrowserLayout::ToolbarHeight;
-        const float footerHeight = AssetBrowserLayout::FooterHeight;
-        const float bodyHeight = std::max(1.0F, contentHeight - toolbarHeight - footerHeight);
+        const float bodyHeight = std::max(1.0F, contentHeight - toolbarHeight);
         const ImVec2 contentMaximum{contentOrigin.x + contentWidth, contentOrigin.y + contentHeight};
         const ImVec2 toolbarMaximum{contentMaximum.x, contentOrigin.y + toolbarHeight};
         const ImVec2 bodyOrigin{contentOrigin.x, toolbarMaximum.y};
-        const ImVec2 footerOrigin{contentOrigin.x, contentMaximum.y - footerHeight};
 
         drawList->AddRectFilled(contentOrigin, contentMaximum, Theme::U32(Theme::BottomDockContentSurface()));
         DrawGlobalDockToolbarSurface(contentOrigin, contentWidth, toolbarHeight);
@@ -429,8 +390,6 @@ namespace Horo::Editor {
                                                    .font = font};
         DrawAssetBrowserViewport(viewport);
 
-        const std::vector<std::size_t> visibleEntries = interactionSession.ProjectEntries(directory);
-        DrawAssetFooter(footerOrigin, contentWidth, visibleEntries.size(), directory, localization, font);
         DrawAssetBrowserDialogs(state, directory, command, context);
     }
 }  // namespace Horo::Editor

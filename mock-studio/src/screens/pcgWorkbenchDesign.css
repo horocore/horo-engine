@@ -1,0 +1,37 @@
+.pcg-side h3 { margin:12px 0 6px; color:var(--mock-accent); font-size:11px; font-weight:600; text-transform:uppercase; }
+.pcg-side h3:first-child { margin-top:0; }
+.pcg-side button { display:flex; justify-content:space-between; gap:7px; width:100%; padding:7px; border:1px solid transparent; border-radius:var(--mock-radius); background:transparent; text-align:left; font-size:11px; }
+.pcg-side button.active { border-color:var(--mock-accent); background:rgba(4,165,252,.12); }
+.pcg-side small { color:var(--mock-muted); font-size:10px; white-space:nowrap; }
+.pcg-inspector { padding:10px; border:1px solid var(--mock-border); border-radius:var(--mock-radius); background:var(--mock-surface); }
+.pcg-inspector h3 { margin:0 0 10px; color:var(--mock-accent); font-size:12px; }
+.pcg-inspector>div { display:flex; justify-content:space-between; gap:7px; padding:8px 0; border-bottom:1px solid var(--mock-border); font-size:11px; }
+.pcg-inspector>div span { color:var(--mock-secondary); }
+.pcg-inspector strong { font-weight:500; text-align:right; }
+.pcg-inspector p { color:var(--mock-muted); font-size:11px; line-height:1.5; }
+.pcg-notice { color:var(--mock-accent); }
+.pcg-data-view { display:flex; flex-direction:column; gap:12px; }
+.pcg-terrain { position:relative; height:260px; overflow:hidden; border:1px solid var(--mock-border); border-radius:var(--mock-radius); background:radial-gradient(ellipse at 35% 45%,rgba(107,176,116,.32),transparent 34%),radial-gradient(ellipse at 75% 25%,rgba(107,176,116,.25),transparent 28%),#17231d; }
+.pcg-terrain:before { content:''; position:absolute; inset:0; background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px); background-size:24px 24px; }
+.pcg-terrain-cluster { position:absolute; border:1px solid rgba(105,197,155,.5); border-radius:50%; background:rgba(105,197,155,.17); }
+.pcg-terrain-cluster.one { left:8%; top:15%; width:25%; height:45%; }
+.pcg-terrain-cluster.two { left:38%; top:28%; width:31%; height:49%; }
+.pcg-terrain-cluster.three { right:7%; bottom:10%; width:22%; height:34%; }
+.pcg-terrain-road { position:absolute; left:58%; top:-10%; width:8%; height:130%; transform:rotate(18deg); background:rgba(255,194,71,.24); }
+.pcg-terrain>span { position:absolute; left:12px; top:12px; padding:5px 8px; border:1px solid var(--mock-border-strong); border-radius:var(--mock-radius); background:var(--mock-panel); font-size:11px; }
+.pcg-metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.pcg-metrics section,.pcg-problems,.pcg-flow section { min-width:0; padding:12px; border:1px solid var(--mock-border); border-radius:var(--mock-radius); background:var(--mock-surface); }
+.pcg-metrics h2,.pcg-problems h2,.pcg-flow h2 { margin:0 0 8px; color:var(--mock-secondary); font-size:11px; font-weight:600; }
+.pcg-metrics strong { color:var(--mock-accent); font-size:18px; font-weight:600; }
+.pcg-metrics p,.pcg-flow p { margin:6px 0 0; color:var(--mock-muted); font-size:11px; line-height:1.45; }
+.pcg-problems>div { display:flex; justify-content:space-between; gap:12px; padding:9px 0; border-bottom:1px solid var(--mock-border); }
+.pcg-problems>div:last-child { border-bottom:0; }
+.pcg-problems strong { font-size:12px; font-weight:500; }
+.pcg-problems p { margin:4px 0 0; color:var(--mock-muted); font-size:11px; }
+.pcg-problems>div>span { align-self:start; color:var(--mock-accent); font-size:11px; }
+.pcg-flow { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.pcg-table-wrap { overflow:auto; border:1px solid var(--mock-border); border-radius:var(--mock-radius); }
+.pcg-table-wrap table { width:100%; border-collapse:collapse; background:var(--mock-surface); font-size:11px; text-align:left; }
+.pcg-table-wrap th,.pcg-table-wrap td { padding:8px 10px; border-bottom:1px solid var(--mock-border); white-space:nowrap; }
+.pcg-table-wrap th { color:var(--mock-secondary); font-weight:500; }
+@media (max-width:700px) { .pcg-metrics,.pcg-flow { grid-template-columns:1fr; } }

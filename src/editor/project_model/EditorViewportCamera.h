@@ -8,7 +8,19 @@
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Runtime/Scene/SceneComponents.h"
 
+#include <cstdint>
+
 namespace Horo::Editor {
+    /** @brief Signed world-axis viewpoint selected from the viewport compass. */
+    enum class EditorViewportAxisView : std::uint8_t {
+        PositiveX,
+        NegativeX,
+        PositiveY,
+        NegativeY,
+        PositiveZ,
+        NegativeZ,
+    };
+
     /** @brief Immutable perspective or orthographic camera values for one editor viewport render. */
     struct EditorViewportCamera {
         Runtime::CameraProjection projection{Runtime::CameraProjection::Perspective};

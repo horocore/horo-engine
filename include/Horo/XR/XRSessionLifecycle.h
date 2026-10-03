@@ -5,10 +5,11 @@
  * @brief Backend-neutral XR session activation, runtime-event state, and generation fencing.
  */
 
-#include "Horo/XR/XRCapabilities.h"
+#include "Horo/XR/XRFeatureNegotiation.h"
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace Horo::XR {
     /** @brief Ordered host-composition resource boundaries; native values remain in the selected adapter. */
@@ -74,9 +75,10 @@ namespace Horo::XR {
          * @brief Prepares one ordered stage for a private candidate generation.
          * @param stage Stage being prepared.
          * @param candidate Exact unpublished session owner.
+         * @param plan Complete accepted feature decisions; adapter must not rediscover or silently substitute a provider.
          * @return Success or an actionable typed adapter failure; a failing stage has no retained resources.
          */
-        [[nodiscard]] virtual Result<void> Prepare(XRSessionPreparation stage, const XRSessionId &candidate) = 0;
+        [[nodiscard]] virtual Result<void> Prepare(XRSessionPreparation stage, const XRSessionId &candidate, const XRFeaturePlan &plan) = 0;
 
         /**
          * @brief Retires one completed stage in reverse order for an exact owner.
@@ -108,12 +110,12 @@ namespace Horo::XR {
          * @param capabilities Immutable evidence for the requested system and runtime generation.
          * @param activeSystem System currently selected by host preflight, including its runtime generation.
          * @param expectedRevision Capability revision retained by the host's accepted plan.
-         * @param requirement Explicit capability and bounded resource request.
+         * @param plan Complete immutable profile and optional-feature decision accepted before resource preparation.
          * @return New session ID, or typed admission/activation failure with the adapter cause preserved.
          * @post Failure leaves the prior publication unchanged and retires only the candidate's completed stages.
          */
         [[nodiscard]] Result<XRSessionId> Activate(const XRCapabilitySnapshot &capabilities, const XRSystemId &activeSystem,
-                                                   XRCapabilityRevision expectedRevision, const XRCapabilityRequirement &requirement);
+                                                   XRCapabilityRevision expectedRevision, const XRFeaturePlan &plan);
 
         /**
          * @brief Applies a selected-runtime event to its exact published generation.
@@ -134,6 +136,9 @@ namespace Horo::XR {
         /** @brief Returns a fixed-size copy of the current state. @return Generation-fenced state publication. */
         [[nodiscard]] XRSessionSnapshot Snapshot() const noexcept;
 
+        /** @brief Copy the active immutable decision plan, if a session remains published. @return Fixed-size plan or no value. */
+        [[nodiscard]] std::optional<XRFeaturePlan> AcceptedPlan() const noexcept;
+
         /** @brief Closes admission and retires resources in reverse order; idempotent. */
         void Shutdown() noexcept;
 
@@ -146,6 +151,7 @@ namespace Horo::XR {
         IXRSessionResources *resources_;
         XRSessionId ownedSession_{};
         XRSessionSnapshot snapshot_{};
+        std::optional<XRFeaturePlan> acceptedPlan_;
         std::uint32_t lastSessionGeneration_{};
         bool destroyed_{};
     };

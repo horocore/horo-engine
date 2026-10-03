@@ -8,6 +8,7 @@
 #include "Horo/Audio/AudioCommandStaging.h"
 #include "Horo/Audio/AudioEventQueue.h"
 #include "Horo/Audio/AudioMemory.h"
+#include "Horo/Audio/AudioMetricExtraction.h"
 #include "Horo/Foundation/Telemetry/Telemetry.h"
 
 #include <array>
@@ -35,6 +36,12 @@ namespace Horo::Audio {
         BackendFailures,
         ParameterLookupFailures,
         EventLookupFailures,
+        ExtractionDrops,
+        ExtractionCoalesced,
+        ExtractionRateLimited,
+        CallbackDeadlineOverruns,
+        CallbackAllocationAttempts,
+        CallbackLockAttempts,
         Count
     };
 
@@ -54,6 +61,7 @@ namespace Horo::Audio {
         OcclusionStalenessSeconds,
         BusPeakRatio,
         BusRmsRatio,
+        ExtractionQueueDepth,
         Count
     };
 
@@ -110,6 +118,13 @@ namespace Horo::Audio {
          * @param sourceGeneration Host-issued increasing queue generation; replacement advances it, and reuse is forbidden.
          * @param stats AudioEventQueue::Stats from this owner's queue. @return False for stale, disabled or wrong-thread input. */
         [[nodiscard]] bool ObserveEventQueue(std::uint64_t sourceGeneration, const AudioEventQueueStats &stats) noexcept;
+        /** @brief Samples exact-source extraction pressure without resetting lifetime totals on replacement.
+         * @param sourceGeneration Nonzero strictly increasing generation for each replacement.
+         * @param stats Control-owner queue snapshot. @return False for stale or regressing input. */
+        [[nodiscard]] bool ObserveExtractionQueue(std::uint64_t sourceGeneration, const AudioExtractionStats &stats) noexcept;
+        /** @brief Projects one consumed fixed callback record into the existing metric catalog.
+         * @param record Control-consumed same-owner record. @return False for invalid kind or value. */
+        [[nodiscard]] bool ObserveExtractedRecord(const AudioExtractionRecord &record) noexcept;
         /** @brief Samples actual command ingress and callback occupancies.
          * @param stats AudioCommandStaging::Stats from this owner's staging. @return False when collection is unavailable. */
         [[nodiscard]] bool ObserveCommandQueue(const AudioCommandStagingStats &stats) noexcept;
@@ -157,6 +172,8 @@ namespace Horo::Audio {
         AudioMetricSnapshot current_;
         AudioEventQueueStats lastEventStats_;
         std::uint64_t eventSourceGeneration_{};
+        AudioExtractionStats lastExtractionStats_;
+        std::uint64_t extractionSourceGeneration_{};
 
         struct MemoryCursor final {
             std::uint64_t sourceGeneration{};

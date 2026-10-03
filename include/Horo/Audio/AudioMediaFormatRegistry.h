@@ -41,8 +41,9 @@ namespace Horo::Audio {
     };
 
     namespace AudioContainerIds {
-        inline constexpr AudioContainerId Wave{1}; /**< RIFF/WAVE container. */
-        inline constexpr AudioContainerId Ogg{2};  /**< Ogg container. */
+        inline constexpr AudioContainerId Wave{1};       /**< RIFF/WAVE container. */
+        inline constexpr AudioContainerId Ogg{2};        /**< Ogg container. */
+        inline constexpr AudioContainerId HoroCooked{3}; /**< Versioned Horo PCM cook payload container. */
     }  // namespace AudioContainerIds
 
     namespace AudioCodecIds {

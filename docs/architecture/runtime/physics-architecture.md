@@ -148,8 +148,25 @@ both graphical and headless hosts that require simulation; `Null` explicitly
 reports omitted Physics and unsupported features. It is never an automatic fallback.
 The initial lifecycle implementation advertises canonical world creation, analytic
 scene-shape admission, rigid-body and fixed/distance-constraint staging, and the
-owner-thread immediate-query capability. Snapshot-query and origin-rebasing behavior
-remain unsupported. Simulation filters remain closed until the validated collision-
+owner-thread immediate-query capability. Immutable solver snapshot queries and origin-
+rebasing behavior remain unsupported. A bounded queued batch accepts copied query
+commands on the owner thread and runs them only when the owner calls
+`ProcessQueryBatch` outside a fixed step. This lets a frame submit without waiting
+for query execution; a worker may poll or cancel its result handle, but may not
+submit or execute native queries. At most one batch is pending per world. Each
+batch's request count fits the world's query budget. Its total requested hit
+capacity has an independent hard cap of `MaximumPhysicsQueryBatchHits` (4096),
+regardless of the world's query-count setting. Admitted
+requests also consume the per-tick query count, including batches later cancelled;
+saturation rejects admission. The result is published all-or-nothing in request order, with
+owned Horo hit values that remain readable after world retirement. Cancellation,
+capability revocation, world retirement and publication changes terminate pending
+batches with distinct typed errors. Cancellation that arrives after publication
+leaves the completed result intact. Cancellation and completion race at one terminal
+mutex: cancellation before publication discards every prepared hit, while completed
+publication makes later cancellation ineffective. Hosts must pump the explicit owner-thread safe
+point; a batch does not schedule itself or require a worker/job service.
+Simulation filters remain closed until the validated collision-
 profile table is installed; scene activation still validates authored profiles and
 materials and publishes complete body/shape/constraint bindings, but does not claim
 contact filtering support from the closed native filter. Immediate-query fixtures
@@ -221,7 +238,9 @@ capacity error. Native Jolt allocation cannot unwind through its no-exception fr
 the explicitly installed allocation hooks terminate on heap exhaustion rather than
 returning a null pointer into native code. This is not a recoverable world-creation
 OOM guarantee or a replacement for process-wide memory admission. Body quarantine
-is rejected at native preparation until its safe-point retirement path is implemented.
+retires the corrupt body and attached constraints after the joined solver step,
+before event reduction and publication. The body handle is stale thereafter;
+recovery requires a new body through an explicit scene activation or rebuild.
 Zero body capacity remains a valid descriptor for omitted compositions, but canonical
 preparation rejects it with `OperationUnsupported` before allocation: the pinned
 native broad phase requires storage for its root nodes even in an empty world.
@@ -336,6 +355,38 @@ triangle meshes, height fields and compounds use bounded canonical geometry and
 stable child/material mappings. Dynamic bodies accept primitives, convex hulls and
 convex compounds; triangle meshes, height fields and static planes remain static.
 Scale is validated and baked before cook rather than applied to runtime shapes.
+
+The owner-thread immediate-query fixture admits an owned analytic compound with at
+most 256 direct children. Each child has a stable fixture-local subshape ID, finite
+body-local pose, material asset generation and slot, and collision layer, profile,
+channel and query response. Native subshape paths are resolved through private
+per-child user data before hits and contact observations are copied. Reordering
+children leaves their Horo IDs unchanged. One-child native compounds may collapse
+to their leaf; the adapter retains that child's metadata in this case. A fixture
+copies its complete descriptor before native publication and releases it on
+destruction, reset, scene unload or shutdown. Mixed sensor and solid children,
+nested compounds, static-plane children and cooked-asset children are unsupported
+by this immediate-query fixture. The authored scene/cooked-asset activation path
+continues to report its existing explicit unsupported cases.
+
+`PhysicsQueryFixtureDescriptor::shape` now selects one of the four analytic
+primitive alternatives or `PhysicsCompoundShapeDescriptor`. Callers that held a
+`PhysicsShapeDescriptor` should pass its concrete alternative with `std::visit`;
+existing direct primitive fixture initializers remain valid. Query collection
+examines a bounded native hit set before selecting `Any`, so per-child filters
+cannot let an ignored child hide an admitted child.
+
+The HeightField V1 tile cook consumes a bounded row-major sample grid with positive
+horizontal spacing and vertical sample scale, plus one explicit hole bit and
+material slot per cell. Hole cells carry no material identity. It publishes an
+exact target-keyed artifact with verified bounds, table extents, source digest and
+payload digest; the runtime loader owns canonical tables but performs no source
+import or native solver construction. Each tile uses its own persistent
+asset-local subresource ID. Cache eviction and shutdown release only the cache
+retain, so a terrain-streaming replacement can prepare a new generation while
+old readers hold their prior lease. Publication into a live world still belongs
+to the Physics pre-step/aggregate scene barrier described below, not to the
+offline cooker or cache.
 
 Analytic authoring resolves one owned body-local pose and typed positive finite
 scale into scale-free geometry before admission. Boxes admit component-wise
@@ -514,6 +565,33 @@ solver boundary and leaves the authored seed unchanged. A missing or stale
 snapshot remains a typed read failure; no caller can infer a partially stepped
 body as an authoritative transform.
 
+`PhysicsBodyTransformAuthority` also owns a bounded presentation history in its
+pre-reserved body records. After applying a fixed tick and publishing one copied
+solver snapshot for every dynamic body, its owner commits that tick's complete
+pose set with `CommitInterpolationTick`. The commit validates the entire set
+before changing any previous/current endpoint. Static and kinematic poses join
+the same completed-tick set; no renderer call advances or mutates simulation.
+An owner-thread `InterpolationEndpoints` read returns an independent Horo value
+that remains usable after later ticks or world retirement. Presentation may
+evaluate that copy on any thread with finite `alpha` in `[0, 1]`; translation
+uses linear interpolation, rotation uses shortest-path spherical interpolation,
+and unbounded extrapolation is rejected. The first tick or a gap/discontinuity
+returns the current completed pose for every render rate.
+
+An explicit dynamic teleport/reset or static rebuild/update breaks history
+continuity. Restore and reload invalidate the published pair immediately, so
+presentation cannot consume a pre-restore pose while awaiting new solver evidence.
+The next successful completed tick starts with equal previous/current endpoints,
+never interpolating across the jump. A host-coordinated
+origin shift at a completed-tick safe point translates both retained endpoints
+and the detached runtime pose by the same finite delta and advances the origin
+generation; queued transform commands must first be drained or translated by
+their owner. This value operation does not itself rebase the native solver,
+which remains unsupported by the current canonical world capability. Reloads
+that construct a new authority candidate begin with empty history. Authored
+poses remain separate from presentation and are not rewritten by solver
+publication or origin rebasing.
+
 ## Dynamic Body Inputs
 
 `PhysicsBodyDynamicsCommand` is the backend-neutral fixed-tick contract for dynamic
@@ -541,6 +619,47 @@ commands are valid and the latter policy never creates an implicit wake transiti
 Unknown modes, stale handles, wrong scene/tick affinity, non-finite inputs and values
 outside the CanonicalV1 command bounds fail before solver mutation.
 
+## Sleeping, Activation And Island Observations
+
+Scene-body creation now defaults moving bodies to `PhysicsInitialBodyActivity::Awake`.
+This corrects the prior implicit dormant creation behavior: existing scene activation
+callers need no new input and dynamic bodies begin responding to gravity on the first
+tick. Callers deliberately preparing dormant moving bodies must explicitly select
+`Sleeping`, with exactly zero linear and angular velocity. Static or unknown initial
+sleep requests fail with `OperationUnsupported`; nonzero sleeping velocities fail
+with `DescriptorInvalid` before native allocation. Sleep-disabled world profiles
+remain unqualified and cannot implicitly admit dormant bodies.
+
+Automatic sleep belongs to the immutable CanonicalV1 solver policy: point motion
+below `0.03 m/s` for `0.5 s`. It is not a scene-unload, entity-removal or persistence
+signal. The existing wake-only `PhysicsBodyMutation` is admitted between ticks and
+applies at the named pre-step safe point. Wake-only requests also support constrained
+moving bodies; the solver propagates activation through connected bodies during the
+joined step. Policy edits on constrained bodies remain unsupported. Static wake
+requests fail; a repeated wake remains safe. Shape/mode/mass/velocity edits retain
+the established wake rules, while damping-only edits preserve sleeping activity.
+Forced live-body sleep, per-body sleep threshold overrides and island-wide commands
+are unsupported rather than approximated by zeroing velocity or deleting bodies.
+
+`PhysicsBodyActivity::Static` distinguishes bodies outside the activation lifecycle
+from sleeping moving bodies. Consumers with exhaustive activity switches must add
+this case; durable authored schemas and existing enum values remain unchanged.
+`ReadSceneBodyReconciliation` returns copied per-body activity. `ReadSceneActivation`
+returns the current exact world generation and static/awake-moving/sleeping-moving
+scene-body counts, excluding query fixtures. Both require the owner thread, a live
+canonical world and a safe point outside stepping; neither retains native resources.
+Counts are bounded by resident bodies and require no successful-path allocation.
+They describe current state, not a historical completed-tick publication. Copies
+remain inert after reset/unload/shutdown, while new reads fail with typed lifecycle
+errors. Null reports `CapabilityUnavailable` rather than inventing an empty solver.
+
+Island counts, membership, stable IDs and lifetime are deliberately unavailable in
+this initial contract. The observation's optional island count is absent, including
+for an empty world; zero must never imply qualified island evidence. Horo exposes no
+native island container or identity, and gameplay cannot infer durable ownership or
+entity retirement from solver connectivity. Origin rebasing remains unsupported and
+must later prove sleep preservation under its own transaction contract.
+
 ## Structural Changes
 
 Creating or removing bodies, changing shapes, and modifying constraints while
@@ -560,8 +679,18 @@ Tick events include:
 - trigger exited
 
 The native adapter copies body/shape handles, authored subshape and material
-evidence, filter-schema generation, contact position/normal/penetration and
-sensor state while the solver callback owns a locked manifold. No native body,
+evidence, filter-schema generation, contact positions on both shapes, normals,
+penetration and sensor state while the solver callback owns a locked manifold.
+Each pair retains at most four distinct points in canonical Horo-value order;
+additional native or multi-manifold evidence contributes to a saturating
+omitted-point count without growing callback storage; repeated omitted evidence
+may be counted again across callbacks. Negative penetration remains
+valid speculative-contact evidence. Solid points may carry an explicitly named
+pre-solve normal-impulse estimate; absent evidence (including sensors) is not a
+zero applied impulse. The pinned solver's contact listener runs before its solver,
+so actual applied post-step impulses are deliberately unavailable through this
+callback. The bounded estimate uses the pinned solver's fixed four-iteration
+two-body estimator and is not exact under multi-body interaction. No native body,
 manifold pointer, callback-order token or consumer call crosses that boundary.
 After the solver joins, Physics canonically orders each pair by its typed Horo
 endpoint identity, coalesces duplicate manifold callbacks, and reconciles the
@@ -591,6 +720,12 @@ evidence. `FailTick` suppresses that tick's event publication and fails the
 world while preserving the prior coherent publication. Neither policy grows a
 callback buffer, invokes a consumer from the solver, or leaves solver-owned
 manifold storage in the event result.
+
+The public `PhysicsContactSummary` migrated from one representative
+`position/normal/penetrationDepthMeters/normalImpulseNewtonSeconds` tuple to
+`pointCount`, `points[0..pointCount)` and `omittedPointCount`. Callers must read
+the bounded array and distinguish absent `normalImpulseEstimateNewtonSeconds`
+from an estimated zero; the old zero placeholder was not a measured impulse.
 
 ## Queries
 
@@ -668,9 +803,14 @@ When the 64-bit publication revision is exhausted, the next structural edit or
 fixed tick fails with `physics.generation.exhausted` before mutating the world or
 publishing another snapshot. Revision zero is never reused for an active world.
 
-Immediate queries execute on the physics owner thread outside a step. Parallel
-or asynchronous queries use a read-only broadphase snapshot with documented
-staleness.
+Immediate and queued batch queries execute on the physics owner thread outside a
+step. The current native solver path does not publish an immutable broadphase or
+shape lease set, so parallel solver reads and off-thread query execution remain
+unsupported. Existing immediate callers do not need migration. Consumers needing
+non-blocking completion may submit the batch through their existing world-bound
+capability, arrange one owner-thread `ProcessQueryBatch` safe point, and poll the
+returned handle from any thread. Result handles own copied hits and never keep the
+world or native solver alive.
 
 CanonicalV1 currently admits bounded analytic query fixtures (box, sphere, capsule
 and static plane) through the active world solely to exercise this query contract
@@ -844,6 +984,28 @@ Physics exposes:
 Debug draw data is extracted into a bounded render snapshot. The renderer does
 not access live physics storage.
 
+`PhysicsDebugSnapshot` is the backend-neutral diagnostic value boundary for one
+successfully published tick. The owner thread calls
+`PhysicsWorld::CaptureDebugSnapshot` after `AdvanceFixedTick` returns and before
+the next tick or world mutation. The call is opt-in and bounded by both record
+and retained-record-storage byte limits; normal fixed ticks do no debug capture
+work. The current canonical producer copies body, shape and constraint identities
+from its private Horo handle registries, contact records from the published event
+buffer, and applied-command/event counts from the completed-tick marker. It does
+not report body pose or sleep state: the current scene registry retains admission
+pose, which is not a reliable post-step value. Per-category availability
+distinguishes an absent producer from an available empty category. Captured,
+budget-truncated and producer-dropped counts remain separate. Consumers compare
+world identity, tick and publication revision with the current marker; retaining
+the snapshot never retains a world, solver object or native pointer.
+
+There are no per-pair broadphase records or query history (immediate query hits
+live in caller-owned buffers), so those categories remain explicitly unavailable.
+The pipeline record contains actual publication counts, not stage timings; the
+existing observer reports phase names only. An unavailable category cannot be
+represented as an available empty result. This model does not add editor UI or
+expose native solver containers.
+
 ## Error Handling
 
 ### Initial world resource profile
@@ -905,7 +1067,8 @@ joined native step is active. The owner thread drains that inbox after the step,
 normalizes validation, assertion and fatal conditions to stable `horo.physics` codes,
 and retains one owned `PhysicsDiagnosticRecord`. Validation evidence is inert;
 assertion and fatal evidence fail the world exactly once while preserving the prior
-coherent publication. Reset, scene unload and shutdown clear the retained evidence,
+coherent publication. Explicit reset clears retained evidence; scene unload and shutdown preserve the first
+terminal failure and its diagnostic,
 and no callback may log, allocate, mutate gameplay state or retain native text.
 
 `PhysicsMetricSnapshot` is the immutable bounded handoff for one committed tick.
@@ -927,9 +1090,28 @@ simulation admission, order, state or determinism. Detailed stage timings are
 profiler-consumable measurements only; this slice does not create a second profiler
 store, arm native capture or claim backend timing support.
 
-NaN or non-finite body state is detected at owned boundaries, associated with
-body/entity identity, and quarantined or treated as fatal according to the
-configured runtime policy.
+NaN or non-finite body state is rejected at descriptor and mutation admission.
+Rejected admission retains structured world and authored-entity evidence; mutation
+rejection also retains the body, owning scene generation and consuming tick. No
+rejected input changes resident solver state or invokes containment policy.
+Before solver entry and after each joined native step, resident body pose, velocity and bounds are scanned
+before event reduction or publication. The stable `physics.body_state.non_finite`
+diagnostic carries world, body, scene object when supplied, scene generation and
+tick. `SceneEntity` appends to the diagnostic context key vocabulary without
+renumbering existing keys; direct world admission leaves it absent. Scene
+activation passes its authored object ID into the body record. `QuarantineBody`
+retires the native body and attached constraints at the
+owner-thread safe point, suppresses its contact and trigger evidence, invalidates
+query generation, removes authored body/collider/constraint bindings and drops
+future payloads and observer dispatch for that handle. Bounded inert command keys
+remain until their consuming tick so removing a source-sequence predecessor cannot
+invalidate a healthy command from the same producer. These reservations still count
+against queue and per-tick capacity until consumption, while pending-command metrics
+exclude suppressed payloads; only the remaining
+finite world may publish the tick. `FailWorld` aborts the tick, preserves the first
+failure through unload/shutdown and publishes no further tick until an explicit
+reset creates a new world generation. Immutable shape resources remain owned by
+the world and are released at normal world teardown.
 
 ## Testing
 
@@ -997,7 +1179,7 @@ Required tests cover:
 
 ## Related Documents
 
-- [Physics Debugger UI Reference](./physics-debugger.html): collision layers, contact pairs, rigidbody inspection, and solver diagnostics panel.
+- [Physics Debugger UI Reference](../../../mock-studio/designs.md#architecture-runtime-physics-debugger): collision layers, contact pairs, rigidbody inspection, and solver diagnostics panel.
 
 - [Coordinate Precision And Origin Rebasing](./coordinate-precision-and-origin-rebasing.md)
 - [ADR-026: Large-World Precision and Floating Origin Strategy](../../adr/026-large-world-precision-and-floating-origin-strategy.md)
@@ -1013,3 +1195,20 @@ Required tests cover:
 - [ADR-144: Destruction Ownership, Authority, State and Runtime Geometry Boundary](../../adr/144-destruction-ownership-authority-state-and-runtime-geometry-boundary.md)
 - [ADR-145: Destruction Source, Chunk Geometry, Collision and Cook Ownership](../../adr/145-destruction-source-chunk-geometry-collision-and-cook-ownership.md)
 - [ADR-146: Destruction Runtime Activation, Physics, Cleanup and Rollback](../../adr/146-destruction-runtime-activation-physics-cleanup-and-rollback.md)
+
+### Flat Convex Compound Artifacts
+
+`PhysicsCompoundCook.h` defines the source-free flat convex compound envelope used by
+DFR collision cooking. Children carry stable asset-local IDs, explicit physical-material
+slots and exact verified convex references. Their finite transforms/scales are baked
+into a shared local coordinate space before this boundary. Up to 256 children are
+encoded in stable-ID order, with complete asset/subresource/target/dependency identity,
+bounded extents and integrity keys. Compound nesting and non-convex children reject;
+there is no simplification, primitive substitution or target fallback.
+
+`LoadCookedPhysicsCompound` verifies the outer envelope and every embedded convex
+artifact through the existing Physics loader. `PhysicsCookedShapeCache` accounts the
+complete decoded child storage and publishes an immutable lease only after complete
+construction. Eviction/replacement/shutdown preserve old active leases. These canonical
+artifact tables retain the existing cache's backend-neutral boundary; world/body native
+activation remains under the existing Physics preparation contract.

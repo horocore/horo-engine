@@ -27,6 +27,12 @@ namespace Horo::Audio {
             {"audio.device.backend_failures", Telemetry::MetricUnit::Count},
             {"audio.parameter.lookup_failures", Telemetry::MetricUnit::Count},
             {"audio.event.lookup_failures", Telemetry::MetricUnit::Count},
+            {"audio.extraction.drops", Telemetry::MetricUnit::Count},
+            {"audio.extraction.coalesced", Telemetry::MetricUnit::Count},
+            {"audio.extraction.rate_limited", Telemetry::MetricUnit::Count},
+            {"audio.callback.deadline_overruns", Telemetry::MetricUnit::Count},
+            {"audio.callback.allocation_attempts", Telemetry::MetricUnit::Count},
+            {"audio.callback.lock_attempts", Telemetry::MetricUnit::Count},
         }};
 
         constexpr std::array<MetricSpec, AudioMetricGaugeCount> GaugeSpecs{{
@@ -44,6 +50,7 @@ namespace Horo::Audio {
             {"audio.occlusion.staleness", Telemetry::MetricUnit::Seconds},
             {"audio.bus.peak", Telemetry::MetricUnit::Ratio},
             {"audio.bus.rms", Telemetry::MetricUnit::Ratio},
+            {"audio.extraction.depth", Telemetry::MetricUnit::Count},
         }};
 
         constexpr std::array<MetricSpec, AudioMetricTimingCount> TimingSpecs{{

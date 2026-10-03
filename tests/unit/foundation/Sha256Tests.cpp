@@ -49,6 +49,17 @@ namespace {
         REQUIRE((HashRepeatedA(65) == "sha256:635361c48bb9eab14198e76ea8ab7f1a41685d6ad62aa9146d301d4f17eb0ae0"));
     }
 
+    TEST_CASE("SHA-256 builder hashes fragments across block boundaries without retaining input", "[unit][foundation][sha256]") {
+        const std::string bytes(1'000'000, 'a');
+        Horo::Sha256Builder builder;
+        for (std::size_t offset = 0; offset < bytes.size(); offset += 7U)
+            REQUIRE(builder.Update(AsBytes(std::string_view{bytes}.substr(offset, 7U))));
+        const auto digest = builder.Finalize();
+        CHECK(Horo::FormatSha256(digest) == "sha256:cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+        CHECK(builder.Finalize() == digest);
+        CHECK_FALSE(builder.Update(AsBytes("more")));
+    }
+
     TEST_CASE("SHA-256 Text Round Trips Canonically", "[unit][foundation][sha256]") {
         const Horo::Sha256Digest digest = Horo::ComputeSha256(AsBytes("round trip"));
         const std::string text = Horo::FormatSha256(digest);

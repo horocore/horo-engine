@@ -45,24 +45,6 @@ namespace Horo::Physics::Detail {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ApplyCanonicalMassPolicy(JPH::BodyCreationSettings &settings, const PhysicsMassPolicy &mass) {
-            if (const auto *explicitMass = std::get_if<PhysicsMass>(&mass); explicitMass != nullptr) {
-                settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
-                settings.mMassPropertiesOverride.mMass = explicitMass->kilograms;
-                return Result<void>::Success();
-            }
-            const auto *density = std::get_if<PhysicsDensity>(&mass);
-            if (density == nullptr)
-                return Result<void>::Success();
-            const float defaultMass = settings.GetMassProperties().mMass;
-            if (!std::isfinite(defaultMass) || defaultMass <= 0.0F)
-                return Result<void>::Failure(
-                    MakeError(PhysicsErrors::DescriptorInvalid, "Canonical scene density could not derive a finite body mass."));
-            settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
-            settings.mMassPropertiesOverride.mMass = defaultMass * (density->kilogramsPerCubicMeter / 1'000.0F);
-            return Result<void>::Success();
-        }
-
         [[nodiscard]] Result<CanonicalConstraintBodies> ResolveCanonicalConstraintBodies(const CanonicalWorld &world,
                                                                                          const PhysicsWorldId owner,
                                                                                          const PhysicsConstraintDescriptor &descriptor) {
@@ -194,7 +176,9 @@ namespace Horo::Physics::Detail {
                 !mutation.angularVelocity && mutation.wake != PhysicsBodyWakePolicy::Wake)
                 return Result<const CanonicalSceneBodyRecord *>::Failure(
                     MakeError(PhysicsErrors::DescriptorInvalid, "A body mutation requires a policy field or explicit wake."));
-            if (std::ranges::any_of(canonical.scene.constraints, [&mutation](const auto &constraint) {
+            if (const bool wakeOnly = !mutation.shape && !mutation.motion && !mutation.mass && !mutation.motionSafety &&
+                                      !mutation.linearVelocity && !mutation.angularVelocity && mutation.wake == PhysicsBodyWakePolicy::Wake;
+                !wakeOnly && std::ranges::any_of(canonical.scene.constraints, [&mutation](const auto &constraint) {
                 return constraint.first == mutation.body || constraint.second == mutation.body;
             }))
                 return Result<const CanonicalSceneBodyRecord *>::Failure(
@@ -357,61 +341,6 @@ namespace Horo::Physics::Detail {
         return Result<ShapeHandle>::Success(identity);
     }
 
-    /** @copydoc CreateCanonicalSceneBody */
-    Result<BodyHandle> CreateCanonicalSceneBody(const CanonicalWorldHandle world, const PhysicsWorldId owner,
-                                                const PhysicsSceneBodyDescriptor &descriptor) {
-        if (world.value == nullptr || !owner.IsValid())
-            return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        auto &canonical = *static_cast<CanonicalWorld *>(world.value);
-        if (canonical.scene.nextBodySlot == std::numeric_limits<std::uint32_t>::max() ||
-            canonical.scene.bodies.size() >= canonical.scene.maximumBodies)
-            return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-        if (const Result<void> valid = ValidatePhysicsBodyDescriptor(descriptor.body, owner); valid.HasError())
-            return Result<BodyHandle>::Failure(valid.ErrorValue());
-        const auto *shape = FindSceneShape(canonical, descriptor.body.shape);
-        if (shape == nullptr)
-            return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::HandleStale));
-
-        JPH::BodyCreationSettings settings(shape->shape.GetPtr(), ToNativePoint(descriptor.body.pose.translation),
-                                           ToNative(descriptor.body.pose.rotation), ToNativeMotion(descriptor.body.motion),
-                                           JPH::ObjectLayer{0});
-        settings.mLinearVelocity = ToNative(descriptor.body.linearVelocity);
-        settings.mAngularVelocity = ToNative(descriptor.body.angularVelocity);
-        settings.mLinearDamping = descriptor.body.motionSafety.linearDampingPerSecond;
-        settings.mAngularDamping = descriptor.body.motionSafety.angularDampingPerSecond;
-        settings.mMaxLinearVelocity = descriptor.body.motionSafety.maximumLinearSpeed;
-        settings.mMaxAngularVelocity = descriptor.body.motionSafety.maximumAngularSpeed;
-        settings.mAllowedDOFs = ToNativeAllowedDOFs(descriptor.body.motionSafety.lockedAxes);
-        settings.mIsSensor = descriptor.sensor;
-        // Reserve native motion storage for future static -> moving safe-point transitions.
-        settings.mAllowDynamicOrKinematic = !shape->shape->MustBeStatic();
-
-        if (const Result<void> mass = ApplyCanonicalMassPolicy(settings, descriptor.body.mass); mass.HasError())
-            return Result<BodyHandle>::Failure(mass.ErrorValue());
-
-        const JPH::BodyID nativeBody =
-            canonical.native.system->GetBodyInterface().CreateAndAddBody(settings, JPH::EActivation::DontActivate);
-        if (nativeBody.IsInvalid())
-            return Result<BodyHandle>::Failure(
-                MakeError(PhysicsErrors::CapacityExceeded, "Canonical solver rejected the scene body admission."));
-        if (nativeBody.GetIndex() >= canonical.query.nativeFixtureIndices.size()) {
-            canonical.native.system->GetBodyInterface().RemoveBody(nativeBody);
-            canonical.native.system->GetBodyInterface().DestroyBody(nativeBody);
-            return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-        }
-
-        const std::uint32_t slot = canonical.scene.nextBodySlot++;
-        const BodyHandle identity{owner, {slot, 1}};
-        canonical.scene.bodies.emplace_back(
-            CanonicalSceneBodyRecord{.handle = identity,
-                                     .nativeBody = nativeBody,
-                                     .pose = descriptor.body.pose,
-                                     .policy = descriptor.body,
-                                     .motionStorageReserved =
-                                         descriptor.body.motion != PhysicsMotionType::Static || settings.mAllowDynamicOrKinematic});
-        return Result<BodyHandle>::Success(identity);
-    }
-
     /** @copydoc ResolveCanonicalBodyMutation */
     Result<PhysicsBodyDescriptor> ResolveCanonicalBodyMutation(const CanonicalWorldHandle world, const PhysicsWorldId owner,
                                                                const PhysicsBodyMutation &mutation) {
@@ -473,19 +402,6 @@ namespace Horo::Physics::Detail {
             interface.ActivateBody(found->nativeBody);
         found->policy = desired;
         return Result<void>::Success();
-    }
-
-    /** @copydoc ReadCanonicalSceneBodyPolicy */
-    Result<PhysicsBodyDescriptor> ReadCanonicalSceneBodyPolicy(const CanonicalWorldHandle world, const PhysicsWorldId owner,
-                                                               const BodyHandle body) {
-        if (world.value == nullptr || !owner.IsValid())
-            return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        if (const auto handle = ValidatePhysicsHandleOwner(body, owner); handle.HasError())
-            return Result<PhysicsBodyDescriptor>::Failure(handle.ErrorValue());
-        const auto *record = FindSceneBody(*static_cast<CanonicalWorld *>(world.value), body);
-        if (record == nullptr)
-            return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::HandleStale));
-        return Result<PhysicsBodyDescriptor>::Success(record->policy);
     }
 
     /** @copydoc CreateCanonicalSceneConstraint */
@@ -569,28 +485,4 @@ namespace Horo::Physics::Detail {
         return Result<void>::Success();
     }
 
-    /** @copydoc ReadCanonicalSceneJointState */
-    Result<PhysicsJointState> ReadCanonicalSceneJointState(const CanonicalWorldHandle world, const ConstraintHandle constraint) {
-        if (world.value == nullptr)
-            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::WorldInvalid));
-        const auto &canonical = *static_cast<const CanonicalWorld *>(world.value);
-        const auto found = std::ranges::find_if(canonical.scene.constraints, [constraint](const auto &record) {
-            return record.handle == constraint;
-        });
-        if (found == canonical.scene.constraints.end())
-            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::HandleStale));
-        switch (found->constraint->GetSubType()) {
-            case JPH::EConstraintSubType::Hinge:
-                return Result<PhysicsJointState>::Success(
-                    {PhysicsJointCoordinateKind::AngleRadians,
-                     static_cast<const JPH::HingeConstraint *>(found->constraint.GetPtr())->GetCurrentAngle()});
-            case JPH::EConstraintSubType::Slider:
-                return Result<PhysicsJointState>::Success(
-                    {PhysicsJointCoordinateKind::PositionMeters,
-                     static_cast<const JPH::SliderConstraint *>(found->constraint.GetPtr())->GetCurrentPosition()});
-            default:
-                return Result<PhysicsJointState>::Failure(
-                    MakeError(PhysicsErrors::OperationUnsupported, "Only hinge and slider joints expose a single-axis coordinate."));
-        }
-    }
 }  // namespace Horo::Physics::Detail

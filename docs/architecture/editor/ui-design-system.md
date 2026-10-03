@@ -153,20 +153,23 @@ sizes. The packaged scale is:
 
 | Role | Default | Use |
 | --- | ---: | --- |
-| `caption` | 14 px | metadata, hints, secondary and supporting text |
-| `label` | 14 px | controls, tabs, tree rows, badges and field labels |
-| `body` | 16 px | paragraphs and primary content |
-| `cardTitle` | 16 px | compact card and component-section titles |
-| `title` | 18 px | panel and modal titles |
-| `heading` | 22 px | section headings comparable to H2 |
-| `display` | 28 px | top-level screen headings comparable to H1 |
+| `caption` | 18 px | metadata, hints, secondary and supporting text |
+| `label` | 18 px | controls, tabs, tree rows, badges and field labels |
+| `body` | 18 px | paragraphs and primary content |
+| `cardTitle` | 18 px | compact card and component-section titles |
+| `title` | 20 px | panel and modal titles |
+| `heading` | 24 px | section headings comparable to H2 |
+| `display` | 30 px | top-level screen headings comparable to H1 |
 
 Feature code obtains these sizes through `Theme::TextPx` and selects the font
 family or emphasis separately. It must not introduce raw visible font sizes.
-Theme overrides may customize the scale, but normalization preserves a 14 px
+Theme overrides may customize the scale, but normalization preserves a 16 px
 minimum and the ordering `body <= cardTitle <= title <= heading <= display`. Component-size
 tokens may change padding and interaction geometry without making visible text
 smaller than the active `caption` role.
+The compact font atlas starts at 18 px. Existing callers keep their
+semantic roles; custom themes specifying smaller font bases, caption, label,
+or component text are raised to the minimum when loaded.
 
 Bottom-dock tabs share the semantic `BottomDockToolbarSurface`,
 `BottomDockContentSurface`, and `BottomDockControlSurface` theme roles. The
@@ -174,9 +177,9 @@ toolbar is intentionally elevated above the content surface; individual tabs
 must not replace this hierarchy with feature-local toolbar colors.
 
 Every bottom-dock pane uses the shared `GlobalDockPaneLayout` metrics and region
-partitioning. A pane may omit its top toolbar or footer and may request a left
-rail, but it does not redefine the canonical toolbar, control, table, spacing,
-or footer dimensions. `GlobalDockPanel` owns registered panes through
+partitioning. A pane may omit its top toolbar or request a left rail; its content
+extends to the bottom of the dock without a pane footer. Panes do not redefine
+the canonical toolbar, control, table, or spacing dimensions. `GlobalDockPanel` owns registered panes through
 `IGlobalDockPane`; built-in and internal module-provided panes use the same
 stable identity, localization-key, attach/detach, and draw contract. Pane
 registration is completed before panel attachment so service lifetimes remain
@@ -297,6 +300,25 @@ Component rules:
   explicit accessible label and tooltip.
 - Optional icons do not change the meaning of a semantic variant. Icon
   placement is explicit and layout remains stable when an icon appears.
+
+### Icon ownership
+
+Editor controls use `UiIcon` identities or resolve stable tokens through
+`UiIconRegistry` at catalog and serialized boundaries. The registry is a fixed,
+editor-owned table: each identity has one canonical token and one drawing
+definition. Aliases map legacy or catalog tokens to an existing identity.
+
+The drawing definition may use the editor's Material Symbols font, a Horo-owned
+ImGui drawing routine, or a font glyph with a custom fallback. The font atlas is
+built before the editor UI runs, so ordinary panel drawing cannot register new
+glyphs or replace icon providers. Atlas glyph ranges are derived from the
+registry's font-backed definitions. A runtime extension that needs custom artwork
+must use a separate, explicitly owned asset and lifetime contract; it cannot
+mutate the built-in icon table.
+
+Panels select icons by meaning rather than by the visual source. The selected
+scene object uses `UiIcon::SceneObject` in both Hierarchy and Inspector; the
+package icon has its own identity even when it currently uses the same glyph.
 - Primitive components remain feature-independent.
 - Composite components are built by composing primitives.
 - Screens, panels, and modal workflows orchestrate components and application

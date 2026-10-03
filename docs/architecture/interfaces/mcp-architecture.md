@@ -180,6 +180,44 @@ mcpController.RegisterTool<ImportAssetTool>();
 mcpController.RegisterTool<BuildProjectTool>();
 ```
 
+### Registry delivery and migration boundary
+
+`HoroMcpRegistry` now owns inert `McpToolDescriptor` values, a complete-candidate
+`Publish`, and immutable, generation-numbered `McpToolSnapshot` readers. Host
+composition supplies application adapters explicitly; registration does not run
+them. The current tool identity is a stable lowercase token and the independent
+tool version is `{major, minor, patch}`. Replacing a published identity cannot
+change its major version or effect, or regress its version. A breaking contract
+therefore needs a new stable tool identity until a later version-migration policy
+is approved. Changes to effect, required capabilities, or schemas are likewise
+rejected for a published identity. A host supplies its available-capability
+inventory at publication; an unavailable descriptor rejects the whole candidate.
+Required capabilities are set-valued: publication rejects duplicate identities
+and stores them in canonical sorted order, so reordering the same grants does not
+make a replacement incompatible.
+`McpToolRegistration` also declares an `McpOwnerContext`; this host-owned value routes the adapter to
+Editor, Runtime, Background, or Build execution. Publication rejects an omitted
+owner instead of silently routing work to a frame-sensitive context. This is a
+deliberate registration migration: the registry test authoring helper and every
+host composition that publishes MCP tools must set the owner explicitly. The
+current repository has no host-published MCP tool pack; existing session and
+transport callers are unaffected. Active operations retain their snapshot and
+adapter lease across registry replacement until their owner invocation starts.
+
+The registry admits a deliberately closed, non-referencing JSON Schema subset:
+`type`, `properties`, `required`, boolean `additionalProperties`, `items`, `enum`,
+`minItems`, `maxItems`, `minLength`, `maxLength`, `minimum`, and `maximum`.
+Unsupported keywords fail registration rather than being ignored. Enum members
+must match their declared type and supported bounds; duplicates are rejected.
+String length bounds in this initial contract count UTF-8 bytes; descriptors
+needing Unicode scalar or grapheme length, references, unions, or conditional
+schemas require an explicit validator revision before admission. Per-tool byte,
+depth, and node limits apply before adapter invocation and to adapter output.
+Discovery is sorted and filtered by host-approved capability identities.
+Authentication, trust, approval, owner-thread scheduling, and protocol framing
+remain with their separate owners; registry capability filtering is not a
+substitute for them.
+
 The host validates tool names, schemas, capabilities, effect category,
 supported hosts, and permission requirements before advertising the tool to a
 client.
@@ -329,35 +367,34 @@ In `HoroEditor`:
 - transport receives requests on its own thread
 - requests are queued to the GUI/editor main thread
 - use cases execute on the main thread
-- responses are sent from the transport thread
+- the initial response carries an operation ID without waiting for owner work
 
 In `horo-engine`:
 
 - transport receives requests on its own thread
 - the CLI host has a single main thread that processes the queue
-- use cases execute on the main thread
+- editor/runtime use cases execute on the main thread; background/build work is
+  pumped on host-owned workers
 
-```cpp
-McpCommandResult McpController::ExecuteCommand(std::string_view toolName,
-                                               const nlohmann::json& args) {
-    // Transport thread
-    auto future = m_mainThreadQueue.Post([this, toolName, args]() {
-        return DispatchOnMainThread(toolName, args);
-    });
-
-    auto result = future.get();
-    const McpHistoryRevision revision = m_history->Append(toolName, args, result);
-
-    m_engineBus->Publish(McpToolInvocationEvent{
-        .requestId = result.requestId,
-        .toolName = std::string(toolName),
-        .state = result.ok ? OperationState::Succeeded : OperationState::Failed,
-        .historyRevision = revision
-    });
-
-    return result;
-}
-```
+The host binds each context to its owning thread and calls `McpController::Pump`
+from that scheduler. A `tools/call` request admits a bounded queued operation and
+returns its ID immediately. `operations/get` and `operations/cancel` use the same
+session manager for local and embedded callers. Each operation retains its
+request ID, session generation, deadline, cancellation chain, registry snapshot,
+and application adapter lease. Queued cancellation removes work before execution;
+running cancellation requests cooperation and makes one terminal result. The
+owner callback may continue until its application capability observes the token;
+shutdown waits a finite drain interval and reports a typed timeout if that
+capability does not cooperate. Editor/runtime adapters start slow application
+work through `InvokeAsync`, retain its completion callback, and return promptly
+from the owner pump. Progress and the exactly-once terminal callback may arrive
+from an application worker. Short synchronous adapters use the default
+`InvokeAsync` bridge; slow synchronous work belongs on the host's Background or
+Build scheduler. No controller-owned thread or process is created. An async
+adapter retains its application-owner lease and invokes completion even after
+cancellation; on a drain timeout, host composition must keep that owner alive
+until its jobs/processes have stopped and callbacks have completed. Controller
+destruction cannot forcibly terminate an application-owned job or process.
 
 ## Error Handling
 
@@ -375,6 +412,15 @@ MCP errors are translated into JSON-RPC error objects:
 Application use cases return typed `Result<T, Error>` values. `McpController`
 translates engine errors into JSON-RPC payloads without leaking internal
 implementation details.
+
+The registry-backed reference `Horo::Hosts::TranslateMcpError` wraps the same
+canonical application error used by GUI, CLI and Python in `error.data` with
+protocol code `-32000`. A composition root supplies exact exposed mappings and
+the active registry; unregistered errors are contract failures. The transport
+retains responsibility for request identity and protocol failures. Disclosure,
+bounds and migration from the earlier lifecycle-only `SafeErrorData` projection
+are specified by
+[Host Translation](../foundation/error-and-diagnostics.md#host-translation).
 
 ## Adding A New MCP Tool
 
@@ -566,7 +612,7 @@ import logic, build behavior, or release policy.
 
 ## Related Documents
 
-- [MCP Panel](./mcp-panel.html): HTML reference design for MCP sessions,
+- [MCP Panel](../../../mock-studio/designs.md#architecture-interfaces-mcp-panel): React mock design for MCP sessions,
   tool-call history, approval queue, request inspection, and audit surface.
 - [System Design](../foundation/system-design.md): host boundaries and dependency direction.
 - [Engine Data Bus](../foundation/engine-data-bus.md): how MCP publishes history

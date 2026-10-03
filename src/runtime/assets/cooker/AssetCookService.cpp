@@ -214,10 +214,13 @@ namespace Horo::Assets {
                 return Result<void>::Failure(cookResult.ErrorValue());
 
             auto sink = std::move(cookResult).Value();
+            if (auto validated = strategy->ValidateCookedPayload(sourceView, sink.payload); validated.HasError())
+                return Result<void>::Failure(validated.ErrorValue());
             const AssetCookArtifact artifact{
                 .id = sourceView.id,
                 .type = sourceView.type,
                 .target = sourceView.target,
+                .cacheKeyDigest = slot.cacheKey.digest,
                 .sourceDigest = sourceView.sourceDigest,
                 .payloadDigest = ComputeSha256(std::as_bytes(std::span{sink.payload})),
                 .payload = std::move(sink.payload),
@@ -342,7 +345,8 @@ namespace Horo::Assets {
             operation.Update("prepare", "Reading asset sources", 0.1F);
 
             for (const auto &record : records) {
-                if (const auto *strategy = catalog.Find(record.type, request.target); !strategy) {
+                const auto *contribution = catalog.FindContribution(record.type, request.target);
+                if (!contribution) {
                     PublishAssetResult(request, record, operation, "prepare", DiagnosticCode{CookErrors::CookerMissing.code.Value()},
                                        DiagnosticSeverity::Error, BuildOutputResult::Failed);
                     return Result<std::vector<CookSlot>>::Failure(Error{CookErrors::CookerMissing.code});
@@ -357,12 +361,15 @@ namespace Horo::Assets {
 
                 auto sourceBytes = std::move(readResult).Value();
                 auto sourceDigest = ComputeSha256(std::as_bytes(std::span{sourceBytes}));
+                const auto identity = contribution->strategy->CacheIdentity();
                 auto cacheKey = BuildAssetCookCacheKey(AssetCookCacheKeyInputs{
                     .assetId = record.id,
                     .assetType = record.type,
                     .sourceDigest = sourceDigest,
-                    .cookerContributionId = record.type.Value(),
-                    .cookerVersion = "1.0.0",
+                    .settingsDigest = identity.settingsDigest,
+                    .settingsSchemaVersion = identity.settingsSchemaVersion,
+                    .cookerContributionId = contribution->contributionId,
+                    .cookerVersion = identity.version,
                     .target = request.target,
                     .artifactFormatVersion = AssetCookArtifact::CurrentFormatVersion,
                 });
@@ -377,8 +384,9 @@ namespace Horo::Assets {
             return Result<std::vector<CookSlot>>::Success(std::move(slots));
         }
 
-        Result<std::size_t> ResolveCacheHits(const AssetCookRequest &request, const AssetCookCache &cache, std::span<CookSlot> slots,
-                                             const CancellationToken &cancellation, CookOperationScope &operation) {
+        Result<std::size_t> ResolveCacheHits(const AssetCookRequest &request, const CookerCatalogSnapshot &catalog,
+                                             const AssetCookCache &cache, std::span<CookSlot> slots, const CancellationToken &cancellation,
+                                             CookOperationScope &operation) {
             operation.Update("cache_check", "Checking artifact cache", 0.2F);
             std::size_t cacheHits = 0;
             for (auto &slot : slots) {
@@ -387,6 +395,23 @@ namespace Horo::Assets {
                     return Result<std::size_t>::Failure(cacheResult.ErrorValue());
 
                 if (auto cached = std::move(cacheResult).Value(); cached.has_value()) {
+                    auto decoded = DecodeCookedArtifact(*cached, request.limits);
+                    if (decoded.HasError())
+                        return Result<std::size_t>::Failure(decoded.ErrorValue());
+                    const auto &artifact = decoded.Value();
+                    if (artifact.id != slot.record.id || artifact.type != slot.record.type || artifact.target != request.target ||
+                        artifact.sourceDigest != slot.sourceDigest || artifact.cacheKeyDigest != slot.cacheKey.digest)
+                        return Result<std::size_t>::Failure(MakeError(CookErrors::MalformedArtifact));
+                    const auto *strategy = catalog.Find(slot.record.type, request.target);
+                    const CookSourceView sourceView{
+                        .id = slot.record.id,
+                        .type = slot.record.type,
+                        .target = request.target,
+                        .sourceDigest = slot.sourceDigest,
+                        .bytes = slot.sourceBytes,
+                    };
+                    if (auto validated = strategy->ValidateCookedPayload(sourceView, artifact.payload); validated.HasError())
+                        return Result<std::size_t>::Failure(validated.ErrorValue());
                     slot.cacheHit = true;
                     slot.cookedArtifact = std::move(*cached);
                     ++cacheHits;
@@ -474,7 +499,7 @@ namespace Horo::Assets {
         }
         auto slots = std::move(slotsResult).Value();
 
-        auto cacheHitsResult = ResolveCacheHits(request, cache, slots, cancellation, operation);
+        auto cacheHitsResult = ResolveCacheHits(request, *catalog_, cache, slots, cancellation, operation);
         if (cacheHitsResult.HasError()) {
             operation.RecordError(cacheHitsResult.ErrorValue());
             return Result<AssetCookReport>::Failure(cacheHitsResult.ErrorValue());

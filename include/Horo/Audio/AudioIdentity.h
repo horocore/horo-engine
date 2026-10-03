@@ -94,6 +94,7 @@ namespace Horo::Audio {
     struct AudioEventIdentityTag;
     struct AudioContributionIdentityTag;
     struct AudioRuntimeIdentityTag;
+    struct AudioAcousticProviderIdentityTag;
 
     /** @brief Persistent identity of one authored or cooked audio clip asset. */
     using AudioClipId = AudioAssetIdentity<AudioClipIdentityTag>;
@@ -115,6 +116,8 @@ namespace Horo::Audio {
     using AudioContributionId = AudioStableIdentity<AudioContributionIdentityTag>;
     /** @brief Process-local owner identity of one audio runtime generation. */
     using AudioRuntimeId = AudioStableIdentity<AudioRuntimeIdentityTag>;
+    /** @brief Stable identity of one off-callback acoustic query provider. */
+    using AudioAcousticProviderId = AudioStableIdentity<AudioAcousticProviderIdentityTag>;
 
     /** @brief Alias used by middleware contracts for stable parameter identity. */
     using StableParameterId = AudioParameterId;
@@ -141,6 +144,8 @@ namespace Horo::Audio {
     struct AudioEventInstanceTag;
     struct AudioDeviceIdentityTag;
     struct AudioSceneContextHandleTag;
+    struct AudioAcousticSourceHandleTag;
+    struct AudioAcousticListenerHandleTag;
 
     /** @brief Generation-safe handle to one prepared runtime clip. */
     using AudioClipHandle = AudioHandle<AudioClipHandleTag>;
@@ -154,4 +159,8 @@ namespace Horo::Audio {
     using AudioDeviceId = AudioHandle<AudioDeviceIdentityTag>;
     /** @brief Generation-safe client handle to one active scene audio context. */
     using AudioSceneContextHandle = AudioHandle<AudioSceneContextHandleTag>;
+    /** @brief Control-owned acoustic source identity; slot reuse requires a new generation. */
+    using AudioAcousticSourceHandle = AudioHandle<AudioAcousticSourceHandleTag>;
+    /** @brief Generation-safe listener identity for an acoustic query. */
+    using AudioAcousticListenerHandle = AudioHandle<AudioAcousticListenerHandleTag>;
 }  // namespace Horo::Audio

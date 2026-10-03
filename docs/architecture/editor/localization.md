@@ -412,7 +412,7 @@ GUI screenshot and interaction scenarios.
 
 ## Related Documents
 
-- [Localization Editor UI Reference](./localization-editor.html): string table grid, locale switcher, missing translation view, and CSV import/export panel.
+- [Localization Editor UI Reference](../../../mock-studio/designs.md#architecture-editor-localization-editor): string table grid, locale switcher, missing translation view, and CSV import/export panel.
 
 - [GUI Design System](./ui-design-system.md)
 - [GUI Screen Host](./gui-screen-host.md)

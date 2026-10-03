@@ -424,29 +424,6 @@ namespace Horo::Editor {
         }
     }
 
-    void GlobalDockOperationsPane::DrawFooter(const GlobalDockPaneRegions &regions, const OperationCounts &counts,
-                                              const EditorGuiContext &context) const {
-        const Theme::Fonts &fonts = context.theme.fonts;
-        const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
-        ImDrawList *drawList = ImGui::GetWindowDrawList();
-        DrawGlobalDockFooterSurface(regions.footerOrigin, regions.footerWidth, metrics.footerHeight);
-        const float footerY = regions.footerOrigin.y + (metrics.footerHeight - Theme::TextPx::Caption()) * 0.5F;
-        const std::string summary =
-            std::format("{} {}   {} {}   {} {}", counts.running,
-                        context.localization.Get("editor", "workspace.global_dock.operations.footer.running"), counts.queued,
-                        context.localization.Get("editor", "workspace.global_dock.operations.footer.queued"), counts.failed,
-                        context.localization.Get("editor", "workspace.global_dock.operations.footer.failed"));
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(), {regions.footerOrigin.x + metrics.contentPadding, footerY},
-                          Theme::U32(Theme::Muted()), summary.c_str());
-        const std::string &bounded = context.localization.Get("editor", "workspace.global_dock.operations.footer.bounded");
-        const float boundedWidth = (fonts.sansCompact != nullptr ? fonts.sansCompact : ImGui::GetFont())
-                                       ->CalcTextSizeA(Theme::TextPx::Caption(), FLT_MAX, 0.0F, bounded.c_str())
-                                       .x;
-        drawList->AddText(fonts.sansCompact, Theme::TextPx::Caption(),
-                          {regions.footerOrigin.x + regions.footerWidth - metrics.contentPadding - boundedWidth, footerY},
-                          Theme::U32(Theme::Muted()), bounded.c_str());
-    }
-
     /** @copydoc GlobalDockOperationsPane::Draw */
     void GlobalDockOperationsPane::Draw(const ImVec2 &contentOrigin, const float contentWidth, const EditorGuiContext &context) {
         const bool snapshotChanged = RefreshSnapshot();
@@ -454,11 +431,10 @@ namespace Horo::Editor {
             RebuildFilter();
         const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
         const GlobalDockPaneRegions regions =
-            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true, .hasFooter = true});
+            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
         const OperationCounts counts = CountStates();
         DrawToolbar(regions, counts, context);
         DrawTable(regions, snapshotChanged, context);
-        DrawFooter(regions, counts, context);
     }
 
     bool GlobalDockOperationsPane::RefreshSnapshot() {

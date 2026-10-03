@@ -95,19 +95,30 @@ namespace Horo::XR {
 
     /** @copydoc XRSessionLifecycle::Activate */
     Result<XRSessionId> XRSessionLifecycle::Activate(const XRCapabilitySnapshot &capabilities, const XRSystemId &activeSystem,
-                                                     const XRCapabilityRevision expectedRevision,
-                                                     const XRCapabilityRequirement &requirement) {
+                                                     const XRCapabilityRevision expectedRevision, const XRFeaturePlan &plan) {
         if (destroyed_)
             return Result<XRSessionId>::Failure(MakeError(XRErrors::OperationUnavailable));
-        if (const auto admission = AdmitXRCapability(capabilities, activeSystem, expectedRevision, requirement); admission.HasError())
-            return Result<XRSessionId>::Failure(admission.ErrorValue());
+        switch (ValidateXRFeaturePlan(plan, capabilities, activeSystem, expectedRevision)) {
+            case XRFeatureNegotiationStatus::Ok:
+                break;
+            case XRFeatureNegotiationStatus::StaleSystem:
+                return Result<XRSessionId>::Failure(MakeError(XRErrors::IdentityStale));
+            case XRFeatureNegotiationStatus::StaleRevision:
+                return Result<XRSessionId>::Failure(MakeError(XRErrors::CapabilityStale));
+            case XRFeatureNegotiationStatus::Unavailable:
+                return Result<XRSessionId>::Failure(MakeError(XRErrors::OperationUnavailable));
+            case XRFeatureNegotiationStatus::CapacityExceeded:
+                return Result<XRSessionId>::Failure(MakeError(XRErrors::CapacityExceeded));
+            default:
+                return Result<XRSessionId>::Failure(MakeError(XRErrors::OperationInvalid));
+        }
         if (lastSessionGeneration_ == std::numeric_limits<std::uint32_t>::max())
             return Result<XRSessionId>::Failure(MakeError(XRErrors::CapacityExceeded));
 
         // A failed private candidate is never reissued, even if its adapter leaked an observation.
         const XRSessionId candidate = CandidateSession(capabilities.System(), ++lastSessionGeneration_);
         for (std::size_t completed = 0; completed < PreparationOrder.size(); ++completed) {
-            auto prepared = resources_->Prepare(PreparationOrder[completed], candidate);
+            auto prepared = resources_->Prepare(PreparationOrder[completed], candidate, plan);
             if (prepared.HasError()) {
                 ReleasePrepared(*resources_, candidate, completed);
                 return Result<XRSessionId>::Failure(
@@ -121,6 +132,7 @@ namespace Horo::XR {
         ownedSession_ = candidate;
         snapshot_.session = candidate;
         snapshot_.capabilityRevision = capabilities.Revision();
+        acceptedPlan_ = plan;
         PublishState(XRSessionState::Ready);
         return Result<XRSessionId>::Success(candidate);
     }
@@ -138,6 +150,7 @@ namespace Horo::XR {
         if (next == XRSessionState::Inactive || next == XRSessionState::Lost) {
             snapshot_.session = {};
             snapshot_.capabilityRevision = {};
+            acceptedPlan_.reset();
         }
         return Result<void>::Success();
     }
@@ -156,6 +169,11 @@ namespace Horo::XR {
     /** @copydoc XRSessionLifecycle::Snapshot */
     XRSessionSnapshot XRSessionLifecycle::Snapshot() const noexcept {
         return snapshot_;
+    }
+
+    /** @copydoc XRSessionLifecycle::AcceptedPlan */
+    std::optional<XRFeaturePlan> XRSessionLifecycle::AcceptedPlan() const noexcept {
+        return acceptedPlan_;
     }
 
     void XRSessionLifecycle::Retire(const XRSessionId &session) noexcept {
@@ -180,5 +198,6 @@ namespace Horo::XR {
         ownedSession_ = {};
         snapshot_.session = {};
         snapshot_.capabilityRevision = {};
+        acceptedPlan_.reset();
     }
 }  // namespace Horo::XR

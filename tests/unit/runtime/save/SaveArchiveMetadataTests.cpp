@@ -200,6 +200,27 @@ namespace {
         policy = Policy();
         policy.participants.erase(policy.participants.begin() + 1);
         CHECK(EvaluateSaveCompatibility(archiveV1, Header(), manifest, policy).disposition == SaveCompatibilityDisposition::DirectRead);
+
+        policy = Policy();
+        policy.participants[0].requiredDependencies = {manifest.participants[1].participant};
+        policy.participants.erase(policy.participants.begin() + 1);
+        CHECK(EvaluateSaveCompatibility(archiveV1, Header(), manifest, policy).reason ==
+              SaveCompatibilityReason::UnknownRequiredParticipant);
+        manifest.participants.erase(manifest.participants.begin() + 1);
+        CHECK(EvaluateSaveCompatibility(archiveV1, Header(), manifest, policy).reason ==
+              SaveCompatibilityReason::MissingRequiredParticipant);
+    }
+
+    TEST_CASE("Unsupported optional participant versions remain opaque when no required owner depends on them",
+              "[runtime][save][compatibility]") {
+        auto manifest = Manifest();
+        auto policy = Policy();
+        manifest.participants[1].schemaVersion = V<ParticipantSchemaVersion>(99);
+        CHECK(EvaluateSaveCompatibility(V<ArchiveFormatVersion>(1), Header(), manifest, policy).disposition ==
+              SaveCompatibilityDisposition::DirectRead);
+        policy.participants[0].requiredDependencies = {manifest.participants[1].participant};
+        CHECK(EvaluateSaveCompatibility(V<ArchiveFormatVersion>(1), Header(), manifest, policy).reason ==
+              SaveCompatibilityReason::UnknownRequiredParticipant);
     }
 
     TEST_CASE("Compatibility preflight covers independent root and participant axes", "[runtime][save][compatibility]") {
@@ -236,6 +257,15 @@ namespace {
 
         policy = Policy();
         policy.participants.push_back(policy.participants.back());
+        CHECK(EvaluateSaveCompatibility(archiveV1, Header(), Manifest(), policy).reason == SaveCompatibilityReason::InvalidMetadata);
+
+        policy = Policy();
+        policy.droppableUnknownParticipants = {policy.participants.front().participant};
+        CHECK(EvaluateSaveCompatibility(archiveV1, Header(), Manifest(), policy).reason == SaveCompatibilityReason::InvalidMetadata);
+
+        policy = Policy();
+        policy.droppableUnknownParticipants = {SaveParticipantId::Parse("project.future.v1").Value(),
+                                               SaveParticipantId::Parse("project.future.v1").Value()};
         CHECK(EvaluateSaveCompatibility(archiveV1, Header(), Manifest(), policy).reason == SaveCompatibilityReason::InvalidMetadata);
 
         policy = Policy();

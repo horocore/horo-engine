@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/PlatformServices/PlatformRequestErrors.h"
 
 #include <chrono>
 #include <compare>
@@ -14,6 +15,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
 #include <type_traits>
 #include <typeindex>
@@ -190,6 +192,62 @@ namespace Horo::PlatformServices {
         Unchanged
     };
 
+    /**
+     * @brief Copyable, generation-fenced SDK ingress for one typed request.
+     * @details Owns only a weak store lease. Provider threads enqueue owned immutable evidence, never request mutations or callbacks.
+     *          Copies may publish concurrently. The first accepted evidence wins; capacity rejection leaves the sink retryable.
+     *          Closing the store revokes every sink, including copies retained after store destruction.
+     */
+    template <typename T> class PlatformRequestCompletionSink final {
+    public:
+        PlatformRequestCompletionSink(const PlatformRequestCompletionSink &) = default;
+        PlatformRequestCompletionSink &operator=(const PlatformRequestCompletionSink &) = default;
+
+        /**
+         * @brief Enqueues a copied/owned provider outcome without publishing terminal state.
+         * @param outcome Normalized success or failure; cancellation acknowledgements use AcknowledgeCancellation.
+         * @return Applied for accepted evidence, Unchanged for duplicate/terminal evidence, or typed ingress failure.
+         */
+        [[nodiscard]] Result<PlatformRequestMutation> Complete(Result<T> outcome) const {
+            if (outcome.HasError())
+                return enqueue_(PlatformRequestState::Failed, {}, std::move(outcome).ErrorValue());
+            std::shared_ptr<const void> payload;
+            if constexpr (!std::is_void_v<T>) {
+                try {
+                    payload = std::make_shared<const T>(std::move(outcome).Value());
+                } catch (const std::bad_alloc &) {
+                    return Result<PlatformRequestMutation>::Failure(MakeError(RequestErrors::CapacityExceeded));
+                }
+            }
+            return enqueue_(PlatformRequestState::Succeeded, std::move(payload), std::nullopt);
+        }
+
+        /**
+         * @brief Enqueues acknowledged cancellation after cancellation intent was recorded.
+         * @param error Canonical platform.request.cancelled error.
+         * @return Accepted, duplicate, or typed invalid-transition/lifecycle failure.
+         */
+        [[nodiscard]] Result<PlatformRequestMutation> AcknowledgeCancellation(Error error) const {
+            return enqueue_(PlatformRequestState::Cancelled, {}, std::move(error));
+        }
+
+    private:
+        friend class PlatformRequestStore;
+        using Enqueue =
+            std::function<Result<PlatformRequestMutation>(PlatformRequestState, std::shared_ptr<const void>, std::optional<Error>)>;
+
+        explicit PlatformRequestCompletionSink(Enqueue enqueue) : enqueue_(std::move(enqueue)) {}
+
+        Enqueue enqueue_;
+    };
+
+    /** @brief Bounded provider-drain evidence; observer delivery is always a separate engine turn. */
+    struct PlatformCompletionDrainReport final {
+        std::size_t processed{}; /**< Evidence removed from the bounded queue, including late terminal evidence. */
+        std::size_t applied{};   /**< Requests terminalized by this drain. */
+        std::size_t discarded{}; /**< Evidence superseded by terminal publication or retention expiry. */
+    };
+
     /** @brief Move-only observer lifetime; destruction suppresses any future callback without cancelling the request. */
     class PlatformRequestSubscription final {
     public:
@@ -220,16 +278,17 @@ namespace Horo::PlatformServices {
         std::size_t terminalCapacity{256};
         std::size_t observerCapacity{512};
         PlatformRequestGeneration generation{1};
+        std::size_t completionCapacity{256}; /**< Finite SDK evidence ingress capacity. */
     };
 
     /**
      * @brief Thread-safe bounded owner of admitted request records and deferred observers.
-     * @details Query, OnComplete, and RequestCancel may be called from any non-real-time thread. The frontend calls Admit,
-     * MarkRunning, terminal completion, DispatchCompletions, and Shutdown on its declared owner lane; internal locking makes
-     * races fail safely while preserving that affinity contract. Callbacks are never invoked by admission, mutation,
-     * cancellation, or registration. The owner dispatches them later without store locks; recursive dispatch is suppressed
-     * and callback exceptions are caught. Shutdown terminalizes every active record and suppresses queued observers. A
-     * callback already executing on the owner lane may finish, so composition quiesces dispatch before destroying the store.
+     * @details Query, OnComplete, and RequestCancel may be called from any non-real-time thread. The frontend constructs the store on its
+     * owner thread and calls Admit, MarkRunning, terminal completion, DispatchCompletions, and Shutdown on that lane; internal locking
+     * makes races fail safely while preserving that affinity contract. Callbacks are never invoked by admission, mutation, cancellation, or
+     * registration. The owner dispatches them later without store locks; recursive dispatch is suppressed and callback exceptions are
+     * caught. Shutdown terminalizes every active record and suppresses queued observers. A callback already executing on the owner lane may
+     * finish, so composition quiesces dispatch before destroying the store.
      */
     class PlatformRequestStore final {
     public:
@@ -251,6 +310,28 @@ namespace Horo::PlatformServices {
                 return Result<PlatformRequestHandle<T>>::Failure(admitted.ErrorValue());
             return Result<PlatformRequestHandle<T>>::Success(PlatformRequestHandle<T>{admitted.Value(), Generation()});
         }
+
+        /**
+         * @brief Creates a provider ingress sink fenced to one current typed request and frontend/session generation.
+         * @param handle Current admitted request identity; dropping it does not revoke the returned sink.
+         * @return Weak-lifetime completion sink or typed stale/closed failure.
+         * @details Session replacement must close the old store and compose a new generation before admitting work.
+         */
+        template <typename T>
+        [[nodiscard]] Result<PlatformRequestCompletionSink<T>> CompletionSink(const PlatformRequestHandle<T> &handle) const {
+            auto enqueue = CompletionSinkErased(handle.Id(), handle.Generation(), typeid(T));
+            if (enqueue.HasError())
+                return Result<PlatformRequestCompletionSink<T>>::Failure(enqueue.ErrorValue());
+            return Result<PlatformRequestCompletionSink<T>>::Success(PlatformRequestCompletionSink<T>{std::move(enqueue).Value()});
+        }
+
+        /**
+         * @brief Commits bounded SDK evidence on the thread that constructed the store, without invoking observers.
+         * @param maxCount Maximum evidence records to process this turn; zero is a successful no-op.
+         * @return Processing counts or typed wrong-thread/recursive/closed failure.
+         * @details Observer callbacks run only during a later DispatchCompletions call. A callback cannot recursively drain ingress.
+         */
+        [[nodiscard]] Result<PlatformCompletionDrainReport> DrainProviderCompletions(std::size_t maxCount = 256);
 
         /** @brief Marks an admitted queued request running; repeated running publication is idempotent. */
         template <typename T> [[nodiscard]] Result<PlatformRequestMutation> MarkRunning(const PlatformRequestHandle<T> &handle) {
@@ -344,7 +425,8 @@ namespace Horo::PlatformServices {
             return SubscribeErased(handle.Id(), handle.Generation(), typeid(T), std::move(erasedObserver));
         }
 
-        /** @brief Delivers up to maxCount queued observers outside locks; recursive or concurrent dispatch returns zero. */
+        /** @brief Delivers up to maxCount queued observers outside locks; wrong-thread, recursive, or overlapping provider-drain dispatch
+         * returns zero. */
         [[nodiscard]] std::size_t DispatchCompletions(std::size_t maxCount = std::numeric_limits<std::size_t>::max()) noexcept;
         /** @brief Terminalizes all active records, suppresses observers, and permanently closes admission. */
         void Shutdown() noexcept;
@@ -378,6 +460,9 @@ namespace Horo::PlatformServices {
         struct State;
 
         [[nodiscard]] State &MutableState() noexcept;
+        [[nodiscard]] Result<PlatformRequestCompletionSink<void>::Enqueue> CompletionSinkErased(PlatformRequestId id,
+                                                                                                PlatformRequestGeneration generation,
+                                                                                                std::type_index type) const;
 
         [[nodiscard]] Result<PlatformRequestId> AdmitErased(std::type_index type);
         [[nodiscard]] Result<PlatformRequestMutation> MarkRunningErased(PlatformRequestId id, PlatformRequestGeneration generation,

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -72,14 +73,22 @@ namespace Horo::Mcp {
         std::uint64_t registryRevision{};
         CancellationToken cancellation;
         std::chrono::steady_clock::time_point deadline;
+        std::function<void(double, std::string)> reportProgress;
 
         /** @brief Reports cooperative cancellation or an elapsed deadline. */
         [[nodiscard]] bool IsStopRequested() const noexcept {
             return cancellation.IsCancellationRequested() || std::chrono::steady_clock::now() >= deadline;
         }
+
+        /** @brief Publishes bounded progress if the operation still owns this callback. @param fraction Completion in [0,1].
+         * @param phase Safe short application phase. */
+        void ReportProgress(double fraction, std::string phase) const {
+            if (reportProgress)
+                reportProgress(fraction, std::move(phase));
+        }
     };
 
-    /** @brief Application-owned controller seam; later registry/tool tickets provide the concrete controller. */
+    /** @brief Host-owned controller seam shared by local and embedded sessions. */
     class IMcpRequestController {
     public:
         virtual ~IMcpRequestController() = default;
@@ -91,6 +100,11 @@ namespace Horo::Mcp {
          * @return Typed application outcome; failures retain their original Horo error identity.
          */
         [[nodiscard]] virtual Result<nlohmann::json> Dispatch(const McpRequest &request, const McpRequestContext &context) = 0;
+
+        /** @brief Cancels an accepted asynchronous request after its initial dispatch returned.
+         * @param session Owning session generation. @param requestId Original JSON-RPC identity.
+         * @return Success if a live operation was cancelled, otherwise typed absence. */
+        [[nodiscard]] virtual Result<void> CancelAccepted(McpSessionHandle session, const nlohmann::json &requestId);
     };
 
     /** @brief Concurrent session admission barrier and callback lifetime owner shared by both adapters. */

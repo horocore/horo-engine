@@ -44,7 +44,13 @@ namespace Horo::WorldStreaming {
             return {.owner = RuntimeOwner(),
                     .revision = IdentityFrom<StreamingRuntimeCompositionRevision>(revision),
                     .schedulerOwner = IdentityFrom<StreamingSchedulerLedgerId>(7),
-                    .schedulerLimits = {.concurrentOperations = 2, .capacityUnits = 8},
+                    .schedulerLimits = {.concurrentOperations = 2,
+                                        .capacityUnits = 8,
+                                        .concurrency = {.profile = WorldPartitionProjectProfile::Editor,
+                                                        .revision = IdentityFrom<StreamingConcurrencyRevision>(1),
+                                                        .loads = 2,
+                                                        .activations = 2,
+                                                        .retirements = 2}},
                     .maximumFeatureAdapters = maximumFeatureAdapters};
         }
 
@@ -85,7 +91,8 @@ namespace Horo::WorldStreaming {
             auto destination = std::move(composition);
             REQUIRE(destination.State() == WorldStreamingRuntimeCompositionState::Active);
             REQUIRE(composition.State() == WorldStreamingRuntimeCompositionState::Closed);
-            RequireError(composition.Scheduler().TryAdmit(QueuedOperation(), 1), WorldStreamingErrors::SchedulerLifecycleUnavailable);
+            RequireError(composition.Scheduler().TryAdmit(QueuedOperation(), 1, IdentityFrom<StreamingConcurrencyRevision>(1)),
+                         WorldStreamingErrors::SchedulerLifecycleUnavailable);
         }
 
         TEST_CASE("Runtime composition rejects missing duplicate unsupported and over-capacity bindings transactionally",
@@ -128,7 +135,8 @@ namespace Horo::WorldStreaming {
             replacement[0] = Binding(41, StreamingRuntimeServiceRole::FeatureAdapter, &navigation, 2);
             const auto revision = IdentityFrom<StreamingRuntimeCompositionRevision>(2);
 
-            const auto reservation = composition.Scheduler().TryAdmit(QueuedOperation(), 3).Value();
+            const auto reservation =
+                composition.Scheduler().TryAdmit(QueuedOperation(), 3, IdentityFrom<StreamingConcurrencyRevision>(1)).Value();
             RequireError(composition.Replace(RuntimeOwner(), revision, replacement),
                          WorldStreamingErrors::RuntimeCompositionLifecycleUnavailable);
             REQUIRE(composition.Revision() == IdentityFrom<StreamingRuntimeCompositionRevision>(1));
@@ -150,11 +158,13 @@ namespace Horo::WorldStreaming {
         TEST_CASE("Runtime composition cancellation closes admission and shutdown retains services through drain",
                   "[unit][world_streaming][composition][shutdown]") {
             auto composition = Composition();
-            const auto reservation = composition.Scheduler().TryAdmit(QueuedOperation(), 3).Value();
+            const auto reservation =
+                composition.Scheduler().TryAdmit(QueuedOperation(), 3, IdentityFrom<StreamingConcurrencyRevision>(1)).Value();
             REQUIRE(composition.RequestCancellation(RuntimeOwner(), composition.Revision()).HasValue());
             REQUIRE(composition.RequestCancellation(RuntimeOwner(), composition.Revision()).HasValue());
             REQUIRE(composition.State() == WorldStreamingRuntimeCompositionState::Cancelling);
-            RequireError(composition.Scheduler().TryAdmit(QueuedOperation(), 1), WorldStreamingErrors::SchedulerLifecycleUnavailable);
+            RequireError(composition.Scheduler().TryAdmit(QueuedOperation(), 1, IdentityFrom<StreamingConcurrencyRevision>(1)),
+                         WorldStreamingErrors::SchedulerLifecycleUnavailable);
 
             REQUIRE(composition.BeginShutdown(RuntimeOwner()).HasValue());
             REQUIRE(composition.State() == WorldStreamingRuntimeCompositionState::Draining);

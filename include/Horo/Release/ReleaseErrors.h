@@ -32,4 +32,24 @@ namespace Horo::Release::ReleaseErrors {
     extern const ErrorCodeDescriptor ProfileCapabilityUnsupported;
     /** @brief A release profile catalog exceeds an explicit resource ceiling. */
     extern const ErrorCodeDescriptor ProfileLimitExceeded;
+    /** @brief A release job, stage, candidate or terminal transition is forbidden. */
+    extern const ErrorCodeDescriptor PipelineTransitionInvalid;
+    /** @brief Frozen release inputs changed before a stage consumed them. */
+    extern const ErrorCodeDescriptor PipelineInputChanged;
+    /** @brief A stage returned an incomplete or contradictory typed output. */
+    extern const ErrorCodeDescriptor PipelineOutputInvalid;
+    /** @brief A candidate stage or final path already belongs to another attempt. */
+    extern const ErrorCodeDescriptor PipelineOutputCollision;
+    /** @brief A private stage could not be durably assembled or promoted. */
+    extern const ErrorCodeDescriptor PipelineStagingIoFailed;
+    /** @brief A stage worker threw across the release execution boundary. */
+    extern const ErrorCodeDescriptor PipelineStageException;
+    /** @brief A stage exceeded its service-owned deadline. */
+    extern const ErrorCodeDescriptor PipelineStageTimeout;
+    /** @brief A bounded release child process failed to exit successfully. */
+    extern const ErrorCodeDescriptor PipelineProcessFailed;
+    /** @brief A release child process stopped after an accepted cancellation. */
+    extern const ErrorCodeDescriptor PipelineProcessCancelled;
+    /** @brief The release service or its operation queue has no admission capacity. */
+    extern const ErrorCodeDescriptor PipelineAdmissionRejected;
 }  // namespace Horo::Release::ReleaseErrors

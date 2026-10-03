@@ -22,6 +22,7 @@
 
 namespace Horo {
     class EngineDataBus;
+    class NativeDialogs;
 }  // namespace Horo
 
 namespace Horo::Input {
@@ -77,6 +78,7 @@ namespace Horo::Editor {
          * @param logoTexture Optional renderer-owned editor logo texture.
          * @param extensionInventory Optional installed-extension inventory.
          * @param extensionMarketplace Optional extension marketplace service.
+         * @param nativeDialogs Optional host-owned file picker for editor workflows.
          */
         explicit GuiScreenHost(const EditorGuiContext &context, EditorModalHost &modalHost,  // NOSONAR(cpp:S107) Service aggregate
                                EditorSettingsService &settingsService, LocalizationService &localization, EngineDataBus &engineEvents,
@@ -84,7 +86,8 @@ namespace Horo::Editor {
                                const RendererAvailabilitySnapshot &rendererAvailability, ScreenRegistry screenRegistry,
                                WorkspacePanelRegistry workspacePanelRegistry, std::uintptr_t logoTexture = 0,
                                Extensions::ExtensionInventory *extensionInventory = nullptr,
-                               Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr);
+                               Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr,
+                               NativeDialogs *nativeDialogs = nullptr);
 
         ~GuiScreenHost();
 
@@ -154,7 +157,11 @@ namespace Horo::Editor {
         /** @brief Offers the committed routed snapshot to the active screen before fixed simulation. */
         void OnInputSnapshot();
 
-        /** @brief Routes one host fixed tick to the active screen. */
+        /**
+         * @brief Routes one host fixed tick to the active screen.
+         * @param simulationTick Monotonic simulation tick identity.
+         * @param fixedDeltaSeconds Duration of the fixed tick in seconds.
+         */
         void OnFixedUpdate(std::uint64_t simulationTick, double fixedDeltaSeconds);
 
         /** @brief Renders the active screen and any active leave-resolution modals. */
@@ -205,6 +212,7 @@ namespace Horo::Editor {
         std::uintptr_t logoTexture_{0};
         Extensions::ExtensionInventory *extensionInventory_{};
         Extensions::ExtensionMarketplaceService *extensionMarketplace_{};
+        NativeDialogs *nativeDialogs_{};
 
         EditorServiceRegistry services_;
         ScreenRegistry screenRegistry_;

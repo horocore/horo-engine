@@ -46,12 +46,11 @@ namespace Horo::Editor {
     void GlobalDockNetworkPane::Draw(const ImVec2 &contentOrigin, const float contentWidth, const EditorGuiContext &context) {
         const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
         const GlobalDockPaneRegions regions =
-            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true, .hasFooter = true});
+            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
         DrawToolbar(regions.toolbarOrigin, regions.toolbarWidth, context);
         const float metricHeight = DrawMetrics(regions.contentOrigin, regions.contentWidth, context);
         DrawTable({regions.contentOrigin.x, regions.contentOrigin.y + metricHeight}, regions.contentWidth,
                   std::max(1.0F, regions.contentHeight - metricHeight), context);
-        DrawFooter(regions.footerOrigin, regions.footerWidth, context);
     }
 
     void GlobalDockNetworkPane::DrawToolbar(const ImVec2 &contentOrigin, const float contentWidth, const EditorGuiContext &context) {
@@ -59,7 +58,7 @@ namespace Horo::Editor {
         const GlobalDockPaneMetrics metrics = ResolveGlobalDockPaneMetrics();
         const float availableHeight = std::max(1.0F, ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - contentOrigin.y);
         const GlobalDockPaneRegions regions =
-            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true, .hasFooter = true});
+            ResolveGlobalDockPaneRegions(contentOrigin, contentWidth, availableHeight, {.hasToolbar = true});
         const auto localized = [&](const char *key) -> const std::string & {
             return context.localization.Get("editor", key);
         };
@@ -246,11 +245,4 @@ namespace Horo::Editor {
         ImGui::PopID();
     }
 
-    void GlobalDockNetworkPane::DrawFooter(const ImVec2 &origin, const float width, const EditorGuiContext &context) const {
-        const std::array<std::string_view, 3> segments{context.localization.Get("editor", "workspace.global_dock.network.footer.peer"),
-                                                       context.localization.Get("editor", "workspace.global_dock.network.footer.objects"),
-                                                       context.localization.Get("editor", "workspace.global_dock.network.footer.tick")};
-        DrawGlobalDockStatusFooter(origin, width, segments,
-                                   context.localization.Get("editor", "workspace.global_dock.network.footer.tracing"), context.theme.fonts);
-    }
 }  // namespace Horo::Editor

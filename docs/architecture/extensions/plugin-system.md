@@ -302,6 +302,21 @@ Initial editor and tool extension points:
 | `project.browser_action` | Add project-browser actions. | Host owns selected project context and confirmation UI. |
 | `mcp.tool` | Add MCP tools subject to permission policy. | MCP host owns transport, schema, and authorization. |
 
+`ProcessObserverRegistry` is the headless, composition-owned implementation of
+`process.observer`. A manifest-derived `horo.process.observe` request must declare
+the separately approved `process.observe` permission; `process.execute` does not
+grant observation. The host supplies an event-kind allowlist and an exact
+activation-scoped capability handle. Each observer chooses a subset. The event
+shape is closed: host/operation lifecycle and diagnostic categories contain only
+an opaque operation ID, sequence, outcome, and enum diagnostic. Paths, arguments,
+environment, credentials, process handles, output, and provider error text cannot
+be represented. Host producers marshal notifications to the registry's owner
+thread. Dispatch is synchronous and non-reentrant, isolates failing callbacks,
+and never owns or controls an OS process. Unregistration and shutdown close new
+callback admission; an in-flight callback retains a host-supplied executable
+module lease until it returns. The host must supply a real module-load lease for
+external code and must not infer unload safety from registration removal alone.
+
 The host-owned `EditorSurfaceRegistry` now borrows registry limits and provider
 status keys during construction and status updates, then copies the values it
 retains. Existing source callers use the same call form; consumers holding exact
@@ -569,6 +584,7 @@ project.read
 project.write
 project.write.generated
 process.execute
+process.observe
 process.thread
 network.client
 network.server
@@ -783,6 +799,18 @@ stage-specific human or JSON outcomes. Compatible legacy/current fixtures and
 intentionally incompatible version/table fixtures protect the harness contract.
 Because this command executes native module code in its own process, it is a
 developer conformance tool rather than a trust or sandbox boundary.
+
+The versioned SDK also carries an extension-author CI template and source-free
+runner. A generated project retains the workflow and bootstrap in its own
+repository; a checked-in lock binds each supported host platform to an HTTPS SDK
+ZIP, exact SDK version, and SHA-256. The bootstrap validates that archive before
+executing SDK tools. CI builds and tests the project, validates the installed
+manifest, runs the ABI conformance harness against trusted build outputs, packs
+and integrity-verifies the native package, and publishes commit/platform/SDK/
+artifact-digest provenance. CI has read-only repository permission and no signing
+key. Its explicit unsigned trust policy checks package bytes only; release
+publisher authentication and full typed package-manifest semantics are distinct
+gates, not implied by a passing author CI run.
 
 Project gameplay modules may use the SDK-generation C++ boundary documented in
 [Gameplay Module Boundary](./gameplay-module-boundary.md). That boundary is
@@ -1468,7 +1496,7 @@ snapshot-pinned importer again, and performs an identity-preserving reimport.
 
 ## Related Documents
 
-- [Plugin Manager UI](./plugin-manager.html): HTML reference design for installed
+- [Plugin Manager UI](../../../mock-studio/designs.md#architecture-extensions-plugin-manager): React mock design for installed
   plugins, marketplace, updates, and dependency diagnostics.
 - [Configuration System](../foundation/configuration-system.md)
 - [Application Security](../security/application-security.md)
@@ -1483,3 +1511,41 @@ snapshot-pinned importer again, and performs an identity-preserving reimport.
 - [ADR-131: Platform Services Closed SDK, Extension ABI, Package and Composition Boundary](../../adr/131-platform-services-closed-sdk-extension-abi-package-and-composition-boundary.md)
 - [MCP Architecture](../interfaces/mcp-architecture.md)
 - [Horo Package System](../packages/package-system.md): game and hybrid packages that may declare editor extensions
+
+## Script Capability Context Implementation
+
+`Horo/Extensions/ScriptCapabilityContext.h` belongs to `Extensions`. Host composition
+creates a shared invocation registry, explicit project/runtime/scene/operation scopes,
+and immutable script context evidence. Context creation intersects the package envelope,
+script approval, project policy and context allowlist with activation-scoped module
+capability grants. Required imports resolve to exact validated descriptor snapshots and
+same-major version ranges before any binding is published. Each import carries an explicit
+approved operation allowlist; an empty list grants no calls. Tooling and gameplay profile
+compatibility is explicit; gameplay requires both runtime and scene scopes.
+
+Runtime adapters receive only `ScriptCapabilityBinding` values. The lower-level
+`ScriptInvocationRegistry` remains a host scheduling primitive and must never be
+published as a script API. Binding calls install the resolved API generation and bounded
+package/module/script/API/policy/operation identity; source, arguments and secrets are
+excluded from that diagnostic record. Controllers retain that identity through progress,
+terminal events and polling snapshots, including cancellation. Provider adapters derive
+`Telemetry::OperationContext` from the invocation diagnostic record and explicitly bind it
+on worker threads with `Telemetry::ScopedOperationContext`; ordinary provider logs then
+inherit only the curated package/module/script/API/policy/operation identity fields.
+
+Bindings also retain a lease to the exact invocation-provider registration; resetting that
+registration cannot be bypassed by reusing its generation number for a replacement.
+Scope teardown and module admission revocation close later binding calls. In-flight
+context-owned work follows the existing cancel policy: host polling, provider progress,
+cancellation observation or completion detects expired authority, requests cooperative
+cancellation and terminalizes once. Context destruction revokes delivery before cancelling
+work. Scope-expired context drains revoke delivery rather than calling a dead runtime.
+The host retains provider code until its cooperative work has joined; cancellation of a
+result alone does not prove native code quiescence. Durable detached operations are not
+admitted by this context-owned boundary.
+
+This is an additive host API. Existing invocation-registry callers keep their scheduling
+contract; module import adapters migrate to `ScriptCapabilityContext::Create`, `Bind`
+and binding `Begin`. No runtime adapter may treat the low-level registration API as an
+alternative permission authority. Public consumer coverage verifies the new header through
+the owning target's staged include boundary.

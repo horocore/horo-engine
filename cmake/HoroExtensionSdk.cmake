@@ -22,6 +22,7 @@ function(horo_configure_extension_sdk)
         "${package_root}/bin"
         "${package_root}/include/Horo/Extensions"
         "${package_root}/share/horo/extension-sdk"
+        "${package_root}/share/horo/extension-sdk/ci"
         "${package_cmake_dir}")
 
     configure_file(
@@ -36,6 +37,22 @@ function(horo_configure_extension_sdk)
         "${PROJECT_SOURCE_DIR}/scripts/scaffold_extension.py"
         "${package_root}/bin/horo-scaffold-extension.py"
         COPYONLY)
+    configure_file(
+        "${PROJECT_SOURCE_DIR}/scripts/run_extension_author_ci.py"
+        "${package_root}/bin/horo-extension-author-ci.py"
+        COPYONLY)
+    configure_file(
+        "${PROJECT_SOURCE_DIR}/scripts/bootstrap_extension_ci.py"
+        "${package_root}/share/horo/extension-sdk/ci/bootstrap.py"
+        COPYONLY)
+    configure_file(
+        "${PROJECT_SOURCE_DIR}/sdk/ci/extension-author-ci.yml"
+        "${package_root}/share/horo/extension-sdk/ci/extension-author-ci.yml"
+        COPYONLY)
+    configure_file(
+        "${PROJECT_SOURCE_DIR}/sdk/ci/extension-ci.lock.json.in"
+        "${package_root}/share/horo/extension-sdk/ci/extension-ci.lock.json"
+        @ONLY)
     configure_file(
         "${PROJECT_SOURCE_DIR}/sdk/schemas/extension-manifest-v1.schema.json"
         "${package_root}/share/horo/extension-sdk/extension-manifest-v1.schema.json"

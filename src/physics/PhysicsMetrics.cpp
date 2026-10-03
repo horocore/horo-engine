@@ -1,6 +1,7 @@
 #include "Horo/Physics/PhysicsMetrics.h"
 
 #include "Horo/Physics/PhysicsErrors.h"
+#include "MetricDescriptorInternal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -35,15 +36,8 @@ namespace Horo::Physics {
                                                                  const Telemetry::MetricUnit unit, std::string description,
                                                                  Telemetry::MetricCollectionLevel level,
                                                                  std::vector<Telemetry::DimensionDescriptor> dimensions = {}) {
-            const auto maximumSeries = dimensions.empty() ? 1U : static_cast<std::uint32_t>(dimensions.front().allowedValues.size());
-            return {.kind = kind,
-                    .name = std::move(name),
-                    .subsystem = "physics",
-                    .unit = unit,
-                    .description = std::move(description),
-                    .dimensions = std::move(dimensions),
-                    .maxSeries = maximumSeries,
-                    .minimumCollectionLevel = level};
+            return PhysicsMetricDetail::MakeDescriptor("physics", kind, std::move(name), unit, std::move(description), level,
+                                                       std::move(dimensions));
         }
 
         template <typename Handle, std::size_t Size>

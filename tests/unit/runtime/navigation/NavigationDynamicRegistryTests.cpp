@@ -1,9 +1,11 @@
 #include "Horo/Navigation/NavigationDynamicRegistry.h"
 #include "Horo/Navigation/NavigationErrors.h"
 #include "Horo/Navigation/NavigationWorldLifecycle.h"
+#include "navigation/NavigationDynamicRegistryTestFixtures.h"
 #include "navigation/NavigationRuntimeTestFixtures.h"
 #include "navigation/NavigationTestAssertions.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <limits>
@@ -13,36 +15,10 @@
 namespace Horo::Navigation {
     namespace {
         using TestSupport::Id;
+        using TestSupport::MakeRegistry;
+        using TestSupport::Obstacle;
+        using TestSupport::Provenance;
         using TestSupport::RequireError;
-
-        [[nodiscard]] NavigationDynamicProvenance Provenance(
-            const std::uint64_t world = 7, const std::uint64_t scene = 11, const std::uint64_t sceneGeneration = 12,
-            const std::uint64_t owner = 21, const std::uint64_t ownerGeneration = 1, const std::uint64_t sourceRevision = 1,
-            const NavigationDynamicSourceKind source = NavigationDynamicSourceKind::SceneEntity, const std::uint64_t authoredModifier = 0) {
-            return {
-                .world = Id<NavigationWorldId>(world),
-                .scene = Id<NavigationSceneRuntimeId>(scene),
-                .sceneGeneration = Id<NavigationSceneGeneration>(sceneGeneration),
-                .owner = Id<NavigationDynamicOwnerId>(owner),
-                .ownerGeneration = Id<NavigationDynamicOwnerGeneration>(ownerGeneration),
-                .sourceRevision = Id<NavigationDynamicSourceRevision>(sourceRevision),
-                .source = source,
-                .authoredModifier = authoredModifier == 0 ? NavigationModifierId{} : Id<NavigationModifierId>(authoredModifier),
-            };
-        }
-
-        [[nodiscard]] NavigationObstacleDescriptor Obstacle(const std::uint64_t id, const NavigationDynamicProvenance &provenance,
-                                                            const std::uint64_t updateTick, const float centerX = 0.0F) {
-            return {
-                .id = Id<NavigationObstacleId>(id),
-                .provenance = provenance,
-                .shape = NavigationDynamicBoxShape{.center = {centerX, 0.0F, 0.0F}, .halfExtents = {1.0F, 1.0F, 1.0F}},
-                .layers = {.bits = 1},
-                .priority = 0,
-                .updateTick = updateTick,
-                .enabled = true,
-            };
-        }
 
         [[nodiscard]] NavigationModifierDescriptor AuthoredModifier() {
             return {
@@ -59,11 +35,6 @@ namespace Horo::Navigation {
             };
         }
 
-        [[nodiscard]] NavigationDynamicRegistry MakeRegistry(const NavigationDynamicRegistryLimits &limits = {}) {
-            auto result = NavigationDynamicRegistry::Create(limits);
-            REQUIRE(result.HasValue());
-            return std::move(result).Value();
-        }
     }  // namespace
 
     TEST_CASE("Dynamic registry stages provider-neutral records and publishes immutable snapshots",
@@ -159,6 +130,30 @@ namespace Horo::Navigation {
         const auto emptySnapshot = std::move(registry.Snapshot()).Value();
         REQUIRE(emptySnapshot.Obstacles().empty());
         RequireError(registry.StageRemoveObstacle(handle, currentRevision), NavigationErrors::DynamicRegistryStale);
+    }
+
+    TEST_CASE("Dynamic obstacle motion coalesces newest source within a fixed command bound",
+              "[unit][navigation][headless][dynamic-registry][overlay]") {
+        auto registry = MakeRegistry();
+        const auto activation = TestSupport::Activation(11, 12, 7, 9);
+        const auto handle = registry.StageRegisterObstacle(Obstacle(1, Provenance(), 1)).Value();
+        REQUIRE(registry.CommitAtSafePoint(activation, 1).HasValue());
+        const auto retained = registry.Snapshot().Value();
+        const auto revision = retained.Obstacles()[0].revision;
+
+        for (std::uint64_t source = 2; source <= NavigationDynamicRegistryHardLimits::CoalescedObstacleUpdates + 1; ++source) {
+            const auto moved = Obstacle(1, Provenance(7, 11, 12, 21, 1, source), 2, static_cast<float>(source));
+            REQUIRE(registry.StageUpdateObstacle(handle, revision, moved).HasValue());
+            CHECK(registry.PendingCommandCount() == 1);
+        }
+        const auto excess = Obstacle(1, Provenance(7, 11, 12, 21, 1, 66), 2, 66.0F);
+        RequireError(registry.StageUpdateObstacle(handle, revision, excess), NavigationErrors::DynamicRegistryCapacityExceeded);
+        REQUIRE(registry.CommitAtSafePoint(activation, 2).HasValue());
+        const auto current = registry.Snapshot().Value();
+        REQUIRE(current.Obstacles().size() == 1);
+        CHECK(std::get<NavigationDynamicBoxShape>(current.Obstacles()[0].shape).center.x == 65.0F);
+        CHECK(std::get<NavigationDynamicBoxShape>(retained.Obstacles()[0].shape).center.x == 0.0F);
+        CHECK(current.Revision().Value() == retained.Revision().Value() + 1);
     }
 
     TEST_CASE("Dynamic registry replacement clears stale commands and advances slot generations",

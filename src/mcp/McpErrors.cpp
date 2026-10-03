@@ -1,5 +1,45 @@
 #include "Horo/Mcp/McpErrors.h"
 
+#include <algorithm>
+#include <string_view>
+#include <utility>
+
+namespace Horo::Mcp {
+    namespace {
+        /** @brief Accepts only bounded stable code tokens at the wire boundary. */
+        [[nodiscard]] std::string_view SafeIdentity(const std::string &value) noexcept {
+            if (value.empty() || value.size() > 128 || !std::ranges::all_of(value, [](const unsigned char character) {
+                return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+                       (character >= '0' && character <= '9') || character == '.' || character == '_' || character == '-';
+            }))
+                return "invalid";
+            return value;
+        }
+    }  // namespace
+
+    /** @copydoc SafeErrorData */
+    nlohmann::json SafeErrorData(const Error &error) {
+        nlohmann::json diagnostics = nlohmann::json::array();
+        for (const auto &diagnostic : error.diagnostics) {
+            if (diagnostics.size() == 8)
+                break;
+            diagnostics.push_back(
+                {{"code", SafeIdentity(diagnostic.code.Value())}, {"severity", static_cast<unsigned>(diagnostic.severity)}});
+        }
+        nlohmann::json causes = nlohmann::json::array();
+        const Error *cause = error.cause.Get();
+        while (cause != nullptr && causes.size() < 4) {
+            causes.push_back({{"domain", SafeIdentity(cause->domain.Value())}, {"code", SafeIdentity(cause->code.Value())}});
+            cause = cause->cause.Get();
+        }
+        return {{"domain", SafeIdentity(error.domain.Value())},
+                {"code", SafeIdentity(error.code.Value())},
+                {"severity", static_cast<unsigned>(error.severity)},
+                {"diagnostics", std::move(diagnostics)},
+                {"causes", std::move(causes)}};
+    }
+}  // namespace Horo::Mcp
+
 namespace Horo::Mcp::McpErrors {
     const ErrorCodeDescriptor ConfigurationInvalid{ErrorDomainId{"horo.mcp"}, ErrorCode{"configuration_invalid"}, ErrorSeverity::Error,
                                                    "MCP session configuration is invalid.",
@@ -31,4 +71,35 @@ namespace Horo::Mcp::McpErrors {
     const ErrorCodeDescriptor DrainTimedOut{ErrorDomainId{"horo.mcp"}, ErrorCode{"drain_timed_out"}, ErrorSeverity::Error,
                                             "MCP callbacks did not drain before shutdown's deadline.",
                                             "Keep application leases alive until the callbacks finish."};
+    const ErrorCodeDescriptor ToolDescriptorInvalid{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_descriptor_invalid"}, ErrorSeverity::Error,
+                                                    "An MCP tool descriptor or schema is invalid.",
+                                                    "Declare a bounded tool contract using supported schema keywords."};
+    const ErrorCodeDescriptor ToolDuplicate{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_duplicate"}, ErrorSeverity::Error,
+                                            "An MCP tool identity is registered more than once.",
+                                            "Use one registration per stable tool ID."};
+    const ErrorCodeDescriptor ToolIncompatible{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_incompatible"}, ErrorSeverity::Error,
+                                               "An MCP tool replacement is not contract-compatible.",
+                                               "Retain the major version and do not regress the published version."};
+    const ErrorCodeDescriptor ToolUnavailable{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_unavailable"}, ErrorSeverity::Warning,
+                                              "The MCP tool is not registered.", "Use an advertised tool identity."};
+    const ErrorCodeDescriptor ToolCapabilityUnavailable{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_capability_unavailable"},
+                                                        ErrorSeverity::Warning, "The MCP tool is unavailable to this session.",
+                                                        "Request an authorized capability from the host."};
+    const ErrorCodeDescriptor ToolInputInvalid{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_input_invalid"}, ErrorSeverity::Error,
+                                               "MCP tool arguments do not satisfy the declared schema.",
+                                               "Supply bounded arguments matching the advertised contract."};
+    const ErrorCodeDescriptor ToolOutputInvalid{ErrorDomainId{"horo.mcp"}, ErrorCode{"tool_output_invalid"}, ErrorSeverity::Error,
+                                                "An MCP tool returned data outside its declared schema.",
+                                                "Repair the application adapter contract."};
+    const ErrorCodeDescriptor OwnerUnavailable{ErrorDomainId{"horo.mcp"}, ErrorCode{"owner_unavailable"}, ErrorSeverity::Error,
+                                               "The MCP owner context is not bound to this thread.", "Pump on the host's owning thread."};
+    const ErrorCodeDescriptor OperationCapacityExceeded{ErrorDomainId{"horo.mcp"}, ErrorCode{"operation_capacity_exceeded"},
+                                                        ErrorSeverity::Warning, "The MCP operation budget was reached.",
+                                                        "Wait for an operation to finish before retrying."};
+    const ErrorCodeDescriptor OperationUnavailable{ErrorDomainId{"horo.mcp"}, ErrorCode{"operation_unavailable"}, ErrorSeverity::Warning,
+                                                   "The MCP operation is unavailable to this session.",
+                                                   "Use a current operation ID from this session."};
+    const ErrorCodeDescriptor RegistryRevisionStale{ErrorDomainId{"horo.mcp"}, ErrorCode{"registry_revision_stale"}, ErrorSeverity::Warning,
+                                                    "The MCP tool registry changed since session admission.",
+                                                    "Refresh the session before calling this tool."};
 }  // namespace Horo::Mcp::McpErrors

@@ -11,6 +11,7 @@
 #include "Horo/PlatformServices/PlatformRequest.h"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -83,6 +84,8 @@ namespace Horo::PlatformServices {
         friend class PlatformProviderFactory;
         friend class PlatformProviderLifecycleHost;
         explicit PlatformProviderCandidateLease(std::shared_ptr<PlatformProviderCandidateState> state) noexcept;
+        [[nodiscard]] HoroPlatformProviderOperations Operations() const noexcept;
+        [[nodiscard]] void *NativeCandidate() const noexcept;
         std::shared_ptr<PlatformProviderCandidateState> state_;
     };
 
@@ -102,9 +105,19 @@ namespace Horo::PlatformServices {
         extern const ErrorCodeDescriptor ShutdownFailed;
     }  // namespace PlatformProviderLifecycleErrors
 
+    /** @brief Finite monotonic timeout for each service, fixed when a host starts. */
+    struct PlatformProviderRequestPolicy final {
+        /** @brief Per-service admission deadline, default 30 seconds. */
+        std::array<std::chrono::milliseconds, static_cast<std::size_t>(PlatformServiceKind::Count)> timeouts = [] {
+            std::array<std::chrono::milliseconds, static_cast<std::size_t>(PlatformServiceKind::Count)> values{};
+            values.fill(std::chrono::seconds{30});
+            return values;
+        }();
+    };
+
     class PlatformProviderAdmission;
 
-    /** @brief Complete exact selection and consumer authority used to start a provider lifecycle. */
+    /** @brief Complete exact selection, consumer authority, and finite request policy for one provider lifecycle. */
     struct PlatformProviderLifecycleStartContext final {
         const PlatformProjectConfiguration &configuration;                 /**< Immutable selected provider and required service set. */
         const PlatformProviderAdmission &admission;                        /**< Host-owned admission registry. */
@@ -114,6 +127,7 @@ namespace Horo::PlatformServices {
         std::string_view consumerExtensionId;                              /**< Stable consuming extension identity. */
         std::string_view consumerModuleId;                                 /**< Stable consuming module identity. */
         std::uint64_t consumerGeneration{};                                /**< Current consumer generation. */
+        PlatformProviderRequestPolicy requestPolicy{}; /**< Finite per-service timeouts; zero or over 24 hours is rejected. */
     };
 
     /**
@@ -126,8 +140,9 @@ namespace Horo::PlatformServices {
     public:
         using RequestHandle = PlatformRequestHandle<void>;
 
-        /** @brief Resolves the exact immutable selection and starts each operation stage in declared order.
+        /** @brief Resolves the exact selection, authority, and request policy and starts each operation stage.
          * @param context Complete selection and consumer authority captured by the host.
+         * @return Started host or typed configuration/provider failure.
          */
         [[nodiscard]] static Result<std::unique_ptr<PlatformProviderLifecycleHost>> Start(
             const PlatformProviderLifecycleStartContext &context);
@@ -138,8 +153,24 @@ namespace Horo::PlatformServices {
 
         /** @brief Admits one typed achievement unlock and retains native code until completion or drain. */
         [[nodiscard]] Result<RequestHandle> UnlockAchievement(AchievementId achievement);
-        /** @brief Applies queued native completions on the owner lane, then delivers deferred observers. */
-        [[nodiscard]] std::size_t DispatchCompletions(std::size_t maximum);
+        /**
+         * @brief Applies ingress before deadline evaluation, starts queued work, then dispatches observers on the owner lane.
+         * @param maximum Maximum copied completions and observer deliveries to process this turn; zero still starts queued work.
+         * @param now Owner-lane monotonic time used to evaluate admission deadlines.
+         * @return Number of copied completion envelopes consumed.
+         * @details The composition owner must call this regularly for both launch and timeout progress.
+         */
+        [[nodiscard]] std::size_t DispatchCompletions(std::size_t maximum,
+                                                      std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
+        /**
+         * @brief Records caller cancellation once; the next owner turn asks the provider to abort executing work.
+         * @param request Current typed request identity.
+         * @param now Monotonic time used to distinguish an already expired queued request.
+         * @return Success for accepted, repeated or terminal cancellation; typed stale/lifecycle failure otherwise.
+         * @details Queued work finalizes immediately without native submission. No observer or provider callback runs here.
+         */
+        [[nodiscard]] Result<void> RequestCancel(const RequestHandle &request,
+                                                 std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
         /** @brief Returns the frontend-owned terminal or active request snapshot. */
         [[nodiscard]] Result<PlatformRequestSnapshot<void>> Query(const RequestHandle &request) const;
         /** @brief Registers one deferred completion observer. */
@@ -194,6 +225,7 @@ namespace Horo::PlatformServices {
         [[nodiscard]] PlatformProviderRetirementDisposition FinalizeOnOwnerThread() noexcept;
 
     private:
+        friend class PlatformProviderLifecycleHost;
         Extensions::ApplicationCapabilityRegistry &capabilities_;
         Extensions::BackendServiceRegistry &services_;
         Extensions::ExtensionAdmissionPolicy policy_;

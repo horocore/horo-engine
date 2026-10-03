@@ -1,7 +1,18 @@
 #include "CanonicalPhysicsRuntimeInternal.h"
 
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
+
 namespace Horo::Physics::Detail {
     namespace {
+        /** @brief Separates static bodies from the moving-body activation lifecycle. */
+        [[nodiscard]] PhysicsBodyActivity ReadNativeActivity(const JPH::Body &body) noexcept {
+            using enum PhysicsBodyActivity;
+            if (body.IsStatic())
+                return Static;
+            return body.IsActive() ? Awake : Sleeping;
+        }
+
         /** @brief Translates the solver's observed motion mode to the Horo policy enum. */
         [[nodiscard]] Result<PhysicsMotionType> ReadNativeMotion(const JPH::Body &native) {
             switch (native.GetMotionType()) {
@@ -15,6 +26,14 @@ namespace Horo::Physics::Detail {
                     return Result<PhysicsMotionType>::Failure(
                         MakeError(PhysicsErrors::SolverFatalCondition, "Native body has an unknown motion mode."));
             }
+        }
+
+        /** @brief Rejects non-finite body evidence before returning an owned snapshot. */
+        [[nodiscard]] bool FiniteReconciliation(const PhysicsBodyReconciliation &value) noexcept {
+            const std::array finite{Math::IsFinite(value.state.pose.translation), Math::IsFinite(value.state.pose.rotation),
+                                    Math::IsFinite(value.state.linearVelocity), Math::IsFinite(value.state.angularVelocity),
+                                    Math::IsFinite(value.observedBoundsExtent)};
+            return std::ranges::all_of(finite, std::identity{});
         }
 
         /** @brief Reads dynamic inverse mass without inventing mass for locked translation. */
@@ -32,7 +51,7 @@ namespace Horo::Physics::Detail {
     /** @copydoc ReadCanonicalSceneBodyReconciliation */
     Result<PhysicsBodyReconciliation> ReadCanonicalSceneBodyReconciliation(const CanonicalWorldHandle world, const PhysicsWorldId owner,
                                                                            const BodyHandle body) {
-        if (world.value == nullptr || !owner.IsValid())
+        if (const std::array valid{world.value != nullptr, owner.IsValid()}; !std::ranges::all_of(valid, std::identity{}))
             return Result<PhysicsBodyReconciliation>::Failure(MakeError(PhysicsErrors::WorldInvalid));
         if (const auto handle = ValidatePhysicsHandleOwner(body, owner); handle.HasError())
             return Result<PhysicsBodyReconciliation>::Failure(handle.ErrorValue());
@@ -70,12 +89,75 @@ namespace Horo::Physics::Detail {
                                                                          rotation.GetW()}},
                                                    .linearVelocity = {linear.GetX(), linear.GetY(), linear.GetZ()},
                                                    .angularVelocity = {angular.GetX(), angular.GetY(), angular.GetZ()},
-                                                   .activity =
-                                                       native.IsActive() ? PhysicsBodyActivity::Awake : PhysicsBodyActivity::Sleeping},
+                                                   .activity = ReadNativeActivity(native)},
                                          .observedMotion = motion.Value(),
                                          .observedShape = shape->handle,
                                          .observedMassKilograms = mass.Value(),
                                          .observedBoundsExtent = {boundsExtent.GetX(), boundsExtent.GetY(), boundsExtent.GetZ()}};
+        if (!FiniteReconciliation(result))
+            return Result<PhysicsBodyReconciliation>::Failure(MakeError(PhysicsErrors::BodyStateNonFinite));
         return Result<PhysicsBodyReconciliation>::Success(std::move(result));
+    }
+
+    /** @copydoc ReadCanonicalSceneActivation */
+    Result<PhysicsActivationObservation> ReadCanonicalSceneActivation(const CanonicalWorldHandle world, const PhysicsWorldId owner) {
+        if (world.value == nullptr || !owner.IsValid())
+            return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        const auto &canonical = *static_cast<const CanonicalWorld *>(world.value);
+        PhysicsActivationObservation result{.world = owner};
+        for (const auto &record : canonical.scene.bodies) {
+            JPH::BodyLockRead lock(canonical.native.system->GetBodyLockInterfaceNoLock(), record.nativeBody);
+            if (!lock.Succeeded())
+                return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::HandleStale));
+            const auto &body = lock.GetBody();
+            if (body.IsStatic())
+                ++result.staticBodies;
+            else if (body.IsActive())
+                ++result.awakeMovingBodies;
+            else
+                ++result.sleepingMovingBodies;
+        }
+        return Result<PhysicsActivationObservation>::Success(result);
+    }
+
+    /** @copydoc ReadCanonicalSceneBodyPolicy */
+    Result<PhysicsBodyDescriptor> ReadCanonicalSceneBodyPolicy(const CanonicalWorldHandle world, const PhysicsWorldId owner,
+                                                               const BodyHandle body) {
+        if (world.value == nullptr || !owner.IsValid())
+            return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        if (const auto handle = ValidatePhysicsHandleOwner(body, owner); handle.HasError())
+            return Result<PhysicsBodyDescriptor>::Failure(handle.ErrorValue());
+        const auto &canonical = *static_cast<const CanonicalWorld *>(world.value);
+        const auto record = std::ranges::find_if(canonical.scene.bodies, [body](const auto &candidate) {
+            return candidate.handle == body;
+        });
+        if (record == canonical.scene.bodies.end())
+            return Result<PhysicsBodyDescriptor>::Failure(MakeError(PhysicsErrors::HandleStale));
+        return Result<PhysicsBodyDescriptor>::Success(record->policy);
+    }
+
+    /** @copydoc ReadCanonicalSceneJointState */
+    Result<PhysicsJointState> ReadCanonicalSceneJointState(const CanonicalWorldHandle world, const ConstraintHandle constraint) {
+        if (world.value == nullptr)
+            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+        const auto &canonical = *static_cast<const CanonicalWorld *>(world.value);
+        const auto found = std::ranges::find_if(canonical.scene.constraints, [constraint](const auto &record) {
+            return record.handle == constraint;
+        });
+        if (found == canonical.scene.constraints.end())
+            return Result<PhysicsJointState>::Failure(MakeError(PhysicsErrors::HandleStale));
+        switch (found->constraint->GetSubType()) {
+            case JPH::EConstraintSubType::Hinge:
+                return Result<PhysicsJointState>::Success(
+                    {PhysicsJointCoordinateKind::AngleRadians,
+                     static_cast<const JPH::HingeConstraint *>(found->constraint.GetPtr())->GetCurrentAngle()});
+            case JPH::EConstraintSubType::Slider:
+                return Result<PhysicsJointState>::Success(
+                    {PhysicsJointCoordinateKind::PositionMeters,
+                     static_cast<const JPH::SliderConstraint *>(found->constraint.GetPtr())->GetCurrentPosition()});
+            default:
+                return Result<PhysicsJointState>::Failure(
+                    MakeError(PhysicsErrors::OperationUnsupported, "Only hinge and slider joints expose a single-axis coordinate."));
+        }
     }
 }  // namespace Horo::Physics::Detail

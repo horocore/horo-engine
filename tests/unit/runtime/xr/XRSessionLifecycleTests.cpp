@@ -29,13 +29,23 @@ namespace Horo::XR {
                 .limits = {.maximumViews = 4, .maximumSpaces = 8, .maximumActions = 8, .maximumDevices = 4},
             };
             descriptor.states.fill(XRCapabilityState::Unsupported);
+            for (const XRCapability feature :
+                 {XRCapability::PrimaryOpaqueStereo, XRCapability::OrientationTracking, XRCapability::PositionTracking,
+                  XRCapability::ViewSpace, XRCapability::LocalSpace, XRCapability::BooleanActions, XRCapability::FloatActions,
+                  XRCapability::Vector2Actions, XRCapability::PoseActions, XRCapability::PredictedFrames,
+                  XRCapability::ExternalColorTargets, XRCapability::SessionLossLifecycle, XRCapability::CanonicalInputProjection})
+                descriptor.states[static_cast<std::size_t>(feature)] = XRCapabilityState::Available;
             descriptor.states[static_cast<std::size_t>(XRCapability::Projection)] = projection;
             auto result = XRCapabilitySnapshot::Create(descriptor);
             REQUIRE(result.HasValue());
             return result.Value();
         }
 
-        constexpr XRCapabilityRequirement Projection{.capability = XRCapability::Projection, .views = 2};
+        constexpr XRFeatureNegotiationRequest Projection{.profile = XRFeatureProfile::Projection1_0,
+                                                         .requestedLimits = {.maximumViews = 2,
+                                                                             .maximumSpaces = 2,
+                                                                             .maximumActions = 4,
+                                                                             .maximumDevices = 1}};
 
         class RecordingResources final : public IXRSessionResources {
         public:
@@ -45,7 +55,9 @@ namespace Horo::XR {
                 bool release;
             };
 
-            Result<void> Prepare(const XRSessionPreparation stage, const XRSessionId &candidate) override {
+            Result<void> Prepare(const XRSessionPreparation stage, const XRSessionId &candidate, const XRFeaturePlan &plan) override {
+                REQUIRE(plan.Profile() == XRFeatureProfile::Projection1_0);
+                REQUIRE(plan.System() == candidate.system);
                 calls.push_back({stage, candidate, false});
                 if (stage == failAt)
                     return Result<void>::Failure(MakeError(XRErrors::RuntimeUnavailable));
@@ -60,9 +72,16 @@ namespace Horo::XR {
             std::vector<Entry> calls;
         };
 
-        Result<XRSessionId> TryActivate(XRSessionLifecycle &lifecycle, const XRCapabilitySnapshot &capabilities,
-                                        const XRCapabilityRequirement &requirement = Projection) {
-            return lifecycle.Activate(capabilities, capabilities.System(), capabilities.Revision(), requirement);
+        XRFeaturePlan PlanFor(const XRCapabilitySnapshot &capabilities) {
+            const auto outcome = NegotiateXRFeatures(capabilities, capabilities.System(), capabilities.Revision(), Projection);
+            REQUIRE(outcome.status == XRFeatureNegotiationStatus::Ok);
+            REQUIRE(outcome.plan.has_value());
+            return *outcome.plan;
+        }
+
+        Result<XRSessionId> TryActivate(XRSessionLifecycle &lifecycle, const XRCapabilitySnapshot &capabilities) {
+            const XRFeaturePlan plan = PlanFor(capabilities);
+            return lifecycle.Activate(capabilities, capabilities.System(), capabilities.Revision(), plan);
         }
 
         XRSessionId Activate(XRSessionLifecycle &lifecycle, const XRCapabilitySnapshot &capabilities) {
@@ -87,6 +106,8 @@ namespace Horo::XR {
             RecordingResources resources;
             XRSessionLifecycle lifecycle{resources};
             const auto session = Activate(lifecycle, Capabilities());
+            REQUIRE(lifecycle.AcceptedPlan().has_value());
+            REQUIRE(lifecycle.AcceptedPlan()->Profile() == XRFeatureProfile::Projection1_0);
             REQUIRE(lifecycle.Snapshot().state == XRSessionState::Ready);
             RequireFailureIdentity(lifecycle.Admit(session, false), XRErrors::OperationUnavailable);
             RequireFailureIdentity(lifecycle.ApplyEvent(session, XRSessionEvent::BecameFocused), XRSessionErrors::TransitionInvalid);
@@ -106,6 +127,7 @@ namespace Horo::XR {
             REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Stopping).HasValue());
             REQUIRE(lifecycle.ApplyEvent(session, XRSessionEvent::Idle).HasValue());
             REQUIRE_FALSE(lifecycle.Snapshot().session.IsValid());
+            REQUIRE_FALSE(lifecycle.AcceptedPlan().has_value());
             RequireFailureIdentity(lifecycle.Admit(session, false), XRErrors::IdentityStale);
         }
 
@@ -136,6 +158,7 @@ namespace Horo::XR {
             resources.failAt = XRSessionPreparation::RendererTargets;
             RequireFailureIdentity(TryActivate(lifecycle, Capabilities(2)), XRSessionErrors::ActivationFailed);
             REQUIRE(lifecycle.Snapshot().session == original);
+            REQUIRE(lifecycle.AcceptedPlan()->System() == original.system);
             REQUIRE(lifecycle.Admit(original, false).HasValue());
 
             resources.failAt = XRSessionPreparation::Count;
@@ -144,6 +167,7 @@ namespace Horo::XR {
             REQUIRE(replacement != original);
             REQUIRE(replacement.slot.generation > original.slot.generation + 1);
             REQUIRE(lifecycle.Snapshot().state == XRSessionState::Ready);
+            REQUIRE(lifecycle.AcceptedPlan()->System() == replacement.system);
             RequireFailureIdentity(lifecycle.ApplyEvent(original, XRSessionEvent::Stopping), XRErrors::IdentityStale);
             RequireFailureIdentity(lifecycle.Admit(original, false), XRErrors::IdentityStale);
             const XRSpaceId oldSpace{original, {.index = 0, .generation = 1}};
@@ -160,6 +184,7 @@ namespace Horo::XR {
             REQUIRE(lifecycle.ApplyEvent(old, XRSessionEvent::InstanceLost).HasValue());
             REQUIRE(lifecycle.ApplyEvent(old, XRSessionEvent::InstanceLost).HasValue());
             REQUIRE_FALSE(lifecycle.Snapshot().session.IsValid());
+            REQUIRE_FALSE(lifecycle.AcceptedPlan().has_value());
             RequireFailureIdentity(lifecycle.Admit(old, false), XRErrors::IdentityStale);
             const auto recovered = Activate(lifecycle, Capabilities());
             REQUIRE(recovered.slot.generation > old.slot.generation);
@@ -168,6 +193,7 @@ namespace Horo::XR {
             lifecycle.Shutdown();
             REQUIRE(resources.calls.size() == count);
             REQUIRE(lifecycle.Snapshot().state == XRSessionState::Destroyed);
+            REQUIRE_FALSE(lifecycle.AcceptedPlan().has_value());
             RequireFailureIdentity(lifecycle.Admit(recovered, false), XRErrors::IdentityStale);
             RequireFailureIdentity(TryActivate(lifecycle, Capabilities()), XRErrors::OperationUnavailable);
         }
@@ -176,17 +202,22 @@ namespace Horo::XR {
             RecordingResources resources;
             XRSessionLifecycle lifecycle{resources};
             const auto current = Capabilities();
-            RequireFailureIdentity(lifecycle.Activate(current, Capabilities(2).System(), current.Revision(), Projection),
+            const XRFeaturePlan plan = PlanFor(current);
+            RequireFailureIdentity(lifecycle.Activate(current, Capabilities(2).System(), current.Revision(), plan),
                                    XRErrors::IdentityStale);
-            RequireFailureIdentity(lifecycle.Activate(current, current.System(), Generation<XRCapabilityRevision>(99), Projection),
+            RequireFailureIdentity(lifecycle.Activate(current, current.System(), Generation<XRCapabilityRevision>(99), plan),
                                    XRErrors::CapabilityStale);
-            RequireFailureIdentity(TryActivate(lifecycle, Capabilities(1, XRCapabilityState::Unsupported)), XRErrors::OperationUnsupported);
-            XRCapabilityRequirement tooMany = Projection;
-            tooMany.views = 5;
-            RequireFailureIdentity(TryActivate(lifecycle, Capabilities(), tooMany), XRErrors::CapacityExceeded);
-            XRCapabilityRequirement invalid = Projection;
-            invalid.capability = XRCapability::Count;
-            RequireFailureIdentity(TryActivate(lifecycle, Capabilities(), invalid), XRErrors::OperationInvalid);
+            const auto missing = Capabilities(1, XRCapabilityState::Unsupported);
+            REQUIRE(NegotiateXRFeatures(missing, missing.System(), missing.Revision(), Projection).status ==
+                    XRFeatureNegotiationStatus::RequiredUnsupported);
+            auto tooMany = Projection;
+            tooMany.requestedLimits.maximumActions = 9;
+            REQUIRE(NegotiateXRFeatures(current, current.System(), current.Revision(), tooMany).status ==
+                    XRFeatureNegotiationStatus::CapacityExceeded);
+            auto invalid = Projection;
+            invalid.profile = XRFeatureProfile::Count;
+            REQUIRE(NegotiateXRFeatures(current, current.System(), current.Revision(), invalid).status ==
+                    XRFeatureNegotiationStatus::InvalidRequest);
             REQUIRE(resources.calls.empty());
         }
     }  // namespace

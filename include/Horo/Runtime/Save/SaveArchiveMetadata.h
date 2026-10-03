@@ -114,6 +114,7 @@ namespace Horo::Runtime {
         SaveParticipantId participant;                            /**< Stable participant identity. */
         SaveVersionSupport<ParticipantSchemaVersionTag> versions; /**< Direct and migration ranges. */
         bool required{true};                                      /**< Required by current product composition. */
+        std::vector<SaveParticipantId> requiredDependencies;      /**< Stable-sorted owners this participant cannot restore without. */
     };
 
     /** @brief Sealed release policy used for deterministic compatibility preflight. */
@@ -123,6 +124,8 @@ namespace Horo::Runtime {
         SaveVersionSupport<ProductSaveCompatibilityVersionTag> productVersions; /**< Product policy support. */
         std::vector<SaveParticipantCompatibility> participants;                 /**< Stable participant order. */
         std::uint64_t supportedFeatureFlagsMask{};                              /**< Understood header feature bits. */
+        std::vector<SaveParticipantId>
+            droppableUnknownParticipants; /**< Stable-sorted explicit permission to discard optional unknown data. */
     };
 
     /** @brief High-level action selected by compatibility preflight. */

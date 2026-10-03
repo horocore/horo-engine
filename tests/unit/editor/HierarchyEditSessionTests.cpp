@@ -33,6 +33,8 @@ TEST_CASE("Hierarchy edit session projects scene objects without ImGui", "[unit]
     REQUIRE((rows[1].node->name == "Camera"));
     REQUIRE((rows[1].depth == 1));
     REQUIRE((session.SelectedId() == HierarchyNodeId{2}));
+    REQUIRE((session.ParentId(1) == std::nullopt));
+    REQUIRE((session.ParentId(2) == HierarchyNodeId{1}));
 
     const std::vector<HierarchyVisibleRow> &filtered = session.VisibleRows("camera");
     REQUIRE((filtered.size() == 2));

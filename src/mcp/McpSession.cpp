@@ -15,6 +15,11 @@
 #include <utility>
 
 namespace Horo::Mcp {
+    /** @copydoc IMcpRequestController::CancelAccepted */
+    Result<void> IMcpRequestController::CancelAccepted(const McpSessionHandle, const nlohmann::json &) {
+        return Result<void>::Failure(MakeError(McpErrors::RequestInvalid));
+    }
+
     namespace {
         /** @brief Keeps host-configurable bounds finite even when configuration itself is untrusted. */
         [[nodiscard]] bool ValidLimits(const McpSessionLimits &limits) noexcept {
@@ -178,15 +183,18 @@ namespace Horo::Mcp {
         if (!ValidRequestId(requestId, state_->limits))
             return Result<void>::Failure(MakeError(McpErrors::RequestInvalid));
         const auto key = std::pair{session.generation, requestId.dump()};
-        std::lock_guard lock{state_->mutex};
-        const auto found = state_->sessions.find(session.id);
-        if (found == state_->sessions.end() || found->second->handle != session)
-            return Result<void>::Failure(MakeError(McpErrors::SessionUnavailable));
-        const auto active = found->second->inFlight.find(key);
-        if (active == found->second->inFlight.end())
-            return Result<void>::Failure(MakeError(McpErrors::RequestInvalid));
-        active->second.RequestCancellation();
-        return Result<void>::Success();
+        {
+            std::lock_guard lock{state_->mutex};
+            const auto found = state_->sessions.find(session.id);
+            if (found == state_->sessions.end() || found->second->handle != session)
+                return Result<void>::Failure(MakeError(McpErrors::SessionUnavailable));
+            const auto active = found->second->inFlight.find(key);
+            if (active != found->second->inFlight.end()) {
+                active->second.RequestCancellation();
+                return Result<void>::Success();
+            }
+        }
+        return state_->controller->CancelAccepted(session, requestId);
     }
 
     /** @copydoc McpSessionManager::SwitchProject */

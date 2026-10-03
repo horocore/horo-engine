@@ -48,6 +48,12 @@ and `CrashService` are optional because availability depends on host role,
 platform integration, and product policy. An operation requiring an unavailable
 capability returns a typed error.
 
+The graphical editor composes a `NativeDialogs` file and folder picker in its
+application host and lends it to the asset-import modal. The picker returns
+structured native paths; an empty file list or absent folder means the user
+cancelled. The modal holds an input-router `NativeDialog` token for the entire
+synchronous picker call. Headless modal callers omit this optional picker.
+
 The platform layer includes:
 
 - Windows, macOS, Linux, and Android implementations
@@ -100,6 +106,12 @@ cache to publish a fresh directory hierarchy through the durable abstraction.
 Existing alternative adapters must adopt this behavior before serving those
 clients; the native implementation and fresh-root package-cache regressions are
 the compatibility reference.
+
+Private update-package transfer also uses a native durable append primitive.
+It requires an existing protected parent directory, creates a new file only at
+offset zero, and otherwise appends only to a regular single-link file with the
+exact expected length. The file is flushed before checkpoint publication;
+checkpoint recovery rejects any interrupted length mismatch.
 
 ## User Directories
 
@@ -315,6 +327,11 @@ obeys the renderer's render-capable-thread contract.
 
 The platform layer does not dispatch arbitrary callbacks while holding native
 or internal locks.
+
+Windows subprocesses inherit only the explicitly listed standard-stream handles.
+Callers that previously relied on ambient inheritable handles must pass a typed
+capability through a dedicated process contract; they must not set process-wide
+inheritance flags to transfer a release or installation lease.
 
 ## Testing
 

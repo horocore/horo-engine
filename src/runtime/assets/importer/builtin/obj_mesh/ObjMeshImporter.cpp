@@ -250,21 +250,21 @@ namespace Horo::Assets {
                 {
                     ImportSettingDescriptor{
                         .id = "coordinateSystem",
-                        .labelKey = "Coordinate System",
-                        .descriptionKey = "Target coordinate system.",
+                        .labelKey = "asset_import.setting.coordinate_system",
+                        .descriptionKey = "asset_import.setting.coordinate_system.description",
                         .kind = ImportSettingKind::Choice,
                         .defaultValue = std::string{"Y-up (engine)"},
                         .choices =
                             {
-                                {.id = "yup", .labelKey = "Y-up (engine)", .value = std::string{"Y-up (engine)"}},
-                                {.id = "zup", .labelKey = "Z-up", .value = std::string{"Z-up"}},
+                                {.id = "yup", .labelKey = "asset_import.choice.y_up", .value = std::string{"Y-up (engine)"}},
+                                {.id = "zup", .labelKey = "asset_import.choice.z_up", .value = std::string{"Z-up"}},
                             },
                         .includeInPresets = true,
                     },
                     ImportSettingDescriptor{
                         .id = "unitScale",
-                        .labelKey = "Unit Scale",
-                        .descriptionKey = "Scale factor from source units to engine units.",
+                        .labelKey = "asset_import.setting.unit_scale",
+                        .descriptionKey = "asset_import.setting.unit_scale.description",
                         .kind = ImportSettingKind::Float,
                         .defaultValue = 1.0,
                         .minimum = 0.001,
@@ -273,15 +273,19 @@ namespace Horo::Assets {
                     },
                     ImportSettingDescriptor{
                         .id = "importNormals",
-                        .labelKey = "Import Normals",
-                        .descriptionKey = "How vertex normals are determined.",
+                        .labelKey = "asset_import.setting.import_normals",
+                        .descriptionKey = "asset_import.setting.import_normals.description",
                         .kind = ImportSettingKind::Choice,
                         .defaultValue = std::string{"Import from source"},
                         .choices =
                             {
-                                {.id = "import", .labelKey = "Import from source", .value = std::string{"Import from source"}},
-                                {.id = "smooth", .labelKey = "Calculate smooth", .value = std::string{"Calculate smooth"}},
-                                {.id = "flat", .labelKey = "Calculate flat", .value = std::string{"Calculate flat"}},
+                                {.id = "import",
+                                 .labelKey = "asset_import.choice.normals_source",
+                                 .value = std::string{"Import from source"}},
+                                {.id = "smooth",
+                                 .labelKey = "asset_import.choice.normals_smooth",
+                                 .value = std::string{"Calculate smooth"}},
+                                {.id = "flat", .labelKey = "asset_import.choice.normals_flat", .value = std::string{"Calculate flat"}},
                             },
                         .includeInPresets = true,
                     },

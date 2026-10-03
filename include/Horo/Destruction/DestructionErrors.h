@@ -74,4 +74,14 @@ namespace Horo::Destruction::DestructionErrors {
     extern const ErrorCodeDescriptor CompositionCapabilityUnavailable;
     /** @brief Work references a replaced immutable destruction composition revision. */
     extern const ErrorCodeDescriptor CompositionStale;
+    /** @brief Destruction replication state or a required field has malformed semantic values. */
+    extern const ErrorCodeDescriptor ReplicationInvalid;
+    /** @brief Destruction replication chunk masks are malformed or contradictory. */
+    extern const ErrorCodeDescriptor ReplicationInvalidChunkMask;
+    /** @brief Destruction replication state exceeds the declared finite work or byte envelope. */
+    extern const ErrorCodeDescriptor ReplicationLimitExceeded;
+    /** @brief The remote DFR schema or exact fracture content cannot be interpreted. */
+    extern const ErrorCodeDescriptor ReplicationIncompatible;
+    /** @brief A payload belongs to a retired authority epoch. */
+    extern const ErrorCodeDescriptor ReplicationStaleAuthority;
 }  // namespace Horo::Destruction::DestructionErrors

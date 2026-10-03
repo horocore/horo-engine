@@ -11,6 +11,7 @@
 #include "Horo/Physics/PhysicsFilterIdentity.h"
 #include "Horo/Physics/PhysicsIdentity.h"
 
+#include <array>
 #include <compare>
 #include <cstdint>
 #include <optional>
@@ -59,17 +60,35 @@ namespace Horo::Physics {
         [[nodiscard]] constexpr auto operator<=>(const PhysicsEventMaterial &) const noexcept = default;
     };
 
+    inline constexpr std::uint32_t MaximumPhysicsContactPoints = 4;
+
     /**
-     * @brief Bounded contact point evidence copied before the native solver callback returns.
+     * @brief One copied contact point with positions on both shapes and optional impulse evidence.
      *
-     * The normal points from the first canonical endpoint toward the second. Impulse data is left
-     * at zero until the solver-specific post-step impulse contract is available.
+     * The normal points from the first canonical endpoint toward the second. Penetration may be
+     * negative for a speculative contact. An impulse value is a bounded pre-solve estimate, not
+     * the solver's applied post-step impulse; absent means unavailable (including sensors).
      */
-    struct PhysicsContactSummary final {
-        Math::Vec3 position{};
+    struct PhysicsContactPoint final {
+        Math::Vec3 positionOnFirst{};
+        Math::Vec3 positionOnSecond{};
         Math::Vec3 normal{0.0F, 1.0F, 0.0F};
         float penetrationDepthMeters{};
-        float normalImpulseNewtonSeconds{};
+        std::optional<float> normalImpulseEstimateNewtonSeconds;
+
+        [[nodiscard]] constexpr auto operator<=>(const PhysicsContactPoint &) const noexcept = default;
+    };
+
+    /**
+     * @brief Bounded copied contact manifold, sorted by Horo point evidence after projection.
+     *
+     * Only the first pointCount entries are meaningful. omittedPointCount counts point evidence
+     * omitted by the fixed bound across callbacks; repeated native evidence may be counted again.
+     */
+    struct PhysicsContactSummary final {
+        std::array<PhysicsContactPoint, MaximumPhysicsContactPoints> points{};
+        std::uint32_t pointCount{};
+        std::uint64_t omittedPointCount{};
 
         [[nodiscard]] constexpr auto operator<=>(const PhysicsContactSummary &) const noexcept = default;
     };

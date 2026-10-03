@@ -1,6 +1,67 @@
 #include "CharacterWorldCommandInternal.h"
 
+#include <chrono>
+
 namespace Horo::Character {
+    namespace {
+        [[nodiscard]] std::uint64_t OverflowTotal(const auto &impl) noexcept {
+            const auto fastPath = impl.fastPath.Snapshot();
+            return impl.commandOverflowCount.load() + fastPath.contactOverflowCount + fastPath.hitOverflowCount +
+                   fastPath.eventOverflowCount + fastPath.impulseOverflowCount + fastPath.scratchOverflowCount;
+        }
+
+        /** @brief Finalizes one optional attempt even when command resolution exits early. */
+        template <typename Impl> class MetricAttempt final {
+        public:
+            MetricAttempt(Impl &impl, CharacterMetricCapture *capture, const std::uint64_t tick) : impl_(impl), capture_(capture) {
+                if (capture_ == nullptr)
+                    return;
+                const auto registryLock = impl_.synchronization.LockRegistry();
+                const auto active = impl_.controllers.Statistics().active;
+                capture_->snapshot = {.world = impl_.descriptor.identity,
+                                      .sceneGeneration = impl_.descriptor.sceneGeneration,
+                                      .tick = tick,
+                                      .activeControllers = static_cast<std::uint32_t>(active)};
+                phaseStart_ = Clock::now();
+            }
+
+            MetricAttempt(const MetricAttempt &) = delete;
+            MetricAttempt &operator=(const MetricAttempt &) = delete;
+            MetricAttempt(MetricAttempt &&) = delete;
+            MetricAttempt &operator=(MetricAttempt &&) = delete;
+
+            ~MetricAttempt() {
+                if (capture_ == nullptr)
+                    return;
+                capture_->snapshot.failed = !committed_;
+                capture_->snapshot.overflows = OverflowTotal(impl_);
+            }
+
+            void FinishPhase(const CharacterMetricPhase phase) noexcept {
+                if (capture_ == nullptr)
+                    return;
+                const auto now = Clock::now();
+                capture_->snapshot.phaseSeconds[static_cast<std::size_t>(phase)] = std::chrono::duration<double>(now - phaseStart_).count();
+                capture_->snapshot.phaseCompleted[static_cast<std::size_t>(phase)] = true;
+                phaseStart_ = now;
+            }
+
+            void Commit(const std::uint64_t publicationRevision) noexcept {
+                if (capture_ == nullptr)
+                    return;
+                capture_->snapshot.publicationRevision = publicationRevision;
+                committed_ = true;
+            }
+
+        private:
+            using Clock = std::chrono::steady_clock;
+            Impl &impl_;
+            CharacterMetricCapture *capture_{};
+            Clock::time_point phaseStart_{};
+            bool committed_{};
+        };
+    }  // namespace
+
     /** @copydoc CharacterWorld::QueueMovementCommand */
     Result<CharacterCommandAdmission> CharacterWorld::QueueMovementCommand(const CharacterMovementRequest &request) {
         const auto rejected = [this](const CharacterCommandAdmissionStatus status) {
@@ -37,6 +98,8 @@ namespace Horo::Character {
     Result<void> CharacterWorld::AdvanceFixedTick(const CharacterFixedTickInput &input) {
         if (const auto owner = Detail::RequireOwnerThread(impl_->ownerThread); owner.HasError())
             return owner;
+        if (input.metrics != nullptr)
+            input.metrics->snapshot = {};
         if (impl_->state.load() != CharacterWorldState::Active || impl_->ticking.load())
             return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
         if (input.tick == 0 || input.sceneGeneration != impl_->descriptor.sceneGeneration || input.fixedDelta <= Duration{} ||
@@ -44,22 +107,28 @@ namespace Horo::Character {
             return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
 
         Detail::TickGuard ticking{*impl_};
+        MetricAttempt metrics{*impl_, input.metrics, input.tick};
         impl_->fastPath.ResetTransient();
+        impl_->tickQueries = 0;
         if (const auto frozen = Detail::FreezeCommandFrame(*impl_, input); frozen.HasError())
             return frozen;
 
         Detail::ObservePhase(input, CharacterTickPhase::FreezeCommands);
+        metrics.FinishPhase(CharacterMetricPhase::FreezeCommands);
         const auto applied = Detail::ApplyCommandFrame(*impl_, input);
         if (applied.HasError())
             return Result<void>::Failure(applied.ErrorValue());
         if (impl_->state.load() != CharacterWorldState::Active)
             return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
         Detail::ObservePhase(input, CharacterTickPhase::ResolveMovement);
+        metrics.FinishPhase(CharacterMetricPhase::ResolveMovement);
 
         impl_->fastPath.Canonicalize();
         Detail::PublishTick(*impl_, input, applied.Value());
         impl_->completedTicks.fetch_add(1);
         Detail::ObservePhase(input, CharacterTickPhase::PublishCompletedTick);
+        metrics.FinishPhase(CharacterMetricPhase::PublishCompletedTick);
+        metrics.Commit(impl_->published.publicationRevision);
         return Result<void>::Success();
     }
 

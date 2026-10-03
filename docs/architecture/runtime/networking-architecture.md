@@ -42,6 +42,55 @@ Character checkpoint.
 - **Typed Runtime Mode Plan**: ADR-102 separates package-supported modes from the one standalone, client, listen-server or dedicated-server plan selected before world publication. Gameplay receives world/session-generation-scoped roles and capabilities; process globals, locality and headless state never grant authority.
 - **Shared Typed Configuration**: ADR-103 applies ADR-009 once across editor, CLI, MCP, CI and packaged hosts. Project defaults, preview preferences, release role, host requests and credential bindings retain distinct owners; product capability/security floors constrain runtime selection.
 
+### Host mode composition boundary
+
+`ResolveNetworkModePlan` consumes one admitted `AssessNetworkTarget` result and its
+exact selection. It validates the closed Standalone/Client/ListenServer/
+DedicatedServer world shape, distinct Scene instances, server-only authority epoch,
+and host presentation selection before any factory runs. A mode plan is immutable
+for its host generation; neither listener presence nor a renderer/headless state
+can create authority. The application composition root supplies concrete factories
+for the required transport, session, replication, Scene, Physics and optional
+presentation/local-player participants. `NetworkRuntime` owns no concrete factory.
+
+`NetworkModeComposition` prepares the complete selected participant set, activates
+it through the same ordered lifecycle, and publishes world-scoped role evidence
+only after all participants succeed. Standalone invokes no transport, session or
+replication factory. Dedicated uses the same authority-world Scene/Physics and
+network participant contract as listen mode, with no GUI, renderer, audio, input
+or local-player participant. Absent presentation participants are no-ops in the
+canonical `RuntimePhase` schedule, not an alternative headless scheduler. The
+runtime host, not this contract, drives `FrameScheduler` and supplies concrete
+Scene/Physics implementations.
+
+The headless `horo-engine --run-network-product` path is an application-owned
+composition consumer. Its product declaration is baked into that executable;
+package inventory is derived from its actual optional GNS link edge, never from
+the selected mode. The no-GNS artifact declares standalone only and invokes no
+transport factory. The GNS artifact may select client, listen or dedicated only
+with explicit bind/connect endpoints; it does not substitute Null or loopback for
+an unavailable production provider. `NetworkProductHost` applies target admission
+before factory invocation and installs the mode as a `RuntimeHost` participant, so
+all modes execute the same canonical phases. `HeadlessNetworkServices` supplies
+the same runtime Scene and canonical Physics world construction to standalone,
+listen and dedicated worlds; dedicated selects no presentation or local-player
+factory. This built-in minimal Scene is not a general authored-project loader.
+The reference executable has no installed credential/trust authorities: native
+`Accepted` and `Connected` events are bounded by its transport poll and explicitly
+closed, never admitted as gameplay sessions. A policy-backed transport-to-session
+path and player roster belong to NET-007.3; typed project/map server launch
+configuration belongs to NET-007.4. Neither is implied by this reference path.
+
+Client session exposure requires `PeerSessionLifecycle::AdmitGameplay` for the
+exact connection and generation; pre-Active transport connectivity is invisible
+to gameplay. Disconnect revokes only the matching client session and never
+promotes it to standalone or transfers the listen server's authority. Aggregate
+travel prepares all replacement Scene/Physics/local-player participants, then
+swaps fresh Scene and authority identities at `CommitDeferredLifecycleChanges`;
+failure retains the old pair. Shutdown revokes role views first and releases
+participants in reverse construction order. Host-provided factories remain
+responsible for their concrete worker, lease, and native-resource teardown.
+
 ## Target Topology and Module Ownership
 
 The network subsystem is organized into four distinct CMake targets with strict compile-time boundaries:
@@ -565,6 +614,29 @@ parsing and compatibility checks precede expensive verification. Timeout,
 cancellation or shutdown invalidates the admission generation, so late transport
 or verifier completion cannot activate a session.
 
+`AdmissionProtection` is the host-owned, owner-thread ledger for NET-002.9. The
+host selects its protocol security floor and finite pending, per-source, work,
+byte and diagnostic limits before accepting connections. It derives a stable
+source bucket from transport evidence, calls
+`ComputeAdmissionTranscriptDigest` over the selected
+protocol/version/schema/features/transport, both fresh nonces and exact
+connection/session generations, then calls `Begin` after handshake
+selection and before constructing authentication. The host must use an
+unpredictable nonce generator and its credential authority must verify the proof
+against that same transcript; the bounded recent-nonce ledger is an additional
+replay fence, not a replacement for cryptographic freshness. It charges hostile
+bytes and parse failures before parsing, passes the ledger into
+`AuthenticationSessionAdapter` to charge attempts and each verifier call, and
+charges diagnostic events before emitting them. A rejected charge closes the
+specific admission and transport connection; the owner calls `End` on success,
+failure, timeout, cancellation or disconnect, and `Shutdown` before releasing
+the host policy or authority providers. The ledger uses fixed 64-slot peer,
+source and recent-nonce storage with no per-attempt allocation. A full source
+ledger rejects new sources until its accounting window expires. This public
+contract is additive: existing authentication callers remain valid, while
+production session composition must pass the shared ledger to enforce global
+limits. It stays in `NetworkRuntime`; transports and gameplay never own it.
+
 ## Delivery Semantics and Backpressure
 
 [ADR-070](../../adr/070-capture-and-voice-io-ownership.md) keeps voice packet policy
@@ -580,6 +652,84 @@ Delivery policies:
 - **UnreliableSequenced**: Discards out-of-order packets; only newer packets are accepted.
 - **ReliableOrdered**: Guaranteed delivery in order (e.g., game events, inventory actions, chat).
 - **ReliableUnordered**: Guaranteed delivery without strict ordering constraints.
+
+The session owner admits each decoded message through a generation-fenced,
+single-owner message delivery gate immediately before calling an application
+handler. Each explicitly configured channel is an independent sequence/replay
+scope; unrelated command, snapshot, and control work needs separate negotiated
+channels to avoid head-of-line coupling. Sequence keys start at one and never
+wrap within a session. Ordered channels require the next key, sequenced and
+replaceable snapshot channels discard older keys, and unordered channels keep
+a fixed 64-key replay window and reject older arrivals. Absolute owner-clock
+expiry is checked before replay state or gameplay mutation; equal to the expiry
+tick is expired. Disconnect/shutdown permanently closes the gate, and a new
+session generation receives new state. The gate is backend-neutral and uses
+the already admitted transport capability snapshot; it never silently changes
+delivery policy. The owner supplies metadata derived from the validated
+transport event and decoded envelope, not untrusted application payload fields.
+Admission consumes a replay key before handler invocation. Typed handler failure
+is propagated and an exception escapes to the owner boundary; neither permits
+ambiguous replay of a handler that may already have mutated state. The gate
+allocates only when configured, not on its admitted-message path; handler work
+has its own budget and error contract.
+This adds a NetworkApi-owned optional policy seam; existing envelope, transport,
+and session callers retain their contracts. A host adding gameplay dispatch
+must construct the gate after session admission, derive its inputs from the
+validated event/envelope, call `Apply` at the owner safe point, and shut it down
+before retiring that session. It does not replace the owner-thread routing and
+handler registry work tracked separately by NET-002.7.
+
+`InboundMessageDispatcher` is the NetworkRuntime owner-thread route for NET-002.7.
+A host supplies its transport and immutable codec snapshot, registers only an
+already-Active `PeerSessionLifecycle` issued by its trust/admission authority,
+and transfers a generation-matched delivery gate. `RunNetworkPoll` stages
+transport events first; only after `PollEvents` returns does it decode bounded
+envelopes and call an exact protocol/message handler through the gate. Handler
+ownership is weak, work is rate-bounded and restricted to `NetworkPoll`, and
+absent, revoked, expired, malformed or overloaded work never reaches gameplay.
+Queue overflow closes the entire route rather than silently dropping an ordered
+packet. The minimal headless product still has no credential authority and
+deliberately closes native peers; connectivity alone cannot register gameplay.
+
+`RpcGameplayDispatch` is the NET-004.9 owner-thread RPC handler composed behind
+an exact admitted `InboundMessageDispatcher` message binding. Its bounded payload
+format is little-endian `RpcId:u64, authorityEpoch:u64, objectSlot:u64,
+objectGeneration:u32, schemaMajor:u16, schemaMinor:u16, logicalSequence:u64,
+recipientPeer:u64, parameterCount:u16`, followed by ascending distinct
+`RpcParameterId:u32, byteLength:u32, canonicalBytes` records. Recipient is zero
+for client-to-authority calls and the exact host-bound local peer for
+authority-to-client calls. Framing, descriptor compatibility, canonical typed
+decoding, live object/role/session authority and reliable logical replay are
+checked before queuing. The transport delivery class comes from admitted context,
+and a reliable declaration cannot arrive through an unreliable lane. Each invocation
+has a finite host-selected wire and retained-value byte ceiling, including optional
+defaults; pending storage is bounded by that ceiling times the command capacity,
+plus at most 64 typed-value slots per command. The fixed-step Gameplay drain repeats mutable checks
+while retaining world, handler and module leases through the callback. Host composition
+must supply an exact module-generation lease with every executable binding. Binding
+compaction retires serializers before releasing their original code lease, and
+serializer callbacks are pinned and revalidated after return. The registration
+call takes its handler pin by value and moves both that pin and the
+module lease into ordered local owners before validation. This prevents implicit
+derived-to-interface smart-pointer temporaries or parameter teardown from retiring
+code before a handler destructor. Existing call expressions remain source-compatible;
+consumers of this new RPC API must rebuild for the updated function signature.
+The factory-only
+construction path uses private admission keys with standard smart-pointer
+factories; consumers cannot bypass descriptor/capacity validation. Standard allocation
+and callback exceptions become typed terminal failures. A final catch-all is required
+at each untrusted module boundary because C++ callbacks can throw non-standard values;
+removing it would let hostile module code escape the host's lifecycle contract.
+The host retires the
+network mapping before destroying its Scene entity; the Gameplay handler resolves
+the generation-qualified entity again before staging its transaction. Handler
+mutation is an all-or-nothing Gameplay transaction; failed or thrown callbacks
+are terminal and never replayed. Binding replacement retains replay high-water
+for the active connection and object occurrence. Peer, object or handler
+revocation cannot erase replay high-water for the same generation; a new
+connection or object generation creates a distinct scope. Unsupported custom caller
+permissions fail closed until a host-approved policy is composed. Rate-limit
+enforcement is owned by NET-004.10.
 
 ### Backpressure and Overload Policies
 
@@ -870,5 +1020,5 @@ The networking subsystem requires targeted automated verification:
 - [Multiplayer Replication Architecture](./multiplayer-replication-architecture.md)
 - [Runtime Lifecycle](./runtime-lifecycle.md)
 - [Concurrency And Job System](../foundation/concurrency-and-jobs.md)
-- [Network Debugger UI Reference](./network-debugger.html)
+- [Network Debugger UI Reference](../../../mock-studio/designs.md#architecture-runtime-network-debugger)
 - [Application Security Architecture](../security/application-security.md)

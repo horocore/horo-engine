@@ -10,6 +10,7 @@
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Packages/PackageCache.h"
 #include "Horo/Packages/PackageLockfile.h"
+#include "Horo/Packages/PackagePublisherVerification.h"
 #include "Horo/Security/ArtifactSignature.h"
 
 #include <compare>
@@ -22,8 +23,6 @@
 #include <vector>
 
 namespace Horo::Packages {
-    class PackagePublisherVerificationService;
-
     /** @brief Selects whether restore may use configured remote or source transports. */
     enum class PackageRestoreMode : std::uint8_t {
         Online,
@@ -117,6 +116,8 @@ namespace Horo::Packages {
         LockedPackage lock;
         std::shared_ptr<const ValidatedPackageArchive> archive;
         bool cacheHit{};
+        std::optional<PackagePublisherVerificationDecision>
+            publisher; /**< Exact publisher decision for this archive, absent only when not requested. */
     };
 
     /** @brief Complete immutable candidate graph published only after every locked package is ready. */

@@ -14,6 +14,14 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 namespace {
     const Horo::ErrorCodeDescriptor kInjectedStoreFailure{
         .domain = Horo::ErrorDomainId{"test.configuration-store"},
@@ -186,6 +194,111 @@ namespace {
         REQUIRE((second >= first));
     }
 
+    TEST_CASE("Product launch leases admit concurrent products and exclude maintenance", "[unit][foundation][release]") {
+        const auto root = std::filesystem::temp_directory_path() / "horo-platform-launch-lease-test";
+        std::error_code ignored;
+        std::filesystem::remove_all(root, ignored);
+        std::filesystem::create_directories(root);
+        Horo::NativeDurableFileSystem files;
+        {
+            auto first = files.TryAcquireProductLaunch(root);
+            REQUIRE(first.HasValue());
+            auto second = files.TryAcquireProductLaunch(root);
+            REQUIRE(second.HasValue());
+            CHECK(files.TryAcquireProductMaintenance(root).HasError());
+        }
+        {
+            auto maintenance = files.TryAcquireProductMaintenance(root);
+            REQUIRE(maintenance.HasValue());
+            CHECK(files.TryAcquireProductLaunch(root).HasError());
+        }
+        CHECK(files.TryAcquireProductLaunch(root).HasValue());
+        CHECK(files.TryAcquireProductMaintenance(root / "missing").HasError());
+        std::filesystem::create_symlink(root / ".product-launch.lock", root / "alias.lock", ignored);
+        if (!ignored) {
+            std::filesystem::remove(root / ".product-launch.lock", ignored);
+            std::filesystem::rename(root / "alias.lock", root / ".product-launch.lock", ignored);
+            if (!ignored)
+                CHECK(files.TryAcquireProductLaunch(root).HasError());
+        }
+        std::filesystem::remove_all(root, ignored);
+    }
+
+#if !defined(_WIN32)
+    TEST_CASE("A child closing an inherited product lease cannot unlock parent maintenance", "[unit][foundation][release]") {
+        const auto root =
+            std::filesystem::temp_directory_path() / ("horo-platform-inherited-lease-" + std::to_string(static_cast<long long>(getpid())));
+        std::error_code ignored;
+        std::filesystem::remove_all(root, ignored);
+        REQUIRE(std::filesystem::create_directories(root));
+        Horo::NativeDurableFileSystem files;
+        {
+            auto maintenance = files.TryAcquireProductMaintenance(root);
+            REQUIRE(maintenance.HasValue());
+            const pid_t child = fork();
+            REQUIRE(child >= 0);
+            if (child == 0) {
+                {
+                    Horo::ProductLaunchLease inherited = std::move(maintenance).Value();
+                }
+                _exit(0);
+            }
+            int status = 0;
+            REQUIRE(waitpid(child, &status, 0) == child);
+            REQUIRE(WIFEXITED(status));
+            REQUIRE(WEXITSTATUS(status) == 0);
+            CHECK(files.TryAcquireProductLaunch(root).HasError());
+        }
+        CHECK(files.TryAcquireProductLaunch(root).HasValue());
+        std::filesystem::remove_all(root, ignored);
+    }
+#endif
+
+    TEST_CASE("Probe lease transfer preserves the maintenance gate and checks installation identity", "[unit][platform][release]") {
+        const auto root = std::filesystem::temp_directory_path() /
+                          ("horo-probe-lease-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const auto other = root / "other";
+        std::error_code ignored;
+        REQUIRE(std::filesystem::create_directories(other));
+        Horo::NativeDurableFileSystem files;
+        Horo::NativeExternalProcessRunner runner;
+        const Horo::ExternalProcessRequest scrubbed{.executable = HORO_PROCESS_TEST_CHILD,
+                                                    .arguments = {"probe-lease-env-absent"},
+                                                    .environment = {.set = {{"HORO_PRODUCT_PROBE_LEASE", "123"}}}};
+        const auto absent = runner.Run(scrubbed, {});
+        REQUIRE(absent.HasValue());
+        CHECK(absent.Value().exitCode == 0);
+        {
+            auto shared = files.TryAcquireProductLaunch(root);
+            REQUIRE(shared.HasValue());
+            const Horo::ExternalProcessRequest denied{.executable = HORO_PROCESS_TEST_CHILD,
+                                                      .arguments = {"adopt-probe-lease", root.string()},
+                                                      .maintenanceLease = &shared.Value()};
+            CHECK(runner.Run(denied, {}).HasError());
+        }
+        {
+            auto maintenance = files.TryAcquireProductMaintenance(root);
+            REQUIRE(maintenance.HasValue());
+            const Horo::ExternalProcessRequest valid{.executable = HORO_PROCESS_TEST_CHILD,
+                                                     .arguments = {"adopt-probe-lease", root.string()},
+                                                     .maintenanceLease = &maintenance.Value()};
+            const auto accepted = runner.Run(valid, {});
+            REQUIRE(accepted.HasValue());
+            CHECK(accepted.Value().reason == Horo::ProcessTerminationReason::Exited);
+            CHECK(accepted.Value().exitCode == 0);
+            CHECK(files.TryAcquireProductLaunch(root).HasError());
+
+            const Horo::ExternalProcessRequest wrongRoot{.executable = HORO_PROCESS_TEST_CHILD,
+                                                         .arguments = {"adopt-probe-lease", other.string()},
+                                                         .maintenanceLease = &maintenance.Value()};
+            const auto rejected = runner.Run(wrongRoot, {});
+            REQUIRE(rejected.HasValue());
+            CHECK(rejected.Value().exitCode == 4);
+        }
+        CHECK(files.TryAcquireProductLaunch(root).HasValue());
+        std::filesystem::remove_all(root, ignored);
+    }
+
     TEST_CASE("Native Durable Filesystem Serializes Locks And Replaces Files", "[unit][foundation]") {
         const auto root = std::filesystem::temp_directory_path() / "horo-platform-durable-test";
         std::error_code ignored;
@@ -217,6 +330,44 @@ namespace {
         REQUIRE((files.RemoveDurable(root / "copied").HasValue()));
         REQUIRE((files.RemoveDurable(root / "published").HasValue()));
         std::filesystem::remove_all(root, ignored);
+    }
+
+    TEST_CASE("Private durable append requires exact offset and rejects file aliases", "[unit][foundation]") {
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto root = std::filesystem::temp_directory_path() / ("horo-private-append-" + std::to_string(stamp));
+        std::filesystem::create_directories(root);
+
+        struct Cleanup final {
+            std::filesystem::path path;
+
+            ~Cleanup() {
+                std::error_code ignored;
+                std::filesystem::remove_all(path, ignored);
+            }
+        } cleanup{root};
+
+        Horo::NativeDurableFileSystem files;
+        const auto partial = root / std::filesystem::path{u8"paket örnek.partial"};
+        const std::string first = "first";
+        const std::string second = "second";
+        REQUIRE(files.AppendPrivateDurable(partial, 0U, std::as_bytes(std::span{first})).HasValue());
+        CHECK(files.AppendPrivateDurable(partial, 0U, std::as_bytes(std::span{second})).HasError());
+        CHECK(files.AppendPrivateDurable(partial, 4U, std::as_bytes(std::span{second})).HasError());
+        REQUIRE(files.AppendPrivateDurable(partial, first.size(), std::as_bytes(std::span{second})).HasValue());
+        {
+            std::ifstream input(partial, std::ios::binary);
+            REQUIRE(std::string(std::istreambuf_iterator<char>(input), {}) == first + second);
+        }
+        std::error_code linkError;
+        std::filesystem::create_hard_link(partial, root / "alias", linkError);
+        if (!linkError)
+            CHECK(files.AppendPrivateDurable(partial, first.size() + second.size(), std::as_bytes(std::span{second})).HasError());
+        std::filesystem::remove(root / "alias", linkError);
+        std::filesystem::remove(partial);
+        linkError.clear();
+        std::filesystem::create_symlink(root / "missing", partial, linkError);
+        if (!linkError)
+            CHECK(files.AppendPrivateDurable(partial, 0U, std::as_bytes(std::span{first})).HasError());
     }
 
     TEST_CASE("Configuration File Store Publishes Deterministic Versioned Documents", "[unit][foundation][configuration]") {
@@ -376,6 +527,24 @@ namespace {
         }
     }
 
+#if defined(_WIN32)
+    TEST_CASE("External process does not inherit unrelated Windows handles", "[unit][platform][process]") {
+        SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+        const HANDLE unrelated = CreateEventW(&security, TRUE, TRUE, nullptr);
+        REQUIRE(unrelated != nullptr);
+        Horo::NativeExternalProcessRunner runner;
+        const Horo::ExternalProcessRequest request{
+            .executable = HORO_PROCESS_TEST_CHILD,
+            .arguments = {"handle-unavailable", std::to_string(reinterpret_cast<std::uintptr_t>(unrelated))},
+        };
+        const auto result = runner.Run(request, {});
+        CloseHandle(unrelated);
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value().reason == Horo::ProcessTerminationReason::Exited);
+        REQUIRE(result.Value().exitCode == 0);
+    }
+#endif
+
     TEST_CASE("External process launch failure leaves the runner usable", "[unit][platform][process]") {
         Horo::NativeExternalProcessRunner runner;
         const auto missing = std::filesystem::temp_directory_path() /
@@ -384,10 +553,13 @@ namespace {
         REQUIRE(runner.Run(invalid, {}).HasError());
 
         const Horo::ExternalProcessRequest valid{.executable = HORO_PROCESS_TEST_CHILD, .arguments = {"exit-failure"}};
-        const auto recovered = runner.Run(valid, {});
-        REQUIRE(recovered.HasValue());
-        REQUIRE(recovered.Value().reason == Horo::ProcessTerminationReason::Exited);
-        REQUIRE(recovered.Value().exitCode == 17);
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            const auto recovered = runner.Run(valid, {});
+            REQUIRE(recovered.HasValue());
+            REQUIRE(recovered.Value().reason == Horo::ProcessTerminationReason::Exited);
+            REQUIRE(recovered.Value().stopCause == Horo::ProcessStopCause::None);
+            REQUIRE(recovered.Value().exitCode == 17);
+        }
     }
 
     TEST_CASE("External process cancellation and forced timeout keep their stop causes", "[unit][platform][process]") {
@@ -463,6 +635,30 @@ namespace {
         std::error_code ignored;
         std::filesystem::remove(marker, ignored);
     }
+#if defined(_WIN32)
+    TEST_CASE("Exited Windows parent cleans up a surviving Job descendant", "[unit][platform][process]") {
+        const auto marker = std::filesystem::temp_directory_path() /
+                            ("horo-exiting-process-tree-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        Horo::NativeExternalProcessRunner runner;
+        const Horo::ExternalProcessRequest tree{
+            .executable = HORO_PROCESS_TEST_CHILD,
+            .arguments = {"exiting-tree", marker.string()},
+            .gracefulTermination = std::chrono::milliseconds{100},
+            .maximumDrainDuration = std::chrono::milliseconds{100},
+        };
+        const auto result = runner.Run(tree, {});
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value().stopCause == Horo::ProcessStopCause::DescendantCleanup);
+        REQUIRE((result.Value().reason == Horo::ProcessTerminationReason::Cancelled ||
+                 result.Value().reason == Horo::ProcessTerminationReason::Forced));
+        REQUIRE(std::filesystem::exists(marker));
+        const auto before = std::filesystem::file_size(marker);
+        std::this_thread::sleep_for(std::chrono::milliseconds{100});
+        REQUIRE(std::filesystem::file_size(marker) == before);
+        std::error_code ignored;
+        std::filesystem::remove(marker, ignored);
+    }
+#endif
 #if !defined(_WIN32)
     TEST_CASE("External process preserves spontaneous POSIX signal outcome", "[unit][platform][process]") {
         Horo::NativeExternalProcessRunner runner;

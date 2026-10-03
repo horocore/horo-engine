@@ -438,6 +438,12 @@ namespace Horo::Editor {
             out.error = "Editor settings file must contain a JSON object.";
             return out;
         }
+        if (const auto schemaVersion = FindIntValue(json, "schemaVersion");
+            json.find("\"schemaVersion\"") != std::string::npos && (!schemaVersion.has_value() || *schemaVersion != 1)) {
+            out.parseError = true;
+            out.error = "Editor settings schema version is unsupported.";
+            return out;
+        }
 
         ApplyJsonValues(json, out.settings);
         if (std::string validationError; !ValidateEditorSettings(out.settings, &validationError)) {

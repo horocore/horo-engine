@@ -952,12 +952,12 @@ namespace Horo::Editor {
             DrawProjectTreeRow("project.json", 2, false, ctx);
             DrawProjectTreeRow("plugins.json", 2, false, ctx);
             DrawProjectTreeRow("input.json", 2, false, ctx);
-            DrawProjectTreeRow("assets", 1, true, ctx);
-            DrawProjectTreeRow("models", 2, true, ctx);
-            DrawProjectTreeRow("textures", 2, true, ctx);
-            DrawProjectTreeRow("materials", 2, true, ctx);
-            DrawProjectTreeRow("shaders", 2, true, ctx);
-            DrawProjectTreeRow("scenes", 2, true, ctx);
+            DrawProjectTreeRow("Assets", 1, true, ctx);
+            DrawProjectTreeRow("Models", 2, true, ctx);
+            DrawProjectTreeRow("Textures", 2, true, ctx);
+            DrawProjectTreeRow("Materials", 2, true, ctx);
+            DrawProjectTreeRow("Shaders", 2, true, ctx);
+            DrawProjectTreeRow("Scenes", 2, true, ctx);
             if (draft.initializeGit)
                 DrawProjectTreeRow(".gitignore", 1, false, ctx);
             if (draft.generateCMakeProject) {

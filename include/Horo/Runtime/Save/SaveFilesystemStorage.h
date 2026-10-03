@@ -15,7 +15,17 @@
 #include <vector>
 
 namespace Horo::Runtime {
-    /** @brief Owns a namespace directory capability for local archive bytes. */
+    /** @brief Owns a single-instance namespace directory capability for local archive bytes.
+     *
+     * Open retains a nonblocking exclusive kernel lock until destruction, including across moves.
+     * Another open of the same physical namespace returns OperationInProgress even in this process.
+     * The fixed lock file is never unlinked or interpreted as PID/timestamp ownership; the kernel
+     * releases ownership on close or process termination. Existing unlocked files are reusable.
+     * Concurrent worker replacements and read selection serialize across this namespace. A read
+     * pins an immutable file and releases the operation lock before reading its bytes. Callers must
+     * settle accepted work before move/destruction; these blocking I/O primitives are worker-only.
+     * Replace is a byte primitive: generation compare-and-swap belongs to SaveSlotCommitTransaction.
+     */
     class SaveFilesystemStorage final {
     public:
         /** @brief Opens a typed namespace below the resolved product root, creating absent directories safely.

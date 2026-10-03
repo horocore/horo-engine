@@ -52,12 +52,26 @@ namespace Horo::Navigation {
         NavigationDynamicLayerMask obstacleLayers{1};
     };
 
+    /** @brief Project-stable avoidance layer mapped to one fixed mask bit; independent of obstacle layers. */
+    struct NavigationAvoidanceLayerDescriptor final {
+        NavigationAvoidanceLayerId id; /**< Durable project identity; zero is invalid. */
+        std::uint8_t bitIndex{};       /**< Stable bit position in [0, 63]. */
+    };
+
+    /** @brief Directed local-steering policy, not gameplay/network authority or scheduling priority. */
+    struct NavigationAvoidanceAgentPolicy final {
+        std::uint8_t layerBit{};       /**< Declared layer occupied by this agent. */
+        std::uint64_t avoidsLayers{1}; /**< Declared layers this agent steers around; direction need not be reciprocal. */
+        float priority{0.5F};          /**< Finite [0, 1] right-of-way preference; higher values resist deviation. */
+    };
+
     /** @brief One committed owner-thread motion sample for an enabled registered agent. */
     struct NavigationCrowdMotionSample final {
         CrowdAgentHandle handle;
         Math::Vec3 position;
         Math::Vec3 velocity;
         std::int32_t priority{};
+        NavigationAvoidanceAgentPolicy avoidance;
     };
 
     /** @brief Immutable per-agent value and contiguous fact ranges; indices address this snapshot only. */
@@ -68,6 +82,7 @@ namespace Horo::Navigation {
         Math::Vec3 velocity;
         float radiusMeters{};
         std::int32_t priority{};
+        NavigationAvoidanceAgentPolicy avoidance;
         std::uint32_t firstNeighbor{};
         std::uint32_t neighborCount{};
         std::uint32_t truncatedNeighbors{};
@@ -141,13 +156,16 @@ namespace Horo::Navigation {
         [[nodiscard]] std::span<const std::uint32_t> CellAgentIndices() const noexcept;
         /** @brief Returns per-profile truncation evidence. @return Profile-ordered aggregates. */
         [[nodiscard]] std::span<const NavigationCrowdProfileTruncation> ProfileTruncation() const noexcept;
+        /** @brief Returns the immutable project-stable avoidance layer table captured for this tick. */
+        [[nodiscard]] std::span<const NavigationAvoidanceLayerDescriptor> AvoidanceLayers() const noexcept;
 
     private:
         friend Result<NavigationCrowdSnapshot> BuildNavigationCrowdSnapshot(const NavigationAgentSnapshot &,
                                                                             const NavigationDynamicRegistrySnapshot &,
                                                                             std::span<const NavigationCrowdMotionSample>,
                                                                             std::span<const NavigationCrowdProfileFacts>,
-                                                                            const NavigationCrowdSnapshotLimits &, std::uint64_t);
+                                                                            const NavigationCrowdSnapshotLimits &, std::uint64_t,
+                                                                            std::span<const NavigationAvoidanceLayerDescriptor>);
         /** @brief Wraps a complete immutable capture. @param storage Snapshot-owned storage. */
         explicit NavigationCrowdSnapshot(std::shared_ptr<const Detail::NavigationCrowdSnapshotStorage> storage) noexcept;
         std::shared_ptr<const Detail::NavigationCrowdSnapshotStorage> storage_;
@@ -161,12 +179,12 @@ namespace Horo::Navigation {
      * @param profiles Unique policy for every enabled agent profile, with finite radii and hard-bounded fact caps.
      * @param limits Product ceiling, cell size, and declared mode; no source is silently truncated to fit storage.
      * @param captureTick Non-zero owner fixed tick represented by all inputs.
+     * @param avoidanceLayers Complete project-stable layer table; empty uses only the built-in default layer.
      * @return Owned immutable snapshot or a typed invalid, stale, or capacity error without partial publication.
      */
-    [[nodiscard]] Result<NavigationCrowdSnapshot> BuildNavigationCrowdSnapshot(const NavigationAgentSnapshot &agents,
-                                                                               const NavigationDynamicRegistrySnapshot &dynamic,
-                                                                               std::span<const NavigationCrowdMotionSample> motions,
-                                                                               std::span<const NavigationCrowdProfileFacts> profiles,
-                                                                               const NavigationCrowdSnapshotLimits &limits,
-                                                                               std::uint64_t captureTick);
+    [[nodiscard]] Result<NavigationCrowdSnapshot> BuildNavigationCrowdSnapshot(
+        const NavigationAgentSnapshot &agents, const NavigationDynamicRegistrySnapshot &dynamic,
+        std::span<const NavigationCrowdMotionSample> motions, std::span<const NavigationCrowdProfileFacts> profiles,
+        const NavigationCrowdSnapshotLimits &limits, std::uint64_t captureTick,
+        std::span<const NavigationAvoidanceLayerDescriptor> avoidanceLayers = {});
 }  // namespace Horo::Navigation

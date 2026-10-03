@@ -4,10 +4,13 @@
 #include "Horo/Runtime/Save/SaveStorageAdapter.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
 namespace Horo::Runtime::Test {
+    std::vector<std::byte> MakeSaveArchiveReaderFixture();
+
     template <typename Identity> Identity Id(const std::uint8_t suffix) {
         std::array<std::uint8_t, 16> bytes{};
         bytes.back() = suffix;

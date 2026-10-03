@@ -12,10 +12,13 @@
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace Horo::Physics::Detail {
     class PhysicsEventProjection;
@@ -76,6 +79,43 @@ namespace Horo::Physics::Detail {
         std::optional<Error> diagnostic;
     };
 
+    /** @brief Bounded Horo-only values projected from resident scene and query-fixture registries. */
+    struct CanonicalDebugProjection final {
+        std::vector<PhysicsDebugRecord> bodies;
+        std::vector<PhysicsDebugRecord> shapes;
+        std::vector<PhysicsDebugRecord> constraints;
+        std::uint64_t truncatedBodies{};
+        std::uint64_t truncatedShapes{};
+        std::uint64_t truncatedConstraints{};
+    };
+
+    /** @brief Copies stable Horo identities from the current owner-thread canonical world after one completed tick. */
+    [[nodiscard]] CanonicalDebugProjection ProjectCanonicalDebug(CanonicalWorldHandle world, const PhysicsDebugBudget &budget);
+
+    /** @brief Exact resident body and optional authored object identified by the joined native state scan. */
+    struct CanonicalNonFiniteBody final {
+        BodyHandle body;
+        std::uint64_t sceneEntity{};
+        bool retirable{true}; /**< False when the native body itself vanished; quarantine cannot safely remove it. */
+    };
+
+    /** @brief Borrowed owner-thread notification for retiring authored binding tables at the same safe point. */
+    struct CanonicalRetirementSink final {
+        PhysicsWorld::QuarantineSink *target{};
+
+        /** @brief Removes the retired body and its collider bindings from the borrowed aggregate. */
+        void Retire(const BodyHandle body) const noexcept {
+            if (target)
+                target->Retire(body);
+        }
+
+        /** @brief Removes one retired constraint binding from the borrowed aggregate. */
+        void Retire(const ConstraintHandle constraint) const noexcept {
+            if (target)
+                target->Retire(constraint);
+        }
+    };
+
     /** @brief Starts private Jolt process registration or reports omitted/incompatible composition. */
     [[nodiscard]] Result<CanonicalRuntimeHandle> CreateCanonicalRuntime(CanonicalFailurePoint failurePoint = CanonicalFailurePoint::None);
     /** @brief Releases types, factory and allocator hooks after every native world has retired. */
@@ -93,10 +133,18 @@ namespace Horo::Physics::Detail {
      */
     [[nodiscard]] Result<CanonicalStepOutcome> StepCanonicalWorld(CanonicalWorldHandle world, float fixedDeltaSeconds,
                                                                   std::uint64_t simulationTick = 0, CanonicalContactSink contactSink = {});
+
+    /** @brief Synthetic contact conditions retained only for native boundary regression coverage. */
+    struct CanonicalContactTestOptions final {
+        bool sensor{};
+        bool persisted{};
+        std::uint32_t contactPointCount{1};
+    };
+
     /** @brief Invokes the installed contact listener with copied native evidence for boundary regression coverage. */
     [[nodiscard]] bool InvokeCanonicalContactCallbackForTesting(CanonicalWorldHandle world, const PhysicsQueryFixture &first,
                                                                 const PhysicsQueryFixture &second, std::uint64_t simulationTick,
-                                                                bool sensor, bool persisted, CanonicalContactSink contactSink);
+                                                                CanonicalContactSink contactSink, CanonicalContactTestOptions options);
     /** @brief Admits one analytic scene shape into an unpublished owner-thread world. */
     [[nodiscard]] Result<ShapeHandle> CreateCanonicalSceneShape(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                                 const PhysicsShapeDescriptor &descriptor);
@@ -118,6 +166,22 @@ namespace Horo::Physics::Detail {
     /** @brief Reads translated native state alongside retained body policy on the owner thread. */
     [[nodiscard]] Result<PhysicsBodyReconciliation> ReadCanonicalSceneBodyReconciliation(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                                                          BodyHandle body);
+    /** @brief Copies bounded scene-body activity counts on the owner thread; native islands remain private and unsupported. */
+    [[nodiscard]] Result<PhysicsActivationObservation> ReadCanonicalSceneActivation(CanonicalWorldHandle world, PhysicsWorldId owner);
+    /** @brief Reads optional authored identity for structured input-boundary diagnostics. */
+    [[nodiscard]] std::uint64_t CanonicalSceneEntity(CanonicalWorldHandle world, BodyHandle body) noexcept;
+    /** @brief Binds inert authored identity to a successfully admitted resident body. */
+    void SetCanonicalSceneEntity(CanonicalWorldHandle world, BodyHandle body, std::uint64_t sceneEntity) noexcept;
+    /** @brief Scans resident native pose, velocity and bounds after a joined step and before publication. */
+    [[nodiscard]] std::optional<CanonicalNonFiniteBody> FindCanonicalNonFiniteBody(CanonicalWorldHandle world, bool postStep,
+                                                                                   std::size_t &cursor) noexcept;
+    /** @brief Avoids suppressing an unrelated query fixture that shares a separately issued body slot. */
+    [[nodiscard]] bool CanonicalQueryFixtureUsesBodyHandle(CanonicalWorldHandle world, BodyHandle body) noexcept;
+    /** @brief Removes a corrupt resident body and every attached native constraint at the owner-thread post-step safe point. */
+    void QuarantineCanonicalSceneBody(CanonicalWorldHandle world, BodyHandle body, const CanonicalRetirementSink &sink) noexcept;
+    /** @brief Marks one resident body as corrupt for deterministic containment tests without feeding NaN to Jolt. */
+    [[nodiscard]] bool InjectCanonicalNonFiniteBodyForTesting(CanonicalWorldHandle world, BodyHandle body, float value,
+                                                              std::uint8_t component, bool postStep) noexcept;
     /** @brief Admits one scene constraint after both body endpoints have been staged. */
     [[nodiscard]] Result<ConstraintHandle> CreateCanonicalSceneConstraint(CanonicalWorldHandle world, PhysicsWorldId owner,
                                                                           const PhysicsConstraintDescriptor &descriptor);

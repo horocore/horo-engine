@@ -289,6 +289,7 @@ namespace Horo::AI {
         std::uint32_t executionOrder{};
         QueryGeneratorId generator;
         QueryTestId test;
+        std::vector<QueryContextRequirement> contexts;
         std::vector<QueryPropertyValue> properties;
 
         bool operator==(const QueryPlanStage &) const = default;
@@ -312,11 +313,14 @@ namespace Horo::AI {
         [[nodiscard]] const QueryResultSchema &ResultSchema() const noexcept;
         /** @brief Returns stages in explicit semantic execution order. @return Read-only admitted stages. */
         [[nodiscard]] std::span<const QueryPlanStage> Stages() const noexcept;
+        /** @brief Returns the deduplicated context dependencies of every admitted stage. @return Stable ID-ordered requirements. */
+        [[nodiscard]] std::span<const QueryContextRequirement> RequiredContexts() const noexcept;
 
     private:
-        EnvironmentQueryPlan(QueryId id, const QueryResultSchema &result, std::vector<QueryPlanStage> stages) noexcept;
+        EnvironmentQueryPlan(QueryId id, const QueryResultSchema &result, std::vector<QueryPlanStage> stages);
         QueryId id_;
         QueryResultSchema result_;
         std::vector<QueryPlanStage> stages_;
+        std::vector<QueryContextRequirement> requiredContexts_;
     };
 }  // namespace Horo::AI

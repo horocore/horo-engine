@@ -39,6 +39,23 @@ replacement fences retained session identities before downstream admission.
 Activation/replacement/shutdown are host lifecycle operations, not frame work.
 Headless compositions continue to omit both XRRuntime and XROpenXR.
 
+`XRFeatureNegotiation.h` resolves the two version-one requirement sets against
+one immutable system capability publication before any session resource preparation.
+Its fixed-size plan records required, enabled optional, explicitly disabled, and
+declared baseline-projection fallback decisions with exact system/revision and finite
+limits. Post-one feature requests fail unsupported even if discovery reports them.
+The added closed capability IDs advance the Horo XRApi minor contract to 1.1; an older
+1.0 producer cannot claim the expanded profile evidence without migration.
+`XRSessionLifecycle::Activate` accepts only a complete negotiated plan, revalidates
+its owner/revision/evidence, and publishes that plan atomically with the session after
+all resource stages succeed. The previous single-capability activation argument was
+removed; callers must negotiate first and treat absence of a plan as preflight failure.
+The selected resource port receives that exact plan during each preparation stage;
+it does not rediscover features or choose an implicit native fallback.
+The host must still combine real selected-backend, Renderer, Input, Platform and
+product-policy evidence before constructing the snapshot; these contracts alone do
+not claim a production OpenXR backend or qualified product tuple.
+
 [ADR-157](../../adr/157-xr-ownership-runtime-composition-and-capability-tier.md)
 is the normative foundation for XR module ownership, host composition, typed
 capability admission, 1.0 profiles, unsupported paths and lifecycle. The sections
@@ -235,6 +252,33 @@ and OpenXR adapter implementations remain separate follow-up capabilities.
 `XRSessionErrors::Descriptors()` is XRRuntime's distinct `horo.xr` diagnostic
 contribution; XRApi's descriptor list and ownership remain unchanged.
 
+`XRFrameLifecycle.h` is the XRRuntime-owned predicted-frame transaction contract.
+It is additive and has no existing caller migration. A host binds the exact active
+view configuration, accepted capability snapshot and finite view/image/layer limits
+after session readiness. The selected native adapter owns actual wait/begin/locate/
+acquire/release/end calls; Renderer owns GPU submission/completion evidence. The
+single-control-thread coordinator reserves a frame before native wait, cancels the
+reservation only if native wait fails, and records every completed native wait. A
+completed wait with invalid prediction or unsupported render intent still returns an
+exact frame identity: the host must begin/end that native frame with zero layers, not
+discard the typed non-Ok render status. The coordinator records later completed steps
+as typed state transitions and never invokes native code, blocks for an image, waits for GPU
+completion, or chooses frame pacing. Each frame ID captures session, configuration,
+capability revision and a non-reused sequence; the wait result preserves the runtime
+prediction and `shouldRender`. Non-rendering frames still begin/end with zero layers.
+Rendering frames require complete view location, bounded unique image acquisition,
+complete Renderer submission, and exact image release before a positive-layer end.
+An explicit backend-confirmed abort keeps release obligations and permits zero-layer
+end only after they are met. The host serializes session replacement, loss publication,
+and resource retirement with an outstanding native wait/frame; single-control-thread
+access alone does not make a blocking native wait and later session mutation atomic.
+If a session changes unexpectedly after reservation, `RecordWait` retains a completed
+wait's frame debt, but currentness checks fence begin/end on the retired native session.
+The host must first prove native quiescence, including disposition of that outstanding
+wait/frame and any acquired images, before `ResetAfterQuiescence` discards the logical
+debt and a new session can bind. This contract does not claim a
+production OpenXR frame loop or a qualified Renderer bridge.
+
 Capabilities are discovered from the selected runtime, platform host, renderer,
 device, permissions, and admitted optional extensions. They are not inferred
 from a headset product name.
@@ -354,6 +398,14 @@ are invalidated when their backend/session generation ends. Unsupported optional
 extensions disable the associated capability with an actionable reason; they do
 not prevent a baseline session unless the active project capability profile
 requires them.
+
+The Horo-facing version-one plan uses stable `XRCapability` IDs, never native
+extension strings. Product policy must name each extra capability once and mark it
+required, optional with an explicit disable/baseline-projection fallback, or disabled.
+Baseline-projection fallback is admitted only for optional depth composition, fixed
+foveation, refresh-rate selection and visibility-mask optimization; it does not
+execute the missing feature. `AdmitXRPlannedFeature` rechecks current publication and
+rejects disabled, unrequested, stale and post-one paths before an adapter is called.
 
 ## Views And Coordinate Spaces
 
@@ -687,7 +739,7 @@ device release gate.
 - [XR Interaction, Runtime UI, Locomotion and Accessibility Ownership](../../adr/161-xr-interaction-runtime-ui-locomotion-and-accessibility-ownership.md)
 - [Mixed-Reality Ownership, Privacy and Capability Tier](../../adr/162-mixed-reality-ownership-privacy-and-capability-tier.md)
 - [XR Tooling, Diagnostics, Privacy and Qualification Ownership](../../adr/163-xr-tooling-diagnostics-privacy-and-qualification-ownership.md)
-- [XR Setup UI Reference](./xr-setup.html)
+- [XR Setup UI Reference](../../../mock-studio/designs.md#architecture-runtime-xr-setup)
 - [Rendering Architecture](./rendering-architecture.md)
 - [Render Backend Parity Contract](./render-backend-parity-contract.md)
 - [Input Architecture](./input-architecture.md)

@@ -17,6 +17,7 @@
 #include <vector>
 
 namespace Horo {
+    class ProductLaunchLease;
     /** @brief Selects whether a child begins with the parent environment or an empty environment. */
     enum class ProcessEnvironmentBase : std::uint8_t {
         InheritWithOverrides,
@@ -85,7 +86,8 @@ namespace Horo {
         std::function<void(ProcessOutputLine)> onOutput;
         std::size_t maximumOutputBytes{4U * 1024U * 1024U}; /**< Per-stream callback byte budget; excess is drained and discarded. */
         std::chrono::milliseconds maximumDrainDuration{std::chrono::seconds{1}}; /**< Final drain bound after forced termination. */
-        CancellationToken forceCancellation; /**< Repeated-interrupt policy; bypasses the graceful period. */
+        CancellationToken forceCancellation;          /**< Repeated-interrupt policy; bypasses the graceful period. */
+        const ProductLaunchLease *maintenanceLease{}; /**< Borrowed exclusive lease transferred only for this bounded child. */
     };
 
     /** @brief Blocking portable execution capability intended to run on an owned worker. */

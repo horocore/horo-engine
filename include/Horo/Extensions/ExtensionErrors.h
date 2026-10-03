@@ -137,6 +137,20 @@ namespace Horo::Extensions::ExtensionErrors {
     extern const ErrorCodeDescriptor CapabilityRegistryCapacityExceeded;
     /** @brief The application capability registry is shutting down. */
     extern const ErrorCodeDescriptor CapabilityRegistryShutdown;
+    /** @brief A process observer descriptor, event, or host allowlist is invalid. */
+    extern const ErrorCodeDescriptor ProcessObserverInvalid;
+    /** @brief A process observer identity is already published. */
+    extern const ErrorCodeDescriptor ProcessObserverDuplicate;
+    /** @brief The bounded process observer registry is full. */
+    extern const ErrorCodeDescriptor ProcessObserverCapacityExceeded;
+    /** @brief Process observer registration and dispatch are closed. */
+    extern const ErrorCodeDescriptor ProcessObserverShutdown;
+    /** @brief Process observer dispatch used the wrong thread. */
+    extern const ErrorCodeDescriptor ProcessObserverThreadViolation;
+    /** @brief Process observer dispatch recursively entered itself. */
+    extern const ErrorCodeDescriptor ProcessObserverReentrant;
+    /** @brief One attributed process observer callback failed. */
+    extern const ErrorCodeDescriptor ProcessObserverCallbackFailed;
     /** @brief A backend-service descriptor or requested identity is malformed. */
     extern const ErrorCodeDescriptor BackendServiceInvalid;
     /** @brief A backend service identity already has a published provider. */

@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -85,6 +86,19 @@ namespace Horo::Network {
 
         [[nodiscard]] NetworkLogStream Stream(Probe &probe, const NetworkLogPolicy policy = {10, 2, true}) {
             return NetworkLogStream::Create(Identity(), policy, &probe).Value();
+        }
+
+        /** @brief Waits for bounded best-effort ingestion before asserting the adapter's persisted content. */
+        [[nodiscard]] bool EmitAcceptedDiagnostic(NetworkTelemetryLogSink &sink, const NetworkLogRecord &record) {
+            const auto acceptedBefore = Telemetry::Runtime::GetStatistics().acceptedRecords;
+            // A producer may lose the queue try-lock to the writer even when the queue is empty.
+            for (unsigned attempt = 0; attempt < 1000; ++attempt) {
+                sink.Emit(record);
+                if (Telemetry::Runtime::GetStatistics().acceptedRecords > acceptedBefore)
+                    return true;
+                std::this_thread::yield();
+            }
+            return false;
         }
     }  // namespace
 
@@ -246,14 +260,18 @@ namespace Horo::Network {
         configuration.echoToStderr = false;
         REQUIRE(Log::Logger::Init(configuration));
         NetworkTelemetryLogSink networkSink;
-        auto stream = NetworkLogStream::Create(Identity(), {10, 1, true}, &networkSink).Value();
+        Probe probe;
+        auto stream = Stream(probe);
         constexpr std::string_view hostile = "Bearer private-password account-name";
         const auto normalized =
             NormalizePrivateBackendFailure(NetworkFailureLayer::Transport, NetworkFailureKind::TransportUnavailable, hostile);
         REQUIRE(normalized.HasValue());
+        REQUIRE(stream.Failure(Identity().connection, Identity().session, normalized.Value(), 1).HasValue());
+        REQUIRE(probe.records.size() == 1);
+        REQUIRE(Log::Logger::Flush());
         {
             const Log::LogContext ambient("private.session", "ambient-secret");
-            REQUIRE(stream.Failure(Identity().connection, Identity().session, normalized.Value(), 1).HasValue());
+            REQUIRE(EmitAcceptedDiagnostic(networkSink, probe.records.front()));
         }
         REQUIRE(Log::Logger::Flush());
         Log::Logger::Shutdown();

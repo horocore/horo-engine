@@ -3,41 +3,42 @@
 
 namespace Horo::Editor {
 
+    /** @copydoc EditorWorkspaceController::ApplyViewportCameraChange */
+    void EditorWorkspaceController::ApplyViewportCameraChange(const Result<void> &result, const char *action) {
+        if (result.HasError()) {
+            LOG_ERROR("editor.viewport", "%s failed: %s", action, result.ErrorValue().message.c_str());
+            return;
+        }
+        m_viewportScene.camera = m_viewport.Current().camera;
+        m_viewModel.viewportCamera = m_viewport.Current().camera;
+    }
+
     bool EditorWorkspaceController::ProcessViewportCameraCommand(const EditorWorkspaceViewCommandData &cmd) {
         switch (cmd.command) {
-            case EditorWorkspaceViewCommand::NavigateViewport:
-                if (cmd.viewportNavigationPayload.has_value()) {
-                    const Result<void> navigated = m_viewport.Navigate(*cmd.viewportNavigationPayload);
-                    if (navigated.HasError()) {
-                        LOG_ERROR("editor.viewport", "Viewport navigation failed: %s", navigated.ErrorValue().message.c_str());
-                    } else {
-                        m_viewportScene.camera = m_viewport.Current().camera;
-                        m_viewModel.viewportCamera = m_viewport.Current().camera;
-                    }
-                }
+            case EditorWorkspaceViewCommand::NavigateViewport: {
+                if (!cmd.viewportNavigationPayload.has_value())
+                    break;
+                ApplyViewportCameraChange(m_viewport.Navigate(*cmd.viewportNavigationPayload), "Viewport navigation");
                 break;
-            case EditorWorkspaceViewCommand::ChangeViewportProjection:
-                if (cmd.viewportProjectionPayload.has_value()) {
-                    const Result<void> changed = m_viewport.SetProjection(*cmd.viewportProjectionPayload);
-                    if (changed.HasError())
-                        LOG_ERROR("editor.viewport", "Viewport projection change failed: %s", changed.ErrorValue().message.c_str());
-                    else {
-                        m_viewportScene.camera = m_viewport.Current().camera;
-                        m_viewModel.viewportCamera = m_viewport.Current().camera;
-                    }
-                }
+            }
+            case EditorWorkspaceViewCommand::AlignViewportToAxis: {
+                if (!cmd.viewportAxisPayload.has_value())
+                    break;
+                ApplyViewportCameraChange(m_viewport.AlignToAxis(*cmd.viewportAxisPayload), "Viewport axis alignment");
                 break;
-            case EditorWorkspaceViewCommand::FocusViewportSelection:
-                if (m_viewModel.primarySelectionWorldBounds.has_value() && cmd.floatPayload.has_value()) {
-                    const Result<void> focused = m_viewport.Focus(*m_viewModel.primarySelectionWorldBounds, *cmd.floatPayload);
-                    if (focused.HasError())
-                        LOG_ERROR("editor.viewport", "Viewport focus failed: %s", focused.ErrorValue().message.c_str());
-                    else {
-                        m_viewportScene.camera = m_viewport.Current().camera;
-                        m_viewModel.viewportCamera = m_viewport.Current().camera;
-                    }
-                }
+            }
+            case EditorWorkspaceViewCommand::ChangeViewportProjection: {
+                if (!cmd.viewportProjectionPayload.has_value())
+                    break;
+                ApplyViewportCameraChange(m_viewport.SetProjection(*cmd.viewportProjectionPayload), "Viewport projection change");
                 break;
+            }
+            case EditorWorkspaceViewCommand::FocusViewportSelection: {
+                if (!m_viewModel.primarySelectionWorldBounds.has_value() || !cmd.floatPayload.has_value())
+                    break;
+                ApplyViewportCameraChange(m_viewport.Focus(*m_viewModel.primarySelectionWorldBounds, *cmd.floatPayload), "Viewport focus");
+                break;
+            }
             case EditorWorkspaceViewCommand::ChangeTransformTool:
                 if (cmd.transformToolPayload.has_value())
                     m_viewModel.activeTransformTool = *cmd.transformToolPayload;

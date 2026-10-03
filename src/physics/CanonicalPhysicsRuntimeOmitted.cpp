@@ -2,6 +2,11 @@
 #include "Horo/Physics/PhysicsErrors.h"
 
 namespace Horo::Physics::Detail {
+    /** @copydoc ProjectCanonicalDebug */
+    CanonicalDebugProjection ProjectCanonicalDebug(const CanonicalWorldHandle, const PhysicsDebugBudget &) {
+        return {};
+    }
+
     /** @copydoc CreateCanonicalRuntime */
     Result<CanonicalRuntimeHandle> CreateCanonicalRuntime(const CanonicalFailurePoint) {
         return Result<CanonicalRuntimeHandle>::Failure(
@@ -62,6 +67,38 @@ namespace Horo::Physics::Detail {
         return Result<PhysicsBodyReconciliation>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
     }
 
+    /** @copydoc ReadCanonicalSceneActivation */
+    Result<PhysicsActivationObservation> ReadCanonicalSceneActivation(const CanonicalWorldHandle, const PhysicsWorldId) {
+        return Result<PhysicsActivationObservation>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc CanonicalSceneEntity */
+    std::uint64_t CanonicalSceneEntity(const CanonicalWorldHandle, const BodyHandle) noexcept {
+        return 0;
+    }
+
+    /** @copydoc SetCanonicalSceneEntity */
+    void SetCanonicalSceneEntity(const CanonicalWorldHandle, const BodyHandle, const std::uint64_t) noexcept {}
+
+    /** @copydoc FindCanonicalNonFiniteBody */
+    std::optional<CanonicalNonFiniteBody> FindCanonicalNonFiniteBody(const CanonicalWorldHandle, const bool, std::size_t &) noexcept {
+        return std::nullopt;
+    }
+
+    /** @copydoc CanonicalQueryFixtureUsesBodyHandle */
+    bool CanonicalQueryFixtureUsesBodyHandle(const CanonicalWorldHandle, const BodyHandle) noexcept {
+        return false;
+    }
+
+    /** @copydoc QuarantineCanonicalSceneBody */
+    void QuarantineCanonicalSceneBody(const CanonicalWorldHandle, const BodyHandle, const CanonicalRetirementSink &) noexcept {}
+
+    /** @copydoc InjectCanonicalNonFiniteBodyForTesting */
+    bool InjectCanonicalNonFiniteBodyForTesting(const CanonicalWorldHandle, const BodyHandle, const float, const std::uint8_t,
+                                                const bool) noexcept {
+        return false;
+    }
+
     /** @copydoc CreateCanonicalSceneConstraint */
     Result<ConstraintHandle> CreateCanonicalSceneConstraint(const CanonicalWorldHandle, const PhysicsWorldId,
                                                             const PhysicsConstraintDescriptor &) {
@@ -110,7 +147,7 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc InvokeCanonicalContactCallbackForTesting */
     bool InvokeCanonicalContactCallbackForTesting(const CanonicalWorldHandle, const PhysicsQueryFixture &, const PhysicsQueryFixture &,
-                                                  const std::uint64_t, const bool, const bool, const CanonicalContactSink) {
+                                                  const std::uint64_t, const CanonicalContactSink, const CanonicalContactTestOptions) {
         return false;
     }
 

@@ -52,6 +52,20 @@ namespace Horo::Runtime {
         std::uint16_t signatureByteLength{};
     };
 
+    /** @brief Exact stored unknown chunk and integrity evidence retained for a later archive. */
+    struct PreservedSaveChunk final {
+        SaveChunkDirectoryEntry entry;      /**< Record, owner, codec, lengths, alignment, and decoded digest; offset is layout-specific. */
+        std::vector<std::byte> storedBytes; /**< Exact bytes from the integrity-verified source archive. */
+
+        [[nodiscard]] auto operator<=>(const PreservedSaveChunk &) const noexcept = default;
+    };
+
+    /** @brief Explicit unknown-data disposition after compatibility preflight. */
+    struct SaveUnknownDataReport final {
+        std::vector<PreservedSaveChunk> preserved; /**< Stable record-ordered optional chunks that must survive repacking. */
+        std::vector<SaveParticipantId> dropped;    /**< Optional owners explicitly authorized for omission by trusted policy. */
+    };
+
     /** @brief Finite budgets applied to every untrusted archive admission path. */
     struct SaveArchiveReaderLimits final {
         std::size_t maximumArchiveBytes{
@@ -99,6 +113,14 @@ namespace Horo::Runtime {
          * @return Owned canonical chunk bytes or an empty optional for an unknown lookup.
          */
         [[nodiscard]] Result<std::optional<std::vector<std::byte>>> SelectChunk(SaveRecordId record) const;
+        /**
+         * @brief Preflights required features and participants, then captures exact unknown optional chunks.
+         * @param policy Sealed release policy; only its explicit droppable IDs permit omission.
+         * @param maximumPreservedBytes Finite aggregate copy budget for opaque stored bytes.
+         * @return Preserved bytes and explicit drops, or an actionable compatibility/integrity/limit error.
+         */
+        [[nodiscard]] Result<SaveUnknownDataReport> InspectUnknownData(const SaveCompatibilityPolicy &policy,
+                                                                       std::uint64_t maximumPreservedBytes) const;
 
     private:
         struct Contents final {
@@ -152,4 +174,15 @@ namespace Horo::Runtime {
     private:
         SaveArchiveReaderLimits limits_;
     };
+
+    /**
+     * @brief Checks that every preservable unknown source chunk survived repacking or copying unchanged.
+     * @param source Integrity-verified source archive.
+     * @param destination Integrity-verified candidate archive, before publication.
+     * @param policy Sealed release policy used for both inspections.
+     * @param maximumPreservedBytes Finite aggregate preservation budget for each archive.
+     * @return Success or a typed failure naming the missing/changed owner and record.
+     */
+    [[nodiscard]] Result<void> VerifyUnknownDataRoundTrip(const ValidatedSaveArchive &source, const ValidatedSaveArchive &destination,
+                                                          const SaveCompatibilityPolicy &policy, std::uint64_t maximumPreservedBytes);
 }  // namespace Horo::Runtime

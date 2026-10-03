@@ -37,6 +37,8 @@ namespace Horo::Physics::PhysicsErrors {
     extern const ErrorCodeDescriptor SolverAssertionFailed;
     /** @brief The native solver reported a fatal condition outside a recoverable operation result. */
     extern const ErrorCodeDescriptor SolverFatalCondition;
+    /** @brief A resident body's solver state contained NaN or infinity at publication. */
+    extern const ErrorCodeDescriptor BodyStateNonFinite;
     /** @brief Malformed or unsupported-version descriptor metadata. */
     extern const ErrorCodeDescriptor DescriptorInvalid;
     /** @brief A command lacks complete canonical identity/order evidence or duplicates an admitted key. */
@@ -53,6 +55,8 @@ namespace Horo::Physics::PhysicsErrors {
     extern const ErrorCodeDescriptor CapabilityRevoked;
     /** @brief A query targets a retired scene or filter/broadphase snapshot generation. */
     extern const ErrorCodeDescriptor QuerySnapshotStale;
+    /** @brief A queued query batch was cancelled before its result was published. */
+    extern const ErrorCodeDescriptor QueryCancelled;
     /** @brief Candidate or process initialization failed after releasing acquired resources. */
     extern const ErrorCodeDescriptor InitializationFailed;
     /** @brief Convex or mesh source geometry is malformed before solver cooking. */

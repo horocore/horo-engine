@@ -136,6 +136,15 @@ namespace Horo::Physics::PhysicsErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor BodyStateNonFinite{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.body_state.non_finite"},
+        .defaultSeverity = ErrorSeverity::Critical,
+        .summary = "A resident physics body has non-finite solver state.",
+        .remediationHint = "Inspect the affected body and its inputs before rebuilding or continuing the world.",
+        .retryable = false,
+        .userActionable = false,
+    };
     const ErrorCodeDescriptor DescriptorInvalid{
         .domain = PhysicsDomain,
         .code = ErrorCode{"physics.descriptor.invalid"},
@@ -205,6 +214,15 @@ namespace Horo::Physics::PhysicsErrors {
         .defaultSeverity = ErrorSeverity::Error,
         .summary = "The physics query snapshot generation is stale.",
         .remediationHint = "Capture the active world, scene and filter generations again before submitting the query.",
+        .retryable = true,
+        .userActionable = false,
+    };
+    const ErrorCodeDescriptor QueryCancelled{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.query.cancelled"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The queued physics query batch was cancelled.",
+        .remediationHint = "Submit a new batch against the current world publication if results are still needed.",
         .retryable = true,
         .userActionable = false,
     };
@@ -284,36 +302,14 @@ namespace Horo::Physics::PhysicsErrors {
     /** @copydoc Descriptors */
     std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
         static const std::array descriptors{
-            &WorldInvalid,
-            &HandleMalformed,
-            &HandleWorldMismatch,
-            &HandleStale,
-            &GenerationExhausted,
-            &CapabilityUnavailable,
-            &OperationUnsupported,
-            &TransformAuthorityViolation,
-            &InvalidState,
-            &ThreadAffinityViolation,
-            &SolverDeadlineExceeded,
-            &SolverValidationMessage,
-            &SolverAssertionFailed,
-            &SolverFatalCondition,
-            &DescriptorInvalid,
-            &CommandOrderInvalid,
-            &SeedPolicyInvalid,
-            &ProfileUnsupported,
-            &CapacityExceeded,
-            &CapabilityStale,
-            &CapabilityRevoked,
-            &QuerySnapshotStale,
-            &InitializationFailed,
-            &ShapeCookSourceInvalid,
-            &ShapeCookLimitExceeded,
-            &ShapeCookCancelled,
-            &ShapeMotionUnsupported,
-            &ShapeArtifactInvalid,
-            &MaterialDescriptorInvalid,
-            &MaterialCombineUnsupported,
+            &WorldInvalid,           &HandleMalformed,         &HandleWorldMismatch,       &HandleStale,
+            &GenerationExhausted,    &CapabilityUnavailable,   &OperationUnsupported,      &TransformAuthorityViolation,
+            &InvalidState,           &ThreadAffinityViolation, &SolverDeadlineExceeded,    &SolverValidationMessage,
+            &SolverAssertionFailed,  &SolverFatalCondition,    &BodyStateNonFinite,        &DescriptorInvalid,
+            &CommandOrderInvalid,    &SeedPolicyInvalid,       &ProfileUnsupported,        &CapacityExceeded,
+            &CapabilityStale,        &CapabilityRevoked,       &QuerySnapshotStale,        &QueryCancelled,
+            &InitializationFailed,   &ShapeCookSourceInvalid,  &ShapeCookLimitExceeded,    &ShapeCookCancelled,
+            &ShapeMotionUnsupported, &ShapeArtifactInvalid,    &MaterialDescriptorInvalid, &MaterialCombineUnsupported,
         };
         return descriptors;
     }

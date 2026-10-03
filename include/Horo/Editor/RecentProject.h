@@ -3,6 +3,7 @@
 #include "Horo/Application/ProjectCompatibility.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -59,5 +60,12 @@ namespace Horo::Editor {
      * @return True on success, false if writing fails.
      */
     bool SaveRecentProjectsToDisk(const std::vector<RecentProjectEntry> &projects);
+
+    /**
+     * @brief Deletes a validated, standalone Horo project directory and its contents.
+     * @param root Absolute project root selected by the user after confirmation.
+     * @return True when the project directory was removed without filesystem errors.
+     */
+    bool DeleteRecentProjectFiles(const std::filesystem::path &root);
 
 }  // namespace Horo::Editor

@@ -11,15 +11,27 @@
 #include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Foundation/OperationStore.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace Horo::Editor::Theme {
     struct Fonts;
+}
+
+namespace Horo {
+    class NativeDialogs;
+}
+
+namespace Horo::Input {
+    class InputRouter;
 }
 
 namespace Horo::Assets {
@@ -28,6 +40,19 @@ namespace Horo::Assets {
 }  // namespace Horo::Assets
 
 namespace Horo::Editor {
+    class ILocalizationService;
+    class IEditorGuiRenderer;
+    class AssetImportSourcePreview;
+
+    /** @brief Optional borrowed capabilities used by the import workflow, valid for its lifetime. */
+    struct AssetImportModalServices {
+        Assets::AssetRegistry *assetRegistry{};     /**< Registry updated after committed imports. */
+        OperationStore *operationStore{};           /**< User-facing operation authority. */
+        const ILocalizationService *localization{}; /**< Editor presentation copy. */
+        NativeDialogs *nativeDialogs{};             /**< Host-owned native file picker. */
+        Input::InputRouter *inputRouter{};          /**< Input context owner while a picker is open. */
+    };
+
     /**
      * @brief Host-owned asset import workflow modal.
      * @details Owns an AssetImportOperation and exposes its snapshots to the GUI
@@ -46,11 +71,10 @@ namespace Horo::Editor {
          * @param fonts Theme fonts reference (valid for modal lifetime).
          * @param jobs Job system for background import work.
          * @param catalog Published immutable importer catalog snapshot.
-         * @param assetRegistry Optional mutable asset registry updated by committed imports.
-         * @param operationStore Optional user-facing operation authority.
+         * @param services Optional capabilities copied at construction; pointed-to services must outlive the modal.
          */
         AssetImportModal(const Theme::Fonts &fonts, JobSystem &jobs, std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> catalog,
-                         Assets::AssetRegistry *assetRegistry = nullptr, OperationStore *operationStore = nullptr) noexcept;
+                         const AssetImportModalServices &services = {}) noexcept;
 
         /** @brief Destroys the modal and its target-private project committer. */
         ~AssetImportModal() override;
@@ -69,8 +93,11 @@ namespace Horo::Editor {
         /** @brief Returns mutable access to the operation snapshot for modal editing. */
         [[nodiscard]] Assets::AssetImportSnapshot &MutableSnapshot() noexcept;
 
-        /** @brief Returns the pinned importer catalog snapshot. */
-        [[nodiscard]] const Assets::AssetImporterCatalogSnapshot &Catalog() const noexcept;
+        /** @brief Returns retained terminal import operations, newest first. */
+        [[nodiscard]] std::span<const OperationRecord> ImportHistory() const noexcept;
+
+        /** @brief Resolves presentation copy with a fallback for headless callers. */
+        [[nodiscard]] std::string_view Localized(std::string_view key, std::string_view fallback) const;
 
         /** @brief Sets the project root for asset destination paths. Call before BeginImport when known. */
         void SetProjectRoot(const std::filesystem::path &root) noexcept;
@@ -81,10 +108,11 @@ namespace Horo::Editor {
          */
         void SetDefaultDestination(const std::filesystem::path &absoluteDirectory) noexcept;
 
+        /** @brief Returns the default project-relative destination for newly added files. */
+        [[nodiscard]] std::string_view DefaultDestinationFolder() const noexcept;
+
         /** @brief Returns the stored project root (empty if not set). */
-        [[nodiscard]] const std::filesystem::path &ProjectRoot() const noexcept {
-            return m_projectRoot;
-        }
+        [[nodiscard]] const std::filesystem::path &ProjectRoot() const noexcept;
 
         /** @brief Initiates an import operation with the given source files. */
         [[nodiscard]] Result<void> BeginImport(const std::vector<std::filesystem::path> &sourceFiles,
@@ -103,6 +131,85 @@ namespace Horo::Editor {
 
         /** @brief Selects an item by index for the settings panel. */
         void SelectItem(std::size_t index);
+
+        /** @brief Returns whether a queued item is selected for the batch import. */
+        [[nodiscard]] bool IsItemIncluded(std::size_t index) const noexcept;
+
+        /** @brief Includes or excludes a queued item before it has been imported. */
+        void SetItemIncluded(std::size_t index, bool included) noexcept;
+
+        /** @brief Reports whether an item remains in the visible import queue. @param index Queue index. @return True if visible. */
+        [[nodiscard]] bool IsItemVisible(std::size_t index) const noexcept;
+
+        /** @brief Returns the number of items still shown in the import queue. @return Visible item count. */
+        [[nodiscard]] std::size_t VisibleItemCount() const noexcept;
+
+        /** @brief Removes a pending item from the visible import queue without changing operation indices. @param index Queue index. */
+        void RemoveItem(std::size_t index);
+
+        /** @brief Returns the number of selected items still available to import. */
+        [[nodiscard]] std::size_t IncludedItemCount() const noexcept;
+
+        /** @brief Returns the source file size captured when a queued item was added. */
+        [[nodiscard]] std::optional<std::uintmax_t> SourceFileSize(std::size_t index) const noexcept;
+
+        /**
+         * @brief Returns the registered importer selected for an item, when available.
+         * @param index Queue index.
+         * @return Pinned catalog contribution or null for an unsupported or invalid item.
+         */
+        [[nodiscard]] const Assets::AssetImporterContribution *ImporterFor(std::size_t index) const noexcept;
+
+        /** @brief Attaches the GUI texture owner for optional source-file previews. */
+        void SetPreviewRenderer(IEditorGuiRenderer *renderer);
+
+        /** @brief Returns the selected source preview texture, or zero while unavailable. */
+        [[nodiscard]] std::uintptr_t SelectedPreviewTexture() const noexcept;
+
+        /**
+         * @brief Reads a catalog-declared setting without exposing its storage encoding to the view.
+         * @param index Queue index.
+         * @param setting Descriptor supplied by the selected importer.
+         * @return Typed current value, or the descriptor default when no valid value is stored.
+         */
+        [[nodiscard]] Assets::ImportSettingValue SettingValue(std::size_t index, const Assets::ImportSettingDescriptor &setting) const;
+        /**
+         * @brief Stores a typed setting value for an editable item.
+         * @param index Queue index.
+         * @param setting Descriptor supplied by the selected importer.
+         * @param value Typed value selected by the view.
+         */
+        void SetSettingValue(std::size_t index, const Assets::ImportSettingDescriptor &setting, const Assets::ImportSettingValue &value);
+
+        /** @brief Opens the native file picker and queues its selected source files. */
+        void BrowseSourceFiles();
+        /** @brief Queues paths received from a view drop or another caller. @param paths Absolute source paths. */
+        void AddSourceFiles(const std::vector<std::filesystem::path> &paths);
+        /** @brief Opens the native folder picker and applies a valid project asset destination. */
+        void BrowseDestination();
+        /** @brief Opens the selected source in the native file manager when available. */
+        void RevealSelectedSource() const;
+        /** @brief Starts import of included pending items. */
+        void StartIncludedImport();
+
+        /** @brief Host-owned advanced options edited as one item value. */
+        struct ItemOptions {
+            std::string assetName;         /**< Destination asset name without extension. */
+            int folderStrategy{};          /**< Existing folder strategy selection. */
+            int assetIdStrategy{};         /**< Existing asset ID strategy selection. */
+            bool createMetaSidecar{};      /**< Whether to create a metadata sidecar. */
+            bool overwriteWithoutPrompt{}; /**< Whether to resolve conflicts by overwriting. */
+        };
+
+        /** @brief Reads advanced options for one item. @param index Queue index. @return Option value or empty defaults. */
+        [[nodiscard]] ItemOptions OptionsFor(std::size_t index) const;
+        /** @brief Updates advanced options on an editable item. @param index Queue index. @param options New option value. */
+        void SetOptionsFor(std::size_t index, ItemOptions options);
+        /** @brief Checks whether the current included items can start importing. @return True when ready. */
+        [[nodiscard]] bool CanImportIncludedItems() const noexcept;
+
+        /** @brief Imports selected pending items in queue order. */
+        [[nodiscard]] Result<void> ImportIncludedItems(const CancellationToken &cancellation);
 
         /** @brief Named importer-settings snapshot scoped to one importer contribution. */
         struct ImportPreset {
@@ -179,6 +286,10 @@ namespace Horo::Editor {
         void ResolveCurrentConflict(ConflictChoice choice, bool applyAll);
 
     private:
+        /** @brief Appends sources to an existing operation and extends its queue projection. */
+        [[nodiscard]] Result<void> AppendImportFiles(const std::vector<std::filesystem::path> &sourceFiles,
+                                                     const std::filesystem::path &projectRoot, const CancellationToken &cancellation);
+
         /** @brief Checks whether importing @p item would overwrite an existing asset. */
         bool WouldConflict(const Assets::AssetImportItem &item) const;
 
@@ -188,24 +299,42 @@ namespace Horo::Editor {
         /** @brief Records one terminal item result and completes the visible operation when the queue is finished. */
         void MarkItemCompleted(std::size_t index);
 
+        /** @brief Hides a terminal item and moves selection to another visible item. */
+        void HideItem(std::size_t index);
+
         /** @brief Moves the visible operation to failed and releases its active handle. */
         void FailVisibleOperation(const Error &error, std::string_view phase);
 
+        /** @brief Refreshes the retained import-operation projection from the process store. */
+        void RefreshImportHistory();
+
+    private:
         const Theme::Fonts &m_fonts;
         JobSystem &m_jobs;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> m_catalog;
         Assets::AssetRegistry *m_assetRegistry{};
         OperationStore *m_operationStore{};
+        const ILocalizationService *m_localization{};
+        NativeDialogs *m_nativeDialogs{};
+        Input::InputRouter *m_inputRouter{};
         std::optional<OperationId> m_visibleOperationId;
+        std::uint64_t m_historyRevision{};
+        OperationId m_lastTerminalImportId{};
+        std::unordered_set<OperationId> m_pendingImportOperations;
+        std::vector<OperationRecord> m_importHistory;
         std::shared_ptr<CancellationSource> m_operationCancellation;
         EditorDataBus *m_events = nullptr;
         std::filesystem::path m_projectRoot; /**< Stored for committer. */
         std::string m_defaultDestinationFolder;
 
         std::unique_ptr<Assets::AssetImportOperation> m_operation;
+        std::unique_ptr<AssetImportSourcePreview> m_sourcePreview;
         std::unique_ptr<Assets::ProjectAssetImportCommitter> m_committer;
         Assets::AssetImportSnapshot m_snapshot;
         std::vector<bool> m_itemCompleted;
+        std::vector<bool> m_includedItems;
+        std::vector<bool> m_itemVisible;
+        std::vector<std::optional<std::uintmax_t>> m_sourceFileSizes;
         bool m_prepared{false};
 
         // Conflict resolution popup state

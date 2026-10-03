@@ -102,6 +102,22 @@ namespace Horo::Navigation {
         [[nodiscard]] NavigationCrowdMotionSample Motion(const NavigationAgentRecord &agent, const float x) {
             return {.handle = agent.handle, .position = {x, 0.0F, 0.0F}, .velocity = {1.0F, 0.0F, 0.0F}, .priority = 2};
         }
+
+        struct AvoidancePairInputs final {
+            NavigationAgentSnapshot agents;
+            NavigationDynamicRegistrySnapshot dynamic;
+            std::array<NavigationCrowdMotionSample, 2> motions;
+            std::array<NavigationCrowdProfileFacts, 1> profiles;
+        };
+
+        [[nodiscard]] AvoidancePairInputs AvoidancePair() {
+            const auto binding = Binding();
+            const std::array descriptors{Agent(binding, 1), Agent(binding, 2)};
+            auto agents = CaptureAgents(binding, descriptors);
+            const auto records = agents.Agents();
+            const std::array motions{Motion(records[0], 0.0F), Motion(records[1], 1.0F)};
+            return {.agents = std::move(agents), .dynamic = CaptureDynamic(binding), .motions = motions, .profiles = {Profile()}};
+        }
     }  // namespace
 
     TEST_CASE("crowd snapshot orders planar cells and equal-distance neighbors for both declared modes",
@@ -149,6 +165,90 @@ namespace Horo::Navigation {
             for (std::size_t index = 0; index < snapshot.NeighborIndices().size(); ++index)
                 CHECK(reordered.NeighborIndices()[index] == snapshot.NeighborIndices()[index]);
         }
+    }
+
+    TEST_CASE("avoidance masks are directed and policy changes publish at one tick", "[unit][navigation][crowd][policy]") {
+        auto inputs = AvoidancePair();
+        const std::array layers{NavigationAvoidanceLayerDescriptor{.id = Id<NavigationAvoidanceLayerId>(22), .bitIndex = 1},
+                                NavigationAvoidanceLayerDescriptor{.id = Id<NavigationAvoidanceLayerId>(11), .bitIndex = 0}};
+        inputs.motions[0].avoidance = {.layerBit = 0, .avoidsLayers = 2, .priority = 0.75F};
+        inputs.motions[1].avoidance = {.layerBit = 1, .avoidsLayers = 2, .priority = 0.25F};
+        const auto first =
+            BuildNavigationCrowdSnapshot(inputs.agents, inputs.dynamic, inputs.motions, inputs.profiles, {}, 8, layers).Value();
+        REQUIRE(first.AvoidanceLayers().size() == 2);
+        CHECK(first.AvoidanceLayers()[0].id == Id<NavigationAvoidanceLayerId>(11));
+        CHECK(first.AvoidanceLayers()[1].id == Id<NavigationAvoidanceLayerId>(22));
+        CHECK(first.Agents()[0].neighborCount == 1);
+        CHECK(first.Agents()[1].neighborCount == 0);
+        CHECK(first.Agents()[0].avoidance.priority == 0.75F);
+        CHECK(first.Agents()[1].avoidance.priority == 0.25F);
+        CHECK(first.Agents()[0].priority == first.Agents()[1].priority);
+
+        inputs.motions[1].avoidance.avoidsLayers = 1;
+        const auto second =
+            BuildNavigationCrowdSnapshot(inputs.agents, inputs.dynamic, inputs.motions, inputs.profiles, {}, 9, layers).Value();
+        CHECK(second.CaptureTick() == 9);
+        CHECK(second.Agents()[0].neighborCount == 1);
+        CHECK(second.Agents()[1].neighborCount == 1);
+        CHECK(first.CaptureTick() == 8);
+        CHECK(first.Agents()[1].neighborCount == 0);
+    }
+
+    TEST_CASE("avoidance rejects undeclared or empty masks and non-finite priorities", "[unit][navigation][crowd][policy]") {
+        auto inputs = AvoidancePair();
+        const auto valid = BuildNavigationCrowdSnapshot(inputs.agents, inputs.dynamic, inputs.motions, inputs.profiles, {}, 4).Value();
+        REQUIRE(valid.AvoidanceLayers().size() == 1);
+        CHECK(valid.AvoidanceLayers()[0].id == Id<NavigationAvoidanceLayerId>(1));
+        const std::array invalidPolicies{
+            NavigationAvoidanceAgentPolicy{.layerBit = 0, .avoidsLayers = 0},
+            NavigationAvoidanceAgentPolicy{.layerBit = 0, .avoidsLayers = 2},
+            NavigationAvoidanceAgentPolicy{.layerBit = 1},
+            NavigationAvoidanceAgentPolicy{.priority = std::numeric_limits<float>::quiet_NaN()},
+            NavigationAvoidanceAgentPolicy{.priority = std::numeric_limits<float>::infinity()},
+            NavigationAvoidanceAgentPolicy{.priority = -0.1F},
+            NavigationAvoidanceAgentPolicy{.priority = 1.1F},
+        };
+        for (const auto policy : invalidPolicies) {
+            inputs.motions[0].avoidance = policy;
+            RequireError(BuildNavigationCrowdSnapshot(inputs.agents, inputs.dynamic, inputs.motions, inputs.profiles, {}, 5),
+                         NavigationErrors::AgentDescriptorInvalid);
+        }
+        CHECK(valid.CaptureTick() == 4);
+        CHECK(valid.Agents()[0].avoidance.priority == 0.5F);
+    }
+
+    TEST_CASE("avoidance layer declarations reject ambiguous identities and mask slots", "[unit][navigation][crowd][policy]") {
+        const auto inputs = AvoidancePair();
+        const std::array duplicateIds{NavigationAvoidanceLayerDescriptor{.id = Id<NavigationAvoidanceLayerId>(7), .bitIndex = 0},
+                                      NavigationAvoidanceLayerDescriptor{.id = Id<NavigationAvoidanceLayerId>(7), .bitIndex = 1}};
+        const std::array duplicateBits{NavigationAvoidanceLayerDescriptor{.id = Id<NavigationAvoidanceLayerId>(7), .bitIndex = 0},
+                                       NavigationAvoidanceLayerDescriptor{.id = Id<NavigationAvoidanceLayerId>(8), .bitIndex = 0}};
+        const std::array zeroId{NavigationAvoidanceLayerDescriptor{.id = {}, .bitIndex = 0}};
+        const std::array outOfRange{NavigationAvoidanceLayerDescriptor{.id = Id<NavigationAvoidanceLayerId>(7), .bitIndex = 64}};
+        for (const auto layers :
+             {std::span<const NavigationAvoidanceLayerDescriptor>{duplicateIds},
+              std::span<const NavigationAvoidanceLayerDescriptor>{duplicateBits},
+              std::span<const NavigationAvoidanceLayerDescriptor>{zeroId}, std::span<const NavigationAvoidanceLayerDescriptor>{outOfRange}})
+            RequireError(BuildNavigationCrowdSnapshot(inputs.agents, inputs.dynamic, inputs.motions, inputs.profiles, {}, 6, layers),
+                         NavigationErrors::AgentDescriptorInvalid);
+        std::array<NavigationAvoidanceLayerDescriptor, 65> excessive{};
+        for (std::size_t index = 0; index < excessive.size(); ++index)
+            excessive[index] = {.id = Id<NavigationAvoidanceLayerId>(index + 1), .bitIndex = static_cast<std::uint8_t>(index)};
+        RequireError(BuildNavigationCrowdSnapshot(inputs.agents, inputs.dynamic, inputs.motions, inputs.profiles, {}, 6, excessive),
+                     NavigationErrors::CapacityExceeded);
+    }
+
+    TEST_CASE("avoidance supports the highest declared bit and finite priority endpoints", "[unit][navigation][crowd][policy]") {
+        auto inputs = AvoidancePair();
+        const std::array layers{NavigationAvoidanceLayerDescriptor{.id = Id<NavigationAvoidanceLayerId>(99), .bitIndex = 63}};
+        inputs.motions[0].avoidance = {.layerBit = 63, .avoidsLayers = std::uint64_t{1} << 63, .priority = 0.0F};
+        inputs.motions[1].avoidance = {.layerBit = 63, .avoidsLayers = std::uint64_t{1} << 63, .priority = 1.0F};
+        const auto snapshot = BuildNavigationCrowdSnapshot(inputs.agents, inputs.dynamic, inputs.motions, inputs.profiles, {}, 7, layers);
+        REQUIRE(snapshot.HasValue());
+        CHECK(snapshot.Value().Agents()[0].neighborCount == 1);
+        CHECK(snapshot.Value().Agents()[1].neighborCount == 1);
+        CHECK(snapshot.Value().Agents()[0].avoidance.priority == 0.0F);
+        CHECK(snapshot.Value().Agents()[1].avoidance.priority == 1.0F);
     }
 
     TEST_CASE("crowd excludes vertically remote boundaries without truncating nearby facts",

@@ -253,6 +253,12 @@ namespace Horo::Runtime::SaveMigrationDetail {
             return Result<void>::Success();
         }
 
+        [[nodiscard]] bool RequiredByTarget(const SaveCompatibilityPolicy &compatibility, const SaveParticipantId &participant) {
+            return std::ranges::any_of(compatibility.participants, [&participant](const SaveParticipantCompatibility &entry) {
+                return entry.required && std::ranges::binary_search(entry.requiredDependencies, participant);
+            });
+        }
+
         [[nodiscard]] Result<void> PlanParticipant(const SaveMigrationParticipantState &sourceParticipant,
                                                    const SaveCompatibilityPolicy &compatibility,
                                                    const SaveMigrationSupportDescriptor &support,
@@ -260,18 +266,38 @@ namespace Horo::Runtime::SaveMigrationDetail {
                                                    const SaveMigrationLimits &limits) {
             const SaveParticipantCompatibility *policy = FindPolicyParticipant(compatibility, sourceParticipant.participant);
             if (policy == nullptr) {
-                if (sourceParticipant.required)
+                if (sourceParticipant.required || RequiredByTarget(compatibility, sourceParticipant.participant))
                     return Result<void>::Failure(
                         MigrationError(SaveErrors::MigrationSourceUnsupported,
                                        "Required source participant is not declared by the target save composition: " +
                                            sourceParticipant.participant.Value()));
-                plan.participantTargets.push_back(
-                    {.participant = sourceParticipant.participant, .schemaVersion = sourceParticipant.schemaVersion, .required = false});
+                const bool preserveUnknown =
+                    !std::ranges::binary_search(compatibility.droppableUnknownParticipants, sourceParticipant.participant);
+                if (preserveUnknown && sourceParticipant.preservedChunks.empty())
+                    return Result<void>::Failure(MigrationError(SaveErrors::MigrationSourceUnsupported,
+                                                                "Unknown optional participant lacks verified preservation evidence: " +
+                                                                    sourceParticipant.participant.Value()));
+                plan.participantTargets.push_back({.participant = sourceParticipant.participant,
+                                                   .schemaVersion = sourceParticipant.schemaVersion,
+                                                   .required = false,
+                                                   .preserveUnknown = preserveUnknown});
                 return Result<void>::Success();
             }
 
             const auto admission = ClassifyVersion(sourceParticipant.schemaVersion, policy->versions, SaveMigrationAxis::ParticipantSchema);
             if (admission.HasError()) {
+                if (!policy->required && !sourceParticipant.required && !RequiredByTarget(compatibility, sourceParticipant.participant)) {
+                    if (sourceParticipant.preservedChunks.empty())
+                        return Result<void>::Failure(
+                            MigrationError(SaveErrors::MigrationSourceUnsupported,
+                                           "Unsupported optional participant lacks verified preservation evidence: " +
+                                               sourceParticipant.participant.Value()));
+                    plan.participantTargets.push_back({.participant = sourceParticipant.participant,
+                                                       .schemaVersion = sourceParticipant.schemaVersion,
+                                                       .required = false,
+                                                       .preserveUnknown = true});
+                    return Result<void>::Success();
+                }
                 Error error = admission.ErrorValue();
                 error.message += " participant=" + sourceParticipant.participant.Value();
                 return Result<void>::Failure(std::move(error));
@@ -292,6 +318,14 @@ namespace Horo::Runtime::SaveMigrationDetail {
                     return Result<void>::Failure(
                         MigrationError(SaveErrors::MigrationSourceUnsupported,
                                        "Target composition requires a participant absent from the source: " + policy.participant.Value()));
+                if (!policy.required)
+                    continue;
+                for (const SaveParticipantId &dependency : policy.requiredDependencies) {
+                    if (FindStateParticipant(source, dependency) == nullptr)
+                        return Result<void>::Failure(
+                            MigrationError(SaveErrors::MigrationSourceUnsupported,
+                                           "Required participant dependency is absent from the source: " + dependency.Value()));
+                }
             }
             return Result<void>::Success();
         }
@@ -332,7 +366,7 @@ namespace Horo::Runtime::SaveMigrationDetail {
     }
 
     Sha256Digest CatalogIdentity(const std::vector<SaveMigrationDefinition> &definitions) {
-        std::string canonical{"Horo.SaveMigrationCatalog.v1"};
+        std::string canonical{"Horo.SaveMigrationCatalog.v2"};
         AppendCount(canonical, definitions.size());
         for (const SaveMigrationDefinition &definition : definitions)
             AppendStep(canonical, View(definition));
@@ -340,7 +374,7 @@ namespace Horo::Runtime::SaveMigrationDetail {
     }
 
     Sha256Digest RouteIdentity(const SaveMigrationPlan &plan) {
-        std::string canonical{"Horo.SaveMigrationRoute.v1"};
+        std::string canonical{"Horo.SaveMigrationRoute.v2"};
         AppendVersion(canonical, plan.sourceArchiveFormat.Value());
         AppendVersion(canonical, plan.sourceSaveSchema.Value());
         AppendVersion(canonical, plan.sourceProductCompatibility.Value());
@@ -358,6 +392,7 @@ namespace Horo::Runtime::SaveMigrationDetail {
             AppendText(canonical, target.participant.Value());
             AppendVersion(canonical, target.schemaVersion.Value());
             canonical.push_back(target.required ? '\x01' : '\x00');
+            canonical.push_back(target.preserveUnknown ? '\x01' : '\x00');
         }
         return ComputeSha256(Bytes(canonical));
     }

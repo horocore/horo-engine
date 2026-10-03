@@ -63,6 +63,7 @@ namespace Horo::Navigation {
     struct NavigationDynamicOwnerIdentityTag;
     struct NavigationDynamicOwnerGenerationIdentityTag;
     struct NavigationDynamicSourceRevisionIdentityTag;
+    struct NavigationAvoidanceLayerIdentityTag;
 
     /** @brief Process-local world incarnation assigned once by the host and never serialized. */
     using NavigationWorldId = NavigationIdentity<NavigationWorldIdentityTag>;
@@ -90,6 +91,8 @@ namespace Horo::Navigation {
     using NavigationDynamicOwnerGeneration = NavigationIdentity<NavigationDynamicOwnerGenerationIdentityTag>;
     /** @brief Monotonic source revision carried by one dynamic obstacle or modifier update. */
     using NavigationDynamicSourceRevision = NavigationIdentity<NavigationDynamicSourceRevisionIdentityTag>;
+    /** @brief Stable authored avoidance layer identity, independent of obstacle and query layers. */
+    using NavigationAvoidanceLayerId = NavigationIdentity<NavigationAvoidanceLayerIdentityTag>;
 
     /** @brief Decodes a canonical network-byte-order surface identity. @param bytes Persistent bytes.
      * @return Typed identity or NavigationErrors::IdentityInvalid when the decoded value is reserved.

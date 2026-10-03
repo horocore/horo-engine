@@ -89,7 +89,7 @@ namespace Horo::Gameplay {
         auto registry = BuildRegistry(*validated.bundle);
         if (registry.HasError())
             return Result<std::unique_ptr<LoadedGameModule>>::Failure(registry.ErrorValue());
-        impl->registry = std::move(registry).Value();
+        impl->registries.registry = std::move(registry).Value();
 
         impl->gameplayModule = validated.bundle->lifecycle.create();
         if (impl->gameplayModule == nullptr)

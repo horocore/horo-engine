@@ -66,11 +66,12 @@ namespace Horo::Navigation {
                                                        const std::uint32_t maximumNeighbors = 16,
                                                        const AvoidanceExecutionMode mode = AvoidanceExecutionMode::BestEffortBounded,
                                                        const float neighborX = 2.0F, const float boundaryX = 2.0F,
-                                                       const float currentVelocityX = 0.0F) {
+                                                       const float currentVelocityX = 0.0F, const float avoidancePriority = 0.5F) {
             const auto agents = Agents(pair);
             const auto dynamic = Dynamic(boundary, boundaryX);
             std::array<NavigationCrowdMotionSample, 2> motions{};
             motions[0] = {.handle = agents.Agents()[0].handle, .position = {0.0F, 0.0F, 0.0F}, .velocity = {currentVelocityX, 0.0F, 0.0F}};
+            motions[0].avoidance.priority = avoidancePriority;
             if (pair)
                 motions[1] = {.handle = agents.Agents()[1].handle, .position = {neighborX, 0.0F, 0.0F}, .velocity = {0.0F, 0.0F, 0.0F}};
             const std::array profiles{NavigationCrowdProfileFacts{.profile = Id<NavigationAgentProfileId>(1),
@@ -129,6 +130,26 @@ namespace Horo::Navigation {
                 CHECK(result.Value().stopReason == NavigationAvoidanceStopReason::NoFeasibleSample);
             }
         }
+    }
+
+    TEST_CASE("Detour crowd priority changes steering preference without bypassing admitted neighbors",
+              "[unit][navigation][crowd][provider][policy]") {
+        auto provider = CreateRecastDetourCrowdBackend();
+        REQUIRE(provider.HasValue());
+        const auto low = Snapshot(true, false, 16, AvoidanceExecutionMode::BestEffortBounded, 2.0F, 2.0F, 0.0F, 0.0F);
+        const auto high = Snapshot(true, false, 16, AvoidanceExecutionMode::BestEffortBounded, 2.0F, 2.0F, 0.0F, 1.0F);
+        REQUIRE(low.Agents()[0].neighborCount == 1);
+        REQUIRE(high.Agents()[0].neighborCount == 1);
+        const auto lowResult = provider.Value()->Solve(low, Request());
+        const auto highResult = provider.Value()->Solve(high, Request());
+        REQUIRE(lowResult.HasValue());
+        REQUIRE(highResult.HasValue());
+        CHECK(lowResult.Value().disposition == NavigationAvoidanceDisposition::Sampled);
+        CHECK(highResult.Value().disposition == NavigationAvoidanceDisposition::Sampled);
+        CHECK((highResult.Value().desiredVelocity.x != lowResult.Value().desiredVelocity.x ||
+               highResult.Value().desiredVelocity.z != lowResult.Value().desiredVelocity.z));
+        CHECK(highResult.Value().binding == lowResult.Value().binding);
+        CHECK(highResult.Value().captureTick == lowResult.Value().captureTick);
     }
 
     TEST_CASE("Detour crowd avoidance makes overlap and acceleration infeasibility explicit", "[unit][navigation][crowd][provider]") {

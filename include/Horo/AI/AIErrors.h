@@ -72,6 +72,24 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor PerceptionMemoryInvalid;
     /** @brief Perception memory received a backward committed simulation tick. */
     extern const ErrorCodeDescriptor PerceptionMemoryTimeInvalid;
+    /** @brief An authoritative gameplay perception event or its admission adapter is malformed. */
+    extern const ErrorCodeDescriptor PerceptionEventInvalid;
+    /** @brief Gameplay has not authorized this exact recipient or disclosure. */
+    extern const ErrorCodeDescriptor PerceptionEventUnauthorized;
+    /** @brief An event source, sender or recipient no longer has its exact scene generation. */
+    extern const ErrorCodeDescriptor PerceptionEventStale;
+    /** @brief The current recipient's perception filter rejects this event. */
+    extern const ErrorCodeDescriptor PerceptionEventFiltered;
+    /** @brief A spatial publication record or query violates its typed range/filter contract. */
+    extern const ErrorCodeDescriptor PerceptionSpatialInvalid;
+    /** @brief A spatial publication exceeds a hard participant capacity. */
+    extern const ErrorCodeDescriptor PerceptionSpatialLimitExceeded;
+    /** @brief A spatial publication has duplicate listener or source entity identities. */
+    extern const ErrorCodeDescriptor PerceptionSpatialConflict;
+    /** @brief A spatial publication uses a stale scene generation or non-increasing revision. */
+    extern const ErrorCodeDescriptor PerceptionSpatialStale;
+    /** @brief A spatial query refers to no listener in the immutable publication. */
+    extern const ErrorCodeDescriptor PerceptionSpatialListenerMissing;
     /** @brief An environment-query asset or descriptor has an invalid typed representation. */
     extern const ErrorCodeDescriptor EnvironmentQuerySchemaInvalid;
     /** @brief Environment-query metadata exceeds a fixed admission bound. */
@@ -84,6 +102,14 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor EnvironmentQueryVersionIncompatible;
     /** @brief An unknown environment-query stage was retained for authoring but cannot execute. */
     extern const ErrorCodeDescriptor EnvironmentQueryStageUnsupported;
+    /** @brief A required context has no value or registered capture provider. */
+    extern const ErrorCodeDescriptor EnvironmentQueryContextMissing;
+    /** @brief A context references a retired entity, scene, or execution revision. */
+    extern const ErrorCodeDescriptor EnvironmentQueryContextStale;
+    /** @brief A context provider needs a capability absent from this scene composition. */
+    extern const ErrorCodeDescriptor EnvironmentQueryContextCapabilityUnavailable;
+    /** @brief A provider produced malformed, oversized, or wrong-kind context data. */
+    extern const ErrorCodeDescriptor EnvironmentQueryContextInvalid;
     /** @brief A behavior-tree schema version, identity, or typed node/property contract is malformed. */
     extern const ErrorCodeDescriptor BehaviorTreeSchemaInvalid;
     /** @brief A behavior-tree source exceeds one of its finite node, edge, pin, or payload bounds. */
@@ -148,4 +174,14 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor SceneActivationInvalid;
     /** @brief The bounded AI scene-agent capacity has been exhausted. */
     extern const ErrorCodeDescriptor AgentCapacityExceeded;
+    /** @brief Canonical state has malformed, duplicate, missing, or over-limit data. */
+    extern const ErrorCodeDescriptor CanonicalStateInvalid;
+    /** @brief No unambiguous supported forward schema migration exists. */
+    extern const ErrorCodeDescriptor CanonicalSchemaUnsupported;
+    /** @brief A declared migration cannot preserve the source value contract. */
+    extern const ErrorCodeDescriptor CanonicalMigrationFailed;
+    /** @brief Scene, agent, schema, or runtime publication changed before restore. */
+    extern const ErrorCodeDescriptor CanonicalRestoreStale;
+    /** @brief Restore was cooperatively cancelled before publication. */
+    extern const ErrorCodeDescriptor CanonicalRestoreCancelled;
 }  // namespace Horo::AI::AIErrors

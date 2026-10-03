@@ -20,6 +20,11 @@ namespace Horo::Audio {
                    next.droppedTelemetry >= previous.droppedTelemetry && next.criticalRetries >= previous.criticalRetries &&
                    next.duplicateTerminals >= previous.duplicateTerminals;
         }
+
+        [[nodiscard]] bool Monotonic(const AudioExtractionStats &next, const AudioExtractionStats &previous) noexcept {
+            return next.published >= previous.published && next.coalesced >= previous.coalesced && next.dropped >= previous.dropped &&
+                   next.rateLimited >= previous.rateLimited && next.depth <= MaximumAudioExtractionSlots;
+        }
     }  // namespace
 
     /** @copydoc AudioMetrics::AudioMetrics */
@@ -67,6 +72,59 @@ namespace Horo::Audio {
         current_.gaugeAvailable[Index(AudioMetricGauge::EventQueueDepth)] = true;
         lastEventStats_ = stats;
         eventSourceGeneration_ = sourceGeneration;
+        return true;
+    }
+
+    /** @copydoc AudioMetrics::ObserveExtractionQueue */
+    bool AudioMetrics::ObserveExtractionQueue(const std::uint64_t sourceGeneration, const AudioExtractionStats &stats) noexcept {
+        if (!IsCollecting())
+            return false;
+        if (sourceGeneration == 0 || sourceGeneration < extractionSourceGeneration_)
+            return Invalid();
+        const auto previous = sourceGeneration == extractionSourceGeneration_ ? lastExtractionStats_ : AudioExtractionStats{};
+        if (!Monotonic(stats, previous))
+            return Invalid();
+        const std::array deltas{stats.dropped - previous.dropped, stats.coalesced - previous.coalesced,
+                                stats.rateLimited - previous.rateLimited};
+        const std::array kinds{AudioMetricCounter::ExtractionDrops, AudioMetricCounter::ExtractionCoalesced,
+                               AudioMetricCounter::ExtractionRateLimited};
+        for (std::size_t index = 0; index < deltas.size(); ++index)
+            AddSaturating(current_.counters[Index(kinds[index])], deltas[index], current_.saturated);
+        current_.gauges[Index(AudioMetricGauge::ExtractionQueueDepth)] = stats.depth;
+        current_.gaugeAvailable[Index(AudioMetricGauge::ExtractionQueueDepth)] = true;
+        lastExtractionStats_ = stats;
+        extractionSourceGeneration_ = sourceGeneration;
+        return true;
+    }
+
+    /** @copydoc AudioMetrics::ObserveExtractedRecord */
+    bool AudioMetrics::ObserveExtractedRecord(const AudioExtractionRecord &record) noexcept {
+        if (!IsCollecting())
+            return false;
+        if (record.samples == 0 || !std::isfinite(record.seconds) || record.seconds < 0.0)
+            return Invalid();
+        if (const auto value = static_cast<std::size_t>(record.kind); value < AudioMetricTimingCount)
+            return ObserveTiming(static_cast<AudioMetricTiming>(value), record.seconds);
+        using enum AudioExtractionKind;
+        AudioMetricCounter counter;
+        switch (record.kind) {
+            case DeadlineOverrun:
+                counter = AudioMetricCounter::CallbackDeadlineOverruns;
+                break;
+            case AllocationAttempt:
+                if (record.seconds != 0.0)
+                    return Invalid();
+                counter = AudioMetricCounter::CallbackAllocationAttempts;
+                break;
+            case LockAttempt:
+                if (record.seconds != 0.0)
+                    return Invalid();
+                counter = AudioMetricCounter::CallbackLockAttempts;
+                break;
+            default:
+                return Invalid();
+        }
+        AddSaturating(current_.counters[Index(counter)], record.samples, current_.saturated);
         return true;
     }
 

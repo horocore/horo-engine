@@ -7,17 +7,33 @@ target_include_directories(HoroHostModuleComposition PUBLIC
 )
 target_link_libraries(HoroHostModuleComposition PUBLIC HoroEngine::Foundation HoroEngine::PlatformServices)
 
+add_library(HoroNetworkProductHost STATIC
+    common/NetworkProductHost.cpp
+    common/HeadlessNetworkServices.cpp
+)
+target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
+target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/common)
+target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
+    HoroEngine::Physics HoroEngine::Runtime)
+
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine
     horo-engine/main.cpp
+    horo-engine/NetworkProductLaunch.cpp
 )
 target_compile_features(horo-engine PRIVATE cxx_std_20)
 target_compile_definitions(horo-engine PRIVATE
     HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     HORO_BUILD_CONFIGURATION="$<CONFIG>"
     HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}"
+    HORO_PRODUCT_HAS_GNS=$<BOOL:${HORO_BUILD_NETWORK_GNS}>
 )
-target_link_libraries(horo-engine PRIVATE HoroEngine::Application HoroEngine::Extensions HoroHostModuleComposition)
+target_link_libraries(horo-engine PRIVATE HoroEngine::Application HoroEngine::Extensions HoroHostModuleComposition
+    HoroNetworkProductHost)
+if(HORO_BUILD_NETWORK_GNS)
+    target_link_libraries(horo-engine PRIVATE HoroEngine::NetworkTransportGNS)
+endif()
+install(TARGETS horo-engine RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT Game)
 
 add_executable(horo-extension-validate
     horo-extension-validate/main.cpp
@@ -78,6 +94,13 @@ add_custom_command(
     VERBATIM)
 add_custom_target(HoroExtensionSdkPackageStage ALL DEPENDS "${HORO_PACKAGE_SDK_PATH}")
 
+# Focused SDK-author qualification can stage its three source-free tools without
+# building unrelated applications.
+add_custom_target(HoroExtensionAuthorCiStage DEPENDS
+    HoroExtensionSdkValidatorStage
+    HoroExtensionSdkConformanceStage
+    HoroExtensionSdkPackageStage)
+
 # The graphical executable is an optional composition root. Foundation and
 # headless hosts must remain buildable when the GUI adapter is intentionally off.
 if(HORO_BUILD_EDITOR_GUI)
@@ -87,6 +110,8 @@ if(HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditor
         HoroEditor/main.cpp
         HoroEditor/app/HoroEditorApp.cpp
+        HoroEditor/app/EditorUserStateMigration.cpp
+        HoroEditor/app/ConfiguredEditorUpdateBackend.cpp
     )
 
     if(APPLE)
@@ -206,9 +231,13 @@ if(HORO_BUILD_EDITOR_GUI)
             HoroEngine::Extensions
             HoroEngine::Platform
             HoroEngine::ProjectMigrations
+            HoroEngine::UserStateMigration
             HoroEngine::InputSdl
+            HoroEngine::UpdateDiscovery
+            HoroEngine::UpdateDownload
             HoroHostModuleComposition
             HoroThirdParty::ImGui
+            nlohmann_json::nlohmann_json
     )
 
     if(HORO_ENABLE_OPENTELEMETRY)

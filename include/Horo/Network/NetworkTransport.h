@@ -54,9 +54,10 @@ namespace Horo::Network {
         NetworkTransportEventKind kind{NetworkTransportEventKind::Failed}; /**< Exact event kind. */
         ListenerHandle listener{};                                         /**< Populated for listener events and acceptance. */
         ConnectionHandle connection{};                                     /**< Populated for connection events. */
-        DeliveryPolicy delivery{DeliveryPolicy::UnreliableUnordered};      /**< Packet delivery class. */
-        std::vector<std::byte> payload;                                    /**< Owned packet bytes for PacketReceived only. */
-        const ErrorCodeDescriptor *failure{};                              /**< Stable typed descriptor for Failed only. */
+        ChannelId channel{};                                          /**< Exact zero-based packet channel; zero for the GNS baseline. */
+        DeliveryPolicy delivery{DeliveryPolicy::UnreliableUnordered}; /**< Packet delivery class. */
+        std::vector<std::byte> payload;                               /**< Owned packet bytes for PacketReceived only. */
+        const ErrorCodeDescriptor *failure{};                         /**< Stable typed descriptor for Failed only. */
     };
 
     /** @brief Transport-level observed counters, not session/authentication evidence. */

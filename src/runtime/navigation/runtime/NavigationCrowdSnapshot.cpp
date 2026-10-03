@@ -42,6 +42,35 @@ namespace Horo::Navigation {
             return found != storage.profiles.end() && found->profile == profile ? std::to_address(found) : nullptr;
         }
 
+        /** @brief Validates one complete, stable layer table before admitting any agent facts. */
+        [[nodiscard]] Result<void> CopyAvoidanceLayers(const std::span<const NavigationAvoidanceLayerDescriptor> layers,
+                                                       Detail::NavigationCrowdSnapshotStorage &storage) {
+            if (layers.size() > 64)
+                return CapacityExceeded();
+            if (layers.empty())
+                storage.avoidanceLayers.push_back({.id = NavigationAvoidanceLayerId::Create(1).Value()});
+            else
+                storage.avoidanceLayers.assign(layers.begin(), layers.end());
+            std::ranges::sort(storage.avoidanceLayers, {}, &NavigationAvoidanceLayerDescriptor::bitIndex);
+            for (const auto &layer : storage.avoidanceLayers) {
+                if (!layer.id.IsValid() || layer.bitIndex >= 64 || (storage.avoidanceLayerBits & (std::uint64_t{1} << layer.bitIndex)) != 0)
+                    return InvalidCapture();
+                storage.avoidanceLayerBits |= std::uint64_t{1} << layer.bitIndex;
+            }
+            for (std::size_t index = 0; index < storage.avoidanceLayers.size(); ++index)
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    if (storage.avoidanceLayers[index].id == storage.avoidanceLayers[previous].id)
+                        return InvalidCapture();
+            return Result<void>::Success();
+        }
+
+        /** @brief Rejects undeclared mask bits and non-finite or out-of-range right-of-way policy. */
+        [[nodiscard]] bool ValidAvoidancePolicy(const NavigationAvoidanceAgentPolicy &policy, const std::uint64_t declaredBits) noexcept {
+            return policy.layerBit < 64 && (declaredBits & (std::uint64_t{1} << policy.layerBit)) != 0 && policy.avoidsLayers != 0 &&
+                   (policy.avoidsLayers & ~declaredBits) == 0 && std::isfinite(policy.priority) && policy.priority >= 0.0F &&
+                   policy.priority <= 1.0F;
+        }
+
         [[nodiscard]] Result<void> CopyAgents(const NavigationAgentSnapshot &source, std::span<const NavigationCrowdMotionSample> motions,
                                               const NavigationCrowdSnapshotLimits &limits,
                                               Detail::NavigationCrowdSnapshotStorage &storage) {
@@ -64,7 +93,8 @@ namespace Horo::Navigation {
                 const auto &record = enabled[index];
                 const auto &motion = ordered[index];
                 const auto *profile = FindProfile(storage, record.profile);
-                if (motion.handle != record.handle || !profile || !Math::IsFinite(motion.position) || !Math::IsFinite(motion.velocity))
+                if (motion.handle != record.handle || !profile || !Math::IsFinite(motion.position) || !Math::IsFinite(motion.velocity) ||
+                    !ValidAvoidancePolicy(motion.avoidance, storage.avoidanceLayerBits))
                     return InvalidCapture();
                 const float radius = record.radiusOverride.value_or(profile->radiusMeters);
                 if (!std::isfinite(radius) || radius <= 0.0F || radius > profile->neighborRadiusMeters)
@@ -84,7 +114,8 @@ namespace Horo::Navigation {
                                           .position = motion.position,
                                           .velocity = motion.velocity,
                                           .radiusMeters = radius,
-                                          .priority = motion.priority});
+                                          .priority = motion.priority,
+                                          .avoidance = motion.avoidance});
             }
             return Result<void>::Success();
         }
@@ -156,13 +187,18 @@ namespace Horo::Navigation {
                         : std::span<const NavigationCrowdProfileTruncation>{};
     }
 
+    /** @copydoc NavigationCrowdSnapshot::AvoidanceLayers */
+    std::span<const NavigationAvoidanceLayerDescriptor> NavigationCrowdSnapshot::AvoidanceLayers() const noexcept {
+        return storage_ ? std::span<const NavigationAvoidanceLayerDescriptor>{storage_->avoidanceLayers}
+                        : std::span<const NavigationAvoidanceLayerDescriptor>{};
+    }
+
     /** @copydoc BuildNavigationCrowdSnapshot */
-    Result<NavigationCrowdSnapshot> BuildNavigationCrowdSnapshot(const NavigationAgentSnapshot &agents,
-                                                                 const NavigationDynamicRegistrySnapshot &dynamic,
-                                                                 const std::span<const NavigationCrowdMotionSample> motions,
-                                                                 const std::span<const NavigationCrowdProfileFacts> profiles,
-                                                                 const NavigationCrowdSnapshotLimits &limits,
-                                                                 const std::uint64_t captureTick) {
+    Result<NavigationCrowdSnapshot> BuildNavigationCrowdSnapshot(
+        const NavigationAgentSnapshot &agents, const NavigationDynamicRegistrySnapshot &dynamic,
+        const std::span<const NavigationCrowdMotionSample> motions, const std::span<const NavigationCrowdProfileFacts> profiles,
+        const NavigationCrowdSnapshotLimits &limits, const std::uint64_t captureTick,
+        const std::span<const NavigationAvoidanceLayerDescriptor> avoidanceLayers) {
         if (!ValidLimits(limits) || captureTick == 0 || !agents.IsValid() || !dynamic.IsValid())
             return Result<NavigationCrowdSnapshot>::Failure(MakeError(NavigationErrors::AgentDescriptorInvalid));
         if (agents.Agents().size() > limits.maximumAgents || motions.size() > limits.maximumAgents ||
@@ -179,6 +215,8 @@ namespace Horo::Navigation {
         storage->dynamicRevision = dynamic.Revision();
         storage->captureTick = captureTick;
         storage->mode = limits.mode;
+        if (const auto copiedLayers = CopyAvoidanceLayers(avoidanceLayers, *storage); copiedLayers.HasError())
+            return Result<NavigationCrowdSnapshot>::Failure(copiedLayers.ErrorValue());
         storage->profiles.assign(profiles.begin(), profiles.end());
         std::ranges::sort(storage->profiles, {}, &NavigationCrowdProfileFacts::profile);
         for (std::size_t index = 0; index < storage->profiles.size(); ++index) {

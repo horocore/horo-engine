@@ -103,7 +103,10 @@ namespace Horo::Editor::DesignSystem {
      * @param typography Typography token set to normalize in place.
      */
     inline void NormalizeTypographyTokens(TypographyTokens &typography) noexcept {
-        constexpr float minimumReadableSize = 14.0F;
+        constexpr float minimumReadableSize = 16.0F;
+        typography.sansBase = std::max(typography.sansBase, minimumReadableSize);
+        typography.sansCompactBase = std::max(typography.sansCompactBase, minimumReadableSize);
+        typography.sansEmphasisBase = std::max(typography.sansEmphasisBase, minimumReadableSize);
         typography.caption = std::max(typography.caption, minimumReadableSize);
         typography.label = std::max(typography.label, minimumReadableSize);
         typography.body = std::max(typography.body, minimumReadableSize);
@@ -262,16 +265,16 @@ namespace Horo::Editor::DesignSystem {
                 ImVec4{0.020F, 0.075F, 0.110F, 1.0F},
             },
             TypographyTokens{
-                .sansBase = 16.0F,
-                .sansCompactBase = 14.0F,
-                .sansEmphasisBase = 16.0F,
-                .caption = 14.0F,
-                .label = 14.0F,
-                .body = 16.0F,
-                .cardTitle = 16.0F,
-                .title = 18.0F,
-                .heading = 22.0F,
-                .display = 28.0F,
+                .sansBase = 18.0F,
+                .sansCompactBase = 18.0F,
+                .sansEmphasisBase = 18.0F,
+                .caption = 18.0F,
+                .label = 18.0F,
+                .body = 18.0F,
+                .cardTitle = 18.0F,
+                .title = 20.0F,
+                .heading = 24.0F,
+                .display = 30.0F,
             },
             RadiusTokens{4.0F, 6.0F, 8.0F},
             SizeTokens{280.0F, 32.0F, 900.0F, 680.0F, 58.0F, 52.0F, 220.0F, 620.0F, 440.0F, 1.0F},
@@ -286,11 +289,11 @@ namespace Horo::Editor::DesignSystem {
             },
             ComponentTokens{
                 std::array{
-                    ComponentSizeMetrics{14.0F, 8.0F, 3.0F, 24.0F, 12.0F},
-                    ComponentSizeMetrics{14.0F, 10.0F, 5.0F, 28.0F, 14.0F},
-                    ComponentSizeMetrics{14.0F, 14.0F, 7.0F, 32.0F, 16.0F},
-                    ComponentSizeMetrics{16.0F, 18.0F, 10.0F, 40.0F, 20.0F},
-                    ComponentSizeMetrics{18.0F, 22.0F, 13.0F, 48.0F, 24.0F},
+                    ComponentSizeMetrics{18.0F, 8.0F, 3.0F, 24.0F, 12.0F},
+                    ComponentSizeMetrics{18.0F, 10.0F, 5.0F, 28.0F, 14.0F},
+                    ComponentSizeMetrics{18.0F, 14.0F, 7.0F, 32.0F, 16.0F},
+                    ComponentSizeMetrics{18.0F, 18.0F, 10.0F, 40.0F, 20.0F},
+                    ComponentSizeMetrics{20.0F, 22.0F, 13.0F, 48.0F, 24.0F},
                 },
                 std::array{0.0F, 4.0F, 8.0F, 12.0F, 16.0F, 24.0F},
             },

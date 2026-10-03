@@ -31,10 +31,11 @@ namespace Horo::Physics::Detail {
             return {.simulationTick = tick,
                     .first = Endpoint(first),
                     .second = Endpoint(second),
-                    .contact = {.position = {static_cast<float>(first), 0.5F, static_cast<float>(second)},
-                                .normal = {0.0F, 1.0F, 0.0F},
-                                .penetrationDepthMeters = 0.02F,
-                                .normalImpulseNewtonSeconds = 0.0F},
+                    .contact =
+                        {.points = {PhysicsContactPoint{.positionOnFirst = {static_cast<float>(first), 0.5F, static_cast<float>(second)},
+                                                        .positionOnSecond = {static_cast<float>(first), 0.5F, static_cast<float>(second)},
+                                                        .penetrationDepthMeters = 0.02F}},
+                         .pointCount = 1},
                     .sensor = sensor};
         }
 
@@ -62,14 +63,17 @@ namespace Horo::Physics::Detail {
 
         projection.BeginTick(1);
         auto first = Observation(1, 2, 1);
-        first.contact.normal = {1.0F, 0.0F, 0.0F};
+        first.contact.points[0].normal = {1.0F, 0.0F, 0.0F};
+        first.contact.points[0].positionOnSecond = {3.0F, 4.0F, 5.0F};
         REQUIRE(projection.TryCapture(first));
         auto completed = projection.CompleteTick(1);
         REQUIRE(completed.HasValue());
         REQUIRE(completed.Value().publishedRecordCount == 1);
         REQUIRE(projection.PublishedEvents()[0].kind == PhysicsEventKind::ContactBegin);
         REQUIRE(projection.PublishedEvents()[0].pair.first.body.slot.index == 1);
-        REQUIRE((projection.PublishedEvents()[0].contact.normal == Math::Vec3{-1.0F, 0.0F, 0.0F}));
+        REQUIRE((projection.PublishedEvents()[0].contact.points[0].normal == Math::Vec3{-1.0F, 0.0F, 0.0F}));
+        REQUIRE((projection.PublishedEvents()[0].contact.points[0].positionOnFirst == Math::Vec3{3.0F, 4.0F, 5.0F}));
+        REQUIRE((projection.PublishedEvents()[0].contact.points[0].positionOnSecond == Math::Vec3{2.0F, 0.5F, 1.0F}));
 
         projection.BeginTick(2);
         REQUIRE(projection.TryCapture(Observation(2, 1, 2)));
@@ -101,6 +105,22 @@ namespace Horo::Physics::Detail {
         REQUIRE(projection.PublishedEvents()[0].kind == PhysicsEventKind::TriggerExit);
     }
 
+    TEST_CASE("Quarantine suppresses published and pending contacts without a stale exit", "[physics][events][nonfinite]") {
+        PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
+        REQUIRE(CaptureOne(projection, 1, 1, 2, true));
+        REQUIRE(projection.CompleteTick(1).Value().publishedRecordCount == 1);
+        projection.BeginTick(2);
+        REQUIRE(projection.TryCapture(Observation(2, 1, 2, true)));
+        REQUIRE(projection.TryCapture(Observation(2, 3, 4)));
+        projection.SuppressBody(Endpoint(1).body);
+        REQUIRE(projection.PublishedEvents().empty());
+        REQUIRE(projection.CompleteTick(2).Value().publishedRecordCount == 1);
+        REQUIRE(projection.PublishedEvents()[0].pair.first.body == Endpoint(3).body);
+        projection.BeginTick(3);
+        REQUIRE(projection.CompleteTick(3).Value().publishedRecordCount == 1);
+        REQUIRE(projection.PublishedEvents()[0].pair.first.body == Endpoint(3).body);
+    }
+
     TEST_CASE("Physics event projection rejects stale observations and reconciles interleaved pairs", "[physics][events][projection]") {
         PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
 
@@ -110,7 +130,7 @@ namespace Horo::Physics::Detail {
         projection.AbortTick();
 
         auto invalid = Observation(1, 1, 2);
-        invalid.contact.normal.x = std::numeric_limits<float>::quiet_NaN();
+        invalid.contact.points[0].normal.x = std::numeric_limits<float>::quiet_NaN();
         projection.BeginTick(1);
         REQUIRE_FALSE(projection.TryCapture(invalid));
         REQUIRE(projection.CompleteTick(1).Value().publishedRecordCount == 0);
@@ -152,16 +172,87 @@ namespace Horo::Physics::Detail {
         observation.firstMaterial = PhysicsEventMaterial{.asset = Assets::AssetId::FromBytes(materialBytes),
                                                          .assetGeneration = 4,
                                                          .slot = PhysicsMaterialSlotId::FromValue(7)};
+        observation.contact.points[0].normalImpulseEstimateNewtonSeconds = 1.0F;
+        auto repeated = observation;
+        repeated.contact.points[0].normalImpulseEstimateNewtonSeconds = 2.0F;
         projection.BeginTick(1);
         REQUIRE(projection.TryCapture(observation));
-        REQUIRE(projection.TryCapture(observation));
-        observation.contact.position = {99.0F, 99.0F, 99.0F};
+        REQUIRE(projection.TryCapture(repeated));
+        observation.contact.points[0].positionOnFirst = {99.0F, 99.0F, 99.0F};
 
         const auto completed = projection.CompleteTick(1);
         REQUIRE(completed.HasValue());
         REQUIRE(completed.Value().publishedRecordCount == 1);
-        REQUIRE((projection.PublishedEvents()[0].contact.position == Math::Vec3{1.0F, 0.5F, 2.0F}));
+        REQUIRE((projection.PublishedEvents()[0].contact.points[0].positionOnFirst == Math::Vec3{1.0F, 0.5F, 2.0F}));
+        REQUIRE(projection.PublishedEvents()[0].contact.pointCount == 1);
+        REQUIRE(projection.PublishedEvents()[0].contact.points[0].normalImpulseEstimateNewtonSeconds == 2.0F);
         REQUIRE(projection.PublishedEvents()[0].firstMaterial->assetGeneration == 4);
+    }
+
+    TEST_CASE("Physics contact manifolds retain deterministic bounded point evidence across callbacks", "[physics][events][manifold]") {
+        auto lower = Observation(1, 1, 2);
+        auto higher = lower;
+        lower.contact.pointCount = MaximumPhysicsContactPoints;
+        higher.contact.pointCount = MaximumPhysicsContactPoints;
+        lower.contact.omittedPointCount = 2;
+        for (std::uint32_t index = 0; index < MaximumPhysicsContactPoints; ++index) {
+            lower.contact.points[index] = lower.contact.points[0];
+            higher.contact.points[index] = higher.contact.points[0];
+            lower.contact.points[index].positionOnFirst.x = static_cast<float>(index);
+            lower.contact.points[index].positionOnSecond.x = static_cast<float>(index);
+            higher.contact.points[index].positionOnFirst.x = static_cast<float>(index + 4);
+            higher.contact.points[index].positionOnSecond.x = static_cast<float>(index + 4);
+        }
+        PhysicsEventProjection first(8, 8, PhysicsEventOverflowPolicy::DropNewest);
+        first.BeginTick(1);
+        REQUIRE(first.TryCapture(higher));
+        REQUIRE(first.TryCapture(lower));
+        REQUIRE(first.CompleteTick(1).HasValue());
+        PhysicsEventProjection second(8, 8, PhysicsEventOverflowPolicy::DropNewest);
+        second.BeginTick(1);
+        REQUIRE(second.TryCapture(lower));
+        REQUIRE(second.TryCapture(higher));
+        REQUIRE(second.CompleteTick(1).HasValue());
+
+        const auto &contact = first.PublishedEvents().front().contact;
+        REQUIRE(contact == second.PublishedEvents().front().contact);
+        REQUIRE(contact.pointCount == MaximumPhysicsContactPoints);
+        REQUIRE(contact.omittedPointCount == 6);
+        for (std::uint32_t index = 0; index < contact.pointCount; ++index)
+            REQUIRE(contact.points[index].positionOnFirst.x == static_cast<float>(index));
+        first.Reset();
+        REQUIRE(first.PublishedEvents().empty());
+        REQUIRE(first.PublishedTick() == 0);
+        REQUIRE(CaptureOne(first, 2, 1, 2));
+        REQUIRE(first.CompleteTick(2).HasValue());
+        REQUIRE(first.PublishedEvents().front().contact.pointCount == 1);
+        REQUIRE(first.PublishedEvents().front().contact.omittedPointCount == 0);
+    }
+
+    TEST_CASE("Physics contact observations reject malformed point and impulse evidence", "[physics][events][manifold]") {
+        PhysicsEventProjection projection(8, 8, PhysicsEventOverflowPolicy::DropNewest);
+        projection.BeginTick(1);
+        auto observation = Observation(1, 1, 2);
+        observation.contact.pointCount = 0;
+        REQUIRE_FALSE(projection.TryCapture(observation));
+        observation = Observation(1, 1, 2);
+        observation.contact.pointCount = MaximumPhysicsContactPoints + 1;
+        REQUIRE_FALSE(projection.TryCapture(observation));
+        observation = Observation(1, 1, 2);
+        observation.contact.points[0].normal = {};
+        REQUIRE_FALSE(projection.TryCapture(observation));
+        observation = Observation(1, 1, 2);
+        observation.contact.points[0].normalImpulseEstimateNewtonSeconds = -1.0F;
+        REQUIRE_FALSE(projection.TryCapture(observation));
+        observation.contact.points[0].normalImpulseEstimateNewtonSeconds = 1.5F;
+        observation.sensor = true;
+        REQUIRE_FALSE(projection.TryCapture(observation));
+        observation.sensor = false;
+        observation.contact.points[0].penetrationDepthMeters = -0.02F;
+        REQUIRE(projection.TryCapture(observation));
+        REQUIRE(projection.CompleteTick(1).HasValue());
+        REQUIRE(projection.PublishedEvents().front().contact.points[0].normalImpulseEstimateNewtonSeconds == 1.5F);
+        REQUIRE(projection.DroppedRecordCount() == 5);
     }
 
     TEST_CASE("Physics event projection bounds concurrent callback capture and reports drops", "[physics][events][projection]") {

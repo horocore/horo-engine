@@ -156,26 +156,11 @@ def test_write_workspace_keeps_generated_state_inside_the_build_directory(tmp_pa
     assert payload["settings"]["sonarlint.connectedMode.project"]["projectKey"] == "horocore_horo-engine"
 
 
-def test_open_workspace_selects_only_the_new_bridge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    snapshots = iter([{64120}, {64120}, {64120, 64121}])
-    monkeypatch.setattr(sonar_ide_analysis, "available_bridge_ports", lambda: next(snapshots))
-    monkeypatch.setattr(sonar_ide_analysis, "run_command", lambda *_: None)
-    monkeypatch.setattr(sonar_ide_analysis.time, "sleep", lambda *_: None)
-
+def test_obsolete_port_discovery_rejects_live_port_reuse(tmp_path: Path) -> None:
     workspace = tmp_path / "sonar.code-workspace"
-    assert sonar_ide_analysis.open_workspace_and_find_bridge(workspace, 5) == 64121
-    marker = workspace.parent / f"{workspace.name}.bridge.json"
-    assert json.loads(marker.read_text(encoding="utf-8")) == {"port": 64121}
-
-
-def test_open_workspace_reuses_its_remembered_live_bridge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    workspace = tmp_path / "sonar.code-workspace"
-    marker = workspace.parent / f"{workspace.name}.bridge.json"
-    marker.write_text('{"port": 64122}\n', encoding="utf-8")
-    monkeypatch.setattr(sonar_ide_analysis, "available_bridge_ports", lambda: {64120, 64122})
-    monkeypatch.setattr(sonar_ide_analysis, "run_command", lambda *_: None)
-
-    assert sonar_ide_analysis.open_workspace_and_find_bridge(workspace, 5) == 64122
+    (tmp_path / "sonar.code-workspace.bridge.json").write_text('{"port": 64122}')
+    with pytest.raises(sonar_ide_analysis.AnalysisError, match="Unverified"):
+        sonar_ide_analysis.open_workspace_and_find_bridge(workspace, 5)
 
 
 def test_bridge_url_rejects_ports_outside_the_ide_range() -> None:
@@ -341,23 +326,6 @@ def test_main_rejects_combining_explicit_files_with_a_change_selector(capsys: py
     }
 
 
-def test_main_reports_a_clean_explicit_analysis(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    source = tmp_path / "source.cpp"
-    source.write_text("int value;\n", encoding="utf-8")
-    build = tmp_path / "build"
-    build.mkdir()
-    (build / sonar_ide_analysis.COMPILE_COMMANDS_FILENAME).write_text(
-        json.dumps([{"directory": str(tmp_path), "file": str(source), "command": "c++ -c source.cpp"}]), encoding="utf-8"
-    )
-    monkeypatch.setattr(sonar_ide_analysis, "repository_root", lambda: tmp_path)
-    monkeypatch.setattr(sonar_ide_analysis, "request_bridge", lambda *_args: 200)
-    monkeypatch.setattr(sonar_ide_analysis, "analyze_when_indexed", lambda *_args: [])
-
-    exit_code = sonar_ide_analysis.main(
-        ["--port", "64120", "--no-prepare", "--build-directory", str(build), str(source)]
-    )
-
-    assert exit_code == 0
-    assert json.loads(capsys.readouterr().out)["status"] == "clean"
+def test_main_rejects_unverified_explicit_port(capsys: pytest.CaptureFixture[str]) -> None:
+    assert sonar_ide_analysis.main(["--port", "64120", "--no-prepare", "source.cpp"]) == 2
+    assert "Unverified explicit ports" in json.loads(capsys.readouterr().err)["error"]

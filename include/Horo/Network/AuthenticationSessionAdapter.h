@@ -16,6 +16,7 @@
 #include <span>
 
 namespace Horo::Network {
+    class AdmissionProtection;
     /** @brief Current closed authentication challenge and result contract version. */
     inline constexpr std::uint32_t AuthenticationContractVersion = 1;
     /** @brief Absolute peer-proof byte bound accepted before any verifier is invoked. */
@@ -91,6 +92,7 @@ namespace Horo::Network {
         Cancelled,
         TimedOut,
         Shutdown,
+        ResourceLimited,
         Count
     };
 
@@ -354,7 +356,8 @@ namespace Horo::Network {
      *
      * The adapter retains only public policy/challenge/evidence metadata and immutable accepted output. Secret proof
      * bytes are borrowed for one synchronous credential call and never enter ordinary state, diagnostics, errors, or
-     * captures. Authority owners must outlive the adapter and cancel their private work before destruction.
+     * captures. Authority owners and the optional host admission ledger must outlive this adapter. A production host
+     * reserves the ledger before authentication and passes it here to charge expensive verifier work.
      */
     class AuthenticationSessionAdapter final {
     public:
@@ -364,12 +367,14 @@ namespace Horo::Network {
          * @param challenge Fresh challenge bound to the accepted negotiation generation.
          * @param authorities Borrowed host authorities that must outlive this adapter.
          * @param deadlineTick Positive absolute monotonic authentication deadline.
+         * @param protection Optional host ledger reserved for this exact challenge; it must outlive this adapter.
          * @return Prepared adapter or typed malformed/policy failure.
          */
         [[nodiscard]] static Result<AuthenticationSessionAdapter> Create(const NetworkTrustPolicySnapshot &policy,
                                                                          const AuthenticationChallenge &challenge,
                                                                          const AuthenticationAuthorities &authorities,
-                                                                         std::uint64_t deadlineTick);
+                                                                         std::uint64_t deadlineTick,
+                                                                         AdmissionProtection *protection = nullptr);
 
         /**
          * @brief Verifies one bounded proof and atomically publishes a principal/channel handoff.
@@ -403,7 +408,8 @@ namespace Horo::Network {
 
     private:
         AuthenticationSessionAdapter(const NetworkTrustPolicySnapshot &policy, const AuthenticationChallenge &challenge,
-                                     const AuthenticationAuthorities &authorities, std::uint64_t deadlineTick) noexcept;
+                                     const AuthenticationAuthorities &authorities, std::uint64_t deadlineTick,
+                                     AdmissionProtection *protection) noexcept;
         [[nodiscard]] bool Owns(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration) const noexcept;
         [[nodiscard]] Result<AuthenticationResult> Reject(const ErrorCodeDescriptor &error, AuthenticationFailureClass failure);
         /** @brief Runs the ordered host-authority chain after cheap hostile-input validation. */
@@ -413,6 +419,7 @@ namespace Horo::Network {
         NetworkTrustPolicySnapshot policy_{};
         AuthenticationChallenge challenge_{};
         AuthenticationAuthorities authorities_{};
+        AdmissionProtection *protection_{};
         std::uint64_t deadlineTick_{};
         AuthenticationResult accepted_{};
         AuthenticationState state_{AuthenticationState::AwaitingProof};
