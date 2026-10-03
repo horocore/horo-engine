@@ -28,6 +28,14 @@ namespace Horo::Physics::Detail {
             }
         }
 
+        /** @brief Rejects non-finite body evidence before returning an owned snapshot. */
+        [[nodiscard]] bool FiniteReconciliation(const PhysicsBodyReconciliation &value) noexcept {
+            const std::array finite{Math::IsFinite(value.state.pose.translation), Math::IsFinite(value.state.pose.rotation),
+                                    Math::IsFinite(value.state.linearVelocity), Math::IsFinite(value.state.angularVelocity),
+                                    Math::IsFinite(value.observedBoundsExtent)};
+            return std::ranges::all_of(finite, std::identity{});
+        }
+
         /** @brief Reads dynamic inverse mass without inventing mass for locked translation. */
         [[nodiscard]] Result<std::optional<float>> ReadNativeMass(const JPH::Body &native, const PhysicsMotionType motion) {
             if (motion != PhysicsMotionType::Dynamic)
@@ -43,7 +51,7 @@ namespace Horo::Physics::Detail {
     /** @copydoc ReadCanonicalSceneBodyReconciliation */
     Result<PhysicsBodyReconciliation> ReadCanonicalSceneBodyReconciliation(const CanonicalWorldHandle world, const PhysicsWorldId owner,
                                                                            const BodyHandle body) {
-        if (world.value == nullptr || !owner.IsValid())
+        if (const std::array valid{world.value != nullptr, owner.IsValid()}; !std::ranges::all_of(valid, std::identity{}))
             return Result<PhysicsBodyReconciliation>::Failure(MakeError(PhysicsErrors::WorldInvalid));
         if (const auto handle = ValidatePhysicsHandleOwner(body, owner); handle.HasError())
             return Result<PhysicsBodyReconciliation>::Failure(handle.ErrorValue());
@@ -86,6 +94,8 @@ namespace Horo::Physics::Detail {
                                          .observedShape = shape->handle,
                                          .observedMassKilograms = mass.Value(),
                                          .observedBoundsExtent = {boundsExtent.GetX(), boundsExtent.GetY(), boundsExtent.GetZ()}};
+        if (!FiniteReconciliation(result))
+            return Result<PhysicsBodyReconciliation>::Failure(MakeError(PhysicsErrors::BodyStateNonFinite));
         return Result<PhysicsBodyReconciliation>::Success(std::move(result));
     }
 

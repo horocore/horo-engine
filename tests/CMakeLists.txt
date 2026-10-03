@@ -546,11 +546,13 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsQueryEventCapabilityTests.cpp
         unit/runtime/physics/PhysicsReferenceSceneCorpusTests.cpp
         unit/runtime/physics/PhysicsSceneActivationTests.cpp
+        unit/runtime/physics/PhysicsSceneContainmentTests.cpp
         unit/runtime/physics/PhysicsShapeDescriptorTests.cpp
         unit/runtime/physics/PhysicsStepPolicyTests.cpp
         unit/runtime/physics/PhysicsTransformAuthorityTests.cpp
         unit/runtime/physics/PhysicsWorldBudgetsTests.cpp
         unit/runtime/physics/PhysicsWorldConstraintMutationTests.cpp
+        unit/runtime/physics/PhysicsWorldContainmentTests.cpp
         unit/runtime/physics/PhysicsWorldDescriptorTests.cpp
         unit/runtime/physics/PhysicsWorldLifecycleTests.cpp
         unit/runtime/physics/PhysicsWorldSettingsTests.cpp
@@ -1009,6 +1011,7 @@ endforeach()
 if(HORO_BUILD_PHYSICS_NATIVE)
     add_executable(HoroPhysicsNativeBoundaryTests
         unit/runtime/physics/CanonicalNativeBoundaryTests.cpp
+        unit/runtime/physics/CanonicalContainmentTests.cpp
         unit/runtime/physics/CanonicalPhysicsRuntimeTests.cpp
         unit/runtime/physics/CanonicalWorldSettingsTests.cpp)
     target_compile_features(HoroPhysicsNativeBoundaryTests PRIVATE cxx_std_20)
