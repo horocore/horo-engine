@@ -170,30 +170,32 @@ namespace Horo::PlatformServices {
 
     /** @copydoc PlatformServicesComposition::Initialize */
     template <typename Factory>
-    Result<void> PlatformServicesComposition::Initialize(const PlatformServicesCompositionRequest &request, const Factory &factory) noexcept
+    Result<void> PlatformServicesComposition::Initialize(const PlatformServicesCompositionRequest &request,
+                                                         const Factory &factory) noexcept {
         try {
-        diagnostics_ = {.profile = request.profile, .mode = request.mode, .generation = request.generation};
-        diagnostics_.services.fill(PlatformServiceAvailability::Unavailable);
-        if (request.mode == PlatformServicesCompositionMode::Null || request.mode == PlatformServicesCompositionMode::Absent) {
-            diagnostics_.reasons.fill(request.mode == PlatformServicesCompositionMode::Null
-                                          ? PlatformServiceUnavailableReason::NullProviderSelected
-                                          : PlatformServiceUnavailableReason::NoProviderSelected);
-            open_ = true;
-            return Result<void>::Success();
+            diagnostics_ = {.profile = request.profile, .mode = request.mode, .generation = request.generation};
+            diagnostics_.services.fill(PlatformServiceAvailability::Unavailable);
+            if (request.mode == PlatformServicesCompositionMode::Null || request.mode == PlatformServicesCompositionMode::Absent) {
+                diagnostics_.reasons.fill(request.mode == PlatformServicesCompositionMode::Null
+                                              ? PlatformServiceUnavailableReason::NullProviderSelected
+                                              : PlatformServiceUnavailableReason::NoProviderSelected);
+                open_ = true;
+                return Result<void>::Success();
+            }
+            auto created = factory(request);
+            if (created.HasError())
+                return Result<void>::Failure(created.ErrorValue());
+            auto candidate = std::move(created).Value();
+            if (!candidate.backend)
+                return Result<void>::Failure(MakeError(FrontendErrors::InvalidComposition));
+            auto initialized = InitializeCandidate(request, std::move(candidate));
+            if (rollbackError_)
+                return Result<void>::Failure(*rollbackError_);
+            open_ = initialized.HasValue();
+            return initialized;
+        } catch (...) {
+            return Result<void>::Failure(rollbackError_.value_or(MakeError(BackendErrors::ServiceUnavailable)));
         }
-        auto created = factory(request);
-        if (created.HasError())
-            return Result<void>::Failure(created.ErrorValue());
-        auto candidate = std::move(created).Value();
-        if (!candidate.backend)
-            return Result<void>::Failure(MakeError(FrontendErrors::InvalidComposition));
-        auto initialized = InitializeCandidate(request, std::move(candidate));
-        if (rollbackError_)
-            return Result<void>::Failure(*rollbackError_);
-        open_ = initialized.HasValue();
-        return initialized;
-    } catch (...) {
-        return Result<void>::Failure(rollbackError_.value_or(MakeError(BackendErrors::ServiceUnavailable)));
     }
 
     /** @copydoc PlatformServicesComposition::InitializeCandidate */
