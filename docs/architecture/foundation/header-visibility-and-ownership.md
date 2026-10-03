@@ -124,6 +124,21 @@ snapshot. `NetworkTransportEvent` now carries an explicit zero-based `channel`;
 the existing GNS baseline supplies channel zero, so current callers retain their
 wire behavior. The NetworkRuntime public-header consumer covers the new header.
 
+## NET-004.9 RPC Gameplay Dispatch Boundary
+
+`HoroEngine::NetworkRuntime` solely owns the additive
+`Horo/Network/RpcGameplayDispatch.h` contract. The existing inbound handler
+signature remains valid; handlers requiring sender authority override the new
+`HandleAdmitted` callback, which receives evidence from the registered session.
+Hosts opt in by binding an accepted RPC descriptor generation, admitted peers,
+live object roles, exact serializers, module-owned handlers and an explicit
+exact-generation code lease covering callback and serializer destruction. They register the
+dispatcher with `InboundMessageDispatcher`, call its fixed-step Gameplay drain,
+and revoke it before borrowed world or module owners are destroyed. No existing
+transport or message codec caller needs migration. The explicit
+`HoroNetworkModePublicHeaderConsumer` and generated public-header consumer check
+the staged target boundary.
+
 ## REL-002.3 Update Discovery Boundary
 
 `HoroEngine::UpdateDiscovery` owns the additive

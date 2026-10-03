@@ -106,6 +106,8 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor RpcCapacityExceeded;
     /** @brief An RPC parameter has no exact accepted typed codec metadata. */
     extern const ErrorCodeDescriptor RpcParameterUnsupported;
+    /** @brief Dispatch has no host-approved implementation of the declared caller policy. */
+    extern const ErrorCodeDescriptor RpcPermissionUnsupported;
     /** @brief Serializer metadata, quantization policy, or typed value representation is malformed. */
     extern const ErrorCodeDescriptor ReplicationSerializerInvalid;
     /** @brief Multiple serializers claim the same owner, semantic type, and codec identity. */
