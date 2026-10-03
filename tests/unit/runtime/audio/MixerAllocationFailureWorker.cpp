@@ -46,27 +46,53 @@ namespace {
         return proxyAllocator && proxyConstructor;
     }
 
+    /** @brief Load the worker PDB explicitly from its binary directory, independent of the caller's working directory. */
+    bool InitializeWorkerSymbols(const HANDLE process) noexcept {
+        std::array<wchar_t, 32768> executable{};
+        const DWORD pathLength = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+        if (pathLength == 0 || pathLength >= executable.size()) {
+            std::fprintf(stderr, "worker executable path failed: %lu\n", GetLastError());
+            return false;
+        }
+        auto directory = executable;
+        const std::wstring_view path{directory.data(), pathLength};
+        const auto separator = path.find_last_of(L"\\/");
+        if (separator == std::wstring_view::npos)
+            return false;
+        directory[separator] = L'\0';
+        // A null search path includes the working directory, but not the executable directory.
+        // Load eagerly so a module registration without a readable PDB cannot count as success.
+        SymSetOptions(SYMOPT_UNDNAME | SYMOPT_FAIL_CRITICAL_ERRORS);
+        if (!SymInitializeW(process, directory.data(), FALSE)) {
+            std::fprintf(stderr, "SymInitialize failed: %lu\n", GetLastError());
+            return false;
+        }
+        const auto module = reinterpret_cast<DWORD64>(GetModuleHandleW(nullptr));
+        const bool loaded = SymLoadModuleExW(process, nullptr, executable.data(), nullptr, module, 0, nullptr, 0) != 0;
+        IMAGEHLP_MODULEW64 information{};
+        information.SizeOfStruct = sizeof(information);
+        // NumSyms is not meaningful for SymPdb; the self-check and recorded stack use actual symbol lookups.
+        const bool hasPdb = loaded && SymGetModuleInfoW64(process, module, &information) && information.SymType == SymPdb;
+        if (!hasPdb) {
+            std::fprintf(stderr, "worker PDB load failed: symbol type %d, symbols %lu, Windows error %lu\n",
+                         static_cast<int>(information.SymType), information.NumSyms, GetLastError());
+            SymCleanup(process);
+        }
+        return hasPdb;
+    }
+
     /** @brief Symbolize only the throwing allocation's recorded stack; never exempt a proxy from injection. */
     bool FailedDebugProxy() noexcept {
         if (!failureInjected || failedBytes != sizeof(std::_Container_proxy))
             return false;
         const HANDLE process = GetCurrentProcess();
-        SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_FAIL_CRITICAL_ERRORS);
-        if (!SymInitialize(process, nullptr, FALSE)) {
-            std::fprintf(stderr, "SymInitialize failed: %lu\n", GetLastError());
+        if (!InitializeWorkerSymbols(process))
             return false;
-        }
-        const auto module = reinterpret_cast<DWORD64>(GetModuleHandleW(nullptr));
-        std::array<wchar_t, 32768> executable{};
-        const DWORD pathLength = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
-        const bool loaded = pathLength != 0 && pathLength < executable.size() &&
-                            SymLoadModuleExW(process, nullptr, executable.data(), nullptr, module, 0, nullptr, 0) != 0;
-        if (!loaded)
-            std::fprintf(stderr, "worker symbol module load failed: path length %lu, Windows error %lu\n", pathLength, GetLastError());
-        const bool proxy = loaded && SymbolizeFailureStack(process);
+        const bool proxy = SymbolizeFailureStack(process);
         SymCleanup(process);
         return proxy;
     }
+
 #endif
 
     /** @brief Record evidence without allocating inside global new. */
@@ -77,6 +103,25 @@ namespace {
         failureDepth = CaptureStackBackTrace(0, static_cast<DWORD>(failureStack.size()), failureStack.data(), nullptr);
 #endif
     }
+
+#if defined(_MSC_VER) && _ITERATOR_DEBUG_LEVEL != 0
+    /** @brief Verify a worker function resolves before running any allocation-failure injections. */
+    bool CheckWorkerSymbols() noexcept {
+        const HANDLE process = GetCurrentProcess();
+        if (!InitializeWorkerSymbols(process))
+            return false;
+        alignas(SYMBOL_INFO) std::array<std::byte, sizeof(SYMBOL_INFO) + MAX_SYM_NAME> storage{};
+        auto *const symbol = reinterpret_cast<SYMBOL_INFO *>(storage.data());
+        symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+        symbol->MaxNameLen = MAX_SYM_NAME;
+        DWORD64 displacement{};
+        const bool resolved = SymFromAddr(process, reinterpret_cast<DWORD64>(&ObserveFailure), &displacement, symbol) &&
+                              std::string_view{symbol->Name}.find("ObserveFailure") != std::string_view::npos;
+        std::fprintf(stderr, "worker symbol self-check: %s\n", resolved ? symbol->Name : "unresolved");
+        SymCleanup(process);
+        return resolved;
+    }
+#endif
 
     /** @brief Exit promptly instead of waiting in a Debug CRT dialog; only proven STL proxy failures are expected. */
     [[noreturn]] void Terminated() noexcept {
@@ -139,6 +184,10 @@ namespace {
 /** @brief Execute one failure prefix against the actual production target in a disposable process. */
 int main(const int argc, const char *const *argv) {
     std::set_terminate(Terminated);
+#if defined(_MSC_VER) && _ITERATOR_DEBUG_LEVEL != 0
+    if (argc == 2 && std::string_view{argv[1]} == "--check-symbols")
+        return CheckWorkerSymbols() ? 0 : static_cast<int>(AllocationFailureOutcome::UnexpectedFailure);
+#endif
     if (argc != 3)
         return static_cast<int>(AllocationFailureOutcome::UnexpectedFailure);
     std::size_t prefix{};

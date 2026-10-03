@@ -82,9 +82,17 @@ namespace Horo::WorldStreaming {
 
         /** @brief Returns the latest aggregate state without blocking. @return Loading, cancelling, or terminal state. */
         [[nodiscard]] StreamingCellAssetRequestState State() const;
-        /** @brief Requests cancellation for the root and every admitted child; idempotent. @return Success or shutdown error. */
+        /**
+         * @brief Requests cancellation for the root and every admitted child before terminal consumption; idempotent while retained.
+         * @return Success, lifecycle-unavailable for a moved-from handle, or CellAssetRequestConsumed after result consumption.
+         * @post An already consumed terminal result remains unchanged.
+         */
         [[nodiscard]] Result<void> RequestCancel();
-        /** @brief Consumes the complete terminal success exactly once without blocking. @return Owned canonical bytes or typed error. */
+        /**
+         * @brief Consumes the aggregate terminal result exactly once without blocking.
+         * @return Owned canonical bytes, preserved child error, CellAssetRequestCancelled for suppressed ready bytes, or typed state error.
+         * @details Cancellation accepted before consumption suppresses success even when every child read already succeeded.
+         */
         [[nodiscard]] Result<StreamingCellAssetBatch> TakeResult();
 
     private:
