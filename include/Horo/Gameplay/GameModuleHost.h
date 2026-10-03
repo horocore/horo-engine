@@ -19,6 +19,7 @@ namespace Horo::Gameplay {
     class GameServiceRegistry;
     class ReplicationRegistrationRegistry;
     class SystemRegistry;
+    class GameEventRegistry;
 
     /** @brief Loaded module whose registry and callable objects are destroyed before its library unloads. */
     class LoadedGameModule final {
@@ -52,6 +53,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] const SystemRegistry &Systems() const noexcept;
         /** @brief Returns frozen native replication registrations and generation-safe lease acquisition. */
         [[nodiscard]] const ReplicationRegistrationRegistry &Replication() const noexcept;
+        /** @brief Returns frozen event callbacks; acquisition pins this exact native module generation. */
+        [[nodiscard]] const GameEventRegistry &Events() const noexcept;
         /** @brief Returns active project-scoped services in provider-first order. */
         [[nodiscard]] std::span<const GameplayServiceId> ActiveServices() const noexcept;
         /** @brief Returns capabilities active for module startup and future scene runtimes. */
