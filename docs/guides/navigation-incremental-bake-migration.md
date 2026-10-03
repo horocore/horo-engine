@@ -157,7 +157,7 @@ parent. The host continues to authorize the root and prevent external ancestor
 replacement while the lease exists. Platform regression coverage checks malformed
 text and linked lock files without changing the tracked replacement contract.
 
-Native durable-filesystem and configuration-store test hosts canonicalize their
+Native durable-filesystem, configuration-store and ZIP-bootstrap test hosts canonicalize their
 temporary roots before acquiring a writer lease, matching publication hosts on
 Windows and macOS as well as Linux. Filesystem replacement adapters run inside a
 private non-throwing boundary with a preconstructed failure value; both standard
