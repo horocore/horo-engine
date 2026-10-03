@@ -397,12 +397,14 @@ namespace Horo::WorldStreaming {
         // Queue proposals own no admitted resources; cancellation after ledger admission remains ledger-owned.
         auto [queue, entry, rows, proposal] = PendingProposalFixture{};
         auto operation = StreamingCellOperation::Create(entry.operation, StreamingCellOperationKind::Load).Value();
-        auto ledgerResult = StreamingSchedulerAdmissionLedger::Create(IdentityFrom<StreamingSchedulerLedgerId>(1), {1, 1});
+        const auto revision = IdentityFrom<StreamingConcurrencyRevision>(1);
+        auto ledgerResult = StreamingSchedulerAdmissionLedger::Create(IdentityFrom<StreamingSchedulerLedgerId>(1),
+                                                                      {1, 1, {WorldPartitionProjectProfile::Editor, revision, 1, 1, 1}});
         REQUIRE(ledgerResult.HasValue());
         auto ledger = std::move(ledgerResult).Value();
-        RequireError(ledger.TryAdmit(operation, 2), SchedulerCapacityExceeded);
+        RequireError(ledger.TryAdmit(operation, 2, revision), SchedulerCapacityExceeded);
         CHECK(queue.Size() == 1);
-        const auto admitted = ledger.TryAdmit(operation, 1);
+        const auto admitted = ledger.TryAdmit(operation, 1, revision);
         REQUIRE(admitted.HasValue());
         Commit(queue, proposal);
         CHECK(queue.Size() == 0);
