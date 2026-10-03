@@ -2,6 +2,7 @@
 #include "Horo/Runtime/Save/SaveAutosaveScheduler.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -58,6 +59,7 @@ namespace Horo::Runtime {
     Result<void> SaveAutosaveScheduler::Admit(SaveOperationDescriptor operation, SaveArbiterAddress address) {
         if (operation.kind != SaveOperationKind::Save)
             return Result<void>::Failure(MakeError(SaveErrors::OperationInvalid));
+        auto callbackFailure = Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
         auto admitted = arbiter_->Admit({.operation = std::move(operation),
                                          .mode = SavePolicyMode::Auto,
                                          .address = std::move(address),
@@ -78,13 +80,16 @@ namespace Horo::Runtime {
             return advanced;
         if (arbiter_->ActiveOperation() != operation_.Id())
             return ObserveTerminal();
-        if (const auto requested = [this]() {
+        static_assert(std::is_nothrow_move_constructible_v<Result<void>>);
+        // Host failures transfer a prepared result; exception translation cannot itself allocate.
+        const auto requested = [this, failure = std::move(callbackFailure)]() mutable noexcept {
             try {
                 return barrier_->Request(operation_.Id(), last_.generation);
             } catch (...) {  // Injected host clock containment boundary.
-                return Result<void>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
+                return std::move(failure);
             }
-        }(); requested.HasError()) {
+        }();
+        if (requested.HasError()) {
             static_cast<void>(arbiter_->Fail(operation_.Id(), requested.ErrorValue()));
             return ObserveTerminal();
         }
@@ -128,14 +133,17 @@ namespace Horo::Runtime {
                 return Return::Failure(retired.ErrorValue());
             return Return::Success({});
         }
-        auto polled = [this, phase, &provenance, &participants, &limits]() {
+        static_assert(std::is_nothrow_move_constructible_v<Result<SaveCaptureBarrierOutcome>>);
+        auto polled = [this, phase, &provenance, &participants, &limits,
+                       failure =
+                           Result<SaveCaptureBarrierOutcome>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed))]() mutable noexcept {
             try {
                 return barrier_->CaptureAtSafePoint(phase, last_.generation, provenance, std::move(participants), limits);
             } catch (...) {  // Injected host clock containment boundary; retain request ownership.
                 snapshot_.blocked = true;
                 snapshot_.pending = true;
                 snapshot_.disposition = SaveAutosaveDisposition::Failed;
-                return Result<SaveCaptureBarrierOutcome>::Failure(MakeError(SaveErrors::LifecycleCallbackFailed));
+                return std::move(failure);
             }
         }();
         if (polled.HasError())

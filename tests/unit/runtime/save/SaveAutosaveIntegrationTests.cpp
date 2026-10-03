@@ -282,6 +282,8 @@ namespace Horo::Runtime {
             CHECK(fixture.barrier->Snapshot().Value().state == SaveBarrierState::Pending);
             CHECK(fixture.barrier->Snapshot().Value().operation == 55);
             const auto cancelled = fixture.barrier->Cancel(55);
+            const auto errorAllocations = Horo::Tests::AllocationProbe::Count() - fixture.clock.allocationsBeforeThrow;
+            CHECK(errorAllocations == 0);
             REQUIRE(cancelled.HasError());
             CHECK(cancelled.ErrorValue().code.Value() == SaveErrors::LifecycleCallbackFailed.code.Value());
             CHECK(fixture.barrier->Snapshot().Value().state == SaveBarrierState::Cancelled);

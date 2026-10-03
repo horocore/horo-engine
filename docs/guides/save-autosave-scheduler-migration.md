@@ -99,3 +99,13 @@ production storage/worker host composition, automated storage retries/backpressu
 suspend/quit orchestration (HORO-1456) remain their owning deliveries. Rotation must
 advance only on confirmed durable success. The scheduler does not change those
 architecture obligations or claim to enable production saves by itself.
+
+## Host exception translation
+
+Request, poll and exact-request cancellation prepare an owned typed fallback before
+invoking the host clock. Their local `noexcept` guards transfer that result when
+a standard or foreign exception is thrown; the catch path does not allocate an
+error identity or message. Result moves are checked at compile time. The public
+API and cancellation/acknowledgement sequence remain unchanged. Fallback
+preparation is fallible setup, outside the nonthrowing callback guard; it occurs
+before operation admission in the request path.

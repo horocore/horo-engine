@@ -2548,10 +2548,12 @@ add_test(NAME HoroSaveCaptureBarrierPublicHeaderConsumer COMMAND HoroSaveCapture
 set_tests_properties(HoroSaveCaptureBarrierPublicHeaderConsumer PROPERTIES LABELS "unit;save;headless")
 
 add_executable(HoroRuntimeSaveAutosaveSchedulerTests
+        support/AllocationProbe.cpp
         unit/runtime/save/SaveAutosaveSchedulerTests.cpp
         unit/runtime/save/SaveAutosaveIntegrationTests.cpp
 )
 target_compile_features(HoroRuntimeSaveAutosaveSchedulerTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeSaveAutosaveSchedulerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSaveAutosaveSchedulerTests PRIVATE HoroEngine::Runtime)
 
 add_executable(HoroSaveAutosavePublicHeaderConsumer support/SaveAutosavePublicHeaderConsumer.cpp)

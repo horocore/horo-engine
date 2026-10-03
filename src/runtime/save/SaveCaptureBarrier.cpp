@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -297,12 +298,15 @@ namespace Horo::Runtime {
             return Failure<void>(SaveErrors::OperationInvalid);
         snapshot_.state = SaveBarrierState::Cancelled;
         ++snapshot_.revision;
-        try {
-            MeasureElapsed();
-        } catch (...) {  // Timing failure must not prevent exact-request cancellation and acknowledgement.
-            return Failure<void>(SaveErrors::LifecycleCallbackFailed);
-        }
-        return Result<void>::Success();
+        static_assert(std::is_nothrow_move_constructible_v<Result<void>>);
+        return [this, failure = Failure<void>(SaveErrors::LifecycleCallbackFailed)]() mutable noexcept {
+            try {
+                MeasureElapsed();
+            } catch (...) {  // Timing failure must not prevent exact-request cancellation and acknowledgement.
+                return std::move(failure);
+            }
+            return Result<void>::Success();
+        }();
     }
 
     /** @copydoc SaveCaptureBarrier::BeginShutdown */

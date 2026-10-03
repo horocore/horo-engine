@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AllocationProbe.h"
 #include "Horo/Runtime/Save/SaveAutosaveScheduler.h"
 #include "SaveCaptureSnapshotTestUtils.h"
 
@@ -37,9 +38,12 @@ namespace Horo::Runtime::AutosaveTestSupport {
     public:
         Duration now;
         bool throws{};
+        mutable std::size_t allocationsBeforeThrow{};
         HostClockException exception{HostClockException::Standard};
 
         [[nodiscard]] Duration MonotonicNow() const override {
+            if (throws)
+                allocationsBeforeThrow = Horo::Tests::AllocationProbe::Count();
             if (throws && exception == HostClockException::Integer)
                 throw 42;
             if (throws && exception == HostClockException::Foreign)
