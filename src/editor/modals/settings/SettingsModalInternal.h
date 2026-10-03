@@ -27,6 +27,7 @@ namespace Horo::Editor::SettingsModalInternal {
         Audio,
         Network,
         Packages,
+        Updates,
         Diagnostics,
         Plugins,
     };
@@ -78,6 +79,7 @@ namespace Horo::Editor::SettingsModalInternal {
 
     void DrawNavigationContent(SettingsState &st, const EditorGuiContext &ctx);
     void DrawContent(SettingsState &st, const EditorGuiContext &ctx);
+    void DrawUpdates(SettingsState &st, const EditorGuiContext &ctx);
     [[nodiscard]] bool DrawFooterContent(SettingsState &st, EditorSettingsService &settings, const EditorGuiContext &ctx);
 
     void DrawPlugins(SettingsState &st, const EditorGuiContext &ctx);

@@ -137,6 +137,8 @@ namespace Horo::Editor {
         std::string statusMessage;
         bool statusIsError = false;
         int activeTab = 0;
+        int pendingUpdateConfirmation = 0;
+        int pendingUpdateChannel = -1;
         std::uint64_t settingsRevision = 0;
 
         GeneralTab general{};

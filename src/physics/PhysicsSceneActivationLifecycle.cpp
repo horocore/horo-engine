@@ -14,7 +14,29 @@ namespace Horo::Physics {
     PhysicsSceneActivationCandidate::PhysicsSceneActivationCandidate(ConstructionData data) noexcept
         : physics_(std::move(data.physics)), character_(std::move(data.character)), runtime_(data.runtime), authority_(data.authority),
           evidence_(data.evidence), bodyBindings_(std::move(data.bodyBindings)), shapeBindings_(std::move(data.shapeBindings)),
-          constraintBindings_(std::move(data.constraintBindings)) {}
+          constraintBindings_(std::move(data.constraintBindings)) {
+        physics_->SetQuarantineSink(*this);
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::Retire(BodyHandle) */
+    void PhysicsSceneActivationCandidate::Retire(const BodyHandle body) noexcept {
+        const auto found = std::ranges::find_if(bodyBindings_, [body](const auto &binding) {
+            return binding.handle == body;
+        });
+        if (found == bodyBindings_.end())
+            return;
+        bodyBindings_.erase(found);
+        std::erase_if(shapeBindings_, [body](const auto &binding) {
+            return binding.body == body;
+        });
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::Retire(ConstraintHandle) */
+    void PhysicsSceneActivationCandidate::Retire(const ConstraintHandle constraint) noexcept {
+        std::erase_if(constraintBindings_, [constraint](const auto &binding) {
+            return binding.handle == constraint;
+        });
+    }
 
     std::unique_ptr<PhysicsSceneActivationCandidate> PhysicsSceneActivationCandidate::Create(ConstructionData data) {
         return std::make_unique<PhysicsSceneActivationCandidate>(std::move(data));

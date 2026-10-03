@@ -4,53 +4,42 @@ applyTo: "**/*"
 
 # SonarQube local-analysis policy
 
-The SonarQube CLI (`sonar`) is the supported full local-analysis workflow for
-this repository. For a bounded local C/C++ file diagnosis when Agentic/Vortex
-is unavailable, `scripts/sonar_ide_analysis.py` may use the trusted running
-VS Code SonarQube for IDE bridge. The bridge result is local IDE feedback, not
-a SonarCloud, PR, or full-quality-gate result.
+Use `python3 scripts/quality_preflight.py check --base <PR-target-ref>` before
+preparing a PR. It runs the supported managed Sonar IDE C/C++ analysis, local CLI
+secrets scanning and Codacy preflight with one worktree change selection. Use
+`--dirty` for only current edits or `--files <paths...>` for a narrow diagnosis.
+The helper supports `--worktree`, keeps generated state outside the source tree,
+and validates listener ownership, compilation context and C++ sensor execution.
 
-## Required workflow
+## Result boundaries
 
-- Run from the worktree being inspected:
-  `sonar analyze --project <project-key> --format json --depth STANDARD`.
-- With no selector, the CLI analyzes staged, unstaged, and untracked changes.
-  Use `--staged`, `--base <ref>`, or repeated `--file <path>` only for an
-  intentional narrower scope.
-- Resolve the exact project key with `sonar list projects --query <name>`;
-  never invent a key.
-- Prefer `SONARQUBE_CLI_TOKEN`, `SONARQUBE_CLI_ORG`, and
-  `SONARQUBE_CLI_SERVER` environment variables for ephemeral runs. Do not put
-  credentials in the repository or command output.
-- Report `secrets` and `agentic` results separately. A clean secrets result is
-  not a clean quality result when `agentic` contains skipped files, failures, or
-  `globalError`.
-- For C/C++, verify that the intended files appear in `agentic.files` and that a
-  long-lived branch has a successful CI analysis supplying Vortex build context.
-- For an explicit local IDE request, create and configure a worktree compilation
-  database, then run `python3 scripts/sonar_ide_analysis.py --port <64120-64130>
-  <files...>`. Report its submitted and skipped files separately from CLI and
-  server findings. The script never uploads source or accepts a token.
+- Sonar IDE is local feedback, not a SonarCloud PR or full quality gate result.
+- CLI secrets, IDE and Codacy results are separate. A clean secrets scan
+  does not establish code-quality success.
+- Exit `0` means the requested local checks completed without findings (or the
+  change selection was empty). Exit `1` means findings; `2` means incomplete.
+- Read submitted/skipped files, errors, freshness and per-file analysis evidence.
+  Missing C++ sensor execution, partial tools or a stale report cannot be clean.
+- Preserve all findings; highlight changed lines without claiming contextual
+  findings existed before the change. Complexity and CPD metrics are advisory.
 
-## Entitlement and failure handling
+## CLI secrets
 
-`403 Forbidden` or `Vortex analysis is not available on this connection` means
-the account or project lacks the required Agentic/Vortex entitlement. Report it
-as a failed CLI quality validation. For an explicitly requested file-level
-local C/C++ diagnosis, use the IDE bridge result only as supplemental local
-feedback; do not represent it as a Vortex or server-quality result, and do not
-silently substitute it for the CI gate or `sonar-scanner`.
+The CLI is used only for `sonar analyze secrets <selected paths>`. Vortex
+analysis and entitlement probes are outside this workflow; do not run the
+general `sonar analyze` command. `doctor` checks local prerequisites and optionally
+compares Codacy cloud configuration without changing checked-in settings.
 
-Do not repeatedly retry an unchanged authorization or entitlement failure. Local
-secrets scanning may still be reported, but it must remain clearly separate from
-Agentic/Vortex quality findings.
+Prefer environment credentials for ephemeral CLI runs. Do not place tokens in
+repository files, process arguments, reports or output. Managed IDE profiles
+copy only connection metadata and encrypted Sonar SecretStorage rows; plaintext
+tokens are not copied. Authentication remains the OS keychain's responsibility.
 
 ## Prohibited substitutions
 
-- Do not call `analyze_file_list`, `toggle_automatic_analysis`, or
-  `analyze_code_snippet` through an MCP server for repository validation; use
-  the repository-owned IDE bridge client when file-level IDE analysis is needed.
-- Do not run `sonar-scanner` for local uncommitted-change feedback; it is the
-  full-project CI scanner.
-- Do not claim success from an empty issue list unless the intended files were
-  analyzed and no skips, failures, or global errors were returned.
+Do not use unverified explicit bridge ports, `analyze_file_list`,
+`toggle_automatic_analysis`, `analyze_code_snippet`, or `sonar-scanner` for local
+validation. The scanner remains the full-project CI path. Do not alter rules,
+cloud configuration or issue status, or upload results as part of preflight.
+
+See `docs/guides/sonarqube-mcp-local-analysis.md` for setup and troubleshooting.

@@ -78,6 +78,32 @@ namespace Horo::Character {
         Crouch,
     };
 
+    /** @brief Committed collision stance; Custom denotes an explicitly requested capsule. */
+    enum class CharacterStance : std::uint8_t {
+        Standing,
+        Crouched,
+        Custom
+    };
+
+    /** @brief Instantaneous capsule replacement at the command's fixed tick; the center root stays fixed. */
+    struct CharacterShapeChangeRequest final {
+        Physics::PhysicsCapsuleShape capsule;
+    };
+
+    /** @brief Clearance outcome; rejected changes retain the prior geometry and stance. */
+    enum class CharacterShapeChangeStatus : std::uint8_t {
+        Applied,
+        Blocked,
+        Invalid
+    };
+
+    /** @brief Owned shape outcome published only with a successful movement tick. */
+    struct CharacterShapeChangeResult final {
+        CharacterShapeChangeStatus status{CharacterShapeChangeStatus::Invalid};
+        Physics::PhysicsCapsuleShape effectiveCapsule;
+        CharacterStance effectiveStance{CharacterStance::Standing};
+    };
+
     /** @brief Collision outcomes accumulated while resolving one movement request. */
     enum class CharacterCollisionFlags : std::uint16_t {
         None = 0,
@@ -116,6 +142,7 @@ namespace Horo::Character {
         float maximumStepHeightMeters{0.3F};
         float maximumSlopeDegrees{45.0F};
         std::uint32_t maximumContacts{16};
+        std::optional<Physics::PhysicsCapsuleShape> crouchedCapsule; /**< Same radius and lower cylindrical height than standing. */
     };
 
     /** @brief Operation that may publish a new collision-root transform. */
@@ -178,7 +205,8 @@ namespace Horo::Character {
         std::optional<Physics::PhysicsQueryMaterial> material;
         Physics::PhysicsQueryResponse response{Physics::PhysicsQueryResponse::Block};
         float distanceMeters{};
-        Math::Vec3 relativeVelocityMetersPerSecond{}; /**< Surface velocity relative to the queried Character frame. */
+        Math::Vec3 relativeVelocityMetersPerSecond{};               /**< Surface velocity relative to the queried Character frame. */
+        std::optional<Physics::PhysicsShapeSubresourceId> subshape; /**< Exact authored child; absent for primitive support. */
     };
 
     /** @brief Read-only capsule sweep request for one bounded movement iteration. */
@@ -338,6 +366,13 @@ namespace Horo::Character {
         std::optional<Math::Quaternion> desiredHeading;
         bool jumpRequested{};
         CharacterStanceIntent stance{CharacterStanceIntent::Keep};
+        std::optional<CharacterShapeChangeRequest> shapeChange; /**< Requires Keep stance; conflicts publish Invalid. */
+    };
+
+    /** @brief Whether physical identity was supplied by Physics or by the explicit controller fallback. */
+    enum class CharacterMaterialSource : std::uint8_t {
+        Query,
+        DescriptorFallback,
     };
 
     /** @brief One owned solver-neutral surface contact retained in deterministic result order. */
@@ -348,6 +383,8 @@ namespace Horo::Character {
         Math::Vec3 normal{0, 1, 0};
         Physics::PhysicsQueryMaterial material;
         float penetrationDepthMeters{};
+        std::optional<Physics::PhysicsShapeSubresourceId> subshape; /**< Copied Physics provenance, never a native child index. */
+        CharacterMaterialSource materialSource{CharacterMaterialSource::Query}; /**< Fallback does not claim a collider binding. */
     };
 
     /**
@@ -378,6 +415,10 @@ namespace Horo::Character {
         bool truncated{};
         bool platformAttached{};
         bool groundingRevalidationRequired{};
+        std::optional<Physics::PhysicsShapeSubresourceId> groundSubshape;             /**< Selected support's authored child identity. */
+        CharacterMaterialSource groundMaterialSource{CharacterMaterialSource::Query}; /**< Origin of the effective physical material. */
+        Math::Vec3 groundPoint{};                              /**< Selected support point; independent of retained contact capacity. */
+        std::optional<CharacterShapeChangeResult> shapeChange; /**< Character-owned clearance outcome, never adapter authority. */
     };
 
     /**
@@ -393,7 +434,38 @@ namespace Horo::Character {
         std::uint64_t stateRevision{};
         CharacterMovementResult movement;
         CharacterTransformPublication transform;
+        Physics::PhysicsCapsuleShape capsule; /**< Effective collision geometry for this committed state. */
+        CharacterStance stance{CharacterStance::Standing};
     };
+
+    /**
+     * @brief Bounded owned ground-surface fact for a post-commit consumer or event adapter.
+     *
+     * Physical asset/generation/slot and body/shape/subshape values remain Physics-owned references,
+     * not leases or semantic surface IDs. A removed asset or world cannot reinterpret this copy.
+     * Consumers must match every correlation field to their captured binding/marker snapshot;
+     * missing/deleted mappings and absent/shutting-down consumers suppress presentation only.
+     * This is support evidence, not an Animation footstep or a Character transition event.
+     */
+    struct CharacterGroundSurfaceFact final {
+        CharacterControllerHandle controller;
+        std::uint64_t tick{};
+        std::uint64_t sequence{};
+        std::uint64_t stateRevision{};
+        std::uint64_t publicationRevision{};
+        CharacterSurfaceContact support;
+        Math::Vec3 achievedVelocityMetersPerSecond{};
+    };
+
+    /**
+     * @brief Projects copied Physics support into bounded post-commit event evidence without live lookup.
+     * @param snapshot Committed locomotion copy, including exact tick, command and publication identity.
+     * @param descriptor Captured controller policy from the same world generation.
+     * @return Owned fact when grounded, an absent fact when airborne, or the original validation error.
+     * @post No registry, material, catalog, Audio or VFX access occurs; simulation state is unchanged.
+     */
+    [[nodiscard]] Result<std::optional<CharacterGroundSurfaceFact>> BuildCharacterGroundSurfaceFact(
+        const CharacterLocomotionSnapshot &snapshot, const CharacterControllerDescriptor &descriptor);
 
     /**
      * @brief Validates controller identity ownership without resolving a registry slot.

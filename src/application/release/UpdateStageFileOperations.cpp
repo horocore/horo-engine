@@ -30,6 +30,18 @@ namespace Horo::Release::Detail {
         return stage.type() == std::filesystem::file_type::not_found && (!error || error == std::errc::no_such_file_or_directory);
     }
 
+    /** @copydoc ValidStageDownloadPaths */
+    bool ValidStageDownloadPaths(const std::filesystem::path &packageFile, const std::filesystem::path &checkpointFile,
+                                 const std::filesystem::path &stageRoot) {
+        if (!ValidStagePaths(packageFile, stageRoot) || !ValidStagePaths(checkpointFile, stageRoot) || packageFile == checkpointFile)
+            return false;
+        auto ready = stageRoot;
+        ready += ".ready";
+        auto prepared = ready;
+        prepared += ".prepared";
+        return packageFile != ready && packageFile != prepared && checkpointFile != ready && checkpointFile != prepared;
+    }
+
     /** @copydoc SyncStageDirectories */
     Result<void> SyncStageDirectories(const std::filesystem::path &root, NativeDurableFileSystem &files) {
         std::error_code error;

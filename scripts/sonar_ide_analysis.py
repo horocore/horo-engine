@@ -4,9 +4,8 @@
 """
 Prepare a worktree and request C/C++ diagnostics from SonarQube for IDE.
 
-With no ``--port``, the script configures a compilation database, writes an
-ignored VS Code workspace, opens it in a dedicated window, discovers that
-window's bridge port, and analyzes the selected files. JSON is the only stdout.
+This compatibility entry point delegates to the managed quality preflight.
+Explicit unverified bridge ports are no longer accepted. JSON is the only stdout.
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-SUPPORTED_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"})
+SUPPORTED_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp", ".tpp"})
 TRANSLATION_UNIT_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx"})
 DEFAULT_BUILD_DIRECTORY = Path("build/sonar-local")
 COMPILE_COMMANDS_FILENAME = "compile_commands.json"
@@ -327,35 +326,8 @@ def write_workspace(root: Path, build_directory: Path, connection_id: str, proje
 
 
 def open_workspace_and_find_bridge(workspace: Path, startup_timeout: float) -> int:
-    """Open a dedicated VS Code window and return its new or remembered bridge."""
-    if startup_timeout <= 0:
-        raise AnalysisError("--startup-timeout must be greater than zero")
-    marker = workspace.parent / f"{workspace.name}.bridge.json"
-    remembered_port: int | None = None
-    try:
-        marker_payload = json.loads(marker.read_text(encoding="utf-8"))
-        candidate = marker_payload.get("port") if isinstance(marker_payload, dict) else None
-        if isinstance(candidate, int) and candidate in BRIDGE_PORTS:
-            remembered_port = candidate
-    except (OSError, json.JSONDecodeError):
-        pass
-
-    existing = available_bridge_ports()
-    run_command("code", ["--new-window", str(workspace)], "VS Code could not open the Sonar workspace")
-    if remembered_port in existing:
-        return remembered_port
-
-    deadline = time.monotonic() + startup_timeout
-    while time.monotonic() < deadline:
-        created = available_bridge_ports() - existing
-        if len(created) == 1:
-            port = created.pop()
-            marker.write_text(json.dumps({"port": port}) + "\n", encoding="utf-8")
-            return port
-        if len(created) > 1:
-            raise AnalysisError(f"Multiple new IDE bridges appeared: {sorted(created)}")
-        time.sleep(0.5)
-    raise AnalysisError("The dedicated VS Code window did not expose a new SonarQube for IDE bridge")
+    """Reject the obsolete port-difference heuristic; callers need a session lease."""
+    raise AnalysisError("Unverified IDE port discovery is unsupported; use quality_preflight.py check")
 
 
 def normalized_findings(response: object) -> list[dict[str, object]]:
@@ -413,7 +385,7 @@ def changed_line_ranges(root: Path, base: str, files: Sequence[Path]) -> dict[Pa
 def filter_findings_to_ranges(
     findings: Sequence[dict[str, object]], ranges: dict[Path, list[tuple[int, int]]]
 ) -> tuple[list[dict[str, object]], int]:
-    """Keep findings overlapping changed lines and count file-level baseline findings."""
+    """Legacy range helper; the managed workflow retains all file findings."""
     selected: list[dict[str, object]] = []
     for finding in findings:
         file_path = finding.get("filePath")
@@ -524,18 +496,26 @@ def _analyze_selection(
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
-    """Prepare the worktree, run one local IDE request, and print JSON."""
+    """Route the legacy entry point through managed ownership and evidence checks."""
     args = parse_arguments(arguments)
     try:
         _validate_arguments(args)
-        root = repository_root()
-        database = _analysis_database(root, args)
-        selection = _selected_files(root, args)
-        validate_compile_commands(root, database, selection.submitted)
-        port = _analysis_bridge(root, args)
-        findings, suppressed = _analyze_selection(root, args, selection, port)
-        print(json.dumps(result_payload(selection, port, database, findings, suppressed), ensure_ascii=False, indent=2))
-        return 1 if findings else 0
+        if args.port is not None:
+            raise AnalysisError("Unverified explicit ports are unsupported; use managed quality_preflight.py check")
+        from quality_preflight import main as preflight_main
+
+        forwarded = ["check", "--only", "sonar", "--format", "json", "--timeout", str(args.timeout),
+                     "--startup-timeout", str(args.startup_timeout), "--connection-id", args.connection_id,
+                     "--project-key", args.project_key]
+        if args.files:
+            forwarded.extend(["--files", *map(str, args.files)])
+        elif args.base:
+            forwarded.extend(["--base", args.base])
+        else:
+            forwarded.append("--dirty")
+        if args.no_prepare:
+            forwarded.extend(["--compile-commands", str(args.build_directory / COMPILE_COMMANDS_FILENAME)])
+        return preflight_main(forwarded)
     except AnalysisError as error:
         print(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False), file=sys.stderr)
         return 2

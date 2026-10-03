@@ -84,11 +84,11 @@ namespace Horo::Editor {
                                  const RendererAvailabilitySnapshot &rendererAvailability, ScreenRegistry screenRegistry,
                                  WorkspacePanelRegistry workspacePanelRegistry, std::uintptr_t logoTexture,
                                  Extensions::ExtensionInventory *extensionInventory,
-                                 Extensions::ExtensionMarketplaceService *extensionMarketplace)
+                                 Extensions::ExtensionMarketplaceService *extensionMarketplace, NativeDialogs *nativeDialogs)
 
         : context_(&context), modalHost_(&modalHost), inputRouter_(&inputRouter), settingsService_(&settingsService),
           localization_(&localization), engineEvents_(&engineEvents), logoTexture_(logoTexture), extensionInventory_(extensionInventory),
-          extensionMarketplace_(extensionMarketplace), screenRegistry_(std::move(screenRegistry)),
+          extensionMarketplace_(extensionMarketplace), nativeDialogs_(nativeDialogs), screenRegistry_(std::move(screenRegistry)),
           workspacePanelRegistry_(std::move(workspacePanelRegistry)) {
         services_.Register(*this);
         services_.RegisterConst(context);
@@ -142,13 +142,6 @@ namespace Horo::Editor {
                                              .label = rendererAvailability.Find(rendererAvailability.ActiveBackendId()) != nullptr
                                                           ? rendererAvailability.Find(rendererAvailability.ActiveBackendId())->displayName
                                                           : std::string{rendererAvailability.ActiveBackendId()}}));
-        static_cast<void>(statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.cpu",
-                                                                                  .labelKey = "status.cpu.label",
-                                                                                  .alignment = EditorStatusBarAlignment::Right,
-                                                                                  .priority = 90,
-                                                                                  .order = 20,
-                                                                                  .maxWidth = 112.0F},
-                                                       EditorStatusItemContent{.value = "0.0 ms"}));
         static_cast<void>(statusItemRegistry_.Register(EditorStatusItemDescriptor{.id = "horo.status.document",
                                                                                   .alignment = EditorStatusBarAlignment::Left,
                                                                                   .priority = 100,
@@ -418,9 +411,6 @@ namespace Horo::Editor {
                                                                                                              ? "status.navigation.busy"
                                                                                                              : "status.navigation.idle")}));
         }
-        const std::string cpuFrameTime = std::format("{:.1f} ms", static_cast<double>(dt * 1000.0F));
-        static_cast<void>(statusItemRegistry_.Update("horo.status.cpu", EditorStatusItemContent{.value = cpuFrameTime}));
-
         if (activeScreen_) {
             isScreenCallbackActive_ = true;
             activeScreen_->OnUpdate(dt);
@@ -467,9 +457,7 @@ namespace Horo::Editor {
 
         if (activeScreen_) {
             isScreenCallbackActive_ = true;
-            ImGui::BeginDisabled(inputRouter_->HasHigherPriorityContext(Input::InputContextKind::FocusedGuiWidget));
             activeScreen_->Draw(contentRegion);
-            ImGui::EndDisabled();
             isScreenCallbackActive_ = false;
         }
 
@@ -497,9 +485,6 @@ namespace Horo::Editor {
     /** @copydoc GuiScreenHost::DispatchMenuInvocation */
     void GuiScreenHost::DispatchMenuInvocation(const EditorMenuInvocation &invocation) {
         using enum EditorMenuAction;
-        if (invocation.action != ExitApplication && invocation.action != None &&
-            inputRouter_->HasHigherPriorityContext(Input::InputContextKind::FocusedGuiWidget))
-            return;
         switch (invocation.action) {
             case NewProject:
                 static_cast<void>(Navigate(GuiRoute{GuiRouteKind::ProjectCreation, ProjectCreationRouteParameters{}}));
@@ -511,7 +496,12 @@ namespace Horo::Editor {
                 if (context_ && modalHost_ && !modalHost_->HasOpenModal()) {
                     auto modal =
                         std::make_unique<AssetImportModal>(context_->theme.fonts, m_importJobs, importerCatalog_,
-                                                           services_.TryGet<Assets::AssetRegistry>(), services_.TryGet<OperationStore>());
+                                                           AssetImportModalServices{.assetRegistry =
+                                                                                        services_.TryGet<Assets::AssetRegistry>(),
+                                                                                    .operationStore = services_.TryGet<OperationStore>(),
+                                                                                    .localization = localization_,
+                                                                                    .nativeDialogs = nativeDialogs_,
+                                                                                    .inputRouter = inputRouter_});
                     modal->SetProjectRoot(CurrentProjectRoot());
                     if (invocation.assetDestination.has_value())
                         modal->SetDefaultDestination(*invocation.assetDestination);
@@ -544,8 +534,7 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::HandleDropFiles(const std::vector<std::filesystem::path> &files) {
-        if (files.empty() || !modalHost_ ||
-            (inputRouter_->HasHigherPriorityContext(Input::InputContextKind::FocusedGuiWidget) && !modalHost_->HasOpenModal()))
+        if (files.empty() || !modalHost_)
             return;
 
         // Auto-open import modal if not already open

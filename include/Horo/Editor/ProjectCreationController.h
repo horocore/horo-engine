@@ -63,7 +63,7 @@ namespace Horo::Editor {
         std::string projectName;
         std::string projectPath;
         std::string projectVersion = "0.1.0";
-        std::string defaultScene = "assets/scenes/main.horo";
+        std::string defaultScene = "Assets/Scenes/main.horo";
         std::string renderBackend = "opengl";
         bool physicsEnabled = true;
         int targetFrameRate = 60;

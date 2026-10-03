@@ -16,7 +16,12 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Let main finish its build checkpoints; supersede stale pull requests.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Direct sccache uploads follow the same main-only policy as snapshots.
+env:
+  SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
 
 jobs:
   format:
@@ -50,6 +55,10 @@ jobs:
     name: Test · ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     needs: [format]
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      HORO_LOG_LEVEL: debug
     timeout-minutes: ${{ matrix.timeout_minutes }}
     permissions:
       contents: read
@@ -119,58 +128,58 @@ jobs:
         if: runner.os == 'Windows'
         uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67
 
-      - name: Setup sccache on Windows
-        if: runner.os == 'Windows'
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+      - name: Restore native build caches
+        id: cache
+        uses: ./.github/actions/restore-native-cache
         with:
-          version: v0.17.0
-
-      - name: Restore compiler cache
-        if: runner.os != 'Windows'
-        uses: hendrikmuhs/ccache-action@33522472633dbd32578e909b315f5ee43ba878ce
-        with:
-          key: ${{ github.job }}-${{ runner.os }}
-
-      - name: Cache FetchContent dependencies
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
-        with:
-          path: ${{ github.workspace }}/.cmake/fetchcontent
-          key: fetchcontent-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
-          restore-keys: fetchcontent-${{ runner.os }}-
+          profile: native-tests-v1
+          mode: Debug
+          max-size: 2G
 
       - name: Toolchain & Environment Diagnostics
         shell: bash
         run: python3 scripts/dev.py doctor
 
-      - name: Build and Test
-        id: native_tests
+      - name: Build native targets
+        id: native_build
         shell: bash
         run: |
-          compiler_cache_args=()
+          compiler_cache_args=(--compiler-launcher ccache)
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             compiler_cache_args=(--compiler-launcher sccache --msvc-debug-information-format Embedded)
           fi
-          python3 scripts/dev.py test \
+          python3 scripts/dev.py build \
             --dir "${{ matrix.build_dir }}" \
-            "${compiler_cache_args[@]}" \
-            --junit "${{ github.workspace }}/${{ matrix.build_dir }}/test-results/ctest.xml"
-          echo "=== test-results directory ==="
-          ls -la "${{ github.workspace }}/${{ matrix.build_dir }}/test-results" || true
-        env:
-          CC: ${{ matrix.cc }}
-          CXX: ${{ matrix.cxx }}
-          FETCHCONTENT_BASE_DIR: ${{ github.workspace }}/.cmake/fetchcontent
-          HORO_LOG_LEVEL: debug
-          SCCACHE_GHA_ENABLED: ${{ runner.os == 'Windows' && 'true' || 'false' }}
-          SCCACHE_IGNORE_SERVER_IO_ERROR: ${{ runner.os == 'Windows' && '1' || '0' }}
+            --fetchcontent-base-dir "$GITHUB_WORKSPACE/.cmake/fetchcontent" \
+            "${compiler_cache_args[@]}"
 
-      - name: Show Windows compiler cache stats
-        if: always() && runner.os == 'Windows'
+      - name: Checkpoint successful native build
+        if: ${{ !cancelled() && steps.native_build.outcome == 'success' }}
+        continue-on-error: true
+        uses: ./.github/actions/save-native-cache
+        with:
+          compiler-key: ${{ steps.cache.outputs.compiler-key }}
+          dependency-key: ${{ steps.cache.outputs.dependency-key }}
+          dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
+
+      - name: Run native tests
+        id: native_tests
+        shell: bash
+        run: |
+          python3 scripts/dev.py test --skip-build \
+            --dir "${{ matrix.build_dir }}" \
+            --junit "${{ github.workspace }}/${{ matrix.build_dir }}/test-results/ctest.xml"
+
+      - name: Report compiler statistics for an incomplete native build
+        if: always() && steps.cache.outcome == 'success' && steps.native_build.outcome != 'success'
         continue-on-error: true
         shell: bash
-        run: '"${SCCACHE_PATH}" --show-stats'
-        env:
-          SCCACHE_GHA_ENABLED: 'true'
+        run: |
+          if [[ "${{ runner.os }}" == Windows ]]; then
+            sccache --show-stats
+          else
+            ccache --show-stats
+          fi
 
       - name: Publish test results
         if: always() && (steps.native_tests.outcome == 'success' || steps.native_tests.outcome == 'failure')
@@ -195,6 +204,9 @@ jobs:
     name: Audio Real-Time Safety · ${{ matrix.platform }} / ${{ matrix.mode }}
     runs-on: ${{ matrix.runner }}
     needs: [format]
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
     timeout-minutes: 35
     permissions:
       contents: read
@@ -228,18 +240,26 @@ jobs:
         if: runner.os == 'Windows'
         uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67
 
-      - name: Cache FetchContent dependencies
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+      - name: Restore native build caches
+        id: cache
+        uses: ./.github/actions/restore-native-cache
         with:
-          path: ${{ github.workspace }}/.cmake/fetchcontent
-          key: fetchcontent-audio-safety-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
-          restore-keys: fetchcontent-audio-safety-${{ runner.os }}-
+          profile: audio-safety-v1
+          mode: ${{ matrix.mode }}
+          max-size: 256M
 
-      - name: Build and gate callback safety
+      - name: Build callback safety targets
+        id: audio_build
         shell: bash
         run: |
+          compiler_cache_args=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache)
+          if [[ "${{ runner.os }}" == Windows ]]; then
+            compiler_cache_args=(-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded)
+          fi
           cmake -S . -B build/audio-realtime-safety -G Ninja \
             -DCMAKE_BUILD_TYPE="${{ matrix.mode }}" \
+            -DFETCHCONTENT_BASE_DIR="$GITHUB_WORKSPACE/.cmake/fetchcontent" \
+            "${compiler_cache_args[@]}" \
             -DBUILD_TESTING=ON \
             -DHORO_BUILD_EDITOR_GUI=OFF \
             -DHORO_BUILD_AUDIO_SDL3=OFF \
@@ -247,16 +267,36 @@ jobs:
             -DHORO_BUILD_EXAMPLES=OFF \
             -DHORO_ENABLE_OPENTELEMETRY=OFF
           cmake --build build/audio-realtime-safety \
-            --target HoroAudioRealtimeSafetyHarnessTests HoroAudioWatchdogTests HoroAudioNullTests HoroAudioDspTests HoroAudioCommandTests \
+            --target HoroAudioRealtimeSafetyHarnessTests HoroAudioWatchdogTests HoroAudioNullTests HoroAudioDspTests HoroCoreAudioDspTests HoroAudioCommandTests \
             --parallel 1
+
+      - name: Checkpoint successful audio build
+        if: ${{ !cancelled() && steps.audio_build.outcome == 'success' }}
+        continue-on-error: true
+        uses: ./.github/actions/save-native-cache
+        with:
+          compiler-key: ${{ steps.cache.outputs.compiler-key }}
+          dependency-key: ${{ steps.cache.outputs.dependency-key }}
+          dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
+
+      - name: Gate callback safety
+        shell: bash
+        run: |
           cmake -E make_directory build/audio-realtime-safety/test-results
           ctest --test-dir build/audio-realtime-safety \
-            -R '^HoroAudio(CallbackLockPolicyTest|RealtimeSafetyHarnessTests::|WatchdogTests::|NullTests::|DspTests::|CommandTests::)' \
+            -R '^(HoroAudio(CallbackLockPolicyTest|RealtimeSafetyHarnessTests::|WatchdogTests::|NullTests::|DspTests::|CommandTests::)|HoroCoreAudioDspTests::)' \
             --output-on-failure --output-junit "${{ github.workspace }}/build/audio-realtime-safety/test-results/ctest.xml" --timeout 90 -j 1
-        env:
-          CC: ${{ matrix.cc }}
-          CXX: ${{ matrix.cxx }}
-          FETCHCONTENT_BASE_DIR: ${{ github.workspace }}/.cmake/fetchcontent
+
+      - name: Report compiler statistics for an incomplete audio build
+        if: always() && steps.cache.outcome == 'success' && steps.audio_build.outcome != 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == Windows ]]; then
+            sccache --show-stats
+          else
+            ccache --show-stats
+          fi
 
       - name: Publish audio safety test results
         if: always()
@@ -350,7 +390,8 @@ jobs:
         with:
           version: v0.17.0
 
-      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: fetchcontent-vfx-windows-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
@@ -376,6 +417,13 @@ jobs:
           SCCACHE_GHA_ENABLED: 'true'
           SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
 
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
+
   cinematic-foundation-windows:
     name: Cinematic Foundation · Windows / MSVC
     runs-on: windows-2022
@@ -392,7 +440,8 @@ jobs:
         with:
           version: v0.17.0
 
-      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: fetchcontent-cinematic-windows-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
@@ -409,14 +458,24 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
-          cmake --build build/cinematic-windows --target HoroCinematicModelTests HoroCinematicRuntimeTests --parallel 2
-          ctest --test-dir build/cinematic-windows -R '^HoroCinematic(Model|Runtime)Tests::' --output-on-failure -j 2
+          cmake --build build/cinematic-windows --target \
+            HoroCinematicModelTests HoroCinematicRuntimeTests HoroCinematicPropertyIntegrationTests \
+            HoroCinematicModelPublicHeaderConsumer HoroCinematicRuntimePublicHeaderConsumer HoroEditorServicesPublicHeaderConsumer \
+            --parallel 2
+          ctest --test-dir build/cinematic-windows -R '^HoroCinematic(Model|Runtime|PropertyIntegration)Tests::' --output-on-failure -j 2
         env:
           CC: cl
           CXX: cl
           FETCHCONTENT_BASE_DIR: ${{ github.workspace }}/.cmake/fetchcontent
           SCCACHE_GHA_ENABLED: 'true'
           SCCACHE_IGNORE_SERVER_IO_ERROR: '1'
+
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
 
   navigation-compositions:
     name: Navigation Provider Compositions
@@ -429,7 +488,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: navigation-compositions-${{ hashFiles('**/CMakeLists.txt', 'cmake/**') }}
@@ -444,8 +504,18 @@ jobs:
               -DHORO_BUILD_EDITOR_GUI=OFF \
               -DHORO_BUILD_EXAMPLES=OFF \
               -DHORO_BUILD_NAVIGATION_RECAST_DETOUR="${enabled}"
-            cmake --build "${build_dir}" --target \
+            cmake --build "${build_dir}" --parallel 2 --target \
               HoroNavigationRuntime HoroNavigationNull HoroNavigationRecastDetour \
               HoroNavigationApiPublicHeaderConsumer HoroNavigationRuntimePublicHeaderConsumer \
-              HoroNavigationNullPublicHeaderConsumer HoroNavigationRecastDetourPublicHeaderConsumer
+              HoroNavigationNullPublicHeaderConsumer HoroNavigationRecastDetourPublicHeaderConsumer \
+              HoroNavigationBakeServicePublicHeaderConsumer HoroNavigationBakeDiagnosticsPublicConsumer
+            ctest --test-dir "${build_dir}" -j 1 \
+              -R '^HoroNavigationBakeDiagnosticsPublicConsumer$' --output-on-failure
           done
+
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}

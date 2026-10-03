@@ -5,10 +5,12 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <ctime>
 #include <format>
 #include <memory>
 #include <miniz.h>
 #include <nlohmann/json.hpp>
+#include <span>
 #include <string_view>
 #include <system_error>
 
@@ -127,14 +129,21 @@ namespace Horo::PackageCommand {
                 bytes[offset + shift / 8] = static_cast<std::byte>((value >> shift) & 0xffU);
         }
 
-        [[nodiscard]] bool SetMode(std::vector<std::byte> &bytes, const File &file, mz_zip_archive &reader, const mz_uint index) {
+        /** @brief Writes canonical DOS timestamps and permissions without using the clock or local timezone. */
+        [[nodiscard]] bool SetMetadata(std::vector<std::byte> &bytes, const bool executable, mz_zip_archive &reader, const mz_uint index) {
             mz_zip_archive_file_stat stat{};
             if (!mz_zip_reader_file_stat(&reader, index, &stat))
                 return false;
             const auto offset = static_cast<std::size_t>(reader.m_central_directory_file_ofs + stat.m_central_dir_ofs + 38U);
-            if (offset > bytes.size() || bytes.size() - offset < 4U)
+            const auto centralTime = static_cast<std::size_t>(reader.m_central_directory_file_ofs + stat.m_central_dir_ofs + 12U);
+            const auto localTime = static_cast<std::size_t>(stat.m_local_header_ofs + 10U);
+            if (offset > bytes.size() || bytes.size() - offset < 4U || centralTime > bytes.size() || bytes.size() - centralTime < 4U ||
+                localTime > bytes.size() || bytes.size() - localTime < 4U)
                 return false;
-            Write32(bytes, offset, (file.executable ? 0100755U : 0100644U) << 16U);
+            constexpr std::uint32_t CanonicalDosTimestamp = 0x00210000U;  // 1980-01-01 00:00:00.
+            Write32(bytes, centralTime, CanonicalDosTimestamp);
+            Write32(bytes, localTime, CanonicalDosTimestamp);
+            Write32(bytes, offset, (executable ? 0100755U : 0100644U) << 16U);
             return true;
         }
 
@@ -144,8 +153,9 @@ namespace Horo::PackageCommand {
                 return Failure("package.archive_invalid", "Packed archive could not be inspected.");
             bool valid = mz_zip_reader_get_num_files(&reader) == files.size() + 1;
             if (valid) {
-                for (mz_uint index = 0; index < files.size(); ++index) {
-                    if (!SetMode(bytes, files[index], reader, index)) {
+                for (mz_uint index = 0; index < files.size() + 1; ++index) {
+                    const bool executable = index < files.size() && files[index].executable;
+                    if (!SetMetadata(bytes, executable, reader, index)) {
                         valid = false;
                         break;
                     }
@@ -155,15 +165,31 @@ namespace Horo::PackageCommand {
             return valid ? Success() : Failure("package.archive_invalid", "Packed file metadata could not be finalized.");
         }
 
+        /** @brief Adds an entry with explicit calendar metadata instead of miniz's current-time default. */
+        [[nodiscard]] bool AddArchiveEntry(mz_zip_archive &writer, const char *path, const std::span<const std::byte> bytes,
+                                           MZ_TIME_T &modified) {
+            return mz_zip_writer_add_mem_ex_v2(&writer, path, bytes.data(), bytes.size(), nullptr, 0U, MZ_BEST_COMPRESSION, 0U, 0U,
+                                               &modified, nullptr, 0U, nullptr, 0U) != 0;
+        }
+
         [[nodiscard]] Outcome MakeArchive(const std::vector<File> &files, std::vector<std::byte> &bytes) {
             const std::string inventory = Inventory(files);
+            // miniz encodes local calendar time: resolve the fixed ZIP epoch in that same domain
+            // so archive bytes are independent of both the wall clock and host time zone.
+            std::tm epoch{};
+            epoch.tm_year = 80;
+            epoch.tm_mday = 1;
+            epoch.tm_isdst = -1;
+            MZ_TIME_T modified = std::mktime(&epoch);
+            if (modified == static_cast<MZ_TIME_T>(-1))
+                return Failure("package.pack_failed", "Stable archive timestamp could not be resolved.");
             mz_zip_archive writer{};
             if (!mz_zip_writer_init_heap(&writer, 0, 0))
                 return Failure("package.pack_failed", "Archive writer could not start.");
             bool valid = true;
             for (const File &file : files)
-                valid &= mz_zip_writer_add_mem(&writer, file.path.c_str(), file.bytes.data(), file.bytes.size(), MZ_BEST_COMPRESSION) != 0;
-            valid &= mz_zip_writer_add_mem(&writer, "files.manifest.json", inventory.data(), inventory.size(), MZ_BEST_COMPRESSION) != 0;
+                valid &= AddArchiveEntry(writer, file.path.c_str(), file.bytes, modified);
+            valid &= AddArchiveEntry(writer, "files.manifest.json", std::as_bytes(std::span{inventory.data(), inventory.size()}), modified);
             void *buffer{};
             std::size_t size{};
             valid &= mz_zip_writer_finalize_heap_archive(&writer, &buffer, &size) != 0;

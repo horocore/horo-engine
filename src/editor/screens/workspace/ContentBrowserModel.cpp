@@ -1,14 +1,11 @@
 #include "ContentBrowserModel.h"
 
 #include "Horo/Assets/AssetImportMetadata.h"
-#include "Horo/Assets/MeshEditorPayload.h"
 #include "Horo/Foundation/PathUtils.h"
+#include "Horo/Foundation/Paths.h"
 
 #include <algorithm>
-#include <array>
-#include <bit>
 #include <cctype>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -21,9 +18,6 @@
 namespace Horo::Editor {
     namespace {
         constexpr std::uintmax_t kMaximumLegacyMetadataBytes = 1024U * 1024U;
-        constexpr std::uintmax_t kMaximumMeshPreviewPayloadBytes = 64U * 1024U * 1024U;
-        constexpr std::size_t kMaximumMeshPreviewPoints = 2048U;
-        constexpr std::streamoff kMeshPositionPayloadOffset = 48;
 
         [[nodiscard]] std::filesystem::path NormalizeAbsolute(const std::filesystem::path &path) {
             std::error_code error;
@@ -153,73 +147,6 @@ namespace Horo::Editor {
             } catch (const nlohmann::json::exception &) {
                 return {};
             }
-        }
-
-        [[nodiscard]] std::uint32_t ReadLittleEndian32(const std::span<const char, 4> bytes) {
-            return (static_cast<std::uint32_t>(static_cast<unsigned char>(bytes[0]))) |
-                   (static_cast<std::uint32_t>(static_cast<unsigned char>(bytes[1])) << 8U) |
-                   (static_cast<std::uint32_t>(static_cast<unsigned char>(bytes[2])) << 16U) |
-                   (static_cast<std::uint32_t>(static_cast<unsigned char>(bytes[3])) << 24U);
-        }
-
-        [[nodiscard]] bool ReadLittleEndian32(std::ifstream &input, std::uint32_t &output) {
-            std::array<char, 4> bytes{};
-            input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-            if (!input)
-                return false;
-            output = ReadLittleEndian32(bytes);
-            return true;
-        }
-
-        [[nodiscard]] float ReadLittleEndianFloat(const std::span<const char, 4> bytes) {
-            const std::uint32_t raw = ReadLittleEndian32(bytes);
-            return std::bit_cast<float>(raw);
-        }
-
-        [[nodiscard]] std::vector<ContentBrowserMeshPreviewPoint> ReadMeshPreview(const std::filesystem::path &assetPath) {
-            std::error_code error;
-            const std::uintmax_t payloadSize = std::filesystem::file_size(assetPath, error);
-            if (error || payloadSize < static_cast<std::uintmax_t>(kMeshPositionPayloadOffset) ||
-                payloadSize > kMaximumMeshPreviewPayloadBytes) {
-                return {};
-            }
-
-            std::ifstream input(assetPath, std::ios::binary);
-            std::uint32_t schemaVersion = 0;
-            std::uint32_t positionCount = 0;
-            std::uint32_t faceCount = 0;
-            if (!input || !ReadLittleEndian32(input, schemaVersion) || !ReadLittleEndian32(input, positionCount) ||
-                !ReadLittleEndian32(input, faceCount) || schemaVersion != Assets::MeshEditorPayloadSchemaVersion || positionCount == 0) {
-                return {};
-            }
-            static_cast<void>(faceCount);
-
-            if (const std::uintmax_t requiredSize = static_cast<std::uintmax_t>(kMeshPositionPayloadOffset) +
-                                                    static_cast<std::uintmax_t>(positionCount) * 3U * sizeof(float);
-                requiredSize > payloadSize)
-                return {};
-
-            const std::size_t sampleCount = std::min<std::size_t>(positionCount, kMaximumMeshPreviewPoints);
-            std::vector<ContentBrowserMeshPreviewPoint> points;
-            points.reserve(sampleCount);
-            for (std::size_t sample = 0; sample < sampleCount; ++sample) {
-                const std::uint32_t positionIndex =
-                    sampleCount == positionCount
-                        ? static_cast<std::uint32_t>(sample)
-                        : static_cast<std::uint32_t>((static_cast<std::uint64_t>(sample) * positionCount) / sampleCount);
-                input.seekg(kMeshPositionPayloadOffset +
-                            static_cast<std::streamoff>(positionIndex) * 3 * static_cast<std::streamoff>(sizeof(float)));
-                std::array<char, 12> bytes{};
-                input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-                if (!input)
-                    return {};
-                const float x = ReadLittleEndianFloat(std::span<const char, 4>{bytes.data(), 4});
-                const float y = ReadLittleEndianFloat(std::span<const char, 4>{bytes.data() + 4, 4});
-                const float z = ReadLittleEndianFloat(std::span<const char, 4>{bytes.data() + 8, 4});
-                if (std::isfinite(x) && std::isfinite(y) && std::isfinite(z))
-                    points.push_back({x, y, z});
-            }
-            return points;
         }
 
         [[nodiscard]] Assets::AssetPreviewFallback InferFallback(const std::string_view assetType) {
@@ -354,8 +281,6 @@ namespace Horo::Editor {
 
             entry.previewFallback = InferFallback(entry.assetType);
             PopulateAssetImporterContribution(entry, importerCatalog, legacySourceExtension);
-            if (!entry.previewImage.IsValid() && entry.assetType == "core.mesh" && importerCatalog == nullptr)
-                entry.meshPreviewPoints = ReadMeshPreview(absoluteEntry);
             return entry;
         }
 
@@ -407,7 +332,7 @@ namespace Horo::Editor {
                                                          const Assets::AssetRegistrySnapshot &snapshot,
                                                          const Assets::AssetImporterCatalogSnapshot *importerCatalog) {
         const std::filesystem::path projectRoot = NormalizeAbsolute(absoluteProjectRoot);
-        const std::filesystem::path assetRoot = NormalizeAbsolute(projectRoot / "assets");
+        const std::filesystem::path assetRoot = NormalizeAbsolute(ProjectLayout::AssetRoot(projectRoot));
         std::filesystem::path currentDirectory =
             requestedAbsoluteDirectory.empty() ? assetRoot : NormalizeAbsolute(requestedAbsoluteDirectory);
         if (!IsContentBrowserDirectoryTargetAllowed(assetRoot, currentDirectory))

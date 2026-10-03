@@ -65,6 +65,23 @@ function(horo_configure_target_header_boundary target)
     endif()
 
     set(stage_root "${HORO_TARGET_INCLUDE_ROOT}/${target}/public")
+    # Remove only headers that belonged to this target in an earlier
+    # configuration. Ownership can move between targets while an existing
+    # build directory is reused; leaving the old staged file would let
+    # include-order shadow the current owning target's header. Preserve current
+    # staged files so a reconfigure does not force an unnecessary rebuild.
+    set(staged_header_patterns)
+    foreach(extension IN LISTS HORO_PUBLIC_HEADER_EXTENSIONS)
+        list(APPEND staged_header_patterns "${stage_root}/*.${extension}")
+    endforeach()
+    file(GLOB_RECURSE staged_headers RELATIVE "${stage_root}" ${staged_header_patterns})
+    foreach(staged_header IN LISTS staged_headers)
+        list(FIND ARG_PUBLIC_HEADERS "${staged_header}" owned_header_index)
+        if(owned_header_index EQUAL -1)
+            file(REMOVE "${stage_root}/${staged_header}")
+        endif()
+    endforeach()
+
     foreach(header IN LISTS ARG_PUBLIC_HEADERS)
         get_filename_component(header_directory "${stage_root}/${header}" DIRECTORY)
         file(MAKE_DIRECTORY "${header_directory}")

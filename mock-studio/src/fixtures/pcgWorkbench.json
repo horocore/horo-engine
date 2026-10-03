@@ -1,0 +1,405 @@
+{
+  "title": "PCG Graph Editor · Forest_Procedural.pcggraph",
+  "subtitle": "assets/pcg/forest/Forest_Procedural.pcggraph · deterministic offline forest bake for streaming cell Forest_North_03",
+  "sidebar": [
+    {
+      "type": "heading",
+      "label": "Open Graphs"
+    },
+    {
+      "type": "item",
+      "label": "Forest_Procedural",
+      "meta": "offline"
+    },
+    {
+      "type": "item",
+      "label": "Road_Spline",
+      "meta": "hybrid"
+    },
+    {
+      "type": "item",
+      "label": "Village_Placement",
+      "meta": "offline"
+    },
+    {
+      "type": "heading",
+      "label": "User Scenarios"
+    },
+    {
+      "type": "item",
+      "label": "Paint forest density",
+      "meta": "active"
+    },
+    {
+      "type": "item",
+      "label": "Preview changed seed",
+      "meta": "fast"
+    },
+    {
+      "type": "item",
+      "label": "Exclude road and water",
+      "meta": "masks"
+    },
+    {
+      "type": "item",
+      "label": "Bake streaming cell",
+      "meta": "commit"
+    },
+    {
+      "type": "heading",
+      "label": "Node Palette"
+    },
+    {
+      "type": "item",
+      "label": "Surface Sampler",
+      "meta": "spatial"
+    },
+    {
+      "type": "item",
+      "label": "Density Filter",
+      "meta": "filter"
+    },
+    {
+      "type": "item",
+      "label": "Slope Filter",
+      "meta": "terrain"
+    },
+    {
+      "type": "item",
+      "label": "Foliage Spawner",
+      "meta": "output"
+    }
+  ],
+  "nodes": [
+    {
+      "title": "Surface Sampler",
+      "summary": "Terrain height + normal · Forest_North_03",
+      "x": 28,
+      "y": 56
+    },
+    {
+      "title": "Density Noise",
+      "summary": "Perlin · 4 octaves · deterministic seed",
+      "x": 292,
+      "y": 56
+    },
+    {
+      "title": "Slope Filter",
+      "summary": "Reject above 28° and below altitude 12m",
+      "x": 592,
+      "y": 56
+    },
+    {
+      "title": "Exclusion Masks",
+      "summary": "Road spline, water body, building footprints",
+      "x": 292,
+      "y": 200
+    },
+    {
+      "title": "Distance Filter",
+      "summary": "Poisson radius · tree 4.2m · rock 2.0m",
+      "x": 592,
+      "y": 200
+    },
+    {
+      "title": "Biome Weights",
+      "summary": "Pine, birch, bush, rock selection weights",
+      "x": 292,
+      "y": 348
+    },
+    {
+      "title": "Foliage Spawner",
+      "summary": "Static mesh instances, LOD groups, collision opt-in",
+      "x": 788,
+      "y": 136
+    }
+  ],
+  "edges": [
+    "M170 92 C230 92 230 92 292 92",
+    "M470 92 C530 92 530 92 592 92",
+    "M470 236 C530 236 530 236 592 236",
+    "M770 92 C832 92 832 174 894 174",
+    "M770 236 C832 236 832 174 894 174",
+    "M470 384 C620 384 742 306 894 236"
+  ],
+  "views": {
+    "preview": {
+      "metrics": [
+        {
+          "title": "Visible Instances",
+          "value": "18,420",
+          "summary": "trees, bushes, rocks, grass clumps"
+        },
+        {
+          "title": "Rejected Points",
+          "value": "13,980",
+          "summary": "slope, water, road, building masks"
+        },
+        {
+          "title": "Foliage Memory",
+          "value": "2.8 MB",
+          "summary": "baked instance buffer for this cell"
+        },
+        {
+          "title": "NavMesh Impact",
+          "value": "1 tile",
+          "summary": "rebake queued after bake-to-scene"
+        }
+      ],
+      "problems": [],
+      "tables": [],
+      "flow": []
+    },
+    "budgets": {
+      "metrics": [
+        {
+          "title": "Point Cloud",
+          "value": "64K",
+          "summary": "below dx12_vulkan 256K budget"
+        },
+        {
+          "title": "Graph Nodes",
+          "value": "11",
+          "summary": "below es3 32 node offline cap"
+        },
+        {
+          "title": "Preview Time",
+          "value": "124ms",
+          "summary": "acceptable for editor preview; not frame budgeted"
+        },
+        {
+          "title": "Instance Buffer",
+          "value": "2.8 MB",
+          "summary": "inside foliage streaming slice"
+        },
+        {
+          "title": "Collision Shapes",
+          "value": "320",
+          "summary": "tree trunks only; rocks disabled"
+        },
+        {
+          "title": "Bake Delta",
+          "value": "clean",
+          "summary": "previous graph-owned output can be removed first"
+        }
+      ],
+      "problems": [],
+      "tables": [
+        {
+          "headers": [
+            "Tier",
+            "Offline Bake",
+            "Runtime PCG",
+            "Point Limit",
+            "Live Preview"
+          ],
+          "rows": [
+            [
+              "es3",
+              "yes",
+              "no",
+              "16K",
+              "no"
+            ],
+            [
+              "dx11 / dx12_vulkan",
+              "yes",
+              "simple",
+              "256K",
+              "yes"
+            ],
+            [
+              "high_end",
+              "yes",
+              "full",
+              "2M",
+              "yes"
+            ]
+          ]
+        }
+      ],
+      "flow": []
+    },
+    "validation": {
+      "metrics": [],
+      "problems": [
+        {
+          "title": "Graph is acyclic",
+          "summary": "Topological order is stable and can be cached for repeated preview runs.",
+          "status": "pass"
+        },
+        {
+          "title": "Determinism check passed",
+          "summary": "Same graph, seed and inputs produce the same point count and instance hashes.",
+          "status": "pass"
+        },
+        {
+          "title": "Road mask source is stale",
+          "summary": "Road_Spline changed after the last preview; regenerate before bake.",
+          "status": "fix"
+        },
+        {
+          "title": "One nav tile requires rebake",
+          "summary": "Baked trunk collision overlaps a walkable tile near the northern road.",
+          "status": "queue"
+        },
+        {
+          "title": "Graph-owned cleanup is safe",
+          "summary": "Existing generated objects are tagged with graph id and streaming cell, so regeneration will not delete hand-authored scene objects.",
+          "status": "safe"
+        },
+        {
+          "title": "Artist previews density",
+          "summary": "Adjust density curve and seed without committing scene objects.",
+          "status": "preview"
+        },
+        {
+          "title": "Level designer protects paths",
+          "summary": "Road, water and building masks remove points before spawning.",
+          "status": "mask"
+        },
+        {
+          "title": "Build owner bakes cell",
+          "summary": "Graph output is converted to tagged scene entities and foliage buffers.",
+          "status": "bake"
+        }
+      ],
+      "tables": [
+        {
+          "headers": [
+            "Check",
+            "Scope",
+            "Result",
+            "User Action"
+          ],
+          "rows": [
+            [
+              "Bounds",
+              "Forest_North_03",
+              "all in cell",
+              "none"
+            ],
+            [
+              "Slope",
+              "terrain normals",
+              "0 violations",
+              "none"
+            ],
+            [
+              "Exclusion",
+              "road/water/building",
+              "road stale",
+              "regenerate"
+            ],
+            [
+              "Collision",
+              "tree trunks",
+              "nav tile dirty",
+              "queue bake"
+            ]
+          ]
+        }
+      ],
+      "flow": []
+    },
+    "runtime": {
+      "metrics": [],
+      "problems": [
+        {
+          "title": "No direct mutation during preview",
+          "summary": "Preview buffers are session-only until Bake To Scene is executed.",
+          "status": "OK"
+        },
+        {
+          "title": "Generated objects are tagged",
+          "summary": "Regeneration can delete only graph-owned outputs, not artist-authored objects.",
+          "status": "OK"
+        },
+        {
+          "title": "Runtime mode is tier-gated",
+          "summary": "Forest scenario defaults to offline bake because es3 cannot run runtime PCG.",
+          "status": "tier"
+        }
+      ],
+      "tables": [
+        {
+          "headers": [
+            "Data",
+            "Authoring Owner",
+            "Runtime Form",
+            "Cleanup Key"
+          ],
+          "rows": [
+            [
+              "Tree points",
+              "PCG graph",
+              "foliage instance buffer",
+              "graph id + cell id"
+            ],
+            [
+              "Trunk collision",
+              "Foliage spawner",
+              "physics static shapes",
+              "generated object tag"
+            ],
+            [
+              "Nav influence",
+              "Validation gate",
+              "nav tile rebuild request",
+              "cell bounds"
+            ],
+            [
+              "Preview points",
+              "Editor session",
+              "discarded",
+              "session id"
+            ]
+          ]
+        }
+      ],
+      "flow": [
+        {
+          "title": "1. Editor Graph Asset",
+          "summary": "Forest_Procedural stores nodes, edges, exposed inputs and deterministic seed."
+        },
+        {
+          "title": "2. Preview Execution",
+          "summary": "ExecutionContext evaluates point clouds with cancellation and no scene mutation."
+        },
+        {
+          "title": "3. Bake Command",
+          "summary": "Graph-owned output in Forest_North_03 is cleaned, regenerated and tagged."
+        },
+        {
+          "title": "4. Runtime Scene",
+          "summary": "Runtime loads baked foliage buffers through world streaming; no editor graph evaluation required on es3."
+        }
+      ]
+    }
+  },
+  "inspector": [
+    {
+      "label": "Raw Points",
+      "value": "64,000"
+    },
+    {
+      "label": "Density Attribute",
+      "value": "0.0 – 1.0"
+    },
+    {
+      "label": "Seed",
+      "value": "execution seed + node id"
+    },
+    {
+      "label": "Bounds",
+      "value": "streaming cell clipped"
+    }
+  ],
+  "status": [
+    "Forest_Procedural.pcggraph · dirty revision 27",
+    "seed 41832 · deterministic preview hash 9AF2",
+    "64K points · 18,420 baked instances",
+    "2 warnings · road mask stale · nav tile dirty",
+    "mode: offline bake"
+  ]
+}

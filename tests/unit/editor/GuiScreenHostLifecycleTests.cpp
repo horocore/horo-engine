@@ -27,7 +27,6 @@ namespace {
         int enters = 0;
         int leaves = 0;
         int destructions = 0;
-        int menuInvocations = 0;
     };
 
     class RecordingScreen final : public GuiScreen {
@@ -51,11 +50,6 @@ namespace {
 
         void Draw(const GuiContentRegion &) override {}
 
-        bool HandleMenuInvocation(const EditorMenuInvocation &) override {
-            ++stats_.menuInvocations;
-            return true;
-        }
-
         [[nodiscard]] LeaveDecision CanLeave(const LeaveTarget &) const override {
             return {.disposition = LeaveDisposition::Allow, .requirement = std::nullopt};
         }
@@ -72,22 +66,24 @@ namespace {
         ScreenStats &stats_;
     };
 
-    void VerifyMenuInputBarrier(GuiScreenHost &host, Input::InputRouter &input, const ScreenStats &stats) {
-        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
-        REQUIRE(stats.menuInvocations == 1);
-        auto modalContext = input.PushContext(Input::InputContextId{"test.modal"}, Input::InputContextKind::ModalRoot);
-        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
-        REQUIRE(stats.menuInvocations == 1);
-        modalContext.Reset();
-        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
-        REQUIRE(stats.menuInvocations == 1);
-        const Input::RawInputSnapshot nextFrame;
-        input.BeginFrame(nextFrame);
-        host.DispatchMenuInvocation(EditorMenuInvocation{.action = EditorMenuAction::SaveScene});
-        REQUIRE(stats.menuInvocations == 2);
+    void ShutdownAndCheckGuiScreenHost(GuiScreenHost &host, ScreenStats &stats, JobSystem &jobs) {
+        host.Shutdown();
+        REQUIRE((host.IsShutdown()));
+        REQUIRE((stats.leaves == 1));
+        REQUIRE((stats.destructions == 1));
+        REQUIRE((host.Services().Empty()));
+
+        host.Shutdown();
+        REQUIRE((stats.leaves == 1));
+        REQUIRE((stats.destructions == 1));
+        const Result<void> navigation = host.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}});
+        REQUIRE((navigation.HasError()));
+        REQUIRE((navigation.ErrorValue().domain.Value() == "horo.editor.screens"));
+        REQUIRE((navigation.ErrorValue().code.Value() == "navigation.host_shutdown"));
+        jobs.Shutdown(ShutdownPolicy::Cancel);
     }
 
-    TEST_CASE("Shutdown Leaves Once Destroys Screen And Revokes Services", "[unit][editor]") {
+    TEST_CASE("Gui Screen Host Registers Core Status And Shuts Down Safely", "[unit][editor]") {
         EngineDataBus engineEvents;
         EditorDataBus editorEvents;
         Input::InputRouter input;
@@ -112,6 +108,8 @@ namespace {
 
         GuiScreenHost host{gui,  modals, settings,  localization,       engineEvents,     creation,
                            jobs, input,  renderers, std::move(screens), std::move(panels)};
+        REQUIRE((host.StatusItems().Find("horo.status.backend") != nullptr));
+        REQUIRE((host.StatusItems().Find("horo.status.cpu") == nullptr));
         REQUIRE((&host.Services().Get<JobSystem>() == &jobs));
         REQUIRE((stats.enters == 0));
         REQUIRE((host.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}).HasError()));
@@ -120,26 +118,12 @@ namespace {
         REQUIRE((stats.enters == 1));
         REQUIRE((!host.Services().Empty()));
 
-        VerifyMenuInputBarrier(host, input, stats);
-
         const Result<void> invalidRoute = host.Navigate(GuiRoute{GuiRouteKind::Welcome, ProjectCreationRouteParameters{}});
         REQUIRE((invalidRoute.HasError()));
         REQUIRE((invalidRoute.ErrorValue().domain.Value() == "horo.editor.screens"));
         REQUIRE((invalidRoute.ErrorValue().code.Value() == "navigation.invalid_route_parameters"));
 
-        host.Shutdown();
-        REQUIRE((host.IsShutdown()));
-        REQUIRE((stats.leaves == 1));
-        REQUIRE((stats.destructions == 1));
-        REQUIRE((host.Services().Empty()));
-
-        host.Shutdown();
-        REQUIRE((stats.leaves == 1));
-        REQUIRE((stats.destructions == 1));
-        const Result<void> navigation = host.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}});
-        REQUIRE((navigation.HasError()));
-        REQUIRE((navigation.ErrorValue().domain.Value() == "horo.editor.screens"));
-        REQUIRE((navigation.ErrorValue().code.Value() == "navigation.host_shutdown"));
-        jobs.Shutdown(ShutdownPolicy::Cancel);
+        ShutdownAndCheckGuiScreenHost(host, stats, jobs);
     }
+
 }  // namespace

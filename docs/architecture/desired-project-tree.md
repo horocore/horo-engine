@@ -43,14 +43,16 @@ horo-engine/
 │       ├── release.json
 │       ├── project-contract.json
 │       └── migration-recovery-contract.json
+├── mock-studio/                  # Standalone React design workspace
+│   ├── src/                      # Shared shell, components, and screen models
+│   ├── public/assets/            # Fonts and static design assets
+│   ├── package.json
+│   ├── designs.md
+│   └── README.md
 ├── docs/
 │   ├── architecture/
 │   │   ├── README.md
 │   │   ├── desired-project-tree.md
-│   │   ├── shared/
-│   │   │   ├── horo-menu-bar.js
-│   │   │   ├── ai-chat.js
-│   │   │   └── ai-chat.css
 │   │   ├── foundation/
 │   │   │   ├── system-design.md
 │   │   │   ├── glossary.md
@@ -70,60 +72,34 @@ horo-engine/
 │   │   │   ├── renderer-distribution-and-availability.md
 │   │   │   ├── renderer-module-package-manifest.md
 │   │   │   ├── material-and-shader-model.md
-│   │   │   ├── shader-graph-editor.html
 │   │   │   ├── advanced-rendering-architecture.md
 │   │   │   ├── animation-architecture.md
-│   │   │   ├── animation-editor.html
 │   │   │   ├── vfx-and-particles-architecture.md
-│   │   │   ├── particle-editor.html
 │   │   │   ├── character-controller-architecture.md
-│   │   │   ├── character-setup.html
 │   │   │   ├── physics-architecture.md
-│   │   │   ├── physics-debugger.html
 │   │   │   ├── audio-architecture.md
-│   │   │   ├── audio-mixer.html
 │   │   │   ├── input-architecture.md
-│   │   │   ├── input-mapping-editor.html
 │   │   │   ├── game-ui-and-hud.md
-│   │   │   ├── ui-canvas-editor.html
 │   │   │   ├── networking-architecture.md
-│   │   │   ├── network-debugger.html
 │   │   │   ├── asset-pipeline.md
 │   │   │   ├── prefab-architecture.md
-│   │   │   ├── prefab-editor.html
 │   │   │   ├── built-in-scene-primitives.md
-│   │   │   ├── primitives-panel.html
 │   │   │   ├── debug-console-and-overlays.md
-│   │   │   ├── console-panel.html
-│   │   │   ├── build-output.html
 │   │   │   ├── platform-services-architecture.md
-│   │   │   ├── platform-services-config.html
 │   │   │   ├── terrain-and-foliage-architecture.md
 │   │   │   ├── world-streaming-architecture.md
 │   │   │   ├── save-game-and-persistence.md
-│   │   │   ├── save-load-manager.html
 │   │   │   ├── navigation-and-ai-architecture.md
-│   │   │   ├── navigation-bake.html
 │   │   │   ├── cinematic-sequencer-architecture.md
-│   │   │   ├── cinematic-sequencer.html
 │   │   │   ├── post-processing-and-effects-architecture.md
-│   │   │   ├── post-processing-stack.html
-│   │   │   ├── render-settings.html
 │   │   │   ├── lod-and-culling-architecture.md
-│   │   │   ├── lod-debugger.html
 │   │   │   ├── accessibility-architecture.md
 │   │   │   ├── decal-system-architecture.md
-│   │   │   ├── decal-placement.html
 │   │   │   ├── virtual-texturing-architecture.md
-│   │   │   ├── virtual-texturing-debug.html
 │   │   │   ├── destruction-and-fracture-architecture.md
-│   │   │   ├── destruction-setup.html
 │   │   │   ├── procedural-generation-architecture.md
-│   │   │   ├── pcg-graph-editor.html
 │   │   │   ├── multiplayer-replication-architecture.md
 │   │   │   ├── vr-ar-architecture.md
-│   │   │   ├── xr-setup.html
-│   │   │   └── material-editor.html
 │   │   ├── editor/
 │   │   │   ├── ProjectMigrationTransactionTests.cpp
 │   │   │   ├── ProjectOpenServiceTests.cpp
@@ -131,19 +107,14 @@ horo-engine/
 │   │   │   ├── gui-screen-host.md
 │   │   │   ├── ui-design-system.md
 │   │   │   ├── localization.md
-│   │   │   ├── localization-editor.html
 │   │   │   ├── editor-document-model.md
 │   │   │   ├── editor-data-bus.md
 │   │   │   ├── editor-panel-host.md
-│   │   │   ├── editor-workspace.html
 │   │   │   ├── editor-modal-host.md
-│   │   │   ├── editor-modal-host-example.html
 │   │   │   ├── editor-ai-agent-architecture.md
 │   │   │   ├── project-model.md
-│   │   │   └── project-settings.html
 │   │   ├── extensions/
 │   │   │   ├── gameplay-module.md
-│   │   │   ├── module-config.html
 │   │   │   ├── gameplay-module-boundary.md
 │   │   │   ├── gameplay-behavior-authoring.md
 │   │   │   ├── gameplay-runtime-integration.md

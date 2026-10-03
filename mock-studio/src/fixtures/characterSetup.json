@@ -1,0 +1,405 @@
+{
+  "title": "Character Setup",
+  "subtitle": "Controller capsule · movement resolution · ground & slope · surface materials · camera · input bindings",
+  "actions": [
+    "Revert",
+    "Apply"
+  ],
+  "sidebar": [
+    {
+      "label": "Player",
+      "value": "active"
+    },
+    {
+      "label": "NPC Guard",
+      "value": "Third Person"
+    },
+    {
+      "label": "SK Humanoid",
+      "value": "72 bones"
+    }
+  ],
+  "tabs": [
+    {
+      "title": "Controller",
+      "cards": [
+        {
+          "title": "Capsule",
+          "fields": [
+            {
+              "label": "Height",
+              "kind": "input",
+              "value": "1.8 m"
+            },
+            {
+              "label": "Radius",
+              "kind": "input",
+              "value": "0.35 m"
+            },
+            {
+              "label": "Crouch Height",
+              "kind": "input",
+              "value": "0.9 m"
+            }
+          ]
+        },
+        {
+          "title": "Physics Body",
+          "fields": [
+            {
+              "label": "Mass",
+              "kind": "input",
+              "value": "80 kg"
+            },
+            {
+              "label": "Gravity Scale",
+              "kind": "input",
+              "value": "1.0"
+            },
+            {
+              "label": "Collider Filter",
+              "kind": "select",
+              "value": "Player",
+              "options": [
+                "Player"
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Root Motion",
+          "fields": [
+            {
+              "label": "Mode",
+              "kind": "select",
+              "value": "Consume",
+              "options": [
+                "Consume",
+                "Ignore"
+              ]
+            },
+            {
+              "label": "Blend",
+              "kind": "input",
+              "value": "1.0"
+            }
+          ]
+        },
+        {
+          "title": "Update",
+          "fields": [
+            {
+              "label": "Order",
+              "kind": "display",
+              "value": "FixedUpdate → Move → RenderExtract"
+            },
+            {
+              "label": "Moving Platforms",
+              "kind": "select",
+              "value": "Enabled",
+              "options": [
+                "Enabled"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Movement",
+      "cards": [
+        {
+          "title": "Speed",
+          "fields": [
+            {
+              "label": "Walk",
+              "kind": "input",
+              "value": "5.0 m/s"
+            },
+            {
+              "label": "Run",
+              "kind": "input",
+              "value": "10.0 m/s"
+            },
+            {
+              "label": "Crouch",
+              "kind": "input",
+              "value": "2.5 m/s"
+            },
+            {
+              "label": "Acceleration",
+              "kind": "input",
+              "value": "20.0"
+            }
+          ]
+        },
+        {
+          "title": "Jump",
+          "fields": [
+            {
+              "label": "Height",
+              "kind": "input",
+              "value": "2.0 m"
+            },
+            {
+              "label": "Air Control",
+              "kind": "input",
+              "value": "0.3"
+            },
+            {
+              "label": "Max Jumps",
+              "kind": "input",
+              "value": "1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Ground",
+      "cards": [
+        {
+          "title": "Ground Detection",
+          "fields": [
+            {
+              "label": "Method",
+              "kind": "select",
+              "value": "Sphere Cast",
+              "options": [
+                "Sphere Cast"
+              ]
+            },
+            {
+              "label": "Distance",
+              "kind": "input",
+              "value": "0.1 m"
+            },
+            {
+              "label": "Layer Mask",
+              "kind": "select",
+              "value": "Default,Terrain",
+              "options": [
+                "Default,Terrain"
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Slope & Step",
+          "fields": [
+            {
+              "label": "Max Slope",
+              "kind": "input",
+              "value": "45°"
+            },
+            {
+              "label": "Step Height",
+              "kind": "input",
+              "value": "0.3 m"
+            },
+            {
+              "label": "Step Smoothing",
+              "kind": "select",
+              "value": "Enabled",
+              "options": [
+                "Enabled"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Surface",
+      "cards": [
+        {
+          "title": "Surface Materials",
+          "fields": [
+            {
+              "label": "Default",
+              "kind": "display",
+              "value": "friction 0.6"
+            },
+            {
+              "label": "Metal",
+              "kind": "display",
+              "value": "friction 0.3"
+            },
+            {
+              "label": "Wood",
+              "kind": "display",
+              "value": "friction 0.7"
+            },
+            {
+              "label": "Ice",
+              "kind": "display",
+              "value": "friction 0.1"
+            }
+          ]
+        },
+        {
+          "title": "Surface Events",
+          "fields": [
+            {
+              "label": "Footstep Audio",
+              "kind": "display",
+              "value": "enabled"
+            },
+            {
+              "label": "VFX Spawn",
+              "kind": "display",
+              "value": "enabled"
+            },
+            {
+              "label": "Physics Material",
+              "kind": "display",
+              "value": "query on contact"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Camera",
+      "cards": [
+        {
+          "title": "View",
+          "fields": [
+            {
+              "label": "FOV",
+              "kind": "input",
+              "value": "90°"
+            },
+            {
+              "label": "Near Clip",
+              "kind": "input",
+              "value": "0.1 m"
+            }
+          ]
+        },
+        {
+          "title": "Look",
+          "fields": [
+            {
+              "label": "Sensitivity",
+              "kind": "input",
+              "value": "1.0"
+            },
+            {
+              "label": "Invert Y",
+              "kind": "select",
+              "value": "No",
+              "options": [
+                "No",
+                "Yes"
+              ]
+            },
+            {
+              "label": "Smooth Time",
+              "kind": "input",
+              "value": "0.05 s"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Input",
+      "cards": [
+        {
+          "title": "Action Bindings",
+          "fields": [
+            {
+              "label": "Move",
+              "kind": "display",
+              "value": "Left Stick / WASD"
+            },
+            {
+              "label": "Look",
+              "kind": "display",
+              "value": "Right Stick / Mouse"
+            },
+            {
+              "label": "Jump",
+              "kind": "display",
+              "value": "A (South) / Space"
+            },
+            {
+              "label": "Crouch",
+              "kind": "display",
+              "value": "B (East) / Ctrl"
+            }
+          ]
+        },
+        {
+          "title": "Context",
+          "fields": [
+            {
+              "label": "Input Map",
+              "kind": "select",
+              "value": "Gameplay",
+              "options": [
+                "Gameplay"
+              ]
+            },
+            {
+              "label": "Focus",
+              "kind": "display",
+              "value": "captured"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Diagnostics",
+      "cards": [
+        {
+          "title": "Validation",
+          "fields": [
+            {
+              "label": "Capsule",
+              "kind": "display",
+              "value": "valid"
+            },
+            {
+              "label": "Collider",
+              "kind": "display",
+              "value": "Player layer"
+            },
+            {
+              "label": "Skeleton",
+              "kind": "display",
+              "value": "SK Humanoid bound"
+            }
+          ]
+        },
+        {
+          "title": "Runtime",
+          "fields": [
+            {
+              "label": "Grounded",
+              "kind": "display",
+              "value": "yes (0.08 m)"
+            },
+            {
+              "label": "Velocity",
+              "kind": "display",
+              "value": "5.2 m/s"
+            },
+            {
+              "label": "Surface",
+              "kind": "display",
+              "value": "Wood (f 0.7)"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "status": [
+    "Player · First Person · SK Humanoid",
+    "Input: Gameplay map",
+    "Grounded · 5.2 m/s"
+  ]
+}

@@ -1,0 +1,43 @@
+name: Checkpoint native build caches
+description: Persist main caches after successful compilation and report statistics on every ref
+inputs:
+  compiler-key:
+    description: Compiler key returned by restore-native-cache
+    required: true
+  dependency-key:
+    description: Dependency key returned by restore-native-cache
+    required: true
+  dependency-hit:
+    description: Exact dependency hit returned by restore-native-cache
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Flush and report compiler cache
+      shell: bash
+      env:
+        RUNNER_PLATFORM: ${{ runner.os }}
+      run: |
+        if [[ "$RUNNER_PLATFORM" == Windows ]]; then
+          sccache --show-stats
+          sccache --stop-server
+        else
+          ccache --cleanup
+          ccache --show-stats
+        fi
+
+    - name: Save dependency sources
+      if: github.ref == 'refs/heads/main' && inputs.dependency-hit != 'true'
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+      with:
+        path: |
+          ${{ github.workspace }}/.cmake/fetchcontent/*-src
+          ${{ github.workspace }}/.cmake/fetchcontent/*-subbuild
+        key: ${{ inputs.dependency-key }}
+
+    - name: Save compiler snapshot
+      if: github.ref == 'refs/heads/main'
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+      with:
+        path: ${{ github.workspace }}/.ci-cache/compiler
+        key: ${{ inputs.compiler-key }}

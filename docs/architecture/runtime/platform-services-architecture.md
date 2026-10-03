@@ -445,6 +445,26 @@ later completion callback may enqueue new work; it cannot recursively drain comp
 or change the published terminal record. Callback exceptions are caught at the engine
 executor boundary and do not change the platform request result.
 
+Implementation status for PLS-001.4: `PlatformRequestStore::CompletionSink(handle)`
+issues a copyable Horo-owned SDK ingress token with a weak store lease and the exact
+request type and generation. `Complete(Result<T>)` and `AcknowledgeCancellation`
+copy/move normalized outcomes into a finite FIFO; they neither mutate terminal
+state nor invoke observers. Admission captures diagnostic context, restored for
+engine-side terminal publication and deferred observer delivery. Duplicate queued
+or terminal evidence is an idempotent no-op and consumes no extra queue slot.
+Capacity rejection leaves that request eligible for a later retry.
+
+`DrainProviderCompletions(maxCount)` runs only on the thread that constructed the
+store, commits at most the given number of evidence records, and reports applied
+and discarded evidence. `DispatchCompletions` remains a separate later owner-thread
+turn; observer callbacks cannot recursively drain SDK evidence. Timeout or another
+terminal publication supersedes queued native evidence without changing the retained
+result. Session replacement closes the old store and composes a new generation;
+`Shutdown` atomically closes ingress and discards pending evidence. Tokens retained
+past store destruction return typed unavailable results without retaining provider
+or frontend lifetimes. This extends the existing request API without changing direct
+owner-lane completion, cancellation, or handle retention contracts.
+
 ### Timeouts, Retry, And Throttling
 
 The frontend captures one finite monotonic deadline at admission. Valid completion
@@ -1813,7 +1833,7 @@ Platform-specific backend tests live in the private platform repositories.
 - [ADR-136](../../adr/136-platform-offline-queue-ownership-replay-and-cloud-intent-boundary.md):
   single-owner offline durability, admission/replay/expiry/shutdown semantics and the
   Save-owned cloud intent boundary.
-- [Platform Services Config UI Reference](./platform-services-config.html): achievements, leaderboards, cloud saves, presence, and platform adapters panel.
+- [Platform Services Config UI Reference](../../../mock-studio/designs.md#architecture-runtime-platform-services-config): achievements, leaderboards, cloud saves, presence, and platform adapters panel.
 
 - [Audio Architecture](./audio-architecture.md)
 - [Input Architecture](./input-architecture.md)
