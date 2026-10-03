@@ -107,6 +107,42 @@
       }
     },
     {
+      "name": "ci-network-base",
+      "hidden": true,
+      "inherits": "ci-headless",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "HORO_VERIFY_NETWORK_DISABLED": "OFF",
+        "HORO_BUILD_INPUT_SDL3": "OFF",
+        "HORO_BUILD_PHYSICS_NATIVE": "OFF",
+        "HORO_BUILD_NAVIGATION_RECAST_DETOUR": "OFF",
+        "HORO_BUILD_EXAMPLES": "OFF"
+      }
+    },
+    {
+      "name": "ci-network-gns",
+      "inherits": "ci-network-base",
+      "binaryDir": "${sourceDir}/build/ci-network-gns",
+      "cacheVariables": {
+        "HORO_BUILD_NETWORK_GNS": "ON"
+      }
+    },
+    {
+      "name": "ci-network-disabled",
+      "inherits": "ci-network-base",
+      "binaryDir": "${sourceDir}/build/ci-network-disabled",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "BUILD_TESTING": "OFF",
+        "HORO_BUILD_NETWORK_GNS": "OFF",
+        "HORO_VERIFY_NETWORK_DISABLED": "ON"
+      }
+    },
+    {
       "name": "sonar",
       "inherits": "ci-linux-debug",
       "binaryDir": "${sourceDir}/build/sonar",
@@ -156,6 +192,14 @@
       "configurePreset": "ci-navigation-null",
       "targets": [
         "HoroCiNavigationChecks"
+      ],
+      "jobs": 2
+    },
+    {
+      "name": "ci-network-gns",
+      "configurePreset": "ci-network-gns",
+      "targets": [
+        "HoroCiNetworkGnsChecks"
       ],
       "jobs": 2
     },
@@ -246,6 +290,22 @@
         "include": {
           "label": "^ci-navigation$"
         }
+      }
+    },
+    {
+      "name": "ci-network-gns",
+      "inherits": "ci-test-base",
+      "configurePreset": "ci-network-gns",
+      "output": {
+        "outputJUnitFile": "${sourceDir}/build/ci-network-gns/ctest.xml"
+      },
+      "filter": {
+        "include": {
+          "label": "^gns$"
+        }
+      },
+      "execution": {
+        "jobs": 1
       }
     },
     {

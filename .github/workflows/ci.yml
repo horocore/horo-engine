@@ -26,9 +26,21 @@ jobs:
     name: Format & Tooling Check
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    outputs:
+      network: ${{ steps.changes.outputs.network }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+
+      - name: Select optional network checks
+        id: changes
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const networkChanged = require('./.github/scripts/network_changes.js');
+            const selected = await networkChanged({ github, context, core });
+            core.info(`Network checks: ${selected ? 'enabled' : 'skipped; no relevant changes'}`);
+            core.setOutput('network', selected);
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -96,6 +108,7 @@ jobs:
           # Preserve the existing main Debug checkpoint and build directory.
           # Compiler entries also validate the flags of auxiliary builds.
           profile: native-tests-v1
+          dependency-profile: ${{ needs.tooling.outputs.network == 'true' && 'native-gns-v1' || '' }}
           mode: Debug
           max-size: 2G
 
@@ -124,6 +137,26 @@ jobs:
         if: runner.os == 'Linux'
         run: cmake --build --preset ci-navigation-null
 
+      - name: Install macOS network crypto library
+        if: ${{ !cancelled() && runner.os == 'macOS' && needs.tooling.outputs.network == 'true' && steps.cache.outcome == 'success' }}
+        run: |
+          brew install openssl@3
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+
+      - name: Configure headless network with GNS
+        id: network_configure
+        if: ${{ !cancelled() && needs.tooling.outputs.network == 'true' && steps.cache.outcome == 'success' }}
+        run: cmake --preset ci-network-gns
+
+      - name: Build headless network with GNS
+        id: network_build
+        if: ${{ !cancelled() && steps.network_configure.outcome == 'success' }}
+        run: cmake --build --preset ci-network-gns
+
+      - name: Verify network without production dependencies
+        if: ${{ !cancelled() && runner.os == 'Linux' && needs.tooling.outputs.network == 'true' && steps.cache.outcome == 'success' }}
+        run: cmake --preset ci-network-disabled
+
       - name: Checkpoint main build caches
         if: ${{ !cancelled() && steps.debug_build.outcome == 'success' }}
         continue-on-error: true
@@ -132,6 +165,7 @@ jobs:
           compiler-key: ${{ steps.cache.outputs.compiler-key }}
           dependency-key: ${{ steps.cache.outputs.dependency-key }}
           dependency-hit: ${{ steps.cache.outputs.dependency-hit }}
+          dependency-ready: ${{ needs.tooling.outputs.network != 'true' || steps.network_configure.outcome == 'success' }}
 
       - name: Prepare Windows mixer allocation diagnostics
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.debug_build.outcome == 'success' }}
@@ -149,6 +183,10 @@ jobs:
       - name: Test navigation without Recast Detour
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_build.outcome == 'success' }}
         run: ctest --preset ci-navigation-null
+
+      - name: Test GNS connections, DNS, delivery and lifecycle
+        if: ${{ !cancelled() && steps.network_build.outcome == 'success' }}
+        run: ctest --preset ci-network-gns
 
       - name: Upload test reports
         if: always()

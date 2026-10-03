@@ -54,6 +54,11 @@ set(HORO_CI_NAVIGATION_TARGETS
     HoroNavigationBakeDiagnosticsPublicConsumer
 )
 
+set(HORO_CI_NETWORK_TARGETS
+    HoroNetworkTransportGnsTests
+    HoroNetworkApiPublicHeaderConsumer
+)
+
 # These editor-labelled suites were explicitly run by the coverage workflow.
 set(HORO_SONAR_EDITOR_TARGETS
     HoroCinematicPropertyIntegrationTests
@@ -82,6 +87,9 @@ function(horo_finalize_ci_suites)
         add_custom_target(HoroCiWindowsChecks DEPENDS ${HORO_CI_WINDOWS_TARGETS})
     endif()
     add_custom_target(HoroCiNavigationChecks DEPENDS ${HORO_CI_NAVIGATION_TARGETS})
+    if(HORO_BUILD_NETWORK_GNS)
+        add_custom_target(HoroCiNetworkGnsChecks DEPENDS ${HORO_CI_NETWORK_TARGETS})
+    endif()
 
     set_property(TEST
         HoroAudioCallbackLockPolicyTest

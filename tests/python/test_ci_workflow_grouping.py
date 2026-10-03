@@ -49,14 +49,15 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
 def test_windows_suites_run_independently_and_remain_blocking() -> None:
     # CTest continues through cases by default. Workflow test stages must also
     # remain runnable after another stage fails, and failures must fail the job.
-    for name in ("Test Debug", "Test Release audio checks", "Test navigation without Recast Detour"):
+    for name in ("Test Debug", "Test Release audio checks", "Test navigation without Recast Detour",
+                 "Test GNS connections, DNS, delivery and lifecycle"):
         match = re.search(rf"      - name: {re.escape(name)}\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
         assert match
         assert "!cancelled()" in match.group(1)
         assert "continue-on-error" not in match.group(1)
         assert "--stop-on-failure" not in match.group(1)
     assert preset("testPresets", "ci-test-base")["execution"]["noTestsAction"] == "error"
-    for name in ("ci-windows-debug", "ci-audio-release", "ci-navigation-null"):
+    for name in ("ci-windows-debug", "ci-audio-release", "ci-navigation-null", "ci-network-gns"):
         assert preset("testPresets", name)["output"]["outputJUnitFile"].endswith("/ctest.xml")
     for name in ("HoroAudioCallbackLockPolicyTest", "HoroPrefabSceneExpansionContractConsumer",
                  "HoroExtensionManagerTests", "HoroExtensionAbiConformanceCliSupported",
@@ -95,6 +96,14 @@ def test_required_checks_and_sdl_composition_are_preserved() -> None:
     headless = preset("configurePresets", "ci-headless")["cacheVariables"]
     assert headless["HORO_BUILD_AUDIO_SDL3"] == "OFF"
     assert headless["HORO_BUILD_EDITOR_GUI"] == "OFF"
+    assert not (ROOT / ".github/workflows/ci-network-gns.yml").exists()
+    assert targets("HORO_CI_NETWORK_TARGETS") == {"HoroNetworkTransportGnsTests", "HoroNetworkApiPublicHeaderConsumer"}
+    assert preset("buildPresets", "ci-network-gns")["targets"] == ["HoroCiNetworkGnsChecks"]
+    assert preset("testPresets", "ci-network-gns")["filter"]["include"]["label"] == "^gns$"
+    network = preset("configurePresets", "ci-network-base")["cacheVariables"]
+    assert network["HORO_BUILD_PHYSICS_NATIVE"] == "OFF"
+    assert network["HORO_BUILD_NAVIGATION_RECAST_DETOUR"] == "OFF"
+    assert preset("configurePresets", "ci-network-disabled")["cacheVariables"]["HORO_VERIFY_NETWORK_DISABLED"] == "ON"
     sonar = (ROOT / ".github/workflows/sonar.yml").read_text(encoding="utf-8")
     assert "name: SonarCloud" in sonar
     assert "ctest --preset sonar" in sonar

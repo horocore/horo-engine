@@ -7,6 +7,9 @@ inputs:
   mode:
     description: Build configuration
     required: true
+  dependency-profile:
+    description: Optional dependency selection namespace; defaults to the compiler profile
+    default: ''
   max-size:
     description: Maximum compiler cache size
     required: true
@@ -95,7 +98,10 @@ runs:
         path: |
           ${{ github.workspace }}/.cmake/fetchcontent/*-src
           ${{ github.workspace }}/.cmake/fetchcontent/*-subbuild
-        key: native-v1-deps-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.identity.outputs.cmake }}-${{ steps.identity.outputs.dependencies }}
+        key: native-v1-deps-${{ runner.os }}-${{ runner.arch }}-${{ inputs.dependency-profile || inputs.profile }}-${{ steps.identity.outputs.cmake }}-${{ steps.identity.outputs.dependencies }}
+        # A larger optional profile can reuse the exact base dependency sources.
+        restore-keys: |
+          native-v1-deps-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.identity.outputs.cmake }}-${{ steps.identity.outputs.dependencies }}
 
     - name: Restore compiler snapshot
       id: compiler
