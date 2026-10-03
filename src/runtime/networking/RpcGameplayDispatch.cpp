@@ -124,12 +124,16 @@ namespace Horo::Network {
     }
 
     /** @copydoc RpcGameplayDispatch::RegisterHandler */
-    Result<void> RpcGameplayDispatch::RegisterHandler(const RpcId id, const std::shared_ptr<IRpcGameplayHandler> &handler,
+    Result<void> RpcGameplayDispatch::RegisterHandler(const RpcId id, std::shared_ptr<IRpcGameplayHandler> handler,
                                                       const std::span<const std::shared_ptr<const IReplicationFieldSerializer>> serializers,
                                                       std::shared_ptr<const void> moduleLease) {
+        // Move both parameters into ordered local owners: parameter/temporary teardown
+        // order must not release module code before the handler's virtual destructor.
+        const auto codeLease = std::move(moduleLease);
+        const auto handlerPin = std::move(handler);
         if (const auto owner = CheckOwner(); owner.HasError())
             return owner;
-        if (!id.IsValid() || !handler || !moduleLease)
+        if (!id.IsValid() || !handlerPin || !codeLease)
             return Result<void>::Failure(MakeError(NetworkErrors::RpcDescriptorInvalid));
         const auto found = descriptors_->Find(id);
         if (found.HasError())
@@ -147,10 +151,8 @@ namespace Horo::Network {
         const DispatchFlagGuard guard{receiving_};
         const auto revision = revocationRevision_;
         // A metadata callback is external code too. Pin every input before invoking any adapter.
-        // Keep the parameter's code lease alive through destruction of the strong handler pin.
-        const auto handlerPin = handler;
         try {
-            Binding binding{id, &descriptor, moduleLease, handlerPin, {serializers.begin(), serializers.end()}, {}};
+            Binding binding{id, &descriptor, codeLease, handlerPin, {serializers.begin(), serializers.end()}, {}};
             binding.metadata.reserve(binding.serializers.size());
             for (std::size_t index = 0; index < binding.serializers.size(); ++index) {
                 const auto &serializer = binding.serializers[index];

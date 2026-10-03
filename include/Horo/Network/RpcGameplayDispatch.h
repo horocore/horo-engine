@@ -122,14 +122,14 @@ namespace Horo::Network {
         /**
          * @brief Installs one executable handler and exact ordered canonical parameter serializers.
          * @param id Accepted declaration identity.
-         * @param handler Weakly retained Gameplay transaction owner.
+         * @param handler Call-owned pin; the installed binding retains the Gameplay transaction owner weakly.
          * @param serializers Exact canonical adapters in descriptor parameter order.
          * @param moduleLease Host-issued exact-generation code lease, retained until adapters and callbacks retire.
          * @details Adapter metadata is copied once under a callback guard. Nested registration is rejected;
          * shutdown or revocation during metadata publication aborts installation. Inputs remain pinned through callbacks.
          * @return Typed validation or capacity result; no partial binding is installed.
          */
-        [[nodiscard]] Result<void> RegisterHandler(RpcId id, const std::shared_ptr<IRpcGameplayHandler> &handler,
+        [[nodiscard]] Result<void> RegisterHandler(RpcId id, std::shared_ptr<IRpcGameplayHandler> handler,
                                                    std::span<const std::shared_ptr<const IReplicationFieldSerializer>> serializers,
                                                    std::shared_ptr<const void> moduleLease);
         /** @brief Revokes one executable binding and discards its pending work.
