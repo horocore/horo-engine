@@ -582,6 +582,15 @@ def test_invalid_cli_input_fails_before_credentials(monkeypatch, args):
     assert failure.value.code == 2
 
 
+def test_valid_cli_input_keeps_read_only_defaults(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["pr_annotations.py", "20", "--repo", "Org/repo"])
+    args = annotations.parse_args()
+    assert args.prs == [20]
+    assert args.repo == "Org/repo"
+    assert args.workers == 8
+    assert not args.fix
+
+
 @pytest.mark.parametrize(
     "state, expected",
     [("open", [1, 2]), ("all", [1, 2]), ("merged", [2]), ("closed", [1])],

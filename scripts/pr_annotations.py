@@ -115,7 +115,11 @@ class GitHub:
 
     def graphql(self, query: str, variables: dict[str, Any]) -> Any:
         result = self.request("POST", "/graphql", {"query": query, "variables": variables})
-        if not isinstance(result, dict) or result.get("errors") or not isinstance(result.get("data"), dict):
+        if (
+            not isinstance(result, dict)
+            or result.get("errors")
+            or not isinstance(result.get("data"), dict)
+        ):
             raise AnnotationError("GitHub GraphQL request failed")
         return result["data"]
 
