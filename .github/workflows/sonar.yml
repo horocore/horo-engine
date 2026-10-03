@@ -107,7 +107,7 @@ jobs:
             libgl1-mesa-dev libglu1-mesa-dev
           python3 -m venv /tmp/horo-gcovr
           /tmp/horo-gcovr/bin/pip install --disable-pip-version-check --no-cache-dir \
-            coverage==7.6.10 gcovr==8.6 pytest==8.3.4
+            coverage==7.6.10 gcovr==8.6 pytest==8.3.4 defusedxml==0.7.1
 
       - name: Configure and build
         id: build
@@ -146,8 +146,8 @@ jobs:
             ${{ github.workspace }}/.sonar/ccache
           key: ${{ steps.compiler.outputs.cache-primary-key }}
 
-      - name: Test and collect coverage
-        id: coverage
+      - name: Run coverage tests
+        id: coverage_tests
         run: |
           xvfb-run -a ctest --test-dir build/sonar --output-on-failure -LE 'gui|editor'
           build/sonar/tests/HoroCinematicPropertyIntegrationTests
@@ -159,6 +159,10 @@ jobs:
           build/sonar/tests/HoroConfiguredEditorUpdateBackendTests
           /tmp/horo-gcovr/bin/coverage run --source=scripts -m pytest tests/python --quiet
           /tmp/horo-gcovr/bin/coverage xml -o build/sonar/python-coverage.xml
+
+      - name: Collect gcovr coverage baseline
+        id: coverage
+        run: |
           gcovr_started=$SECONDS
           /tmp/horo-gcovr/bin/gcovr --sonarqube build/sonar/coverage.xml \
             -j 0 \
@@ -176,8 +180,69 @@ jobs:
             --exclude-noncode-lines \
             --gcov-ignore-parse-errors=negative_hits.warn_once_per_file \
             build/sonar
-          echo "gcovr completed in $((SECONDS - gcovr_started))s"
+          gcovr_seconds=$((SECONDS - gcovr_started))
+          echo "gcovr completed in ${gcovr_seconds}s"
+          echo "seconds=$gcovr_seconds" >> "$GITHUB_OUTPUT"
           ccache --show-stats
+
+      # Trial collector never replaces the authoritative gcovr report.
+      - name: Benchmark fastcov on the same coverage data
+        id: fastcov
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GCOVR_SECONDS: ${{ steps.coverage.outputs.seconds }}
+        run: |
+          /tmp/horo-gcovr/bin/pip install --disable-pip-version-check --no-cache-dir fastcov==1.17
+          {
+            gcc --version
+            gcov --version
+            /tmp/horo-gcovr/bin/gcovr --version
+            /tmp/horo-gcovr/bin/fastcov --version
+          } > build/sonar/coverage-tool-versions.txt
+          fastcov_started=$SECONDS
+          /tmp/horo-gcovr/bin/fastcov \
+            --gcov gcov --jobs "$(nproc)" --process-gcno \
+            --search-directory build/sonar \
+            --include "$GITHUB_WORKSPACE/include/" \
+              "$GITHUB_WORKSPACE/src/" \
+              "$GITHUB_WORKSPACE/apps/common/" \
+              "$GITHUB_WORKSPACE/apps/horo-engine/" \
+              "$GITHUB_WORKSPACE/apps/horo-package/" \
+              "$GITHUB_WORKSPACE/apps/HoroEditor/app/EditorUserStateMigration.cpp" \
+              "$GITHUB_WORKSPACE/apps/HoroEditor/app/ConfiguredEditorUpdateBackend.cpp" \
+            --output build/sonar/fastcov-coverage.json
+          /tmp/horo-gcovr/bin/fastcov_to_sonarqube \
+            build/sonar/fastcov-coverage.json --output build/sonar/fastcov-coverage.xml
+          fastcov_seconds=$((SECONDS - fastcov_started))
+          echo "fastcov collection and conversion completed in ${fastcov_seconds}s"
+          /tmp/horo-gcovr/bin/python scripts/compare_sonar_coverage.py \
+            --root "$GITHUB_WORKSPACE" \
+            --gcovr-report build/sonar/coverage.xml \
+            --fastcov-report build/sonar/fastcov-coverage.xml \
+            --gcovr-seconds "$GCOVR_SECONDS" --fastcov-seconds "$fastcov_seconds" \
+            --output build/sonar/coverage-comparison.json --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Report incomplete fastcov experiment
+        if: ${{ !cancelled() && steps.fastcov.outcome == 'failure' }}
+        run: |
+          echo '## Fastcov experiment incomplete' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Collector or comparison failed; review logs and artifacts. Sonar uses gcovr.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage experiment evidence
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.coverage.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-experiment-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            build/sonar/coverage.xml
+            build/sonar/fastcov-coverage.json
+            build/sonar/fastcov-coverage.xml
+            build/sonar/coverage-comparison.json
+            build/sonar/coverage-tool-versions.txt
 
       - name: SonarCloud scan
         id: scan

@@ -38,3 +38,24 @@ branches. Exit 1 means findings; exit 2 means incomplete or stale analysis.
 Reports and managed profiles live outside the source tree. See the
 [local-analysis guide](../docs/guides/sonarqube-mcp-local-analysis.md) for setup,
 compiler context, advisory metrics, measured timings and CI limitations.
+
+## Sonar coverage collector experiment
+
+The Sonar workflow benchmarks pinned fastcov 1.17 on pull requests after the
+existing gcovr baseline is generated. Both collectors consume the same
+`build/sonar` coverage data; fastcov includes unexecuted units with
+`--process-gcno`. Its timed region includes collection and generic Sonar XML
+conversion, but excludes package installation. No test or input directory is
+removed from the collection scope.
+
+`compare_sonar_coverage.py` compares normalized source/line identities and
+covered flags, including uncovered lines. It writes complete differences to
+JSON and timings to the workflow summary. The comparison establishes line
+coverage only, matching the existing `--sonarqube-metric line`; function, branch
+and exclusion semantics can differ between collectors. Differences are
+diagnostic during this trial. Invalid reports or collector failures mark the
+experiment incomplete, while Sonar still consumes `coverage.xml` from gcovr.
+
+The seven-day workflow artifact contains both XML reports, fastcov JSON,
+comparison JSON and tool versions. A collector change requires reviewing both
+the timings and line differences.
