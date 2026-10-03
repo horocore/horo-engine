@@ -20,10 +20,11 @@ the unified project version and retains unknown project-owned component bytes.
 ## Platform evidence
 
 The [CI workflow](https://github.com/horocore/horo-engine/actions/workflows/ci.yml)
-tests the latest PR head on Linux/GCC and macOS/Clang. The separate
-[Prefab Foundation Windows workflow](https://github.com/horocore/horo-engine/actions/workflows/prefab-foundation-windows.yml)
-preserves the format/tooling prerequisite and builds and runs the prefab and Asset
-Registry suites on Windows/MSVC. Check the PR's current-head checks before marking any
+tests the latest PR head on Linux/GCC and macOS/Clang. Its
+`Headless Contracts · Windows / MSVC` job shares one configure/build across CLI,
+VFX, cinematic and prefab targets after the format/tooling prerequisite. The
+`Test Prefab Foundation contracts` step runs the prefab and Asset Registry suites
+on Windows/MSVC and retains its own JUnit report. Check the PR's current-head checks before marking any
 platform qualified; this document intentionally contains no frozen `Pending` or
 unverified `passed` status. The project-migration integration suite runs in the
 Linux/macOS full-test matrix, not in the focused Windows job.

@@ -59,3 +59,20 @@ experiment incomplete, while Sonar still consumes `coverage.xml` from gcovr.
 The seven-day workflow artifact contains both XML reports, fastcov JSON,
 comparison JSON and tool versions. A collector change requires reviewing both
 the timings and line differences.
+
+## CI runner grouping and closed PR cleanup
+
+`.github/workflows/ci.yml` shares one format prerequisite, runs both audio build
+modes on each platform runner, and groups compatible Windows headless contracts.
+Both audio modes and all four Windows test groups must pass their aggregate gate.
+Separate JUnit files preserve per-suite evidence even if another suite fails.
+This reduces the CI plus former Prefab workflow from 16 to 9 runner jobs without
+removing targets or test filters. Hosted timings remain the acceptance evidence.
+
+`cancel-closed-pr.yml` runs on `pull_request_target: closed` from the trusted base
+branch, checking out only `github.sha` from that trusted base branch. It requests cancellation of active
+`pull_request` runs linked to that PR, with exact repository/branch/SHA matching
+as a fallback for missing API links. Completed runs and main push runs are
+preserved. It handles both merge and manual closure, even after branch deletion.
+The helper becomes active after landing on the base branch and may itself queue
+while runner capacity is exhausted; it does not instantly release slots at merge.
