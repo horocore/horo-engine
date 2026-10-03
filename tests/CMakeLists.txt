@@ -564,8 +564,10 @@ horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
 
 add_executable(HoroAITests
         support/AllocationProbe.cpp
+        unit/runtime/ai/AICanonicalStateTests.cpp
         unit/runtime/ai/AIIdentityTests.cpp
         unit/runtime/ai/AISceneActivationTests.cpp
+        unit/runtime/ai/AISceneRestoreTests.cpp
         unit/runtime/ai/AISceneComponentsTests.cpp
         unit/runtime/ai/AITaskLifecycleTests.cpp
         unit/runtime/ai/BehaviorTreeTests.cpp
