@@ -621,6 +621,31 @@ The controller supports runtime size changes:
   step behavior, the gameplay system must use a separate controller descriptor or
   override the movement request accordingly
 
+The instantaneous runtime contract uses `CharacterMovementRequest::shapeChange`
+for an explicit radius/cylindrical-half-height replacement, or `Stand`/`Crouch`
+against the immutable descriptor's standing capsule and optional `crouchedCapsule`.
+The crouch profile keeps the standing radius and reduces cylindrical height.
+Explicit geometry requires `Keep` stance; a conflicting named stance, missing
+crouch profile, malformed dimensions or out-of-envelope capsule publishes `Invalid`.
+This replaces the former accepted-but-unused stance intent; callers that request
+crouch must provide the descriptor profile and current overlap adapter.
+
+The collision root is the capsule center and stays fixed during instantaneous
+resize. Every different candidate geometry, including shrink, uses one exact-tick
+overlap probe without depenetration. An overlap publishes `Blocked` and keeps the
+prior geometry/stance; a clear candidate publishes `Applied`. Query errors retain
+their original typed cause and fail the attempted tick. Identity, authored descriptor,
+step policy and heading are preserved. The effective capsule and stance live in the
+owned locomotion snapshot; later movement and teleport queries use that capsule.
+Shape results cannot be supplied by an adapter. All controller candidates preflight
+before any geometry or transform is committed. Failed ticks publish no candidate.
+Without a movement sweep, applied resize detaches support and requires grounding
+revalidation; the sweep path resolves support against the new geometry immediately.
+Shape clearance and movement/ground sweeps share the immutable per-tick query
+budget; exhausting it aborts the attempt before another adapter call.
+Queue capacity, replacement, generation and shutdown rules are the movement rules.
+No transition is retried implicitly on a later tick.
+
 Size changes are fixed-tick commands. A gradual transition advances once per
 committed tick under a typed profile; presentation delta never changes collision
 height. Every intermediate capsule requires clearance or the command reports its

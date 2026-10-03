@@ -58,7 +58,8 @@ namespace Horo::Character {
             return Result<CharacterControllerHandle>::Failure(
                 MakeError(CharacterErrors::CapacityExceeded, "Controller contact capacity exceeds the Character world work budget."));
         const auto registryLock = impl_->synchronization.LockRegistry();
-        auto acquired = impl_->controllers.Acquire(Detail::CharacterControllerRecord{descriptor});
+        auto acquired =
+            impl_->controllers.Acquire(Detail::CharacterControllerRecord{.descriptor = descriptor, .capsule = descriptor.capsule});
         if (acquired.HasValue()) {
             const CharacterControllerHandle handle = acquired.Value();
             impl_->controllerGenerations[handle.slot.index] = handle.slot.generation;
