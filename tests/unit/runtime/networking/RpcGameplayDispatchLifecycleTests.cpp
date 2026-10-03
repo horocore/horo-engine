@@ -236,6 +236,23 @@ namespace Horo::Network {
         REQUIRE(leaseWeak.expired());
     }
 
+    TEST_CASE("RPC rejected registration retires its final handler before its code lease", "[unit][network][rpc]") {
+        bool handlerDestroyedWithLease = false;
+        Fixture fixture(false, RpcTarget::Authority, true, true);
+        fixture.dispatch->RevokeHandler(fixture.rpc);
+        const std::weak_ptr<const void> leaseWeak = fixture.moduleLease;
+        const std::weak_ptr<Handler> handlerWeak = fixture.handler;
+        fixture.handler->duringDestruction = [&handlerDestroyedWithLease, leaseWeak] {
+            handlerDestroyedWithLease = !leaseWeak.expired();
+        };
+        TestSupport::RequireError(fixture.dispatch->RegisterHandler(RpcId{}, std::move(fixture.handler), {},
+                                                                    std::move(fixture.moduleLease)),
+                                  NetworkErrors::RpcDescriptorInvalid);
+        REQUIRE(handlerDestroyedWithLease);
+        REQUIRE(handlerWeak.expired());
+        REQUIRE(leaseWeak.expired());
+    }
+
     TEST_CASE("RPC vector binding retirement retains each module through its serializer destructor", "[unit][network][rpc]") {
         bool firstDestroyedWithLease = false;
         bool secondDestroyedWithLease = false;

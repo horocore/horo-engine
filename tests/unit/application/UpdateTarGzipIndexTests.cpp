@@ -1,4 +1,6 @@
 #include "Horo/Release/UpdateStageReady.h"
+#include "Horo/Release/UpdateTarGzipStagingJob.h"
+#include "Horo/Release/UpdateTransferCheckpointStore.h"
 #if defined(__linux__)
 #include "Horo/Release/LinuxPortableBootstrapHost.h"
 #include "Horo/Release/UpdateRollback.h"
@@ -297,6 +299,32 @@ TEST_CASE("Signed Linux tar gzip stages its authenticated inventory and publishe
                                 UpdateFileRole::Entrypoint};
     CHECK(
         VerifyReadyUpdateStage(package.record, package.checkpoint, package.file, stage, std::span{&file, 1U}, Limits, verifier).HasValue());
+}
+
+TEST_CASE("Signed Linux tar gzip stages from a complete durable HTTPS checkpoint", "[release][update][tar]") {
+    TemporaryPackage temporary;
+    auto package = Sign(temporary, Gzip(InventoryTar()));
+    Horo::NativeDurableFileSystem files;
+    const UpdateDownloadPaths paths{package.file, temporary.path / "editor.checkpoint"};
+    REQUIRE(SaveUpdateTransferCheckpoint(files, paths.partialFile, paths.checkpointFile, package.checkpoint).HasValue());
+    const auto stage = temporary.path / "editor-stage";
+    auto verifier = Verifier();
+    auto published =
+        PrepareTarGzipUpdateStageHttps({package.record, paths, stage, {.maximumPackageBytes = 4096U, .reserveBytes = 0U}, Limits}, files,
+                                       verifier, {});
+    REQUIRE(published.HasValue());
+    CHECK(std::filesystem::is_regular_file(published.Value()));
+    CHECK(std::filesystem::is_regular_file(stage / "bin/editor"));
+}
+
+TEST_CASE("Signed Linux tar gzip refuses overlapping private download paths before network access", "[release][update][tar]") {
+    TemporaryPackage temporary;
+    auto package = Sign(temporary, Gzip(InventoryTar()));
+    Horo::NativeDurableFileSystem files;
+    const UpdateDownloadPaths paths{package.file, package.file};
+    auto verifier = Verifier();
+    CHECK(PrepareTarGzipUpdateStageHttps({package.record, paths, temporary.path / "editor-stage", {}, Limits}, files, verifier, {})
+              .HasError());
 }
 
 TEST_CASE("Signed Linux tar gzip rejects an inventory content mismatch without publishing ready", "[release][update][tar]") {

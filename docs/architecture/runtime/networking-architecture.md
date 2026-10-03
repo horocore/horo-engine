@@ -708,7 +708,13 @@ plus at most 64 typed-value slots per command. The fixed-step Gameplay drain rep
 while retaining world, handler and module leases through the callback. Host composition
 must supply an exact module-generation lease with every executable binding. Binding
 compaction retires serializers before releasing their original code lease, and
-serializer callbacks are pinned and revalidated after return. The factory-only
+serializer callbacks are pinned and revalidated after return. The registration
+call takes its handler pin by value and moves both that pin and the
+module lease into ordered local owners before validation. This prevents implicit
+derived-to-interface smart-pointer temporaries or parameter teardown from retiring
+code before a handler destructor. Existing call expressions remain source-compatible;
+consumers of this new RPC API must rebuild for the updated function signature.
+The factory-only
 construction path uses private admission keys with standard smart-pointer
 factories; consumers cannot bypass descriptor/capacity validation. Standard allocation
 and callback exceptions become typed terminal failures. A final catch-all is required

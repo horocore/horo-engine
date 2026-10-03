@@ -7,6 +7,19 @@ namespace Horo::Extensions {
     using namespace Detail;
     using namespace ExtensionErrors;
 
+    /** @copydoc ScriptInvocationDiagnosticContext::CaptureOperationContext */
+    Telemetry::OperationContext ScriptInvocationDiagnosticContext::CaptureOperationContext() const {
+        return {.operationId = operationId,
+                .diagnosticContext = Log::LogContextSnapshot{{
+                    {"package.id", packageId},
+                    {"module.id", moduleId},
+                    {"script.id", scriptId},
+                    {"script.api_id", apiId},
+                    {"policy.revision", std::to_string(policyRevision)},
+                    {"operation.id", std::to_string(operationId)},
+                }}};
+    }
+
     /** @copydoc ScriptInvocationProgress::Fraction */
     double ScriptInvocationProgress::Fraction() const noexcept {
         if (totalUnits == 0)
@@ -18,6 +31,32 @@ namespace Horo::Extensions {
     bool ScriptInvocationSnapshot::IsTerminal() const noexcept {
         using enum ScriptInvocationStateKind;
         return state == Completed || state == Failed || state == Cancelled;
+    }
+
+    ScriptInvocationProviderLease::ScriptInvocationProviderLease(std::shared_ptr<ScriptInvocationProviderState> provider) noexcept
+        : provider_(std::move(provider)) {}
+
+    /** @copydoc ScriptInvocationProviderLease::IsUsable */
+    bool ScriptInvocationProviderLease::IsUsable() const noexcept {
+        if (!provider_)
+            return false;
+        std::lock_guard lock(provider_->Mutex());
+        return provider_->active;
+    }
+
+    /** @copydoc ScriptInvocationProviderLease::Generation */
+    std::uint64_t ScriptInvocationProviderLease::Generation() const noexcept {
+        return provider_ ? provider_->generation : 0;
+    }
+
+    /** @copydoc ScriptInvocationProviderLease::Matches */
+    bool ScriptInvocationProviderLease::Matches(const ScriptInvocationProviderRegistration &provider) const noexcept {
+        return provider_ && provider_.get() == provider.provider_.get();
+    }
+
+    /** @copydoc ScriptInvocationProviderRegistration::Lease */
+    ScriptInvocationProviderLease ScriptInvocationProviderRegistration::Lease() const noexcept {
+        return ScriptInvocationProviderLease{provider_};
     }
 
     ScriptInvocationProviderRegistration::ScriptInvocationProviderRegistration(

@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Utf8.h"
 #include "Horo/Runtime/Ui/UiBinding.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
 #include "UiBindingInternal.h"
@@ -295,6 +296,18 @@ namespace Horo::Runtime::Ui {
             return ValidateBindingFallback(descriptor, *targetType);
         }
     }  // namespace
+
+    /** @copydoc BindingInternal::ValidateValue */
+    Result<void> BindingInternal::ValidateValue(const UiBindingValue &value, const UiBindingValueType type,
+                                                const UiBindingValueLimits &limits) {
+        if (const auto valid = ValidateFallback(value, type, limits); valid.HasError())
+            return Failure(UiErrors::BindingValueInvalid);
+        if (const auto *text = std::get_if<std::string>(&value); text && !IsValidUtf8ScalarSequence(*text))
+            return Failure(UiErrors::BindingValueInvalid);
+        if (const auto *message = std::get_if<UiBindingLocalizedMessage>(&value); message && !IsValidUtf8ScalarSequence(message->key))
+            return Failure(UiErrors::BindingValueInvalid);
+        return Result<void>::Success();
+    }
 
     /** @copydoc ValidateUiBindingProviderDescriptor */
     Result<void> ValidateUiBindingProviderDescriptor(const UiBindingProviderDescriptor &descriptor,

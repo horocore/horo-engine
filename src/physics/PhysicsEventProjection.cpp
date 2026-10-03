@@ -136,6 +136,18 @@ namespace Horo::Physics::Detail {
         }
     }
 
+    /** @copydoc PhysicsEventProjection::AppendEnter */
+    void PhysicsEventProjection::AppendEnter(const PairState &pair) noexcept {
+        using enum PhysicsEventKind;
+        Append(pair.sensor ? TriggerEnter : ContactBegin, pair);
+    }
+
+    /** @copydoc PhysicsEventProjection::AppendExit */
+    void PhysicsEventProjection::AppendExit(const PairState &pair) noexcept {
+        using enum PhysicsEventKind;
+        Append(pair.sensor ? TriggerExit : ContactEnd, pair);
+    }
+
     /** @copydoc PhysicsEventProjection::ReconcileLifecycle */
     void PhysicsEventProjection::ReconcileLifecycle() noexcept {
         using enum PhysicsEventKind;
@@ -144,20 +156,20 @@ namespace Horo::Physics::Detail {
         while (previousIndex < previousPairs_.size() || currentIndex < currentPairs_.size()) {
             if (previousIndex == previousPairs_.size()) {
                 const PairState &current = currentPairs_[currentIndex];
-                Append(current.sensor ? TriggerEnter : ContactBegin, current);
+                AppendEnter(current);
                 ++currentIndex;
             } else if (currentIndex == currentPairs_.size()) {
                 const PairState &previous = previousPairs_[previousIndex];
-                Append(previous.sensor ? TriggerExit : ContactEnd, previous);
+                AppendExit(previous);
                 ++previousIndex;
             } else {
                 const PairState &previous = previousPairs_[previousIndex];
                 const PairState &current = currentPairs_[currentIndex];
                 if (previous.pair < current.pair) {
-                    Append(previous.sensor ? TriggerExit : ContactEnd, previous);
+                    AppendExit(previous);
                     ++previousIndex;
                 } else if (current.pair < previous.pair) {
-                    Append(current.sensor ? TriggerEnter : ContactBegin, current);
+                    AppendEnter(current);
                     ++currentIndex;
                 } else {
                     AppendMatchedTransition(previous, current);
@@ -217,6 +229,30 @@ namespace Horo::Physics::Detail {
         overflowedDuringTick_ = false;
     }
 
+    /** @copydoc PhysicsEventProjection::SuppressBody */
+    void PhysicsEventProjection::SuppressBody(const BodyHandle body) noexcept {
+        const auto touches = [body](const PhysicsEventPairKey &pair) {
+            return pair.first.body == body || pair.second.body == body;
+        };
+        const std::uint32_t retained = std::min(callbackWrite_.load(std::memory_order::seq_cst), maximumInFlightPairs_);
+        std::uint32_t kept{};
+        for (std::uint32_t index = 0; index < retained; ++index) {
+            if (observations_[index].first.body != body && observations_[index].second.body != body)
+                observations_[kept++] = observations_[index];
+        }
+        callbackWrite_.store(kept, std::memory_order::seq_cst);
+        std::erase_if(previousPairs_, [touches](const PairState &pair) {
+            return touches(pair.pair);
+        });
+        std::erase_if(currentPairs_, [touches](const PairState &pair) {
+            return touches(pair.pair);
+        });
+        for (auto &buffer : eventBuffers_)
+            std::erase_if(buffer, [touches](const PhysicsEventRecord &event) {
+                return touches(event.pair);
+            });
+    }
+
     /** @copydoc PhysicsEventProjection::Reset */
     void PhysicsEventProjection::Reset() noexcept {
         AbortTick();
@@ -254,11 +290,17 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc PhysicsEventProjection::ValidObservation */
     bool PhysicsEventProjection::ValidObservation(const PhysicsContactObservation &observation) noexcept {
-        return observation.simulationTick != 0 && ValidEndpoint(observation.first) && ValidEndpoint(observation.second) &&
-               observation.first != observation.second && observation.first.body.world == observation.second.body.world &&
-               observation.first.filterSchemaGeneration == observation.second.filterSchemaGeneration &&
-               ValidMaterial(observation.firstMaterial) && ValidMaterial(observation.secondMaterial) &&
-               observation.contact.pointCount > 0 && observation.contact.pointCount <= MaximumPhysicsContactPoints &&
+        const std::array valid{observation.simulationTick != 0,
+                               ValidEndpoint(observation.first),
+                               ValidEndpoint(observation.second),
+                               observation.first != observation.second,
+                               observation.first.body.world == observation.second.body.world,
+                               observation.first.filterSchemaGeneration == observation.second.filterSchemaGeneration,
+                               ValidMaterial(observation.firstMaterial),
+                               ValidMaterial(observation.secondMaterial),
+                               observation.contact.pointCount > 0,
+                               observation.contact.pointCount <= MaximumPhysicsContactPoints};
+        return std::ranges::all_of(valid, std::identity{}) &&
                std::all_of(observation.contact.points.begin(), observation.contact.points.begin() + observation.contact.pointCount,
                            [&observation](const PhysicsContactPoint &point) {
             return ValidPoint(point, observation.sensor);
@@ -307,8 +349,8 @@ namespace Horo::Physics::Detail {
                 Append(ContactPersist, current);
             return;
         }
-        Append(previous.sensor ? TriggerExit : ContactEnd, previous);
-        Append(current.sensor ? TriggerEnter : ContactBegin, current);
+        AppendExit(previous);
+        AppendEnter(current);
     }
 
     /** @copydoc PhysicsEventProjection::StagingEvents */

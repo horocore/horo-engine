@@ -470,6 +470,9 @@
     "settings.nav.packages": {
       "text": "Packages"
     },
+    "settings.nav.updates": {
+      "text": "Updates"
+    },
     "settings.nav.plugins": {
       "text": "Extensions"
     },
@@ -478,6 +481,120 @@
     },
     "settings.nav.tools": {
       "text": "Tools"
+    },
+    "settings.updates.automatic_download": {
+      "text": "Download automatically"
+    },
+    "settings.updates.automatic_download.description": {
+      "text": "Prepare verified updates in the background when available."
+    },
+    "settings.updates.cancel": {
+      "text": "Cancel"
+    },
+    "settings.updates.channel": {
+      "text": "Update channel"
+    },
+    "settings.updates.channel.description": {
+      "text": "Changing channels requires a new manual check."
+    },
+    "settings.updates.channel.enterprise": {
+      "text": "Enterprise"
+    },
+    "settings.updates.channel.nightly": {
+      "text": "Nightly"
+    },
+    "settings.updates.channel.offline": {
+      "text": "Offline"
+    },
+    "settings.updates.channel.preview": {
+      "text": "Preview"
+    },
+    "settings.updates.channel.stable": {
+      "text": "Stable"
+    },
+    "settings.updates.check": {
+      "text": "Check now"
+    },
+    "settings.updates.compatibility": {
+      "text": "Compatibility impact"
+    },
+    "settings.updates.confirm.restart": {
+      "text": "Restart and install this verified update? Save your work first."
+    },
+    "settings.updates.confirm.rollback": {
+      "text": "Roll back this installation to its previous verified version?"
+    },
+    "settings.updates.confirm.channel": {
+      "text": "Switch to a less stable update channel? New builds may affect project and plugin compatibility."
+    },
+    "settings.updates.confirm.action": {
+      "text": "Confirm"
+    },
+    "settings.updates.diagnostics": {
+      "text": "Diagnostics"
+    },
+    "settings.updates.download": {
+      "text": "Download and verify"
+    },
+    "settings.updates.install_on_exit": {
+      "text": "Install on exit"
+    },
+    "settings.updates.install_on_exit.description": {
+      "text": "Install a staged update after the editor closes."
+    },
+    "settings.updates.no_offer": {
+      "text": "No update release notes are available."
+    },
+    "settings.updates.release_notes": {
+      "text": "Release notes"
+    },
+    "settings.updates.restart": {
+      "text": "Restart now"
+    },
+    "settings.updates.rollback": {
+      "text": "Roll back"
+    },
+    "settings.updates.unconfigured": {
+      "text": "Updates are unavailable: this installation has no authenticated source and supported package stager."
+    },
+    "settings.updates.phase.active": {
+      "text": "Active"
+    },
+    "settings.updates.phase.available": {
+      "text": "Available"
+    },
+    "settings.updates.phase.checking": {
+      "text": "Checking"
+    },
+    "settings.updates.phase.downloading": {
+      "text": "Downloading"
+    },
+    "settings.updates.phase.failed": {
+      "text": "Failed"
+    },
+    "settings.updates.phase.idle": {
+      "text": "Not checked"
+    },
+    "settings.updates.phase.restart_required": {
+      "text": "Restart required"
+    },
+    "settings.updates.phase.rolled_back": {
+      "text": "Rolled back"
+    },
+    "settings.updates.phase.staged": {
+      "text": "Staged"
+    },
+    "settings.updates.phase.up_to_date": {
+      "text": "Up to date"
+    },
+    "settings.updates.phase.verifying": {
+      "text": "Verifying"
+    },
+    "settings.updates.phase.activating": {
+      "text": "Restart handoff requested"
+    },
+    "settings.updates.phase.rollback_pending": {
+      "text": "Rollback handoff requested"
     },
     "settings.network.max_preview_clients": {
       "text": "Max Preview Clients"

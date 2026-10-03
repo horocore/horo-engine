@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Runtime/Ui/UiActions.h"
+#include "Horo/Runtime/Ui/UiAsyncActions.h"
 
 #include <compare>
 #include <cstdint>
@@ -29,6 +30,7 @@ namespace Horo::Runtime::Ui {
     enum class UiControlAvailability : std::uint8_t {
         Enabled,
         Disabled,
+        Busy,
         Count,
     };
 
@@ -315,7 +317,14 @@ namespace Horo::Runtime::Ui {
          * @return Transition and state projection, or typed stale, disabled, ordering, capacity or lifecycle failure.
          * @post A successful DefaultPending result must be resolved by ApplyDefault or SuppressDefault before another input.
          */
-        [[nodiscard]] Result<UiControlEventResult> Handle(UiControlInput input);
+        [[nodiscard]] Result<UiControlEventResult> Handle(const UiControlInput &input);
+
+        /**
+         * @brief Copies the staged default action without changing the control value or pending decision.
+         * @return Empty when no action is staged, otherwise the exact action ApplyDefault would emit; no allocation occurs.
+         * @note The owner may admit a binding write before applying the UI-local default, or suppress a refused write.
+         */
+        [[nodiscard]] Result<std::optional<UiControlDefaultAction>> PeekDefault() const;
 
         /**
          * @brief Applies the one staged default action in deterministic owner order.
@@ -330,11 +339,31 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> SuppressDefault();
 
         /**
+         * @brief Reconciles a value control to authoritative provider state at an owner safe point.
+         * @param value Boolean for Toggle, finite in-range double for Slider, or bounded valid UTF-8 text for TextInput.
+         * @return Success or typed lifecycle/value failure; rejected values leave all control state unchanged.
+         * @post Availability and focus are preserved; press, repeat, pending default and editing state are cleared.
+         * @note The caller fences provider outcome ownership before calling; this operation performs no allocation.
+         */
+        [[nodiscard]] Result<void> ReconcileValue(const UiActionValue &value);
+
+        /**
          * @brief Changes availability at an owner safe point and cancels transient interaction state when disabling.
-         * @param availability New explicit availability.
+         * @param availability Enabled or Disabled; Busy is derived exclusively from the action owner projection.
          * @return Success or typed lifecycle/state failure.
          */
         [[nodiscard]] Result<void> SetAvailability(UiControlAvailability availability);
+
+        /**
+         * @brief Copies the current action owner's projection and derives effective busy availability.
+         * @param actions Router-owned operation store for this exact source generation.
+         * @return Success or typed stale/lifecycle failure. Pending work clears transient activation;
+         * terminal state restores the separately configured availability. No callback or operation is owned by the control.
+         */
+        [[nodiscard]] Result<void> ObserveAsyncActions(const UiAsyncActionStore &actions);
+        /** @brief Copies retained progress/terminal/error presentation state. @return Optional immutable projection or lifecycle failure.
+         */
+        [[nodiscard]] Result<std::optional<UiAsyncActionSnapshot>> AsyncAction() const;
 
         /** @brief Closes input/default admission and releases transient focus/press state. @return Success or lifecycle failure. */
         [[nodiscard]] Result<void> BeginRetirement();
