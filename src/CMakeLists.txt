@@ -907,6 +907,17 @@ add_library(HoroEngine::AudioCommands ALIAS HoroAudioCommands)
 target_compile_features(HoroAudioCommands PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioCommands PUBLIC HoroEngine::AudioMemory PRIVATE HoroAudioSafetyHooks)
 
+add_library(HoroAudioMixer STATIC
+        audio/mixer/MixerGraphCompiler.cpp
+        audio/mixer/MixerCycleEvidence.cpp
+        audio/mixer/MixerGraphRuntime.cpp
+        audio/mixer/MixerRenderPlan.cpp
+        audio/mixer/MixerPlanState.h
+)
+add_library(HoroEngine::AudioMixer ALIAS HoroAudioMixer)
+target_compile_features(HoroAudioMixer PUBLIC cxx_std_20)
+target_link_libraries(HoroAudioMixer PUBLIC HoroEngine::AudioDsp HoroEngine::AudioCommands)
+
 add_library(HoroAudioMetrics STATIC
         audio/metrics/AudioMetricExtraction.cpp
         audio/metrics/AudioMetrics.cpp
