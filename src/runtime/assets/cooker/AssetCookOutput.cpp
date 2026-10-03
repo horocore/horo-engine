@@ -10,6 +10,7 @@
 #include <format>
 #include <limits>
 #include <optional>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Assets::CookStorageDetail {
@@ -159,6 +160,20 @@ namespace Horo::Assets::CookStorageDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Contains foreign filesystem exceptions without allocating after a possible native commit. */
+        Result<void> InvokeReplacement(DurableFileSystem &files, const std::filesystem::path &prepared,
+                                       const std::filesystem::path &destination, AtomicFileReplacementReceipt *receipt,
+                                       Result<void> exceptionFailure) noexcept {
+            static_assert(std::is_nothrow_move_constructible_v<Result<void>>);
+            try {
+                return receipt == nullptr ? files.AtomicReplace(prepared, destination)
+                                          : files.AtomicReplaceTracked(prepared, destination, *receipt);
+            } catch (...) {
+                // The caller retains the receipt; even a foreign exception cannot erase a committed replacement.
+                return exceptionFailure;
+            }
+        }
+
         /** @brief Gives the native receipt precedence over an adapter error or exception after replacement. */
         Result<void> ResolveReplacementOutcome(Result<void> replaced, const AtomicFileReplacementReceipt &receipt,
                                                std::optional<Error> *postCommitError) {
@@ -180,14 +195,10 @@ namespace Horo::Assets::CookStorageDetail {
     Result<void> ReplaceDurably(DurableFileSystem *files, const std::filesystem::path &prepared, const std::filesystem::path &destination,
                                 std::optional<Error> *postCommitError) {
         AtomicFileReplacementReceipt receipt;
-        auto replaced = Result<void>::Failure(MakeError(CookErrors::MalformedArtifact, "Filesystem replacement raised an exception."));
-        try {
-            replaced = postCommitError == nullptr ? files->AtomicReplace(prepared, destination)
-                                                  : files->AtomicReplaceTracked(prepared, destination, receipt);
-        } catch (...) {
-            // External filesystem adapters cannot erase the true commit point by throwing after replacement.
-            return ResolveReplacementOutcome(std::move(replaced), receipt, postCommitError);
-        }
+        // Construct the fallback before entering the adapter: no error allocation follows an irreversible rename.
+        auto failure = Result<void>::Failure(MakeError(CookErrors::MalformedArtifact, "Filesystem replacement raised an exception."));
+        auto replaced =
+            InvokeReplacement(*files, prepared, destination, postCommitError == nullptr ? nullptr : &receipt, std::move(failure));
         return ResolveReplacementOutcome(std::move(replaced), receipt, postCommitError);
     }
 

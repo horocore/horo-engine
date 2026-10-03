@@ -13,6 +13,7 @@
 #include <iterator>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -52,6 +53,11 @@ namespace Horo::Assets::OutputTestSupport {
         PointerRename,
         PointerSync,
         PointerException,
+        PointerStandardException,
+        PointerBeforeException,
+        PointerBeforeStandardException,
+        GenerationException,
+        GenerationStandardException,
         BaselineSync
     };
 
@@ -73,13 +79,15 @@ namespace Horo::Assets::OutputTestSupport {
 
         Result<void> AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) override {
             const bool pointer = destination.filename() == "current.json";
+            if (!pointer && (fault == PublicationFault::GenerationException || fault == PublicationFault::GenerationStandardException))
+                ThrowFault(fault == PublicationFault::GenerationStandardException);
             if ((pointer && fault == PublicationFault::PointerRename) || (!pointer && fault == PublicationFault::GenerationRename))
                 return Failure();
             auto result = native.AtomicReplace(prepared, destination);
             if (result.HasError())
                 return result;
-            if (pointer && fault == PublicationFault::PointerException)
-                throw 42;
+            if (pointer && (fault == PublicationFault::PointerException || fault == PublicationFault::PointerStandardException))
+                ThrowFault(fault == PublicationFault::PointerStandardException);
             if (pointer && fault == PublicationFault::PointerSync)
                 return Failure();
             return result;
@@ -88,6 +96,9 @@ namespace Horo::Assets::OutputTestSupport {
         Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
                                           AtomicFileReplacementReceipt &receipt) override {
             const bool baseline = prepared.filename() == "unpublished.current.json";
+            if (!baseline &&
+                (fault == PublicationFault::PointerBeforeException || fault == PublicationFault::PointerBeforeStandardException))
+                ThrowFault(fault == PublicationFault::PointerBeforeStandardException);
             if (!baseline && fault == PublicationFault::PointerRename)
                 return Failure();
             auto result = native.AtomicReplaceTracked(prepared, destination, receipt);
@@ -95,8 +106,8 @@ namespace Horo::Assets::OutputTestSupport {
                 return result;
             if (baseline)
                 return fault == PublicationFault::BaselineSync ? Failure() : std::move(result);
-            if (fault == PublicationFault::PointerException)
-                throw 42;
+            if (fault == PublicationFault::PointerException || fault == PublicationFault::PointerStandardException)
+                ThrowFault(fault == PublicationFault::PointerStandardException);
             return fault == PublicationFault::PointerSync ? Failure() : std::move(result);
         }
 
@@ -105,6 +116,14 @@ namespace Horo::Assets::OutputTestSupport {
                 (fault == PublicationFault::RootFlush && path == root))
                 return Failure();
             return native.SyncDirectory(path);
+        }
+
+    private:
+        /** @brief Exercises both standard-library and foreign exception values at the adapter boundary. */
+        [[noreturn]] static void ThrowFault(const bool standard) {
+            if (standard)
+                throw std::runtime_error{"Injected publication adapter exception."};
+            throw 42;
         }
     };
 

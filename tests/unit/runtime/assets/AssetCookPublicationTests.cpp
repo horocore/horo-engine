@@ -42,7 +42,8 @@ TEST_CASE("Filesystem failure before pointer commit preserves the prior generati
 }
 
 TEST_CASE("Pointer durability failure and adapter exception retain true committed adoption", "[native]") {
-    for (const auto fault : {PublicationFault::PointerSync, PublicationFault::PointerException}) {
+    for (const auto fault :
+         {PublicationFault::PointerSync, PublicationFault::PointerException, PublicationFault::PointerStandardException}) {
         TempDir tmp;
         const auto id = Id("00000000-0000-0000-0000-000000000001");
         const auto bytes = MakePayload(id, 8);
@@ -60,6 +61,35 @@ TEST_CASE("Pointer durability failure and adapter exception retain true committe
         CHECK(result.Value().durabilityError.has_value());
         CHECK(adopted);
         CHECK(ResolveCurrentCookGeneration(tmp.path).Value().manifestDigest == result.Value().manifestDigest);
+    }
+}
+
+TEST_CASE("Standard and foreign filesystem exceptions before commit preserve the previous selector", "[native]") {
+    for (const auto fault : {PublicationFault::GenerationException, PublicationFault::GenerationStandardException,
+                             PublicationFault::PointerBeforeException, PublicationFault::PointerBeforeStandardException}) {
+        TempDir tmp;
+        const auto id = Id("00000000-0000-0000-0000-000000000001");
+        const auto oldBytes = MakePayload(id, 8, 1);
+        const auto newBytes = MakePayload(id, 8, 2);
+        PublicationFiles files;
+        files.root = tmp.path;
+        REQUIRE(PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, oldBytes), oldBytes, 4096U, {},
+                                               Policy(files, "10000000-0000-0000-0000-000000000001"))
+                    .HasValue());
+        const auto pointer = ReadText(tmp.path / "current.json");
+        files.fault = fault;
+        bool adopted{};
+        auto policy = Policy(files, "10000000-0000-0000-0000-000000000002");
+        policy.afterCommit = [&adopted](const AssetCookGeneration &) {
+            adopted = true;
+        };
+        const auto result =
+            PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, newBytes), newBytes, 4096U, {}, policy);
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == "asset.cook.malformed_artifact");
+        CHECK_FALSE(adopted);
+        CHECK(ReadText(tmp.path / "current.json") == pointer);
+        CHECK(ResolveCurrentCookGeneration(tmp.path).HasValue());
     }
 }
 

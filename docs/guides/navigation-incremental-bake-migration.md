@@ -139,6 +139,31 @@ application dependency. Public-header consumer coverage includes the new header
 and changed NavigationRuntime/Assets contracts. GUI/CLI/MCP command registration
 remains NAV-003.10, not an alternate publication implementation.
 
+Integration with bake diagnostics keeps both the publication receipt and the
+checkpoint observer on each job descriptor. Hosts may supply the project-owned
+diagnostics consumer alongside the required source authority and entropy callback;
+successful pointer replacement remains successful even when cancellation races
+with diagnostic delivery. Diagnostic and canonical runtime-load test hosts now
+initialize the same authoritative evidence as production publishers. The staged
+NavigationBakeService consumer checks both public headers and the const source
+authority capability: `UpdateCurrent` changes its shared evidence under the guard,
+without replacing the capability itself. No runtime or provider target gains an
+application dependency.
+
+Native exclusive lock acquisition now rejects traversal, trailing separators and
+embedded NULs before directory creation. Valid hosts already pass the canonical
+absolute `.cook-writer.lock` path; native acquisition uses its revalidated canonical
+parent. The host continues to authorize the root and prevent external ancestor
+replacement while the lease exists. Platform regression coverage checks malformed
+text and linked lock files without changing the tracked replacement contract.
+
+Native durable-filesystem and configuration-store test hosts canonicalize their
+temporary roots before acquiring a writer lease, matching publication hosts on
+Windows and macOS as well as Linux. Filesystem replacement adapters run inside a
+private non-throwing boundary with a preconstructed failure value; both standard
+and foreign exceptions remain contained before or after native commit, and the
+caller-owned receipt still determines rollback versus committed adoption.
+
 Cook inventory readers and publishers may tighten the compiled `AssetCookLimits`
 artifact/count ceilings, and enforce a 1 GiB aggregate generation ceiling.
 Release archives intersect their own limits with those cook ceilings when reading

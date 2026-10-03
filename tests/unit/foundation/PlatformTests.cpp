@@ -301,10 +301,11 @@ namespace {
     }
 
     TEST_CASE("Native Durable Filesystem Serializes Locks And Replaces Files", "[unit][foundation]") {
-        const auto root = std::filesystem::temp_directory_path() / "horo-platform-durable-test";
+        const auto temporary = std::filesystem::temp_directory_path() / "horo-platform-durable-test";
         std::error_code ignored;
-        std::filesystem::remove_all(root, ignored);
-        std::filesystem::create_directories(root);
+        std::filesystem::remove_all(temporary, ignored);
+        std::filesystem::create_directories(temporary);
+        const auto root = std::filesystem::canonical(temporary);
         Horo::NativeDurableFileSystem files;
         {
             auto first = files.TryAcquireExclusive(root / "mutation.lock", "first");
@@ -453,8 +454,9 @@ namespace {
 
     TEST_CASE("Configuration File Store Publishes Deterministic Versioned Documents", "[unit][foundation][configuration]") {
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        const std::filesystem::path root = std::filesystem::temp_directory_path() / ("horo-configuration-store-" + std::to_string(stamp));
-        std::filesystem::create_directories(root);
+        const auto temporary = std::filesystem::temp_directory_path() / ("horo-configuration-store-" + std::to_string(stamp));
+        std::filesystem::create_directories(temporary);
+        const auto root = std::filesystem::canonical(temporary);
         Horo::NativeDurableFileSystem files;
         Horo::ConfigurationFileStore store{files};
         const Horo::ConfigurationSnapshot snapshot = BuildConfigurationSnapshot();
