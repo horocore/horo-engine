@@ -1,111 +1,11 @@
-#include "AiTestSupport.h"
-#include "Horo/AI/AIErrors.h"
-#include "Horo/AI/AISceneActivation.h"
-
-#include <array>
-#include <catch2/catch_test_macros.hpp>
-#include <cstdint>
-#include <limits>
-#include <memory>
-#include <optional>
-#include <utility>
+#include "AiSceneTestSupport.h"
 
 namespace Horo::AI {
     namespace {
         using TestSupport::ExpectError;
+        using TestSupport::MakeFixture;
         using TestSupport::MakeIdentity;
-
-        [[nodiscard]] SourceLocation At(const std::uint32_t line) {
-            return SourceLocation{"assets/ai/scene_lifecycle.horo", line, 1};
-        }
-
-        [[nodiscard]] std::shared_ptr<const BlackboardSchema> MakeSchema(const std::uint64_t identity) {
-            const BlackboardKeyDescriptor key{.key = MakeIdentity<BlackboardKeyId>(identity + 1),
-                                              .kind = BlackboardValueKind::Boolean,
-                                              .cardinality = BlackboardValueCardinality::Scalar,
-                                              .maximumCollectionElements = 1,
-                                              .presence = BlackboardKeyPresence::Required,
-                                              .access = BlackboardKeyAccess::ReadWrite,
-                                              .defaultValue = BlackboardValue{BlackboardScalarValue{false}}};
-            auto captured = BlackboardSchema::Capture({.identity = MakeIdentity<BlackboardSchemaId>(identity),
-                                                       .version = 1,
-                                                       .unknownValuePolicy = BlackboardUnknownValuePolicy::Reject,
-                                                       .keys = std::array{key}});
-            REQUIRE(captured.HasValue());
-            return std::make_shared<const BlackboardSchema>(std::move(captured).Value());
-        }
-
-        [[nodiscard]] std::shared_ptr<const DecisionAssetPlan> MakePlan(const std::shared_ptr<const BlackboardSchema> &schema,
-                                                                        const std::uint64_t assetIdentity) {
-            const DecisionNodeDescriptor nodeDescriptor{.type = MakeIdentity<DecisionNodeTypeId>(assetIdentity + 1),
-                                                        .origin = {DecisionDescriptorSourceKind::Native,
-                                                                   MakeIdentity<DecisionProviderId>(assetIdentity + 2), 1},
-                                                        .requirements = {},
-                                                        .source = At(3)};
-            const DecisionAssetDescriptor asset{.asset = MakeIdentity<DecisionGraphAssetId>(assetIdentity),
-                                                .kind = DecisionPlanKind::BehaviorTree,
-                                                .schemaVersion = CurrentDecisionAssetSchemaVersion,
-                                                .blackboardSchema = schema->Identity(),
-                                                .requiredBlackboardSchemaVersion = {1, std::numeric_limits<std::uint32_t>::max()},
-                                                .nodes = {{.id = MakeIdentity<DecisionNodeId>(assetIdentity + 3),
-                                                           .type = nodeDescriptor.type,
-                                                           .descriptorVersion = {1, 1},
-                                                           .requirements = {},
-                                                           .source = At(5)}},
-                                                .subtrees = {},
-                                                .source = At(1)};
-            const auto compiled = DecisionAssetCompiler::Compile(asset, {}, std::array{nodeDescriptor}, std::array{schema});
-            REQUIRE(compiled.HasValue());
-            REQUIRE(compiled.Value().IsValid());
-            return compiled.Value().plan;
-        }
-
-        struct ActivationFixture final {
-            std::shared_ptr<const BlackboardSchema> schema;
-            std::shared_ptr<const DecisionAssetPlan> plan;
-            AiControllerDescriptor descriptor;
-            AiSceneActivationBinding binding;
-            Runtime::EntityRef owner;
-            AiSceneAgentDescriptor agent;
-        };
-
-        [[nodiscard]] ActivationFixture MakeFixture(const std::uint64_t agentIdentity, const std::uint64_t controllerIdentity,
-                                                    const std::uint64_t sceneIdentity, const std::uint32_t entityIndex) {
-            auto schema = MakeSchema(sceneIdentity * 10);
-            auto plan = MakePlan(schema, sceneIdentity * 10 + 1);
-            AiControllerDescriptor descriptor{.controller = MakeIdentity<ControllerTypeId>(controllerIdentity),
-                                              .decisionAsset = plan->Asset(),
-                                              .decisionKind = plan->Kind(),
-                                              .blackboardSchema = schema,
-                                              .decisionPlan = plan};
-            const AiSceneActivationBinding binding{.incarnation = AiRuntimeIncarnation::Create(sceneIdentity).Value(),
-                                                   .scene = Runtime::SceneRuntimeId{sceneIdentity}};
-            const Runtime::EntityRef owner{.runtime = binding.scene, .entity = Runtime::EntityId{.index = entityIndex, .generation = 1}};
-            const AiAgentComponent agent{.agent = MakeIdentity<AgentId>(agentIdentity)};
-            const AiControllerComponent controller{.controller = descriptor.controller,
-                                                   .decisionAsset = descriptor.decisionAsset,
-                                                   .blackboardSchema = schema->Identity(),
-                                                   .decisionKind = descriptor.decisionKind,
-                                                   .requiredCapabilities = AiCapabilitySet::Of(AiCapability::Behavior),
-                                                   .schemaVersion = CurrentAiSceneComponentSchemaVersion,
-                                                   .startupPolicy = AiStartupPolicy::OnSceneActivation,
-                                                   .enabled = true};
-            return {.schema = std::move(schema),
-                    .plan = std::move(plan),
-                    .descriptor = std::move(descriptor),
-                    .binding = binding,
-                    .owner = owner,
-                    .agent = {.owner = owner, .agent = agent, .controller = controller}};
-        }
-
-        [[nodiscard]] std::unique_ptr<AiSceneActivationCandidate> Publish(AiSceneRuntime &runtime, ActivationFixture &fixture) {
-            auto prepared = runtime.PrepareScene(fixture.binding, std::array{fixture.agent}, std::array{fixture.descriptor});
-            REQUIRE(prepared.HasValue());
-            auto candidate = std::move(prepared).Value();
-            REQUIRE(candidate->ValidatePublication().HasValue());
-            candidate->Publish();
-            return candidate;
-        }
+        using TestSupport::Publish;
 
         TEST_CASE("AI activation rejects a failed controller admission without publishing an agent or task",
                   "[unit][ai][scene][activation]") {
@@ -249,5 +149,6 @@ namespace Horo::AI {
             CHECK(snapshot.Value().Agents().front().owner.runtime == Runtime::SceneRuntimeId{47});
             CHECK(snapshot.Value().Agents().front().owner.entity.generation == 1);
         }
+
     }  // namespace
 }  // namespace Horo::AI

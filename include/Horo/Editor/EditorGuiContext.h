@@ -12,6 +12,7 @@ namespace Horo::Editor {
     class EditorDataBus;
     class NotificationService;
     class ILocalizationService;
+    class UpdateExperienceSession;
     struct EditorSettingsSnapshot;
 
     /** @brief Provides theme configuration and font atlas access for the GUI. */
@@ -31,5 +32,6 @@ namespace Horo::Editor {
         ILocalizationService &localization;
         const ThemeContext &theme;
         const EditorSettingsSnapshot &settings;
+        UpdateExperienceSession *updates = nullptr; /**< Borrowed host-owned update workflow, when configured. */
     };
 }  // namespace Horo::Editor

@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/Result.h"
+#include "Horo/Physics/PhysicsCompoundCook.h"
 #include "Horo/Physics/PhysicsConvexHullCook.h"
 #include "Horo/Physics/PhysicsCookedShapeDescriptor.h"
 #include "Horo/Physics/PhysicsHeightFieldCook.h"
@@ -68,6 +69,8 @@ namespace Horo::Physics {
         [[nodiscard]] const LoadedPhysicsTriangleMesh *TriangleMesh() const noexcept;
         /** @brief Returns immutable verified heightfield-tile tables, or null for another kind. */
         [[nodiscard]] const LoadedPhysicsHeightField *HeightField() const noexcept;
+        /** @brief Returns immutable verified flat convex children, or null for another kind. */
+        [[nodiscard]] const LoadedPhysicsCompound *Compound() const noexcept;
         /** @brief Tests whether two active leases pin the same immutable resource. */
         [[nodiscard]] bool SharesResourceWith(const PhysicsCookedShapeLease &other) const noexcept;
 
@@ -85,7 +88,7 @@ namespace Horo::Physics {
      * @brief Thread-safe bounded cache keyed by complete cook, payload, target and kind identity.
      *
      * Construction validates and owns canonical runtime tables but exposes no backend-native type.
-     * ConvexHull, TriangleMesh and HeightField are supported by qualified loaders. Other cooked
+     * ConvexHull, TriangleMesh, HeightField and flat convex Compound are supported by qualified loaders. Other cooked
      * kinds fail explicitly until their artifact contracts and native adapters are qualified.
      */
     class PhysicsCookedShapeCache final {  // NOSONAR(cpp:S3624) Pimpl destructor is out-of-line

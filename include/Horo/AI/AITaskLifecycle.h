@@ -37,6 +37,9 @@ namespace Horo::AI {
         ContextCancelled,
         AgentGenerationRetired,
         OwnerShutdown,
+        TimedOut,
+        Superseded,
+        PlanReplaced,
         Count,
     };
 

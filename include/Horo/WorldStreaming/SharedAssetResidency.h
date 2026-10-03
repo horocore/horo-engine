@@ -83,6 +83,13 @@ namespace Horo::WorldStreaming {
         Closed
     };
 
+    /** @brief Read-only projection of one canonical cache charge; this value owns no allocation. */
+    struct SharedAssetCharge final {
+        SharedAssetChargeId id;      /**< Exact non-reused allocation incarnation. */
+        StreamingBudgetAmounts cost; /**< Cache-reported independent resource amounts. */
+        bool retiring{};             /**< New leases are closed while the cache retires this allocation. */
+    };
+
     /**
      * @brief Streaming-authority ledger for one mounted partition and exact host owner lifetime.
      * @details Asset Pipeline/cache retains allocation ownership and reports actual retirement. This ledger only
@@ -161,6 +168,10 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] Result<std::uint64_t> Charged(StreamingBudgetDimension dimension) const;
         /** @brief Returns consumer leases not yet released. @return Retained lease count. */
         [[nodiscard]] std::size_t LeaseCount() const noexcept;
+
+        /** @brief Inspects one canonical charge without creating a lease or changing ownership.
+         * @param key Exact asset/content identity. @return Current charge, empty for absence, or typed invalid error. */
+        [[nodiscard]] Result<std::optional<SharedAssetCharge>> Inspect(const SharedAssetKey &key) const;
 
     private:
         struct Entry final {

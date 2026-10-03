@@ -85,6 +85,30 @@ namespace Horo::Physics::Detail {
         impl.commandOrderDirty = false;
     }
 
+    /** @brief Validates producer continuity without discarding quarantined ordering reservations. */
+    [[nodiscard]] Result<void> ValidateCommandSources(auto &impl, const std::uint32_t eligible) {
+        std::ranges::sort(impl.sourceOrder.begin(), impl.sourceOrder.begin() + eligible,
+                          [&impl](const std::uint32_t left, const std::uint32_t right) {
+            const PhysicsCommandOrderKey &leftKey = impl.CommandAt(left).order;
+            const PhysicsCommandOrderKey &rightKey = impl.CommandAt(right).order;
+            return std::tie(leftKey.source, leftKey.sourceSequence) < std::tie(rightKey.source, rightKey.sourceSequence);
+        });
+        for (std::uint32_t offset = 0; offset < eligible; ++offset) {
+            const PhysicsCommandOrderKey &key = impl.CommandAt(impl.sourceOrder[offset]).order;
+            const bool startsSource = offset == 0 || impl.CommandAt(impl.sourceOrder[offset - 1]).order.source != key.source;
+            if (startsSource && key.sourceSequence != 1)
+                return Result<void>::Failure(
+                    MakeError(PhysicsErrors::CommandOrderInvalid, "A Physics command source sequence has a missing predecessor."));
+            if (!startsSource) {
+                const std::uint64_t previousSequence = impl.CommandAt(impl.sourceOrder[offset - 1]).order.sourceSequence;
+                if (previousSequence == std::numeric_limits<std::uint64_t>::max() || key.sourceSequence != previousSequence + 1)
+                    return Result<void>::Failure(
+                        MakeError(PhysicsErrors::CommandOrderInvalid, "A Physics command source sequence has a missing predecessor."));
+            }
+        }
+        return Result<void>::Success();
+    }
+
     /** @brief Validates one complete tick frame after canonicalization and before observation. */
     [[nodiscard]] Result<std::uint32_t> ValidateCommandFrame(auto &impl, const PhysicsFixedTickInput &input) {
         std::uint32_t eligible{};
@@ -100,25 +124,8 @@ namespace Horo::Physics::Detail {
                     MakeError(PhysicsErrors::CommandOrderInvalid, "A Physics command targets a stale world or scene generation."));
             impl.sourceOrder[offset] = offset;
         }
-        std::ranges::sort(impl.sourceOrder.begin(), impl.sourceOrder.begin() + eligible,
-                          [&impl](const std::uint32_t left, const std::uint32_t right) {
-            const PhysicsCommandOrderKey &leftKey = impl.CommandAt(left).order;
-            const PhysicsCommandOrderKey &rightKey = impl.CommandAt(right).order;
-            return std::tie(leftKey.source, leftKey.sourceSequence) < std::tie(rightKey.source, rightKey.sourceSequence);
-        });
-        for (std::uint32_t offset = 0; offset < eligible; ++offset) {
-            const PhysicsCommandOrderKey &key = impl.CommandAt(impl.sourceOrder[offset]).order;
-            const bool startsSource = offset == 0 || impl.CommandAt(impl.sourceOrder[offset - 1]).order.source != key.source;
-            if (startsSource && key.sourceSequence != 1)
-                return Result<std::uint32_t>::Failure(
-                    MakeError(PhysicsErrors::CommandOrderInvalid, "A Physics command source sequence has a missing predecessor."));
-            if (!startsSource) {
-                const std::uint64_t previousSequence = impl.CommandAt(impl.sourceOrder[offset - 1]).order.sourceSequence;
-                if (previousSequence == std::numeric_limits<std::uint64_t>::max() || key.sourceSequence != previousSequence + 1)
-                    return Result<std::uint32_t>::Failure(
-                        MakeError(PhysicsErrors::CommandOrderInvalid, "A Physics command source sequence has a missing predecessor."));
-            }
-        }
+        if (const auto sources = ValidateCommandSources(impl, eligible); sources.HasError())
+            return Result<std::uint32_t>::Failure(sources.ErrorValue());
         return Result<std::uint32_t>::Success(eligible);
     }
 
@@ -137,6 +144,8 @@ namespace Horo::Physics::Detail {
             const PhysicsStructuralCommand &command = impl.CommandAt(offset);
             if (const bool selected = selectedKind == Destroy ? command.order.commandKind == Destroy : command.order.commandKind != Destroy;
                 !selected)
+                continue;
+            if (impl.IsRetiredCommand(command.order))
                 continue;
             if (input.observer.command)
                 input.observer.command(input.observer.context, command, safePoint, input.simulationTick);

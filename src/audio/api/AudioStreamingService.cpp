@@ -225,16 +225,16 @@ namespace Horo::Audio {
 
         /** @brief Records saturating counters on the single callback consumer and applies its underrun policy. */
         void RecordUnderrun(AudioStreamState &state, const std::uint32_t missing) noexcept {
-            const auto oldFrames = state.underrunFrames.load(std::memory_order_relaxed);
+            const auto oldFrames = state.underrunFrames.load(std::memory_order_seq_cst);
             state.underrunFrames.store(oldFrames > std::numeric_limits<std::uint64_t>::max() - missing
                                            ? std::numeric_limits<std::uint64_t>::max()
                                            : oldFrames + missing,
-                                       std::memory_order_relaxed);
-            const auto oldCallbacks = state.underrunCallbacks.load(std::memory_order_relaxed);
+                                       std::memory_order_seq_cst);
+            const auto oldCallbacks = state.underrunCallbacks.load(std::memory_order_seq_cst);
             state.underrunCallbacks.store(oldCallbacks == std::numeric_limits<std::uint64_t>::max() ? oldCallbacks : oldCallbacks + 1,
-                                          std::memory_order_relaxed);
+                                          std::memory_order_seq_cst);
             if (state.request.underrunPolicy == AudioStreamUnderrunPolicy::StopWithSilence)
-                state.stopped.store(true, std::memory_order_release);
+                state.stopped.store(true, std::memory_order_seq_cst);
         }
 
         /** @brief Checks service storage and join bounds before allocation. */
@@ -251,13 +251,13 @@ namespace Horo::Audio {
         AudioStreamRenderResult result;
         if (!ValidOutput(state_, planes, frames))
             return result;
-        const bool stopped = state_->stopped.load(std::memory_order_acquire);
-        const std::uint64_t read = state_->consumed.load(std::memory_order_relaxed);
-        const std::uint64_t publication = state_->produced.load(std::memory_order_acquire);
+        const bool stopped = state_->stopped.load(std::memory_order_seq_cst);
+        const std::uint64_t read = state_->consumed.load(std::memory_order_seq_cst);
+        const std::uint64_t publication = state_->produced.load(std::memory_order_seq_cst);
         const std::uint64_t written = publication & CursorMask;
         const auto available = stopped || written < read ? 0U : static_cast<std::uint32_t>(std::min<std::uint64_t>(frames, written - read));
         CopyOutput(*state_, planes, read, available, frames);
-        state_->consumed.store(read + available, std::memory_order_release);
+        state_->consumed.store(read + available, std::memory_order_seq_cst);
 
         const bool ended = (publication & EndMarker) != 0 && read + available == written;
         const std::uint32_t missing = frames - available;
@@ -266,7 +266,7 @@ namespace Horo::Audio {
         result.availableFrames = available;
         result.silentFrames = missing;
         result.ended = ended;
-        result.stopped = state_->stopped.load(std::memory_order_relaxed);
+        result.stopped = state_->stopped.load(std::memory_order_seq_cst);
         return result;
     }
 

@@ -96,7 +96,8 @@ namespace Horo::Runtime {
         /** @brief Adds one required cooked asset, deduplicating an identical requirement. @param dependency Stable asset
          * identity and expected type. @return Success, or a typed error for an invalid or conflicting requirement. */
         [[nodiscard]] Result<void> RequireAsset(SceneAssetDependency dependency);
-        /** @brief Validates identity, hierarchy, numeric values, primitives, and components. @return Immutable definition
+        /** @brief Validates authored values and projects enabled navigation surface AssetIds as core.navmesh requirements.
+         * @return Immutable definition
          * or the first typed validation error. */
         [[nodiscard]] Result<RuntimeSceneDefinition> Build() &&;
 
