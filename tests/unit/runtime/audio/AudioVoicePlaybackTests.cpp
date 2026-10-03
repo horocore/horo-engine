@@ -1,4 +1,5 @@
 #include "AllocationProbe.h"
+#include "AudioPlaybackTestSupport.h"
 #include "Horo/Audio/AudioCommandBuffer.h"
 #include "Horo/Audio/AudioErrors.h"
 #include "Horo/Audio/AudioVoicePlayback.h"
@@ -38,25 +39,7 @@ namespace Horo::Audio {
             return plan.Value();
         }
 
-        struct Samples final {
-            alignas(64) std::array<float, 512> pcm{};
-            alignas(64) std::array<float, 256> output{};
-            std::array<std::span<const float>, 1> inputs{pcm};
-            std::array<std::span<float>, 1> outputs{output};
-
-            Samples() {
-                pcm.fill(1.0F);
-                output.fill(-9.0F);
-            }
-
-            AudioResamplerInput Source(const std::uint32_t frames = 512) const {
-                return {inputs, frames, true};
-            }
-
-            AudioResamplerOutput Destination(const std::uint32_t frames = 16) const {
-                return {outputs, frames};
-            }
-        };
+        using Samples = PlaybackTest::SampleBuffers;
 
         AudioVoicePlayback Playback(AudioVoiceStateMachine &registry, const Samples &samples, const double pitch = 1.0,
                                     const AudioVoiceLoop loop = {}, const AudioResamplerQuality quality = Linear,
@@ -407,11 +390,8 @@ namespace Horo::Audio {
             static Backend::RenderResult Process(void *context, const Backend::RenderInvocation &invocation) noexcept {
                 using enum Backend::RenderDisposition;
                 auto &port = *static_cast<PlaybackPort *>(context);
-                if (invocation.phase != Backend::RenderPhase::Rendering) {
-                    for (auto *plane : invocation.output.planes)
-                        std::fill_n(plane, invocation.output.validFrames, 0.0F);
-                    return {invocation.phase == Backend::RenderPhase::Priming ? Ready : Quiesced, AudioCallbackFaultCode::None};
-                }
+                if (invocation.phase != Backend::RenderPhase::Rendering)
+                    return PlaybackTest::SilentPhase(invocation);
                 if (!port.Consume(invocation))
                     return {};
                 std::array<std::span<float>, 1> planes{std::span{invocation.output.planes[0], invocation.output.capacityFrames}};
@@ -422,14 +402,6 @@ namespace Horo::Audio {
             }
         };
 
-        void Complete(Backend::NullAudioBackend &backend, const Backend::Request &request) {
-            auto operation = backend.Begin(request, {1, 1'000'000'000});
-            REQUIRE(operation.HasValue());
-            REQUIRE(backend.AdvanceControl().HasValue());
-            REQUIRE(backend.Poll(operation.Value()).Value().has_value());
-            REQUIRE(backend.AcknowledgeCompletion(operation.Value()).HasValue());
-        }
-
         TEST_CASE("Actual Null callbacks consume voice controls through the production SPSC buffer", "[audio][voice_playback][null]") {
             auto registry = Registry();
             Samples samples;
@@ -439,12 +411,7 @@ namespace Horo::Audio {
             PlaybackPort port{voice, commands};
             auto backend = std::move(Backend::CreateNullAudioBackend({Owner(), 1, 1, 1}).Value());
             const AudioDeviceEpoch epoch{{Owner(), 1, 1}, 1, 1};
-            Complete(*backend, Backend::Enumerate{});
-            Complete(*backend,
-                     Backend::Open{epoch, {epoch.device, {48000, MakeAudioSpeakerLayout(AudioSpeakerPreset::Mono)}, {}, {128, 128, 128}}});
-            Complete(*backend, Backend::Start{epoch, {&port, PlaybackPort::Process}});
-            REQUIRE(backend->AdvanceCallback().HasValue());
-            REQUIRE(backend->CommitRendering(epoch).HasValue());
+            PlaybackTest::Start(*backend, epoch, {&port, PlaybackPort::Process});
             std::uint64_t sequence{};
             const auto publish = [&](const AudioVoiceControl control) {
                 const AudioCommandRecord record{++sequence,
@@ -468,15 +435,7 @@ namespace Horo::Audio {
             REQUIRE(backend->AdvanceCallback().HasValue());
             CHECK(port.terminalCount == 1);
             CHECK(commands.Depth() == 0);
-            commands.Close();
-            const auto quiesce = backend->Begin(Backend::Quiesce{epoch}, {1, 1'000'000'000}).Value();
-            REQUIRE(backend->AdvanceControl().HasValue());
-            REQUIRE(backend->AdvanceCallback().HasValue());
-            REQUIRE(backend->Poll(quiesce).Value().has_value());
-            REQUIRE(backend->AcknowledgeCompletion(quiesce).HasValue());
-            Complete(*backend, Backend::Stop{epoch});
-            Complete(*backend, Backend::Close{});
-            CHECK(commands.IsDrained());
+            PlaybackTest::Shutdown(*backend, commands, epoch);
         }
     }  // namespace
 }  // namespace Horo::Audio

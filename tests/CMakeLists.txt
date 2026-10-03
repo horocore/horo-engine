@@ -460,6 +460,9 @@ horo_register_catch_test(HoroAudioDspTests LABELS "unit;audio;headless")
 add_executable(HoroAudioPlaybackTests
     support/AllocationProbe.cpp
     unit/runtime/audio/AudioVoicePlaybackTests.cpp
+    unit/runtime/audio/AudioRepeatedPlaybackTests.cpp
+    unit/runtime/audio/AudioRepeatedPlaybackTestFixture.h
+    unit/runtime/audio/AudioPlaybackTestSupport.h
 )
 target_include_directories(HoroAudioPlaybackTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_features(HoroAudioPlaybackTests PRIVATE cxx_std_20)
@@ -473,6 +476,29 @@ target_include_directories(HoroCoreAudioDspTests PRIVATE ${PROJECT_SOURCE_DIR}/t
 target_compile_features(HoroCoreAudioDspTests PRIVATE cxx_std_20)
 target_link_libraries(HoroCoreAudioDspTests PRIVATE HoroEngine::AudioDsp)
 horo_register_catch_test(HoroCoreAudioDspTests LABELS "unit;audio;headless")
+add_executable(HoroMixerAllocationFailureWorker
+        unit/runtime/audio/MixerAllocationFailureWorker.cpp
+        support/AllocationProbe.cpp)
+target_include_directories(HoroMixerAllocationFailureWorker PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_compile_features(HoroMixerAllocationFailureWorker PRIVATE cxx_std_20)
+target_link_libraries(HoroMixerAllocationFailureWorker PRIVATE HoroEngine::AudioMixer Catch2::Catch2)
+if(MSVC)
+    target_compile_definitions(HoroMixerAllocationFailureWorker PRIVATE NOMINMAX)
+    target_link_libraries(HoroMixerAllocationFailureWorker PRIVATE Dbghelp)
+endif()
+add_executable(HoroAudioMixerTests
+        unit/runtime/audio/MixerGraphCompilerTests.cpp
+        unit/runtime/audio/MixerGraphRuntimeTests.cpp
+        unit/runtime/audio/MixerRenderPlanTests.cpp
+        unit/runtime/audio/MixerTestFixture.h
+        support/AllocationProbe.cpp)
+target_include_directories(HoroAudioMixerTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_compile_features(HoroAudioMixerTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAudioMixerTests PRIVATE HoroEngine::AudioMixer HoroEngine::Platform Threads::Threads)
+target_compile_definitions(HoroAudioMixerTests PRIVATE
+        HORO_MIXER_ALLOCATION_WORKER="$<TARGET_FILE:HoroMixerAllocationFailureWorker>")
+add_dependencies(HoroAudioMixerTests HoroMixerAllocationFailureWorker)
+horo_register_catch_test(HoroAudioMixerTests LABELS "unit;audio;headless;realtime-safety")
 add_executable(HoroAudioResamplerBenchmark EXCLUDE_FROM_ALL benchmarks/audio/ResamplerBenchmark.cpp)
 target_compile_features(HoroAudioResamplerBenchmark PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioResamplerBenchmark PRIVATE HoroEngine::AudioDsp)
@@ -735,11 +761,17 @@ add_executable(HoroCinematicRuntimeTests
         unit/runtime/cinematic/SequencePlayerTests.cpp
         unit/runtime/cinematic/SequencePlaybackRuntimeCoverageTests.cpp
         unit/runtime/cinematic/SequencePlaybackRuntimeTests.cpp
+        unit/runtime/cinematic/EventTrackDispatchTests.cpp
+        unit/runtime/cinematic/EventTrackNativeIntegrationTests.cpp
 )
 target_compile_features(HoroCinematicRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroCinematicRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(HoroCinematicRuntimeTests PRIVATE HoroEngine::CinematicRuntime)
+target_link_libraries(HoroCinematicRuntimeTests PRIVATE HoroEngine::CinematicRuntime HoroEngine::CinematicScriptBridge)
 horo_register_catch_test(HoroCinematicRuntimeTests LABELS "unit;cinematic;headless")
+add_executable(HoroCinematicEventPublicHeaderConsumer support/CinematicEventPublicHeaderConsumer.cpp)
+target_compile_features(HoroCinematicEventPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroCinematicEventPublicHeaderConsumer PRIVATE HoroEngine::CinematicScriptBridge)
+add_test(NAME HoroCinematicEventPublicHeaderConsumer COMMAND HoroCinematicEventPublicHeaderConsumer)
 add_executable(HoroCinematicPropertyIntegrationTests
         support/AllocationProbe.cpp
         unit/runtime/cinematic/PropertyTrackIntegrationTests.cpp
@@ -1047,6 +1079,12 @@ horo_add_gameplay_module(HoroTestGameModule
 )
 target_include_directories(HoroTestGameModule PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 get_property(HORO_TEST_GAME_MODULE_REVISION_FILE TARGET HoroTestGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
+target_include_directories(HoroCinematicRuntimeTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
+target_compile_definitions(HoroCinematicRuntimeTests PRIVATE
+        HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
+        HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
+)
+add_dependencies(HoroCinematicRuntimeTests HoroTestGameModule)
 add_executable(HoroGameModuleHostTests
         unit/gameplay/GameModuleHostTests.cpp
 )
