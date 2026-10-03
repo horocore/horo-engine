@@ -1468,6 +1468,7 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/StreamingCellArtifact.cpp
         runtime/world_streaming/StreamingCellAssetRequest.cpp
         runtime/world_streaming/StreamingCellActivation.cpp
+        runtime/world_streaming/StreamingCellDirection.cpp
         runtime/world_streaming/StreamingCellStability.cpp
         runtime/world_streaming/StreamingFailurePolicy.cpp
         runtime/world_streaming/StreamingFailurePolicyErrors.cpp
@@ -1502,6 +1503,7 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/WorldStreamingTraceErrors.cpp
         runtime/world_streaming/WorldStreamingTrace.cpp
         runtime/world_streaming/WorldStreamingErrors.cpp
+        runtime/world_streaming/WorldStreamingLifecycleErrors.cpp
         runtime/world_streaming/WorldStreamingIdentity.cpp
 )
 add_library(HoroEngine::WorldStreaming ALIAS HoroWorldStreaming)
