@@ -92,10 +92,18 @@ namespace Horo::Cinematic {
         std::size_t matches{};
         const std::size_t before = Horo::Tests::AllocationProbe::Count();
         for (std::size_t query = 0; query < 1'024; ++query) {
-            matches += plan->Find(Track, Key) == expected;
-            matches += plan->Find(Track, {12, 1}) == nullptr;
-            matches += plan->Find({9, 1}, Key) == nullptr;
-            matches += plan->Find({11, 1}, Key) == nullptr;
+            if (plan->Find(Track, Key) == expected) {
+                ++matches;
+            }
+            if (plan->Find(Track, {12, 1}) == nullptr) {
+                ++matches;
+            }
+            if (plan->Find({9, 1}, Key) == nullptr) {
+                ++matches;
+            }
+            if (plan->Find({11, 1}, Key) == nullptr) {
+                ++matches;
+            }
         }
         const std::size_t after = Horo::Tests::AllocationProbe::Count();
         CHECK(matches == 4'096);
