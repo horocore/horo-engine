@@ -39,6 +39,17 @@ namespace Horo::WorldStreaming {
             return {IdentityFrom<StreamingCellAssetRequestId>(3), Operation(), 3, StreamingCellAssetRequestLifecycle::Active};
         }
 
+        /** @brief Create the bounded scheduler used by the asset-retirement regression. */
+        StreamingSchedulerAdmissionLedger RetirementScheduler() {
+            auto result = StreamingSchedulerAdmissionLedger::Create(IdentityFrom<StreamingSchedulerLedgerId>(1),
+                                                                    {1,
+                                                                     5,
+                                                                     {WorldPartitionProjectProfile::Editor,
+                                                                      IdentityFrom<StreamingConcurrencyRevision>(1), 1, 1, 1}});
+            REQUIRE(result.HasValue());
+            return std::move(result).Value();
+        }
+
         struct RequestFixture final {
             std::array<Assets::AssetId, 3> ids{Asset(4), Asset(5), Asset(6)};
             CookedWorldIndexManifest manifest{Manifest()};
@@ -269,13 +280,7 @@ namespace Horo::WorldStreaming {
         DelayedProvider provider;
         LoadHarness loads{provider, 1};
         ReleaseRead release{provider};
-        auto schedulerResult = StreamingSchedulerAdmissionLedger::Create(IdentityFrom<StreamingSchedulerLedgerId>(1),
-                                                                         {1,
-                                                                          5,
-                                                                          {WorldPartitionProjectProfile::Editor,
-                                                                           IdentityFrom<StreamingConcurrencyRevision>(1), 1, 1, 1}});
-        REQUIRE(schedulerResult.HasValue());
-        auto scheduler = std::move(schedulerResult).Value();
+        auto scheduler = RetirementScheduler();
         const auto operation = StreamingCellOperation::Create(CandidateTestSupport::Operation(), StreamingCellOperationKind::Load).Value();
         std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> participants;
         bool published{};
