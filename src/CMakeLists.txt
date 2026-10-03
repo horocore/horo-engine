@@ -399,6 +399,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveOperationArbiter.cpp
         runtime/save/SaveProjectPolicy.cpp
         runtime/save/SaveSafePointCoordinator.cpp
+        runtime/save/SaveCaptureBarrier.cpp
         runtime/save/SaveTestCompositions.cpp
 )
 add_library(HoroEngine::Runtime ALIAS HoroRuntime)
@@ -487,6 +488,10 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiBinding.cpp
         runtime/ui/UiBindingFingerprint.cpp
         runtime/ui/UiBindingValidation.cpp
+        runtime/ui/UiBindingStore.cpp
+        runtime/ui/UiBindingWrites.cpp
+        runtime/ui/UiBindingWriteAdmission.cpp
+        runtime/ui/UiBindingStorePreparation.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiLocalization.cpp
         runtime/ui/UiDocument.cpp
@@ -502,7 +507,9 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiDiagnosticDescriptors.cpp
         runtime/ui/UiAccessibility.cpp
         runtime/ui/UiAccessibilityReading.cpp
+        runtime/ui/UiAccessibilityInteraction.cpp
         runtime/ui/UiAccessibilityChanges.cpp
+        runtime/ui/UiAccessibilityAnnouncementQueue.cpp
         runtime/ui/UiAccessibilityPolicy.cpp
         runtime/ui/UiAccessibilityStorage.cpp
         runtime/ui/UiElementTree.cpp
@@ -510,6 +517,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiPointerCapture.cpp
         runtime/ui/UiPointerCaptureErrors.cpp
         runtime/ui/UiActions.cpp
+        runtime/ui/UiActionRouter.cpp
         runtime/ui/UiFeedback.cpp
         runtime/ui/UiFeedbackErrors.cpp
         runtime/ui/UiScreenStack.cpp
@@ -857,6 +865,7 @@ target_link_libraries(HoroAudioMemory PUBLIC HoroEngine::AudioApi PRIVATE HoroAu
 
 add_library(HoroAudioCommands STATIC
         audio/commands/AudioClock.cpp
+        audio/commands/AudioParameterAutomation.cpp
         audio/commands/AudioCommands.cpp
         audio/commands/AudioCommandBuffer.cpp
         audio/commands/AudioCommandStaging.cpp
@@ -938,6 +947,7 @@ target_link_libraries(HoroPhysics PUBLIC HoroEngine::Foundation HoroEngine::Asse
 if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp
+        physics/CanonicalPhysicsRuntimeBodyCreation.cpp
         physics/CanonicalPhysicsRuntimeDebug.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
@@ -950,6 +960,7 @@ if(HORO_BUILD_PHYSICS_NATIVE)
     target_link_libraries(HoroPhysics PRIVATE Jolt)
     set_source_files_properties(
         physics/CanonicalPhysicsRuntime.cpp
+        physics/CanonicalPhysicsRuntimeBodyCreation.cpp
         physics/CanonicalPhysicsRuntimeDebug.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
         physics/CanonicalPhysicsRuntimeEvents.cpp
@@ -980,7 +991,12 @@ add_library(HoroAI STATIC
         runtime/ai/api/AISceneErrors.cpp
         runtime/ai/api/AIIdentity.cpp
         runtime/ai/api/AITaskLifecycle.cpp
+        runtime/ai/api/AITaskContinuation.cpp
+        runtime/ai/api/AITaskJobService.cpp
         runtime/ai/api/BehaviorTree.cpp
+        runtime/ai/api/BehaviorTreeExecutionPlan.cpp
+        runtime/ai/api/BehaviorTreeInstance.cpp
+        runtime/ai/api/BehaviorTreeTaskExecution.cpp
         runtime/ai/api/BlackboardInstance.cpp
         runtime/ai/api/BlackboardSchema.cpp
         runtime/ai/api/DecisionAssetPlan.cpp
@@ -1144,6 +1160,7 @@ target_link_libraries(HoroCinematicModel
 )
 
 add_library(HoroCinematicRuntime STATIC
+        runtime/cinematic/player/PropertyTrackRuntime.cpp
         runtime/cinematic/player/SequenceEvaluation.cpp
         runtime/cinematic/player/SequenceFrameBlend.cpp
         runtime/cinematic/player/SequenceEvaluationErrors.cpp
@@ -1347,6 +1364,9 @@ add_library(HoroWorldStreaming STATIC
         runtime/world_streaming/CookedWorldIndexManifest.cpp
         runtime/world_streaming/FallbackStreamingProvider.cpp
         runtime/world_streaming/StreamingBudgetModel.cpp
+        runtime/world_streaming/StreamingFeatureBudgetPolicy.cpp
+        runtime/world_streaming/StreamingFeatureBudgetReservations.cpp
+        runtime/world_streaming/StreamingFeatureBudgetErrors.cpp
         runtime/world_streaming/SharedAssetResidency.cpp
         runtime/world_streaming/SharedAssetResidencyErrors.cpp
         runtime/world_streaming/StreamingCellOperation.cpp
@@ -1391,6 +1411,8 @@ target_compile_features(HoroWorldStreaming PUBLIC cxx_std_20)
 target_link_libraries(HoroWorldStreaming PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
 add_library(HoroPrefab STATIC
+        runtime/prefab/CookedPrefab.cpp
+        runtime/prefab/CookedPrefabCodec.cpp
         runtime/prefab/PrefabErrors.cpp
         runtime/prefab/PrefabIdentity.cpp
         runtime/prefab/PrefabLimits.cpp
@@ -1424,6 +1446,7 @@ target_link_libraries(HoroPrefabSceneExpansion PUBLIC HoroEngine::PrefabAuthorin
 
 add_library(HoroInput STATIC
         runtime/input/Input.cpp
+        runtime/input/InputPresentation.cpp
         runtime/input/InputErrors.cpp
 )
 add_library(HoroEngine::Input ALIAS HoroInput)
@@ -1435,6 +1458,7 @@ target_link_libraries(HoroInput PUBLIC HoroEngine::Foundation PRIVATE nlohmann_j
 # retains its Foundation/Assets-only contract.
 add_library(HoroRuntimeUiInput STATIC
         runtime/ui/input/UiTextInputAdapter.cpp
+        runtime/ui/input/UiNavigationInput.cpp
 )
 add_library(HoroEngine::RuntimeUiInput ALIAS HoroRuntimeUiInput)
 target_compile_features(HoroRuntimeUiInput PUBLIC cxx_std_20)
@@ -1786,6 +1810,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
 endif ()
 
 add_library(HoroEditorServices STATIC
+        editor/CinematicPropertyBindings.cpp
         editor/EditorServiceErrors.cpp
         editor/data_bus/EditorEngineEventBridge.cpp
         editor/data_bus/EditorSurfaceEventContext.cpp
@@ -1852,6 +1877,7 @@ target_include_directories(HoroEditorServices
 target_link_libraries(HoroEditorServices
         PUBLIC
         HoroEngine::Foundation
+        HoroEngine::CinematicRuntime
         HoroEngine::NetworkApi
         HoroEngine::Application
         HoroEngine::Platform
@@ -2093,6 +2119,8 @@ add_library(HoroExtensions STATIC
         extensions/script/ScriptInvocationInternal.h
         extensions/script/ScriptInvocationRegistration.cpp
         extensions/script/ScriptInvocation.cpp
+        extensions/script/ScriptCapabilityContext.cpp
+        extensions/script/ScriptCapabilityContextInternal.h
         extensions/registry/ExtensionActivationState.cpp
         extensions/registry/EditorSurfaceContextErrors.cpp
         extensions/registry/EditorCommandErrors.cpp

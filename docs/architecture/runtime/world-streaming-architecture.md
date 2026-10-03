@@ -441,6 +441,37 @@ partition replacement and shutdown close admission while
 old exact leases and retirement acknowledgements remain routable to their original
 ledger. Host composition must drain that ledger before destroying its cache owner.
 
+`StreamingFeatureBudgetReservations` owns the WST-003.4 aggregate reservation
+boundary. It creates one `WorldStreamingRuntimeComposition` with the existing canonical
+scheduler and one shared-residency ledger, exposing both children read-only. A complete
+peak plan names Terrain, Foliage, Navigation, Physics and General across all seven
+independent resource axes. Four immutable feature slices are deducted from each global
+hard limit with checked subtraction; General receives exactly the remainder. A feature
+cannot borrow another slice merely because aggregate capacity remains available.
+The existing budget model retains soft-target/service-window evaluation; this authority
+enforces admitted hard capacity and does not create another clock or pressure policy.
+
+Admission checks current owner, immutable policy, authority revision and the host's
+canonical cell-attempt fence before accepting any peak or canonical operation. Growth
+must be admitted before allocation. Realizing a new shared allocation transfers its
+exact reserved portion into one cache charge in the original feature; it never adds
+that physical charge again. Cache reuse may resolve an explicitly reserved duplicate
+peak, or use an explicit zero portion for already-known reuse. It creates only another
+lease and retains the original charge's slice. Unknown costs are not zero: all plan
+features and resource axes must be explicitly present. Scratch/upload copies outside
+the realized charge remain reserved until their operation's acknowledged retirement.
+
+Cancellation, failure, replacement and shutdown retain outstanding peaks. Terminal
+operation release removes only unrealized portions; unleased and retiring cache
+allocations remain charged until the cache owner acknowledges actual retirement.
+Non-reused scheduler reservations, charge incarnations and outer authority revisions
+prevent stale completions from freeing successors. Borrowed service replacement is
+blocked while either operations or cache charges remain. Shutdown closes both child
+admission seams and reaches Closed only when both have drained. Policy/partition
+replacement uses a new non-reused owner and routes old acknowledgements to the original
+authority rather than resetting retained usage. See the
+[feature reservation migration guide](../../guides/world-streaming-feature-budget-migration.md).
+
 GPU reservation realization follows
 [ADR-034](../../adr/034-gpu-memory-and-residency-ownership.md): the host-composed
 provider adapter obtains a renderer claim against the host GPU envelope before

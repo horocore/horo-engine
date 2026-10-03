@@ -1118,6 +1118,60 @@ SetVoicePitch(voice, 0.8, fade = 100 ms)
 SetLowPassCutoff(SFX, 1200 Hz, fade = 500 ms)
 ```
 
+### AUD-004.8 bounded parameter automation
+
+`HoroEngine::AudioCommands` owns the additive `AudioParameterAutomation.h`
+contract. Control prepares up to 64 immutable parameter bindings and seals the
+engine before transferring exclusive ownership to the callback. Addresses retain
+stable parameter, bus/route/effect identities, the exact runtime, voice handle
+where applicable, and a non-reused binding generation. The host validates actual
+voice/graph liveness and retains physical bindings through callback detachment;
+structural normalization does not establish liveness. No callback registry,
+string lookup, dynamic allocation, lock, or application callback is introduced.
+
+Producers submit `AudioAutomateParameterCommand` and
+`AudioCancelAutomationCommand` through the existing staging/SPSC FIFO and retained
+scheduled-batch path. Automation commands are never coalesced. After normal
+consumption, the host dispatches `Apply`; it must retain or explicitly reconcile
+rejected work rather than silently dropping it. `ApplyBatch` provides bounded
+all-or-nothing admission for automation-only batches at their exact dispatched
+boundary. It rejects mixed host-owned payloads without mutation: aggregate mixed
+batch admission remains the host's responsibility. Batch transactions use one
+fixed engine-sized stack copy, not heap storage. Ordinary queue and engine
+capacity rejection preserve request IDs and all previously accepted state.
+
+Sample targets use the shipping sample-clock mapping, exact epoch, clock and
+discontinuity generations. Late work is rejected. The host advances the engine
+at each rendered sample and copies the corresponding value into its prepared
+voice, bus, send or DSP binding; sampling once per block is insufficient for the
+continuity contract. Block partition does not change interpolation. Pause rejects
+advancement without consuming queued work. Discontinuity, graph/voice replacement
+or reset requires closing/detaching the old engine and preparing new bindings;
+old addresses never rebind by stable-ID coincidence.
+
+Each parameter supplies finite model-unit range, initial value, minimum smoothing
+frames and a positive maximum per-sample delta. Linear and monotone cubic
+smoothstep curves have exact endpoints. Durations conservatively bound the entire
+admitted range divided by the delta (smoothstep multiplies by 1.5 for its maximum
+derivative), including unknown future overlap anchors. Too-short explicit ramps
+are rejected. Immediate intent starts at the earliest admitted boundary and uses
+mandatory linear smoothing with the same range-derived duration; it never means
+an uncontrolled value jump. Floating-point quantization remains bounded by the
+model range's binary32 rounding error; the numeric delta is not a universal
+perceptual audibility threshold. Model owners choose limits appropriate to gain,
+pitch, cutoff or other units.
+
+Up to 128 queued requests execute by start frame, then increasing admitted request
+ID for equal frames. IDs strictly increase within one engine, including cancelled
+requests. A new overlap replaces the older trajectory from its evaluated value at
+the exact start sample, preserving continuity and reaching the latest target.
+Cancellation removes one pending request or holds the active request at the last
+advanced sample; later requests remain queued. Cancellation of a completed or
+replaced request is explicitly `NotFound`. Matching unload/reset barriers close
+admission and discard automation; control still owns transport draining, callback
+detachment and resource reclamation. Existing last-value voice snapshots retain
+their contract; hosts opt into this new explicit automation path.
+
 The core supports simple audio snapshots as named mixer-state presets:
 
 ```text

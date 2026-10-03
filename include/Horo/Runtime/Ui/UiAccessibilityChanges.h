@@ -25,12 +25,62 @@ namespace Horo::Runtime::Ui {
         Assertive
     };
 
+    /** @brief Semantic occurrence category; validation text must match the published node's error. */
+    enum class UiAccessibilityAnnouncementKind : std::uint8_t {
+        Event,
+        Validation,
+        Status
+    };
+
+    /** @brief Explicit terminal disposition of retained announcement delivery. */
+    enum class UiAccessibilityAnnouncementState : std::uint8_t {
+        Pending,
+        Cancelled
+    };
+
+    /** @brief Reason that an accepted occurrence is no longer eligible for speech. */
+    enum class UiAccessibilityAnnouncementCancellation : std::uint8_t {
+        None,
+        OwnerChanged,
+        NodeUnavailable,
+        Retired
+    };
+
+    struct UiAccessibilityAnnouncementGenerationTag;
+    using UiAccessibilityAnnouncementGeneration = UiRevision<UiAccessibilityAnnouncementGenerationTag>;
+
+    /** @brief Exact owner/session cursor for cumulative, idempotent acknowledgment. Zero sequence is invalid. */
+    struct UiAccessibilityAnnouncementCursor final {
+        RuntimeUiInstanceId instance;
+        UiCanvasInstanceId canvas;
+        UiAccessibilityAnnouncementGeneration generation;
+        std::uint64_t sequence{};
+        [[nodiscard]] constexpr auto operator<=>(const UiAccessibilityAnnouncementCursor &) const noexcept = default;
+    };
+
     /** @brief Borrowed announcement copied during publication, scoped to an exact exposed semantic node. */
     struct UiAccessibilityAnnouncementInput final {
         UiAccessibilityAnnouncementId id;
         UiAccessibilityNodeId node;
         UiAccessibilityAnnouncementPolicy policy{UiAccessibilityAnnouncementPolicy::Polite};
         UiAccessibilityTextInput text;
+        UiAccessibilityAnnouncementKind kind{UiAccessibilityAnnouncementKind::Event};
+    };
+
+    /** @brief One accepted FIFO occurrence; text is owned by the publisher until its cursor is acknowledged.
+     * @details Cancelled records retain sequence evidence but return no speech text. Revision changes alone do not cancel;
+     *          document/tree identity, focus audience or modal activation changes do. Status/events are never coalesced.
+     */
+    struct UiAccessibilityAnnouncement final {
+        UiAccessibilityAnnouncementCursor cursor;
+        UiAccessibilityAnnouncementId id;
+        UiAccessibilityNodeId node;
+        UiAccessibilitySemanticRevision revision;
+        UiAccessibilityAnnouncementKind kind{UiAccessibilityAnnouncementKind::Event};
+        UiAccessibilityAnnouncementPolicy policy{UiAccessibilityAnnouncementPolicy::Off};
+        UiAccessibilityAnnouncementState state{UiAccessibilityAnnouncementState::Pending};
+        UiAccessibilityAnnouncementCancellation cancellation{UiAccessibilityAnnouncementCancellation::None};
+        UiAccessibilityTextRef text;
     };
 
     /** @brief Closed change categories; structural records use exact generation-checked identities. */
@@ -86,6 +136,7 @@ namespace Horo::Runtime::Ui {
         std::uint32_t announcements{64};
         std::uint32_t announcementTextBytes{16'384};
         std::uint64_t deduplicationRevisions{32}; /**< Inclusive semantic-revision window; no wall-clock reads. */
+        std::uint64_t deliveryGeneration{1}; /**< Host-issued non-reusable session generation within this owner; increment on recreation. */
         /** @brief Validates all storage ceilings. @return Whether creation can reserve the budgets. */
         [[nodiscard]] bool IsValid() const noexcept;
     };
@@ -105,7 +156,7 @@ namespace Horo::Runtime::Ui {
          * @return Publisher or typed descriptor/capacity failure.
          */
         [[nodiscard]] static Result<UiAccessibilityChangePublisher> Create(const UiAccessibilityExtractorDescriptor &owner,
-                                                                           UiAccessibilityChangeLimits limits = {});
+                                                                           const UiAccessibilityChangeLimits &limits = {});
         /** @brief Releases the retained snapshot and owned output. */
         ~UiAccessibilityChangePublisher();
         /** @brief Transfers publisher state and invalidates the source. @param other Owner to transfer. */
@@ -121,7 +172,8 @@ namespace Horo::Runtime::Ui {
          * @return Success (including explicit resync overflow) or typed stale/schema/capacity/lifecycle failure.
          * @details Removal order is reverse old preorder; additions/updates follow new preorder; focus then announcements follow.
          *          Covered/suppressed/suspended/disabled nodes cannot announce. Off events produce no output.
-         *          Overflow suppresses all announcements and remembers their IDs, so resync never replays them.
+         *          Delta overflow suppresses announcement delta previews, while accepted delivery remains in Announcements().
+         *          Delivery count/byte exhaustion rejects the entire publication before mutation; retry is explicit.
          */
         [[nodiscard]] Result<void> Publish(const UiAccessibilitySnapshot &snapshot,
                                            std::span<const UiAccessibilityAnnouncementInput> announcements = {});
@@ -141,6 +193,21 @@ namespace Horo::Runtime::Ui {
         /** @brief Resolves an announcement's owned text. @param text Range from current Changes(). @return Text or empty for invalid range.
          */
         [[nodiscard]] std::string_view Text(UiAccessibilityTextRef text) const noexcept;
+        /** @brief Returns accepted unacknowledged occurrences in sequence order, independent of semantic delta resync.
+         * @return Borrowed retained queue. Successful Publish, Acknowledge, Retire, move or destruction invalidates the borrow.
+         * @note Changes() announcement records are previews; Announcements() is the sole delivery authority.
+         */
+        [[nodiscard]] std::span<const UiAccessibilityAnnouncement> Announcements() const noexcept;
+        /** @brief Resolves retained speech text only for an exact currently pending cursor.
+         * @param cursor Cursor from Announcements(). @return Owned borrowed text, or empty for stale/cancelled/acknowledged cursors.
+         */
+        [[nodiscard]] std::string_view AnnouncementText(const UiAccessibilityAnnouncementCursor &cursor) const noexcept;
+        /** @brief Cumulatively acknowledges accepted delivery, releasing its prefix and bytes without replay.
+         * @param cursor Exact owner/session and accepted sequence; already acknowledged cursors are idempotent.
+         * @return Success or stale/foreign/future cursor failure; valid acknowledgments remain permitted after retirement.
+         * @note Acknowledge only after copying/delivering or observing cancellation. Resync never implies acknowledgment.
+         */
+        [[nodiscard]] Result<void> Acknowledge(const UiAccessibilityAnnouncementCursor &cursor);
 
     private:
         struct Storage;

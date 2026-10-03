@@ -254,6 +254,7 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveOperationArbiter.h
     Horo/Runtime/Save/SaveProjectPolicy.h
     Horo/Runtime/Save/SaveSafePointCoordinator.h
+    Horo/Runtime/Save/SaveCaptureBarrier.h
     Horo/Runtime/Save/SaveTestCompositions.h
 )
 horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
@@ -264,6 +265,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiAccessibilityChanges.h
     Horo/Runtime/Ui/UiIdentity.h
     Horo/Runtime/Ui/UiBinding.h
+    Horo/Runtime/Ui/UiBindingStore.h
     Horo/Runtime/Ui/UiCanvasSpace.h
     Horo/Runtime/Ui/UiLocalization.h
     Horo/Runtime/Ui/UiDocument.h
@@ -446,6 +448,7 @@ horo_configure_target_header_boundary(HoroAudioMemory PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroAudioCommands PUBLIC_HEADERS
     Horo/Audio/AudioClock.h
+    Horo/Audio/AudioParameterAutomation.h
     Horo/Audio/AudioCommands.h
     Horo/Audio/AudioCommandBuffer.h
     Horo/Audio/AudioCommandStaging.h
@@ -513,7 +516,10 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/AISceneComponents.h
     Horo/AI/AIIdentity.h
     Horo/AI/AITaskLifecycle.h
+    Horo/AI/AITaskContinuation.h
+    Horo/AI/AITaskJobService.h
     Horo/AI/BehaviorTree.h
+    Horo/AI/BehaviorTreeRuntime.h
     Horo/AI/BlackboardInstance.h
     Horo/AI/BlackboardSchema.h
     Horo/AI/DecisionAssetValidation.h
@@ -601,6 +607,7 @@ horo_configure_target_header_boundary(HoroCinematicModel PUBLIC_HEADERS
     Horo/Cinematic/TransformTrack.h
 )
 horo_configure_target_header_boundary(HoroCinematicRuntime PUBLIC_HEADERS
+    Horo/Cinematic/PropertyTrackRuntime.h
     Horo/Cinematic/SequenceEvaluation.h
     Horo/Cinematic/SequenceEvaluationErrors.h
     Horo/Cinematic/SequencePlayer.h
@@ -694,6 +701,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/CookedWorldIndexManifest.h
     Horo/WorldStreaming/FallbackStreamingProvider.h
     Horo/WorldStreaming/StreamingBudgetModel.h
+    Horo/WorldStreaming/StreamingFeatureBudgetReservations.h
     Horo/WorldStreaming/SharedAssetResidency.h
     Horo/WorldStreaming/StreamingCellOperation.h
     Horo/WorldStreaming/StreamingCellCandidate.h
@@ -731,6 +739,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroPrefab PUBLIC_HEADERS
+    Horo/Prefab/CookedPrefab.h
     Horo/Prefab/PrefabErrors.h
     Horo/Prefab/PrefabIdentity.h
     Horo/Prefab/PrefabLimits.h
@@ -839,6 +848,7 @@ horo_configure_target_header_boundary(HoroModelProviderAdapters PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
+    Horo/Editor/CinematicPropertyBindings.h
     Horo/Editor/ActivityBarLayout.h
     Horo/Editor/EditorConfiguration.h
     Horo/Editor/EditorEngineEventBridge.h
@@ -879,7 +889,9 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroEditorViewportOpenGL)
 horo_configure_target_header_boundary(HoroEditorViewportMetal)
 horo_configure_target_header_boundary(HoroInputSdl)
-horo_configure_target_header_boundary(HoroRuntimeUiInput)
+horo_configure_target_header_boundary(HoroRuntimeUiInput PUBLIC_HEADERS
+    Horo/Runtime/Ui/UiNavigationInput.h
+)
 horo_configure_target_header_boundary(HoroGui PUBLIC_HEADERS
     Horo/Editor/AssetImportModal.h
     Horo/Editor/DefaultScreenFactories.h
@@ -929,6 +941,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ProjectValidatorRegistry.h
     Horo/Extensions/ScriptExportDescriptor.h
     Horo/Extensions/ScriptInvocation.h
+    Horo/Extensions/ScriptCapabilityContext.h
     Horo/Extensions/ScriptValue.h
     Horo/Extensions/ToolchainProviderRegistry.h
 )
