@@ -75,6 +75,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@33522472633dbd32578e909b315f5ee43ba878ce
         with:
           key: ui-build-linux
+          save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install system dependencies
         run: |
@@ -102,7 +103,8 @@ jobs:
             libglu1-mesa-dev
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: fetchcontent-ui-linux-${{ hashFiles('**/CMakeLists.txt', '**/CMakePresets.json') }}
@@ -133,6 +135,13 @@ jobs:
           path: artifact/bin/
           retention-days: 1
 
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
+
   build-macos:
     name: Build · macOS / Clang
     runs-on: macos-latest
@@ -147,12 +156,14 @@ jobs:
         uses: hendrikmuhs/ccache-action@33522472633dbd32578e909b315f5ee43ba878ce
         with:
           key: ui-build-macos
+          save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install ffmpeg
         run: brew install ffmpeg ninja
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        id: dependency_cache
         with:
           path: ~/.cmake/fetchcontent
           key: fetchcontent-ui-macos-${{ hashFiles('**/CMakeLists.txt', '**/CMakePresets.json') }}
@@ -183,6 +194,13 @@ jobs:
           path: artifact/bin/
           retention-days: 1
 
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        with:
+          path: ~/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
+
   # ── 2c. Build — Windows ──────────────────────────────────────────────────
   build-windows:
     name: Build · Windows / MSVC
@@ -192,6 +210,7 @@ jobs:
     timeout-minutes: 30
     needs: report-commits
     env:
+      SCCACHE_GHA_ENABLED: 'false'
       SCCACHE_DIR: ${{ github.workspace }}/.sccache
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -200,14 +219,16 @@ jobs:
         uses: mozilla-actions/sccache-action@1583d6b38d7b86129b83e1c73e4d8d455ca32f48
 
       - name: Cache sccache
-        uses: actions/cache@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        id: compiler_cache
         with:
           path: ${{ env.SCCACHE_DIR }}
           key: sccache-ui-windows-${{ hashFiles('**/CMakeLists.txt', '**/CMakePresets.json') }}
           restore-keys: sccache-ui-windows-
 
       - name: Cache FetchContent dependencies
-        uses: actions/cache@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        uses: actions/cache/restore@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        id: dependency_cache
         with:
           path: ${{ github.workspace }}/.cmake/fetchcontent
           key: fetchcontent-ui-windows-${{ hashFiles('**/CMakeLists.txt', '**/CMakePresets.json') }}
@@ -252,6 +273,20 @@ jobs:
           name: ui-binary-windows
           path: artifact/bin/
           retention-days: 1
+
+      - name: Save compiler cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.compiler_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: ${{ steps.compiler_cache.outputs.cache-primary-key }}
+
+      - name: Save dependency cache on main
+        if: ${{ success() && github.ref == 'refs/heads/main' && steps.dependency_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa869af7a04f0f2f7d9d8c98b20807b
+        with:
+          path: ${{ github.workspace }}/.cmake/fetchcontent
+          key: ${{ steps.dependency_cache.outputs.cache-primary-key }}
 
   # ── 3a. UI suites — Linux ─────────────────────────────────────────────────
   ui-linux:
