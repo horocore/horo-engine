@@ -8,8 +8,10 @@
 #include <string_view>
 
 #if defined(_MSC_VER) && _ITERATOR_DEBUG_LEVEL != 0
-#include <DbgHelp.h>
 #include <Windows.h>
+
+// DbgHelp requires Windows SDK types; keep this dependent include in a separate block.
+#include <DbgHelp.h>
 #endif
 
 using namespace Horo::Tests::MixerFixture;
