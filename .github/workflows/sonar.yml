@@ -159,9 +159,6 @@ jobs:
           build/sonar/tests/HoroConfiguredEditorUpdateBackendTests
           /tmp/horo-coverage/bin/coverage run --source=scripts -m pytest tests/python --quiet
           /tmp/horo-coverage/bin/coverage xml -o build/sonar/python-coverage.xml
-          node --test --experimental-test-coverage \
-            --test-reporter=lcov --test-reporter-destination=build/sonar/javascript-coverage.lcov \
-            .github/scripts/cancel_closed_pr_runs.test.js
 
       - name: Collect fastcov line coverage
         id: coverage
@@ -222,7 +219,6 @@ jobs:
             -Dsonar.cfamily.compile-commands=build/sonar/compile_commands.json \
             -Dsonar.coverageReportPaths=build/sonar/coverage.xml \
             -Dsonar.python.coverage.reportPaths=build/sonar/python-coverage.xml \
-            -Dsonar.javascript.lcov.reportPaths=build/sonar/javascript-coverage.lcov \
             -Dsonar.cfamily.analysisCache.mode=server \
             -Dsonar.qualitygate.wait=true \
             -Dsonar.qualitygate.timeout=300

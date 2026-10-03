@@ -76,8 +76,7 @@ removing targets or test filters. Hosted timings remain the acceptance evidence.
 
 `cancel-closed-pr.yml` runs on `pull_request_target: closed`. Its trusted base
 workflow owns the inline script; no repository source is checked out, and only
-`actions: write` is granted. Node regression tests execute that exact script with
-bound API mocks. It requests cancellation of active `pull_request` runs linked
+`actions: write` is granted. It requests cancellation of active `pull_request` runs linked
 to that PR, with exact repository/branch/SHA matching as a fallback for missing
 API links. Completed runs and main push runs are preserved. It handles both merge
 and manual closure, even after branch deletion.
