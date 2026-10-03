@@ -1,4 +1,5 @@
 include(Catch)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroCiSuites.cmake")
 
 add_test(NAME HoroDependencyDirectionNegativeConfigureTest
     COMMAND "${CMAKE_COMMAND}"
@@ -118,15 +119,16 @@ endif ()
 add_compile_definitions(HORO_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
 function(horo_register_catch_test target)
-    cmake_parse_arguments(ARG "" "" "LABELS;EXTRA_ARGS;PROPERTIES" ${ARGN})
+    cmake_parse_arguments(PARSE_ARGV 1 ARG "" "" "LABELS;EXTRA_ARGS;PROPERTIES")
+    horo_ci_catch_labels(${target})
     target_compile_features(${target} PRIVATE cxx_std_20)
     target_compile_definitions(${target} PRIVATE HORO_PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
     target_link_libraries(${target} PRIVATE Catch2::Catch2WithMain)
     catch_discover_tests(${target}
             TEST_PREFIX "${target}::"
             EXTRA_ARGS ${ARG_EXTRA_ARGS}
-            PROPERTIES LABELS "${ARG_LABELS}" ${ARG_PROPERTIES}
     )
+    horo_ci_catch_properties(${target})
 endfunction()
 
 add_executable(HoroModelProviderTests unit/editor/ModelProviderContractTests.cpp)
@@ -3342,3 +3344,5 @@ target_compile_features(HoroScriptCapabilityPublicHeaderConsumer PRIVATE cxx_std
 target_link_libraries(HoroScriptCapabilityPublicHeaderConsumer PRIVATE HoroEngine::Extensions)
 add_test(NAME HoroScriptCapabilityPublicHeaderConsumer COMMAND HoroScriptCapabilityPublicHeaderConsumer)
 set_tests_properties(HoroScriptCapabilityPublicHeaderConsumer PROPERTIES LABELS "unit;extensions;headless")
+
+horo_finalize_ci_suites()
