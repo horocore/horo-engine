@@ -2547,6 +2547,19 @@ target_link_libraries(HoroSaveCaptureBarrierPublicHeaderConsumer PRIVATE HoroEng
 add_test(NAME HoroSaveCaptureBarrierPublicHeaderConsumer COMMAND HoroSaveCaptureBarrierPublicHeaderConsumer)
 set_tests_properties(HoroSaveCaptureBarrierPublicHeaderConsumer PROPERTIES LABELS "unit;save;headless")
 
+add_executable(HoroRuntimeSaveAutosaveSchedulerTests
+        unit/runtime/save/SaveAutosaveSchedulerTests.cpp
+        unit/runtime/save/SaveAutosaveIntegrationTests.cpp
+)
+target_compile_features(HoroRuntimeSaveAutosaveSchedulerTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveAutosaveSchedulerTests PRIVATE HoroEngine::Runtime)
+
+add_executable(HoroSaveAutosavePublicHeaderConsumer support/SaveAutosavePublicHeaderConsumer.cpp)
+target_compile_features(HoroSaveAutosavePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroSaveAutosavePublicHeaderConsumer PRIVATE HoroEngine::Runtime)
+add_test(NAME HoroSaveAutosavePublicHeaderConsumer COMMAND HoroSaveAutosavePublicHeaderConsumer)
+set_tests_properties(HoroSaveAutosavePublicHeaderConsumer PROPERTIES LABELS "unit;save;headless")
+
 add_executable(HoroRuntimeSaveProjectPolicyTests
         unit/runtime/save/SaveProjectPolicyTests.cpp
 )
@@ -3278,6 +3291,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveStorageAdapterTests
         HoroRuntimeSaveStoragePolicyTests
         HoroRuntimeSaveOperationArbiterTests
+        HoroRuntimeSaveAutosaveSchedulerTests
         HoroRuntimeSaveSlotCommitTransactionTests
         HoroRuntimeSaveSlotRecoveryTests
         HoroRuntimeSaveSafePointCoordinatorTests

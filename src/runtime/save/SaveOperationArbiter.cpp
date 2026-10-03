@@ -437,6 +437,18 @@ namespace Horo::Runtime {
                                                     : Result<void>::Failure(MakeError(SaveErrors::ArbiterInvalid));
     }
 
+    /** @copydoc SaveOperationArbiter::PollCancellation */
+    Result<bool> SaveOperationArbiter::PollCancellation(const OperationId operation) {
+        const auto found = FindActiveRecord(*state_, operation);
+        if (found == state_->records.end())
+            return Result<bool>::Failure(MakeError(SaveErrors::ArbiterInvalid));
+        const auto observed = found->controller.ObserveCancellation();
+        const bool cancelled = observed == SaveCancellationObservation::Cancelled;
+        if (cancelled)
+            static_cast<void>(SynchronizeTerminal(*state_, *found));
+        return Result<bool>::Success(cancelled);
+    }
+
     /** @copydoc SaveOperationArbiter::Snapshot */
     std::optional<SaveArbiterSnapshot> SaveOperationArbiter::Snapshot(const OperationId operation) const {
         const auto found = Find(*state_, operation);
