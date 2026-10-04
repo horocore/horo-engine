@@ -147,4 +147,85 @@ namespace Horo::Network {
 
         RequireError(BuildReplicationDescriptorReplacement({}, retiredDescriptors, Limits), NetworkErrors::ReplicationDescriptorInvalid);
     }
+
+    TEST_CASE("Replacement collects attributed failures across every schema without publishing", "[unit][network][replication][registry]") {
+        const std::array original{Schema(30), Schema(10, {Field(2), Field(1)}), Schema(20)};
+        const auto previous = BuildReplicationDescriptorSnapshot(original, Limits).Value();
+        const auto fingerprint = previous->Fingerprint();
+        auto changed = Schema(10, {Field(1)});
+        changed.version = {1, 1};
+        changed.compatibility.maximum = changed.version;
+        changed.fields.front().codec = Codec(2);
+        auto foreign = Schema(20);
+        foreign.owner.value = "game.foreign";
+        const std::array candidate{foreign, changed};
+
+        const auto result = BuildReplicationDescriptorReplacement(previous, candidate, Limits, 16);
+        RequireError(result, NetworkErrors::ReplicationDescriptorIncompatible);
+        const auto &diagnostics = result.ErrorValue().diagnostics;
+        REQUIRE(diagnostics.size() == 6);
+        REQUIRE(diagnostics[0].path == "schemas[10].fields[1]");
+        REQUIRE(diagnostics[1].path == "schemas[10].fields[2]");
+        REQUIRE(diagnostics[2].path == "schemas[10].fields[2]");
+        REQUIRE(diagnostics[3].path == "schemas[20]");
+        REQUIRE(diagnostics[4].path == "schemas[20]");
+        REQUIRE(diagnostics[5].path == "schemas[30]");
+        REQUIRE(diagnostics[0].code.Value() == "replication.field_semantics_changed");
+        REQUIRE(diagnostics[1].code.Value() == "replication.field_retirement_missing");
+        REQUIRE(diagnostics[2].code.Value() == "replication.required_field_removed");
+        REQUIRE(diagnostics[3].code.Value() == "replication.owner_mismatch");
+        REQUIRE(diagnostics[4].code.Value() == "replication.unversioned_change");
+        REQUIRE(diagnostics[5].code.Value() == "replication.schema_missing");
+        REQUIRE(diagnostics.front().message.find("game.replication") != std::string::npos);
+        REQUIRE(diagnostics.front().message.find("prior 1.0, candidate 1.1") != std::string::npos);
+        REQUIRE(previous->Fingerprint() == fingerprint);
+        REQUIRE(previous->Schemas().size() == 3);
+        REQUIRE(previous->Schemas().front().fields.front().codec == Codec(1));
+
+        const std::array reordered{changed, foreign};
+        const auto repeated = BuildReplicationDescriptorReplacement(previous, reordered, Limits, 16);
+        RequireError(repeated, NetworkErrors::ReplicationDescriptorIncompatible);
+        REQUIRE(repeated.ErrorValue().diagnostics.size() == diagnostics.size());
+        for (std::size_t index = 0; index < diagnostics.size(); ++index) {
+            REQUIRE(repeated.ErrorValue().diagnostics[index].code.Value() == diagnostics[index].code.Value());
+            REQUIRE(repeated.ErrorValue().diagnostics[index].path == diagnostics[index].path);
+            REQUIRE(repeated.ErrorValue().diagnostics[index].message == diagnostics[index].message);
+        }
+    }
+
+    TEST_CASE("Replacement reports version regression and every erased retirement without retiring the old generation",
+              "[unit][network][replication][registry]") {
+        auto original = Schema();
+        original.version = {2, 0};
+        original.compatibility = {original.version, original.version};
+        original.tombstonedFields = {FieldIdValue(2), FieldIdValue(3)};
+        const std::array descriptors{original};
+        const auto previous = BuildReplicationDescriptorSnapshot(descriptors, Limits).Value();
+        const auto fingerprint = previous->Fingerprint();
+        const std::array candidate{Schema()};
+        const auto rejected = BuildReplicationDescriptorReplacement(previous, candidate, Limits, 8);
+        RequireError(rejected, NetworkErrors::ReplicationDescriptorIncompatible);
+        const auto &diagnostics = rejected.ErrorValue().diagnostics;
+        REQUIRE(diagnostics.size() == 3);
+        REQUIRE(diagnostics[0].code.Value() == "replication.version_regression");
+        REQUIRE(diagnostics[1].code.Value() == "replication.tombstone_missing");
+        REQUIRE(diagnostics[2].code.Value() == "replication.tombstone_missing");
+        REQUIRE(diagnostics[1].path == "schemas[10].fields[2]");
+        REQUIRE(diagnostics[2].path == "schemas[10].fields[3]");
+        REQUIRE(previous->Fingerprint() == fingerprint);
+        REQUIRE(previous->Schemas().front().tombstonedFields == original.tombstonedFields);
+    }
+
+    TEST_CASE("Replacement diagnostic overflow is deterministic and always rejects", "[unit][network][replication][registry]") {
+        const std::array original{Schema(20), Schema(10)};
+        const auto previous = BuildReplicationDescriptorSnapshot(original, Limits).Value();
+        const std::array candidate{Schema(30)};
+        const auto result = BuildReplicationDescriptorReplacement(previous, candidate, Limits, 1);
+        RequireError(result, NetworkErrors::ReplicationDescriptorIncompatible);
+        REQUIRE(result.ErrorValue().diagnostics.size() == 2);
+        REQUIRE(result.ErrorValue().diagnostics.front().path == "schemas[10]");
+        REQUIRE(result.ErrorValue().diagnostics.back().message.find("limit") != std::string::npos);
+        RequireError(BuildReplicationDescriptorReplacement(previous, candidate, Limits, 0), NetworkErrors::ReplicationDescriptorInvalid);
+        REQUIRE(previous->Schemas().size() == 2);
+    }
 }  // namespace Horo::Network

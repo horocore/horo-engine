@@ -10,6 +10,7 @@
 #include "Horo/Network/NetworkAddress.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/ProtocolIdentity.h"
+#include "Horo/Network/ReplicationDeclarationPolicy.h"
 #include "Horo/Network/TransportCapabilities.h"
 
 #include <array>
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Horo::Network {
     namespace Detail {
@@ -246,9 +248,25 @@ namespace Horo::Network {
         constexpr auto operator<=>(const NetworkProjectTransportPolicy &) const noexcept = default;
     };
 
+    /** @brief Authored inventory completeness; legacy unknown can never certify an empty schema set. */
+    enum class NetworkReplicationInventoryCompleteness : std::uint8_t {
+        Unknown,
+        Complete,
+        Count
+    };
+
+    /** @brief Bounded inert project requirements; registration and payload application remain separately owned. */
+    struct NetworkReplicationInventory final {
+        static constexpr ReplicationDescriptorLimits DescriptorLimits{64, 64, 128, 512, 8192};
+        static constexpr std::size_t MaximumDocumentBytes = 64 * 1024;
+
+        NetworkReplicationInventoryCompleteness completeness{NetworkReplicationInventoryCompleteness::Unknown};
+        std::vector<ReplicationDeclaration> declarations; /**< Complete owned requirements, never inferred from successful registration. */
+    };
+
     /** @brief Detached candidate used to construct or replace project network authority. */
     struct NetworkProjectSettingsInput final {
-        static constexpr std::uint32_t CurrentContractVersion = 2;
+        static constexpr std::uint32_t CurrentContractVersion = 3;
 
         std::uint32_t contractVersion{CurrentContractVersion};             /**< Closed project-settings contract version. */
         NetworkProjectSettingsId settings{};                               /**< Stable settings authority identity. */
@@ -260,6 +278,7 @@ namespace Horo::Network {
         NetworkProjectTransportPolicy transport{};                         /**< Exact transport requirement policy. */
         NetworkAddress defaultEndpoint{};        /**< Optional portable endpoint; host may override within policy. */
         std::uint32_t credentialRequirementId{}; /**< Stable public requirement ID, never a credential reference. */
+        NetworkReplicationInventory replication; /**< Explicit portable authored inventory, including unavailable modules. */
     };
 
     /**
@@ -310,9 +329,11 @@ namespace Horo::Network {
         [[nodiscard]] const NetworkAddress &DefaultEndpoint() const noexcept;
         /** @brief Returns the public credential requirement identity. @return Zero when no credential is required. */
         [[nodiscard]] std::uint32_t CredentialRequirementId() const noexcept;
+        /** @brief Returns canonical authored requirements and explicit completeness. @return Owned inert inventory borrow. */
+        [[nodiscard]] const NetworkReplicationInventory &ReplicationInventory() const noexcept;
 
     private:
-        explicit NetworkProjectSettings(const NetworkProjectSettingsInput &input, NetworkProjectSettingsFingerprint fingerprint) noexcept;
+        explicit NetworkProjectSettings(NetworkProjectSettingsInput input, NetworkProjectSettingsFingerprint fingerprint) noexcept;
 
         NetworkProjectSettingsInput input_;
         NetworkProjectSettingsFingerprint fingerprint_;
@@ -326,11 +347,18 @@ namespace Horo::Network {
     [[nodiscard]] std::string SerializeNetworkProjectSettings(const NetworkProjectSettings &settings);
 
     /**
-     * @brief Parses version two or migrates the documented version-one policy before validation.
+     * @brief Parses version three or migrates version one/two with unknown replication completeness before validation.
      * @param document Untrusted portable JSON, limited to 64 KiB and strict known fields.
      * @return Complete validated candidate or a typed malformed/capacity failure. No state is applied.
      */
     [[nodiscard]] Result<NetworkProjectSettingsInput> ParseNetworkProjectSettings(std::string_view document);
+
+    /**
+     * @brief Requires explicit authored completeness before network build/activation; does not validate installed registrations.
+     * @param settings Exact immutable project-policy revision pinned by the operation.
+     * @return Success for complete inventory, or typed incomplete-inventory diagnostics. No callbacks or publication.
+     */
+    [[nodiscard]] Result<void> RequireCompleteNetworkReplicationInventory(const NetworkProjectSettings &settings);
 
     /**
      * @brief Preflights a selected role and exact transport evidence for configure, cook, start or automation.

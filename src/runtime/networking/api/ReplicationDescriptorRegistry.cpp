@@ -3,6 +3,7 @@
 #include "Horo/Network/NetworkErrors.h"
 
 #include <algorithm>
+#include <format>
 #include <limits>
 #include <new>
 #include <string_view>
@@ -110,40 +111,62 @@ namespace Horo::Network {
             return found != schema.fields.end() && found->id == id ? std::to_address(found) : nullptr;
         }
 
-        /** @brief Returns a stable compatibility failure without exposing descriptor payload bytes. */
-        template <typename T> [[nodiscard]] Result<T> Incompatible() {
-            return Result<T>::Failure(MakeError(NetworkErrors::ReplicationDescriptorIncompatible));
+        /** @brief Retains deterministic attributed diagnostics without permitting overflow to publish a generation. */
+        struct ReplacementDiagnostics final {
+            Error error{MakeError(NetworkErrors::ReplicationDescriptorIncompatible)};
+            std::size_t maximum{};
+            bool overflowed{};
+
+            void Add(const ReplicationSchemaDescriptor &previous, const ReplicationSchemaDescriptor *candidate, const std::string_view code,
+                     const std::string_view reason, const std::optional<FieldId> field = {}) {
+                if (error.diagnostics.size() == maximum) {
+                    overflowed = true;
+                    return;
+                }
+                error.diagnostics.push_back(
+                    {.code = DiagnosticCode{std::string{code}},
+                     .severity = DiagnosticSeverity::Error,
+                     .message =
+                         std::format("Module '{}', schema {} (prior {}.{}, candidate {}): {}.", previous.owner.value, previous.id.Value(),
+                                     previous.version.major, previous.version.minor,
+                                     candidate ? std::format("{}.{}", candidate->version.major, candidate->version.minor) : "unavailable",
+                                     reason),
+                     .path = field ? std::format("schemas[{}].fields[{}]", previous.id.Value(), field->Value())
+                                   : std::format("schemas[{}]", previous.id.Value())});
+            }
+        };
+
+        /** @brief Collects all forbidden stable field changes and retirements using the unchanged registry invariants. */
+        void CollectPriorFields(const ReplicationSchemaDescriptor &previous, const ReplicationSchemaDescriptor &candidate,
+                                ReplacementDiagnostics &diagnostics) {
+            for (const auto &field : previous.fields) {
+                if (const auto *replacement = FindField(candidate, field.id); replacement != nullptr) {
+                    if (*replacement != field)
+                        diagnostics.Add(previous, &candidate, "replication.field_semantics_changed", "stable field semantics changed",
+                                        field.id);
+                    continue;
+                }
+                if (!std::ranges::binary_search(candidate.tombstonedFields, field.id))
+                    diagnostics.Add(previous, &candidate, "replication.field_retirement_missing", "removed field has no tombstone",
+                                    field.id);
+                if (candidate.compatibility.Contains(previous.version) && field.requirement == ReplicationFieldRequirement::Required)
+                    diagnostics.Add(previous, &candidate, "replication.required_field_removed",
+                                    "compatible projection removes a required field", field.id);
+            }
         }
 
-        /** @brief Ensures retired identities remain retired in every later schema. */
-        [[nodiscard]] bool RetainsTombstones(const ReplicationSchemaDescriptor &previous, const ReplicationSchemaDescriptor &candidate) {
-            return std::ranges::all_of(previous.tombstonedFields, [&candidate](const FieldId id) {
-                return std::ranges::binary_search(candidate.tombstonedFields, id);
-            });
-        }
-
-        /** @brief Ensures prior fields retain semantics or undergo an allowed retirement. */
-        [[nodiscard]] bool RetainsPriorFields(const ReplicationSchemaDescriptor &previous, const ReplicationSchemaDescriptor &candidate) {
-            return std::ranges::all_of(previous.fields, [&previous, &candidate](const ReplicationFieldDescriptor &priorField) {
-                if (const ReplicationFieldDescriptor *candidateField = FindField(candidate, priorField.id); candidateField != nullptr)
-                    return *candidateField == priorField;
-                if (!std::ranges::binary_search(candidate.tombstonedFields, priorField.id))
-                    return false;
-                if (candidate.compatibility.Contains(previous.version) && priorField.requirement == ReplicationFieldRequirement::Required)
-                    return false;
-                return true;
-            });
-        }
-
-        /** @brief Ensures compatible-minor additions are new, optional, and canonical-defaulted. */
-        [[nodiscard]] bool HasCompatibleAdditions(const ReplicationSchemaDescriptor &previous,
-                                                  const ReplicationSchemaDescriptor &candidate) {
-            return std::ranges::all_of(candidate.fields, [&previous](const ReplicationFieldDescriptor &candidateField) {
-                if (FindField(previous, candidateField.id) != nullptr)
-                    return true;
-                return candidateField.introducedVersion > previous.version &&
-                       candidateField.requirement == ReplicationFieldRequirement::Optional && candidateField.canonicalDefault.has_value();
-            });
+        /** @brief Collects every incompatible addition without changing major-version replacement admission. */
+        void CollectAdditions(const ReplicationSchemaDescriptor &previous, const ReplicationSchemaDescriptor &candidate,
+                              ReplacementDiagnostics &diagnostics) {
+            if (!candidate.compatibility.Contains(previous.version))
+                return;
+            for (const auto &field : candidate.fields) {
+                if (FindField(previous, field.id) == nullptr &&
+                    (field.introducedVersion <= previous.version || field.requirement != ReplicationFieldRequirement::Optional ||
+                     !field.canonicalDefault))
+                    diagnostics.Add(previous, &candidate, "replication.addition_incompatible",
+                                    "compatible addition is not new and optional with a canonical default", field.id);
+            }
         }
 
         /** @brief Fully validated canonical storage awaiting immutable snapshot construction. */
@@ -174,17 +197,20 @@ namespace Horo::Network {
         }
 
         /** @brief Validates stable identity and compatible-minor rules across one schema replacement. */
-        [[nodiscard]] Result<void> ValidateReplacementSchema(const ReplicationSchemaDescriptor &previous,
-                                                             const ReplicationSchemaDescriptor &candidate) {
-            if (candidate.owner != previous.owner || candidate.version < previous.version)
-                return Incompatible<void>();
+        void CollectReplacementSchema(const ReplicationSchemaDescriptor &previous, const ReplicationSchemaDescriptor &candidate,
+                                      ReplacementDiagnostics &diagnostics) {
+            if (candidate.owner != previous.owner)
+                diagnostics.Add(previous, &candidate, "replication.owner_mismatch", "declaring owner changed");
+            if (candidate.version < previous.version)
+                diagnostics.Add(previous, &candidate, "replication.version_regression", "schema version regressed");
             if (candidate.version == previous.version && candidate != previous)
-                return Incompatible<void>();
-            if (!RetainsTombstones(previous, candidate) || !RetainsPriorFields(previous, candidate))
-                return Incompatible<void>();
-            if (!candidate.compatibility.Contains(previous.version))
-                return Result<void>::Success();
-            return HasCompatibleAdditions(previous, candidate) ? Result<void>::Success() : Incompatible<void>();
+                diagnostics.Add(previous, &candidate, "replication.unversioned_change",
+                                "published schema changed without a version increment");
+            for (const auto field : previous.tombstonedFields)
+                if (!std::ranges::binary_search(candidate.tombstonedFields, field))
+                    diagnostics.Add(previous, &candidate, "replication.tombstone_missing", "retired identity was not retained", field);
+            CollectPriorFields(previous, candidate, diagnostics);
+            CollectAdditions(previous, candidate, diagnostics);
         }
 
         /** @brief Copies, canonicalizes, validates, and hashes one complete candidate. */
@@ -254,18 +280,38 @@ namespace Horo::Network {
     Result<ReplicationDescriptorSnapshotPtr> BuildReplicationDescriptorReplacement(
         const ReplicationDescriptorSnapshotPtr &previous, const std::span<const ReplicationSchemaDescriptor> descriptors,
         const ReplicationDescriptorLimits &limits) {
-        if (previous == nullptr)
+        return BuildReplicationDescriptorReplacement(previous, descriptors, limits, 1024);
+    }
+
+    /** @copydoc BuildReplicationDescriptorReplacement */
+    Result<ReplicationDescriptorSnapshotPtr> BuildReplicationDescriptorReplacement(
+        const ReplicationDescriptorSnapshotPtr &previous, const std::span<const ReplicationSchemaDescriptor> descriptors,
+        const ReplicationDescriptorLimits &limits, const std::size_t maximumDiagnostics) {
+        if (previous == nullptr || maximumDiagnostics == 0)
             return Result<ReplicationDescriptorSnapshotPtr>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
         Result<ReplicationDescriptorSnapshotPtr> candidate = BuildReplicationDescriptorSnapshot(descriptors, limits);
         if (candidate.HasError())
             return candidate;
 
-        for (const ReplicationSchemaDescriptor &previousSchema : previous->Schemas()) {
-            const auto candidateSchema = candidate.Value()->Find(previousSchema.id);
-            if (candidateSchema.HasError())
-                return Incompatible<ReplicationDescriptorSnapshotPtr>();
-            if (const Result<void> compatible = ValidateReplacementSchema(previousSchema, *candidateSchema.Value()); compatible.HasError())
-                return Incompatible<ReplicationDescriptorSnapshotPtr>();
+        try {
+            ReplacementDiagnostics diagnostics;
+            diagnostics.maximum = maximumDiagnostics;
+            for (const ReplicationSchemaDescriptor &previousSchema : previous->Schemas()) {
+                const auto candidateSchema = candidate.Value()->Find(previousSchema.id);
+                if (candidateSchema.HasError())
+                    diagnostics.Add(previousSchema, nullptr, "replication.schema_missing", "required schema is missing");
+                else
+                    CollectReplacementSchema(previousSchema, *candidateSchema.Value(), diagnostics);
+            }
+            if (diagnostics.overflowed)
+                diagnostics.error.diagnostics.push_back(
+                    {.code = DiagnosticCode{"replication.diagnostic_overflow"},
+                     .severity = DiagnosticSeverity::Error,
+                     .message = "Replacement diagnostics exceeded the explicit limit; publication is denied."});
+            if (!diagnostics.error.diagnostics.empty())
+                return Result<ReplicationDescriptorSnapshotPtr>::Failure(std::move(diagnostics.error));
+        } catch (const std::bad_alloc &) {
+            return Result<ReplicationDescriptorSnapshotPtr>::Failure(MakeError(NetworkErrors::ReplicationCapacityExceeded));
         }
         return candidate;
     }

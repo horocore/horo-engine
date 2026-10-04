@@ -80,6 +80,10 @@ namespace Horo::Application::Internal {
     Result<std::unique_ptr<NetworkProductHost>> NetworkProductHost::Create(Clock &clock, const NetworkProductHostInputs &inputs,
                                                                            Network::NetworkModeFactories factories,
                                                                            Network::NetworkTargetDiagnostic *diagnostic) {
+        if (inputs.selection.role != Network::NetworkProjectRole::Standalone) {
+            if (const auto complete = Network::RequireCompleteNetworkReplicationInventory(inputs.project); complete.HasError())
+                return Result<std::unique_ptr<NetworkProductHost>>::Failure(complete.ErrorValue());
+        }
         const auto assessment = Network::AssessNetworkTarget(inputs.project, inputs.product, inputs.inventory, inputs.hostFacts,
                                                              inputs.requirements, inputs.selection);
         if (diagnostic != nullptr)
