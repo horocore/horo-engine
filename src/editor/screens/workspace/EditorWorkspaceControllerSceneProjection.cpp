@@ -87,19 +87,24 @@ namespace Horo::Editor {
             LOG_ERROR("editor.runtime_scene", "Runtime scene operation failed: %s", operationError->message.c_str());
 
         const std::optional<Runtime::RuntimeSceneView> active = m_runtimeScene.ActiveScene();
-        if (!active || active->DefinitionRevision() == m_activeRuntimeRevision)
+        if (!active || (!m_cameraPreview && active->DefinitionRevision() == m_activeRuntimeRevision))
             return;
 
         LoadDocumentAssetMeshes();
         const SceneDocumentSnapshot document = m_document.Snapshot();
-        Result<EditorViewportSceneSnapshot> extracted =
-            ExtractEditorViewportScene(*active, m_queuedRuntimeRevision, m_viewport.Current().camera, m_primitiveMeshCache, &document,
-                                       &m_assetMeshCache);
+        const auto camera = ResolveCameraCutPreview(*active);
+        if (camera.HasError()) {
+            LOG_ERROR("editor.viewport", "Camera authority commit failed: %s", camera.ErrorValue().message.c_str());
+            return;
+        }
+        Result<EditorViewportSceneSnapshot> extracted = ExtractEditorViewportScene(*active, m_queuedRuntimeRevision, camera.Value(),
+                                                                                   m_primitiveMeshCache, &document, &m_assetMeshCache);
         if (extracted.HasError()) {
             LOG_ERROR("editor.viewport", "Runtime scene extraction failed: %s", extracted.ErrorValue().message.c_str());
             return;
         }
         m_viewportScene = std::move(extracted).Value();
+        m_viewModel.viewportCamera = camera.Value();
         ++m_viewportSceneRevision;
         if (!m_viewport.Current().transformPreviews.empty()) {
             const Result<void> reapplied =

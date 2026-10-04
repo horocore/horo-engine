@@ -1262,6 +1262,20 @@ add_library(HoroEngine::CinematicRuntime ALIAS HoroCinematicRuntime)
 target_compile_features(HoroCinematicRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroCinematicRuntime PUBLIC HoroEngine::CinematicModel)
 
+add_library(HoroCameraRuntime STATIC
+        runtime/camera/CameraErrors.cpp
+        runtime/camera/CameraService.cpp
+        runtime/camera/SceneCamera.cpp
+)
+add_library(HoroEngine::CameraRuntime ALIAS HoroCameraRuntime)
+target_compile_features(HoroCameraRuntime PUBLIC cxx_std_20)
+target_link_libraries(HoroCameraRuntime PUBLIC HoroEngine::RuntimeScene HoroEngine::RenderApi)
+
+add_library(HoroCinematicCameraRuntime STATIC runtime/cinematic/camera/CameraCutRuntime.cpp)
+add_library(HoroEngine::CinematicCameraRuntime ALIAS HoroCinematicCameraRuntime)
+target_compile_features(HoroCinematicCameraRuntime PUBLIC cxx_std_20)
+target_link_libraries(HoroCinematicCameraRuntime PUBLIC HoroEngine::CinematicRuntime HoroEngine::CameraRuntime)
+
 add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavMeshData.cpp
         runtime/navigation/api/NavigationTileDescriptor.cpp
@@ -2148,6 +2162,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerSceneAssets.cpp
             editor/screens/workspace/EditorWorkspaceControllerSceneRecovery.cpp
             editor/screens/workspace/EditorWorkspaceControllerSceneProjection.cpp
+            editor/screens/workspace/EditorWorkspaceControllerCamera.cpp
             editor/screens/workspace/EditorWorkspaceControllerPlay.cpp
             editor/screens/workspace/EditorWorkspaceControllerCommandRouting.cpp
             editor/screens/workspace/EditorWorkspaceControllerCommands.cpp
@@ -2183,6 +2198,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroGui
             PUBLIC
             HoroEngine::EditorServices
+            HoroEngine::CinematicCameraRuntime
             HoroEngine::Foundation
             HoroThirdParty::ImGui
             PRIVATE
