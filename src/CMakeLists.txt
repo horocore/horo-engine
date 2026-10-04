@@ -630,6 +630,7 @@ add_library(HoroGameplayApi STATIC
         gameplay/api/GameModule.cpp
         gameplay/api/GameplayComponentErrors.cpp
         gameplay/api/GameplayErrors.cpp
+        gameplay/api/GameplayPhysicsErrors.cpp
 )
 add_library(HoroEngine::GameplayApi ALIAS HoroGameplayApi)
 target_compile_features(HoroGameplayApi PUBLIC cxx_std_20)
@@ -710,6 +711,7 @@ add_library(HoroGameplayLua STATIC
         gameplay/lua/LuaBehavior.cpp
         gameplay/lua/LuaBehaviorMetadata.cpp
         gameplay/lua/LuaReplicationDeclaration.cpp
+        gameplay/lua/LuaPhysicsBinding.cpp
 )
 
 add_library(HoroGameplayBuild STATIC
@@ -1010,6 +1012,13 @@ add_library(HoroPhysics STATIC
 add_library(HoroEngine::Physics ALIAS HoroPhysics)
 target_compile_features(HoroPhysics PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysics PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::PhysicsModel)
+add_library(HoroGameplayPhysicsIntegration STATIC gameplay/runtime/GameplayPhysicsContext.cpp)
+add_library(HoroEngine::GameplayPhysicsIntegration ALIAS HoroGameplayPhysicsIntegration)
+target_compile_features(HoroGameplayPhysicsIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroGameplayPhysicsIntegration PUBLIC HoroEngine::GameplayApi HoroEngine::Physics)
+target_link_libraries(HoroGameplayRuntime PRIVATE HoroEngine::GameplayPhysicsIntegration)
+target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayPhysicsIntegration)
+target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayPhysicsIntegration)
 if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp

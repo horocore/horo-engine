@@ -3,6 +3,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "LuaBehaviorMetadata.h"
+#include "LuaPhysicsBinding.h"
 #include "LuaReplicationDeclaration.h"
 
 #include <algorithm>
@@ -294,6 +295,8 @@ namespace Horo::Gameplay {
 
         static void PushContext(lua_State *state, BehaviorContext &context) {
             lua_newtable(state);
+            Detail::PushLuaPhysicsContext(state, context);
+            lua_setfield(state, -2, "physics");
             lua_newtable(state);
             Function<Position>(state, context, "position");
             Function<SetPosition>(state, context, "set_position");

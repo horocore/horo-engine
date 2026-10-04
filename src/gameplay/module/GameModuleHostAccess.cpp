@@ -1,5 +1,6 @@
 #include "GameModuleHostDetail.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <utility>
@@ -103,9 +104,16 @@ namespace Horo::Gameplay {
         return impl_->runtimeContext.cancellation;
     }
 
+    /** @copydoc LoadedGameModule::PhysicsContext */
+    std::shared_ptr<const GameplayPhysicsContext> LoadedGameModule::PhysicsContext() const noexcept {
+        return impl_->physics;
+    }
+
     /** @copydoc LoadedGameModule::PrepareReload */
     Result<GameModuleReloadSnapshot> LoadedGameModule::PrepareReload() {  // NOSONAR(cpp:S5817) Mutates generation lifecycle.
         impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
+        if (impl_->physics)
+            impl_->physics->Revoke();
         if (impl_.use_count() != 1)
             return Result<GameModuleReloadSnapshot>::Failure(
                 MakeError(GameplayErrors::GameplayReloadRestartRequired, "A module-generation runtime is still active."));
@@ -120,4 +128,8 @@ namespace Horo::Gameplay {
 
     /** @copydoc GameModuleHost::GameModuleHost */
     GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities) : hostCapabilities_(std::move(hostCapabilities)) {}
+
+    /** @copydoc GameModuleHost::GameModuleHost */
+    GameModuleHost::GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics)
+        : hostCapabilities_(std::move(hostCapabilities)), physics_(std::move(physics)) {}
 }  // namespace Horo::Gameplay
