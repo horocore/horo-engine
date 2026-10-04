@@ -90,10 +90,10 @@ namespace Horo::Editor {
         /** @brief Creates an owning request for the exact endpoint with verified TLS and no ambient credentials. */
         [[nodiscard]] CurlHandle CreateRequest(const std::string &url, const EditorUpdateManifestHttpPolicy &policy,
                                                ManifestResponse &response) {
-            CurlHandle handle{curl_easy_init(), &curl_easy_cleanup};
-            if (!handle)
-                return handle;
-            auto *curl = handle.get();
+            auto *curl = curl_easy_init();
+            if (curl == nullptr)
+                return CurlHandle{nullptr, &curl_easy_cleanup};
+            CurlHandle handle{curl, &curl_easy_cleanup};
             // TLS 1.3 is the minimum; libcurl retains its default maximum supported version.
             if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
                 return CurlHandle{nullptr, &curl_easy_cleanup};
