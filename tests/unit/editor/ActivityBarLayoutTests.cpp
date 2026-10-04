@@ -85,4 +85,35 @@ namespace {
         REQUIRE((layout.FindSlot("horo.viewport") == ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 0}));
         REQUIRE((layout.ItemAt(ActivityBarRail::Left, 1, 0).empty()));
     }
+
+    TEST_CASE("Withdrawing A Contribution Compacts Its Group And Allows Reattachment", "[unit][editor][extensions]") {
+        ActivityBarLayout layout;
+        REQUIRE(layout.Insert("horo.first", {ActivityBarRail::Right, 1, 0}).Succeeded());
+        REQUIRE(layout.Insert("com.example.tools.drawer", {ActivityBarRail::Right, 1, 1}).Succeeded());
+        REQUIRE(layout.Insert("horo.last", {ActivityBarRail::Right, 1, 2}).Succeeded());
+        REQUIRE(layout.Insert("horo.bottom", {ActivityBarRail::Bottom, 0, 0}).Succeeded());
+
+        REQUIRE(layout.Remove("com.example.tools.drawer").Succeeded());
+        CHECK_FALSE(layout.FindSlot("com.example.tools.drawer").has_value());
+        CHECK(layout.ItemAt(ActivityBarRail::Right, 1, 0) == "horo.first");
+        CHECK(layout.ItemAt(ActivityBarRail::Right, 1, 1) == "horo.last");
+        CHECK(layout.ItemAt(ActivityBarRail::Right, 1, 2).empty());
+        CHECK(layout.ItemAt(ActivityBarRail::Bottom, 0, 0) == "horo.bottom");
+
+        CHECK(layout.Remove("com.example.tools.drawer").code == ActivityBarLayoutOperationCode::UnknownItem);
+        REQUIRE(layout.Insert("com.example.tools.drawer", {ActivityBarRail::Right, 1, 1}).Succeeded());
+        CHECK(layout.ItemAt(ActivityBarRail::Right, 1, 1) == "com.example.tools.drawer");
+        CHECK(layout.ItemAt(ActivityBarRail::Right, 1, 2) == "horo.last");
+    }
+
+    TEST_CASE("Withdrawing The Only Contribution Leaves A Reusable Empty Group", "[unit][editor][extensions]") {
+        ActivityBarLayout layout;
+        REQUIRE(layout.Insert("com.example.tools.drawer", {ActivityBarRail::Left, 0, 0}).Succeeded());
+        CHECK(layout.Remove("").code == ActivityBarLayoutOperationCode::UnknownItem);
+        CHECK(layout.ItemAt(ActivityBarRail::Left, 0, 0) == "com.example.tools.drawer");
+        REQUIRE(layout.Remove("com.example.tools.drawer").Succeeded());
+        CHECK(layout.Groups(ActivityBarRail::Left).front().items.empty());
+        CHECK(layout.Groups(ActivityBarRail::Left).size() == ActivityBarLayout::kDefaultGroupCount);
+        REQUIRE(layout.Insert("com.example.tools.replacement", {ActivityBarRail::Left, 0, 0}).Succeeded());
+    }
 }  // namespace
