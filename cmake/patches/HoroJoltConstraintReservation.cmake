@@ -6,7 +6,11 @@ endif()
 
 # Verify the entire source set before modifying any member: drift cannot leave a partially applied patch.
 function(horo_verify_jolt_file relative original_digest patched_digest)
-    file(SHA256 "${JOLT_SOURCE_DIR}/Jolt/Physics/${relative}" actual)
+    file(READ "${JOLT_SOURCE_DIR}/Jolt/Physics/${relative}" source)
+    # CMake writes text with native line endings on Windows. Verify canonical content
+    # for both fresh archives and previously patched trees without weakening drift checks.
+    string(REPLACE "\r\n" "\n" source "${source}")
+    string(SHA256 actual "${source}")
     if(NOT actual STREQUAL original_digest AND NOT actual STREQUAL patched_digest)
         message(FATAL_ERROR "Jolt reservation patch source drift: ${relative} (${actual})")
     endif()
@@ -23,14 +27,15 @@ horo_verify_jolt_file("PhysicsSystem.h"
 
 function(horo_patch_jolt_file relative original_digest patched_digest needle addition)
     set(path "${JOLT_SOURCE_DIR}/Jolt/Physics/${relative}")
-    file(SHA256 "${path}" actual)
+    file(READ "${path}" source)
+    string(REPLACE "\r\n" "\n" source "${source}")
+    string(SHA256 actual "${source}")
     if(actual STREQUAL patched_digest)
         return()
     endif()
     if(NOT actual STREQUAL original_digest)
         message(FATAL_ERROR "Jolt reservation patch source drift: ${relative} (${actual})")
     endif()
-    file(READ "${path}" source)
     string(FIND "${source}" "${needle}" first)
     if(first EQUAL -1)
         message(FATAL_ERROR "Jolt reservation patch context missing: ${relative}")

@@ -116,15 +116,7 @@ namespace Horo::AI::Detail {
                 if (!agent.retired && std::ranges::find(destroyed, agent.record.owner) != destroyed.end())
                     candidate->removals.push_back(index);
             }
-            std::vector<AiSceneAgentDescriptor> agents;
-            agents.reserve(created.size());
-            for (const auto &entity : created) {
-                if (!entity.components || (!entity.components->aiAgent && !entity.components->aiController))
-                    continue;
-                agents.push_back({.owner = entity.entity,
-                                  .agent = entity.components->aiAgent.value_or(AiAgentComponent{}),
-                                  .controller = entity.components->aiController});
-            }
+            const auto agents = ProjectAgents(created);
             // Reuse only retired slots with a fresh generation. Exhausted generations remain permanent tombstones.
             for (std::size_t index = 0; index < state.agents.size() && candidate->slots.size() < agents.size(); ++index) {
                 const auto &agent = state.agents[index];
@@ -151,22 +143,43 @@ namespace Horo::AI::Detail {
             if (prepared.HasError())
                 return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(prepared.ErrorValue());
             candidate->additions = std::move(prepared).Value();
-            candidate->retired.reserve(candidate->removals.size());
-            candidate->tombstones.reserve(candidate->removals.size());
-            for (const auto index : candidate->removals) {
+            PreparePublicationStorage(*candidate, agents, appended);
+            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
+        }
+
+        /** @brief Copies only typed AI projections into detached agent descriptors. */
+        static std::vector<AiSceneAgentDescriptor> ProjectAgents(const std::span<const Runtime::RuntimeEntityView> created) {
+            std::vector<AiSceneAgentDescriptor> agents;
+            agents.reserve(created.size());
+            for (const auto &entity : created) {
+                if (!entity.components || (!entity.components->aiAgent && !entity.components->aiController))
+                    continue;
+                agents.push_back({.owner = entity.entity,
+                                  .agent = entity.components->aiAgent.value_or(AiAgentComponent{}),
+                                  .controller = entity.components->aiController});
+            }
+            return agents;
+        }
+
+        /** @brief Reserves final indexes and teardown storage while resident task ownership is unchanged. */
+        static void PreparePublicationStorage(StructuralCandidate &candidate, const std::span<const AiSceneAgentDescriptor> agents,
+                                              const std::size_t appended) {
+            auto &state = *candidate.state;
+            candidate.retired.reserve(candidate.removals.size());
+            candidate.tombstones.reserve(candidate.removals.size());
+            for (const auto index : candidate.removals) {
                 AgentRuntimeState tombstone;
                 tombstone.record.handle = state.agents[index].record.handle;
                 tombstone.retired = true;
-                candidate->tombstones.push_back(std::move(tombstone));
+                candidate.tombstones.push_back(std::move(tombstone));
             }
-            candidate->owners.reserve(state.agentsByOwner.size() + agents.size());
+            candidate.owners.reserve(state.agentsByOwner.size() + agents.size());
             for (const auto &[owner, index] : state.agentsByOwner)
-                if (!state.agents[index].retired && std::ranges::find(candidate->removals, index) == candidate->removals.end())
-                    candidate->owners.emplace(owner, index);
+                if (!state.agents[index].retired && std::ranges::find(candidate.removals, index) == candidate.removals.end())
+                    candidate.owners.emplace(owner, index);
             for (std::size_t index = 0; index < agents.size(); ++index)
-                candidate->owners.emplace(agents[index].owner, candidate->slots[index].index);
+                candidate.owners.emplace(agents[index].owner, candidate.slots[index].index);
             state.agents.reserve(state.agents.size() + appended);
-            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
         }
 
         AiSceneRuntime *runtime_;

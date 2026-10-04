@@ -355,12 +355,14 @@ namespace Horo::Gameplay {
                         instance.implementation->OnDisable(context);
                     } catch (...) {  // NOSONAR(cpp:S1181) Project callback containment must complete destruction.
                         complete = false;
+                        LOG_WARN("gameplay.runtime", "Behavior OnDisable threw during teardown; destruction will continue.");
                     }
                 }
                 try {
                     instance.implementation->OnDestroy(context);
                 } catch (...) {  // NOSONAR(cpp:S1181) Project callback containment must release the factory instance.
                     complete = false;
+                    LOG_WARN("gameplay.runtime", "Behavior OnDestroy threw during teardown; factory instance will still be released.");
                 }
             }
             instance.factory.destroy(instance.factory.userData, instance.implementation);
@@ -376,8 +378,7 @@ namespace Horo::Gameplay {
             if (physics)
                 physics->Revoke();
             for (auto iterator = instances.rbegin(); iterator != instances.rend(); ++iterator) {
-                if (!RollbackInstance(*iterator))
-                    LOG_WARN("gameplay.runtime", "Behavior shutdown callback threw; factory instance was still released.");
+                (void)RollbackInstance(*iterator);
             }
             instances.clear();
             events.current.clear();

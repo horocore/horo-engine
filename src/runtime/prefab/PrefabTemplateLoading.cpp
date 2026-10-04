@@ -171,6 +171,31 @@ namespace Horo::Prefab::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc PrefabTemplateProviderState::Progress */
+    void PrefabTemplateProviderState::Progress(PrefabTemplateRequest &request, std::size_t &inFlight) {
+        Result<void> progress = Result<void>::Success();
+        try {
+            if (request.pending && !InFlight(*request.pending))
+                progress = Consume(request);
+            if (progress.HasValue() && request.decoded && request.dependencies.size() == request.decoded->Data().dependencies.size())
+                progress = Publish(request);
+            if (progress.HasValue() && request.status == PrefabTemplateLoadState::Loading && !request.pending &&
+                inFlight < limits.maximumConcurrentLoads) {
+                progress = Schedule(request);
+                if (progress.HasValue())
+                    ++inFlight;
+            }
+        } catch (const std::bad_alloc &) {
+            progress = Result<void>::Failure(MakeError(PrefabErrors::ComponentAllocationFailed));
+        }
+        if (progress.HasError()) {
+            request.error = std::move(progress).ErrorValue();
+            request.cancellation.RequestCancellation();
+            ReleasePins(request);
+            request.status = PrefabTemplateLoadState::Failed;
+        }
+    }
+
     /** @copydoc PrefabTemplateProviderState::Pump */
     Result<void> PrefabTemplateProviderState::Pump() {
         if (closed || !payloads)
@@ -207,27 +232,7 @@ namespace Horo::Prefab::Detail {
                 request->status = PrefabTemplateLoadState::Cancelled;
                 continue;
             }
-            Result<void> progress = Result<void>::Success();
-            try {
-                if (request->pending && !InFlight(*request->pending))
-                    progress = Consume(*request);
-                if (progress.HasValue() && request->decoded && request->dependencies.size() == request->decoded->Data().dependencies.size())
-                    progress = Publish(*request);
-                if (progress.HasValue() && request->status == PrefabTemplateLoadState::Loading && !request->pending &&
-                    inFlight < limits.maximumConcurrentLoads) {
-                    progress = Schedule(*request);
-                    if (progress.HasValue())
-                        ++inFlight;
-                }
-            } catch (const std::bad_alloc &) {
-                progress = Result<void>::Failure(MakeError(PrefabErrors::ComponentAllocationFailed));
-            }
-            if (progress.HasError()) {
-                request->error = std::move(progress).ErrorValue();
-                request->cancellation.RequestCancellation();
-                ReleasePins(*request);
-                request->status = PrefabTemplateLoadState::Failed;
-            }
+            Progress(*request, inFlight);
         }
         std::erase_if(requests, [](const auto &request) {
             return request->status != PrefabTemplateLoadState::Loading;

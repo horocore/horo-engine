@@ -86,10 +86,10 @@ unchanged native capacity. Horo constraint and collision-pair storage is also fu
 reserved before publication. The generated third-party notice identifies the patch
 and its digest; generated notices/build outputs are not repository inputs.
 
-The new owned-resource regressions and updated Physics public consumer are pending
-native execution. Actual generation-qualified Physics bindings and application-level
-aggregate participation still require the concrete adapter; this low-level batch is
-not complete ticket acceptance.
+Native owned-resource regressions, public-header consumers and the concrete Physics
+structural adapter now run in the Linux skeleton suite. Adapter regressions cover
+rollback, publication and removal of generation-qualified bindings. A provider-driven
+application aggregate remains separate acceptance work.
 
 ## AI owner staging
 
@@ -113,9 +113,9 @@ through `PrepareScene`, not constructing implementation state. The control block
 allocated during preparation, never during allocation-free activation publication.
 Affected C++ consumers must rebuild; the public module C ABI is unchanged.
 
-The four new AI group cases and public consumer are not yet executed. Full application
-composition and a provider-driven Physics/AI/Gameplay aggregate rollback regression
-remain necessary before this ticket can claim complete acceptance.
+The AI group cases and public consumer run in the Linux skeleton suite. Full
+application composition and a provider-driven Physics/AI/Gameplay aggregate rollback
+regression remain necessary before this ticket can claim complete acceptance.
 
 ## Consumer migration and evidence
 
@@ -126,6 +126,8 @@ complete synchronous Scene transaction and postcommit callback phase.
 
 The narrow provider lifecycle tests and Gameplay metadata rollback, unknown
 attachment, reentrant shutdown and full-budget replacement tests cover the
-implemented paths. Detached Physics body tests require a fresh granted native
-validation pass. Full integrated owner behavior and hosted gates are prerequisites
-for delivery; this guide is not a technical-ready claim.
+implemented paths. Detached Physics body and constraint tests run with the native
+provider; the omitted-provider composition has a separate targeted pass. Jolt patch
+regressions verify fresh and repeated application with both LF and CRLF inputs and
+reject unexpected source changes before mutation. These checks qualify the bounded
+foundation, not full integrated owner behavior or complete HORO-1038 acceptance.

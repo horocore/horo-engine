@@ -54,6 +54,8 @@ namespace Horo::Prefab::Detail {
         [[nodiscard]] Result<void> CheckOwner() const;
         [[nodiscard]] Result<void> CheckAdmission(const Assets::AssetRegistrySnapshot &snapshot, Runtime::SceneRuntimeId scene) const;
         [[nodiscard]] Result<void> Pump();
+        /** @brief Advances one admitted request and accounts for newly scheduled workers. */
+        void Progress(PrefabTemplateRequest &request, std::size_t &inFlight);
         [[nodiscard]] Result<void> Consume(PrefabTemplateRequest &request);
         [[nodiscard]] Result<void> Schedule(PrefabTemplateRequest &request);
         [[nodiscard]] Result<void> Publish(PrefabTemplateRequest &request);

@@ -181,11 +181,13 @@ namespace Horo::Physics {
         const auto shape = initial.Value()->Shapes().front();
         PhysicsConstraintDescriptor constraint;
         constraint.first.body = resident;
+        constraint.parameters = PhysicsHingeConstraint{};
         REQUIRE(initial.Value()->PrepareConstraints(std::array{constraint}).HasValue());
         const auto joint = initial.Value()->Constraints().front();
         REQUIRE(initial.Value()->ValidatePublication().HasValue());
         initial.Value()->Publish();
-        initial.Value().reset();
+        auto initialGroup = std::move(initial).Value();
+        initialGroup.reset();
         const auto retirement = [&] {
             auto prepared = world->PrepareSceneGroup({}, {});
             REQUIRE(prepared.HasValue());
@@ -227,13 +229,15 @@ namespace Horo::Physics {
         const auto resident = world->CreateSceneBody({body}).Value();
         PhysicsConstraintDescriptor descriptor;
         descriptor.first.body = resident;
+        descriptor.parameters = PhysicsHingeConstraint{};
         auto prepared = world->PrepareSceneGroup({}, {});
         REQUIRE(prepared.HasValue());
         REQUIRE(prepared.Value()->Handles().empty());
         REQUIRE(prepared.Value()->PrepareConstraints(std::array{descriptor}).HasValue());
         const auto aborted = prepared.Value()->Constraints().front();
         CHECK(world->ReadSceneJointState(aborted).HasError());
-        prepared.Value().reset();
+        auto abortedGroup = std::move(prepared).Value();
+        abortedGroup.reset();
         CHECK(world->ReadSceneBodyReconciliation(resident).HasValue());
         prepared = world->PrepareSceneGroup({}, {});
         REQUIRE(prepared.HasValue());

@@ -658,6 +658,7 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/RuntimeSceneDefinition.cpp
         runtime/scene/SavedSceneBootstrap.cpp
         runtime/scene/RuntimeScene.cpp
+        runtime/scene/RuntimeSceneView.cpp
         runtime/scene/RuntimeSceneService.cpp
         runtime/scene/RuntimeSceneErrors.cpp
 )
@@ -1034,6 +1035,7 @@ if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp
         physics/CanonicalPhysicsRuntimeBodyCreation.cpp
+        physics/CanonicalPhysicsRuntimeSceneBatch.cpp
         physics/CanonicalPhysicsRuntimeDebug.cpp
         physics/CanonicalPhysicsRuntimeContainment.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp
@@ -1048,6 +1050,7 @@ if(HORO_BUILD_PHYSICS_NATIVE)
     set_source_files_properties(
         physics/CanonicalPhysicsRuntime.cpp
         physics/CanonicalPhysicsRuntimeBodyCreation.cpp
+        physics/CanonicalPhysicsRuntimeSceneBatch.cpp
         physics/CanonicalPhysicsRuntimeDebug.cpp
         physics/CanonicalPhysicsRuntimeContainment.cpp
         physics/CanonicalPhysicsRuntimeDiagnostics.cpp

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_vector.hpp>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -170,12 +171,12 @@ TEST_CASE("Gameplay group preparation never constructs callbacks and preserves t
         REQUIRE(preparation.HasValue());
         auto candidate = std::move(preparation).Value();
         CHECK(candidate->ValidatePublication().HasValue());
-        CHECK(recorder.calls == before);
+        CHECK_THAT(recorder.calls, Catch::Matchers::Equals(before));
         CHECK(runtime->InstanceCount() == 1);
         CHECK(runtime->FixedUpdate({}, FixedDeltaTime{}).HasError());
         // Rollback is metadata-only: no factory, no hooks, no existing instance teardown.
     }
-    CHECK(recorder.calls == before);
+    CHECK_THAT(recorder.calls, Catch::Matchers::Equals(before));
     CHECK(recorder.destroyed == 0);
     {
         auto preparation = participant->Prepare(scene->View(), {&projected, 1}, {});
@@ -210,7 +211,7 @@ TEST_CASE("Gameplay structural admission rejects unknown attachments without fac
     const RuntimeEntityView projected{.entity = {SceneRuntimeId{12}, EntityId{1, 1}}, .components = &components};
     const auto before = recorder.calls;
     CHECK(participant->Prepare(scene->View(), {&projected, 1}, {}).HasError());
-    CHECK(recorder.calls == before);
+    CHECK_THAT(recorder.calls, Catch::Matchers::Equals(before));
     CHECK(runtime->InstanceCount() == 1);
     CHECK(recorder.destroyed == 0);
 }

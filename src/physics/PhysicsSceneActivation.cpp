@@ -147,6 +147,62 @@ namespace Horo::Physics::Detail {
             return abort(activated.ErrorValue());
         return Result<StagedPhysicsScene>::Success(std::move(staged));
     }
+
+    namespace {
+        /** @brief Prepares the paired native and character worlds under one captured generation. */
+        Result<StagedPhysicsScene> PrepareWorldResources(PhysicsRuntime &runtime, const PhysicsSceneActivationSettings &settings,
+                                                         const Runtime::RuntimeSceneView scene,
+                                                         const PhysicsSceneActivationEvidence evidence, const PhysicsWorldId identity,
+                                                         const PhysicsScenePlan &plan) {
+            auto physics = runtime.PrepareWorld(settings.physics);
+            if (physics.HasError())
+                return Result<StagedPhysicsScene>::Failure(physics.ErrorValue());
+            auto character = Character::CharacterWorld::Prepare({scene.RuntimeId().value, identity, evidence.collisionFilterGeneration,
+                                                                 evidence.originGeneration},
+                                                                settings.character);
+            if (character.HasError())
+                return Result<StagedPhysicsScene>::Failure(character.ErrorValue());
+            return StagePhysicsScene(std::move(physics).Value(), std::move(character).Value(), identity, plan);
+        }
+
+        /** @brief Captures exact authored-to-runtime bindings while both worlds remain detached. */
+        Result<std::shared_ptr<PhysicsStructuralState>> PrepareStructuralState(StagedPhysicsScene &resources,
+                                                                               const Runtime::RuntimeSceneView scene,
+                                                                               PhysicsSceneActivationAuthority &authority,
+                                                                               const PhysicsSceneActivationEvidence evidence) {
+            auto structural = std::make_shared<PhysicsStructuralState>();
+            structural->world = resources.physics.get();
+            structural->scene = scene.RuntimeId();
+            structural->authority = &authority;
+            structural->evidence = evidence;
+            structural->bodies.reserve(resources.bodyBindings.size());
+            for (const auto &binding : resources.bodyBindings) {
+                const auto entity = scene.Find(binding.object);
+                if (!entity)
+                    return Result<std::shared_ptr<PhysicsStructuralState>>::Failure(MakeError(PhysicsErrors::HandleStale));
+                structural->bodies.push_back({*entity, binding.body, binding.handle});
+            }
+            structural->shapes.reserve(resources.shapeBindings.size());
+            for (const auto &binding : resources.shapeBindings) {
+                const auto entity = scene.Find(binding.object);
+                if (!entity)
+                    return Result<std::shared_ptr<PhysicsStructuralState>>::Failure(MakeError(PhysicsErrors::HandleStale));
+                structural->shapes.push_back({*entity, binding.collider, binding.handle, binding.body});
+            }
+            structural->constraints.reserve(resources.constraintBindings.size());
+            for (const auto &binding : resources.constraintBindings) {
+                const auto entity = scene.Find(binding.object);
+                if (!entity)
+                    return Result<std::shared_ptr<PhysicsStructuralState>>::Failure(MakeError(PhysicsErrors::HandleStale));
+                structural->constraints.push_back({*entity, binding.constraint, binding.handle});
+            }
+            structural->authoredBodies = std::move(resources.bodyBindings);
+            structural->authoredShapes = std::move(resources.shapeBindings);
+            structural->authoredConstraints = std::move(resources.constraintBindings);
+            return Result<std::shared_ptr<PhysicsStructuralState>>::Success(std::move(structural));
+        }
+    }  // namespace
+
 }  // namespace Horo::Physics::Detail
 
 namespace Horo::Physics {
@@ -185,50 +241,16 @@ namespace Horo::Physics {
             const Result<PhysicsWorldId> identity = runtime_->IssueWorldIdentity();
             if (identity.HasError())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(identity.ErrorValue());
-            auto physics = runtime_->PrepareWorld(settings_.physics);
-            if (physics.HasError())
-                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(physics.ErrorValue());
-            auto character = Character::CharacterWorld::Prepare({scene.RuntimeId().value, identity.Value(),
-                                                                 evidence.collisionFilterGeneration, evidence.originGeneration},
-                                                                settings_.character);
-            if (character.HasError())
-                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(character.ErrorValue());
-            Result<Detail::StagedPhysicsScene> staged =
-                Detail::StagePhysicsScene(std::move(physics).Value(), std::move(character).Value(), identity.Value(), plan);
+            auto staged = Detail::PrepareWorldResources(*runtime_, settings_, scene, evidence, identity.Value(), plan);
             if (staged.HasError())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(staged.ErrorValue());
             Detail::StagedPhysicsScene resources = std::move(staged).Value();
             std::shared_ptr<Detail::PhysicsStructuralState> structural;
             if (structuralRegistration_) {
-                structural = std::make_shared<Detail::PhysicsStructuralState>();
-                structural->world = resources.physics.get();
-                structural->scene = scene.RuntimeId();
-                structural->authority = authority_;
-                structural->evidence = evidence;
-                structural->bodies.reserve(resources.bodyBindings.size());
-                for (const auto &binding : resources.bodyBindings) {
-                    const auto entity = scene.Find(binding.object);
-                    if (!entity)
-                        return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(PhysicsErrors::HandleStale));
-                    structural->bodies.push_back({*entity, binding.body, binding.handle});
-                }
-                structural->shapes.reserve(resources.shapeBindings.size());
-                for (const auto &binding : resources.shapeBindings) {
-                    const auto entity = scene.Find(binding.object);
-                    if (!entity)
-                        return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(PhysicsErrors::HandleStale));
-                    structural->shapes.push_back({*entity, binding.collider, binding.handle, binding.body});
-                }
-                structural->constraints.reserve(resources.constraintBindings.size());
-                for (const auto &binding : resources.constraintBindings) {
-                    const auto entity = scene.Find(binding.object);
-                    if (!entity)
-                        return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(PhysicsErrors::HandleStale));
-                    structural->constraints.push_back({*entity, binding.constraint, binding.handle});
-                }
-                structural->authoredBodies = std::move(resources.bodyBindings);
-                structural->authoredShapes = std::move(resources.shapeBindings);
-                structural->authoredConstraints = std::move(resources.constraintBindings);
+                auto preparedState = Detail::PrepareStructuralState(resources, scene, *authority_, evidence);
+                if (preparedState.HasError())
+                    return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(preparedState.ErrorValue());
+                structural = std::move(preparedState).Value();
             }
             auto candidate = PhysicsSceneActivationCandidate::Create({.physics = std::move(resources.physics),
                                                                       .character = std::move(resources.character),

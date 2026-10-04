@@ -154,6 +154,266 @@ namespace Horo::Physics::Detail {
             }
 
         private:
+            /** @brief Detached descriptor and binding projections shared by the preparation phases. */
+            struct GroupPlan {
+                struct ColliderBindingInput {
+                    Runtime::EntityRef entity;
+                    Runtime::PhysicsColliderSlotId slot;
+                    std::size_t shape{};
+                    std::size_t body{};
+                };
+
+                std::vector<BodyHandle> retiredBodies;
+                std::vector<ShapeHandle> retiredShapes;
+                std::vector<ConstraintHandle> retiredConstraints;
+                std::vector<Runtime::EntityRef> owners;
+                std::vector<PhysicsSceneGroupBody> bodies;
+                std::vector<PhysicsSceneGroupShape> shapes;
+                std::vector<ColliderBindingInput> colliderBindings;
+                std::vector<PhysicsConstraintDescriptor> constraints;
+                std::vector<std::pair<Runtime::EntityRef, Runtime::PhysicsConstraintSlotId>> constraintBindings;
+            };
+
+            /** @brief Removes retired bindings from detached copies only; native retirement is prepared later. */
+            static void ProjectRetirement(StructuralCandidate &candidate, GroupPlan &plan,
+                                          const std::span<const Runtime::EntityRef> destroyed) {
+                const auto retiring = [&](const Runtime::EntityRef entity) {
+                    return std::ranges::find(destroyed, entity) != destroyed.end();
+                };
+                for (const auto &binding : candidate.bindings)
+                    if (retiring(binding.entity))
+                        plan.retiredBodies.push_back(binding.handle);
+                for (const auto &binding : candidate.shapes)
+                    if (retiring(binding.entity) || std::ranges::find(plan.retiredBodies, binding.body) != plan.retiredBodies.end())
+                        plan.retiredShapes.push_back(binding.handle);
+                for (const auto &binding : candidate.constraints)
+                    if (retiring(binding.entity))
+                        plan.retiredConstraints.push_back(binding.handle);
+                std::erase_if(candidate.bindings, [&](const auto &binding) {
+                    return retiring(binding.entity);
+                });
+                std::erase_if(candidate.shapes, [&](const auto &binding) {
+                    return retiring(binding.entity) || std::ranges::find(plan.retiredBodies, binding.body) != plan.retiredBodies.end();
+                });
+                std::erase_if(candidate.authoredBodies, [&](const auto &binding) {
+                    return std::ranges::find(plan.retiredBodies, binding.handle) != plan.retiredBodies.end();
+                });
+                std::erase_if(candidate.authoredShapes, [&](const auto &binding) {
+                    return std::ranges::find(plan.retiredShapes, binding.handle) != plan.retiredShapes.end();
+                });
+            }
+
+            /** @brief Converts the typed authored body policy and candidate hierarchy into a native-neutral descriptor. */
+            static Result<void> PrepareBodyPolicy(PhysicsSceneGroupBody &body, const Runtime::RuntimeEntityView &entity,
+                                                  const Runtime::RuntimeSceneView active,
+                                                  const std::span<const Runtime::RuntimeEntityView> created) {
+                const auto &component = *entity.components->rigidBody;
+                auto transform = WorldTransform(entity, active, created);
+                if (transform.HasError())
+                    return Result<void>::Failure(transform.ErrorValue());
+                auto pose = ToBodyPhysicsPose(transform.Value());
+                if (pose.HasError())
+                    return Result<void>::Failure(pose.ErrorValue());
+                body.descriptor.body.pose = pose.Value();
+                body.descriptor.body.motion = static_cast<PhysicsMotionType>(component.motion);
+                body.descriptor.body.mass = std::visit([]<typename T>(const T &mass) -> PhysicsMassPolicy {
+                    if constexpr (std::is_same_v<T, Runtime::AuthoredPhysicsNoMass>)
+                        return PhysicsNoMass{};
+                    else if constexpr (std::is_same_v<T, Runtime::AuthoredPhysicsMass>)
+                        return PhysicsMass{mass.kilograms};
+                    else
+                        return PhysicsDensity{mass.kilogramsPerCubicMeter};
+                }, component.mass);
+                body.descriptor.body.linearVelocity = component.initialLinearVelocity;
+                body.descriptor.body.angularVelocity = component.initialAngularVelocity;
+                body.descriptor.body.motionSafety.linearDampingPerSecond = component.linearDampingPerSecond;
+                body.descriptor.body.motionSafety.angularDampingPerSecond = component.angularDampingPerSecond;
+                body.descriptor.body.motionSafety.maximumLinearSpeed = component.maximumLinearSpeed;
+                body.descriptor.body.motionSafety.maximumAngularSpeed = component.maximumAngularSpeed;
+                return Result<void>::Success();
+            }
+
+            /** @brief Validates one collider's immutable resource closure before admitting its shape. */
+            static Result<void> PrepareCollider(GroupPlan &plan, PhysicsSceneGroupBody &body,
+                                                std::vector<PhysicsSceneGroupShape::Child> &children,
+                                                const Runtime::RuntimeEntityView &contributor, const Runtime::ColliderComponent &collider,
+                                                const Runtime::RuntimeSceneView active) {
+                const bool hasChildren = !children.empty();
+                const auto *analytic = std::get_if<Runtime::PhysicsAnalyticCollider>(&collider.source);
+                for (const auto &material : collider.materials)
+                    if (const auto valid = ValidateAsset(contributor, active, material.material, PhysicsErrors::MaterialDescriptorInvalid);
+                        valid.HasError())
+                        return Result<void>::Failure(valid.ErrorValue());
+                if (!analytic) {
+                    const auto asset = std::get<Runtime::PhysicsShapeAssetReference>(collider.source).asset;
+                    if (const auto valid = ValidateAsset(contributor, active, asset, PhysicsErrors::ShapeArtifactInvalid); valid.HasError())
+                        return Result<void>::Failure(valid.ErrorValue());
+                    return Result<void>::Failure(
+                        MakeError(PhysicsErrors::OperationUnsupported,
+                                  "The exact cooked shape has no qualified CanonicalV1 realization path; runtime cooking and "
+                                  "fallback are forbidden."));
+                }
+                auto resolved = ResolvePhysicsPrimitiveShape({.geometry = AnalyticGeometry(*analytic),
+                                                              .localPose = {collider.localPose.translation, collider.localPose.rotation},
+                                                              .scale = {collider.scale}});
+                if (resolved.HasError())
+                    return Result<void>::Failure(resolved.ErrorValue());
+                if (hasChildren && body.descriptor.sensor != collider.sensor)
+                    return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
+                body.descriptor.sensor = collider.sensor;
+                plan.colliderBindings.push_back({contributor.entity, collider.collider, plan.shapes.size(), plan.bodies.size()});
+                children.push_back({static_cast<std::uint32_t>(plan.shapes.size()), resolved.Value().localPose});
+                plan.shapes.push_back({resolved.Value().geometry});
+                return Result<void>::Success();
+            }
+
+            /** @brief Collects only exact body-slot contributors and preserves their authored local poses. */
+            static Result<void> PrepareBodyColliders(GroupPlan &plan, PhysicsSceneGroupBody &body, const Runtime::RuntimeEntityView &entity,
+                                                     const Runtime::RuntimeSceneView active,
+                                                     const std::span<const Runtime::RuntimeEntityView> created) {
+                std::vector<PhysicsSceneGroupShape::Child> children;
+                for (const auto &contributor : created) {
+                    for (std::size_t index = 0; index < contributor.components->colliders.size(); ++index) {
+                        const auto &collider = contributor.components->colliders[index];
+                        if (!collider.enabled)
+                            continue;
+                        auto target =
+                            ResolveTarget(contributor, Runtime::GroupPhysicsReferenceKind::ColliderBody, index, collider.body, active);
+                        if (target.HasError())
+                            return Result<void>::Failure(target.ErrorValue());
+                        if (target.Value() != entity.entity || collider.body.body != entity.components->rigidBody->body)
+                            continue;
+                        if (const auto ready = PrepareCollider(plan, body, children, contributor, collider, active); ready.HasError())
+                            return ready;
+                    }
+                }
+                if (children.empty())
+                    return Failure<void>("An enabled group body has no collider contributors.");
+                // A compound also preserves the local pose of a single collider.
+                body.shape = static_cast<std::uint32_t>(plan.shapes.size());
+                plan.shapes.push_back({std::move(children)});
+                return Result<void>::Success();
+            }
+
+            /** @brief Projects enabled bodies before any detached native allocation. */
+            static Result<void> PrepareBodies(GroupPlan &plan, const Runtime::RuntimeSceneView active,
+                                              const std::span<const Runtime::RuntimeEntityView> created) {
+                for (const auto &entity : created) {
+                    if (!entity.components)
+                        return Failure<void>("Missing structural component projection.");
+                }
+                for (const auto &entity : created) {
+                    if (!entity.components->rigidBody || !entity.components->rigidBody->enabled)
+                        continue;
+                    PhysicsSceneGroupBody body;
+                    if (const auto ready = PrepareBodyPolicy(body, entity, active, created); ready.HasError())
+                        return ready;
+                    if (const auto ready = PrepareBodyColliders(plan, body, entity, active, created); ready.HasError())
+                        return ready;
+                    plan.bodies.push_back(std::move(body));
+                    plan.owners.push_back(entity.entity);
+                }
+                return Result<void>::Success();
+            }
+
+            /** @brief Resolves the exact runtime entity/body slot from candidate bindings. */
+            static std::optional<BodyHandle> ResolveBody(const StructuralCandidate &candidate, const Runtime::EntityRef entity,
+                                                         const Runtime::PhysicsBodySlotId slot) {
+                for (const auto &binding : candidate.bindings)
+                    if (binding.entity == entity && binding.slot == slot)
+                        return binding.handle;
+                return std::nullopt;
+            }
+
+            /** @brief Resolves a constraint's second endpoint without synthesizing a resident body. */
+            static Result<void> ResolveSecondEndpoint(PhysicsConstraintDescriptor &constraint, const Runtime::RuntimeEntityView &entity,
+                                                      const Runtime::PhysicsConstraintComponent &component, const std::size_t index,
+                                                      const Runtime::RuntimeSceneView active, const StructuralCandidate &candidate) {
+                if (const auto *second = std::get_if<Runtime::PhysicsConstraintBodyEndpoint>(&component.second)) {
+                    auto target = ResolveTarget(entity, Runtime::GroupPhysicsReferenceKind::ConstraintSecond, index, second->body, active);
+                    if (target.HasError())
+                        return Result<void>::Failure(target.ErrorValue());
+                    const auto secondHandle = ResolveBody(candidate, target.Value(), second->body.body);
+                    if (!secondHandle)
+                        return Failure<void>("A group constraint has no exact second body binding.");
+                    constraint.second = PhysicsBodyAnchor{*secondHandle, {second->localFrame.translation, second->localFrame.rotation}};
+                } else {
+                    const auto &frame = std::get<Runtime::PhysicsConstraintWorldEndpoint>(component.second).frame;
+                    constraint.second = PhysicsWorldAnchor{{frame.translation, frame.rotation}};
+                }
+                return Result<void>::Success();
+            }
+
+            /** @brief Projects one enabled typed constraint against the prepared body bindings. */
+            static Result<PhysicsConstraintDescriptor> PrepareConstraint(const Runtime::RuntimeEntityView &entity, const std::size_t index,
+                                                                         const Runtime::RuntimeSceneView active,
+                                                                         const StructuralCandidate &candidate) {
+                const auto &component = entity.components->physicsConstraints[index];
+                auto first =
+                    ResolveTarget(entity, Runtime::GroupPhysicsReferenceKind::ConstraintFirst, index, component.first.body, active);
+                if (first.HasError())
+                    return Result<PhysicsConstraintDescriptor>::Failure(first.ErrorValue());
+                const auto firstHandle = ResolveBody(candidate, first.Value(), component.first.body.body);
+                if (!firstHandle)
+                    return Failure<PhysicsConstraintDescriptor>("A group constraint has no exact first body binding.");
+                PhysicsConstraintDescriptor constraint;
+                constraint.first = {*firstHandle, {component.first.localFrame.translation, component.first.localFrame.rotation}};
+                if (const auto ready = ResolveSecondEndpoint(constraint, entity, component, index, active, candidate); ready.HasError())
+                    return Result<PhysicsConstraintDescriptor>::Failure(ready.ErrorValue());
+                constraint.parameters = std::visit([]<typename T>(const T &parameters) -> decltype(constraint.parameters) {
+                    if constexpr (std::is_same_v<T, Runtime::PhysicsFixedConstraint>)
+                        return PhysicsFixedConstraint{};
+                    else
+                        return PhysicsDistanceConstraint{parameters.minimumMeters, parameters.maximumMeters};
+                }, component.parameters);
+                return Result<PhysicsConstraintDescriptor>::Success(std::move(constraint));
+            }
+
+            /** @brief Stages constraint descriptors and their publication bindings in occurrence order. */
+            static Result<void> PrepareConstraints(StructuralCandidate &candidate, GroupPlan &plan, const Runtime::RuntimeSceneView active,
+                                                   const std::span<const Runtime::RuntimeEntityView> created) {
+                for (const auto &entity : created) {
+                    for (std::size_t index = 0; index < entity.components->physicsConstraints.size(); ++index) {
+                        const auto &component = entity.components->physicsConstraints[index];
+                        if (!component.enabled)
+                            continue;
+                        auto descriptor = PrepareConstraint(entity, index, active, candidate);
+                        if (descriptor.HasError())
+                            return Result<void>::Failure(descriptor.ErrorValue());
+                        plan.constraints.push_back(std::move(descriptor).Value());
+                        plan.constraintBindings.emplace_back(entity.entity, component.constraint);
+                    }
+                }
+                if (const auto admitted = candidate.native->PrepareConstraints(plan.constraints); admitted.HasError())
+                    return admitted;
+                for (std::size_t index = 0; index < plan.constraintBindings.size(); ++index)
+                    candidate.constraints.push_back({plan.constraintBindings[index].first, plan.constraintBindings[index].second,
+                                                     candidate.native->Constraints()[index]});
+                return Result<void>::Success();
+            }
+
+            /** @brief Incorporates native retirement closure and additions in detached binding tables. */
+            static void ProjectNativeBindings(StructuralCandidate &candidate, const GroupPlan &plan,
+                                              const std::span<const Runtime::RuntimeEntityView> created) {
+                std::erase_if(candidate.constraints, [&](const auto &binding) {
+                    const auto handles = candidate.native->RetiredConstraints();
+                    return std::ranges::find(handles, binding.handle) != handles.end();
+                });
+                std::erase_if(candidate.authoredConstraints, [&](const auto &binding) {
+                    const auto handles = candidate.native->RetiredConstraints();
+                    return std::ranges::find(handles, binding.handle) != handles.end();
+                });
+                for (const auto &binding : plan.colliderBindings)
+                    candidate.shapes.push_back({binding.entity, binding.slot, candidate.native->Shapes()[binding.shape],
+                                                candidate.native->Handles()[binding.body]});
+                for (std::size_t index = 0; index < plan.owners.size(); ++index) {
+                    const auto entity = std::ranges::find(created, plan.owners[index], &Runtime::RuntimeEntityView::entity);
+                    candidate.bindings.push_back(
+                        {plan.owners[index], entity->components->rigidBody->body, candidate.native->Handles()[index]});
+                }
+            }
+
+            /** @brief Prepares the complete detached owner candidate; publication remains a separate no-fail phase. */
             Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareOwned(
                 const Runtime::RuntimeSceneView active, const std::span<const Runtime::RuntimeEntityView> created,
                 const std::span<const Runtime::EntityRef> destroyed) {
@@ -170,212 +430,29 @@ namespace Horo::Physics::Detail {
                 if (candidate->revision == std::numeric_limits<std::uint64_t>::max())
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
                         MakeError(PhysicsErrors::GenerationExhausted));
-                const auto retiring = [&](const Runtime::EntityRef entity) {
-                    return std::ranges::find(destroyed, entity) != destroyed.end();
-                };
-                std::vector<BodyHandle> retiredBodies;
-                std::vector<ShapeHandle> retiredShapes;
-                std::vector<ConstraintHandle> retiredConstraints;
-                for (const auto &binding : candidate->bindings)
-                    if (retiring(binding.entity))
-                        retiredBodies.push_back(binding.handle);
-                for (const auto &binding : candidate->shapes)
-                    if (retiring(binding.entity) || std::ranges::find(retiredBodies, binding.body) != retiredBodies.end())
-                        retiredShapes.push_back(binding.handle);
-                for (const auto &binding : candidate->constraints)
-                    if (retiring(binding.entity))
-                        retiredConstraints.push_back(binding.handle);
-                std::erase_if(candidate->bindings, [&](const auto &binding) {
-                    return retiring(binding.entity);
-                });
-                std::erase_if(candidate->shapes, [&](const auto &binding) {
-                    return retiring(binding.entity) || std::ranges::find(retiredBodies, binding.body) != retiredBodies.end();
-                });
-                std::erase_if(candidate->authoredBodies, [&](const auto &binding) {
-                    return std::ranges::find(retiredBodies, binding.handle) != retiredBodies.end();
-                });
-                std::erase_if(candidate->authoredShapes, [&](const auto &binding) {
-                    return std::ranges::find(retiredShapes, binding.handle) != retiredShapes.end();
-                });
-                for (const auto &entity : created)
-                    if (!entity.components)
-                        return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>("Missing structural component projection.");
-
-                std::vector<Runtime::EntityRef> owners;
-                std::vector<PhysicsSceneGroupBody> bodies;
-                std::vector<PhysicsSceneGroupShape> shapes;
-
-                struct ColliderBindingInput {
-                    Runtime::EntityRef entity;
-                    Runtime::PhysicsColliderSlotId slot;
-                    std::size_t shape{};
-                    std::size_t body{};
-                };
-
-                std::vector<ColliderBindingInput> colliderBindings;
-                for (const auto &entity : created) {
-                    if (!entity.components || !entity.components->rigidBody || !entity.components->rigidBody->enabled)
-                        continue;
-                    const auto &component = *entity.components->rigidBody;
-                    auto transform = WorldTransform(entity, active, created);
-                    if (transform.HasError())
-                        return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(transform.ErrorValue());
-                    auto pose = ToBodyPhysicsPose(transform.Value());
-                    if (pose.HasError())
-                        return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(pose.ErrorValue());
-                    PhysicsSceneGroupBody body;
-                    body.descriptor.body.pose = pose.Value();
-                    body.descriptor.body.motion = static_cast<PhysicsMotionType>(component.motion);
-                    body.descriptor.body.mass = std::visit([]<typename T>(const T &mass) -> PhysicsMassPolicy {
-                        if constexpr (std::is_same_v<T, Runtime::AuthoredPhysicsNoMass>)
-                            return PhysicsNoMass{};
-                        else if constexpr (std::is_same_v<T, Runtime::AuthoredPhysicsMass>)
-                            return PhysicsMass{mass.kilograms};
-                        else
-                            return PhysicsDensity{mass.kilogramsPerCubicMeter};
-                    }, component.mass);
-                    body.descriptor.body.linearVelocity = component.initialLinearVelocity;
-                    body.descriptor.body.angularVelocity = component.initialAngularVelocity;
-                    body.descriptor.body.motionSafety.linearDampingPerSecond = component.linearDampingPerSecond;
-                    body.descriptor.body.motionSafety.angularDampingPerSecond = component.angularDampingPerSecond;
-                    body.descriptor.body.motionSafety.maximumLinearSpeed = component.maximumLinearSpeed;
-                    body.descriptor.body.motionSafety.maximumAngularSpeed = component.maximumAngularSpeed;
-                    std::vector<PhysicsSceneGroupShape::Child> children;
-                    for (const auto &contributor : created) {
-                        for (std::size_t index = 0; index < contributor.components->colliders.size(); ++index) {
-                            const auto &collider = contributor.components->colliders[index];
-                            if (!collider.enabled)
-                                continue;
-                            auto target =
-                                ResolveTarget(contributor, Runtime::GroupPhysicsReferenceKind::ColliderBody, index, collider.body, active);
-                            if (target.HasError())
-                                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(target.ErrorValue());
-                            if (target.Value() != entity.entity || collider.body.body != component.body)
-                                continue;
-                            const auto *analytic = std::get_if<Runtime::PhysicsAnalyticCollider>(&collider.source);
-                            for (const auto &material : collider.materials)
-                                if (const auto valid =
-                                        ValidateAsset(contributor, active, material.material, PhysicsErrors::MaterialDescriptorInvalid);
-                                    valid.HasError())
-                                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(valid.ErrorValue());
-                            if (!analytic) {
-                                const auto asset = std::get<Runtime::PhysicsShapeAssetReference>(collider.source).asset;
-                                if (const auto valid = ValidateAsset(contributor, active, asset, PhysicsErrors::ShapeArtifactInvalid);
-                                    valid.HasError())
-                                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(valid.ErrorValue());
-                                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
-                                    MakeError(PhysicsErrors::OperationUnsupported,
-                                              "The exact cooked shape has no qualified CanonicalV1 realization path; runtime cooking and "
-                                              "fallback are forbidden."));
-                            }
-                            auto resolved =
-                                ResolvePhysicsPrimitiveShape({.geometry = AnalyticGeometry(*analytic),
-                                                              .localPose = {collider.localPose.translation, collider.localPose.rotation},
-                                                              .scale = {collider.scale}});
-                            if (resolved.HasError())
-                                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(resolved.ErrorValue());
-                            if (!children.empty() && body.descriptor.sensor != collider.sensor)
-                                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
-                                    MakeError(PhysicsErrors::OperationUnsupported));
-                            body.descriptor.sensor = collider.sensor;
-                            colliderBindings.push_back({contributor.entity, collider.collider, shapes.size(), bodies.size()});
-                            children.push_back({static_cast<std::uint32_t>(shapes.size()), resolved.Value().localPose});
-                            shapes.push_back({resolved.Value().geometry});
-                        }
-                    }
-                    if (children.empty())
-                        return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(
-                            "An enabled group body has no collider contributors.");
-                    // A compound also preserves the local pose of a single collider.
-                    body.shape = static_cast<std::uint32_t>(shapes.size());
-                    shapes.push_back({std::move(children)});
-                    bodies.push_back(std::move(body));
-                    owners.push_back(entity.entity);
-                }
+                GroupPlan plan;
+                ProjectRetirement(*candidate, plan, destroyed);
+                if (const auto ready = PrepareBodies(plan, active, created); ready.HasError())
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(ready.ErrorValue());
                 const bool hasConstraints = std::ranges::any_of(created, [](const auto &entity) {
                     return std::ranges::any_of(entity.components->physicsConstraints, [](const auto &constraint) {
                         return constraint.enabled;
                     });
                 });
-                if (bodies.empty() && !hasConstraints && retiredBodies.empty() && retiredShapes.empty() && retiredConstraints.empty())
+                if (plan.bodies.empty() && !hasConstraints && plan.retiredBodies.empty() && plan.retiredShapes.empty() &&
+                    plan.retiredConstraints.empty())
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
-                auto prepared = candidate->state->world->PrepareSceneGroup(shapes, bodies);
+                auto prepared = candidate->state->world->PrepareSceneGroup(plan.shapes, plan.bodies);
                 if (prepared.HasError())
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(prepared.ErrorValue());
                 candidate->native = std::move(prepared).Value();
-                if (const auto retirement = candidate->native->PrepareRetirement(retiredBodies, retiredShapes, retiredConstraints);
-                    retirement.HasError())
-                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(retirement.ErrorValue());
-                std::erase_if(candidate->constraints, [&](const auto &binding) {
-                    const auto handles = candidate->native->RetiredConstraints();
-                    return std::ranges::find(handles, binding.handle) != handles.end();
-                });
-                std::erase_if(candidate->authoredConstraints, [&](const auto &binding) {
-                    const auto handles = candidate->native->RetiredConstraints();
-                    return std::ranges::find(handles, binding.handle) != handles.end();
-                });
-                for (const auto &binding : colliderBindings)
-                    candidate->shapes.push_back({binding.entity, binding.slot, candidate->native->Shapes()[binding.shape],
-                                                 candidate->native->Handles()[binding.body]});
-                for (std::size_t index = 0; index < owners.size(); ++index) {
-                    const auto entity = std::ranges::find(created, owners[index], &Runtime::RuntimeEntityView::entity);
-                    candidate->bindings.push_back(
-                        {owners[index], entity->components->rigidBody->body, candidate->native->Handles()[index]});
-                }
-                std::vector<PhysicsConstraintDescriptor> constraints;
-                std::vector<std::pair<Runtime::EntityRef, Runtime::PhysicsConstraintSlotId>> constraintBindings;
-                const auto resolve = [&](const Runtime::EntityRef entity,
-                                         const Runtime::PhysicsBodySlotId slot) -> std::optional<BodyHandle> {
-                    for (const auto &binding : candidate->bindings)
-                        if (binding.entity == entity && binding.slot == slot)
-                            return binding.handle;
-                    return std::nullopt;
-                };
-                for (const auto &entity : created) {
-                    for (std::size_t index = 0; index < entity.components->physicsConstraints.size(); ++index) {
-                        const auto &component = entity.components->physicsConstraints[index];
-                        if (!component.enabled)
-                            continue;
-                        auto first =
-                            ResolveTarget(entity, Runtime::GroupPhysicsReferenceKind::ConstraintFirst, index, component.first.body, active);
-                        if (first.HasError())
-                            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(first.ErrorValue());
-                        const auto firstHandle = resolve(first.Value(), component.first.body.body);
-                        if (!firstHandle)
-                            return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(
-                                "A group constraint has no exact first body binding.");
-                        PhysicsConstraintDescriptor constraint;
-                        constraint.first = {*firstHandle, {component.first.localFrame.translation, component.first.localFrame.rotation}};
-                        if (const auto *second = std::get_if<Runtime::PhysicsConstraintBodyEndpoint>(&component.second)) {
-                            auto target =
-                                ResolveTarget(entity, Runtime::GroupPhysicsReferenceKind::ConstraintSecond, index, second->body, active);
-                            if (target.HasError())
-                                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(target.ErrorValue());
-                            const auto secondHandle = resolve(target.Value(), second->body.body);
-                            if (!secondHandle)
-                                return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(
-                                    "A group constraint has no exact second body binding.");
-                            constraint.second =
-                                PhysicsBodyAnchor{*secondHandle, {second->localFrame.translation, second->localFrame.rotation}};
-                        } else {
-                            const auto &frame = std::get<Runtime::PhysicsConstraintWorldEndpoint>(component.second).frame;
-                            constraint.second = PhysicsWorldAnchor{{frame.translation, frame.rotation}};
-                        }
-                        constraint.parameters = std::visit([]<typename T>(const T &parameters) -> decltype(constraint.parameters) {
-                            if constexpr (std::is_same_v<T, Runtime::PhysicsFixedConstraint>)
-                                return PhysicsFixedConstraint{};
-                            else
-                                return PhysicsDistanceConstraint{parameters.minimumMeters, parameters.maximumMeters};
-                        }, component.parameters);
-                        constraints.push_back(constraint);
-                        constraintBindings.emplace_back(entity.entity, component.constraint);
-                    }
-                }
-                if (const auto admitted = candidate->native->PrepareConstraints(constraints); admitted.HasError())
-                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(admitted.ErrorValue());
-                for (std::size_t index = 0; index < constraintBindings.size(); ++index)
-                    candidate->constraints.push_back(
-                        {constraintBindings[index].first, constraintBindings[index].second, candidate->native->Constraints()[index]});
+                if (const auto ready =
+                        candidate->native->PrepareRetirement(plan.retiredBodies, plan.retiredShapes, plan.retiredConstraints);
+                    ready.HasError())
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(ready.ErrorValue());
+                ProjectNativeBindings(*candidate, plan, created);
+                if (const auto ready = PrepareConstraints(*candidate, plan, active, created); ready.HasError())
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(ready.ErrorValue());
                 return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
             }
 
