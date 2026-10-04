@@ -46,7 +46,7 @@ namespace Horo::Navigation {
         }
 
         void RequireTerminal(const NavigationBakeJobHandle &handle) {
-            RequireEventually([&] {
+            RequireEventually([&handle] {
                 return handle.Snapshot()->IsTerminal();
             });
         }
@@ -72,7 +72,7 @@ namespace Horo::Navigation {
 
         double priorProgress{};
         std::uint64_t priorRevision{};
-        RequireEventually([&] {
+        RequireEventually([&handle, &priorRevision, &priorProgress] {
             const auto snapshot = handle.Snapshot();
             REQUIRE(snapshot.has_value());
             CHECK(snapshot->revision >= priorRevision);
@@ -112,7 +112,7 @@ namespace Horo::Navigation {
         descriptor.work[2].execute = descriptor.work[1].execute;
 
         auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
-        RequireEventually([&] {
+        RequireEventually([&tileEntered] {
             return tileEntered.load();
         });
         REQUIRE(handle.RequestCancellation());
@@ -122,6 +122,9 @@ namespace Horo::Navigation {
         const auto terminal = handle.Snapshot();
         REQUIRE(terminal.has_value());
         CHECK(terminal->state == NavigationBakeJobState::Cancelled);
+        REQUIRE(terminal->terminalError.has_value());
+        CHECK(ErrorChainContains(*terminal->terminalError, NavigationErrors::BakeInputCancelled.domain,
+                                 NavigationErrors::BakeInputCancelled.code));
         CHECK(terminal->terminalChildJobs == terminal->acceptedChildJobs);
         const auto terminalRevision = terminal->revision;
         CHECK(handle.RequestCancellation());
@@ -146,6 +149,8 @@ namespace Horo::Navigation {
         const auto terminal = handle.Snapshot();
         REQUIRE(terminal.has_value());
         CHECK(terminal->state == NavigationBakeJobState::Cancelled);
+        REQUIRE(terminal->terminalError.has_value());
+        CHECK(terminal->terminalError->code.Value() == NavigationErrors::BakeInputCancelled.code.Value());
         CHECK(terminal->acceptedChildJobs == 0);
         CHECK(terminal->terminalChildJobs == 0);
     }
@@ -181,7 +186,7 @@ namespace Horo::Navigation {
         descriptor.budget.maximumResidentBytes = 100;
         descriptor.budget.maximumConcurrentJobs = 3;
         descriptor.work[1].residentBytes = 60;
-        descriptor.work[1].execute = [&](const CancellationToken &) {
+        descriptor.work[1].execute = [&firstEntered, &releaseFirst, &firstCompleted](const CancellationToken &) {
             firstEntered.store(true);
             while (!releaseFirst.load())
                 std::this_thread::yield();
@@ -189,7 +194,7 @@ namespace Horo::Navigation {
             return Result<void>::Success();
         };
         descriptor.work[2].residentBytes = 60;
-        descriptor.work[2].execute = [&](const CancellationToken &) {
+        descriptor.work[2].execute = [&laterWorkStartedTooEarly, &firstCompleted, &laterWorkCount](const CancellationToken &) {
             laterWorkStartedTooEarly.store(!firstCompleted.load());
             laterWorkCount.fetch_add(1);
             return Result<void>::Success();
@@ -198,7 +203,7 @@ namespace Horo::Navigation {
         descriptor.work[3].execute = descriptor.work[2].execute;
 
         auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
-        RequireEventually([&] {
+        RequireEventually([&firstEntered] {
             return firstEntered.load();
         });
         CHECK(laterWorkCount.load() == 0);
@@ -220,5 +225,230 @@ namespace Horo::Navigation {
         REQUIRE(started.HasError());
         CHECK(started.ErrorValue().code.Value() == NavigationErrors::BakeJobInvalid.code.Value());
         CHECK_FALSE(operations.SnapshotIfChanged(0).has_value());
+    }
+
+    TEST_CASE("Navigation bake cancellation before pointer replacement prevents publication success") {
+        OperationStore operations(4, 4);
+        JobSystem jobs({.workerCount = 4, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 16});
+        std::atomic<bool> publicationEntered{};
+        auto descriptor = CompleteDescriptor();
+        const auto receipt = std::make_shared<NavigationBakePublicationReceipt>();
+        descriptor.publicationReceipt = receipt;
+        descriptor.work.back().execute = [&publicationEntered](const CancellationToken &cancellation) {
+            publicationEntered.store(true);
+            while (!cancellation.IsCancellationRequested())
+                std::this_thread::yield();
+            return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
+        };
+        auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
+        RequireEventually([&publicationEntered] {
+            return publicationEntered.load();
+        });
+        REQUIRE(handle.RequestCancellation());
+        RequireTerminal(handle);
+        CHECK_FALSE(receipt->IsCommitted());
+        CHECK(handle.Snapshot()->state == NavigationBakeJobState::Cancelled);
+        CHECK(handle.Snapshot()->terminalChildJobs == handle.Snapshot()->acceptedChildJobs);
+    }
+
+    TEST_CASE("Navigation bake stale publication cancels the operation and preserves its typed cause chain") {
+        for (const auto *cause : {&NavigationErrors::BakeInputStale, &NavigationErrors::SourceGeometryStale}) {
+            OperationStore operations(4, 4);
+            JobSystem jobs({.workerCount = 4, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 16});
+            auto descriptor = CompleteDescriptor();
+            descriptor.work.back().execute = [cause](const CancellationToken &) {
+                return Result<void>::Failure(
+                    WrapError(NavigationErrors::ProviderFailed, MakeError(*cause), "Publication input changed before adoption."));
+            };
+            auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
+            RequireTerminal(handle);
+            const auto terminal = handle.Snapshot();
+            CHECK(terminal->state == NavigationBakeJobState::Cancelled);
+            REQUIRE(terminal->terminalError.has_value());
+            CHECK(terminal->terminalError->code.Value() == NavigationErrors::ProviderFailed.code.Value());
+            CHECK(ErrorChainContains(*terminal->terminalError, cause->domain, cause->code));
+            CHECK(terminal->terminalChildJobs == terminal->acceptedChildJobs);
+            const auto projected = operations.SnapshotIfChanged(0);
+            REQUIRE(projected.has_value());
+            CHECK(projected->operations.front().state == OperationState::Cancelled);
+            REQUIRE(projected->operations.front().error.has_value());
+            CHECK(ErrorChainContains(*projected->operations.front().error, cause->domain, cause->code));
+            const auto revision = terminal->revision;
+            CHECK(handle.RequestCancellation());
+            CHECK(handle.Snapshot()->revision == revision);
+        }
+    }
+
+    TEST_CASE("Navigation bake cancellation after pointer replacement preserves committed terminal truth") {
+        OperationStore operations(4, 4);
+        JobSystem jobs({.workerCount = 4, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 16});
+        auto descriptor = CompleteDescriptor();
+        const auto receipt = std::make_shared<NavigationBakePublicationReceipt>();
+        descriptor.publicationReceipt = receipt;
+        descriptor.work.back().execute = [receipt](const CancellationToken &cancellation) {
+            receipt->RecordCommitted();
+            while (!cancellation.IsCancellationRequested())
+                std::this_thread::yield();
+            return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
+        };
+        auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
+        RequireEventually([receipt] {
+            return receipt->IsCommitted();
+        });
+        REQUIRE(operations.RequestCancel(handle.Id()));
+        RequireTerminal(handle);
+        const auto terminal = handle.Snapshot();
+        CHECK(terminal->state == NavigationBakeJobState::Succeeded);
+        CHECK(terminal->Progress() == 1.0);
+        CHECK(terminal->terminalChildJobs == terminal->acceptedChildJobs);
+        REQUIRE(terminal->terminalError.has_value());
+        CHECK(IsJobCancelled(*terminal->terminalError));
+        CHECK(operations.SnapshotIfChanged(0)->operations.front().state == OperationState::Succeeded);
+        const auto revision = terminal->revision;
+        CHECK(handle.RequestCancellation());
+        CHECK(handle.Snapshot()->revision == revision);
+    }
+
+    TEST_CASE("Navigation bake contains foreign publication exceptions and preserves commit receipts") {
+        for (const bool committed : {false, true}) {
+            OperationStore operations(4, 4);
+            JobSystem jobs({.workerCount = 4, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 16});
+            auto descriptor = CompleteDescriptor();
+            const auto receipt = std::make_shared<NavigationBakePublicationReceipt>();
+            descriptor.publicationReceipt = receipt;
+            descriptor.work.back().execute = [receipt, committed](const CancellationToken &) -> Result<void> {
+                if (committed)
+                    receipt->RecordCommitted();
+                throw 7;
+            };
+            auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
+            RequireTerminal(handle);
+            CHECK(handle.Snapshot()->state == (committed ? NavigationBakeJobState::Succeeded : NavigationBakeJobState::Failed));
+            REQUIRE(handle.Snapshot()->terminalError.has_value());
+            CHECK(handle.Snapshot()->terminalChildJobs == handle.Snapshot()->acceptedChildJobs);
+        }
+    }
+
+    TEST_CASE("Navigation bake drain timeout retains running callback ownership until it closes") {
+        OperationStore operations(4, 4);
+        JobSystem jobs({.workerCount = 4, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 16});
+        std::atomic<bool> cancellationObserved{};
+        std::atomic<bool> secondEntered{};
+        std::atomic<bool> releaseChild{};
+        std::atomic<bool> childClosed{};
+        auto descriptor = CompleteDescriptor();
+        descriptor.budget.childDrainTimeout = Duration::FromMilliseconds(100);
+        descriptor.work[1].execute = [&secondEntered](const CancellationToken &) {
+            while (!secondEntered.load())
+                std::this_thread::yield();
+            return Result<void>::Success();
+        };
+        descriptor.work[2].execute = [&secondEntered, &cancellationObserved, &releaseChild,
+                                      &childClosed](const CancellationToken &cancellation) {
+            secondEntered.store(true);
+            while (!cancellation.IsCancellationRequested())
+                std::this_thread::yield();
+            cancellationObserved.store(true);
+            while (!releaseChild.load())
+                std::this_thread::yield();
+            childClosed.store(true);
+            return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
+        };
+        auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
+        RequireEventually([&cancellationObserved] {
+            return cancellationObserved.load();
+        });
+        CHECK_FALSE(handle.Snapshot()->IsTerminal());
+        releaseChild.store(true);
+        RequireTerminal(handle);
+        CHECK(childClosed.load());
+        CHECK(handle.Snapshot()->state == NavigationBakeJobState::Failed);
+        REQUIRE(handle.Snapshot()->terminalError.has_value());
+        CHECK(handle.Snapshot()->terminalError->code.Value() == "job.wait_timed_out");
+        CHECK(handle.Snapshot()->terminalChildJobs == handle.Snapshot()->acceptedChildJobs);
+    }
+
+    TEST_CASE("Navigation bake counts accepted queued children cancelled before callback execution") {
+        OperationStore operations(4, 4);
+        JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 16});
+        std::atomic<std::size_t> entered{};
+        auto descriptor = CompleteDescriptor();
+        descriptor.budget.maximumConcurrentJobs = 3;
+        descriptor.work.insert(descriptor.work.begin() + 3, Work(NavigationBakeJobStage::TileBuild));
+        for (std::size_t index = 1; index <= 3; ++index) {
+            descriptor.work[index].execute = [&entered](const CancellationToken &cancellation) {
+                entered.fetch_add(1);
+                while (!cancellation.IsCancellationRequested())
+                    std::this_thread::yield();
+                return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
+            };
+        }
+        auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
+        RequireEventually([&entered, &handle] {
+            return entered.load() != 0 && handle.Snapshot()->acceptedChildJobs == 4;
+        });
+        REQUIRE(handle.RequestCancellation());
+        RequireTerminal(handle);
+        // Join may assist a child or wait for the other worker; three accepted tile jobs still exceed two workers.
+        CHECK(entered.load() >= 1);
+        CHECK(entered.load() < 3);
+        CHECK(handle.Snapshot()->state == NavigationBakeJobState::Cancelled);
+        CHECK(handle.Snapshot()->acceptedChildJobs == 4);
+        CHECK(handle.Snapshot()->terminalChildJobs == 4);
+    }
+
+    TEST_CASE("Navigation bake rejects reused or ambiguous commit receipts before admission") {
+        OperationStore operations(4, 4);
+        JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 16});
+        auto descriptor = CompleteDescriptor();
+        descriptor.publicationReceipt = std::make_shared<NavigationBakePublicationReceipt>();
+        descriptor.publicationReceipt->RecordCommitted();
+        CHECK(StartNavigationBakeJob(operations, jobs, descriptor).HasError());
+        descriptor.publicationReceipt = std::make_shared<NavigationBakePublicationReceipt>();
+        descriptor.work.push_back(Work(NavigationBakeJobStage::Publication));
+        CHECK(StartNavigationBakeJob(operations, jobs, descriptor).HasError());
+        CHECK_FALSE(operations.SnapshotIfChanged(0).has_value());
+    }
+
+    TEST_CASE("Navigation bake does not report success when host omits its promised commit receipt") {
+        OperationStore operations(4, 4);
+        JobSystem jobs({.workerCount = 2, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 16});
+        auto descriptor = CompleteDescriptor();
+        descriptor.publicationReceipt = std::make_shared<NavigationBakePublicationReceipt>();
+        auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
+        RequireTerminal(handle);
+        CHECK(handle.Snapshot()->state == NavigationBakeJobState::Failed);
+        CHECK(handle.Snapshot()->terminalError->code.Value() == NavigationErrors::BakeJobInvalid.code.Value());
+    }
+
+    TEST_CASE("Navigation bake scheduler shutdown drains publication and preserves its commit truth") {
+        for (const bool committed : {false, true}) {
+            OperationStore operations(4, 4);
+            JobSystem jobs({.workerCount = 4, .maxQueuedJobs = 16, .maxRetainedTerminalJobs = 16});
+            std::atomic<bool> publicationEntered{};
+            std::atomic<bool> publicationClosed{};
+            auto descriptor = CompleteDescriptor();
+            const auto receipt = std::make_shared<NavigationBakePublicationReceipt>();
+            descriptor.publicationReceipt = receipt;
+            descriptor.work.back().execute = [committed, receipt, &publicationEntered,
+                                              &publicationClosed](const CancellationToken &cancellation) {
+                if (committed)
+                    receipt->RecordCommitted();
+                publicationEntered.store(true);
+                while (!cancellation.IsCancellationRequested())
+                    std::this_thread::yield();
+                publicationClosed.store(true);
+                return Result<void>::Failure(MakeError(NavigationErrors::BakeInputCancelled));
+            };
+            auto handle = RequireHandle(StartNavigationBakeJob(operations, jobs, std::move(descriptor)));
+            RequireEventually([&publicationEntered] {
+                return publicationEntered.load();
+            });
+            jobs.Shutdown(ShutdownPolicy::Cancel);
+            CHECK(publicationClosed.load());
+            CHECK(handle.Snapshot()->IsTerminal());
+            CHECK(handle.Snapshot()->state == (committed ? NavigationBakeJobState::Succeeded : NavigationBakeJobState::Cancelled));
+            CHECK(handle.Snapshot()->terminalChildJobs == handle.Snapshot()->acceptedChildJobs);
+        }
     }
 }  // namespace Horo::Navigation

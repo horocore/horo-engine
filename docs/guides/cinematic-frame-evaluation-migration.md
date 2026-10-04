@@ -61,8 +61,10 @@ callback context, registries, and code image. Reload retirement revokes admissio
 and refuses unloading while a lease remains. Revoke registrations before native
 teardown; editor preview rejects native gameplay adapters.
 
-The registration-context change advances `GameplaySdkBoundaryVersion` from 6 to 7
-and the gameplay build fingerprint to `gameplay-sdk7`. Rebuild native modules and
+The combined event and persistence registration context advances
+`GameplaySdkBoundaryVersion` to 8 and the gameplay build fingerprint to
+`gameplay-sdk8`. Boundary-7 modules built against either independently developed
+registration layout are incompatible with this combined context. Rebuild native modules and
 their SDK consumers; old artifacts fail compatibility validation before any
 factory or callback executes. `GameplayApi` owns `GameEventRegistry.h`,
 `CinematicModel` owns cooked values/errors, `CinematicRuntime` owns dispatcher and

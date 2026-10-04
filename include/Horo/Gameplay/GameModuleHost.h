@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Gameplay/GameModule.h"
+#include "Horo/Gameplay/SaveGameplayPersistence.h"
 
 #include <filesystem>
 #include <memory>
@@ -53,6 +54,13 @@ namespace Horo::Gameplay {
         [[nodiscard]] const SystemRegistry &Systems() const noexcept;
         /** @brief Returns frozen native replication registrations and generation-safe lease acquisition. */
         [[nodiscard]] const ReplicationRegistrationRegistry &Replication() const noexcept;
+        /** @brief Acquires one declared durable adapter while exact-generation runtime admission remains open.
+         * @param participant Stable identity registered through GameRegistrationContext::persistence.
+         * @return Pinned adapter for explicit SaveParticipationClient registration, or typed missing/retiring error.
+         * @pre Called by the runtime owner at a quiescent composition boundary.
+         */
+        [[nodiscard]] Result<std::shared_ptr<Runtime::GameplayPersistenceAdapter>> AcquirePersistence(
+            const Runtime::SaveParticipantId &participant) const;
         /** @brief Returns frozen event callbacks; acquisition pins this exact native module generation. */
         [[nodiscard]] const GameEventRegistry &Events() const noexcept;
         /** @brief Returns active project-scoped services in provider-first order. */

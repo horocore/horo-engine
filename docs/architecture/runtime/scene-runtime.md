@@ -118,6 +118,55 @@ handles before service destruction. Runtime identities are monotonically
 assigned only after a complete candidate is built; failed preparations do not
 consume an identity.
 
+## Runtime Scene Cell Payload Production
+
+`HoroEngine::SceneCellPayload` owns the Scene-side CoreEcs semantic baseline and
+host-composed admission seam. It depends on `RuntimeScene` and `WorldStreaming`;
+neither of those targets depends on the integration target or on each other.
+`RuntimeSceneCellPayload` owns one immutable, complete `RuntimeSceneDefinition`
+plus its durable partition/cell/Scene identity and exact non-zero source revision.
+It contains no editor document, source path, prefab resolver, runtime handle or
+live residency generation. This is an in-memory provider handoff; it introduces
+no binary schema or migration and does not modify ADR-023's canonical container.
+
+`CookRuntimeSceneCellPayload` accepts the complete offline-expanded typed cell
+snapshot and the captured expected publication. The supplied immutable partition
+must contain that exact cell. Entity IDs, authored order, hierarchy and supported
+component data are preserved. Missing external parents fail Scene validation;
+the cooker cannot silently detach a child or reinterpret its transform. Project
+component and behavior schemas must be declared explicitly at their exact
+versions; opaque bytes are preserved without runtime schema conversion. Stable
+behavior instance IDs must be unique across the cell baseline. Existing Scene
+validation owns all other component and cross-component invariants.
+
+Mandatory entity, dependency and retained-byte ceilings reject complete oversized
+inputs before ownership copying where feasible. The retained-byte metric includes
+entity/dependency records and their nested vector elements, type names, field names,
+strings and opaque bytes, including dependencies projected by the Scene builder.
+It is a host storage estimate, not a wire size, allocator peak, or live streaming
+reservation. Validation scratch and allocator overhead remain separate. A valid
+empty cell produces an empty definition. Cooperative cancellation is checked
+between copying units and immediately before output publication. Failure publishes
+no payload and changes no source or runtime state.
+
+`QueueRuntimeSceneCellPayload` copies the source-free definition into the existing
+`RuntimeSceneService` detached aggregate preparation. It accepts an exact runtime
+fence separately from cooked content and retains a shared lease to the explicit
+host `SceneCellPayloadAuthority`. The host authority owns current content revisions,
+partition/cell fencing, reservations and the required provider barrier. Its pure,
+bounded predicate runs at admission and again immediately before aggregate
+publication through an owned `ScenePublicationCheck`; cancellation is checked at
+both points. Invalid or superseded evidence prevents publication and preserves the
+active Scene. Deferred failure is reported through `TakeOperationError`.
+
+The Scene service owns pending storage, asset requests, cancellation, replacement,
+unload and shutdown exactly as for other immutable definitions. The publication
+check retires on immediate failure, pending cancellation, deferred failure or
+successful commit; it owns no provider resources. This seam prepares/replaces one
+cell Scene domain. A host must not use it to replace an unrelated aggregate Scene
+or claim multi-cell merge support. Already published cell eviction and aggregate
+World Streaming activation remain under their existing owner transactions.
+
 ## Model Boundary
 
 ```text

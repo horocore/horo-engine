@@ -536,6 +536,11 @@ namespace Horo::Cinematic {
         return cameraCuts_.size();
     }
 
+    /** @copydoc SequenceFrameEvaluationPlan::CameraKeys */
+    std::span<const SequenceFrameCameraCutKey> SequenceFrameEvaluationPlan::CameraKeys() const noexcept {
+        return cameraCuts_;
+    }
+
     /** @copydoc SequenceFrameEvaluationPlan::LoopMode */
     SequenceLoopMode SequenceFrameEvaluationPlan::LoopMode() const noexcept {
         return loopMode_;

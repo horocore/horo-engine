@@ -261,14 +261,22 @@ persists game-owned component or service state, it must use stable component
 IDs, schema versions, and explicit upgrade paths rather than C++ layout
 identity.
 
-Game modules may later participate in a save system through explicit save
-descriptors or hooks. That contract is intentionally separate from scene
+Game modules participate through the explicit `GameRegistrationContext::persistence`
+registry and host-acquired generation-pinned adapters. That contract is separate from scene
 authoring serialization. `BehaviorComponent.fields` are authoring/default data;
 runtime behavior instance state is included in a save snapshot only if the
 behavior or service declares a stable save payload and schema version. Save data
 uses the same stable component/behavior IDs and upgrade rules as persistent
 content, but it is not allowed to serialize raw C++ object memory, function
 pointers, entity runtime addresses, or module allocator ownership.
+
+Freeze resolves declared behavior/service owners without calling their sources.
+Module-global and session records use the same inert canonical descriptor and
+runtime-only source. Explicit host composition binds each accepted declaration
+to `SaveParticipationClient`; archive work receives detached owned bytes and
+restore joins the aggregate staged transaction. Missing adapters and mismatched
+module/schema versions fail before live publication under the exact compatibility
+policy described in the gameplay persistence migration guide.
 
 ## Replication Registration
 
@@ -292,6 +300,66 @@ Gameplay modules include only the backend-neutral replication declarations from
 `Horo::Network`. They never depend on transport, socket, session backend, or host
 headers. Behavior code does not infer network authority from local process state
 or mutate replicated state outside declared simulation phases.
+
+### Script descriptor generation
+
+Lua behavior compilation translates the source `replication` table into the same
+`GameplayReplicationRegistration` used by native modules, then calls its shared
+`Register`/`Freeze` validation path. The JSON sidecar owns both the nonzero unsigned
+`replicationSchemaId` and `replicationModuleId`, alongside `behaviorTypeId`. The
+module must own that behavior namespace. Moving or renaming the source and sidecar
+preserves every identity. An optional source `schema_id` is an assertion and must
+match the sidecar. Source fields retain issued numeric IDs across rename/reorder;
+removed IDs remain in `tombstones` and cannot be reused.
+Behavior and replication declaration reads inspect raw table storage; authored
+`__index` and `__len` metamethods do not supply metadata or execute during validation.
+Existing behavior string-metadata coercion remains protected by the Lua compiler
+budget; replication metadata keeps its strict scalar types.
+
+For example, the sidecar adds `"replicationSchemaId": 42` and
+`"replicationModuleId": "game.my_game"`, while the source declares:
+
+```lua
+replication = {
+    major = 1, minor = 0, minimum_minor = 0, maximum_minor = 0,
+    capture_phase = "gameplay", apply_phase = "pre_physics",
+    fields = {
+        { id = 7, value_type = 1, codec = 2, kind = "number",
+          introduced_major = 1, introduced_minor = 0,
+          condition = "owner_only", requirement = "required",
+          maximum_bytes = 8, maximum_elements = 1 }
+    },
+    tombstones = {}
+}
+```
+
+The initial generated adapter supports exact `boolean`, `integer`, `unsigned`,
+and `number` scalar codecs. Each owner-issued value-type/codec pair has one exact
+kind and bounds. Optional fields require a typed `default`, encoded and validated
+through that codec. Conditions are `always`, `initial_only`, `owner_only`,
+`skip_owner`, or `simulated_only`; write authority remains server-only. Unsupported
+keywords, sparse arrays, missing identities, conflicting codec declarations,
+and invalid bounds fail compilation rather than activating a partial descriptor.
+The generated schedule uses owner-thread simulation safe points with no implicit
+component access. Capture/apply implementations remain explicit owner adapters;
+metadata does not automatically replicate Lua globals or behavior fields.
+
+`ReplicationDeclaration` exposes generated typed metadata for explicit host
+composition. `AcquireReplication` pins an immutable schema/codec generation without
+retaining a Lua VM or script callable. Runtime consumers use numeric `FieldId` and
+owned `ReplicationRuntimeValue` payloads, never field-name lookup or reflection.
+Descriptor generation runs only during compilation. These additive accessors keep
+existing non-replicated scripts and native registration callers unchanged; callers
+using the old four-argument `Compile` continue to compile non-replicated programs.
+
+Compatible reload validates both behavior and replication before replacing either.
+Schema/owner changes, major-version changes, incompatible field evolution, existing
+codec changes, or safe-point changes require restart. Compatible optional minor
+additions use the Network replacement validator. Old leases retain their complete
+previous generation. Compile, missing-source, missing-sidecar, or reload errors
+include source context and preserve the current program, registry, and revision.
+`ReloadFiles` provides that transaction directly; the editor's existing candidate
+compile/replacement path enforces the same contract.
 
 ## Deferred Runtime Extension Points
 

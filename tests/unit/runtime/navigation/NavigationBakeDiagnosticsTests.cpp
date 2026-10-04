@@ -1,4 +1,5 @@
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "PublicationOperationId.h"
 #include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavigationBakeDiagnosticsFixture.h"
 
@@ -32,7 +33,10 @@ namespace Horo::Application {
         };
 
         [[nodiscard]] NavigationBakeServiceConfig BakeConfig(const Directory &directory, const std::shared_ptr<Builder> &builder,
-                                                             const std::shared_ptr<NavigationBakeDiagnostics> &journal) {
+                                                             const std::shared_ptr<NavigationBakeDiagnostics> &journal,
+                                                             const IncrementalBakeFixture &fixture) {
+            auto authority = std::make_shared<NavigationBakeSourceAuthority>();
+            REQUIRE(authority->UpdateCurrent(fixture.revisions, fixture.Observations()).HasValue());
             return {.definition = Asset(),
                     .artifactType = Assets::AssetTypeId::Parse("core.navmesh").Value(),
                     .target = AssetCookTargetId::Parse("headless-null").Value(),
@@ -46,6 +50,8 @@ namespace Horo::Application {
                                .maximumWorkItems = 8,
                                .maximumWorkUnits = 1024ULL * 1024ULL * 1024ULL,
                                .childDrainTimeout = Duration::FromMilliseconds(2000)},
+                    .sourceAuthority = std::move(authority),
+                    .newOperationId = Horo::TestSupport::NewPublicationOperationId,
                     .diagnostics = journal};
         }
 
@@ -72,6 +78,17 @@ namespace Horo::Application {
             return {};
         }
 
+        /** @brief Check terminal truth independently of trailing persistence warnings. */
+        void RequireTerminalProjection(const BuildOutputStore &store, const OperationId id, const BuildOutputResult result) {
+            const auto output = store.SnapshotIfChanged(0).value();
+            REQUIRE(std::ranges::count_if(output.records, [id, result](const auto &record) {
+                return record.operationId == id && record.result == result;
+            }) == 1);
+            REQUIRE(std::ranges::count_if(output.records, [id](const auto &record) {
+                return record.operationId == id && record.result != BuildOutputResult::None;
+            }) == 1);
+        }
+
         void AwaitBuilder(const Builder &builder) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
             while (!builder.entered.load() && std::chrono::steady_clock::now() < deadline)
@@ -88,10 +105,10 @@ namespace Horo::Application {
         OperationStore operations{8, 16};
         JobSystem jobs{{.workerCount = 2, .maxQueuedJobs = 16}};
         auto builder = std::make_shared<Builder>();
-        auto bake = BakeConfig(directory, builder, journal);
+        IncrementalBakeFixture fixture;
+        auto bake = BakeConfig(directory, builder, journal, fixture);
         bake.tileLimits.maximumVertices = 1;
         auto service = NavigationBakeService::Create(bake, operations, jobs).Value();
-        IncrementalBakeFixture fixture;
         const auto id = service->Submit(Request(fixture)).Value();
         REQUIRE(AwaitTerminal(*service, operations, id).state == OperationState::Failed);
         jobs.Shutdown(ShutdownPolicy::Drain);
@@ -114,7 +131,16 @@ namespace Horo::Application {
             return record.code.Value() == "navigation.bake.tile_failed" && record.message.find("profile=1") != std::string::npos &&
                    !record.source;
         }));
-        REQUIRE(snapshot.persistenceDrops == 0);
+        const auto telemetryStatistics = Telemetry::Runtime::GetStatistics();
+        CAPTURE(snapshot.persistenceDrops, telemetryStatistics.contentionDrops, telemetryStatistics.queueFullDrops);
+        // The dispatcher may reject a checkpoint rather than block on its consumer's queue lock.
+        REQUIRE(snapshot.persistenceDrops <= telemetryStatistics.contentionDrops);
+        REQUIRE(telemetryStatistics.queueFullDrops == 0);
+        REQUIRE(snapshot.submissionFailures == 0);
+        REQUIRE(snapshot.historyFailures == 0);
+        REQUIRE(std::ranges::count_if(output.records, [](const auto &record) {
+            return record.code.Value() == "navigation.bake.history_unavailable";
+        }) == (snapshot.persistenceDrops > 0 ? 1 : 0));
     }
 
     TEST_CASE("Bake diagnostics survive observer closure and project restart without live operation aliasing",
@@ -130,7 +156,7 @@ namespace Horo::Application {
             OperationStore operations{8, 16};
             JobSystem jobs{{.workerCount = 2, .maxQueuedJobs = 16}};
             auto builder = std::make_shared<Builder>();
-            auto bake = BakeConfig(directory, builder, journal);
+            auto bake = BakeConfig(directory, builder, journal, fixture);
             bake.tileLimits.maximumVertices = 1;
             auto service = NavigationBakeService::Create(bake, operations, jobs).Value();
             auto panelSnapshot = config.output->SnapshotIfChanged(0);
@@ -140,7 +166,7 @@ namespace Horo::Application {
             service.reset();
             jobs.Shutdown(ShutdownPolicy::Drain);
             REQUIRE(Telemetry::Runtime::Flush());
-            REQUIRE(config.output->SnapshotIfChanged(0)->records.back().result == BuildOutputResult::Failed);
+            RequireTerminalProjection(*config.output, id, BuildOutputResult::Failed);
         }
         auto recoveredConfig = DiagnosticConfig(directory);
         auto recovered = NavigationBakeDiagnostics::Create(recoveredConfig).Value();
@@ -174,8 +200,8 @@ namespace Horo::Application {
         JobSystem jobs{{.workerCount = 2, .maxQueuedJobs = 16}};
         auto builder = std::make_shared<Builder>();
         builder->pause.store(true);
-        auto service = NavigationBakeService::Create(BakeConfig(directory, builder, journal), operations, jobs).Value();
         IncrementalBakeFixture fixture;
+        auto service = NavigationBakeService::Create(BakeConfig(directory, builder, journal, fixture), operations, jobs).Value();
         const auto id = service->Submit(Request(fixture)).Value();
         AwaitBuilder(*builder);
         const auto running = journal->Snapshot();
@@ -208,10 +234,16 @@ namespace Horo::Application {
         TelemetryOwner telemetry(journal);
         OperationStore operations{8, 16};
         JobSystem jobs{{.workerCount = 2, .maxQueuedJobs = 16}};
-        auto bake = BakeConfig(directory, std::make_shared<Builder>(), journal);
+        IncrementalBakeFixture fixture;
+        auto bake = BakeConfig(directory, std::make_shared<Builder>(), journal, fixture);
         auto expected = OperationState::Succeeded;
         auto result = BuildOutputResult::Succeeded;
+        bool unavailableHistory{};
         SECTION("native success") { /* Exercise the unmodified production configuration. */ }
+        SECTION("successful operation with unavailable persistence") {
+            REQUIRE(Telemetry::Runtime::Shutdown());
+            unavailableHistory = true;
+        }
         SECTION("admitted budget failure") {
             bake.budget.maximumWorkItems = 1;
             expected = OperationState::Failed;
@@ -223,11 +255,11 @@ namespace Horo::Application {
             result = BuildOutputResult::Failed;
         }
         auto service = NavigationBakeService::Create(bake, operations, jobs).Value();
-        IncrementalBakeFixture fixture;
         const auto id = service->Submit(Request(fixture)).Value();
         REQUIRE(AwaitTerminal(*service, operations, id).state == expected);
         jobs.Shutdown(ShutdownPolicy::Drain);
-        REQUIRE(Telemetry::Runtime::Flush());
+        if (!unavailableHistory)
+            REQUIRE(Telemetry::Runtime::Flush());
         const auto snapshot = journal->Snapshot();
         REQUIRE(snapshot.records.back().result == result);
         REQUIRE(std::ranges::count_if(snapshot.records, [](const auto &record) {
@@ -235,7 +267,14 @@ namespace Horo::Application {
         }) == 1);
         if (expected == OperationState::Failed)
             REQUIRE_FALSE(snapshot.records.back().causeCode.empty());
-        REQUIRE(config.output->SnapshotIfChanged(0)->records.back().result == result);
+        if (unavailableHistory) {
+            REQUIRE(snapshot.persistenceDrops > 0);
+            const auto output = config.output->SnapshotIfChanged(0).value();
+            REQUIRE(std::ranges::any_of(output.records, [](const auto &record) {
+                return record.code.Value() == "navigation.bake.history_unavailable";
+            }));
+        }
+        RequireTerminalProjection(*config.output, id, result);
     }
 
 }  // namespace Horo::Application

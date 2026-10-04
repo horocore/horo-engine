@@ -29,15 +29,17 @@ namespace Horo::Assets {
      * @brief All inputs needed to run one cook operation.
      */
     struct AssetCookRequest {
-        std::filesystem::path sourceRoot;            /**< Project source root for resolving relative source paths. */
-        std::filesystem::path cacheRoot;             /**< Cache root directory for immutable artifact cache. */
-        std::filesystem::path cookedRoot;            /**< Target root for generation publication. */
-        AssetRegistrySnapshot registry;              /**< Pinned immutable registry snapshot. */
-        AssetCookTargetId target;                    /**< Cook target to produce artifacts for. */
-        AssetCookLimits limits;                      /**< Bounded size and concurrency limits. */
-        BuildOutputStore *buildOutputStore{nullptr}; /**< Optional typed per-asset cook output authority. */
-        OperationStore *operationStore{nullptr};     /**< Optional user-facing operation authority. */
-        std::function<void()> requestCancel;         /**< Cooperative cancellation request paired with the supplied token. */
+        std::filesystem::path sourceRoot;                    /**< Project source root for resolving relative source paths. */
+        std::filesystem::path cacheRoot;                     /**< Cache root directory for immutable artifact cache. */
+        std::filesystem::path cookedRoot;                    /**< Target root for generation publication. */
+        AssetRegistrySnapshot registry;                      /**< Pinned immutable registry snapshot. */
+        AssetCookTargetId target;                            /**< Cook target to produce artifacts for. */
+        AssetCookLimits limits;                              /**< Bounded size and concurrency limits. */
+        BuildOutputStore *buildOutputStore{nullptr};         /**< Optional typed per-asset cook output authority. */
+        OperationStore *operationStore{nullptr};             /**< Optional user-facing operation authority. */
+        std::function<void()> requestCancel;                 /**< Cooperative cancellation request paired with the supplied token. */
+        std::shared_ptr<DurableFileSystem> publicationFiles; /**< Required host-owned durable writer and common native lock capability. */
+        std::function<Result<AssetId>()> newPublicationOperationId; /**< Required host entropy source for unique publication staging. */
     };
 
     /**
@@ -71,6 +73,9 @@ namespace Horo::Assets {
          * @param request Cook operation inputs.
          * @param cancellation Parent operation cancellation token.
          * @return Published generation report, or a typed error (missing cooker, read failure, etc.).
+         * @pre publicationFiles and newPublicationOperationId are supplied by the host, including for an empty registry.
+         * @post Recovery, full-inventory replacement and success adoption hold the common .cook-writer.lock.
+         * @post Cancellation before pointer replacement preserves the old generation; committed output remains successful.
          */
         [[nodiscard]] Result<AssetCookReport> Cook(const AssetCookRequest &request, const CancellationToken &cancellation);
 

@@ -20,20 +20,20 @@ jobs:
   sonar:
     name: SonarCloud
     runs-on: ubuntu-24.04
-    # A cold build, coverage pass, and CFamily scan can exceed 40 minutes. Keep a
-    # bounded margin so the scan and Quality Gate wait can finish and publish the
-    # server-side analysis cache instead of timing out at the scan boundary.
+    timeout-minutes: 90
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_DIR: ${{ github.workspace }}/.sonar/ccache
       CCACHE_COMPRESS: 'true'
       CCACHE_MAXSIZE: 2G
-      FETCHCONTENT_BASE_DIR: ${{ github.workspace }}/.cmake/fetchcontent
       SONAR_USER_HOME: ${{ github.workspace }}/.sonar/user-home
+      SONAR_SCANNER_VERSION: '7.2.0.5079'
+      HORO_COMPILER_LAUNCHER: ccache
 
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Checkout source and Git history
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -78,55 +78,24 @@ jobs:
         with:
           path: |
             ${{ github.workspace }}/.sonar/user-home/cache
-            ${{ github.workspace }}/.sonar/user-home/sonar-scanner-7.2.0.5079-linux-x64
-          key: sonar-v3-scanner-7.2.0.5079-${{ runner.os }}-${{ runner.arch }}
+            ${{ github.workspace }}/.sonar/user-home/sonar-scanner-${{ env.SONAR_SCANNER_VERSION }}-linux-x64
+          key: sonar-v3-scanner-${{ env.SONAR_SCANNER_VERSION }}-${{ runner.os }}-${{ runner.arch }}
 
-      - name: Report cache restores
-        env:
-          COMPILER_CACHE_KEY: ${{ steps.compiler.outputs.cache-matched-key }}
-          DEPENDENCY_CACHE_KEY: ${{ steps.deps.outputs.cache-matched-key }}
-          SCANNER_CACHE_KEY: ${{ steps.scanner_cache.outputs.cache-matched-key }}
+      - name: Setup build tools
+        uses: ./.github/actions/setup-build-tools
+
+      - name: Install coverage tools
         run: |
-          echo "FetchContent cache: ${DEPENDENCY_CACHE_KEY:-cold start}"
-          echo "Compiler cache: ${COMPILER_CACHE_KEY:-cold start}"
-          echo "Scanner downloads cache: ${SCANNER_CACHE_KEY:-cold start}"
-          echo 'CFamily analysis cache: SonarCloud server (main branch; PRs use target branch)'
+          python3 -m venv /tmp/horo-coverage
+          /tmp/horo-coverage/bin/pip install --disable-pip-version-check --no-cache-dir \
+            coverage==7.6.10 fastcov==1.17 pytest==8.3.4 defusedxml==0.7.1
 
-      - name: Install Linux dependencies
-        id: install
-        run: |
-          if ! sudo apt-get update; then
-            sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
-            sudo apt-get update
-          fi
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build ccache unzip python3-venv xvfb xauth libssl-dev \
-            libwayland-dev wayland-protocols libxkbcommon-dev \
-            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-            libxext-dev libxss-dev libxtst-dev libxxf86vm-dev \
-            libgl1-mesa-dev libglu1-mesa-dev
-          python3 -m venv /tmp/horo-gcovr
-          /tmp/horo-gcovr/bin/pip install --disable-pip-version-check --no-cache-dir \
-            coverage==7.6.10 gcovr==8.6 pytest==8.3.4
+      - name: Configure instrumented Debug build
+        run: cmake --preset sonar
 
-      - name: Configure and build
+      - name: Build instrumented targets
         id: build
-        run: |
-          cmake -S . -B build/sonar -G Ninja -DBUILD_TESTING=ON \
-            -DFETCHCONTENT_BASE_DIR="$FETCHCONTENT_BASE_DIR" \
-            -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
-            -DCMAKE_C_FLAGS_DEBUG="--coverage -fprofile-abs-path" \
-            -DCMAKE_CXX_FLAGS_DEBUG="--coverage -fprofile-abs-path" \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            -DHORO_ENABLE_EDITOR=ON \
-            -DHORO_ENABLE_IMGUI_UI_TESTS=ON \
-            -DHORO_ENABLE_GPU_SMOKE_TESTS=ON \
-            -DHORO_BUILD_RENDER_VULKAN=ON \
-            -DHORO_ENABLE_TELEMETRY=ON \
-            -DHORO_ENABLE_OPENTELEMETRY=ON \
-            -DHORO_BUILD_NETWORK_GNS=ON
-          cmake --build build/sonar --parallel
+        run: cmake --build --preset sonar
 
       # Checkpoint build inputs before coverage and analysis. A later scan timeout
       # must not discard the dependency and compiler work needed by the next run.
@@ -146,50 +115,39 @@ jobs:
             ${{ github.workspace }}/.sonar/ccache
           key: ${{ steps.compiler.outputs.cache-primary-key }}
 
-      - name: Test and collect coverage
-        id: coverage
-        run: |
-          xvfb-run -a ctest --test-dir build/sonar --output-on-failure -LE 'gui|editor'
-          build/sonar/tests/HoroCinematicPropertyIntegrationTests
-          xvfb-run -a build/sonar/tests/HoroEditorPresentationTests
-          xvfb-run -a build/sonar/tests/HoroEditorUiAutomationTests '~[native]'
-          xvfb-run -a build/sonar/tests/HoroSourceFileOpenServiceTests
-          xvfb-run -a build/sonar/tests/HoroEditorWorkspaceControllerTests
-          xvfb-run -a build/sonar/tests/HoroEditorUserStateMigrationTests
-          build/sonar/tests/HoroConfiguredEditorUpdateBackendTests
-          /tmp/horo-gcovr/bin/coverage run --source=scripts -m pytest tests/python --quiet
-          /tmp/horo-gcovr/bin/coverage xml -o build/sonar/python-coverage.xml
-          gcovr_started=$SECONDS
-          /tmp/horo-gcovr/bin/gcovr --sonarqube build/sonar/coverage.xml \
-            -j 0 \
-            --sonarqube-metric line \
-            --root "$GITHUB_WORKSPACE" \
-            --filter "$GITHUB_WORKSPACE/include" \
-            --filter "$GITHUB_WORKSPACE/src" \
-            --filter "$GITHUB_WORKSPACE/apps/common" \
-            --filter "$GITHUB_WORKSPACE/apps/horo-engine" \
-            --filter "$GITHUB_WORKSPACE/apps/horo-package" \
-            --filter "$GITHUB_WORKSPACE/apps/HoroEditor/app/EditorUserStateMigration.cpp" \
-            --filter "$GITHUB_WORKSPACE/apps/HoroEditor/app/ConfiguredEditorUpdateBackend.cpp" \
-            --exclude-throw-branches \
-            --exclude-unreachable-branches \
-            --exclude-noncode-lines \
-            --gcov-ignore-parse-errors=negative_hits.warn_once_per_file \
-            build/sonar
-          echo "gcovr completed in $((SECONDS - gcovr_started))s"
-          ccache --show-stats
+      - name: Run C++ coverage tests
+        run: xvfb-run -a ctest --preset sonar
 
-      - name: SonarCloud scan
+      - name: Run Python coverage tests
+        run: |
+          /tmp/horo-coverage/bin/coverage run --source=scripts -m pytest tests/python --quiet
+          /tmp/horo-coverage/bin/coverage xml -o build/sonar/python-coverage.xml
+
+      - name: Collect fastcov line coverage
+        id: coverage
+        run: bash .github/scripts/collect_sonar_coverage.sh
+
+      - name: Upload coverage evidence
+        if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            build/sonar/coverage.xml
+            build/sonar/fastcov-coverage.json
+
+      - name: Install cached Sonar scanner
+        run: bash .github/scripts/install_sonar_scanner.sh
+
+      - name: Analyze code and wait for Quality Gate
         id: scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          mkdir -p "$SONAR_USER_HOME"
-          if [ ! -x "$SONAR_USER_HOME/sonar-scanner-7.2.0.5079-linux-x64/bin/sonar-scanner" ]; then
-            curl --proto "=https" --proto-redir "=https" --retry 3 -fsSL https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-7.2.0.5079-linux-x64.zip -o /tmp/sonar-scanner.zip
-            unzip -q /tmp/sonar-scanner.zip -d "$SONAR_USER_HOME"
-          fi
-          "$SONAR_USER_HOME/sonar-scanner-7.2.0.5079-linux-x64/bin/sonar-scanner" \
+          "$SONAR_USER_HOME/sonar-scanner-$SONAR_SCANNER_VERSION-linux-x64/bin/sonar-scanner" \
             -Dsonar.organization=horocore \
             -Dsonar.projectKey=horocore_horo-engine \
             -Dsonar.sourceEncoding=UTF-8 \
@@ -209,5 +167,5 @@ jobs:
         with:
           path: |
             ${{ github.workspace }}/.sonar/user-home/cache
-            ${{ github.workspace }}/.sonar/user-home/sonar-scanner-7.2.0.5079-linux-x64
+            ${{ github.workspace }}/.sonar/user-home/sonar-scanner-${{ env.SONAR_SCANNER_VERSION }}-linux-x64
           key: ${{ steps.scanner_cache.outputs.cache-primary-key }}

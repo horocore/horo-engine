@@ -244,6 +244,15 @@ namespace Horo::Physics::PhysicsErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor ShapeCookImporterFailed{
+        .domain = PhysicsDomain,
+        .code = ErrorCode{"physics.shape_cook.importer_failed"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The collision source importer failed before publication.",
+        .remediationHint = "Inspect the named source adapter and its failure detail; the prior cooked generation remains unchanged.",
+        .retryable = false,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor ShapeCookLimitExceeded{
         .domain = PhysicsDomain,
         .code = ErrorCode{"physics.shape_cook.limit_exceeded"},
@@ -302,14 +311,39 @@ namespace Horo::Physics::PhysicsErrors {
     /** @copydoc Descriptors */
     std::span<const ErrorCodeDescriptor *const> Descriptors() noexcept {
         static const std::array descriptors{
-            &WorldInvalid,           &HandleMalformed,         &HandleWorldMismatch,       &HandleStale,
-            &GenerationExhausted,    &CapabilityUnavailable,   &OperationUnsupported,      &TransformAuthorityViolation,
-            &InvalidState,           &ThreadAffinityViolation, &SolverDeadlineExceeded,    &SolverValidationMessage,
-            &SolverAssertionFailed,  &SolverFatalCondition,    &BodyStateNonFinite,        &DescriptorInvalid,
-            &CommandOrderInvalid,    &SeedPolicyInvalid,       &ProfileUnsupported,        &CapacityExceeded,
-            &CapabilityStale,        &CapabilityRevoked,       &QuerySnapshotStale,        &QueryCancelled,
-            &InitializationFailed,   &ShapeCookSourceInvalid,  &ShapeCookLimitExceeded,    &ShapeCookCancelled,
-            &ShapeMotionUnsupported, &ShapeArtifactInvalid,    &MaterialDescriptorInvalid, &MaterialCombineUnsupported,
+            &WorldInvalid,
+            &HandleMalformed,
+            &HandleWorldMismatch,
+            &HandleStale,
+            &GenerationExhausted,
+            &CapabilityUnavailable,
+            &OperationUnsupported,
+            &TransformAuthorityViolation,
+            &InvalidState,
+            &ThreadAffinityViolation,
+            &SolverDeadlineExceeded,
+            &SolverValidationMessage,
+            &SolverAssertionFailed,
+            &SolverFatalCondition,
+            &BodyStateNonFinite,
+            &DescriptorInvalid,
+            &CommandOrderInvalid,
+            &SeedPolicyInvalid,
+            &ProfileUnsupported,
+            &CapacityExceeded,
+            &CapabilityStale,
+            &CapabilityRevoked,
+            &QuerySnapshotStale,
+            &QueryCancelled,
+            &InitializationFailed,
+            &ShapeCookSourceInvalid,
+            &ShapeCookImporterFailed,
+            &ShapeCookLimitExceeded,
+            &ShapeCookCancelled,
+            &ShapeMotionUnsupported,
+            &ShapeArtifactInvalid,
+            &MaterialDescriptorInvalid,
+            &MaterialCombineUnsupported,
         };
         return descriptors;
     }

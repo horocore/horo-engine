@@ -7,6 +7,7 @@
 
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/WorldStreaming/StreamingCellCandidate.h"
+#include "Horo/WorldStreaming/WorldPackageChunkAssignment.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -121,4 +122,30 @@ namespace Horo::WorldStreaming {
                                                                                const CookedWorldIndexManifest &manifest,
                                                                                const StreamingCellCandidate &candidate,
                                                                                const StreamingCellAssetRequestContext &context);
+
+    /**
+     * @brief Complete borrowed release evidence used only during synchronous packaged-read admission.
+     * @details Assignment and availability must outlive the call. No reference from this carrier is retained by admitted child work.
+     */
+    struct WorldPackageCellAdmission final {
+        const WorldPackageChunkAssignment &assignment;        /**< Immutable cook-stage requirements. */
+        const WorldPackageAvailabilitySnapshot &availability; /**< Complete verified installation facts. */
+        WorldPackageContentContext context;                   /**< Current host-owned release and lifecycle fence. */
+    };
+
+    /**
+     * @brief Admits packaged cell reads only after exact release content is completely verified and mounted.
+     * @param service Borrowed service outliving all admitted child work.
+     * @param registry Immutable asset registry captured for the admitted reads.
+     * @param manifest Sole cooked-cell authority.
+     * @param candidate Exact generation-pinned cell candidate.
+     * @param context Aggregate identity, operation and request ceiling.
+     * @param content Complete release requirements, availability publication and current host fence, borrowed only for this call.
+     * @return Aggregate request, preserved validation error, or PackageChunkContentMissing before any child is submitted.
+     * @details Use EvaluateWorldCellContent to obtain exact missing chunk IDs and download/install/failure causes.
+     * Already admitted work retains submission-time immutable facts; replacement or shutdown governs new admission.
+     */
+    [[nodiscard]] Result<StreamingCellAssetRequest> RequestStreamingCellAssets(
+        Assets::AssetLoadService &service, const Assets::AssetRegistrySnapshot &registry, const CookedWorldIndexManifest &manifest,
+        const StreamingCellCandidate &candidate, const StreamingCellAssetRequestContext &context, const WorldPackageCellAdmission &content);
 }  // namespace Horo::WorldStreaming
