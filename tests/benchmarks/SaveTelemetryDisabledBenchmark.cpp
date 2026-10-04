@@ -15,6 +15,48 @@ namespace {
         std::int64_t nanoseconds{};
     };
 
+    /** @brief Numeric lineage failures and calling-thread allocations observed during identity capture. */
+    struct IdentityMeasurement {
+        std::size_t failures{};
+        std::size_t allocations{};
+    };
+
+    /** @brief Measures one explicit allocation before producer work; reports no completion on allocation failure. */
+    Measurement CalibrateAllocationProbe() {
+        Measurement result;
+        AllocationState().trackedAllocations = 0;
+        AllocationState().trackAllocations = true;
+        const auto release = [](void *memory) noexcept {
+            ::operator delete(memory);
+        };
+        try {
+            // An explicit allocation-function call cannot be elided like a new-expression.
+            const std::unique_ptr<void, decltype(release)> allocation{::operator new(64), release};
+            AllocationState().trackAllocations = false;
+            result.completed = 1;
+        } catch (const std::bad_alloc &) {
+            AllocationState().trackAllocations = false;
+            // Failed calibration cannot establish that the probe observes successful allocations.
+        }
+        result.allocations = AllocationState().trackedAllocations;
+        return result;
+    }
+
+    /** @brief Measures numeric identity capture without including setup or positive-control allocations. */
+    IdentityMeasurement MeasureIdentities(const std::size_t iterations) {
+        IdentityMeasurement result;
+        AllocationState().trackedAllocations = 0;
+        AllocationState().trackAllocations = true;
+        for (std::size_t iteration = 0; iteration < iterations; ++iteration) {
+            const auto identity = Horo::Telemetry::CaptureOperationIdentity();
+            result.failures +=
+                identity.operationId != 41 || identity.parentOperationId != 40 || !identity.diagnosticContext.Fields().empty() ? 1U : 0U;
+        }
+        AllocationState().trackAllocations = false;
+        result.allocations = AllocationState().trackedAllocations;
+        return result;
+    }
+
     class PolicySink final : public Horo::Telemetry::ISink {
         void Export(const Horo::Telemetry::Record &, const Horo::Telemetry::InstrumentDescriptor *) override {
             // This fixture deliberately discards records; it measures producer behavior only.
@@ -44,6 +86,9 @@ namespace {
 }  // namespace
 
 int main() {
+    const auto calibration = CalibrateAllocationProbe();
+    if (calibration.completed != 1 || calibration.allocations != 1)
+        return 5;
     Horo::Log::Logger::Shutdown();
     auto registrationResult = Horo::Runtime::SaveTelemetryRegistration::Create();
     if (registrationResult.HasError())
@@ -52,16 +97,7 @@ int main() {
     constexpr std::size_t iterations = 100'000;
     Horo::Telemetry::ScopedOperationContext operation{Horo::Telemetry::OperationContext{.operationId = 41, .parentOperationId = 40}};
     Horo::Log::LogContext ambient{"account.id", std::string(4096, 'a'), "payload.özel", std::string(4096, 'b')};
-    std::size_t identityFailures{};
-    AllocationState().trackedAllocations = 0;
-    AllocationState().trackAllocations = true;
-    for (std::size_t iteration = 0; iteration < iterations; ++iteration) {
-        const auto identity = Horo::Telemetry::CaptureOperationIdentity();
-        identityFailures +=
-            identity.operationId != 41 || identity.parentOperationId != 40 || !identity.diagnosticContext.Fields().empty() ? 1U : 0U;
-    }
-    AllocationState().trackAllocations = false;
-    const auto identityAllocations = AllocationState().trackedAllocations;
+    const auto identities = MeasureIdentities(iterations);
     const auto disabled = MeasureStages(iterations);
     registration.reset();
     if (!Horo::Telemetry::Runtime::Initialize({.subsystemPrefixes = {"other"},
@@ -76,12 +112,12 @@ int main() {
     registration.reset();
     const bool shutdown = Horo::Telemetry::Runtime::Shutdown();
     std::cout << "compiled_telemetry=" << HORO_ENABLE_TELEMETRY << " iterations=" << iterations
-              << " identity_allocations=" << identityAllocations << " identity_failures=" << identityFailures
+              << " identity_allocations=" << identities.allocations << " identity_failures=" << identities.failures
               << " disabled_save_allocations=" << disabled.allocations << " disabled_ns_per_stage=" << disabled.nanoseconds / iterations
               << " policy_disabled_allocations=" << policy.allocations
               << " policy_disabled_ns_per_stage=" << policy.nanoseconds / iterations << '\n';
     return shutdown && disabled.completed == iterations && disabled.allocations == 0 && policy.completed == iterations &&
-                   policy.allocations == 0 && identityAllocations == 0 && identityFailures == 0
+                   policy.allocations == 0 && identities.allocations == 0 && identities.failures == 0
                ? 0
                : 2;
 }
