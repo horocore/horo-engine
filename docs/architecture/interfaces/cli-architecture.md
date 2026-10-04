@@ -504,6 +504,59 @@ Rules:
   same envelope as the final summary record unless they choose a declared
   streaming schema.
 
+### Version-One Presenter Compatibility
+
+`CliOutputPresenter` is the invocation-confined stream owner over `CliTerminalResult`.
+It owns copied command metadata and the immutable `ErrorTranslator`; borrowed output
+and diagnostic streams outlive it. It is neither copyable nor movable. Completion
+is idempotent and emits one result document (JSON) or one terminal `type: result`,
+`recordVersion: 1` record (JSONL). Every terminal envelope includes `exitCode` and
+`outputSchema: {id, version}` alongside the required fields above. The descriptor's
+schema ID/version identifies the flat typed result fields; strings, integers,
+numbers and booleans retain their JSON types. Failure has `result: null` and the
+unchanged canonical safe error payload.
+
+JSONL admits only its terminal record and, when `CliOutputSchema::progressRecords`
+is true, `type: progress`, `recordVersion: 1` records containing `schemaVersion`,
+command, invocation ID, phase, completion and message. Undeclared progress is
+rejected before writing. Single-document JSON suppresses progress. Terminal
+identity, records, and schema do not depend on TTY detection.
+
+A completed batch can retain successful result fields and typed per-item errors in
+`CliCommandResult::partialFailures`. Its terminal status is `partial_failure`, with
+ordered `partialFailures: [{item, error}]`; the first failed item's shared mapping
+determines the exit category. No failure is flattened into a result string.
+
+Readers ignore unknown optional fields within a supported schema/record version.
+Adding an optional field preserves version one; removing required fields, changing
+their meaning/type, or adding a new record kind requires a new declared version.
+Required command-result changes increment the descriptor's output schema version.
+The new optional progress declaration defaults to false; existing descriptors keep
+their terminal-only contract. Public CLI consumers rebuild for the additive C++
+metadata/result layout, with no persisted numeric enum identities introduced.
+
+Normal failures use the shared exact `ErrorTranslator` categories 2/3/4/5/6/7/8/10;
+pre-initialization or unexpected process-host failure uses exit 1 and the registered
+`cli.host_failure` identity. An unmapped original error is retained, including its
+cause and diagnostics, in `CliPresentationOutcome::rejectedError` for owned host
+diagnostics; it is never assigned a fabricated application identity or disclosed
+using an unvalidated fallback message. The public envelope fails closed with the
+safe host-failure payload. Fatal OS signals retain native termination semantics.
+
+The production `horo-engine` host now runs `host inspect`, `host help`,
+`observability smoke` and `diagnostics bundle --output-path <absolute.zip>` through
+accepted metadata and typed dispatch. Legacy first-argument flags normalize into
+those same paths at the app boundary; unknown flags now produce usage failures. Before command admission, those failures
+use the versioned `horo.cli.invocation` schema and `cli.invocation` envelope command
+rather than claiming that an unexecuted command completed. Each production command
+uses a distinct output schema identity for its declared typed field shape.
+`--run-network-product` retains its separate existing product-launch contract.
+Diagnostic bundle error metadata is exposed by inert
+`Diagnostics::DiagnosticBundleErrorDomain()` in its existing Foundation header;
+the caller builds the registry and exact mapping table explicitly. Returned
+static descriptor pointers are borrowed through registry construction, which
+copies all metadata. Creating metadata activates no services and registers nothing.
+
 ## Progress
 
 Long-running operations expose progress from the authoritative job store.
@@ -738,3 +791,10 @@ Required tests cover:
 - [MCP Architecture](./mcp-architecture.md)
 - [Runtime Debug Console And Development Overlays](../runtime/debug-console-and-overlays.md)
 - [Application Security](../security/application-security.md)
+
+The Windows executable boundary receives UTF-16 through `wmain` and owns its UTF-8
+argument storage through synchronous dispatch, including the existing network host
+route. MSVC/clang-cl select the wide console entry; MinGW uses a target-local
+`-municode` link option. No global code-page state changes. Conversion failures
+retain the canonical `cli.parse_failed` identity and use the selected machine
+envelope with usage exit 2 before invoking application operations.

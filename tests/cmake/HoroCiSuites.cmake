@@ -16,6 +16,8 @@ set(HORO_CI_AUDIO_TARGETS
 set(HORO_CI_WINDOWS_TARGETS
     ${HORO_CI_AUDIO_TARGETS}
     HoroCliCommandRegistryTests
+    HoroCliOutputPublicHeaderConsumer
+    HoroCliProductionOutputContract
     HoroPlatformTests
     HoroUpdateZipPackageProducerTests
     HoroVfxApiTests

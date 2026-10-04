@@ -30,6 +30,7 @@ def targets(name: str) -> set[str]:
 def test_windows_group_preserves_every_previously_built_target() -> None:
     assert targets("HORO_CI_WINDOWS_TARGETS") == targets("HORO_CI_AUDIO_TARGETS") | {
         "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
+        "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
         "HoroVfxApiTests", "HoroCinematicModelTests", "HoroCinematicRuntimeTests",
         "HoroCinematicPropertyIntegrationTests", "HoroCinematicModelPublicHeaderConsumer",
         "HoroCinematicRuntimePublicHeaderConsumer", "HoroEditorServicesPublicHeaderConsumer",

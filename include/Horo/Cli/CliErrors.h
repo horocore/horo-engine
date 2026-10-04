@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Foundation/ErrorCode.h"
+#include "Horo/Foundation/ModuleDescriptor.h"
 
 namespace Horo::Cli::CliErrors {
     /** @brief A descriptor or host policy contains malformed metadata. */
@@ -52,4 +53,8 @@ namespace Horo::Cli::CliErrors {
     extern const ErrorCodeDescriptor ExecutionTimedOut;
     /** @brief Adapter progress or result data exceeded a dispatcher-owned bound. */
     extern const ErrorCodeDescriptor ExecutionCapacityExceeded;
+    /** @brief Unexpected process-host failure before a normal operation result is available. */
+    extern const ErrorCodeDescriptor HostFailure;
+    /** @brief Returns inert CLI-owned error metadata for explicit host composition. @return Canonical descriptor contribution. */
+    [[nodiscard]] ModuleErrorDomainDescriptor ErrorDomain();
 }  // namespace Horo::Cli::CliErrors

@@ -11,6 +11,7 @@ add_library(HoroFoundation STATIC
         foundation/error/ErrorCodeRegistry.cpp
         foundation/error/ValidationResult.cpp
         foundation/diagnostics/DiagnosticBundle.cpp
+        foundation/diagnostics/DiagnosticBundleErrors.cpp
         foundation/hashing/Sha256.cpp
         foundation/math/SceneMath.cpp
         foundation/math/WorldCoordinate64.cpp
@@ -60,16 +61,18 @@ target_link_libraries(HoroSecurity PUBLIC HoroEngine::Foundation PRIVATE MbedTLS
 
 add_library(HoroCliHost STATIC
         cli/CliCommandRegistry.cpp
+        cli/CliCommandHelp.cpp
         cli/CliCommonOptions.cpp
         cli/CliDispatcher.cpp
         cli/CliExecutionLifecycle.cpp
         cli/CliErrors.cpp
         cli/CliOptionParser.cpp
+        cli/CliOutputPresenter.cpp
 )
 add_library(HoroEngine::CliHost ALIAS HoroCliHost)
 target_compile_features(HoroCliHost PUBLIC cxx_std_20)
 target_link_libraries(HoroCliHost
-        PUBLIC HoroEngine::Foundation
+        PUBLIC HoroEngine::Foundation HoroEngine::HostErrors
         PRIVATE nlohmann_json::nlohmann_json
 )
 

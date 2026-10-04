@@ -1815,9 +1815,10 @@ add_executable(HoroCliCommandRegistryTests
         unit/cli/CliDispatcherTests.cpp
         unit/cli/CliProgressLifecycleTests.cpp
         unit/cli/CliOptionParserTests.cpp
+        unit/cli/CliOutputPresenterTests.cpp
 )
 target_compile_features(HoroCliCommandRegistryTests PRIVATE cxx_std_20)
-target_link_libraries(HoroCliCommandRegistryTests PRIVATE HoroEngine::CliHost HoroEngine::Platform)
+target_link_libraries(HoroCliCommandRegistryTests PRIVATE HoroEngine::CliHost HoroEngine::Platform nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroCliCommandRegistryTests LABELS "unit;cli;headless")
 
 add_executable(HoroMcpSessionTests
@@ -3393,3 +3394,15 @@ target_compile_features(HoroWorldPackageChunkPublicConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroWorldPackageChunkPublicConsumer PRIVATE HoroEngine::WorldStreaming)
 add_test(NAME HoroWorldPackageChunkPublicConsumer COMMAND HoroWorldPackageChunkPublicConsumer)
 set_tests_properties(HoroWorldPackageChunkPublicConsumer PROPERTIES LABELS "unit;world_streaming;headless")
+
+add_executable(HoroCliOutputPublicHeaderConsumer support/CliOutputPublicHeaderConsumer.cpp)
+target_compile_features(HoroCliOutputPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroCliOutputPublicHeaderConsumer PRIVATE HoroEngine::CliHost)
+add_test(NAME HoroCliOutputPublicHeaderConsumer COMMAND HoroCliOutputPublicHeaderConsumer)
+set_tests_properties(HoroCliOutputPublicHeaderConsumer PROPERTIES LABELS "cli;headless;sonar-coverage;ci-windows")
+add_executable(HoroCliProductionOutputContract integration/CliProductionOutputContract.cpp)
+target_compile_features(HoroCliProductionOutputContract PRIVATE cxx_std_20)
+target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::Platform nlohmann_json::nlohmann_json)
+add_dependencies(HoroCliProductionOutputContract horo-engine)
+add_test(NAME HoroCliProductionOutputContract COMMAND HoroCliProductionOutputContract "$<TARGET_FILE:horo-engine>")
+set_tests_properties(HoroCliProductionOutputContract PROPERTIES LABELS "cli;integration;headless;sonar-coverage;ci-windows" TIMEOUT 120)
