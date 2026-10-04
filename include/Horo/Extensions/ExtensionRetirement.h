@@ -61,13 +61,24 @@ namespace Horo::Extensions {
     /** @brief Shared work token; its final release destroys provider state before removing its diagnostic. */
     class ExtensionExecutableLease final {
     public:
+        /** @brief Construction authority reserved to the retirement admission controller. */
+        class ConstructionKey final {
+            friend class ExtensionRetirement;
+            ConstructionKey() = default;
+        };
+
+        /**
+         * @brief Constructs an unadmitted token before acquiring the state mutex.
+         * @param key Controller-only construction authority.
+         * @param owner Provider owner retained through admission or rollback.
+         */
+        ExtensionExecutableLease(ConstructionKey key, std::shared_ptr<void> owner);
         ~ExtensionExecutableLease();
         ExtensionExecutableLease(const ExtensionExecutableLease &) = delete;
         ExtensionExecutableLease &operator=(const ExtensionExecutableLease &) = delete;
 
     private:
         friend class ExtensionRetirement;
-        ExtensionExecutableLease(std::shared_ptr<ExtensionRetirementState> state, std::size_t id, std::shared_ptr<void> owner);
         std::shared_ptr<ExtensionRetirementState> state_;
         std::size_t id_{};
         std::shared_ptr<void> moduleCode_;
@@ -81,6 +92,8 @@ namespace Horo::Extensions {
      * outstanding work keeps its provider objects and complete executable dependency closure alive.
      * Lease acquisition/release and Inspect are thread-safe. RegisterContribution and BeginRetirement belong
      * to the same host owner lane. This API does not authorize live package replacement or force unload.
+     * Const handles share the same synchronized controller state; const does not imply immutable lifecycle state
+     * or relax owner-lane requirements. Only the controller can construct executable-work tokens.
      */
     class ExtensionRetirement final {
     public:
@@ -105,7 +118,7 @@ namespace Horo::Extensions {
          * @details Only weak ownership is stored here; every admitted work/publication token takes its own
          * strong pin. Host composition must not replace a module's bound code within one activation.
          */
-        [[nodiscard]] bool BindModuleCode(std::string_view moduleId, const std::shared_ptr<void> &codeOwner);
+        [[nodiscard]] bool BindModuleCode(std::string_view moduleId, const std::shared_ptr<void> &codeOwner) const;
         /**
          * @brief Admits attributed work only before retirement begins.
          * @param moduleId Exact resolved owning module identity.
@@ -115,25 +128,26 @@ namespace Horo::Extensions {
          * @return Shared work token, or null for closed admission, unknown identity or exhausted bounds.
          */
         [[nodiscard]] std::shared_ptr<ExtensionExecutableLease> Acquire(std::string_view moduleId, ExtensionLeaseKind kind,
-                                                                        std::string subject, std::shared_ptr<void> owner);
+                                                                        std::string subject, std::shared_ptr<void> owner) const;
         /**
          * @brief Retains one host revocation owner while the extension is active.
          * @param moduleId Exact resolved owning module identity.
          * @param contribution Host adapter whose Revoke closes admission and removes the contribution.
          * @return False for unknown modules, closed admission, null owner or exhausted bounds.
          */
-        [[nodiscard]] bool RegisterContribution(std::string_view moduleId, std::shared_ptr<IExtensionRetirementContribution> contribution);
+        [[nodiscard]] bool RegisterContribution(std::string_view moduleId,
+                                                std::shared_ptr<IExtensionRetirementContribution> contribution) const;
         /**
          * @brief Closes work admission and revokes contributions dependent-first; repeated calls are safe.
          * @return Attributed drain/restart state after revocation.
          * @throws std::bad_alloc Report allocation failure; admission remains closed and revocation is complete.
          */
-        [[nodiscard]] ExtensionRetirementReport BeginRetirement();
+        [[nodiscard]] ExtensionRetirementReport BeginRetirement() const;
         /**
          * @brief Allocation-free shutdown safety path; revokes every publication even when report allocation cannot succeed.
          * @details Owner-lane only. Reentrant calls observe retirement already started and do not repeat revocation.
          */
-        void CloseAdmission() noexcept;
+        void CloseAdmission() const noexcept;
         /**
          * @brief Returns current attributed work; Draining means release listed owners or restart, never force unload.
          * @return Owned snapshot of the extension disposition and outstanding work identities.
@@ -146,7 +160,7 @@ namespace Horo::Extensions {
          */
         [[nodiscard]] bool IsDrained() const noexcept;
         /** @brief Records a sticky provider drain/retained-code failure; process restart is the only recovery. */
-        void RequireRestart() noexcept;
+        void RequireRestart() const noexcept;
 
     private:
         std::shared_ptr<ExtensionRetirementState> state_;

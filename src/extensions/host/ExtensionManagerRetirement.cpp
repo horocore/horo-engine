@@ -29,14 +29,14 @@ namespace Horo::Extensions {
                 return Result<void>::Failure(
                     MakeError(ExtensionErrors::LoadFailed, "Extension provider must be activated before its dependent: " + provider));
             const auto &record = *found->second;
-            for (std::size_t module = 0; module < record.moduleIds.size(); ++module) {
-                auto lease = record.retirement->Acquire(record.moduleIds[module], ExtensionLeaseKind::HostService,
-                                                        "dependent-package:" + std::string{extensionId}, record.lifetimes[module]);
+            for (std::size_t moduleIndex = 0; moduleIndex < record.moduleIds.size(); ++moduleIndex) {
+                auto lease = record.retirement->Acquire(record.moduleIds[moduleIndex], ExtensionLeaseKind::HostService,
+                                                        "dependent-package:" + std::string{extensionId}, record.lifetimes[moduleIndex]);
                 if (!lease)
                     return Result<void>::Failure(
                         MakeError(ExtensionErrors::LoadFailed, "Provider dependency admission closed: " + provider));
                 leases.push_back(std::move(lease));
-                dependencies.push_back(record.lifetimes[module]);
+                dependencies.push_back(record.lifetimes[moduleIndex]);
             }
         }
         return Result<void>::Success();

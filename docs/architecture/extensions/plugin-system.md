@@ -1369,6 +1369,16 @@ that call before retirement, or retain an already admitted operation. Keep the
 manager alive until owners release and call `FinalizeRetirements` on the activation
 lane; destroying a busy manager instead chooses the restart-only retention path.
 
+Retirement controller operations and backend registration attachment are logically
+const handle operations: they mutate shared, synchronized lifecycle state, not
+the handle identity. Const handles do not relax admission or owner-lane rules.
+Ordinary calls remain source-compatible; callers storing member-function pointers
+must update their signatures to include `const` and rebuild the owning consumers.
+Executable lease construction remains controller-only through a non-publicly
+constructible passkey; consumers acquire tokens through `Acquire`, never by
+constructing an untracked token. Allocation precedes the admission lock, and
+rollback destroys provider owners and executable pins only after unlocking.
+
 Safe runtime unload requires all of the following to be proven for a specific
 module API:
 

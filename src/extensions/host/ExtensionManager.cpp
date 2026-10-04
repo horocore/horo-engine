@@ -383,8 +383,8 @@ namespace Horo::Extensions {
             std::vector<ExtensionPlatformProviderCandidate> candidates;
             for (std::size_t index = 0; index < inputs.plan.moduleIds.size(); ++index) {
                 const auto &moduleId = inputs.plan.moduleIds[index];
-                const auto module = std::ranges::find(inputs.manifest.modules, moduleId, &ExtensionModuleManifest::id);
-                if (module == inputs.manifest.modules.end())
+                const auto foundModule = std::ranges::find(inputs.manifest.modules, moduleId, &ExtensionModuleManifest::id);
+                if (foundModule == inputs.manifest.modules.end())
                     return Result<std::vector<ExtensionPlatformProviderCandidate>>::Failure(
                         MakeError(ExtensionErrors::ModuleResolutionFailed, "Resolved module is absent from the package manifest."));
                 auto path = ResolveModuleLibraryPath(inputs.manifest, inputs.plan.selectedEntries[index]);
@@ -397,7 +397,7 @@ namespace Horo::Extensions {
                     return Result<std::vector<ExtensionPlatformProviderCandidate>>::Failure(loaded.ErrorValue());
                 std::shared_ptr<Platform::DynamicLibrary> library{std::move(loaded).Value()};
                 const bool provider = inputs.platformDeclarations != 0 && inputs.manifest.contributions.front().owningModule == moduleId;
-                auto activated = ActivateModule(library, inputs.manifest, *module, provider, inputs.retirement, dependencies);
+                auto activated = ActivateModule(library, inputs.manifest, *foundModule, provider, inputs.retirement, dependencies);
                 if (activated.HasError())
                     return Result<std::vector<ExtensionPlatformProviderCandidate>>::Failure(activated.ErrorValue());
                 ActivatedModule native = std::move(activated).Value();

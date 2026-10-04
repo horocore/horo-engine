@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -223,7 +224,7 @@ namespace Horo::Extensions {
                     return Result<std::vector<const Discovery::DiscoveredPackage *>>::Failure(
                         MakeError(ExtensionErrors::HeadlessHostActivationFailed,
                                   "Declared extension provider graph is cyclic or refers to an unavailable package."));
-                order.push_back(&*next);
+                order.push_back(std::to_address(next));
             }
             return Result<std::vector<const Discovery::DiscoveredPackage *>>::Success(std::move(order));
         }

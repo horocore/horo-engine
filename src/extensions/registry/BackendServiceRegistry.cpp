@@ -442,7 +442,7 @@ namespace Horo::Extensions {
     }  // namespace
 
     /** @copydoc BackendServiceRegistration::AttachRetirement */
-    bool BackendServiceRegistration::AttachRetirement(const std::shared_ptr<ExtensionRetirement> &retirement) {
+    bool BackendServiceRegistration::AttachRetirement(const std::shared_ptr<ExtensionRetirement> &retirement) const {
         if (!retirement || !IsRegistered())
             return false;
         if (std::this_thread::get_id() != provider_->ownerThread)
@@ -462,7 +462,7 @@ namespace Horo::Extensions {
                                          std::move(service));
         if (!lease)
             return false;
-        auto code = std::make_shared<RetirementBackendCode>(RetirementBackendCode{std::move(previous), std::move(lease)});
+        auto code = std::make_shared<RetirementBackendCode>(std::move(previous), std::move(lease));
         auto publication = std::make_shared<BackendRetirementPublication>(BackendServiceRegistration{registry_, provider_}, retirement);
         {
             std::scoped_lock lock{provider_->mutex};

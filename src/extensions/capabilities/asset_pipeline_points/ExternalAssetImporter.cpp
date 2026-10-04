@@ -336,22 +336,23 @@ namespace Horo::Extensions {
 
             [[nodiscard]] Result<Assets::PreparedAssetImport> Import(const Assets::AssetImportInput &input,
                                                                      const CancellationToken &cancellation) const override {
-                const auto call = AcquireExternalCall(instance_);
-                if (instance_->retirement && !call)
-                    return ImportFailure("External importer is retiring; release outstanding work or restart.");
-                if (auto inputValid = ValidateImportInput(input, cancellation); inputValid.HasError())
-                    return Result<Assets::PreparedAssetImport>::Failure(inputValid.ErrorValue());
+                // The admitted branch owns executable code through every native invocation and result check.
+                if (const auto call = AcquireExternalCall(instance_); call || !instance_->retirement) {
+                    if (auto inputValid = ValidateImportInput(input, cancellation); inputValid.HasError())
+                        return Result<Assets::PreparedAssetImport>::Failure(inputValid.ErrorValue());
 
-                Assets::PreparedAssetImport prepared;
-                bool outputRejected{};
-                const HoroExtensionStatus status = InvokeExternalImporter(instance_, input, cancellation, prepared, outputRejected);
-                if (cancellation.IsCancellationRequested() || status == HORO_EXTENSION_ERROR_CANCELLED)
-                    return ImportFailure("External asset importer callback was cancelled.");
-                if (status != HORO_EXTENSION_SUCCESS || outputRejected)
-                    return ImportFailure("External asset importer callback failed or produced rejected output.");
-                if (prepared.type.Value().empty() || prepared.editorPayload.empty())
-                    return ImportFailure("External importer returned invalid or empty output.");
-                return Result<Assets::PreparedAssetImport>::Success(std::move(prepared));
+                    Assets::PreparedAssetImport prepared;
+                    bool outputRejected{};
+                    const HoroExtensionStatus status = InvokeExternalImporter(instance_, input, cancellation, prepared, outputRejected);
+                    if (cancellation.IsCancellationRequested() || status == HORO_EXTENSION_ERROR_CANCELLED)
+                        return ImportFailure("External asset importer callback was cancelled.");
+                    if (status != HORO_EXTENSION_SUCCESS || outputRejected)
+                        return ImportFailure("External asset importer callback failed or produced rejected output.");
+                    if (prepared.type.Value().empty() || prepared.editorPayload.empty())
+                        return ImportFailure("External importer returned invalid or empty output.");
+                    return Result<Assets::PreparedAssetImport>::Success(std::move(prepared));
+                }
+                return ImportFailure("External importer is retiring; release outstanding work or restart.");
             }
 
         private:
@@ -364,39 +365,40 @@ namespace Horo::Extensions {
 
             [[nodiscard]] Result<Assets::AssetPreviewImage> GeneratePreview(const Assets::AssetPreviewInput &input,
                                                                             const CancellationToken &cancellation) const override {
-                const auto call = AcquireExternalCall(instance_);
-                if (instance_->retirement && !call)
-                    return Result<Assets::AssetPreviewImage>::Failure(
-                        MakeError(ExtensionErrors::InvocationFailed, "External preview is retiring; release outstanding work or restart."));
-                if (input.width == 0 || input.height == 0 || input.width > kMaxPreviewDimension || input.height > kMaxPreviewDimension)
-                    return Result<Assets::AssetPreviewImage>::Failure(
-                        MakeError(ExtensionErrors::InvocationFailed, "External preview dimensions are invalid."));
+                // Keep the admission lease alive until the preview callback and response validation finish.
+                if (const auto call = AcquireExternalCall(instance_); call || !instance_->retirement) {
+                    if (input.width == 0 || input.height == 0 || input.width > kMaxPreviewDimension || input.height > kMaxPreviewDimension)
+                        return Result<Assets::AssetPreviewImage>::Failure(
+                            MakeError(ExtensionErrors::InvocationFailed, "External preview dimensions are invalid."));
 
-                Assets::AssetPreviewImage image;
-                HoroAssetPreviewRequest request{
-                    .structSize = sizeof(HoroAssetPreviewRequest),
-                    .editorPayload = input.editorPayload.data(),
-                    .editorPayloadByteCount = input.editorPayload.size(),
-                    .absoluteAssetPath = {input.absoluteAssetPath.data(), static_cast<std::uint32_t>(input.absoluteAssetPath.size())},
-                    .assetType = {input.assetType.Value().data(), static_cast<std::uint32_t>(input.assetType.Value().size())},
-                    .width = input.width,
-                    .height = input.height,
-                    .cancellation = {&cancellation, IsCancelled},
-                };
-                HoroAssetPreviewResponse response{
-                    .structSize = sizeof(HoroAssetPreviewResponse),
-                    .rgba8Pixels = {&image.pixels, ResizeVector},
-                };
-                const HoroExtensionStatus status = SafeInvoke([&instance = instance_, &request, &response] {
-                    return instance->preview(instance->context, &request, &response);
-                }, "preview");
+                    Assets::AssetPreviewImage image;
+                    HoroAssetPreviewRequest request{
+                        .structSize = sizeof(HoroAssetPreviewRequest),
+                        .editorPayload = input.editorPayload.data(),
+                        .editorPayloadByteCount = input.editorPayload.size(),
+                        .absoluteAssetPath = {input.absoluteAssetPath.data(), static_cast<std::uint32_t>(input.absoluteAssetPath.size())},
+                        .assetType = {input.assetType.Value().data(), static_cast<std::uint32_t>(input.assetType.Value().size())},
+                        .width = input.width,
+                        .height = input.height,
+                        .cancellation = {&cancellation, IsCancelled},
+                    };
+                    HoroAssetPreviewResponse response{
+                        .structSize = sizeof(HoroAssetPreviewResponse),
+                        .rgba8Pixels = {&image.pixels, ResizeVector},
+                    };
+                    const HoroExtensionStatus status = SafeInvoke([&instance = instance_, &request, &response] {
+                        return instance->preview(instance->context, &request, &response);
+                    }, "preview");
 
-                image.width = response.width;
-                image.height = response.height;
-                if (status != HORO_EXTENSION_SUCCESS || !image.IsValid())
-                    return Result<Assets::AssetPreviewImage>::Failure(
-                        MakeError(ExtensionErrors::InvocationFailed, "External preview callback returned invalid output."));
-                return Result<Assets::AssetPreviewImage>::Success(std::move(image));
+                    image.width = response.width;
+                    image.height = response.height;
+                    if (status != HORO_EXTENSION_SUCCESS || !image.IsValid())
+                        return Result<Assets::AssetPreviewImage>::Failure(
+                            MakeError(ExtensionErrors::InvocationFailed, "External preview callback returned invalid output."));
+                    return Result<Assets::AssetPreviewImage>::Success(std::move(image));
+                }
+                return Result<Assets::AssetPreviewImage>::Failure(
+                    MakeError(ExtensionErrors::InvocationFailed, "External preview is retiring; release outstanding work or restart."));
             }
 
         private:

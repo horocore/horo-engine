@@ -424,6 +424,7 @@ namespace Horo::Extensions::Tests {
         CompleteImporterFixture fixture;
         auto retirement = std::make_shared<ExtensionRetirement>(fixture.manifest.id, std::vector<std::string>{fixture.owner.id});
         fixture.session.lifetime = std::make_shared<ExtensionModuleLifetime>();
+        const std::weak_ptr<ExtensionModuleLifetime> executableCode = fixture.session.lifetime;
         REQUIRE(retirement->BindModuleCode(fixture.owner.id, fixture.session.lifetime));
         fixture.session.retirement = retirement;
         REQUIRE(RegisterExternalAssetImporter(&fixture.session, &fixture.descriptor) == HORO_EXTENSION_SUCCESS);
@@ -444,6 +445,7 @@ namespace Horo::Extensions::Tests {
         });
         CallbackReleaseGuard releaseGuard{release};
         began.get();
+        fixture.session.lifetime.reset();
         retirement->CloseAdmission();
         REQUIRE(catalog.WithdrawPackage(fixture.manifest.id));
         const auto report = retirement->Inspect();
@@ -454,11 +456,17 @@ namespace Horo::Extensions::Tests {
         const auto rejected = importer->Import(Assets::AssetImportInput{.sourceExtension = "raw"}, {});
         CHECK(rejected.HasError());
         CHECK(fixture.invocation.destroyed == 0);
+        CHECK_FALSE(executableCode.expired());
         releaseGuard.Release();
         REQUIRE(admitted.get().HasValue());
+        const auto completed = retirement->Inspect();
+        CHECK(std::ranges::none_of(completed.outstanding, [](const auto &work) {
+            return work.kind == ExtensionLeaseKind::Callback;
+        }));
         snapshot.reset();
         importer.reset();
         CHECK(fixture.invocation.destroyed == 1);
+        CHECK(executableCode.expired());
         CHECK(retirement->IsDrained());
     }
 

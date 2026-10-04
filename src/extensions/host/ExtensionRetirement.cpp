@@ -7,8 +7,6 @@
 
 namespace Horo::Extensions {
     struct ExtensionRetirementState final {
-        // Protects admission, diagnostics and publication ownership. Revocation and provider destruction run outside this mutex.
-        mutable std::mutex mutex;
         std::string extensionId;
         std::vector<std::string> modules;
         std::vector<std::weak_ptr<void>> code;
@@ -20,7 +18,7 @@ namespace Horo::Extensions {
         };
 
         struct Publication final {
-            std::size_t module;
+            std::size_t moduleIndex;
             std::shared_ptr<void> code;
             std::shared_ptr<IExtensionRetirementContribution> owner;
         };
@@ -31,6 +29,12 @@ namespace Horo::Extensions {
         bool retiring{};
         bool revoking{};
         bool restartRequired{};
+
+    private:
+        friend class ExtensionRetirement;
+        friend class ExtensionExecutableLease;
+        // Protects admission, diagnostics and publication ownership. Revocation and provider destruction run outside this mutex.
+        mutable std::mutex mutex;
     };
 
     namespace {
@@ -39,21 +43,20 @@ namespace Horo::Extensions {
 
         /** @brief Copies a diagnostic while the caller holds the state mutex. */
         ExtensionRetirementReport Snapshot(const ExtensionRetirementState &state) {
+            using enum ExtensionRetirementDisposition;
             ExtensionRetirementReport report{.extensionId = state.extensionId};
             if (state.retiring)
-                report.disposition = state.work.empty() && !state.revoking ? ExtensionRetirementDisposition::Complete
-                                                                           : ExtensionRetirementDisposition::Draining;
+                report.disposition = state.work.empty() && !state.revoking ? Complete : Draining;
             if (state.restartRequired)
-                report.disposition = ExtensionRetirementDisposition::RestartRequired;
+                report.disposition = RestartRequired;
             for (const auto &work : state.work)
                 report.outstanding.push_back(work.attribution);
             return report;
         }
     }  // namespace
 
-    ExtensionExecutableLease::ExtensionExecutableLease(std::shared_ptr<ExtensionRetirementState> state, const std::size_t id,
-                                                       std::shared_ptr<void> owner)
-        : state_(std::move(state)), id_(id), owner_(std::move(owner)) {}
+    /** @copydoc ExtensionExecutableLease::ExtensionExecutableLease */
+    ExtensionExecutableLease::ExtensionExecutableLease(ConstructionKey, std::shared_ptr<void> owner) : owner_(std::move(owner)) {}
 
     ExtensionExecutableLease::~ExtensionExecutableLease() {
         owner_.reset();
@@ -81,12 +84,12 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc ExtensionRetirement::BindModuleCode */
-    bool ExtensionRetirement::BindModuleCode(const std::string_view moduleId, const std::shared_ptr<void> &codeOwner) {
+    bool ExtensionRetirement::BindModuleCode(const std::string_view moduleId, const std::shared_ptr<void> &codeOwner) const {
         std::scoped_lock lock{state_->mutex};
-        const auto module = std::ranges::find(state_->modules, moduleId);
-        if (!codeOwner || state_->retiring || module == state_->modules.end())
+        const auto foundModule = std::ranges::find(state_->modules, moduleId);
+        if (!codeOwner || state_->retiring || foundModule == state_->modules.end())
             return false;
-        const auto index = static_cast<std::size_t>(module - state_->modules.begin());
+        const auto index = static_cast<std::size_t>(foundModule - state_->modules.begin());
         auto &code = state_->code[index];
         if (state_->bound[index])
             return false;
@@ -97,16 +100,16 @@ namespace Horo::Extensions {
 
     /** @copydoc ExtensionRetirement::Acquire */
     std::shared_ptr<ExtensionExecutableLease> ExtensionRetirement::Acquire(const std::string_view moduleId, const ExtensionLeaseKind kind,
-                                                                           std::string subject, std::shared_ptr<void> owner) {
+                                                                           std::string subject, std::shared_ptr<void> owner) const {
         if (!owner || subject.empty())
             return {};
-        auto lease = std::shared_ptr<ExtensionExecutableLease>{new ExtensionExecutableLease{{}, 0, std::move(owner)}};
+        auto lease = std::make_shared<ExtensionExecutableLease>(ExtensionExecutableLease::ConstructionKey{}, std::move(owner));
         std::shared_ptr<void> code;
         std::scoped_lock lock{state_->mutex};
-        const auto module = std::ranges::find(state_->modules, moduleId);
-        if (state_->retiring || state_->work.size() >= MaximumWork || state_->nextId == 0 || module == state_->modules.end())
+        const auto foundModule = std::ranges::find(state_->modules, moduleId);
+        if (state_->retiring || state_->work.size() >= MaximumWork || state_->nextId == 0 || foundModule == state_->modules.end())
             return {};
-        code = state_->code[static_cast<std::size_t>(module - state_->modules.begin())].lock();
+        code = state_->code[static_cast<std::size_t>(foundModule - state_->modules.begin())].lock();
         if (!code)
             return {};
         const std::size_t id = state_->nextId++;
@@ -119,13 +122,13 @@ namespace Horo::Extensions {
 
     /** @copydoc ExtensionRetirement::RegisterContribution */
     bool ExtensionRetirement::RegisterContribution(const std::string_view moduleId,
-                                                   std::shared_ptr<IExtensionRetirementContribution> contribution) {
+                                                   std::shared_ptr<IExtensionRetirementContribution> contribution) const {
         std::shared_ptr<void> code;
         std::scoped_lock lock{state_->mutex};
-        const auto module = std::ranges::find(state_->modules, moduleId);
-        if (!contribution || state_->retiring || module == state_->modules.end() || state_->publications.size() >= MaximumPublications)
+        const auto foundModule = std::ranges::find(state_->modules, moduleId);
+        if (!contribution || state_->retiring || foundModule == state_->modules.end() || state_->publications.size() >= MaximumPublications)
             return false;
-        const auto index = static_cast<std::size_t>(module - state_->modules.begin());
+        const auto index = static_cast<std::size_t>(foundModule - state_->modules.begin());
         code = state_->code[index].lock();
         if (!code)
             return false;
@@ -133,18 +136,18 @@ namespace Horo::Extensions {
         // Allocate before moving native owners into a temporary under the state mutex.
         // On failure the lock guard unwinds before either caller ownership or the code pin.
         state_->publications.reserve(state_->publications.size() + 1);
-        state_->publications.push_back({index, std::move(code), std::move(contribution)});
+        state_->publications.emplace_back(index, std::move(code), std::move(contribution));
         return true;
     }
 
     /** @copydoc ExtensionRetirement::BeginRetirement */
-    ExtensionRetirementReport ExtensionRetirement::BeginRetirement() {
+    ExtensionRetirementReport ExtensionRetirement::BeginRetirement() const {
         CloseAdmission();
         return Inspect();
     }
 
     /** @copydoc ExtensionRetirement::CloseAdmission */
-    void ExtensionRetirement::CloseAdmission() noexcept {
+    void ExtensionRetirement::CloseAdmission() const noexcept {
         std::vector<ExtensionRetirementState::Publication> publications;
         {
             std::scoped_lock lock{state_->mutex};
@@ -154,10 +157,10 @@ namespace Horo::Extensions {
             state_->revoking = true;
             publications = std::move(state_->publications);
         }
-        for (std::size_t module = state_->modules.size(); module > 0; --module) {
+        for (std::size_t moduleIndex = state_->modules.size(); moduleIndex > 0; --moduleIndex) {
             for (std::size_t index = publications.size(); index > 0; --index) {
                 auto &publication = publications[index - 1];
-                if (publication.module == module - 1) {
+                if (publication.moduleIndex == moduleIndex - 1) {
                     publication.owner->Revoke();
                     publication.owner.reset();
                     publication.code.reset();
@@ -181,7 +184,7 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc ExtensionRetirement::RequireRestart */
-    void ExtensionRetirement::RequireRestart() noexcept {
+    void ExtensionRetirement::RequireRestart() const noexcept {
         std::scoped_lock lock{state_->mutex};
         state_->restartRequired = true;
     }
