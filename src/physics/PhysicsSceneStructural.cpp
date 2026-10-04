@@ -38,8 +38,8 @@ namespace Horo::Physics::Detail {
             while (entity.parent) {
                 if (remaining-- == 0)
                     return Failure<Math::Transform>("A structural Physics hierarchy contains a cycle.");
-                const auto found = std::ranges::find(created, *entity.parent, &Runtime::RuntimeEntityView::entity);
-                if (found != created.end()) {
+                if (const auto found = std::ranges::find(created, *entity.parent, &Runtime::RuntimeEntityView::entity);
+                    found != created.end()) {
                     entity = *found;
                 } else {
                     auto parent = active.Get(*entity.parent);
@@ -78,7 +78,7 @@ namespace Horo::Physics::Detail {
                 if (resource.metadata.id != asset)
                     continue;
                 const auto bytes = resource.artifact.Bytes();
-                auto decoded = Assets::DecodeCookedArtifact({reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()});
+                auto decoded = Assets::DecodeCookedArtifactBytes(bytes);
                 if (decoded.HasError())
                     return Result<void>::Failure(decoded.ErrorValue());
                 if (decoded.Value().id != asset || decoded.Value().type != resource.metadata.expectedType ||
@@ -86,8 +86,7 @@ namespace Horo::Physics::Detail {
                     return Result<void>::Failure(MakeError(code, "Structural resource does not match its admitted identity/type."));
                 return Result<void>::Success();
             }
-            const auto resolved = active.FindAsset(asset);
-            if (!resolved || !resolved->type || resolved->bytes.empty())
+            if (const auto resolved = active.FindAsset(asset); !resolved || !resolved->type || resolved->bytes.empty())
                 return Result<void>::Failure(MakeError(code, "Required structural resource is absent from the admitted closure."));
             return Result<void>::Success();
         }
@@ -177,7 +176,7 @@ namespace Horo::Physics::Detail {
             /** @brief Removes retired bindings from detached copies only; native retirement is prepared later. */
             static void ProjectRetirement(StructuralCandidate &candidate, GroupPlan &plan,
                                           const std::span<const Runtime::EntityRef> destroyed) {
-                const auto retiring = [&](const Runtime::EntityRef entity) {
+                const auto retiring = [destroyed](const Runtime::EntityRef entity) {
                     return std::ranges::find(destroyed, entity) != destroyed.end();
                 };
                 for (const auto &binding : candidate.bindings)
@@ -189,16 +188,16 @@ namespace Horo::Physics::Detail {
                 for (const auto &binding : candidate.constraints)
                     if (retiring(binding.entity))
                         plan.retiredConstraints.push_back(binding.handle);
-                std::erase_if(candidate.bindings, [&](const auto &binding) {
+                std::erase_if(candidate.bindings, [&retiring](const auto &binding) {
                     return retiring(binding.entity);
                 });
-                std::erase_if(candidate.shapes, [&](const auto &binding) {
+                std::erase_if(candidate.shapes, [&retiring, &plan](const auto &binding) {
                     return retiring(binding.entity) || std::ranges::find(plan.retiredBodies, binding.body) != plan.retiredBodies.end();
                 });
-                std::erase_if(candidate.authoredBodies, [&](const auto &binding) {
+                std::erase_if(candidate.authoredBodies, [&plan](const auto &binding) {
                     return std::ranges::find(plan.retiredBodies, binding.handle) != plan.retiredBodies.end();
                 });
-                std::erase_if(candidate.authoredShapes, [&](const auto &binding) {
+                std::erase_if(candidate.authoredShapes, [&plan](const auto &binding) {
                     return std::ranges::find(plan.retiredShapes, binding.handle) != plan.retiredShapes.end();
                 });
             }
@@ -261,9 +260,9 @@ namespace Horo::Physics::Detail {
                 if (hasChildren && body.descriptor.sensor != collider.sensor)
                     return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
                 body.descriptor.sensor = collider.sensor;
-                plan.colliderBindings.push_back({contributor.entity, collider.collider, plan.shapes.size(), plan.bodies.size()});
-                children.push_back({static_cast<std::uint32_t>(plan.shapes.size()), resolved.Value().localPose});
-                plan.shapes.push_back({resolved.Value().geometry});
+                plan.colliderBindings.emplace_back(contributor.entity, collider.collider, plan.shapes.size(), plan.bodies.size());
+                children.emplace_back(static_cast<std::uint32_t>(plan.shapes.size()), resolved.Value().localPose);
+                plan.shapes.emplace_back(resolved.Value().geometry);
                 return Result<void>::Success();
             }
 
@@ -291,7 +290,7 @@ namespace Horo::Physics::Detail {
                     return Failure<void>("An enabled group body has no collider contributors.");
                 // A compound also preserves the local pose of a single collider.
                 body.shape = static_cast<std::uint32_t>(plan.shapes.size());
-                plan.shapes.push_back({std::move(children)});
+                plan.shapes.emplace_back(std::move(children));
                 return Result<void>::Success();
             }
 
@@ -387,36 +386,36 @@ namespace Horo::Physics::Detail {
                 if (const auto admitted = candidate.native->PrepareConstraints(plan.constraints); admitted.HasError())
                     return admitted;
                 for (std::size_t index = 0; index < plan.constraintBindings.size(); ++index)
-                    candidate.constraints.push_back({plan.constraintBindings[index].first, plan.constraintBindings[index].second,
-                                                     candidate.native->Constraints()[index]});
+                    candidate.constraints.emplace_back(plan.constraintBindings[index].first, plan.constraintBindings[index].second,
+                                                       candidate.native->Constraints()[index]);
                 return Result<void>::Success();
             }
 
             /** @brief Incorporates native retirement closure and additions in detached binding tables. */
             static void ProjectNativeBindings(StructuralCandidate &candidate, const GroupPlan &plan,
                                               const std::span<const Runtime::RuntimeEntityView> created) {
-                std::erase_if(candidate.constraints, [&](const auto &binding) {
+                std::erase_if(candidate.constraints, [&candidate](const auto &binding) {
                     const auto handles = candidate.native->RetiredConstraints();
                     return std::ranges::find(handles, binding.handle) != handles.end();
                 });
-                std::erase_if(candidate.authoredConstraints, [&](const auto &binding) {
+                std::erase_if(candidate.authoredConstraints, [&candidate](const auto &binding) {
                     const auto handles = candidate.native->RetiredConstraints();
                     return std::ranges::find(handles, binding.handle) != handles.end();
                 });
                 for (const auto &binding : plan.colliderBindings)
-                    candidate.shapes.push_back({binding.entity, binding.slot, candidate.native->Shapes()[binding.shape],
-                                                candidate.native->Handles()[binding.body]});
+                    candidate.shapes.emplace_back(binding.entity, binding.slot, candidate.native->Shapes()[binding.shape],
+                                                  candidate.native->Handles()[binding.body]);
                 for (std::size_t index = 0; index < plan.owners.size(); ++index) {
                     const auto entity = std::ranges::find(created, plan.owners[index], &Runtime::RuntimeEntityView::entity);
-                    candidate.bindings.push_back(
-                        {plan.owners[index], entity->components->rigidBody->body, candidate.native->Handles()[index]});
+                    candidate.bindings.emplace_back(plan.owners[index], entity->components->rigidBody->body,
+                                                    candidate.native->Handles()[index]);
                 }
             }
 
             /** @brief Prepares the complete detached owner candidate; publication remains a separate no-fail phase. */
             Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareOwned(
                 const Runtime::RuntimeSceneView active, const std::span<const Runtime::RuntimeEntityView> created,
-                const std::span<const Runtime::EntityRef> destroyed) {
+                const std::span<const Runtime::EntityRef> destroyed) const {
                 auto candidate = std::make_unique<StructuralCandidate>();
                 candidate->state = registration_->active;
                 candidate->scene = active;
@@ -434,12 +433,13 @@ namespace Horo::Physics::Detail {
                 ProjectRetirement(*candidate, plan, destroyed);
                 if (const auto ready = PrepareBodies(plan, active, created); ready.HasError())
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(ready.ErrorValue());
-                const bool hasConstraints = std::ranges::any_of(created, [](const auto &entity) {
+                if (const bool hasConstraints = std::ranges::any_of(created,
+                                                                    [](const auto &entity) {
                     return std::ranges::any_of(entity.components->physicsConstraints, [](const auto &constraint) {
                         return constraint.enabled;
                     });
                 });
-                if (plan.bodies.empty() && !hasConstraints && plan.retiredBodies.empty() && plan.retiredShapes.empty() &&
+                    plan.bodies.empty() && !hasConstraints && plan.retiredBodies.empty() && plan.retiredShapes.empty() &&
                     plan.retiredConstraints.empty())
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
                 auto prepared = candidate->state->world->PrepareSceneGroup(plan.shapes, plan.bodies);

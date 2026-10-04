@@ -168,7 +168,7 @@ namespace Horo::Physics::Detail {
         /** @brief Captures exact authored-to-runtime bindings while both worlds remain detached. */
         Result<std::shared_ptr<PhysicsStructuralState>> PrepareStructuralState(StagedPhysicsScene &resources,
                                                                                const Runtime::RuntimeSceneView scene,
-                                                                               PhysicsSceneActivationAuthority &authority,
+                                                                               const PhysicsSceneActivationAuthority &authority,
                                                                                const PhysicsSceneActivationEvidence evidence) {
             auto structural = std::make_shared<PhysicsStructuralState>();
             structural->world = resources.physics.get();
@@ -180,21 +180,21 @@ namespace Horo::Physics::Detail {
                 const auto entity = scene.Find(binding.object);
                 if (!entity)
                     return Result<std::shared_ptr<PhysicsStructuralState>>::Failure(MakeError(PhysicsErrors::HandleStale));
-                structural->bodies.push_back({*entity, binding.body, binding.handle});
+                structural->bodies.emplace_back(*entity, binding.body, binding.handle);
             }
             structural->shapes.reserve(resources.shapeBindings.size());
             for (const auto &binding : resources.shapeBindings) {
                 const auto entity = scene.Find(binding.object);
                 if (!entity)
                     return Result<std::shared_ptr<PhysicsStructuralState>>::Failure(MakeError(PhysicsErrors::HandleStale));
-                structural->shapes.push_back({*entity, binding.collider, binding.handle, binding.body});
+                structural->shapes.emplace_back(*entity, binding.collider, binding.handle, binding.body);
             }
             structural->constraints.reserve(resources.constraintBindings.size());
             for (const auto &binding : resources.constraintBindings) {
                 const auto entity = scene.Find(binding.object);
                 if (!entity)
                     return Result<std::shared_ptr<PhysicsStructuralState>>::Failure(MakeError(PhysicsErrors::HandleStale));
-                structural->constraints.push_back({*entity, binding.constraint, binding.handle});
+                structural->constraints.emplace_back(*entity, binding.constraint, binding.handle);
             }
             structural->authoredBodies = std::move(resources.bodyBindings);
             structural->authoredShapes = std::move(resources.shapeBindings);

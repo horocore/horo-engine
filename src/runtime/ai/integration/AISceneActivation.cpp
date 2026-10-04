@@ -380,7 +380,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiSceneRuntime::StartTaskAtSafePoint */
-    Result<TaskHandle> AiSceneRuntime::StartTaskAtSafePoint(const AgentHandle agent, const TaskId taskDefinition) {
+    Result<TaskHandle> AiSceneRuntime::StartTaskAtSafePoint(const AgentHandle agent, const TaskId taskDefinition) const {
         if (shutdown_ || active_ == nullptr)
             return Failure<TaskHandle>(AIErrors::RuntimeUnavailable, "The AI scene runtime is not active.");
         if (active_->revision == std::numeric_limits<std::uint64_t>::max())
@@ -413,7 +413,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiSceneRuntime::DisableAtSafePoint */
-    Result<void> AiSceneRuntime::DisableAtSafePoint(const AgentHandle agent) {
+    Result<void> AiSceneRuntime::DisableAtSafePoint(const AgentHandle agent) const {
         if (shutdown_ || active_ == nullptr)
             return Failure(AIErrors::RuntimeUnavailable, "The AI scene runtime is not active.");
         if (active_->revision == std::numeric_limits<std::uint64_t>::max())
@@ -432,7 +432,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiSceneRuntime::RetireOwnerAtSafePoint */
-    Result<std::size_t> AiSceneRuntime::RetireOwnerAtSafePoint(const Runtime::EntityRef owner) {
+    Result<std::size_t> AiSceneRuntime::RetireOwnerAtSafePoint(const Runtime::EntityRef owner) const {
         if (shutdown_ || active_ == nullptr)
             return Failure<std::size_t>(AIErrors::RuntimeUnavailable, "The AI scene runtime is not active.");
         if (active_->revision == std::numeric_limits<std::uint64_t>::max())

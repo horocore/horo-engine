@@ -5,9 +5,9 @@
 namespace Horo::Physics {
     /** @brief Pins detached native admission while borrowing a world that invalidates it before teardown. */
     struct PhysicsSceneBodyPreparation::Impl final {
-        Impl(PhysicsWorld::Impl &owner, Detail::CanonicalSceneBodyBatch batch)
-            : owner(&owner), batch(std::move(batch)), identity(owner.identity), revision(owner.publication.Snapshot().publicationRevision),
-              thread(owner.runtime->ownerThread) {}
+        Impl(PhysicsWorld::Impl &worldOwner, Detail::CanonicalSceneBodyBatch batch)
+            : owner(&worldOwner), batch(std::move(batch)), identity(worldOwner.identity),
+              revision(worldOwner.publication.Snapshot().publicationRevision), thread(worldOwner.runtime->ownerThread) {}
 
         PhysicsWorld::Impl *owner;
         Detail::CanonicalSceneBodyBatch batch;
@@ -16,7 +16,9 @@ namespace Horo::Physics {
         std::thread::id thread;
     };
 
-    PhysicsSceneBodyPreparation::PhysicsSceneBodyPreparation(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+    /** @copydoc PhysicsSceneBodyPreparation::PhysicsSceneBodyPreparation */
+    PhysicsSceneBodyPreparation::PhysicsSceneBodyPreparation(ConstructionKey, std::unique_ptr<Impl> impl) noexcept
+        : impl_(std::move(impl)) {}
 
     PhysicsSceneBodyPreparation::~PhysicsSceneBodyPreparation() = default;
 
@@ -71,9 +73,9 @@ namespace Horo::Physics {
         // Native teardown cancels the batch before deleting owner: never dereference a stale borrowed owner.
         if (auto pending = impl_->batch.ValidatePublication(); pending.HasError())
             return pending;
-        const auto &owner = *impl_->owner;
-        if (owner.identity != impl_->identity || owner.state != PhysicsWorldState::ActiveSolver || owner.stepping ||
-            owner.runtime->state != PhysicsRuntimeState::Ready || owner.publication.Snapshot().publicationRevision != impl_->revision)
+        if (const auto &owner = *impl_->owner; owner.identity != impl_->identity || owner.state != PhysicsWorldState::ActiveSolver ||
+                                               owner.stepping || owner.runtime->state != PhysicsRuntimeState::Ready ||
+                                               owner.publication.Snapshot().publicationRevision != impl_->revision)
             return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
         return Result<void>::Success();
     }
@@ -102,7 +104,8 @@ namespace Horo::Physics {
         if (prepared.HasError())
             return Preparation::Failure(prepared.ErrorValue());
         auto state = std::make_unique<PhysicsSceneBodyPreparation::Impl>(*impl_, std::move(prepared).Value());
-        return Preparation::Success(std::unique_ptr<PhysicsSceneBodyPreparation>{new PhysicsSceneBodyPreparation{std::move(state)}});
+        return Preparation::Success(
+            std::make_unique<PhysicsSceneBodyPreparation>(PhysicsSceneBodyPreparation::ConstructionKey{}, std::move(state)));
     }
 
     /** @copydoc PhysicsWorld::PrepareSceneGroup */
@@ -122,7 +125,8 @@ namespace Horo::Physics {
             if (prepared.HasError())
                 return Preparation::Failure(prepared.ErrorValue());
             auto state = std::make_unique<PhysicsSceneBodyPreparation::Impl>(*impl_, std::move(prepared).Value());
-            return Preparation::Success(std::unique_ptr<PhysicsSceneBodyPreparation>{new PhysicsSceneBodyPreparation{std::move(state)}});
+            return Preparation::Success(
+                std::make_unique<PhysicsSceneBodyPreparation>(PhysicsSceneBodyPreparation::ConstructionKey{}, std::move(state)));
         } catch (const std::bad_alloc &) {
             return Preparation::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         }

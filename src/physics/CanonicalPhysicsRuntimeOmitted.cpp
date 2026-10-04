@@ -38,13 +38,13 @@ namespace Horo::Physics::Detail {
     }
 
     /** @copydoc CanonicalSceneBodyBatch::PrepareConstraints */
-    Result<void> CanonicalSceneBodyBatch::PrepareConstraints(std::span<const PhysicsConstraintDescriptor>) {
+    Result<void> CanonicalSceneBodyBatch::PrepareConstraints(std::span<const PhysicsConstraintDescriptor>) const {
         return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
     }
 
     /** @copydoc CanonicalSceneBodyBatch::PrepareRetirement */
     Result<void> CanonicalSceneBodyBatch::PrepareRetirement(std::span<const BodyHandle>, std::span<const ShapeHandle>,
-                                                            std::span<const ConstraintHandle>) {
+                                                            std::span<const ConstraintHandle>) const {
         return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
     }
 
@@ -54,7 +54,7 @@ namespace Horo::Physics::Detail {
     }
 
     /** @copydoc CanonicalSceneBodyBatch::Publish */
-    void CanonicalSceneBodyBatch::Publish() noexcept {}
+    void CanonicalSceneBodyBatch::Publish() const noexcept {}
 
     /** @copydoc PrepareCanonicalSceneBodies */
     Result<CanonicalSceneBodyBatch> PrepareCanonicalSceneBodies(CanonicalWorldHandle, PhysicsWorldId,

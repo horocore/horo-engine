@@ -131,3 +131,25 @@ provider; the omitted-provider composition has a separate targeted pass. Jolt pa
 regressions verify fresh and repeated application with both LF and CRLF inputs and
 reject unexpected source changes before mutation. These checks qualify the bounded
 foundation, not full integrated owner behavior or complete HORO-1038 acceptance.
+
+## Quality repair migration
+
+The provider observation/cancellation operations, Gameplay runner dispatch and
+AI safe-point operations now expose const-qualified wrapper methods. They still
+mutate their explicitly owned or borrowed runtime state on the documented owner
+lane; const qualification does not grant concurrent access. Existing ordinary
+call expressions remain valid, but affected C++ consumers and member-function
+pointers must rebuild against the new declarations. Scene group admission is
+borrowed by const reference and copied into the owned command buffer.
+
+The non-installed Gameplay structural composition factory now borrows a raw
+pointer slot by reference. A host updates that slot only at drained lifecycle
+boundaries and keeps the slot and pointed-to composition alive through each
+transaction. It does not transfer ownership or capture a stale pointer snapshot.
+
+`DecodeCookedArtifactBytes` accepts immutable cache byte leases directly. The
+existing integer-buffer decoder forwards to that same implementation without
+copying the encoded input. Both entry points retain identical envelope bounds,
+identity, digest and malformed-input checks. Public header ownership and target
+dependencies remain unchanged. Native detached candidates explicitly delete copy
+operations so no second object can inherit their rollback obligations.

@@ -7,7 +7,10 @@ namespace Horo::Physics::Detail {
     CanonicalSceneBodyBatch::CanonicalSceneBodyBatch(std::shared_ptr<CanonicalSceneBodyBatchState> state) noexcept
         : state_(std::move(state)) {}
 
-    CanonicalSceneBodyBatch::~CanonicalSceneBodyBatch() = default;
+    CanonicalSceneBodyBatch::~CanonicalSceneBodyBatch() {
+        state_.reset();
+    }
+
     CanonicalSceneBodyBatch::CanonicalSceneBodyBatch(CanonicalSceneBodyBatch &&) noexcept = default;
     CanonicalSceneBodyBatch &CanonicalSceneBodyBatch::operator=(CanonicalSceneBodyBatch &&) noexcept = default;
 
@@ -28,7 +31,7 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc CanonicalSceneBodyBatch::RetiredConstraints */
     std::span<const ConstraintHandle> CanonicalSceneBodyBatch::RetiredConstraints() const noexcept {
-        return state_ ? std::span<const ConstraintHandle>{state_->retiredConstraints} : std::span<const ConstraintHandle>{};
+        return state_ ? std::span<const ConstraintHandle>{state_->retirement.retiredConstraints} : std::span<const ConstraintHandle>{};
     }
 
     namespace {
@@ -124,12 +127,12 @@ namespace Horo::Physics::Detail {
     /** @copydoc CanonicalSceneBodyBatch::PrepareRetirement */
     Result<void> CanonicalSceneBodyBatch::PrepareRetirement(const std::span<const BodyHandle> bodies,
                                                             const std::span<const ShapeHandle> shapes,
-                                                            const std::span<const ConstraintHandle> constraints) {
-        if (!IsPending() || state_->retirementPrepared || state_->retirementFailed || state_->constraintsPrepared ||
+                                                            const std::span<const ConstraintHandle> constraints) const {
+        if (!IsPending() || state_->retirement.retirementPrepared || state_->retirement.retirementFailed || state_->constraintsPrepared ||
             state_->constraintsFailed)
             return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
-        state_->retirementFailed = true;
-        auto &world = *state_->world;
+        state_->retirement.retirementFailed = true;
+        const auto &world = *state_->world;
         if (bodies.size() > world.scene.maximumBodies || shapes.size() > world.scene.maximumShapes ||
             constraints.size() > world.scene.maximumConstraints)
             return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
@@ -142,33 +145,32 @@ namespace Horo::Physics::Detail {
         nativeConstraints.reserve(world.scene.constraints.size());
         retiringShapes.reserve(shapes.size() + bodies.size());
         retiringConstraints.reserve(world.scene.constraints.size());
-        const auto unique = [](const auto &handles) {
+        if (const auto unique = [](const auto &handles) {
             for (std::size_t index = 0; index < handles.size(); ++index)
                 if (std::find(handles.begin(), handles.begin() + index, handles[index]) != handles.begin() + index)
                     return false;
             return true;
-        };
-        if (!unique(retiringBodies) || !unique(retiringShapes) || !unique(retiringConstraints))
+        }; !unique(retiringBodies) || !unique(retiringShapes) || !unique(retiringConstraints))
             return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
         if (const auto resolved =
                 ResolveRetirement(world, bodies, retiringBodies, retiringShapes, retiringConstraints, nativeBodies, nativeConstraints);
             resolved.HasError())
             return resolved;
         auto pairs = RetainedCollisionPairs(world, retiringConstraints);
-        state_->retiredBodies = std::move(retiringBodies);
-        state_->retiredShapes = std::move(retiringShapes);
-        state_->retiredConstraints = std::move(retiringConstraints);
-        state_->retiredNativeBodies = std::move(nativeBodies);
-        state_->retiredNativeConstraints = std::move(nativeConstraints);
+        state_->retirement.retiredBodies = std::move(retiringBodies);
+        state_->retirement.retiredShapes = std::move(retiringShapes);
+        state_->retirement.retiredConstraints = std::move(retiringConstraints);
+        state_->retirement.retiredNativeBodies = std::move(nativeBodies);
+        state_->retirement.retiredNativeConstraints = std::move(nativeConstraints);
         state_->collisionPairs = std::move(pairs);
-        state_->retirementPrepared = true;
-        state_->retirementFailed = false;
+        state_->retirement.retirementPrepared = true;
+        state_->retirement.retirementFailed = false;
         return Result<void>::Success();
     }
 
     /** @copydoc CanonicalSceneBodyBatch::PrepareConstraints */
-    Result<void> CanonicalSceneBodyBatch::PrepareConstraints(const std::span<const PhysicsConstraintDescriptor> descriptors) {
-        if (!IsPending() || state_->retirementFailed || state_->constraintsPrepared || state_->constraintsFailed)
+    Result<void> CanonicalSceneBodyBatch::PrepareConstraints(const std::span<const PhysicsConstraintDescriptor> descriptors) const {
+        if (!IsPending() || state_->retirement.retirementFailed || state_->constraintsPrepared || state_->constraintsFailed)
             return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
         state_->constraintsFailed = true;
         auto &world = *state_->world;
@@ -181,17 +183,17 @@ namespace Horo::Physics::Detail {
         records.reserve(descriptors.size());
         handles.reserve(descriptors.size());
         native.reserve(descriptors.size());
-        auto pairs = RetainedCollisionPairs(world, state_->retiredConstraints);
+        auto pairs = RetainedCollisionPairs(world, state_->retirement.retiredConstraints);
         for (const auto &descriptor : descriptors) {
-            if (std::ranges::find(state_->retiredBodies, descriptor.first.body) != state_->retiredBodies.end() ||
+            if (std::ranges::find(state_->retirement.retiredBodies, descriptor.first.body) != state_->retirement.retiredBodies.end() ||
                 (std::holds_alternative<PhysicsBodyAnchor>(descriptor.second) &&
-                 std::ranges::find(state_->retiredBodies, std::get<PhysicsBodyAnchor>(descriptor.second).body) !=
-                     state_->retiredBodies.end()))
+                 std::ranges::find(state_->retirement.retiredBodies, std::get<PhysicsBodyAnchor>(descriptor.second).body) !=
+                     state_->retirement.retiredBodies.end()))
                 return Result<void>::Failure(MakeError(PhysicsErrors::HandleStale));
             auto prepared = PrepareCanonicalConstraintRecord({&world}, state_->owner, descriptor, state_->records);
             if (prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
-            auto &record = prepared.Value();
+            auto record = std::move(prepared).Value();
             AddCollisionPair(pairs, record);
             handles.push_back(record.handle);
             native.push_back(record.constraint.GetPtr());
@@ -209,7 +211,7 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc CanonicalSceneBodyBatch::ValidatePublication */
     Result<void> CanonicalSceneBodyBatch::ValidatePublication() const {
-        if (!IsPending() || state_->constraintsFailed || state_->retirementFailed)
+        if (!IsPending() || state_->constraintsFailed || state_->retirement.retirementFailed)
             return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
         return Result<void>::Success();
     }
@@ -220,26 +222,28 @@ namespace Horo::Physics::Detail {
     }
 
     /** @copydoc CanonicalSceneBodyBatch::Publish */
-    void CanonicalSceneBodyBatch::Publish() noexcept {
-        if (!IsPending() || state_->constraintsFailed || state_->retirementFailed)
+    void CanonicalSceneBodyBatch::Publish() const noexcept {
+        if (!IsPending() || state_->constraintsFailed || state_->retirement.retirementFailed)
             return;
         auto &world = *state_->world;
         auto &bodies = world.native.system->GetBodyInterface();
-        if (!state_->retiredNativeConstraints.empty())
-            world.native.system->RemoveConstraints(state_->retiredNativeConstraints.data(),
-                                                   static_cast<int>(state_->retiredNativeConstraints.size()));
-        std::erase_if(world.scene.constraints, [&](const auto &record) {
-            return std::ranges::find(state_->retiredConstraints, record.handle) != state_->retiredConstraints.end();
+        if (!state_->retirement.retiredNativeConstraints.empty())
+            world.native.system->RemoveConstraints(state_->retirement.retiredNativeConstraints.data(),
+                                                   static_cast<int>(state_->retirement.retiredNativeConstraints.size()));
+        std::erase_if(world.scene.constraints, [this](const auto &record) {
+            return std::ranges::find(state_->retirement.retiredConstraints, record.handle) != state_->retirement.retiredConstraints.end();
         });
-        if (!state_->retiredNativeBodies.empty()) {
-            bodies.RemoveBodies(state_->retiredNativeBodies.data(), static_cast<int>(state_->retiredNativeBodies.size()));
-            bodies.DestroyBodies(state_->retiredNativeBodies.data(), static_cast<int>(state_->retiredNativeBodies.size()));
+        if (!state_->retirement.retiredNativeBodies.empty()) {
+            bodies.RemoveBodies(state_->retirement.retiredNativeBodies.data(),
+                                static_cast<int>(state_->retirement.retiredNativeBodies.size()));
+            bodies.DestroyBodies(state_->retirement.retiredNativeBodies.data(),
+                                 static_cast<int>(state_->retirement.retiredNativeBodies.size()));
         }
-        std::erase_if(world.scene.bodies, [&](const auto &record) {
-            return std::ranges::find(state_->retiredBodies, record.handle) != state_->retiredBodies.end();
+        std::erase_if(world.scene.bodies, [this](const auto &record) {
+            return std::ranges::find(state_->retirement.retiredBodies, record.handle) != state_->retirement.retiredBodies.end();
         });
-        std::erase_if(world.scene.shapes, [&](const auto &record) {
-            return std::ranges::find(state_->retiredShapes, record.handle) != state_->retiredShapes.end();
+        std::erase_if(world.scene.shapes, [this](const auto &record) {
+            return std::ranges::find(state_->retirement.retiredShapes, record.handle) != state_->retirement.retiredShapes.end();
         });
         if (state_->broadphasePrepared)
             bodies.AddBodiesFinalize(state_->nativeBodies.data(), static_cast<int>(state_->nativeBodies.size()), state_->addState,
@@ -256,7 +260,7 @@ namespace Horo::Physics::Detail {
             for (auto &constraint : state_->constraints)
                 world.scene.constraints.push_back(std::move(constraint));
         }
-        if (state_->constraintsPrepared || state_->retirementPrepared)
+        if (state_->constraintsPrepared || state_->retirement.retirementPrepared)
             world.scene.disabledJointCollisionPairs.swap(state_->collisionPairs);
         if (!state_->awakeBodies.empty())
             bodies.ActivateBodies(state_->awakeBodies.data(), static_cast<int>(state_->awakeBodies.size()));

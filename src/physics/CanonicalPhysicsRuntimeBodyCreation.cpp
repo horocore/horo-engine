@@ -2,6 +2,26 @@
 
 namespace Horo::Physics::Detail {
     namespace {
+        /** @brief Creates a detached compound from already staged children, preserving DAG and pose validation. */
+        Result<JPH::Ref<JPH::Shape>> PrepareCompoundShape(const CanonicalSceneBodyBatchState &batch,
+                                                          const std::vector<PhysicsSceneGroupShape::Child> &children) {
+            if (children.empty() || children.size() > 256)
+                return Result<JPH::Ref<JPH::Shape>>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
+            JPH::StaticCompoundShapeSettings settings;
+            for (const auto &child : children) {
+                if (child.shape >= batch.shapes.size())
+                    return Result<JPH::Ref<JPH::Shape>>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
+                if (const auto valid = ValidatePhysicsPose(child.localPose); valid.HasError())
+                    return Result<JPH::Ref<JPH::Shape>>::Failure(valid.ErrorValue());
+                settings.AddShape(ToNative(child.localPose.translation), ToNative(child.localPose.rotation),
+                                  batch.shapes[child.shape].shape.GetPtr());
+            }
+            auto created = settings.Create();
+            if (created.HasError())
+                return Result<JPH::Ref<JPH::Shape>>::Failure(MakeError(PhysicsErrors::ShapeArtifactInvalid));
+            return Result<JPH::Ref<JPH::Shape>>::Success(created.Get());
+        }
+
         /** @brief Constructs a private shape DAG without inserting any shape into the active world table. */
         [[nodiscard]] Result<void> PrepareGroupShapes(CanonicalSceneBodyBatchState &batch, const PhysicsWorldId owner,
                                                       const std::span<const PhysicsSceneGroupShape> inputs) {
@@ -17,22 +37,10 @@ namespace Horo::Physics::Detail {
                         return Result<void>::Failure(created.ErrorValue());
                     native = std::move(created).Value();
                 } else {
-                    const auto &children = std::get<std::vector<PhysicsSceneGroupShape::Child>>(input.geometry);
-                    if (children.empty() || children.size() > 256)
-                        return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
-                    JPH::StaticCompoundShapeSettings settings;
-                    for (const auto &child : children) {
-                        if (child.shape >= batch.shapes.size())
-                            return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
-                        if (const auto valid = ValidatePhysicsPose(child.localPose); valid.HasError())
-                            return valid;
-                        settings.AddShape(ToNative(child.localPose.translation), ToNative(child.localPose.rotation),
-                                          batch.shapes[child.shape].shape.GetPtr());
-                    }
-                    auto created = settings.Create();
+                    auto created = PrepareCompoundShape(batch, std::get<std::vector<PhysicsSceneGroupShape::Child>>(input.geometry));
                     if (created.HasError())
-                        return Result<void>::Failure(MakeError(PhysicsErrors::ShapeArtifactInvalid));
-                    native = created.Get();
+                        return Result<void>::Failure(created.ErrorValue());
+                    native = std::move(created).Value();
                 }
                 const ShapeHandle handle{owner, {batch.world->scene.nextShapeSlot++, 1}};
                 batch.shapes.push_back({.handle = handle, .shape = std::move(native)});
@@ -96,16 +104,18 @@ namespace Horo::Physics::Detail {
                 const auto stagedShape = std::ranges::find(batch.shapes, descriptor.body.shape, &CanonicalSceneShapeRecord::handle);
                 const auto residentShape =
                     std::ranges::find(canonical.scene.shapes, descriptor.body.shape, &CanonicalSceneShapeRecord::handle);
-                const auto *shape = stagedShape != batch.shapes.end()               ? std::to_address(stagedShape)
-                                    : residentShape != canonical.scene.shapes.end() ? std::to_address(residentShape)
-                                                                                    : nullptr;
+                const CanonicalSceneShapeRecord *shape{};
+                if (stagedShape != batch.shapes.end())
+                    shape = std::to_address(stagedShape);
+                else if (residentShape != canonical.scene.shapes.end())
+                    shape = std::to_address(residentShape);
                 if (!shape)
                     return Result<void>::Failure(MakeError(PhysicsErrors::HandleStale));
                 auto settings = PrepareSceneBodySettings(descriptor, *shape);
                 if (settings.HasError())
                     return Result<void>::Failure(settings.ErrorValue());
                 auto &bodyInterface = canonical.native.system->GetBodyInterface();
-                JPH::Body *body = bodyInterface.CreateBody(settings.Value());
+                const JPH::Body *body = bodyInterface.CreateBody(settings.Value());
                 if (!body)
                     return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
                 const auto nativeId = body->GetID();

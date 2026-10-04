@@ -93,7 +93,7 @@ namespace Horo::Prefab {
         /** @brief Observes preparation without waiting or I/O. @return Current state; empty handles are failed. */
         [[nodiscard]] PrefabTemplateLoadState State() const noexcept;
         /** @brief Requests cooperative cancellation; never waits for a worker. */
-        void RequestCancel() noexcept;
+        void RequestCancel() const noexcept;
 
     private:
         friend class PrefabTemplateProvider;
@@ -138,7 +138,7 @@ namespace Horo::Prefab {
          * @param handle This provider's terminal request; consumed exactly once.
          * @return Verified lease or original typed failure/not-ready/stale result.
          */
-        [[nodiscard]] Result<PrefabTemplateLease> TakeResult(PrefabTemplateLoadHandle &handle);
+        [[nodiscard]] Result<PrefabTemplateLease> TakeResult(const PrefabTemplateLoadHandle &handle) const;
         /** @brief Rechecks residency provenance and scene incarnation immediately before Scene-owned publication.
          * @param lease Prepared complete lease from this provider.
          * @return Success or typed stale, foreign-provider or scene/shutdown failure. No scene mutation occurs.

@@ -22,10 +22,11 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsSceneActivationCandidate::Retire(BodyHandle) */
     void PhysicsSceneActivationCandidate::Retire(const BodyHandle body) noexcept {
-        const auto found = std::ranges::find_if(bodyBindings_, [body](const auto &binding) {
+        if (const auto found = std::ranges::find_if(bodyBindings_,
+                                                    [body](const auto &binding) {
             return binding.handle == body;
         });
-        if (found != bodyBindings_.end())
+            found != bodyBindings_.end())
             bodyBindings_.erase(found);
         std::erase_if(shapeBindings_, [body](const auto &binding) {
             return binding.body == body;

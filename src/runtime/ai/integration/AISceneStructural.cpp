@@ -17,6 +17,10 @@ namespace Horo::AI::Detail {
         /** @brief Detached additions and preallocated indexes; existing tasks never move during preparation. */
         class StructuralCandidate final : public Runtime::SceneStructuralCandidate {
         public:
+            StructuralCandidate() = default;
+            StructuralCandidate(const StructuralCandidate &) = delete;
+            StructuralCandidate &operator=(const StructuralCandidate &) = delete;
+
             std::shared_ptr<AiSceneRuntimeState> state;
             Runtime::RuntimeSceneView scene;
             std::uint64_t revision{};

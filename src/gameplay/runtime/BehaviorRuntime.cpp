@@ -205,6 +205,9 @@ namespace Horo::Gameplay {
             explicit StructuralCandidate(std::shared_ptr<Impl> lifetime)
                 : lifetime(std::move(lifetime)), owner(*this->lifetime), scene(owner.scene.View()) {}
 
+            StructuralCandidate(const StructuralCandidate &) = delete;
+            StructuralCandidate &operator=(const StructuralCandidate &) = delete;
+
             ~StructuralCandidate() override {
                 owner.structuralPending = false;
                 if (owner.shutdownRequested)
@@ -238,11 +241,8 @@ namespace Horo::Gameplay {
                 for (Instance &instance : additions) {
                     if (owner.shutdownRequested)
                         return FailAdditions(first, "Gameplay shutdown requested during structural notifications.");
-                    try {
-                        instance.implementation = instance.factory.create(instance.factory.userData);
-                    } catch (...) {
+                    if (!TryCreateInstance(instance))
                         return FailAdditions(first, "Spawned behavior factory threw an exception.");
-                    }
                     if (instance.implementation == nullptr)
                         return FailAdditions(first, "Spawned behavior factory returned no instance.");
                     // Capacity and all component copies were prepared before the aggregate commit fence.
@@ -263,6 +263,16 @@ namespace Horo::Gameplay {
                 return teardownComplete ? Result<void>::Success()
                                         : Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed,
                                                                           "Retired behavior callbacks failed after structural commit."));
+            }
+
+            /** @brief Contains arbitrary native project factory exceptions without allocating error/rollback state. */
+            static bool TryCreateInstance(Instance &instance) noexcept {
+                try {
+                    instance.implementation = instance.factory.create(instance.factory.userData);
+                    return true;
+                } catch (...) {
+                    return false;
+                }
             }
 
             /** @brief Releases only this group's constructed instances, never revoking the existing runner's capability. */
@@ -311,33 +321,37 @@ namespace Horo::Gameplay {
                     if (entity.components == nullptr || entity.entity.runtime != active.RuntimeId())
                         return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
                             MakeError(GameplayErrors::InvalidBehaviorComponent));
-                    std::unordered_map<std::string_view, std::size_t> multiplicity;
-                    for (const BehaviorComponent &component : entity.components->behaviors) {
-                        if (auto valid = ValidateBehaviorComponent(component); valid.HasError())
-                            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(valid.ErrorValue());
-                        const BehaviorRegistration *registration = owner.registry.Find(component.typeId);
-                        if (registration == nullptr)
-                            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
-                                MakeError(GameplayErrors::BehaviorNotRegistered));
-                        const auto sameIdentity = [&](const Instance &existing) {
-                            return existing.component.instanceId == component.instanceId &&
-                                   std::ranges::find(destroyed, existing.entity) == destroyed.end();
-                        };
-                        if (std::ranges::any_of(owner.instances, sameIdentity) || std::ranges::any_of(candidate->additions, sameIdentity))
-                            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
-                                MakeError(GameplayErrors::InvalidBehaviorInstanceId));
-                        if (++multiplicity[component.typeId.Value()] > 1 && !registration->descriptor.allowMultiple)
-                            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
-                                MakeError(GameplayErrors::BehaviorMultiplicityViolation));
-                        if (owner.instances.size() - retiring + candidate->additions.size() >= owner.limits.maximumInstances)
-                            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
-                                MakeError(GameplayErrors::InvalidBehaviorComponent, "Scene behavior instance budget was exceeded."));
-                        candidate->additions.emplace_back(entity.entity, component, registration->factory);
-                    }
+                    if (auto prepared = PrepareEntity(entity, *candidate, destroyed, retiring); prepared.HasError())
+                        return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(prepared.ErrorValue());
                 }
                 owner.instances.reserve(owner.instances.size() + candidate->additions.size());
                 owner.structuralPending = true;
                 return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
+            }
+
+            /** @brief Validates one entity's attachment identities, multiplicity and live budget before any callback. */
+            Result<void> PrepareEntity(const Runtime::RuntimeEntityView &entity, StructuralCandidate &candidate,
+                                       const std::span<const Runtime::EntityRef> destroyed, const std::size_t retiring) const {
+                std::unordered_map<std::string_view, std::size_t> multiplicity;
+                for (const BehaviorComponent &component : entity.components->behaviors) {
+                    if (auto valid = ValidateBehaviorComponent(component); valid.HasError())
+                        return Result<void>::Failure(valid.ErrorValue());
+                    const BehaviorRegistration *registration = owner.registry.Find(component.typeId);
+                    if (registration == nullptr)
+                        return Result<void>::Failure(MakeError(GameplayErrors::BehaviorNotRegistered));
+                    if (const auto sameIdentity = [&component, destroyed](const Instance &existing) {
+                        return existing.component.instanceId == component.instanceId &&
+                               std::ranges::find(destroyed, existing.entity) == destroyed.end();
+                    }; std::ranges::any_of(owner.instances, sameIdentity) || std::ranges::any_of(candidate.additions, sameIdentity))
+                        return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorInstanceId));
+                    if (++multiplicity[component.typeId.Value()] > 1 && !registration->descriptor.allowMultiple)
+                        return Result<void>::Failure(MakeError(GameplayErrors::BehaviorMultiplicityViolation));
+                    if (owner.instances.size() - retiring + candidate.additions.size() >= owner.limits.maximumInstances)
+                        return Result<void>::Failure(
+                            MakeError(GameplayErrors::InvalidBehaviorComponent, "Scene behavior instance budget was exceeded."));
+                    candidate.additions.emplace_back(entity.entity, component, registration->factory);
+                }
+                return Result<void>::Success();
             }
 
             std::shared_ptr<Impl> lifetime;
@@ -438,7 +452,7 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc BehaviorRuntime::FixedUpdate */
-    Result<void> BehaviorRuntime::FixedUpdate(const std::span<const GameplayInputAction> input, const FixedDeltaTime delta) {
+    Result<void> BehaviorRuntime::FixedUpdate(const std::span<const GameplayInputAction> input, const FixedDeltaTime delta) const {
         if (impl_->shutdown || impl_->structuralPending)
             return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, "Behavior runtime is shut down."));
         impl_->events.BeginTick();
@@ -471,7 +485,7 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc BehaviorRuntime::PresentationUpdate */
-    void BehaviorRuntime::PresentationUpdate(const FrameDeltaTime delta) {
+    void BehaviorRuntime::PresentationUpdate(const FrameDeltaTime delta) const {
         if (impl_->shutdown || impl_->structuralPending)
             return;
         Runtime::SceneCommandBuffer rejectedCommands;
@@ -485,7 +499,7 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc BehaviorRuntime::SetEnabled */
-    Result<void> BehaviorRuntime::SetEnabled(const BehaviorInstanceId instanceId, const bool enabled) {
+    Result<void> BehaviorRuntime::SetEnabled(const BehaviorInstanceId instanceId, const bool enabled) const {
         if (impl_->shutdown || impl_->structuralPending)
             return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
         const auto found = std::ranges::find(impl_->instances, instanceId, [](const Impl::Instance &instance) {
@@ -544,7 +558,7 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc BehaviorRuntime::RestoreReloadSnapshot */
-    Result<void> BehaviorRuntime::RestoreReloadSnapshot(const BehaviorRuntimeReloadSnapshot &snapshot) {
+    Result<void> BehaviorRuntime::RestoreReloadSnapshot(const BehaviorRuntimeReloadSnapshot &snapshot) const {
         if (!impl_ || impl_->shutdown || impl_->structuralPending || snapshot.instances.size() != impl_->instances.size())
             return Result<void>::Failure(MakeError(GameplayErrors::GameplayReloadSnapshotInvalid));
         std::unordered_map<std::uint64_t, const BehaviorInstanceReloadState *> states;
@@ -574,7 +588,7 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc BehaviorRuntime::Shutdown */
-    void BehaviorRuntime::Shutdown() noexcept {
+    void BehaviorRuntime::Shutdown() const noexcept {
         if (!impl_ || impl_->shutdown)
             return;
         impl_->shutdownRequested = true;

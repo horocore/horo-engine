@@ -132,7 +132,17 @@ namespace Horo::Physics {
      * before deleting the solver. Reserved handles are not active body bindings until publication.
      */
     class PhysicsSceneBodyPreparation final {
+        struct Impl;
+
     public:
+        /** @brief Checked construction authority held only by the owning Physics world. */
+        class ConstructionKey final {
+            friend class PhysicsWorld;
+            ConstructionKey() = default;
+        };
+
+        /** @brief Constructs checked detached state. @param key Factory authority. @param impl Owned preparation state. */
+        PhysicsSceneBodyPreparation(ConstructionKey key, std::unique_ptr<Impl> impl) noexcept;
         ~PhysicsSceneBodyPreparation();
         PhysicsSceneBodyPreparation(const PhysicsSceneBodyPreparation &) = delete;
         PhysicsSceneBodyPreparation &operator=(const PhysicsSceneBodyPreparation &) = delete;
@@ -172,8 +182,6 @@ namespace Horo::Physics {
 
     private:
         friend class PhysicsWorld;
-        struct Impl;
-        explicit PhysicsSceneBodyPreparation(std::unique_ptr<Impl> impl) noexcept;
         std::unique_ptr<Impl> impl_;
     };
 

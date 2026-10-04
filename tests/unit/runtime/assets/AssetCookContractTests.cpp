@@ -114,6 +114,14 @@ TEST_CASE("Cooked Artifact Round-Trips Through Binary Envelope", "[unit][runtime
     REQUIRE((decoded.Value().sourceDigest == artifact.sourceDigest));
     REQUIRE((decoded.Value().payloadDigest == artifact.payloadDigest));
     REQUIRE((decoded.Value().payload == artifact.payload));
+    auto byteDecoded = DecodeCookedArtifactBytes(std::as_bytes(std::span{encoded.Value()}), limits);
+    REQUIRE(byteDecoded.HasValue());
+    CHECK(byteDecoded.Value().id == decoded.Value().id);
+    CHECK(byteDecoded.Value().payload == decoded.Value().payload);
+    auto damaged = encoded.Value();
+    damaged.back() ^= 0x01;
+    CHECK(DecodeCookedArtifactBytes(std::as_bytes(std::span{damaged}), limits).HasError());
+    CHECK(DecodeCookedArtifactBytes({}, limits).HasError());
 }
 
 TEST_CASE("Cooked Artifact Round-Tips Cache-Key Digest Verbatim", "[unit][runtime][assets][cook]") {

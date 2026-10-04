@@ -220,7 +220,7 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] Result<std::vector<DeferredEntity>> CreateGroup(std::vector<RuntimeEntityGroupEntry> entries,
                                                                       std::vector<RuntimeGroupAssetLease> resources,
-                                                                      SceneStructuralAdmission admission);
+                                                                      const SceneStructuralAdmission &admission);
         /** @brief Queues destruction of an existing generation-checked entity. @param entity Reference validated when the
          * batch commits. */
         void Destroy(EntityRef entity);

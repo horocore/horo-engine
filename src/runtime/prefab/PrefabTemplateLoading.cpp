@@ -37,13 +37,12 @@ namespace Horo::Prefab::Detail {
     /** @copydoc PrefabTemplateProviderState::PrefabTemplateProviderState */
     PrefabTemplateProviderState::PrefabTemplateProviderState(Assets::AssetRegistry &assetRegistry, Assets::AssetLoadService &assetLoads,
                                                              Runtime::RuntimeSceneService &sceneService, PrefabLimitProfile capturedProfile,
-                                                             PrefabTemplateProviderLimits capacities)
+                                                             const PrefabTemplateProviderLimits &capacities)
         : registry(assetRegistry), loads(assetLoads), scenes(sceneService), profile(std::move(capturedProfile)), limits(capacities) {
         if (!limits.IsValid())
             return;
         const auto entries = limits.maximumTemplates * (profile.Policy().maximumReferencedAssets + 1);
-        auto cacheResult = Assets::AssetPayloadCache::Create(entries, limits.maximumRetainedBytes);
-        if (cacheResult.HasValue())
+        if (auto cacheResult = Assets::AssetPayloadCache::Create(entries, limits.maximumRetainedBytes); cacheResult.HasValue())
             payloads = std::move(cacheResult).Value();
         requests.reserve(limits.maximumOutstanding);
         cache.reserve(limits.maximumTemplates);
@@ -61,8 +60,7 @@ namespace Horo::Prefab::Detail {
                                                              Runtime::SceneRuntimeId scene) const {
         if (closed || !payloads)
             return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected, "Prefab provider is closed or invalid."));
-        const auto active = scenes.ActiveScene();
-        if (!active || active->RuntimeId() != scene)
+        if (const auto active = scenes.ActiveScene(); !active || active->RuntimeId() != scene)
             return Result<void>::Failure(MakeError(PrefabErrors::SceneUnavailable));
         if (snapshot.Revision().value == 0 || registry.Snapshot().Revision() != snapshot.Revision())
             return Result<void>::Failure(MakeError(PrefabErrors::ResolutionStale));
@@ -126,10 +124,11 @@ namespace Horo::Prefab::Detail {
             std::erase_if(cache, [](const auto &entry) {
                 return entry.allocation.expired();
             });
-            const auto preparing = std::count_if(requests.begin(), requests.end(), [](const auto &candidate) {
+            if (const auto preparing = std::ranges::count_if(requests,
+                                                             [](const auto &candidate) {
                 return candidate->decoded.has_value();
             });
-            if (cache.size() + static_cast<std::size_t>(preparing) >= limits.maximumTemplates)
+                cache.size() + static_cast<std::size_t>(preparing) >= limits.maximumTemplates)
                 return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected, "Live template allocation capacity exhausted."));
             auto decoded = CookedPrefab::Parse(std::as_bytes(std::span{artifact.Value().payload}), request.root.asset, profile);
             if (decoded.HasError())
@@ -151,7 +150,7 @@ namespace Horo::Prefab::Detail {
             auto lease = payloads->Admit(std::as_bytes(std::span{loaded.Value().bytes}));
             if (lease.HasError())
                 return Result<void>::Failure(std::move(lease).ErrorValue());
-            request.dependencies.push_back({expected, std::move(lease).Value()});
+            request.dependencies.emplace_back(expected, std::move(lease).Value());
         }
         return Result<void>::Success();
     }
@@ -160,10 +159,9 @@ namespace Horo::Prefab::Detail {
     Result<void> PrefabTemplateProviderState::Publish(PrefabTemplateRequest &request) {
         if (auto admission = CheckAdmission(request.registry, request.scene); admission.HasError())
             return admission;
-        auto allocation = std::make_shared<const PrefabTemplateAllocation>(
-            PrefabTemplateAllocation{std::move(*request.decoded), request.registry, request.rootLease, std::move(request.dependencies),
-                                     request.root.target, identity});
-        cache.push_back({allocation, allocation});  // Reserved; no throwing publication after the owned candidate is complete.
+        auto allocation = std::make_shared<const PrefabTemplateAllocation>(std::move(*request.decoded), request.registry, request.rootLease,
+                                                                           std::move(request.dependencies), request.root.target, identity);
+        cache.emplace_back(allocation, allocation);  // Reserved; no throwing publication after the owned candidate is complete.
         request.result = std::move(allocation);
         request.decoded.reset();
         request.rootLease = {};
@@ -196,14 +194,27 @@ namespace Horo::Prefab::Detail {
         }
     }
 
+    /** @copydoc PrefabTemplateProviderState::CancelRequest */
+    bool PrefabTemplateProviderState::CancelRequest(PrefabTemplateRequest &request) {
+        if (!request.cancellation.Token().IsCancellationRequested())
+            return false;
+        if (request.pending && InFlight(*request.pending))
+            return true;
+        request.pending.reset();
+        ReleasePins(request);
+        if (!request.error)
+            request.error = MakeError(PrefabErrors::Cancelled);
+        request.status = PrefabTemplateLoadState::Cancelled;
+        return true;
+    }
+
     /** @copydoc PrefabTemplateProviderState::Pump */
     Result<void> PrefabTemplateProviderState::Pump() {
         if (closed || !payloads)
             return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected));
         const auto scene = scenes.ActiveScene();
         const auto incarnation = scene ? scene->RuntimeId() : Runtime::SceneRuntimeId{};
-        const auto revision = registry.Snapshot().Revision();
-        if (incarnation != activeScene || revision != activeRevision) {
+        if (const auto revision = registry.Snapshot().Revision(); incarnation != activeScene || revision != activeRevision) {
             DropResidency();
             activeScene = incarnation;
             activeRevision = revision;
@@ -212,7 +223,7 @@ namespace Horo::Prefab::Detail {
         for (const auto &request : requests)
             if (request->pending && InFlight(*request->pending))
                 ++inFlight;
-        for (auto &request : requests) {
+        for (const auto &request : requests) {
             // Abandonment is not a capacity refund while a cancelled worker still occupies a load slot.
             if (request.use_count() == 1)
                 request->cancellation.RequestCancellation();
@@ -222,16 +233,8 @@ namespace Horo::Prefab::Detail {
                     request->cancellation.RequestCancellation();
                 }
             }
-            if (request->cancellation.Token().IsCancellationRequested()) {
-                if (request->pending && InFlight(*request->pending))
-                    continue;
-                request->pending.reset();
-                ReleasePins(*request);
-                if (!request->error)
-                    request->error = MakeError(PrefabErrors::Cancelled);
-                request->status = PrefabTemplateLoadState::Cancelled;
+            if (CancelRequest(*request))
                 continue;
-            }
             Progress(*request, inFlight);
         }
         std::erase_if(requests, [](const auto &request) {

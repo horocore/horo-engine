@@ -27,14 +27,14 @@ namespace Horo::Runtime {
     /** @copydoc SceneCommandBuffer::CreateGroup */
     Result<std::vector<DeferredEntity>> SceneCommandBuffer::CreateGroup(std::vector<RuntimeEntityGroupEntry> entries,
                                                                         std::vector<RuntimeGroupAssetLease> resources,
-                                                                        SceneStructuralAdmission admission) {
+                                                                        const SceneStructuralAdmission &admission) {
         if (entries.empty() || entries.size() > 256 || resources.size() > 257 || !admission.scene.IsValid() ||
             admission.registry.value == 0 || entries.size() > std::numeric_limits<std::uint64_t>::max() - nextDeferred_)
             return Result<std::vector<DeferredEntity>>::Failure(
                 MakeError(SceneErrors::StructuralCommitFailed, "Invalid structural group bounds."));
         std::size_t referenceCount{};
         for (std::size_t index = 0; index < entries.size(); ++index) {
-            if (entries[index].parentInGroup && (*entries[index].parentInGroup >= index || entries[index].info.parent))
+            if (entries[index].parentInGroup.has_value() && (*entries[index].parentInGroup >= index || entries[index].info.parent))
                 return Result<std::vector<DeferredEntity>>::Failure(
                     MakeError(SceneErrors::InvalidEntity, "Group parent must precede its child."));
             if (entries[index].physicsReferences.size() > 4096 - referenceCount)
@@ -48,7 +48,7 @@ namespace Horo::Runtime {
         std::vector<DeferredEntity> tokens;
         tokens.reserve(entries.size());
         for (std::size_t index = 0; index < entries.size(); ++index)
-            tokens.push_back({nextDeferred_ + index});
+            tokens.emplace_back(nextDeferred_ + index);
         auto returned = tokens;
         commands_.emplace_back(CreateGroupCommand{std::move(entries), std::move(resources), std::move(tokens), admission});
         nextDeferred_ += returned.size();
@@ -260,7 +260,7 @@ namespace Horo::Runtime {
             entities.reserve(group.entries.size());
             for (std::size_t index = 0; index < group.entries.size(); ++index) {
                 auto info = group.entries[index].info;
-                if (group.entries[index].parentInGroup)
+                if (group.entries[index].parentInGroup.has_value())
                     info.parent = entities[*group.entries[index].parentInGroup];
                 auto created = scene.CreateEntity(candidate, info);
                 if (created.HasError())
@@ -270,6 +270,37 @@ namespace Horo::Runtime {
                 result.created.emplace_back(group.deferred[index], created.Value());
             }
             return ResolveGroupReferences(group, entities);
+        }
+
+        /** @brief Validates one producer/target pair against candidate and resident Scene lifetimes. */
+        Result<ResolvedGroupPhysicsBodyReference> ResolveGroupReference(
+            const RuntimeComponentSet &components, const GroupPhysicsBodyReference &reference, const std::span<const EntityRef> entities,
+            const std::span<const ResolvedGroupPhysicsBodyReference> resolved) const {
+            if (const auto *source = SourceBodyReference(components, reference);
+                !source || source->body != reference.body || !reference.body.IsValid() ||
+                std::ranges::any_of(resolved, [&reference](const auto &other) {
+                return other.kind == reference.kind && other.component == reference.component;
+            }))
+                return Result<ResolvedGroupPhysicsBodyReference>::Failure(
+                    MakeError(SceneErrors::InvalidEntity, "Invalid or duplicated typed group body fixup."));
+            EntityRef target;
+            if (const auto *local = std::get_if<RuntimeGroupEntitySlot>(&reference.target)) {
+                if (local->index >= entities.size())
+                    return Result<ResolvedGroupPhysicsBodyReference>::Failure(MakeError(SceneErrors::InvalidEntity));
+                target = entities[local->index];
+            } else {
+                target = std::get<EntityRef>(reference.target);
+                if (!scene.IsValid(scene.storage_, target))
+                    return Result<ResolvedGroupPhysicsBodyReference>::Failure(
+                        MakeError(SceneErrors::StaleEntity, "External group targets must already belong to the committed Scene."));
+            }
+            if (!scene.IsValid(candidate, target))
+                return Result<ResolvedGroupPhysicsBodyReference>::Failure(MakeError(SceneErrors::StaleEntity));
+            if (const auto &body = candidate.slots[target.entity.index].components.rigidBody;
+                !body || !body->enabled || body->body != reference.body)
+                return Result<ResolvedGroupPhysicsBodyReference>::Failure(
+                    MakeError(SceneErrors::InvalidEntity, "Group body target has no matching enabled slot."));
+            return Result<ResolvedGroupPhysicsBodyReference>::Success({reference.kind, reference.component, target, reference.body});
         }
 
         /** @brief Resolves typed references only after every group entity has a candidate slot. */
@@ -282,31 +313,10 @@ namespace Horo::Runtime {
                 auto resolved = std::make_shared<std::vector<ResolvedGroupPhysicsBodyReference>>();
                 resolved->reserve(entry.physicsReferences.size());
                 for (const auto &reference : entry.physicsReferences) {
-                    const auto *source = SourceBodyReference(entry.info.components, reference);
-                    if (!source || source->body != reference.body || !reference.body.IsValid() ||
-                        std::ranges::any_of(*resolved, [&](const auto &other) {
-                        return other.kind == reference.kind && other.component == reference.component;
-                    }))
-                        return Result<void>::Failure(
-                            MakeError(SceneErrors::InvalidEntity, "Invalid or duplicated typed group body fixup."));
-                    EntityRef target;
-                    if (const auto *local = std::get_if<RuntimeGroupEntitySlot>(&reference.target)) {
-                        if (local->index >= entities.size())
-                            return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
-                        target = entities[local->index];
-                    } else {
-                        target = std::get<EntityRef>(reference.target);
-                        if (!scene.IsValid(scene.storage_, target))
-                            return Result<void>::Failure(
-                                MakeError(SceneErrors::StaleEntity, "External group targets must already belong to the committed Scene."));
-                    }
-                    if (!scene.IsValid(candidate, target))
-                        return Result<void>::Failure(MakeError(SceneErrors::StaleEntity));
-                    const auto &body = candidate.slots[target.entity.index].components.rigidBody;
-                    if (!body || !body->enabled || body->body != reference.body)
-                        return Result<void>::Failure(
-                            MakeError(SceneErrors::InvalidEntity, "Group body target has no matching enabled slot."));
-                    resolved->push_back({reference.kind, reference.component, target, reference.body});
+                    auto fixup = ResolveGroupReference(entry.info.components, reference, entities, *resolved);
+                    if (fixup.HasError())
+                        return Result<void>::Failure(fixup.ErrorValue());
+                    resolved->push_back(std::move(fixup).Value());
                 }
                 candidate.slots[entities[index].entity.index].groupPhysicsReferences = std::move(resolved);
             }
@@ -316,14 +326,15 @@ namespace Horo::Runtime {
         /** @brief Resolves the exact typed producer field without changing durable authoring metadata. */
         static const PhysicsBodyReference *SourceBodyReference(const RuntimeComponentSet &components,
                                                                const GroupPhysicsBodyReference &reference) noexcept {
+            using enum GroupPhysicsReferenceKind;
             switch (reference.kind) {
-                case GroupPhysicsReferenceKind::ColliderBody:
+                case ColliderBody:
                     return reference.component < components.colliders.size() ? &components.colliders[reference.component].body : nullptr;
-                case GroupPhysicsReferenceKind::ConstraintFirst:
+                case ConstraintFirst:
                     return reference.component < components.physicsConstraints.size()
                                ? &components.physicsConstraints[reference.component].first.body
                                : nullptr;
-                case GroupPhysicsReferenceKind::ConstraintSecond:
+                case ConstraintSecond:
                     if (reference.component < components.physicsConstraints.size()) {
                         if (const auto *body =
                                 std::get_if<PhysicsConstraintBodyEndpoint>(&components.physicsConstraints[reference.component].second))
@@ -366,18 +377,19 @@ namespace Horo::Runtime {
                     continue;
                 resourceGroup = true;
                 const auto parent = slot.parent ? std::optional<EntityRef>{{scene.runtimeId_, *slot.parent}} : std::nullopt;
-                created.push_back(
-                    {resolution.entity, slot.authoredObject, parent, &slot.localTransform, &slot.primitiveMesh, &slot.components,
-                     slot.groupPhysicsReferences ? std::span<const ResolvedGroupPhysicsBodyReference>{*slot.groupPhysicsReferences}
-                                                 : std::span<const ResolvedGroupPhysicsBodyReference>{},
-                     std::span<const RuntimeGroupAssetLease>{*slot.groupResources}});
+                created.emplace_back(resolution.entity, slot.authoredObject, parent, &slot.localTransform, &slot.primitiveMesh,
+                                     &slot.components,
+                                     slot.groupPhysicsReferences
+                                         ? std::span<const ResolvedGroupPhysicsBodyReference>{*slot.groupPhysicsReferences}
+                                         : std::span<const ResolvedGroupPhysicsBodyReference>{},
+                                     std::span<const RuntimeGroupAssetLease>{*slot.groupResources});
             }
             for (std::size_t index = 0; index < scene.storage_.slots.size(); ++index) {
                 const auto &old = scene.storage_.slots[index];
                 if (old.active && old.groupResources &&
                     (!candidate.slots[index].active || candidate.slots[index].generation != old.generation)) {
                     resourceGroup = true;
-                    destroyed.push_back({scene.runtimeId_, {static_cast<std::uint32_t>(index), old.generation}});
+                    destroyed.emplace_back(scene.runtimeId_, EntityId{static_cast<std::uint32_t>(index), old.generation});
                 }
             }
             return resourceGroup;
@@ -388,13 +400,14 @@ namespace Horo::Runtime {
                                     const std::span<const std::unique_ptr<SceneStructuralParticipant>> participants) const {
             const auto needs = [&](SceneStructuralOwner owner) {
                 const auto componentsNeed = [owner](const RuntimeComponentSet &components) {
+                    using enum SceneStructuralOwner;
                     switch (owner) {
-                        case SceneStructuralOwner::Physics:
+                        case Physics:
                             return components.rigidBody.has_value() || !components.colliders.empty() ||
                                    !components.physicsConstraints.empty();
-                        case SceneStructuralOwner::Gameplay:
+                        case Gameplay:
                             return !components.behaviors.empty() || !components.gameplayComponents.empty();
-                        case SceneStructuralOwner::AI:
+                        case AI:
                             return components.aiAgent.has_value() || components.aiController.has_value();
                     }
                     return false;

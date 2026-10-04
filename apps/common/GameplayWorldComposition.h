@@ -79,5 +79,5 @@ namespace Horo::Application::Internal {
      * @details Empty/retired slots reject required Gameplay work rather than discover or load another module.
      */
     [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeGameplayStructuralParticipant(
-        const std::unique_ptr<GameplayWorldComposition> &active);
+        GameplayWorldComposition *const &active);
 }  // namespace Horo::Application::Internal

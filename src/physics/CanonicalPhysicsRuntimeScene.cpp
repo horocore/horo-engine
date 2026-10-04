@@ -461,8 +461,8 @@ namespace Horo::Physics::Detail {
             return Result<ConstraintHandle>::Failure(prepared.ErrorValue());
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
         auto &record = prepared.Value();
-        const auto *second = std::get_if<PhysicsBodyAnchor>(&descriptor.second);
-        if (second != nullptr && descriptor.collisionPolicy == PhysicsJointCollisionPolicy::DisableBetweenBodies) {
+        if (const auto *second = std::get_if<PhysicsBodyAnchor>(&descriptor.second);
+            second != nullptr && descriptor.collisionPolicy == PhysicsJointCollisionPolicy::DisableBetweenBodies) {
             const std::uint64_t key = CollisionPairKey(record.firstBody, record.secondBody);
             const auto insertion = std::ranges::lower_bound(canonical.scene.disabledJointCollisionPairs, key);
             if (insertion == canonical.scene.disabledJointCollisionPairs.end() || *insertion != key)
@@ -470,7 +470,7 @@ namespace Horo::Physics::Detail {
         }
         canonical.native.system->AddConstraint(record.constraint.GetPtr());
         const auto identity = record.handle;
-        canonical.scene.constraints.push_back(std::move(record));
+        canonical.scene.constraints.push_back(record);
         return Result<ConstraintHandle>::Success(identity);
     }
 

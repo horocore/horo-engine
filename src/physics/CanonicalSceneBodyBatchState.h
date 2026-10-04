@@ -1,10 +1,28 @@
 #pragma once
 
+/** @file CanonicalSceneBodyBatchState.h
+ * @brief Private detached native additions and prepared retirement closure. */
+
 #include "CanonicalPhysicsRuntimeInternal.h"
 
 namespace Horo::Physics::Detail {
+    /** @brief Prepared retirement closure; resident resources remain owned by the active world. */
+    struct CanonicalSceneRetirement final {
+        std::vector<BodyHandle> retiredBodies;
+        std::vector<ShapeHandle> retiredShapes;
+        std::vector<ConstraintHandle> retiredConstraints;
+        std::vector<JPH::BodyID> retiredNativeBodies;
+        std::vector<JPH::Constraint *> retiredNativeConstraints;
+        bool retirementPrepared{};
+        bool retirementFailed{};
+    };
+
     /** @brief Detached native storage; the weak world registration lets teardown invalidate retained candidates safely. */
     struct CanonicalSceneBodyBatchState final {
+        CanonicalSceneBodyBatchState() = default;
+        CanonicalSceneBodyBatchState(const CanonicalSceneBodyBatchState &) = delete;
+        CanonicalSceneBodyBatchState &operator=(const CanonicalSceneBodyBatchState &) = delete;
+
         ~CanonicalSceneBodyBatchState() {
             Abort();
         }
@@ -26,13 +44,7 @@ namespace Horo::Physics::Detail {
 
         CanonicalWorld *world{};
         PhysicsWorldId owner;
-        std::vector<BodyHandle> retiredBodies;
-        std::vector<ShapeHandle> retiredShapes;
-        std::vector<ConstraintHandle> retiredConstraints;
-        std::vector<JPH::BodyID> retiredNativeBodies;
-        std::vector<JPH::Constraint *> retiredNativeConstraints;
-        bool retirementPrepared{};
-        bool retirementFailed{};
+        CanonicalSceneRetirement retirement;
         std::vector<CanonicalSceneShapeRecord> shapes;
         std::vector<ShapeHandle> shapeHandles;
         std::vector<CanonicalSceneConstraintRecord> constraints;

@@ -244,21 +244,21 @@ namespace Horo::AI {
          * @param taskDefinition Persistent task identity.
          * @return Generation-fenced task handle or a typed lifecycle/capacity error.
          */
-        [[nodiscard]] Result<TaskHandle> StartTaskAtSafePoint(AgentHandle agent, TaskId taskDefinition);
+        [[nodiscard]] Result<TaskHandle> StartTaskAtSafePoint(AgentHandle agent, TaskId taskDefinition) const;
 
         /**
          * @brief Disables one agent, cancelling its task before revoking its capabilities and blackboard.
          * @param agent Exact active agent handle.
          * @return Success or a typed malformed/stale/shutdown error.
          */
-        [[nodiscard]] Result<void> DisableAtSafePoint(AgentHandle agent);
+        [[nodiscard]] Result<void> DisableAtSafePoint(AgentHandle agent) const;
 
         /**
          * @brief Retires the agent owned by one destroyed runtime entity generation.
          * @param owner Exact RuntimeScene entity reference.
          * @return Number retired or a typed malformed/stale/shutdown error.
          */
-        [[nodiscard]] Result<std::size_t> RetireOwnerAtSafePoint(Runtime::EntityRef owner);
+        [[nodiscard]] Result<std::size_t> RetireOwnerAtSafePoint(Runtime::EntityRef owner) const;
 
         /** @brief Captures an immutable value snapshot of the active publication. */
         [[nodiscard]] Result<AiSceneSnapshot> Snapshot() const;

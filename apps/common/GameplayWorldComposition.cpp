@@ -20,7 +20,7 @@ namespace Horo::Application::Internal {
         /** @brief Explicit host slot, not a backend locator; the active module runner owns every constructed attachment. */
         class GameplayStructuralParticipant final : public Runtime::SceneStructuralParticipant {
         public:
-            explicit GameplayStructuralParticipant(const std::unique_ptr<GameplayWorldComposition> &active) : active_(active) {}
+            explicit GameplayStructuralParticipant(GameplayWorldComposition *const &active) : active_(active) {}
 
             [[nodiscard]] Runtime::SceneStructuralOwner Owner() const noexcept override {
                 return Runtime::SceneStructuralOwner::Gameplay;
@@ -37,7 +37,7 @@ namespace Horo::Application::Internal {
             }
 
         private:
-            const std::unique_ptr<GameplayWorldComposition> &active_;
+            GameplayWorldComposition *const &active_;
         };
     }  // namespace
 
@@ -140,8 +140,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc MakeGameplayStructuralParticipant */
-    std::unique_ptr<Runtime::SceneStructuralParticipant> MakeGameplayStructuralParticipant(
-        const std::unique_ptr<GameplayWorldComposition> &active) {
+    std::unique_ptr<Runtime::SceneStructuralParticipant> MakeGameplayStructuralParticipant(GameplayWorldComposition *const &active) {
         return std::make_unique<GameplayStructuralParticipant>(active);
     }
 }  // namespace Horo::Application::Internal

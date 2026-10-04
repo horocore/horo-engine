@@ -69,7 +69,7 @@ namespace Horo::Prefab {
     }
 
     /** @copydoc PrefabTemplateLoadHandle::RequestCancel */
-    void PrefabTemplateLoadHandle::RequestCancel() noexcept {
+    void PrefabTemplateLoadHandle::RequestCancel() const noexcept {
         if (request_)
             request_->cancellation.RequestCancellation();
     }
@@ -134,7 +134,7 @@ namespace Horo::Prefab {
     }
 
     /** @copydoc PrefabTemplateProvider::TakeResult */
-    Result<PrefabTemplateLease> PrefabTemplateProvider::TakeResult(PrefabTemplateLoadHandle &handle) {
+    Result<PrefabTemplateLease> PrefabTemplateProvider::TakeResult(const PrefabTemplateLoadHandle &handle) const {
         if (auto owner = state_->CheckOwner(); owner.HasError())
             return Result<PrefabTemplateLease>::Failure(owner.ErrorValue());
         const auto &request = handle.request_;
@@ -189,9 +189,10 @@ namespace Horo::Prefab {
         }
         std::vector<Runtime::RuntimeGroupAssetLease> resources;
         resources.reserve(lease.Dependencies().size() + 1);
-        resources.push_back({{lease.Template()->Data().assetId, Assets::AssetTypeId::Parse("core.prefab").Value()}, lease.Artifact()});
+        resources.emplace_back(Assets::AssetDependency{lease.Template()->Data().assetId, Assets::AssetTypeId::Parse("core.prefab").Value()},
+                               lease.Artifact());
         for (const auto &dependency : lease.Dependencies())
-            resources.push_back({dependency.metadata, dependency.artifact});
+            resources.emplace_back(dependency.metadata, dependency.artifact);
         Runtime::SceneCommandBuffer commands;
         auto tokens = commands.CreateGroup(std::move(entries), std::move(resources),
                                            {lease.Scene(), lease.RegistryRevision(), cancellation, state_->retirement.Token()});
@@ -242,7 +243,7 @@ namespace Horo::Prefab {
     void PrefabTemplateProvider::Shutdown() noexcept {
         state_->closed = true;
         state_->retirement.RequestCancellation();
-        for (auto &request : state_->requests) {
+        for (const auto &request : state_->requests) {
             request->cancellation.RequestCancellation();
             request->status = PrefabTemplateLoadState::Cancelled;
             state_->ReleasePins(*request);

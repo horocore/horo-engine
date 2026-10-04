@@ -417,3 +417,41 @@ TEST_CASE("behavior runtime rejects an oversized reload payload without shutting
     REQUIRE(snapshot.ErrorValue().code.Value() == GameplayErrors::GameplayReloadSnapshotInvalid.code.Value());
     REQUIRE(runtime.Value()->FixedUpdate({}, FixedDeltaTime{1.0 / 60.0}).HasValue());
 }
+
+TEST_CASE("Gameplay structural factories contain standard and foreign exceptions after commit", "[prefab][gameplay]") {
+    Recorder recorder;
+    BehaviorRegistry registry = Registry(recorder);
+    auto sceneResult = RuntimeScene::Create(Definition(), SceneRuntimeId{17});
+    REQUIRE(sceneResult.HasValue());
+    auto scene = std::move(sceneResult).Value();
+    auto runtimeResult = BehaviorRuntime::Create(*scene, registry);
+    REQUIRE(runtimeResult.HasValue());
+    auto runtime = std::move(runtimeResult).Value();
+    SECTION("standard") {
+        recorder.onFactory = [] {
+            throw std::runtime_error{"Factory failure"};
+        };
+    }
+    SECTION("foreign") {
+        recorder.onFactory = [] {
+            throw 7;
+        };
+    }
+    RuntimeComponentSet components;
+    components.behaviors.push_back({BehaviorInstanceId{2}, Type(), 1, true, {}});
+    const RuntimeEntityView projected{.entity = {SceneRuntimeId{17}, EntityId{1, 1}}, .components = &components};
+    auto participant = runtime->MakeStructuralParticipant();
+    auto prepared = participant->Prepare(scene->View(), {&projected, 1}, {});
+    REQUIRE(prepared.HasValue());
+    auto candidate = std::move(prepared).Value();
+    SceneCommandBuffer commands;
+    (void)commands.Create({.components = components});
+    REQUIRE(candidate->ValidatePublication().HasValue());
+    REQUIRE(scene->Commit(commands).HasValue());
+    candidate->Publish();
+    CHECK(candidate->AfterPublication().HasError());
+    candidate.reset();
+    CHECK(runtime->InstanceCount() == 1);
+    CHECK(recorder.destroyed == 0);
+    CHECK(scene->View().EntityAt(1).has_value());
+}

@@ -39,26 +39,26 @@ namespace Horo::Assets {
                 out.push_back(b);
         }
 
-        [[nodiscard]] std::uint32_t ReadU32LE(const std::span<const std::uint8_t> bytes, const std::size_t offset) {
+        [[nodiscard]] std::uint32_t ReadU32LE(const std::span<const std::byte> bytes, const std::size_t offset) {
             return std::uint32_t(bytes[offset]) | (std::uint32_t(bytes[offset + 1]) << 8U) | (std::uint32_t(bytes[offset + 2]) << 16U) |
                    (std::uint32_t(bytes[offset + 3]) << 24U);
         }
 
-        [[nodiscard]] std::uint16_t ReadU16LE(const std::span<const std::uint8_t> bytes, const std::size_t offset) {
+        [[nodiscard]] std::uint16_t ReadU16LE(const std::span<const std::byte> bytes, const std::size_t offset) {
             return std::uint16_t(std::uint16_t(bytes[offset]) | (std::uint16_t(bytes[offset + 1]) << 8U));
         }
 
-        [[nodiscard]] std::uint64_t ReadU64LE(const std::span<const std::uint8_t> bytes, const std::size_t offset) {
+        [[nodiscard]] std::uint64_t ReadU64LE(const std::span<const std::byte> bytes, const std::size_t offset) {
             std::uint64_t value = 0;
             for (int shift = 0; shift < 64; shift += 8)
                 value |= std::uint64_t(bytes[offset + shift / 8]) << shift;
             return value;
         }
 
-        [[nodiscard]] Sha256Digest ReadDigest(const std::span<const std::uint8_t> bytes, const std::size_t offset) {
+        [[nodiscard]] Sha256Digest ReadDigest(const std::span<const std::byte> bytes, const std::size_t offset) {
             Sha256Digest digest{};
             for (std::size_t i = 0; i < digest.bytes.size(); ++i)
-                digest.bytes[i] = bytes[offset + i];
+                digest.bytes[i] = std::to_integer<std::uint8_t>(bytes[offset + i]);
             return digest;
         }
 
@@ -102,11 +102,16 @@ namespace Horo::Assets {
 
     /** @copydoc DecodeCookedArtifact */
     Result<AssetCookArtifact> DecodeCookedArtifact(const std::span<const std::uint8_t> bytes, const AssetCookLimits &limits) {
+        return DecodeCookedArtifactBytes(std::as_bytes(bytes), limits);
+    }
+
+    /** @copydoc DecodeCookedArtifactBytes */
+    Result<AssetCookArtifact> DecodeCookedArtifactBytes(const std::span<const std::byte> bytes, const AssetCookLimits &limits) {
         if (bytes.size() < FixedHeaderSize || bytes.size() > limits.maximumArtifactBytes)
             return MakeMalformedError();
 
         for (std::size_t i = 0; i < Magic.size(); ++i)
-            if (bytes[i] != static_cast<std::uint8_t>(Magic[i]))
+            if (bytes[i] != static_cast<std::byte>(Magic[i]))
                 return MakeMalformedError();
 
         if (const auto version = ReadU32LE(bytes, 8); version != CurrentFormatVersion)
@@ -136,7 +141,7 @@ namespace Horo::Assets {
         AssetCookArtifact artifact;
         std::array<std::uint8_t, 16> idBytes{};
         for (std::size_t i = 0; i < 16; ++i)
-            idBytes[i] = bytes[16 + i];
+            idBytes[i] = std::to_integer<std::uint8_t>(bytes[16 + i]);
         artifact.id = AssetId::FromBytes(idBytes);
         artifact.type = typeResult.Value();
         artifact.target = targetResult.Value();

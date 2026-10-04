@@ -50,9 +50,11 @@ namespace Horo::Prefab::Detail {
     struct PrefabTemplateProviderState final {
         PrefabTemplateProviderState(Assets::AssetRegistry &assetRegistry, Assets::AssetLoadService &assetLoads,
                                     Runtime::RuntimeSceneService &sceneService, PrefabLimitProfile capturedProfile,
-                                    PrefabTemplateProviderLimits capacities);
+                                    const PrefabTemplateProviderLimits &capacities);
         [[nodiscard]] Result<void> CheckOwner() const;
         [[nodiscard]] Result<void> CheckAdmission(const Assets::AssetRegistrySnapshot &snapshot, Runtime::SceneRuntimeId scene) const;
+        /** @brief Completes cancellation only when the shared-loader worker has released its slot. */
+        bool CancelRequest(PrefabTemplateRequest &request);
         [[nodiscard]] Result<void> Pump();
         /** @brief Advances one admitted request and accounts for newly scheduled workers. */
         void Progress(PrefabTemplateRequest &request, std::size_t &inFlight);

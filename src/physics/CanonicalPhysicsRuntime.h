@@ -40,14 +40,14 @@ namespace Horo::Physics::Detail {
         [[nodiscard]] std::span<const ConstraintHandle> Constraints() const noexcept;
         [[nodiscard]] std::span<const ConstraintHandle> RetiredConstraints() const noexcept;
         [[nodiscard]] Result<void> PrepareRetirement(std::span<const BodyHandle> bodies, std::span<const ShapeHandle> shapes,
-                                                     std::span<const ConstraintHandle> constraints);
-        [[nodiscard]] Result<void> PrepareConstraints(std::span<const PhysicsConstraintDescriptor> descriptors);
+                                                     std::span<const ConstraintHandle> constraints) const;
+        [[nodiscard]] Result<void> PrepareConstraints(std::span<const PhysicsConstraintDescriptor> descriptors) const;
         /** @brief Tests retained pending ownership without dereferencing a destroyed world. */
         [[nodiscard]] bool IsPending() const noexcept;
         /** @brief Rechecks native lifetime and exact pending ownership before aggregate publication. */
         [[nodiscard]] Result<void> ValidatePublication() const;
         /** @brief Publishes a validated fully prepared batch without further allocation. */
-        void Publish() noexcept;
+        void Publish() const noexcept;
 
     private:
         std::shared_ptr<CanonicalSceneBodyBatchState> state_;
