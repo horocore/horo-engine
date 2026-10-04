@@ -1375,9 +1375,10 @@ target_compile_features(HoroProjectMetadataTests PRIVATE cxx_std_20)
 target_link_libraries(HoroProjectMetadataTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroProjectCompatibilityTests
         unit/application/ProjectCompatibilityTests.cpp
+        unit/application/ProjectSourceDocumentTests.cpp
 )
 target_compile_features(HoroProjectCompatibilityTests PRIVATE cxx_std_20)
-target_link_libraries(HoroProjectCompatibilityTests PRIVATE HoroEngine::Application)
+target_link_libraries(HoroProjectCompatibilityTests PRIVATE HoroEngine::ProjectSettings nlohmann_json::nlohmann_json)
 add_executable(HoroReleaseVersionTests
         unit/application/ReleaseVersionTests.cpp
 )

@@ -4,7 +4,7 @@
 
 namespace Horo::ProjectMigrations::R0_2_0 {
     /** @brief Exact development source contract; generated release validation verifies this binding. */
-    inline constexpr std::string_view TargetContract = "sha256:34145f6d5c5c83575dd4cc3aa4d6ab4bf34cfde8bb5ec6adb7ede6d9d1c862f6";
+    inline constexpr std::string_view TargetContract = "sha256:e068efe802defac5ec18d9742f0b1e1c50b1bfda5b26f8fc4a3a02eaf478065c";
     /** @brief Builds the audited 0.1.0 to 0.2.0 authoring adoption pipeline. @return Registered definition or typed error. */
     [[nodiscard]] Result<Application::ProjectMigrationDefinition> BuildProjectMigration();
     /** @brief Builds the complete target marker and authored-data validator. @return Owned read-only validator. */

@@ -2,6 +2,7 @@
   "horoVersion": "0.2.0",
   "documents": {
     ".horo/project.json": {
+      "strictJsonBounds": {"maximumBytes": 1048576, "maximumDepth": 32, "maximumKeys": 32768, "maximumKeyBytes": 128, "maximumStringBytes": 8192, "profileAuthority": "exact_registered_release_and_persistent_contract"},
       "required": ["horoVersion", "persistentContract", "projectId", "name", "projectVersion", "createdAt", "settings"],
       "optional": ["compatibilityProof", "migrationHistoryHead"],
       "settingsRequired": ["assetCompression", "renderBackend", "textureCompression"],

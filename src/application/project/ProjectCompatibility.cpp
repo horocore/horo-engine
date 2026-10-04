@@ -1,6 +1,7 @@
 #include "Horo/Application/ProjectCompatibility.h"
 
 #include "GeneratedProjectCompatibility.h"
+#include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Foundation/String.h"
 #include "ProjectErrors.h"
 
@@ -56,7 +57,7 @@ namespace Horo::Application {
                     !existsError && !exists ? ProjectErrors::MetadataNotFound : ProjectErrors::MetadataReadFailed;
                 return Result<std::string>::Failure(MetadataError(descriptor, "Unable to inspect " + path.string() + '.'));
             }
-            if (size == 0 || size > kMaximumMetadataBytes) {
+            if (size == 0 || size > 1024U * 1024U) {
                 return Result<std::string>::Failure(MetadataError(ProjectErrors::MetadataSizeInvalid));
             }
             std::ifstream input(path, std::ios::binary);
@@ -72,13 +73,45 @@ namespace Horo::Application {
         }
 
         struct ParserState {
+            enum class RootMarker {
+                None,
+                Release,
+                Contract
+            };
+            std::size_t maximumDepth = 32;
+            std::size_t maximumKeys = 32768;
             bool duplicate = false;
             bool limitExceeded = false;
             std::size_t keyCount = 0;
             std::vector<std::unordered_set<std::string>> keys;
+            RootMarker rootMarker = RootMarker::None;
+            std::string release;
+            std::string contract;
+
+            /** @brief Retains bounded root markers even when a later callback discards an over-limit DOM. */
+            void CaptureRootAuthority(const int depth, const Json::parse_event_t event, const Json &parsed) {
+                if (depth != 1)
+                    return;
+                if (event == Json::parse_event_t::key) {
+                    const auto &value = parsed.get_ref<const std::string &>();
+                    rootMarker = value == "horoVersion"          ? RootMarker::Release
+                                 : value == "persistentContract" ? RootMarker::Contract
+                                                                 : RootMarker::None;
+                } else if (event == Json::parse_event_t::value && parsed.is_string()) {
+                    const auto &value = parsed.get_ref<const std::string &>();
+                    constexpr std::size_t maximumMarkerBytes = 7U + 64U;  // Canonical sha256: identity.
+                    if (value.size() > maximumMarkerBytes)
+                        return;
+                    if (rootMarker == RootMarker::Release)
+                        release = value;
+                    else if (rootMarker == RootMarker::Contract)
+                        contract = value;
+                }
+            }
 
             bool OnEvent(const int depth, const Json::parse_event_t event, Json &parsed) {
-                if (depth < 0 || static_cast<std::size_t>(depth) > kMaximumDepth) {
+                CaptureRootAuthority(depth, event, parsed);
+                if (depth < 0 || static_cast<std::size_t>(depth) > maximumDepth) {
                     limitExceeded = true;
                     return false;
                 }
@@ -93,35 +126,54 @@ namespace Horo::Application {
                     if (keys.size() <= parentDepth)
                         keys.resize(parentDepth + 1);
                     duplicate = !keys[parentDepth].insert(value).second || duplicate;
-                    limitExceeded = ++keyCount > kMaximumKeys || value.size() > kMaximumKeyBytes || limitExceeded;
+                    limitExceeded = ++keyCount > maximumKeys || value.size() > kMaximumKeyBytes || limitExceeded;
                 } else if (event == Json::parse_event_t::value && parsed.is_string()) {
-                    limitExceeded = parsed.get_ref<const std::string &>().size() > kMaximumStringBytes || limitExceeded;
+                    const auto &value = parsed.get_ref<const std::string &>();
+                    limitExceeded = value.size() > kMaximumStringBytes || limitExceeded;
                 }
                 return !duplicate && !limitExceeded;
             }
         };
 
-        Result<Json> ParseJson(const std::string &contents) {
-            ParserState state;
+        /** @brief Selects the expanded bounds only for the exact application-registered development contract. */
+        bool HasRegisteredExpandedProfile(const ParserState &state) {
+            const auto *decision = BuiltInReleaseCompatibilityRegistry().Find({ParseHoroVersion("0.2.0").Value()});
+            return decision != nullptr && state.release == "0.2.0" &&
+                   state.contract == FormatPersistentContractHash(decision->persistentContract);
+        }
+
+        /** @brief Parses under the supplied finite callback state without selecting a release profile. */
+        Result<Json> ParseBoundedDocument(const std::string_view contents, ParserState &state) {
             const Json::parser_callback_t callback = [&state](const int depth, const Json::parse_event_t event, Json &parsed) {
                 return state.OnEvent(depth, event, parsed);
             };
-
             try {
-                Json document = Json::parse(contents, callback, true, false);
-                if (state.duplicate)
-                    return Result<Json>::Failure(MetadataError(ProjectErrors::MetadataDuplicateKey));
-                if (state.limitExceeded)
-                    return Result<Json>::Failure(MetadataError(ProjectErrors::MetadataLimitExceeded));
-                return Result<Json>::Success(std::move(document));
+                return Result<Json>::Success(Json::parse(contents, callback, true, false));
             } catch (const Json::exception &exception) {
-                if (state.duplicate)
-                    return Result<Json>::Failure(MetadataError(ProjectErrors::MetadataDuplicateKey));
-                if (state.limitExceeded)
-                    return Result<Json>::Failure(MetadataError(ProjectErrors::MetadataLimitExceeded));
                 return Result<Json>::Failure(
                     MetadataError(ProjectErrors::MetadataInvalidJson, "Invalid project metadata JSON: " + std::string{exception.what()}));
             }
+        }
+
+        /** @brief Applies the registered or legacy profile and its stable diagnostic precedence. */
+        Result<Json> ParseJson(const std::string_view contents, const bool legacy = false) {
+            if (contents.empty() || contents.size() > (legacy ? kMaximumMetadataBytes : 1024U * 1024U))
+                return Result<Json>::Failure(MetadataError(ProjectErrors::MetadataSizeInvalid));
+            ParserState state;
+            if (legacy) {
+                state.maximumDepth = kMaximumDepth;
+                state.maximumKeys = kMaximumKeys;
+            }
+            auto parsed = ParseBoundedDocument(contents, state);
+            // The expanded parse is only a bounded authority probe. Until the exact contract
+            // agrees, the legacy parser owns diagnostics, including size-before-duplicate.
+            if (!legacy && !HasRegisteredExpandedProfile(state))
+                return ParseJson(contents, true);
+            if (state.duplicate)
+                return Result<Json>::Failure(MetadataError(ProjectErrors::MetadataDuplicateKey));
+            if (state.limitExceeded)
+                return Result<Json>::Failure(MetadataError(ProjectErrors::MetadataLimitExceeded));
+            return parsed;
         }
 
         bool HasString(const Json &object, const char *key) {
@@ -230,65 +282,103 @@ namespace Horo::Application {
         return Result<void>::Failure(MakeError(ProjectErrors::ProofRejected));
     }
 
+    namespace {
+        /** @brief Validates the existing startup metadata subset from the sole strict root parser. */
+        Result<ProjectMetadata> DecodeMetadata(const Json &root) {
+            if (!root.is_object() || !HasString(root, "horoVersion") || !HasString(root, "persistentContract") ||
+                !HasString(root, "projectId") || !HasString(root, "name") || !HasString(root, "projectVersion") ||
+                !HasString(root, "createdAt") || !root.contains("settings") || !root["settings"].is_object() ||
+                !HasString(root["settings"], "renderBackend")) {
+                return Result<ProjectMetadata>::Failure(MetadataError(ProjectErrors::MetadataInvalidSchema));
+            }
+
+            auto horoVersion = ParseHoroVersion(root["horoVersion"].get_ref<const std::string &>());
+            auto contract = ParsePersistentContractHash(root["persistentContract"].get_ref<const std::string &>());
+            if (horoVersion.HasError() || contract.HasError()) {
+                return Result<ProjectMetadata>::Failure(MetadataError(ProjectErrors::MetadataInvalidValue));
+            }
+
+            const std::string projectId = root["projectId"].get<std::string>();
+            const std::string name = root["name"].get<std::string>();
+            const std::string projectVersion = root["projectVersion"].get<std::string>();
+            const std::string createdAt = root["createdAt"].get<std::string>();
+            const std::string renderBackend = root["settings"]["renderBackend"].get<std::string>();
+            if (Text::IsBlank(projectId) || projectId.size() > kMaximumProjectIdBytes || Text::IsBlank(name) ||
+                name.size() > kMaximumProjectNameBytes || Text::IsBlank(projectVersion) ||
+                projectVersion.size() > kMaximumProjectVersionBytes || Text::IsBlank(createdAt) ||
+                createdAt.size() > kMaximumTimestampBytes || !IsCanonicalBackendId(renderBackend)) {
+                return Result<ProjectMetadata>::Failure(MetadataError(ProjectErrors::MetadataInvalidValue));
+            }
+
+            std::optional<CompatibilityProof> proof;
+            if (root.contains("compatibilityProof")) {
+                auto parsedProof = ParseProof(root["compatibilityProof"]);
+                if (parsedProof.HasError())
+                    return Result<ProjectMetadata>::Failure(parsedProof.ErrorValue());
+                proof = std::move(parsedProof).Value();
+            }
+            std::optional<MigrationHistoryHead> historyHead;
+            if (root.contains("migrationHistoryHead")) {
+                if (!root["migrationHistoryHead"].is_string())
+                    return Result<ProjectMetadata>::Failure(MetadataError(ProjectErrors::MetadataInvalidValue));
+                auto parsedHead = ParsePersistentContractHash(root["migrationHistoryHead"].get_ref<const std::string &>());
+                if (parsedHead.HasError())
+                    return Result<ProjectMetadata>::Failure(MetadataError(ProjectErrors::MetadataInvalidValue));
+                historyHead = MigrationHistoryHead{MigrationContentHash{parsedHead.Value().bytes}};
+            }
+            return Result<ProjectMetadata>::Success({{horoVersion.Value()},
+                                                     contract.Value(),
+                                                     std::move(proof),
+                                                     projectId,
+                                                     name,
+                                                     projectVersion,
+                                                     createdAt,
+                                                     renderBackend,
+                                                     historyHead});
+        }
+    }  // namespace
+
+    /** @copydoc DecodeProjectSourceDocument */
+    Result<ProjectSourceDocument> DecodeProjectSourceDocument(const std::string_view contents) {
+        auto parsed = ParseJson(contents);
+        if (parsed.HasError())
+            return Result<ProjectSourceDocument>::Failure(parsed.ErrorValue());
+        auto metadata = DecodeMetadata(parsed.Value());
+        if (metadata.HasError())
+            return Result<ProjectSourceDocument>::Failure(metadata.ErrorValue());
+        std::optional<std::string> network;
+        const auto &settings = parsed.Value()["settings"];
+        if (settings.contains("network")) {
+            // Network schema interpretation belongs exclusively to its codec. Legacy metadata
+            // inspection must not start rejecting previously ignored settings members.
+            network = settings["network"].dump();
+        }
+        return Result<ProjectSourceDocument>::Success({std::move(metadata).Value(), std::move(network)});
+    }
+
+    /** @copydoc LoadProjectSourceDocument */
+    Result<ProjectSourceDocument> LoadProjectSourceDocument(const std::filesystem::path &projectRoot) {
+        std::error_code error;
+        const auto root = std::filesystem::weakly_canonical(projectRoot, error);
+        if (projectRoot.empty() || error)
+            return Result<ProjectSourceDocument>::Failure(MetadataError(ProjectErrors::MetadataReadFailed));
+        const auto path = std::filesystem::weakly_canonical(root / ".horo/project.json", error);
+        const auto relative = path.lexically_relative(root);
+        if (error || relative.empty() || relative.is_absolute() || *relative.begin() == "..")
+            return Result<ProjectSourceDocument>::Failure(
+                MetadataError(ProjectErrors::MetadataReadFailed, "Project metadata escapes the authorized project root."));
+        auto contents = ReadMetadata(path);
+        if (contents.HasError())
+            return Result<ProjectSourceDocument>::Failure(contents.ErrorValue());
+        return DecodeProjectSourceDocument(contents.Value());
+    }
+
     /** @copydoc LoadProjectMetadata */
     Result<ProjectMetadata> LoadProjectMetadata(const std::filesystem::path &projectRoot) {
-        auto contents = ReadMetadata(projectRoot / ".horo/project.json");
-        if (contents.HasError())
-            return Result<ProjectMetadata>::Failure(contents.ErrorValue());
-        auto parsed = ParseJson(contents.Value());
-        if (parsed.HasError())
-            return Result<ProjectMetadata>::Failure(parsed.ErrorValue());
-        const Json &root = parsed.Value();
-        if (!root.is_object() || !HasString(root, "horoVersion") || !HasString(root, "persistentContract") ||
-            !HasString(root, "projectId") || !HasString(root, "name") || !HasString(root, "projectVersion") ||
-            !HasString(root, "createdAt") || !root.contains("settings") || !root["settings"].is_object() ||
-            !HasString(root["settings"], "renderBackend")) {
-            return Result<ProjectMetadata>::Failure(MetadataError(ProjectErrors::MetadataInvalidSchema));
-        }
-
-        auto horoVersion = ParseHoroVersion(root["horoVersion"].get_ref<const std::string &>());
-        auto contract = ParsePersistentContractHash(root["persistentContract"].get_ref<const std::string &>());
-        if (horoVersion.HasError() || contract.HasError()) {
-            return Result<ProjectMetadata>::Failure(MetadataError(ProjectErrors::MetadataInvalidValue));
-        }
-
-        const std::string projectId = root["projectId"].get<std::string>();
-        const std::string name = root["name"].get<std::string>();
-        const std::string projectVersion = root["projectVersion"].get<std::string>();
-        const std::string createdAt = root["createdAt"].get<std::string>();
-        const std::string renderBackend = root["settings"]["renderBackend"].get<std::string>();
-        if (Text::IsBlank(projectId) || projectId.size() > kMaximumProjectIdBytes || Text::IsBlank(name) ||
-            name.size() > kMaximumProjectNameBytes || Text::IsBlank(projectVersion) ||
-            projectVersion.size() > kMaximumProjectVersionBytes || Text::IsBlank(createdAt) || createdAt.size() > kMaximumTimestampBytes ||
-            !IsCanonicalBackendId(renderBackend)) {
-            return Result<ProjectMetadata>::Failure(MetadataError(ProjectErrors::MetadataInvalidValue));
-        }
-
-        std::optional<CompatibilityProof> proof;
-        if (root.contains("compatibilityProof")) {
-            auto parsedProof = ParseProof(root["compatibilityProof"]);
-            if (parsedProof.HasError())
-                return Result<ProjectMetadata>::Failure(parsedProof.ErrorValue());
-            proof = std::move(parsedProof).Value();
-        }
-        std::optional<MigrationHistoryHead> historyHead;
-        if (root.contains("migrationHistoryHead")) {
-            if (!root["migrationHistoryHead"].is_string())
-                return Result<ProjectMetadata>::Failure(MetadataError(ProjectErrors::MetadataInvalidValue));
-            auto parsedHead = ParsePersistentContractHash(root["migrationHistoryHead"].get_ref<const std::string &>());
-            if (parsedHead.HasError())
-                return Result<ProjectMetadata>::Failure(MetadataError(ProjectErrors::MetadataInvalidValue));
-            historyHead = MigrationHistoryHead{MigrationContentHash{parsedHead.Value().bytes}};
-        }
-        return Result<ProjectMetadata>::Success({{horoVersion.Value()},
-                                                 contract.Value(),
-                                                 std::move(proof),
-                                                 projectId,
-                                                 name,
-                                                 projectVersion,
-                                                 createdAt,
-                                                 renderBackend,
-                                                 historyHead});
+        auto source = LoadProjectSourceDocument(projectRoot);
+        if (source.HasError())
+            return Result<ProjectMetadata>::Failure(source.ErrorValue());
+        return Result<ProjectMetadata>::Success(std::move(source).Value().metadata);
     }
 
     ProjectCompatibilityInspector::ProjectCompatibilityInspector(const ReleaseCompatibilityRegistry &registry,

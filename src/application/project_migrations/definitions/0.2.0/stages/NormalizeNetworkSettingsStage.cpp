@@ -1,66 +1,40 @@
 #include "../ProjectMigration.h"
+#include "Horo/Application/ProjectNetworkSettings.h"
 #include "Horo/Network/NetworkProjectSettings.h"
 #include "src/application/project/ProjectErrors.h"
 
 #include <algorithm>
 #include <array>
-#include <functional>
 #include <nlohmann/json.hpp>
-#include <set>
 
 namespace Horo::ProjectMigrations::R0_2_0 {
     namespace {
         using Json = nlohmann::json;
-
-        /** @brief Bounds root metadata parsing and rejects duplicate keys before extracting nested policy. */
-        struct RootGuard final {
-            std::vector<std::set<std::string>> keys;
-            bool rejected{};
-
-            bool operator()(const int depth, const Json::parse_event_t event, const Json &value) {
-                if (depth < 0 || depth > 32) {
-                    rejected = true;
-                    return false;
-                }
-                const auto index = static_cast<std::size_t>(event == Json::parse_event_t::key ? std::max(0, depth - 1) : depth);
-                if (keys.size() <= index)
-                    keys.resize(index + 1);
-                if (event == Json::parse_event_t::object_start)
-                    keys[index].clear();
-                if (event == Json::parse_event_t::key && !keys[index].insert(value.get<std::string>()).second)
-                    rejected = true;
-                return !rejected;
-            }
-        };
 
         /** @brief Parses one constrained candidate without raw-root access or writes. */
         Result<Json> ReadRoot(const Application::ProjectDocumentView &source) {
             if (source.path != ".horo/project.json" || source.bytes.empty() || source.bytes.size() > 1024U * 1024U)
                 return Result<Json>::Failure(
                     MakeError(Application::ProjectErrors::MigrationStageFailed, "Invalid project metadata inventory or size."));
-            RootGuard guard;
             const auto text = std::string_view{reinterpret_cast<const char *>(source.bytes.data()), source.bytes.size()};
-            auto root = Json::parse(text, std::ref(guard), false);
-            if (guard.rejected || root.is_discarded() || !root.is_object() || !root.contains("settings") || !root["settings"].is_object())
-                return Result<Json>::Failure(
-                    MakeError(Application::ProjectErrors::MigrationStageFailed, "Malformed or duplicate project settings."));
-            return Result<Json>::Success(std::move(root));
+            const auto captured = Application::DecodeProjectSourceDocument(text);
+            if (captured.HasError())
+                return Result<Json>::Failure(captured.ErrorValue());
+            // Re-materialize already validated source only to retain unrelated authored settings during replacement.
+            return Result<Json>::Success(Json::parse(text));
         }
 
         /** @brief Calls the sole portable Network codec; absent policy never manufactures defaults or completeness. */
         Result<void> NormalizeNetwork(Json &settings) {
             if (!settings.contains("network"))
                 return Result<void>::Success();
-            auto parsed = Network::ParseNetworkProjectSettings(settings["network"].dump());
+            auto parsed = Application::ResolveProjectNetworkSettings({.networkSettingsSource = settings["network"].dump()});
             if (parsed.HasError())
                 return Result<void>::Failure(parsed.ErrorValue());
-            if (parsed.Value().contractVersion != 3)
+            if (!parsed.Value().has_value() || parsed.Value()->ContractVersion() != 3)
                 return Result<void>::Failure(MakeError(Application::ProjectErrors::MigrationStageFailed,
                                                        "Project contract 0.2.0 requires the portable Network v3 codec."));
-            auto validated = Network::NetworkProjectSettings::Create(parsed.Value());
-            if (validated.HasError())
-                return Result<void>::Failure(validated.ErrorValue());
-            settings["network"] = Json::parse(Network::SerializeNetworkProjectSettings(validated.Value()));
+            settings["network"] = Json::parse(Network::SerializeNetworkProjectSettings(*parsed.Value()));
             return Result<void>::Success();
         }
 

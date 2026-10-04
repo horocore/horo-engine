@@ -132,6 +132,7 @@ horo_configure_target_header_boundary(HoroPlatformServicesExtension PUBLIC_HEADE
 horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Application/HostObservability.h
     Horo/Application/ProjectCompatibility.h
+    Horo/Application/ProjectSourceDocument.h
     Horo/Application/ProjectMigration.h
     Horo/Application/ProjectMigrationCatalog.h
     Horo/Application/ProjectVersion.h
@@ -150,6 +151,9 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/ReleasePreflight.h
     Horo/Release/ReleaseTargetMatrix.h
     Horo/Release/ReleaseVersion.h
+)
+horo_configure_target_header_boundary(HoroProjectSettings PUBLIC_HEADERS
+    Horo/Application/ProjectNetworkSettings.h
 )
 horo_configure_target_header_boundary(HoroReleaseGitHub PUBLIC_HEADERS
     Horo/Release/GitHubReleasePublication.h

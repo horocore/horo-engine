@@ -2,13 +2,13 @@
   "horoVersion": "0.2.0",
   "contractBaseline": "0.2.0",
   "projectContract": "project-contract.json",
-  "persistentContract": "sha256:34145f6d5c5c83575dd4cc3aa4d6ab4bf34cfde8bb5ec6adb7ede6d9d1c862f6",
-  "migrationDefinitions": "sha256:41f07c022dabdb1fdf9d68b84c5c8b689688042edac2102ed330e8a131bc08f0",
+  "persistentContract": "sha256:e068efe802defac5ec18d9742f0b1e1c50b1bfda5b26f8fc4a3a02eaf478065c",
+  "migrationDefinitions": "sha256:6668f6a93bce5e684fb6165cc9faf8b34933b968b21ad46838cfb1e64b3e2ba4",
   "migrationRecoveryContract": "sha256:ccca65a3a1fab86ad116098c3d5c1b8499118137470761e50eb174b7de121acb",
   "supportedMigrationRecoveryContracts": [
     {"contract": "sha256:ccca65a3a1fab86ad116098c3d5c1b8499118137470761e50eb174b7de121acb", "reader": "journal-v1"}
   ],
-  "decisionHash": "sha256:1c8efdfda913f26d0b179745da3d7fda709a7af6998c0e0c1a768a0a0ec08fad",
+  "decisionHash": "sha256:acc9937a86e760051489fc0acfa4db84c4ff869319b5e76228596fa8239cd82a",
   "minimumMigratableVersion": "0.0.1",
   "migrationCheckpoints": [],
   "developmentSnapshot": true

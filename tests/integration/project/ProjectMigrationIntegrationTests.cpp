@@ -347,29 +347,28 @@ TEST_CASE("0.2 production migration recovery survives host restart without rewri
         REQUIRE(recovery.operationId.has_value());
         operation = *recovery.operationId;
     }
-    bool rollback = false;
-    SECTION("resume verified target after restart") {}
+    const auto recoverAfterRestart = [&](const MigrationRecoveryAction expectedAction) {
+        files.failRoot = false;
+        BackendProjectOpen restarted(&files);
+        REQUIRE(restarted.transactions.InspectPendingRecovery(project.Root()).action == expectedAction);
+        REQUIRE(restarted.transactions.Recover(project.Root()).HasValue());
+        REQUIRE(restarted.transactions.InspectPendingRecovery(project.Root()).action == MigrationRecoveryAction::None);
+    };
+    SECTION("resume verified target after restart") {
+        recoverAfterRestart(MigrationRecoveryAction::ResumePublish);
+        REQUIRE(project.ReadProjectJson()["horoVersion"] == "0.2.0");
+        REQUIRE(project.ReadProjectJson()["migrationHistoryHead"] == ComputeTestSha256(project.ReadHistoryBytes()));
+        REQUIRE(project.ReadHistoryJson()["receipts"].front()["definitions"].back()["id"] == AuthoringDefinitionId);
+    }
     SECTION("restore verified originals when forward root evidence is lost") {
-        rollback = true;
         std::error_code error;
         REQUIRE(std::filesystem::remove(project.Root() / ".horo/local/migration" / operation / "staging/.horo/project.json", error));
         REQUIRE_FALSE(error);
-    }
-    files.failRoot = false;
-    BackendProjectOpen restarted(&files);
-    REQUIRE(restarted.transactions.InspectPendingRecovery(project.Root()).action ==
-            (rollback ? MigrationRecoveryAction::RestoreOriginals : MigrationRecoveryAction::ResumePublish));
-    REQUIRE(restarted.transactions.Recover(project.Root()).HasValue());
-    REQUIRE(restarted.transactions.InspectPendingRecovery(project.Root()).action == MigrationRecoveryAction::None);
-    if (rollback) {
+        recoverAfterRestart(MigrationRecoveryAction::RestoreOriginals);
         REQUIRE(project.ReadProjectBytes() == originalRoot);
         REQUIRE(ReadBytes(prefabPath) == originalPrefab);
         REQUIRE(ReadBytes(scenePath) == originalScene);
         REQUIRE_FALSE(std::filesystem::exists(project.Root() / ".horo/migration_history.json"));
-    } else {
-        REQUIRE(project.ReadProjectJson()["horoVersion"] == "0.2.0");
-        REQUIRE(project.ReadProjectJson()["migrationHistoryHead"] == ComputeTestSha256(project.ReadHistoryBytes()));
-        REQUIRE(project.ReadHistoryJson()["receipts"].front()["definitions"].back()["id"] == AuthoringDefinitionId);
     }
 }
 

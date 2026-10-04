@@ -355,8 +355,13 @@ target_include_directories(HoroProjectMigrations
         PRIVATE ${PROJECT_SOURCE_DIR} ${HORO_GENERATED_DIR}
 )
 target_link_libraries(HoroProjectMigrations PUBLIC HoroEngine::Application
-        PRIVATE HoroEngine::NetworkApi HoroEngine::NavigationApi HoroEngine::Assets nlohmann_json::nlohmann_json)
+        PRIVATE HoroEngine::ProjectSettings HoroEngine::NavigationApi HoroEngine::Assets nlohmann_json::nlohmann_json)
 add_dependencies(HoroProjectMigrations HoroProjectMigrationCatalog)
+
+add_library(HoroProjectSettings STATIC application/project/ProjectNetworkSettings.cpp)
+add_library(HoroEngine::ProjectSettings ALIAS HoroProjectSettings)
+target_compile_features(HoroProjectSettings PUBLIC cxx_std_20)
+target_link_libraries(HoroProjectSettings PUBLIC HoroEngine::Application HoroEngine::NetworkApi)
 
 add_library(HoroSaveApi STATIC
         runtime/save/SaveErrors.cpp

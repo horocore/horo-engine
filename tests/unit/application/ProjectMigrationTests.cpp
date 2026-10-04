@@ -418,7 +418,11 @@ namespace project_migration_tests {
     TEST_CASE("Production Compression Migration Attributes Target Validation Failure", "[unit][application]") {
         const auto support = Horo::Application::BuildBuiltInProjectMigrationSupportDescriptor();
         REQUIRE((support.HasValue()));
+        REQUIRE(support.Value().targetValidator != nullptr);
+        const auto stage = support.Value().targetValidator->Describe().id.value;
+        REQUIRE_FALSE(stage.empty());
         ProductionMigrationFixture fixture;
+        REQUIRE(Horo::Application::FormatHoroVersion(fixture.plan.target.value) == "0.1.0");
         TemporaryProject finalProject;
         finalProject.Write(".horo/project.json",
                            R"({"projectId":"target-attribution","settings":{"assetCompression":"lz4","textureCompression":"bc7"}})"
@@ -429,7 +433,7 @@ namespace project_migration_tests {
         const auto finalValidation = Horo::Application::ProjectMigrationExecutor::Finalize(candidate, {}, support.Value().targetValidator);
         REQUIRE((finalValidation.HasError()));
         REQUIRE((finalValidation.ErrorValue().message.find("horo.project.target_contract") != std::string::npos));
-        REQUIRE((finalValidation.ErrorValue().message.find("validate_0_1_0_target_contract") != std::string::npos));
+        REQUIRE((finalValidation.ErrorValue().message.find(stage) != std::string::npos));
     }
 
     TEST_CASE("Production Compression Verified Dry Run Preserves Authoritative Bytes", "[unit][application]") {

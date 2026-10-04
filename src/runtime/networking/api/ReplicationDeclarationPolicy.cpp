@@ -112,6 +112,27 @@ namespace Horo::Network {
             return result;
         }
 
+        /** @brief Rejects invalid assessment inputs and finite-budget overflow before inspecting declarations. */
+        [[nodiscard]] Result<void> ValidateAssessmentInputs(const std::span<const ReplicationDeclaration> declarations,
+                                                            const ReplicationDescriptorSnapshotPtr &registered,
+                                                            const std::span<const ModuleId> availableModules,
+                                                            const ReplicationDeclarationUse use,
+                                                            const ReplicationDeclarationPolicyLimits &limits) {
+            if (use >= ReplicationDeclarationUse::Count || limits.maximumModules == 0 || limits.maximumDiagnostics == 0 ||
+                limits.descriptors.maximumSchemas == 0 || limits.descriptors.maximumFieldsPerSchema == 0 ||
+                limits.descriptors.maximumOwnerIdentityBytes == 0 || limits.descriptors.maximumDefaultBytesPerField == 0 ||
+                limits.descriptors.maximumTotalDefaultBytes == 0)
+                return Result<void>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
+            if (declarations.size() > limits.descriptors.maximumSchemas || availableModules.size() > limits.maximumModules ||
+                (registered != nullptr && registered->Schemas().size() > limits.descriptors.maximumSchemas))
+                return Result<void>::Failure(MakeError(NetworkErrors::ReplicationCapacityExceeded));
+            if (std::ranges::any_of(availableModules, [&](const ModuleId &module) {
+                return module.value.empty() || module.value.size() > limits.descriptors.maximumOwnerIdentityBytes;
+            }))
+                return Result<void>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
+            return Result<void>::Success();
+        }
+
         /** @brief Safe closed text for local diagnostic presentation; no remote input or payload is embedded. */
         [[nodiscard]] const char *ProblemText(const ReplicationDeclarationProblem problem) noexcept {
             using enum ReplicationDeclarationProblem;
@@ -197,18 +218,9 @@ namespace Horo::Network {
                                                                            const std::span<const ModuleId> availableModules,
                                                                            const ReplicationDeclarationUse use,
                                                                            const ReplicationDeclarationPolicyLimits &limits) {
-        if (use >= ReplicationDeclarationUse::Count || limits.maximumModules == 0 || limits.maximumDiagnostics == 0 ||
-            limits.descriptors.maximumSchemas == 0 || limits.descriptors.maximumFieldsPerSchema == 0 ||
-            limits.descriptors.maximumOwnerIdentityBytes == 0 || limits.descriptors.maximumDefaultBytesPerField == 0 ||
-            limits.descriptors.maximumTotalDefaultBytes == 0)
-            return Result<ReplicationDeclarationAssessment>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
-        if (declarations.size() > limits.descriptors.maximumSchemas || availableModules.size() > limits.maximumModules ||
-            (registered != nullptr && registered->Schemas().size() > limits.descriptors.maximumSchemas))
-            return Result<ReplicationDeclarationAssessment>::Failure(MakeError(NetworkErrors::ReplicationCapacityExceeded));
-        if (std::ranges::any_of(availableModules, [&](const ModuleId &module) {
-            return module.value.empty() || module.value.size() > limits.descriptors.maximumOwnerIdentityBytes;
-        }))
-            return Result<ReplicationDeclarationAssessment>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
+        const auto inputValidation = ValidateAssessmentInputs(declarations, registered, availableModules, use, limits);
+        if (inputValidation.HasError())
+            return Result<ReplicationDeclarationAssessment>::Failure(inputValidation.ErrorValue());
         try {
             ReplicationDeclarationAssessment assessment;
             assessment.use_ = use;

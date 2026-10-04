@@ -101,6 +101,41 @@ inside CLI/MCP would create a competing source authority and cannot meet HORO-12
 The approved next-minor integration removes that blocker; no further routine
 payload decision is being awaited.
 
+### Application-owned metadata and Network accessor
+
+`HoroApplication` owns `ProjectSourceDocument.h`: one bounded, strict metadata
+decode captures ordinary metadata and optional canonical Network value bytes.
+The expanded 0.2 bounds require both the exact registered release and its exact
+persistent-contract hash. A caller cannot select the profile; unknown/mismatched
+markers retain legacy 64 KiB/16-depth/256-key diagnostics. The approved 0.2
+descriptor records 1 MiB/32-depth/32768-key bounds; key/string limits are unchanged.
+The loader resolves metadata beneath the explicit authorized project root; it
+neither grants trust nor activates a project.
+
+`HoroProjectSettings` owns `ProjectNetworkSettings.h` and the typed composition
+accessor. Its public edges are Application and NetworkApi, keeping Network out
+of Application's existing Foundation-only public closure and GameplayBuild.
+The neutral captured string is consumed only by the sole Network decoder;
+absence remains absent, legacy inventory remains Unknown, and codec diagnostics
+are preserved. The 0.2 migration normalizer consumes these same owners instead
+of maintaining a second strict project JSON parser. Both headers use the normal
+ownership-generated consumer coverage (OBJECT compile coverage, not executable
+CTest tests). The source profile retains bounded authority markers separately
+from the DOM: limit violations may discard that DOM but cannot change the exact
+registered profile's diagnostics. Root ordering, marker duplication/wrong types,
+legacy size/key/depth precedence, Network inventory preservation, and physical
+containment have focused regression coverage.
+
+Incremental validation: the six-target accessor/policy/migration slice built;
+after correcting marker preservation, its focused CTest passed 35/35. A subsequent
+four-target batch built and passed 15/15 compatibility/lifecycle tests, including
+the added marker-ordering cases and the three exact hosted failures caused by
+old current-version expectations. Creation/open now require the exact registered
+current release and contract, while compression definition tests still explicitly
+require the frozen 0.1 target. Target validation diagnostics use the owning
+registered validator's exact stage ID. No broad local matrix or local Sonar run
+was performed. Full Navigation automation remains unfinished.
+
 ## Candidate identity classification and incremental validation
 
 The published Network codec stack was integrated by normal fast-forward to
