@@ -135,13 +135,14 @@ namespace Horo {
                 ownerMetadata.size() > 4096U)
                 return Result<std::filesystem::path>::Failure(FsError(IoFailed, path));
             std::error_code error;
-            if (std::filesystem::weakly_canonical(path.parent_path(), error) != path.parent_path() || error)
-                return Result<std::filesystem::path>::Failure(FsError(IoFailed, path));
-            std::filesystem::create_directories(path.parent_path(), error);
+            const auto canonicalParent = std::filesystem::weakly_canonical(path.parent_path(), error);
             if (error)
                 return Result<std::filesystem::path>::Failure(FsError(IoFailed, path));
-            const auto parent = std::filesystem::canonical(path.parent_path(), error);
-            if (error || parent != path.parent_path())
+            std::filesystem::create_directories(canonicalParent, error);
+            if (error)
+                return Result<std::filesystem::path>::Failure(FsError(IoFailed, path));
+            const auto parent = std::filesystem::canonical(canonicalParent, error);
+            if (error || parent != canonicalParent)
                 return Result<std::filesystem::path>::Failure(FsError(IoFailed, path));
             return Result<std::filesystem::path>::Success(parent / path.filename());
         }

@@ -98,6 +98,12 @@ write/copy/remove, same-filesystem atomic replacement, parent-directory
 synchronization according to host policy, capacity inspection, and immediate
 OS-held exclusive locking. Lock-file text is diagnostic only; ownership lives
 in the native handle and is released by RAII or process termination.
+The native adapter canonicalizes host-owned parent directories before creating
+missing parents and acquiring the lock, including macOS `/var` aliases. Alias
+and canonical spellings share one exclusion key. The lock file itself must
+remain a regular single-link file; symlinks and reparse points are rejected.
+`ExclusiveFileLock::ProtectsPath` continues to require the exact canonical
+lock-file path selected by the publication authority.
 
 Operations that create a lock file or destination file also create missing
 parent directories. This is part of the `DurableFileSystem` contract rather

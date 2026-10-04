@@ -50,6 +50,39 @@ namespace {
         CHECK(lock.Value().ProtectsPath(valid));
     }
 
+    TEST_CASE("Native publication locks share canonical authority through host directory aliases", "[unit][foundation][publication]") {
+        LockDirectory directory;
+        Horo::NativeDurableFileSystem files;
+        const auto nativeParent = directory.path / std::filesystem::path{u8"native root ü"};
+        const auto aliasParent = directory.path / "host alias";
+        REQUIRE(std::filesystem::create_directory(nativeParent));
+        std::error_code error;
+        std::filesystem::create_directory_symlink(nativeParent, aliasParent, error);
+        if (error) {
+            WARN("Native directory links unavailable on this test filesystem");
+            return;
+        }
+        const auto suffix = std::filesystem::path{u8"new parent ü"} / "publication.lock";
+        const auto canonicalPath = nativeParent / suffix;
+        const auto aliasPath = aliasParent / suffix;
+        {
+            auto first = files.TryAcquireExclusive(aliasPath, "alias owner");
+            REQUIRE(first.HasValue());
+            CHECK(first.Value().ProtectsPath(canonicalPath));
+            auto competing = files.TryAcquireExclusive(canonicalPath, "canonical contender");
+            REQUIRE(competing.HasError());
+            CHECK(competing.ErrorValue().code.Value() == "filesystem.lock_busy");
+        }
+        {
+            auto first = files.TryAcquireExclusive(canonicalPath, "canonical owner");
+            REQUIRE(first.HasValue());
+            auto competing = files.TryAcquireExclusive(aliasPath, "alias contender");
+            REQUIRE(competing.HasError());
+            CHECK(competing.ErrorValue().code.Value() == "filesystem.lock_busy");
+        }
+        CHECK(files.TryAcquireExclusive(aliasPath, "after release").HasValue());
+    }
+
     TEST_CASE("Native publication locks reject linked files without overwriting their contents", "[unit][foundation][publication]") {
         LockDirectory directory;
         Horo::NativeDurableFileSystem files;
