@@ -4,6 +4,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -223,4 +224,51 @@ TEST_CASE("Cooked Artifact Rejects Empty Input", "[unit][runtime][assets][cook]"
     auto decoded = DecodeCookedArtifact(empty, limits);
     REQUIRE((decoded.HasError()));
     REQUIRE((decoded.ErrorValue().code.Value() == "asset.cook.malformed_artifact"));
+}
+
+TEST_CASE("Cooked Artifact Rejects Text Fields Outside Envelope", "[unit][runtime][assets][cook]") {
+    const AssetCookLimits limits;
+    const auto artifact = Artifact(Id("00112233-4455-6677-8899-aabbccddeeff"), Type("core.mesh"), Target("headless-null"), {});
+    auto encodedResult = EncodeCookedArtifact(artifact, limits);
+    REQUIRE(encodedResult.HasValue());
+    auto encoded = std::move(encodedResult).Value();
+
+    SECTION("Target length exceeds remaining bytes") {
+        encoded[12] = 0xFF;
+        encoded[13] = 0xFF;
+    }
+    SECTION("Type length exceeds remaining bytes") {
+        encoded[14] = 0xFF;
+        encoded[15] = 0xFF;
+    }
+    SECTION("Text is truncated after the fixed header") {
+        encoded.resize(136);
+    }
+
+    const auto decoded = DecodeCookedArtifact(encoded, limits);
+    REQUIRE(decoded.HasError());
+    CHECK(decoded.ErrorValue().code.Value() == "asset.cook.malformed_artifact");
+    const auto byteDecoded = DecodeCookedArtifactBytes(std::as_bytes(std::span{encoded}), limits);
+    REQUIRE(byteDecoded.HasError());
+    CHECK(byteDecoded.ErrorValue().code.Value() == "asset.cook.malformed_artifact");
+}
+
+TEST_CASE("Cooked Artifact Rejects Wrapped Envelope Length", "[unit][runtime][assets][cook]") {
+    AssetCookLimits limits;
+    limits.maximumArtifactBytes = std::numeric_limits<std::uint64_t>::max();
+    const auto artifact = Artifact(Id("00112233-4455-6677-8899-aabbccddeeff"), Type("core.mesh"), Target("headless-null"), {});
+    auto encodedResult = EncodeCookedArtifact(artifact, limits);
+    REQUIRE(encodedResult.HasValue());
+    auto encoded = std::move(encodedResult).Value();
+    encoded[12] = 0xFF;
+    encoded[13] = 0xFF;
+    const std::uint64_t headerEnd = 136 + 65535 + artifact.type.Value().size();
+    // This payload length made the old headerEnd + payloadSize check wrap to encoded.size().
+    const auto payloadSize = std::numeric_limits<std::uint64_t>::max() - (headerEnd - encoded.size()) + 1;
+    for (std::size_t i = 0; i < 8; ++i)
+        encoded[128 + i] = static_cast<std::uint8_t>(payloadSize >> (8 * i));
+
+    const auto decoded = DecodeCookedArtifactBytes(std::as_bytes(std::span{encoded}), limits);
+    REQUIRE(decoded.HasError());
+    CHECK(decoded.ErrorValue().code.Value() == "asset.cook.malformed_artifact");
 }

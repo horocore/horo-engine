@@ -63,10 +63,11 @@ namespace Horo::Assets {
         }
 
         /** @brief Copies a bounds-checked envelope text field without pointer alias casts. */
-        [[nodiscard]] std::string ReadText(const std::span<const std::byte> bytes, const std::size_t offset, const std::size_t count) {
-            std::string text(count, '\0');
-            if (count != 0)
-                std::memcpy(text.data(), bytes.data() + offset, count);
+        [[nodiscard]] std::string ReadText(const std::span<const std::byte> bytes) {
+            std::string text;
+            text.reserve(bytes.size());
+            for (const auto byte : bytes)
+                text.push_back(std::to_integer<char>(byte));
             return text;
         }
 
@@ -129,14 +130,14 @@ namespace Horo::Assets {
         const auto typeLen = ReadU16LE(bytes, 14);
         const std::size_t headerEnd = FixedHeaderSize + targetLen + typeLen;
         const auto payloadSize = ReadU64LE(bytes, FixedHeaderSize - 8);
-        if (headerEnd + payloadSize != bytes.size())
+        if (headerEnd > bytes.size() || payloadSize != bytes.size() - headerEnd)
             return MakeMalformedError();
 
         if (payloadSize > limits.maximumArtifactBytes)
             return Result<AssetCookArtifact>::Failure(MakeError(TooLarge, "Cooked artifact payload exceeds the maximum size."));
 
-        const std::string targetText = ReadText(bytes, FixedHeaderSize, targetLen);
-        const std::string typeText = ReadText(bytes, FixedHeaderSize + targetLen, typeLen);
+        const std::string targetText = ReadText(bytes.subspan(FixedHeaderSize, targetLen));
+        const std::string typeText = ReadText(bytes.subspan(FixedHeaderSize + targetLen, typeLen));
 
         auto targetResult = AssetCookTargetId::Parse(targetText);
         if (targetResult.HasError())
