@@ -130,7 +130,7 @@ namespace Horo::Extensions::Tests {
             lifetime.loaded = true;
 
             CHECK_FALSE(lifetime.UnloadNow());
-            CHECK(lifetime.UnloadNow());
+            CHECK_FALSE(lifetime.UnloadNow());
         }
     }
 }  // namespace Horo::Extensions::Tests

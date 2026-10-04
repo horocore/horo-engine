@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Extensions/EditorSurfaceContext.h"
+#include "Horo/Extensions/ExtensionRetirement.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -125,6 +126,8 @@ namespace Horo::Extensions {
 
         /** @brief Revokes the command and its activation-scoped surface context. */
         void Reset() noexcept;
+        /** @brief Binds command publication/context revocation to the verified provider module retirement owner. */
+        [[nodiscard]] bool AttachRetirement(const std::shared_ptr<ExtensionRetirement> &retirement);
 
         /** @brief Reports whether the command remains published and its provider context is usable. */
         [[nodiscard]] bool IsRegistered() const noexcept;
@@ -138,6 +141,9 @@ namespace Horo::Extensions {
 
         std::weak_ptr<EditorCommandRegistryState> registry_;
         std::shared_ptr<EditorCommandEntry> entry_;
+        std::shared_ptr<ExtensionExecutableLease> retirementLease_;
+        /** @brief Returns the exact owning module while registration remains valid. */
+        [[nodiscard]] std::string_view RetirementModule() const noexcept;
     };
 
     /** @brief Explicit host registry for command-backed editor contributions. */

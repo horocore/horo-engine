@@ -2234,6 +2234,10 @@ add_library(HoroExtensions STATIC
         extensions/discovery/DiscoveryPlan.cpp
         extensions/discovery/DiscoveryRootPolicy.cpp
         extensions/host/ExtensionManager.cpp
+        extensions/host/ExtensionManagerRetirement.cpp
+        extensions/host/ExtensionPlatformProviderCopy.cpp
+        extensions/host/ExtensionRetirement.cpp
+        extensions/host/EditorRegistrationRetirement.cpp
         extensions/host/ExtensionCapabilityAdmission.cpp
         extensions/host/EditorSurfaceContext.cpp
         extensions/host/EditorSurfaceRegistry.cpp
@@ -2290,6 +2294,7 @@ add_library(HoroExtensions STATIC
         extensions/registry/ExtensionInventory.cpp
         extensions/marketplace/ExtensionMarketplace.cpp
         extensions/capabilities/asset_pipeline_points/ExternalAssetImporter.cpp
+        extensions/capabilities/asset_pipeline_points/ExtensionModuleLifetime.cpp
         extensions/capabilities/asset_pipeline_points/ExternalAssetImporterConversion.cpp
         extensions/capabilities/asset_cooker/AssetCookerErrors.cpp
         extensions/capabilities/asset_cooker/AssetCookerRegistry.cpp

@@ -41,6 +41,7 @@ namespace Horo::Extensions {
         Pipeline,
         Toolchain,
         CapabilityResolution,
+        Shutdown,
     };
 
     /** @brief One bounded typed failure retained for CLI, MCP, or automation presentation. */
@@ -50,6 +51,12 @@ namespace Horo::Extensions {
         Error error;                                                              /**< Original typed failure and cause chain. */
     };
 
+    /** @brief Attributed admitted callback/process operation that must drain before host finalization. */
+    struct HeadlessExtensionOutstandingWork final {
+        HeadlessExtensionHostStage stage;
+        std::string subject;
+    };
+
     /** @brief Immutable inspection copy of headless discovery, activation, and diagnostic state. */
     struct HeadlessExtensionHostSnapshot final {
         HeadlessExtensionHostState state{HeadlessExtensionHostState::Configuring}; /**< Lifecycle state at inspection time. */
@@ -57,6 +64,8 @@ namespace Horo::Extensions {
         std::vector<std::string> loadedExtensions;                                 /**< Manager-owned active extension identities. */
         std::vector<Discovery::RootDiagnostic> rootDiagnostics;                    /**< Root-policy decisions from the last startup. */
         std::vector<HeadlessExtensionHostDiagnostic> diagnostics;                  /**< Bounded attributed failures retained so far. */
+        std::vector<HeadlessExtensionOutstandingWork> outstandingWork;             /**< Admitted work; visible while shutdown waits. */
+        std::vector<ExtensionRetirementReport> retirements; /**< Package-level callback/resource/service drain evidence. */
     };
 
     /** @brief Host-owned construction policy for one headless extension composition. */
@@ -209,7 +218,12 @@ namespace Horo::Extensions {
          * @return Lifecycle, discovery, activation, root-policy, and retained diagnostic state.
          */
         [[nodiscard]] HeadlessExtensionHostSnapshot Inspect() const;
-        /** @brief Closes admission, cancels registry-owned work, and releases module ownership in teardown order. */
+        /**
+         * @brief Closes admission, cancels registry-owned work, and releases module ownership in teardown order.
+         * @details Native finalization belongs to the activation owner lane. Busy or off-lane native owners
+         * retain executable code and require process restart rather than forcing unload. Inspection remains
+         * available while shutdown drains already admitted work.
+         */
         void Shutdown() noexcept;
 
     private:

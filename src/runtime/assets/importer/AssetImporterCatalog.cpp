@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <memory>
+#include <new>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -206,5 +207,24 @@ namespace Horo::Assets {
         if (state_->sealed)
             return;
         state_->entries.clear();
+    }
+
+    /** @copydoc AssetImporterCatalog::WithdrawPackage */
+    bool AssetImporterCatalog::WithdrawPackage(const std::string_view packageId) noexcept {
+        try {
+            std::vector<AssetImporterContribution> remaining;
+            for (const auto &entry : state_->entries) {
+                if (entry.packageId != packageId)
+                    remaining.push_back(entry);
+            }
+            std::shared_ptr<const AssetImporterCatalogSnapshot> replacement;
+            if (state_->sealed)
+                replacement = std::make_shared<AssetImporterCatalogSnapshot>(remaining);
+            state_->entries = std::move(remaining);
+            state_->published = std::move(replacement);
+            return true;
+        } catch (const std::bad_alloc &) {
+            return false;
+        }
     }
 }  // namespace Horo::Assets
