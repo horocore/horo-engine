@@ -1,4 +1,5 @@
 #include "Horo/Network/NetworkProjectSettings.h"
+#include "NetworkProjectSettingsTestSupport.h"
 #include "ReplicationDescriptorTestSupport.h"
 
 #include <algorithm>
@@ -156,11 +157,7 @@ namespace {
             REQUIRE(parsed.Value().defaultEndpoint == alternate.defaultEndpoint);
         }
 
-        auto legacy = nlohmann::json::parse(encoded);
-        legacy["contractVersion"] = 1;
-        legacy.erase("defaultEndpoint");
-        legacy.erase("credentialRequirementId");
-        legacy.erase("replication");
+        const auto legacy = TestSupport::LegacyNetworkSettingsDocument(original.Value(), TestSupport::LegacyNetworkSettingsVersion::One);
         const auto migrated = ParseNetworkProjectSettings(legacy.dump());
         REQUIRE(migrated.HasValue());
         REQUIRE(migrated.Value().contractVersion == 3);

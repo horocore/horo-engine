@@ -102,18 +102,18 @@ namespace Horo::Network::Detail {
             return true;
         }
 
-        /** @brief Reads complete inert field semantics, without resolving a codec or adapter. */
-        bool Field(const Json &value, ReplicationFieldDescriptor &output) {
-            if (!Shape(value, {"id", "valueType", "codec", "introducedVersion", "condition", "requirement", "writePolicy", "limits",
-                               "canonicalDefault", "customCondition"}) ||
-                !Shape(value.at("limits"), {"maximumEncodedBytes", "maximumElementCount"}))
-                return false;
+        /** @brief Reads wire identities and closed policies without resolving executable bindings. */
+        bool FieldSemantics(const Json &value, ReplicationFieldDescriptor &output) {
+            return Identity(value.at("id"), output.id) && Identity(value.at("valueType"), output.valueType) &&
+                   Identity(value.at("codec"), output.codec) && Version(value.at("introducedVersion"), output.introducedVersion) &&
+                   Policy(value.at("condition"), output.condition) && Policy(value.at("requirement"), output.requirement) &&
+                   Policy(value.at("writePolicy"), output.writePolicy);
+        }
+
+        /** @brief Reads bounded payload/default metadata and an optional inert condition identity. */
+        bool FieldPayload(const Json &value, ReplicationFieldDescriptor &output) {
             std::uint64_t bytes{}, elements{};
-            if (!Identity(value.at("id"), output.id) || !Identity(value.at("valueType"), output.valueType) ||
-                !Identity(value.at("codec"), output.codec) || !Version(value.at("introducedVersion"), output.introducedVersion) ||
-                !Policy(value.at("condition"), output.condition) || !Policy(value.at("requirement"), output.requirement) ||
-                !Policy(value.at("writePolicy"), output.writePolicy) ||
-                !Number(value.at("limits").at("maximumEncodedBytes"), bytes, std::numeric_limits<std::uint32_t>::max()) ||
+            if (!Number(value.at("limits").at("maximumEncodedBytes"), bytes, std::numeric_limits<std::uint32_t>::max()) ||
                 !Number(value.at("limits").at("maximumElementCount"), elements, std::numeric_limits<std::uint32_t>::max()) ||
                 !Default(value.at("canonicalDefault"), output.canonicalDefault))
                 return false;
@@ -125,6 +125,14 @@ namespace Horo::Network::Detail {
                 output.customCondition = condition;
             }
             return true;
+        }
+
+        /** @brief Rejects unknown field keys before decoding complete inert semantics. */
+        bool Field(const Json &value, ReplicationFieldDescriptor &output) {
+            return Shape(value, {"id", "valueType", "codec", "introducedVersion", "condition", "requirement", "writePolicy", "limits",
+                                 "canonicalDefault", "customCondition"}) &&
+                   Shape(value.at("limits"), {"maximumEncodedBytes", "maximumElementCount"}) && FieldSemantics(value, output) &&
+                   FieldPayload(value, output);
         }
 
         /** @brief Writes every stable field semantic with explicit nullable optional identities/defaults. */
@@ -143,8 +151,8 @@ namespace Horo::Network::Detail {
                     {"customCondition", value.customCondition ? Json(value.customCondition->Value()) : Json(nullptr)}};
         }
 
-        /** @brief Reads one schema after checking its complete array/owner envelope before copying. */
-        bool Schema(const Json &value, ReplicationSchemaDescriptor &output) {
+        /** @brief Checks the complete array/owner envelope before allocating schema storage. */
+        bool SchemaEnvelope(const Json &value) {
             if (!Shape(value, {"id", "owner", "version", "compatibility", "fields", "tombstones"}) ||
                 !Shape(value.at("compatibility"), {"minimum", "maximum"}) || !value.at("owner").is_string() ||
                 !value.at("fields").is_array() || !value.at("tombstones").is_array())
@@ -153,25 +161,39 @@ namespace Horo::Network::Detail {
             const auto &fields = value.at("fields");
             const auto &tombstones = value.at("tombstones");
             if (owner.size() > NetworkReplicationInventory::DescriptorLimits.maximumOwnerIdentityBytes ||
-                fields.size() + tombstones.size() > NetworkReplicationInventory::DescriptorLimits.maximumFieldsPerSchema ||
-                !Identity(value.at("id"), output.id) || !Version(value.at("version"), output.version) ||
-                !Version(value.at("compatibility").at("minimum"), output.compatibility.minimum) ||
-                !Version(value.at("compatibility").at("maximum"), output.compatibility.maximum))
+                fields.size() + tombstones.size() > NetworkReplicationInventory::DescriptorLimits.maximumFieldsPerSchema)
                 return false;
-            output.owner.value = owner;
-            for (const auto &field : fields) {
+            return true;
+        }
+
+        /** @brief Reads exact schema identity and compatibility interval before copying fields. */
+        bool SchemaIdentity(const Json &value, ReplicationSchemaDescriptor &output) {
+            return Identity(value.at("id"), output.id) && Version(value.at("version"), output.version) &&
+                   Version(value.at("compatibility").at("minimum"), output.compatibility.minimum) &&
+                   Version(value.at("compatibility").at("maximum"), output.compatibility.maximum);
+        }
+
+        /** @brief Copies only bounded inert fields and retired identities from a verified envelope. */
+        bool SchemaContents(const Json &value, ReplicationSchemaDescriptor &output) {
+            output.owner.value = value.at("owner").get_ref<const std::string &>();
+            for (const auto &field : value.at("fields")) {
                 ReplicationFieldDescriptor parsed;
                 if (!Field(field, parsed))
                     return false;
                 output.fields.push_back(std::move(parsed));
             }
-            for (const auto &tombstone : tombstones) {
+            for (const auto &tombstone : value.at("tombstones")) {
                 FieldId id;
                 if (!Identity(tombstone, id))
                     return false;
                 output.tombstonedFields.push_back(id);
             }
             return true;
+        }
+
+        /** @brief Reads one complete schema without selecting a codec or native adapter. */
+        bool Schema(const Json &value, ReplicationSchemaDescriptor &output) {
+            return SchemaEnvelope(value) && SchemaIdentity(value, output) && SchemaContents(value, output);
         }
 
         /** @brief Writes an already canonical inert schema, including retired wire identities. */
@@ -190,29 +212,44 @@ namespace Horo::Network::Detail {
                     {"fields", std::move(fields)},
                     {"tombstones", std::move(tombstones)}};
         }
+
+        /** @brief Validates the aggregate default budget across every schema before copying the inventory. */
+        Result<void> ValidateDefaultBudget(const NetworkReplicationInventory &input) {
+            std::size_t defaultBytes{};
+            for (const auto &declaration : input.declarations) {
+                for (const auto &field : declaration.schema.fields) {
+                    const auto bytes = field.canonicalDefault ? field.canonicalDefault->canonicalBytes.size() : 0;
+                    if (bytes > NetworkReplicationInventory::DescriptorLimits.maximumTotalDefaultBytes - defaultBytes)
+                        return Result<void>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsCapacityExceeded));
+                    defaultBytes += bytes;
+                }
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates completeness, declaration shape, and aggregate budgets before any owning copy. */
+        Result<void> ValidateInventory(const NetworkReplicationInventory &input) {
+            if (input.completeness >= NetworkReplicationInventoryCompleteness::Count ||
+                (input.completeness == NetworkReplicationInventoryCompleteness::Unknown && !input.declarations.empty()))
+                return Result<void>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsInvalid));
+            if (input.declarations.size() > NetworkReplicationInventory::DescriptorLimits.maximumSchemas)
+                return Result<void>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsCapacityExceeded));
+            for (const auto &declaration : input.declarations) {
+                if (declaration.requirement >= ReplicationDeclarationRequirement::Count)
+                    return Result<void>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
+                if (const auto valid =
+                        ValidateReplicationSchemaDescriptor(declaration.schema, NetworkReplicationInventory::DescriptorLimits);
+                    valid.HasError())
+                    return Result<void>::Failure(valid.ErrorValue());
+            }
+            return ValidateDefaultBudget(input);
+        }
     }  // namespace
 
     /** @copydoc CanonicalizeReplicationInventory */
     Result<NetworkReplicationInventory> CanonicalizeReplicationInventory(const NetworkReplicationInventory &input) {
-        if (input.completeness >= NetworkReplicationInventoryCompleteness::Count ||
-            (input.completeness == NetworkReplicationInventoryCompleteness::Unknown && !input.declarations.empty()))
-            return Result<NetworkReplicationInventory>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsInvalid));
-        if (input.declarations.size() > NetworkReplicationInventory::DescriptorLimits.maximumSchemas)
-            return Result<NetworkReplicationInventory>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsCapacityExceeded));
-        std::size_t defaultBytes{};
-        for (const auto &declaration : input.declarations) {
-            if (declaration.requirement >= ReplicationDeclarationRequirement::Count)
-                return Result<NetworkReplicationInventory>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
-            if (const auto valid = ValidateReplicationSchemaDescriptor(declaration.schema, NetworkReplicationInventory::DescriptorLimits);
-                valid.HasError())
-                return Result<NetworkReplicationInventory>::Failure(valid.ErrorValue());
-            for (const auto &field : declaration.schema.fields) {
-                const auto bytes = field.canonicalDefault ? field.canonicalDefault->canonicalBytes.size() : 0;
-                if (bytes > NetworkReplicationInventory::DescriptorLimits.maximumTotalDefaultBytes - defaultBytes)
-                    return Result<NetworkReplicationInventory>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsCapacityExceeded));
-                defaultBytes += bytes;
-            }
-        }
+        if (const auto valid = ValidateInventory(input); valid.HasError())
+            return Result<NetworkReplicationInventory>::Failure(valid.ErrorValue());
         try {
             auto result = input;
             std::ranges::sort(result.declarations, {}, [](const auto &declaration) {

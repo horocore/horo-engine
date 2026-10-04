@@ -1,4 +1,5 @@
 #include "Horo/Network/NetworkProjectSettings.h"
+#include "NetworkProjectSettingsTestSupport.h"
 #include "ReplicationDescriptorTestSupport.h"
 
 #include <algorithm>
@@ -25,9 +26,7 @@ namespace Horo::Network {
 
     TEST_CASE("Network inventory migration never certifies legacy unknown as complete empty", "[unit][network][settings][inventory]") {
         const auto complete = NetworkProjectSettings::Create(Project()).Value();
-        auto legacy = nlohmann::json::parse(SerializeNetworkProjectSettings(complete));
-        legacy["contractVersion"] = 2;
-        legacy.erase("replication");
+        const auto legacy = LegacyNetworkSettingsDocument(complete, LegacyNetworkSettingsVersion::Two);
         const auto migrated = ParseNetworkProjectSettings(legacy.dump());
         REQUIRE(migrated.HasValue());
         REQUIRE(migrated.Value().replication.completeness == NetworkReplicationInventoryCompleteness::Unknown);

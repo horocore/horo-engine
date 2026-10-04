@@ -1,4 +1,5 @@
 #include "Horo/Network/NetworkTargetCapabilities.h"
+#include "NetworkProjectSettingsTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
@@ -315,11 +316,7 @@ namespace {
 
     TEST_CASE("Migrated project settings still require the exact packaged target", "[unit][network][target]") {
         Fixture fixture;
-        auto legacy = nlohmann::json::parse(SerializeNetworkProjectSettings(fixture.project));
-        legacy["contractVersion"] = 1;
-        legacy.erase("defaultEndpoint");
-        legacy.erase("credentialRequirementId");
-        legacy.erase("replication");
+        const auto legacy = TestSupport::LegacyNetworkSettingsDocument(fixture.project, TestSupport::LegacyNetworkSettingsVersion::One);
         const auto migrated = ParseNetworkProjectSettings(legacy.dump());
         REQUIRE(migrated.HasValue());
         REQUIRE(migrated.Value().replication.completeness == NetworkReplicationInventoryCompleteness::Unknown);
