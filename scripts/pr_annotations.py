@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Check and repair issue, project, and assignee annotations on pull requests.
-
-Requires GH_TOKEN, GITHUB_TOKEN, or an authenticated GitHub CLI (gh).
-Checking is the default. --fix can set the issue milestone, establish a
-closing issue reference, add labels and projects, and assign the PR.
-"""
+"""Check pull-request annotations by default; repair them only with explicit --fix."""
 
 from __future__ import annotations
 
@@ -19,7 +14,6 @@ import re
 import sys
 from typing import Any
 from urllib.parse import urlencode
-
 
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
@@ -85,6 +79,7 @@ class GitHub:
     """Fixed-host, bounded JSON transport; each worker owns its connection."""
 
     def __init__(self, token: str) -> None:
+        """Retain credentials for this transport's fixed GitHub host."""
         self.token = token
 
     def request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
@@ -159,13 +154,17 @@ def jira_key(pr: dict[str, Any]) -> str | None:
     return match.group(1) if match else None
 
 
+def referenced_numbers(text: str, pattern: re.Pattern[str], excluded: int) -> set[int]:
+    """Collect distinct references while excluding the PR's own number."""
+    return {int(number) for number in pattern.findall(text)} - {excluded}
+
+
 def issue_number(pr: dict[str, Any]) -> int | None:
-    title_links = {int(number) for number in ISSUE_REF.findall(pr.get("title") or "")}
-    title_links.discard(pr["number"])
+    title_links = referenced_numbers(pr.get("title") or "", ISSUE_REF, pr["number"])
     if len(title_links) == 1:
         return next(iter(title_links))
     linked = {item["number"] for item in pr.get("closingIssuesReferences") or []}
-    linked.update(int(number) for number in CLOSING_REF.findall(pr.get("body") or ""))
+    linked.update(referenced_numbers(pr.get("body") or "", CLOSING_REF, pr["number"]))
     if not linked:
         linked = title_links
     linked.discard(pr["number"])
@@ -174,29 +173,34 @@ def issue_number(pr: dict[str, Any]) -> int | None:
     return next(iter(linked)) if linked else None
 
 
+def search_jira_issue(pr: dict[str, Any], options: CheckOptions) -> int:
+    """Resolve one exact Jira key without accepting partial or ambiguous searches."""
+    key = jira_key(pr)
+    if key is None:
+        raise AnnotationError("no linked issue or Jira key in branch name")
+    matches = options.api.request(
+        "GET",
+        "/search/issues?"
+        + urlencode({"q": f"repo:{options.repo} is:issue {key}", "per_page": 100}),
+    )
+    if matches.get("incomplete_results") or matches["total_count"] > len(matches["items"]):
+        raise AnnotationError("Jira issue search is incomplete; pass --issue NUMBER")
+    matches = [
+        item
+        for item in matches["items"]
+        if key in JIRA_KEY.findall(f"{item['title']} {item.get('body') or ''}")
+    ]
+    if len(matches) != 1:
+        raise AnnotationError(
+            f"Jira key {key} matched {len(matches)} GitHub issues; pass --issue NUMBER"
+        )
+    return matches[0]["number"]
+
+
 def resolve_issue(pr: dict[str, Any], options: CheckOptions) -> dict[str, Any]:
     number = options.issue_override or issue_number(pr)
     if number is None:
-        key = jira_key(pr)
-        if key is None:
-            raise AnnotationError("no linked issue or Jira key in branch name")
-        matches = options.api.request(
-            "GET",
-            "/search/issues?"
-            + urlencode({"q": f"repo:{options.repo} is:issue {key}", "per_page": 100}),
-        )
-        if matches.get("incomplete_results") or matches["total_count"] > len(matches["items"]):
-            raise AnnotationError("Jira issue search is incomplete; pass --issue NUMBER")
-        matches = [
-            item
-            for item in matches["items"]
-            if key in JIRA_KEY.findall(f"{item['title']} {item.get('body') or ''}")
-        ]
-        if len(matches) != 1:
-            raise AnnotationError(
-                f"Jira key {key} matched {len(matches)} GitHub issues; " "pass --issue NUMBER"
-            )
-        number = matches[0]["number"]
+        number = search_jira_issue(pr, options)
     result = options.api.request("GET", f"/repos/{options.repo}/issues/{number}")
     if "pull_request" in result:
         raise AnnotationError("development reference points to a pull request, not an issue")
@@ -216,12 +220,20 @@ def names(items: list[dict[str, Any]] | None, field: str) -> set[str]:
     return {item[field] for item in items or []}
 
 
+def closing_reference_page(data: dict[str, Any]) -> dict[str, Any]:
+    """Require GitHub to return a closing-reference connection for the PR."""
+    node = data.get("node")
+    if not node or not node.get("closingIssuesReferences"):
+        raise AnnotationError("GitHub did not return PR closing references")
+    return node["closingIssuesReferences"]
+
+
 def has_development_link(
     pr: dict[str, Any], issue_number_value: int, options: CheckOptions
 ) -> bool:
-    if pr.get("baseRefName") == options.default_branch and issue_number_value in {
-        int(value) for value in CLOSING_REF.findall(pr.get("body") or "")
-    }:
+    if pr.get("baseRefName") == options.default_branch and issue_number_value in referenced_numbers(
+        pr.get("body") or "", CLOSING_REF, pr["number"]
+    ):
         return True
     cursor = None
     seen_cursors: set[str] = set()
@@ -231,10 +243,7 @@ def has_development_link(
             "closingIssuesReferences(first:100,after:$after){ nodes{number} pageInfo{hasNextPage endCursor} } } } }",
             {"id": pr["id"], "after": cursor},
         )
-        node = data.get("node")
-        if not node or not node.get("closingIssuesReferences"):
-            raise AnnotationError("GitHub did not return PR closing references")
-        result = node["closingIssuesReferences"]
+        result = closing_reference_page(data)
         if issue_number_value in {item["number"] for item in result["nodes"]}:
             return True
         if not result["pageInfo"]["hasNextPage"]:
@@ -379,6 +388,12 @@ def report_changes(
     return True
 
 
+def report_notes(notes: list[str]) -> None:
+    """Report skipped annotation decisions before any attempted writes."""
+    for note in notes:
+        print(f"  note: {note}", flush=True)
+
+
 def check_pr(number: int, options: CheckOptions) -> bool:
     pr = load_pr(number, options)
     try:
@@ -399,8 +414,7 @@ def check_pr(number: int, options: CheckOptions) -> bool:
         print(f"PR #{number}: note: {error}", flush=True)
     notes, fixes = changes(pr, issue, options)
     print(f"PR #{number} -> {issue_label} ({jira_key(pr) or 'no Jira key'})", flush=True)
-    for note in notes:
-        print(f"  note: {note}", flush=True)
+    report_notes(notes)
     if options.fix and issue["number"] is None:
         return False
     if not report_changes(number, pr, issue, fixes, options):
@@ -419,6 +433,25 @@ def list_pr_numbers(options: CheckOptions, state: str, limit: int | None) -> lis
         pulls = [pr for pr in pulls if bool(pr.get("merged_at")) == (state == "merged")]
     numbers = [pr["number"] for pr in pulls]
     return numbers[:limit] if limit is not None else numbers
+
+
+def validate_selection(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Require one selection mode and a single PR for an explicit issue override."""
+    if args.all == bool(args.prs) or (args.issue and len(args.prs) != 1):
+        parser.error("provide PR numbers or --all; --issue requires exactly one PR")
+
+
+def validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Reject ambiguous selections and invalid execution bounds before API access."""
+    validate_selection(parser, args)
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be positive")
+    if not 1 <= args.workers <= 16:
+        parser.error("--workers must be between 1 and 16")
+    if args.issue is not None and args.issue < 1:
+        parser.error("--issue must be positive")
+    if any(number < 1 for number in args.prs):
+        parser.error("PR numbers must be positive")
 
 
 def parse_args() -> argparse.Namespace:
@@ -446,16 +479,7 @@ def parse_args() -> argparse.Namespace:
         help="skip Development links when GitHub GraphQL is unavailable",
     )
     args = parser.parse_args()
-    if args.all == bool(args.prs) or (args.issue and len(args.prs) != 1):
-        parser.error("provide PR numbers or --all; --issue requires exactly one PR")
-    if args.limit is not None and args.limit < 1:
-        parser.error("--limit must be positive")
-    if args.workers < 1 or args.workers > 16:
-        parser.error("--workers must be between 1 and 16")
-    if args.issue is not None and args.issue < 1:
-        parser.error("--issue must be positive")
-    if any(number < 1 for number in args.prs):
-        parser.error("PR numbers must be positive")
+    validate_arguments(parser, args)
     return args
 
 

@@ -1,7 +1,5 @@
 """Offline security, credential and bounded GitHub transport regressions."""
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import http.client

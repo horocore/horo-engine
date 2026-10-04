@@ -1,7 +1,5 @@
 """Offline regression coverage for additive annotation policy and CLI orchestration."""
 
-from __future__ import annotations
-
 import argparse
 from pathlib import Path
 import runpy
@@ -478,7 +476,7 @@ def test_main_aggregates_all_worker_results(monkeypatch, options, all_prs, resul
 
 
 def test_main_fails_on_setup_error(monkeypatch, capsys):
-    monkeypatch.setattr(annotations, "parse_args", lambda: arguments())
+    monkeypatch.setattr(annotations, "parse_args", arguments)
     monkeypatch.setattr(
         annotations,
         "load_options",
