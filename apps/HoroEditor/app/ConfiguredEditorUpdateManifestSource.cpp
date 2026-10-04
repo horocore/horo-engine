@@ -46,11 +46,24 @@ namespace Horo::Editor {
             return false;
         }
 
-        /** @brief One request's bounded body and cooperative cancellation state. */
+        /** @brief One request owns transport and callback state; transport cleanup precedes callback-state destruction. */
         struct ManifestResponse final {
+            /** @brief Takes unique transport ownership; callback state cannot move after its address is configured. */
+            explicit ManifestResponse(CurlHandle handle, CancellationToken token)
+                : cancellation(std::move(token)), transport(std::move(handle)) {}
+
+            ManifestResponse(const ManifestResponse &) = delete;
+            ManifestResponse &operator=(const ManifestResponse &) = delete;
+            ManifestResponse(ManifestResponse &&) = delete;
+            ManifestResponse &operator=(ManifestResponse &&) = delete;
+
             std::string body;
             CancellationToken cancellation;
             bool oversized{};
+            CurlHandle transport;
+
+            /** @brief Configures the owned live transport without ambient credentials or redirects. */
+            [[nodiscard]] bool Configure(const std::string &url, const EditorUpdateManifestHttpPolicy &policy);
         };
 
         /** @brief Appends one bounded body chunk without allowing an exception across the C callback. */
@@ -87,9 +100,9 @@ namespace Horo::Editor {
             return response == nullptr ? 0 : ReportTransfer(*response);
         };
 
-        /** @brief Configures the exact endpoint, verification, bounded callbacks, and no ambient credentials. */
-        [[nodiscard]] bool ConfigureRequest(CURL *curl, const std::string &url, const EditorUpdateManifestHttpPolicy &policy,
-                                            ManifestResponse &response) {
+        /** @copydoc ManifestResponse::Configure */
+        bool ManifestResponse::Configure(const std::string &url, const EditorUpdateManifestHttpPolicy &policy) {
+            auto *curl = transport.get();
             return curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_USERAGENT, "horo-update/1") == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https") == CURLE_OK &&
@@ -103,10 +116,10 @@ namespace Horo::Editor {
                    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, static_cast<long>(policy.connectTimeoutSeconds)) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(policy.requestTimeoutSeconds)) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, ReceiveBodyCallback) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response) == CURLE_OK &&
+                   curl_easy_setopt(curl, CURLOPT_WRITEDATA, this) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, ReportTransferCallback) == CURLE_OK &&
-                   curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &response) == CURLE_OK;
+                   curl_easy_setopt(curl, CURLOPT_XFERINFODATA, this) == CURLE_OK;
         }
     }  // namespace
 
@@ -120,15 +133,15 @@ namespace Horo::Editor {
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::Cancelled));
         if (static const bool CurlReady = curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK; !CurlReady)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
-        ManifestResponse response{{}, cancellation};
         CURL *const curl = curl_easy_init();
         CurlHandle handle{curl, &curl_easy_cleanup};
+        ManifestResponse response{std::move(handle), cancellation};
         if (curl == nullptr)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         // The owning transfer scope enforces TLS 1.3 before any configuration or perform call.
         if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
-        if (!ConfigureRequest(curl, url, policy, response))
+        if (!response.Configure(url, policy))
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         // libcurl copies CAINFO when the option is set.
         if (const std::string caBundle = policy.certificateAuthorityBundle.string();
