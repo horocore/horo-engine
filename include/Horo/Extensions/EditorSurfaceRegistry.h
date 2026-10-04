@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Extensions/EditorSurfaceContext.h"
+#include "Horo/Extensions/ExtensionRetirement.h"
 #include "Horo/Foundation/Result.h"
 
 #include <atomic>
@@ -117,6 +118,15 @@ namespace Horo::Extensions {
 
         /** @brief Withdraws this exact contribution and preserves its bounded presentation state. */
         void Reset() const noexcept;
+        /**
+         * @brief Binds this real surface publication to its verified module retirement owner.
+         * @param retirement Verified owning module's retirement controller.
+         * @return True when revocation is registered; false for invalid, retired or already bound ownership.
+         * @details Failure before work admission leaves the registration unchanged. Failure after creating
+         * the revocation adapter withdraws publication through the adapter's RAII cleanup.
+         * @throws std::bad_alloc Allocation failure; any constructed revocation adapter still withdraws publication.
+         */
+        [[nodiscard]] bool AttachRetirement(const std::shared_ptr<ExtensionRetirement> &retirement);
         /** @brief Reports whether this contribution remains published in the registry. */
         [[nodiscard]] bool IsRegistered() const noexcept;
         /** @brief Returns the stable contribution identity, or an empty view after move. */
@@ -134,6 +144,7 @@ namespace Horo::Extensions {
 
         mutable std::weak_ptr<EditorSurfaceRegistryState> registry_;
         mutable std::shared_ptr<EditorSurfaceState> surface_;
+        mutable std::shared_ptr<ExtensionExecutableLease> retirementLease_;
     };
 
     /**

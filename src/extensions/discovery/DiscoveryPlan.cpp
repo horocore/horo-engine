@@ -19,7 +19,7 @@ namespace Horo::Extensions::Discovery {
 
         /** @brief Validate graph references before any package path is probed. */
         bool IsInvalidLocation(const PackageLocation &location, const RootSelection &selection) {
-            return location.packageId.empty() ||
+            return location.packageId.empty() || location.providerPackageIds.size() > 4096 ||
                    !std::ranges::binary_search(selection.diagnostics, location.rootId, {}, &RootDiagnostic::rootId);
         }
 
@@ -32,8 +32,11 @@ namespace Horo::Extensions::Discovery {
                 return Result<DiscoveredPackage>::Failure(
                     MakeError(InvalidDiscoveryPlan,
                               location.packageId + ": " + (error ? error.message() : "Package location is not a directory.")));
-            return Result<DiscoveredPackage>::Success(
-                {.packageId = location.packageId, .rootId = root.id, .canonicalPath = std::move(path).Value(), .kind = root.kind});
+            return Result<DiscoveredPackage>::Success({.packageId = location.packageId,
+                                                       .rootId = root.id,
+                                                       .canonicalPath = std::move(path).Value(),
+                                                       .kind = root.kind,
+                                                       .providerPackageIds = location.providerPackageIds});
         }
     }  // namespace
 

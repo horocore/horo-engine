@@ -224,6 +224,8 @@ namespace Horo::Extensions {
 
             ~ExternalImporterInstance() {
                 DestroyExternalImporter(destroy, context);
+                lifetime.reset();
+                executableLease.reset();
             }
 
             ExternalImporterInstance(const ExternalImporterInstance &) = delete;
@@ -233,11 +235,23 @@ namespace Horo::Extensions {
             ExternalImporterInstance &operator=(ExternalImporterInstance &&) = delete;
 
             std::shared_ptr<ExtensionModuleLifetime> lifetime;
+            std::shared_ptr<ExtensionRetirement> retirement;
+            std::shared_ptr<ExtensionExecutableLease> executableLease;
+            std::string moduleId;
+            std::string contributionId;
             void *context{};
             HoroAssetImporterDestroyFunc destroy{};
             HoroAssetImportFunc importFn{};
             HoroAssetPreviewFunc preview{};
         };
+
+        /** @brief Admits a real adapter call while retaining the provider and executable dependency closure. */
+        [[nodiscard]] std::shared_ptr<ExtensionExecutableLease> AcquireExternalCall(
+            const std::shared_ptr<ExternalImporterInstance> &instance) {
+            return instance->retirement
+                       ? instance->retirement->Acquire(instance->moduleId, ExtensionLeaseKind::Callback, instance->contributionId, instance)
+                       : nullptr;
+        }
 
         template <typename Invoker> [[nodiscard]] HoroExtensionStatus SafeInvoke(Invoker &&invoker, const char *operation) {
             try {
@@ -258,6 +272,17 @@ namespace Horo::Extensions {
 
         [[nodiscard]] Result<Assets::PreparedAssetImport> ImportFailure(const std::string_view message) {
             return Result<Assets::PreparedAssetImport>::Failure(MakeError(ExtensionErrors::InvocationFailed, std::string{message}));
+        }
+
+        /** @brief Validates cancellation and bounded input before borrowing caller data into the native ABI. */
+        [[nodiscard]] Result<void> ValidateImportInput(const Assets::AssetImportInput &input, const CancellationToken &cancellation) {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(
+                    MakeError(ExtensionErrors::InvocationFailed, "External asset import was cancelled before provider entry."));
+            if (input.settings.size() > kMaxListEntries || input.sourceExtension.size() > kMaxTextBytes)
+                return Result<void>::Failure(
+                    MakeError(ExtensionErrors::InvocationFailed, "External asset import input exceeded ABI bounds."));
+            return Result<void>::Success();
         }
 
         [[nodiscard]] std::vector<HoroAssetImportSettingValue> BuildAbiSettings(const Assets::AssetImportInput &input) {
@@ -311,10 +336,11 @@ namespace Horo::Extensions {
 
             [[nodiscard]] Result<Assets::PreparedAssetImport> Import(const Assets::AssetImportInput &input,
                                                                      const CancellationToken &cancellation) const override {
-                if (cancellation.IsCancellationRequested())
-                    return ImportFailure("External asset import was cancelled before provider entry.");
-                if (input.settings.size() > kMaxListEntries || input.sourceExtension.size() > kMaxTextBytes)
-                    return ImportFailure("External asset import input exceeded ABI bounds.");
+                const auto call = AcquireExternalCall(instance_);
+                if (instance_->retirement && !call)
+                    return ImportFailure("External importer is retiring; release outstanding work or restart.");
+                if (auto inputValid = ValidateImportInput(input, cancellation); inputValid.HasError())
+                    return Result<Assets::PreparedAssetImport>::Failure(inputValid.ErrorValue());
 
                 Assets::PreparedAssetImport prepared;
                 bool outputRejected{};
@@ -338,6 +364,10 @@ namespace Horo::Extensions {
 
             [[nodiscard]] Result<Assets::AssetPreviewImage> GeneratePreview(const Assets::AssetPreviewInput &input,
                                                                             const CancellationToken &cancellation) const override {
+                const auto call = AcquireExternalCall(instance_);
+                if (instance_->retirement && !call)
+                    return Result<Assets::AssetPreviewImage>::Failure(
+                        MakeError(ExtensionErrors::InvocationFailed, "External preview is retiring; release outstanding work or restart."));
                 if (input.width == 0 || input.height == 0 || input.width > kMaxPreviewDimension || input.height > kMaxPreviewDimension)
                     return Result<Assets::AssetPreviewImage>::Failure(
                         MakeError(ExtensionErrors::InvocationFailed, "External preview dimensions are invalid."));
@@ -374,38 +404,6 @@ namespace Horo::Extensions {
         };
 
     }  // namespace
-
-    ExtensionModuleLifetime::~ExtensionModuleLifetime() {
-        (void)UnloadNow();
-    }
-
-    /** @copydoc ExtensionModuleLifetime::UnloadNow */
-    bool ExtensionModuleLifetime::UnloadNow() noexcept {
-        if (!loaded)
-            return true;
-        loaded = false;
-        if (unload != nullptr && moduleApi.moduleContext != nullptr) {
-            try {
-                unload(&moduleApi);
-            } catch (const std::runtime_error &exception) {
-                LOG_WARN("extensions.importer", "Runtime error during module unload: %s", exception.what());
-                return false;
-            } catch (const std::logic_error &exception) {
-                LOG_WARN("extensions.importer", "Logic error during module unload: %s", exception.what());
-                return false;
-            } catch (const std::bad_alloc &exception) {
-                LOG_WARN("extensions.importer", "Bad alloc during module unload: %s", exception.what());
-                return false;
-            } catch (const std::exception &exception) {  // NOSONAR(cpp:S1181)
-                LOG_WARN("extensions.importer", "Exception during module unload: %s", exception.what());
-                return false;
-            } catch (...) {  // NOSONAR(cpp:S1181)
-                LOG_WARN("extensions.importer", "Unknown exception during module unload.");
-                return false;
-            }
-        }
-        return true;
-    }
 
     namespace {
         /** @brief Bound each declared span before dereferencing any element. */
@@ -497,6 +495,15 @@ namespace Horo::Extensions {
 
             auto instance = std::make_shared<ExternalImporterInstance>();
             instance->lifetime = session->lifetime;
+            instance->retirement = session->retirement;
+            instance->moduleId = contribution.moduleId;
+            instance->contributionId = contribution.contributionId;
+            if (instance->retirement) {
+                instance->executableLease = instance->retirement->Acquire(instance->moduleId, ExtensionLeaseKind::Resource,
+                                                                          instance->contributionId, instance->lifetime);
+                if (!instance->executableLease)
+                    throw std::invalid_argument{"Importer executable lease admission failed"};
+            }
             instance->context = descriptor->importerContext;
             instance->importFn = descriptor->importAsset;
             instance->preview = descriptor->generatePreview;

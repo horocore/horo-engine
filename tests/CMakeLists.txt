@@ -2773,6 +2773,12 @@ set_target_properties(HoroExtensionAbiCConsumer PROPERTIES C_EXTENSIONS OFF)
 target_link_libraries(HoroExtensionAbiCConsumer PRIVATE HoroEngine::Extensions)
 add_test(NAME HoroExtensionAbiCConsumer COMMAND HoroExtensionAbiCConsumer)
 
+add_executable(HoroExtensionRetirementPublicHeaderConsumer support/ExtensionRetirementPublicHeaderConsumer.cpp)
+target_compile_features(HoroExtensionRetirementPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroExtensionRetirementPublicHeaderConsumer PRIVATE HoroEngine::Extensions)
+add_test(NAME HoroExtensionRetirementPublicHeaderConsumer COMMAND HoroExtensionRetirementPublicHeaderConsumer)
+set_tests_properties(HoroExtensionRetirementPublicHeaderConsumer PROPERTIES LABELS "unit;extensions;headless")
+
 add_executable(HoroPackagedExtensionActivation helpers/extensions/PackagedExtensionActivation.cpp)
 target_compile_features(HoroPackagedExtensionActivation PRIVATE cxx_std_20)
 target_include_directories(HoroPackagedExtensionActivation PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
@@ -2830,6 +2836,7 @@ set_tests_properties(HoroPackageAuthorCommands PROPERTIES LABELS "packages;sdk;c
 add_executable(HoroExtensionManagerTests
         unit/extensions/ApplicationCapabilityRegistryTests.cpp
         unit/extensions/ExtensionActivationTransactionTests.cpp
+        unit/extensions/ExtensionRetirementTests.cpp
         unit/extensions/ExtensionCapabilityAdmissionTests.cpp
         unit/extensions/ExtensionActivationStateTests.cpp
         unit/extensions/EditorSurfaceDescriptorTests.cpp

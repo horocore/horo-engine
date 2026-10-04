@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/Extensions/ExtensionRetirement.h"
 
 /**
  * @file BackendServiceRegistry.h
@@ -240,6 +241,13 @@ namespace Horo::Extensions {
 
         /** @brief Reports whether this registration still owns a discoverable service. */
         [[nodiscard]] bool IsRegistered() const noexcept;
+        /**
+         * @brief Binds service publication and its admitted operations/code closure to extension retirement.
+         * @param retirement Owning package's retirement controller with verified module code already bound.
+         * @return False for invalid, repeated, closed, off-owner-lane or already executing registration.
+         * @details Bind on the registration's owner lane before exposing the service to callers.
+         */
+        [[nodiscard]] bool AttachRetirement(const std::shared_ptr<ExtensionRetirement> &retirement);
 
     private:
         friend class BackendServiceRegistry;
