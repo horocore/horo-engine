@@ -2,6 +2,7 @@
 
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Gameplay/GameplayPhysicsContext.h"
 
 #include <algorithm>
 #include <unordered_map>
@@ -99,6 +100,13 @@ namespace Horo::Gameplay {
                 if (event.target && (!event.target->IsValid() || event.target->scene != instance.entity.runtime.value))
                     return Result<void>::Failure(MakeError(GameplayErrors::InvalidEvent));
                 return runtime.events.Publish(std::move(event));
+            }
+
+            [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept override {
+                if (runtime.physics && !runtime.physics->Binding().moduleId.empty() &&
+                    !instance.component.typeId.Value().starts_with(runtime.physics->Binding().moduleId + "."))
+                    return {};
+                return runtime.physics;
             }
         };
 
@@ -209,6 +217,7 @@ namespace Horo::Gameplay {
         BehaviorRuntimeLimits limits;
         EventQueue events;
         std::shared_ptr<void> generationLease;
+        std::shared_ptr<const GameplayPhysicsContext> physics;
         std::vector<Instance> instances;
         bool shutdown{};
     };
@@ -218,11 +227,24 @@ namespace Horo::Gameplay {
     /** @copydoc BehaviorRuntime::Create */
     Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
                                                                      const BehaviorRuntimeLimits limits) {
+        return Create(scene, registry, limits,
+                      GameplayPhysicsContext::Withheld({.scene = scene.View().RuntimeId().value}, GameplayPhysicsDenial::Unavailable));
+    }
+
+    /** @copydoc BehaviorRuntime::Create */
+    Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
+                                                                     const BehaviorRuntimeLimits limits,
+                                                                     std::shared_ptr<const GameplayPhysicsContext> physics) {
+        if (physics && physics->Binding().scene != scene.View().RuntimeId().value)
+            return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Physics::PhysicsErrors::HandleWorldMismatch));
         auto generationLease = registry.AcquireGenerationLease();
         if (generationLease.HasError())
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(generationLease.ErrorValue());
         auto impl = std::make_unique<Impl>(scene, registry, limits, std::move(generationLease).Value());
+        impl->physics = std::move(physics);
         if (Result<void> built = impl->BuildInstances(); built.HasError()) {
+            if (impl->physics)
+                impl->physics->Revoke();
             bool rollbackComplete = true;
             for (auto iterator = impl->instances.rbegin(); iterator != impl->instances.rend(); ++iterator) {
                 rollbackComplete = impl->RollbackInstance(*iterator) && rollbackComplete;
@@ -379,6 +401,8 @@ namespace Horo::Gameplay {
         if (!impl_ || impl_->shutdown)
             return;
         impl_->shutdown = true;
+        if (impl_->physics)
+            impl_->physics->Revoke();
         for (auto iterator = impl_->instances.rbegin(); iterator != impl_->instances.rend(); ++iterator) {
             if (!impl_->RollbackInstance(*iterator))
                 LOG_WARN("gameplay.runtime", "Behavior shutdown callback threw; factory instance was still released.");

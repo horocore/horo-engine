@@ -14,7 +14,7 @@ namespace Horo::Physics {
                 return Result<PhysicsWorld *>::Failure(MakeError(PhysicsErrors::HandleWorldMismatch));
             if (requested.capabilityGeneration == 0 || requested.capabilityGeneration != state.identity.capabilityGeneration)
                 return Result<PhysicsWorld *>::Failure(MakeError(PhysicsErrors::CapabilityStale));
-            if (state.revoked)
+            if (state.revoked || state.revocation.IsCancellationRequested())
                 return Result<PhysicsWorld *>::Failure(MakeError(PhysicsErrors::CapabilityRevoked));
             if (state.stale || state.world == nullptr)
                 return Result<PhysicsWorld *>::Failure(MakeError(PhysicsErrors::CapabilityStale));
@@ -25,6 +25,22 @@ namespace Horo::Physics {
             PhysicsPublishedTick published;
             std::uint32_t admittedThisTick{};
         };
+
+        /** @brief Prune dead admissions on the world owner thread before reserving another bounded slot. */
+        bool RetiredAdmission(const std::weak_ptr<PhysicsQueryEventCapabilityState> &weak) {
+            const auto access = weak.lock();
+            return !access || access->revoked || access->revocation.IsCancellationRequested();
+        }
+
+        /** @brief Validate a pending batch's borrowed admission before dereferencing world-owned query storage. */
+        Result<void> ValidatePendingAccess(const PhysicsQueryBatchState &batch, const PhysicsWorld &world) {
+            const auto &access = batch.Access();
+            if (!access || access->stale || access->world != &world)
+                return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityStale));
+            if (access->revoked || access->revocation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityRevoked));
+            return Result<void>::Success();
+        }
 
         template <typename WorldImpl>
         [[nodiscard]] Result<QueryBatchAdmission> ValidateBatchAdmission(const PhysicsWorld &world, WorldImpl &impl,
@@ -131,6 +147,13 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsWorld::IssueQueryEventCapability */
     Result<PhysicsQueryEventCapability> PhysicsWorld::IssueQueryEventCapability() {
+        return IssueQueryEventCapability(CancellationToken{});
+    }
+
+    /** @copydoc PhysicsWorld::IssueQueryEventCapability */
+    Result<PhysicsQueryEventCapability> PhysicsWorld::IssueQueryEventCapability(const CancellationToken &revocation) {
+        if (revocation.IsCancellationRequested())
+            return Result<PhysicsQueryEventCapability>::Failure(MakeError(PhysicsErrors::CapabilityRevoked));
         if (impl_->runtime->ownerThread != std::this_thread::get_id())
             return Result<PhysicsQueryEventCapability>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
         if (impl_->state == PhysicsWorldState::ActiveNull || impl_->runtime->state != PhysicsRuntimeState::Ready)
@@ -139,10 +162,7 @@ namespace Horo::Physics {
             return Result<PhysicsQueryEventCapability>::Failure(MakeError(PhysicsErrors::InvalidState));
         if (impl_->queryEvents.nextCapabilityGeneration == 0)
             return Result<PhysicsQueryEventCapability>::Failure(MakeError(PhysicsErrors::GenerationExhausted));
-        std::erase_if(impl_->queryEvents.capabilities, [](const auto &weak) {
-            const auto access = weak.lock();
-            return !access || access->revoked;
-        });
+        std::erase_if(impl_->queryEvents.capabilities, RetiredAdmission);
         if (impl_->queryEvents.capabilities.size() >= MaximumPhysicsQueryEventCapabilitiesPerWorld)
             return Result<PhysicsQueryEventCapability>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         try {
@@ -150,6 +170,7 @@ namespace Horo::Physics {
             state->world = this;
             state->identity = {impl_->identity, impl_->queryEvents.nextCapabilityGeneration};
             state->ownerThread = impl_->runtime->ownerThread;
+            state->revocation = revocation;
             impl_->queryEvents.capabilities.push_back(state);
             impl_->queryEvents.nextCapabilityGeneration =
                 impl_->queryEvents.nextCapabilityGeneration == std::numeric_limits<std::uint64_t>::max()
@@ -208,13 +229,8 @@ namespace Horo::Physics {
             (void)batch->FailCode(PhysicsErrors::CapabilityUnavailable);
             return Result<void>::Success();
         }
-        const auto &access = batch->Access();
-        if (!access || access->stale || access->world != this) {
-            (void)batch->FailCode(PhysicsErrors::CapabilityStale);
-            return Result<void>::Success();
-        }
-        if (access->revoked) {
-            (void)batch->FailCode(PhysicsErrors::CapabilityRevoked);
+        if (const auto valid = ValidatePendingAccess(*batch, *this); valid.HasError()) {
+            (void)batch->Fail(valid.ErrorValue());
             return Result<void>::Success();
         }
         const auto published = PublishedTick();

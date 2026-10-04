@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "artifactEdition": "extension-compatibility-1",
+  "engine": {
+    "version": "@HORO_ENGINE_VERSION@",
+    "sourceRevision": "@HORO_SOURCE_REVISION@",
+    "releaseStatus": "development",
+    "identityPolicy": "Pin the engine revision and SDK archive SHA-256; the development version alone is not an exact identity."
+  },
+  "extensionSdk": {
+    "version": "@HORO_EXTENSION_SDK_VERSION@",
+    "publicTarget": "HoroEngine::ExtensionSdk",
+    "languageBoundary": "C11 / C++20 consuming a C ABI",
+    "hostAbi": {
+      "id": "horo-extension",
+      "minimum": {"major": @HORO_EXTENSION_ABI_MAJOR_VERSION@, "minor": @HORO_EXTENSION_ABI_MIN_HOST_MINOR@},
+      "maximumExclusive": {"major": @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@, "minor": 0},
+      "published": {"major": @HORO_EXTENSION_ABI_MAJOR_VERSION@, "minor": @HORO_EXTENSION_ABI_PUBLISHED_MINOR@},
+      "admission": "Same major, sufficient host minor, table sizes and explicitly required function bits; the version range alone is insufficient."
+    },
+    "extensionManifestSchema": 1,
+    "packageManifestSchema": 1,
+    "supportedAuthorCiPlatforms": ["linux-x64", "macos-arm64", "macos-x64", "windows-x64"],
+    "binaryPolicy": "Build one native artifact per platform/architecture; no cross-platform or C++ gameplay binary compatibility is promised.",
+    "qualificationPolicy": "This is the supported author CI matrix, not evidence of a published SDK archive or a passed platform run. Pin real archive URLs/digests in the author CI lock."
+  },
+  "gameplay": {
+    "separateContract": true,
+    "boundaryVersion": 9,
+    "fingerprintGeneration": "gameplay-sdk9",
+    "distribution": "Separate engine build-tree SDK; not included as an installed gameplay SDK in this extension package.",
+    "compatibility": "Exact engine/compiler/platform/configuration fingerprint and descriptor revision; rebuild modules and descriptor bundles after generation changes."
+  },
+  "migrationGuide": "MigrationGuide.md",
+  "rollbackPolicy": "Retain the previous exact engine, SDK archive, package binaries, lock and project backup; stop the host, restore the coherent set, re-evaluate trust and restart. Never force-unload or mix generations."
+}

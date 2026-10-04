@@ -1502,3 +1502,18 @@ scoped projections and evaluate group constraints before reserving voices; no
 implicit group registry or source-policy override is introduced. The ownership
 registry stages this header and the generated `HoroAudioApi` public-header
 consumer compiles it using only declared Foundation/Assets dependencies.
+
+CLI-001.4 adds `CliOutputPresenter.h` to `HoroCliHost` ownership and deliberately
+adds the lower-level `HoroHostErrors` public dependency for its typed translator.
+`DiagnosticBundleErrorDomain()` remains in the existing Foundation-owned
+`DiagnosticBundle.h`; no header promotion or broad private include path is used.
+Consumers rebuild for additive CLI output metadata and partial-result fields.
+The generated CLI/Foundation header consumers and
+`HoroCliOutputPublicHeaderConsumer` verify staged visibility and explicit registry
+construction without ambient registration or application activation.
+
+CLI result presentation consumes inert diagnostic-bundle error metadata defined in
+`HoroFoundation`'s private `DiagnosticBundleErrors.cpp`; descriptor addresses refer
+to the original Foundation-owned error identities. Registration remains explicit
+at the application root. Generated command help is a target-private presentation
+translation unit in `HoroCliHost`, sharing the admitted registry metadata.

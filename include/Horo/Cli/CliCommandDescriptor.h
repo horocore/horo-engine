@@ -127,6 +127,7 @@ namespace Horo::Cli {
         std::string id;            /**< Stable lowercase namespaced schema identity. */
         std::uint32_t version{};   /**< Non-zero schema version. */
         CliOutputFormat formats{}; /**< Human plus at least one machine-readable format. */
+        bool progressRecords{};    /**< Declares version-one progress records in JSONL; terminal summaries are always required. */
     };
 
     /** @brief Whether the command may request terminal interaction. */

@@ -17,9 +17,13 @@
 #include <iterator>
 #include <ranges>
 #include <string>
+#include <type_traits>
 
 namespace Horo::Extensions::Tests {
     namespace fs = std::filesystem;
+
+    static_assert(!std::is_move_constructible_v<ExtensionManager>);
+    static_assert(!std::is_move_assignable_v<ExtensionManager>);
 
     TEST_CASE("Marketplace registry parsing filters immutable compatible entries") {
         constexpr std::string_view Registry = R"json({
@@ -663,7 +667,7 @@ namespace Horo::Extensions::Tests {
         CHECK_THAT(admitted.ErrorValue().message, !Catch::Matchers::ContainsSubstring("rejected compatibility requirement"));
     }
 
-    TEST_CASE_METHOD(ExtensionManagerTestFixture, "External asset importer loads, previews, reimports, and survives manager release",
+    TEST_CASE_METHOD(ExtensionManagerTestFixture, "External asset importer loads, previews, reimports, and retires held snapshots safely",
                      "[Extensions][Assets]") {
         using namespace Horo::Assets;
 
@@ -711,17 +715,6 @@ namespace Horo::Extensions::Tests {
             CancellationToken{});
         REQUIRE(preview.HasValue());
         REQUIRE(preview.Value().IsValid());
-
-        manager.UnloadExtension(loaded.Value());
-        REQUIRE(manager.GetLoadedExtensionIds().empty());
-        auto afterRelease = contribution->strategy->Import(
-            AssetImportInput{
-                .sourceBytes = sourceBytes,
-                .sourceExtension = "hraw",
-                .settings = {false},
-            },
-            CancellationToken{});
-        REQUIRE(afterRelease.HasValue());
 
         const fs::path projectRoot = tempDir / "project";
         const fs::path sourcePath = projectRoot / "source.hraw";
@@ -780,6 +773,22 @@ namespace Horo::Extensions::Tests {
         REQUIRE(reimported.Value().reasons[0] == AssetImportReason::SourceChanged);
         REQUIRE(reimported.Value().reasons[1] == AssetImportReason::ImporterChanged);
         REQUIRE(reimported.Value().reasons[2] == AssetImportReason::ModuleChanged);
+
+        const auto retirement = manager.RetireExtension(loaded.Value());
+        REQUIRE(manager.GetLoadedExtensionIds().empty());
+        REQUIRE(retirement.disposition == ExtensionRetirementDisposition::Draining);
+        REQUIRE_FALSE(retirement.outstanding.empty());
+        CHECK(retirement.outstanding.front().moduleId == "com.horo.examples.asset-importer-basic.native");
+        REQUIRE(catalog.Snapshot() != nullptr);
+        CHECK(catalog.Snapshot()->FindById(contribution->contributionId) == nullptr);
+        const auto afterWithdrawal =
+            contribution->strategy->Import(AssetImportInput{.sourceBytes = sourceBytes, .sourceExtension = "hraw", .settings = {false}},
+                                           CancellationToken{});
+        REQUIRE(afterWithdrawal.HasError());
+        CHECK_THAT(afterWithdrawal.ErrorValue().message, Catch::Matchers::ContainsSubstring("retiring"));
+        const auto refusedReplacement = manager.LoadExtension(packagePath.string());
+        REQUIRE(refusedReplacement.HasError());
+        manager.UnloadExtension(loaded.Value());
     }
 #endif
 

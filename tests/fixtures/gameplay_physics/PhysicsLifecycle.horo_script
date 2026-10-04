@@ -1,0 +1,52 @@
+local client, completed, cancelled
+local phase = 0
+local channel = "12345678-1234-4234-8234-123456789abc"
+local function query(method, rev, generation, channel_id, maximum)
+    return method(client, rev, generation, channel_id, 0, 0, 0, 0, 0, -1, 10, maximum)
+end
+local function hit(result)
+    assert(#result == 1 and result[1].distance_meters > 4 and result[1].distance_meters < 5)
+    assert(#result[1].position == 3 and #result[1].normal == 3)
+    assert(result.completed_tick == 1 and result.publication_revision == revision and not result.truncated)
+end
+return horo.behavior {
+    type_id = "game.tests.physics_lifecycle", display_name = "Physics lifecycle",
+    on_create = function(ctx)
+        client = assert(ctx.physics.acquire())
+        for _, method in ipairs({client.submit, client.submit_batch}) do
+            for _, invalid in ipairs({{0, 1, channel, 1}, {revision, 0, channel, 1},
+                                      {revision, 1, channel, 0}, {revision, 1, channel, 65},
+                                      {revision, 1, "invalid", 1}}) do
+                local value, error = query(method, invalid[1], invalid[2], invalid[3], invalid[4])
+                assert(value == nil and error.code ~= nil and error.domain ~= nil)
+            end
+        end
+        for _, invalid in ipairs({{0, revision, 1}, {1, 0, 1}, {1, revision, 0}, {1, revision, 65}}) do
+            local value, error = client:read_events(invalid[1], invalid[2], invalid[3])
+            assert(value == nil and error.code ~= nil)
+        end
+        local events = assert(client:read_events(1, revision, 64))
+        assert(not events.truncated and events.omitted_record_count == 0 and events.dropped_record_count == 0)
+        hit(assert(query(client.submit, revision, 1, channel, 1)))
+        completed = assert(query(client.submit_batch, revision, 1, channel, 1))
+        assert(completed:poll() == nil)
+    end,
+    on_fixed_update = function(ctx, dt)
+        phase = phase + 1
+        if phase == 1 then
+            hit(assert(completed:poll())[1])
+            assert(not completed:cancel())
+            cancelled = assert(query(client.submit_batch, revision, 1, channel, 1))
+            assert(cancelled:cancel())
+        else
+            hit(assert(completed:poll())[1])
+            assert(not completed:cancel())
+            local result, error = cancelled:poll()
+            assert(result == nil and error.code == "physics.query.cancelled")
+            local value, revoked = query(client.submit, revision, 1, channel, 1)
+            assert(value == nil and revoked.code == "physics.capability.revoked")
+            local acquired, denial = ctx.physics.acquire()
+            assert(acquired == nil and denial.code == "physics.capability.revoked")
+        end
+    end
+}

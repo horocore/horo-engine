@@ -4,6 +4,47 @@
 
 This document defines how project-owned gameplay modules integrate with runtime systems: game-owned assets, input actions, scheduled systems, scene/play lifecycle, game-owned component persistence, and deferred runtime extension points.
 
+### Physics execution context (PHY-006.5)
+
+The application world owner binds the existing `PhysicsQueryEventCapability` through
+`GameplayPhysicsContext`; this holder owns admission/revocation, not another query
+or event interface. The holder borrows the explicit world only during creation and
+retains no world/Scene pointer. Acquisition validates the exact module principal,
+Scene runtime ID and activation generation. Permission is trusted resolved host
+policy, not a module claim, namespace guess or global discovery result.
+
+`GameRuntimeContext::physics` is injected before native module `Start`.
+`BehaviorRuntime` injects that same binding into native/script behavior contexts.
+Unavailable hosts inject an inert holder reporting `gameplay.physics.unavailable`;
+denied modules receive no Physics client and report `gameplay.physics.permission_denied`.
+Disabled selections fail before code activation. Retirement closes the shared
+cancellation fence before behavior/module callbacks, then releases registry and
+module/script state. World failure independently invalidates Physics admission
+before the host shuts down gameplay or releases world storage. Retained clients
+return revoked/stale errors and cannot bind a replacement generation.
+
+The production headless consumer is `GameplayWorldComposition`, invoked by
+`HeadlessNetworkServices` from `horo-engine --run-network-product`. Explicit native
+artifact/revision or script/source-sidecar selection and permission are supplied by
+the host-local invocation. Scene and Physics services share one generation-owned
+candidate record, paired at factory construction; equal Scene IDs never share
+storage or retarget old clients. The normal runtime host remains the scheduler.
+No arbitrary authored-project loading or network trust admission is implied.
+
+The editor retains its explicit Null Physics selection and core-only play clone.
+It receives unavailable behavior/module contexts, not solver activation or fallback.
+The application boundary is reusable by a future graphical world composition.
+
+`GameplayApi` remains Physics-header/solver-free. `GameplayPhysicsIntegration` owns
+the opt-in public context header and depends on the existing Physics target.
+Runtime, ModuleHost and Lua use that target privately for injection/retirement;
+this link does not select or construct a solver. The build-tree gameplay SDK
+exports Physics only through its explicitly requested `Physics` component,
+including the private static-link closure and staged target-owned headers.
+Boundary 9 changes `GameRuntimeContext` and the behavior backend vtable: all native
+modules must rebuild with the matching sdk9 fingerprint. See
+[migration and consumer contract](../../guides/gameplay-physics-capability-migration.md).
+
 ## Game-Owned Asset Types
 
 Game modules may register asset types for source assets owned by the project:
@@ -300,6 +341,66 @@ Gameplay modules include only the backend-neutral replication declarations from
 `Horo::Network`. They never depend on transport, socket, session backend, or host
 headers. Behavior code does not infer network authority from local process state
 or mutate replicated state outside declared simulation phases.
+
+### Script descriptor generation
+
+Lua behavior compilation translates the source `replication` table into the same
+`GameplayReplicationRegistration` used by native modules, then calls its shared
+`Register`/`Freeze` validation path. The JSON sidecar owns both the nonzero unsigned
+`replicationSchemaId` and `replicationModuleId`, alongside `behaviorTypeId`. The
+module must own that behavior namespace. Moving or renaming the source and sidecar
+preserves every identity. An optional source `schema_id` is an assertion and must
+match the sidecar. Source fields retain issued numeric IDs across rename/reorder;
+removed IDs remain in `tombstones` and cannot be reused.
+Behavior and replication declaration reads inspect raw table storage; authored
+`__index` and `__len` metamethods do not supply metadata or execute during validation.
+Existing behavior string-metadata coercion remains protected by the Lua compiler
+budget; replication metadata keeps its strict scalar types.
+
+For example, the sidecar adds `"replicationSchemaId": 42` and
+`"replicationModuleId": "game.my_game"`, while the source declares:
+
+```lua
+replication = {
+    major = 1, minor = 0, minimum_minor = 0, maximum_minor = 0,
+    capture_phase = "gameplay", apply_phase = "pre_physics",
+    fields = {
+        { id = 7, value_type = 1, codec = 2, kind = "number",
+          introduced_major = 1, introduced_minor = 0,
+          condition = "owner_only", requirement = "required",
+          maximum_bytes = 8, maximum_elements = 1 }
+    },
+    tombstones = {}
+}
+```
+
+The initial generated adapter supports exact `boolean`, `integer`, `unsigned`,
+and `number` scalar codecs. Each owner-issued value-type/codec pair has one exact
+kind and bounds. Optional fields require a typed `default`, encoded and validated
+through that codec. Conditions are `always`, `initial_only`, `owner_only`,
+`skip_owner`, or `simulated_only`; write authority remains server-only. Unsupported
+keywords, sparse arrays, missing identities, conflicting codec declarations,
+and invalid bounds fail compilation rather than activating a partial descriptor.
+The generated schedule uses owner-thread simulation safe points with no implicit
+component access. Capture/apply implementations remain explicit owner adapters;
+metadata does not automatically replicate Lua globals or behavior fields.
+
+`ReplicationDeclaration` exposes generated typed metadata for explicit host
+composition. `AcquireReplication` pins an immutable schema/codec generation without
+retaining a Lua VM or script callable. Runtime consumers use numeric `FieldId` and
+owned `ReplicationRuntimeValue` payloads, never field-name lookup or reflection.
+Descriptor generation runs only during compilation. These additive accessors keep
+existing non-replicated scripts and native registration callers unchanged; callers
+using the old four-argument `Compile` continue to compile non-replicated programs.
+
+Compatible reload validates both behavior and replication before replacing either.
+Schema/owner changes, major-version changes, incompatible field evolution, existing
+codec changes, or safe-point changes require restart. Compatible optional minor
+additions use the Network replacement validator. Old leases retain their complete
+previous generation. Compile, missing-source, missing-sidecar, or reload errors
+include source context and preserve the current program, registry, and revision.
+`ReloadFiles` provides that transaction directly; the editor's existing candidate
+compile/replacement path enforces the same contract.
 
 ## Deferred Runtime Extension Points
 

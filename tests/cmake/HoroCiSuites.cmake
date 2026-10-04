@@ -16,11 +16,15 @@ set(HORO_CI_AUDIO_TARGETS
 set(HORO_CI_WINDOWS_TARGETS
     ${HORO_CI_AUDIO_TARGETS}
     HoroCliCommandRegistryTests
+    HoroCliOutputPublicHeaderConsumer
+    HoroCliProductionOutputContract
     HoroPlatformTests
     HoroUpdateZipPackageProducerTests
     HoroVfxApiTests
     HoroCinematicModelTests
     HoroCinematicRuntimeTests
+    HoroCameraCutRuntimeTests
+    HoroCameraCutPublicHeaderConsumer
     HoroCinematicPropertyIntegrationTests
     HoroCinematicModelPublicHeaderConsumer
     HoroCinematicRuntimePublicHeaderConsumer
@@ -61,6 +65,7 @@ set(HORO_CI_NETWORK_TARGETS
 
 # These editor-labelled suites were explicitly run by the coverage workflow.
 set(HORO_SONAR_EDITOR_TARGETS
+    HoroCameraCutEditorIntegrationTests
     HoroCinematicPropertyIntegrationTests
     HoroConfiguredEditorUpdateBackendTests
 )

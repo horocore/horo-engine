@@ -31,6 +31,8 @@
     "bin/horo-extension-author-ci.py"
   ],
   "ciTemplate": "share/horo/extension-sdk/ci/extension-author-ci.yml",
+  "compatibilityMatrix": "share/horo/extension-sdk/CompatibilityMatrix.json",
+  "migrationGuide": "share/horo/extension-sdk/MigrationGuide.md",
   "entryPoints": [
     "horo_extension_query",
     "horo_extension_load",

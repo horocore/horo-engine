@@ -5,6 +5,7 @@
  * @brief Explicit allowlist-based portable diagnostic bundle generation.
  */
 
+#include "Horo/Foundation/ModuleDescriptor.h"
 #include "Horo/Foundation/Result.h"
 
 #include <cstddef>
@@ -47,4 +48,6 @@ namespace Horo::Diagnostics {
      * @return Committed bundle summary or a stable typed observability error.
      */
     [[nodiscard]] Result<DiagnosticBundleSummary> GenerateDiagnosticBundle(const DiagnosticBundleRequest &request);
+    /** @brief Returns inert error metadata for diagnostic bundle operations. @return Original Foundation-owned canonical errors. */
+    [[nodiscard]] ModuleErrorDomainDescriptor DiagnosticBundleErrorDomain();
 }  // namespace Horo::Diagnostics

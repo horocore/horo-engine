@@ -64,6 +64,7 @@ horo_configure_target_header_boundary(HoroCliHost PUBLIC_HEADERS
     Horo/Cli/CliDispatcher.h
     Horo/Cli/CliErrors.h
     Horo/Cli/CliOptionParser.h
+        Horo/Cli/CliOutputPresenter.h
 )
 
 horo_configure_target_header_boundary(HoroMcpSession PUBLIC_HEADERS
@@ -388,6 +389,9 @@ horo_configure_target_header_boundary(HoroGameplayRuntime PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroGameplayPerceptionIntegration PUBLIC_HEADERS
     Horo/Gameplay/PerceptionEventSource.h
 )
+horo_configure_target_header_boundary(HoroGameplayPhysicsIntegration PUBLIC_HEADERS
+    Horo/Gameplay/GameplayPhysicsContext.h
+)
 horo_configure_target_header_boundary(HoroGameplayModuleHost PUBLIC_HEADERS
     Horo/Gameplay/GameModuleHost.h
 )
@@ -656,6 +660,13 @@ horo_configure_target_header_boundary(HoroCinematicRuntime PUBLIC_HEADERS
     Horo/Cinematic/SequencePlaybackRuntime.h
     Horo/Cinematic/SequencePlaybackRuntimeErrors.h
 )
+horo_configure_target_header_boundary(HoroCameraRuntime PUBLIC_HEADERS
+    Horo/Runtime/Camera/CameraErrors.h
+    Horo/Runtime/Camera/CameraService.h
+)
+horo_configure_target_header_boundary(HoroCinematicCameraRuntime PUBLIC_HEADERS
+    Horo/Cinematic/CameraCutRuntime.h
+)
 horo_configure_target_header_boundary(HoroCinematicScriptBridge PUBLIC_HEADERS
     Horo/Cinematic/GameplayEventAdapter.h
     Horo/Cinematic/ScriptEventCook.h
@@ -763,6 +774,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/StreamingCellOperation.h
     Horo/WorldStreaming/StreamingCellCandidate.h
     Horo/WorldStreaming/StreamingCellAssetRequest.h
+    Horo/WorldStreaming/WorldPackageChunkAssignment.h
     Horo/WorldStreaming/StreamingCellActivation.h
     Horo/WorldStreaming/StreamingCellDirection.h
     Horo/WorldStreaming/StreamingCellState.h
@@ -811,6 +823,10 @@ Horo/Prefab/PrefabDependencyGraph.h
     Horo/Prefab/PrefabDocument.h
     Horo/Prefab/PrefabSceneIdentityRemap.h
     Horo/Prefab/PrefabSourceResolver.h
+)
+
+horo_configure_target_header_boundary(HoroSceneCellPayload PUBLIC_HEADERS
+    Horo/Runtime/Scene/RuntimeSceneCellPayload.h
 )
 
 horo_configure_target_header_boundary(HoroPrefabSceneExpansion PUBLIC_HEADERS
@@ -990,6 +1006,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ExtensionErrors.h
     Horo/Extensions/ExtensionInventory.h
     Horo/Extensions/ExtensionManager.h
+    Horo/Extensions/ExtensionRetirement.h
     Horo/Extensions/ExtensionManifest.h
     Horo/Extensions/ExtensionModuleResolution.h
     Horo/Extensions/ExtensionPlatformProvider.h

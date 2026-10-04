@@ -52,7 +52,9 @@ namespace Horo::Cli {
         }
 
         [[nodiscard]] bool IsConfigurationKey(const std::string_view value, const std::size_t maximumBytes) noexcept {
-            if (value.empty() || value.size() > maximumBytes || value.front() == '.' || value.back() == '.')
+            if (value.empty() || value.size() > maximumBytes)
+                return false;
+            if (value.front() == '.' || value.back() == '.')
                 return false;
             return value.find('.') != std::string_view::npos && value.find("..") == std::string_view::npos &&
                    std::ranges::all_of(value, IsConfigurationKeyCharacter);
@@ -242,12 +244,17 @@ namespace Horo::Cli {
             return isEnumeration == option.enumerationValues.empty();
         }
 
+        /** @brief Sensitive options cannot acquire retained defaults or configuration values. */
+        [[nodiscard]] bool HasInvalidValueSource(const CliOptionDescriptor &option) noexcept {
+            return (option.required && option.defaultValue.has_value()) ||
+                   (option.sensitive && (option.defaultValue.has_value() || option.configurationKey.has_value()));
+        }
+
         [[nodiscard]] Result<void> ValidateOptionShape(const CliOptionDescriptor &option, const CliCommandRegistryLimits &limits) {
             if (option.enumerationValues.size() > limits.maximumEnumerationValues)
                 return Result<void>::Failure(MakeError(CliErrors::RegistryCapacityExceeded));
-            if ((option.required && option.defaultValue.has_value()) || (option.sensitive && option.defaultValue.has_value()) ||
-                (option.sensitive && option.configurationKey.has_value()) || HasInvalidFlagSchema(option) ||
-                HasInvalidEnumerationSchema(option) || !HasValidNumericRange(option.valueKind, option.numericRange) ||
+            if (HasInvalidValueSource(option) || HasInvalidFlagSchema(option) || HasInvalidEnumerationSchema(option) ||
+                !HasValidNumericRange(option.valueKind, option.numericRange) ||
                 (option.configurationKey.has_value() && !IsConfigurationKey(*option.configurationKey, limits.maximumIdentifierBytes)))
                 return Result<void>::Failure(MakeError(CliErrors::OptionSchemaIncompatible));
             return Result<void>::Success();
@@ -262,6 +269,28 @@ namespace Horo::Cli {
             return Result<void>::Success();
         }
 
+        /** @brief Parses the complete integer spelling before applying its declared range. */
+        [[nodiscard]] bool HasValidIntegerDefault(const CliOptionDescriptor &option) {
+            std::int64_t parsed{};
+            const auto [end, error] =
+                std::from_chars(option.defaultValue->data(), option.defaultValue->data() + option.defaultValue->size(), parsed);
+            return error == std::errc{} && end == option.defaultValue->data() + option.defaultValue->size() &&
+                   (!option.numericRange.minimumInteger.has_value() || parsed >= *option.numericRange.minimumInteger) &&
+                   (!option.numericRange.maximumInteger.has_value() || parsed <= *option.numericRange.maximumInteger);
+        }
+
+        /** @brief Parses a finite locale-independent number before applying its declared range. */
+        [[nodiscard]] bool HasValidNumberDefault(const CliOptionDescriptor &option) {
+            if (!ValidFloat(*option.defaultValue))
+                return false;
+            std::istringstream stream{*option.defaultValue};
+            stream.imbue(std::locale::classic());
+            double parsed{};
+            stream >> parsed;
+            return (!option.numericRange.minimumNumber.has_value() || parsed >= *option.numericRange.minimumNumber) &&
+                   (!option.numericRange.maximumNumber.has_value() || parsed <= *option.numericRange.maximumNumber);
+        }
+
         [[nodiscard]] bool HasValidDefaultValue(const CliOptionDescriptor &option) {
             using enum CliOptionValueKind;
             switch (option.valueKind) {
@@ -270,24 +299,10 @@ namespace Horo::Cli {
                 case String:
                 case Path:
                     return !option.defaultValue->empty();
-                case SignedInteger: {
-                    std::int64_t parsed{};
-                    const auto [end, error] =
-                        std::from_chars(option.defaultValue->data(), option.defaultValue->data() + option.defaultValue->size(), parsed);
-                    return error == std::errc{} && end == option.defaultValue->data() + option.defaultValue->size() &&
-                           (!option.numericRange.minimumInteger.has_value() || parsed >= *option.numericRange.minimumInteger) &&
-                           (!option.numericRange.maximumInteger.has_value() || parsed <= *option.numericRange.maximumInteger);
-                }
-                case FloatingPoint: {
-                    if (!ValidFloat(*option.defaultValue))
-                        return false;
-                    std::istringstream stream{*option.defaultValue};
-                    stream.imbue(std::locale::classic());
-                    double parsed{};
-                    stream >> parsed;
-                    return (!option.numericRange.minimumNumber.has_value() || parsed >= *option.numericRange.minimumNumber) &&
-                           (!option.numericRange.maximumNumber.has_value() || parsed <= *option.numericRange.maximumNumber);
-                }
+                case SignedInteger:
+                    return HasValidIntegerDefault(option);
+                case FloatingPoint:
+                    return HasValidNumberDefault(option);
                 case Enumeration:
                     return std::ranges::find(option.enumerationValues, *option.defaultValue) != option.enumerationValues.end();
             }
@@ -385,6 +400,14 @@ namespace Horo::Cli {
                    IsCanonicalNamespacedId(descriptor.output.id, limits.maximumIdentifierBytes) && ValidAvailability(descriptor.hosts);
         }
 
+        /** @brief Keeps prompt availability and its explicit non-interactive alternative coherent. */
+        [[nodiscard]] bool HasValidInteractiveAlternative(const CliCommandDescriptor &descriptor, const CliCommandRegistryLimits &limits) {
+            if (descriptor.interactive == CliInteractivePolicy::Forbidden)
+                return !descriptor.interactiveAlternativeOption.has_value();
+            return descriptor.interactiveAlternativeOption.has_value() &&
+                   IsCanonicalToken(*descriptor.interactiveAlternativeOption, limits.maximumIdentifierBytes);
+        }
+
         [[nodiscard]] Result<void> ValidateDescriptorMetadata(const CliCommandDescriptor &descriptor,
                                                               const CliCommandRegistryLimits &limits) {
             if (descriptor.path.segments.empty() || descriptor.path.segments.size() > limits.maximumPathSegments)
@@ -397,17 +420,14 @@ namespace Horo::Cli {
                 return Result<void>::Failure(MakeError(CliErrors::DescriptorInvalid));
             if (!HasKnownDescriptorPolicies(descriptor) || !HasValidDescriptorIdentities(descriptor, limits))
                 return Result<void>::Failure(MakeError(CliErrors::DescriptorInvalid));
-            if (descriptor.interactive == CliInteractivePolicy::Forbidden && descriptor.interactiveAlternativeOption.has_value())
-                return Result<void>::Failure(MakeError(CliErrors::DescriptorInvalid));
-            if (descriptor.interactive != CliInteractivePolicy::Forbidden &&
-                (!descriptor.interactiveAlternativeOption.has_value() ||
-                 !IsCanonicalToken(*descriptor.interactiveAlternativeOption, limits.maximumIdentifierBytes)))
+            if (!HasValidInteractiveAlternative(descriptor, limits))
                 return Result<void>::Failure(MakeError(CliErrors::DescriptorInvalid));
             return Result<void>::Success();
         }
 
         [[nodiscard]] Result<void> ValidateOutputSchema(const CliOutputSchema &output) {
-            if (output.version == 0 || !ValidFormats(output.formats))
+            if (output.version == 0 || !ValidFormats(output.formats) ||
+                (output.progressRecords && (output.formats & CliOutputFormat::JsonLines) == CliOutputFormat::None))
                 return Result<void>::Failure(MakeError(CliErrors::OutputSchemaIncompatible));
             return Result<void>::Success();
         }
@@ -467,6 +487,20 @@ namespace Horo::Cli {
             return Result<void>::Success();
         }
 
+        /** @brief Resolves the declared prompt alternative against command and shared host options. */
+        [[nodiscard]] Result<void> ValidateInteractiveOption(const CliCommandDescriptor &descriptor) {
+            if (!descriptor.interactiveAlternativeOption)
+                return Result<void>::Success();
+            const auto namedAlternative = [&descriptor](const CliOptionDescriptor &option) {
+                return option.name == *descriptor.interactiveAlternativeOption;
+            };
+            const bool foundInCommand = std::ranges::any_of(descriptor.options, namedAlternative);
+            if (const bool foundInCommon = std::ranges::any_of(CliOptionParser::CommonOptions(), namedAlternative);
+                !foundInCommand && !foundInCommon)
+                return Result<void>::Failure(MakeError(CliErrors::DescriptorInvalid));
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ValidateDescriptor(const CliCommandDescriptor &descriptor, const CliCommandRegistryPolicy &policy) {
             if (const Result<void> valid = ValidateDescriptorMetadata(descriptor, policy.limits); valid.HasError())
                 return valid;
@@ -482,33 +516,9 @@ namespace Horo::Cli {
                 return valid;
             if (const Result<void> valid = ValidatePositionals(descriptor.positionals, policy.limits); valid.HasError())
                 return valid;
-            if (descriptor.interactiveAlternativeOption.has_value()) {
-                const bool foundInCommand = std::ranges::any_of(descriptor.options, [&descriptor](const CliOptionDescriptor &option) {
-                    return option.name == *descriptor.interactiveAlternativeOption;
-                });
-                const bool foundInCommon =
-                    std::ranges::any_of(CliOptionParser::CommonOptions(), [&descriptor](const CliOptionDescriptor &option) {
-                    return option.name == *descriptor.interactiveAlternativeOption;
-                });
-                if (!foundInCommand && !foundInCommon)
-                    return Result<void>::Failure(MakeError(CliErrors::DescriptorInvalid));
-            }
+            if (const Result<void> valid = ValidateInteractiveOption(descriptor); valid.HasError())
+                return valid;
             return ValidateCapabilities(descriptor.requiredCapabilities, policy);
-        }
-
-        [[nodiscard]] std::string JoinPath(const CommandPath &path) {
-            std::string result;
-            for (const std::string &segment : path.segments) {
-                if (!result.empty())
-                    result.push_back(' ');
-                result.append(segment);
-            }
-            return result;
-        }
-
-        [[nodiscard]] bool HasPrefix(const CommandPath &path, const CommandPath &prefix) noexcept {
-            return prefix.segments.size() <= path.segments.size() &&
-                   std::ranges::equal(prefix.segments, std::span{path.segments}.first(prefix.segments.size()));
         }
 
         void Canonicalize(CliCommandDescriptor &descriptor) {
@@ -518,68 +528,6 @@ namespace Horo::Cli {
             std::ranges::sort(descriptor.requiredCapabilities, {}, &CliCapabilityId::value);
         }
 
-        void AppendFormats(std::string &help, const CliOutputFormat formats) {
-            help.append("Output: human");
-            if (HasFormat(formats, CliOutputFormat::Json))
-                help.append(", json");
-            if (HasFormat(formats, CliOutputFormat::JsonLines))
-                help.append(", jsonl");
-            help.push_back('\n');
-        }
-
-        void AppendOptionValue(std::string &help, const CliOptionDescriptor &option) {
-            using enum CliOptionValueKind;
-            switch (option.valueKind) {
-                case Flag:
-                    return;
-                case String:
-                    help.append(" <string>");
-                    return;
-                case SignedInteger:
-                    help.append(" <integer>");
-                    return;
-                case FloatingPoint:
-                    help.append(" <number>");
-                    return;
-                case Path:
-                    help.append(" <path>");
-                    return;
-                case Enumeration:
-                    help.append(" <");
-                    for (std::size_t index = 0; index < option.enumerationValues.size(); ++index) {
-                        if (index > 0)
-                            help.push_back('|');
-                        help.append(option.enumerationValues[index]);
-                    }
-                    help.push_back('>');
-                    return;
-            }
-        }
-
-        void AppendOptionPolicy(std::string &help, const CliOptionDescriptor &option) {
-            if (option.required)
-                help.append(" (required)");
-            else if (option.defaultValue.has_value() && !option.sensitive)
-                help.append(" (default: ").append(*option.defaultValue).push_back(')');
-            if (option.repeatable)
-                help.append(" (repeatable)");
-        }
-
-        void AppendOptions(std::string &help, const std::span<const CliOptionDescriptor> options) {
-            for (const CliOptionDescriptor &option : options) {
-                help.append("  ");
-                if (option.shortName.has_value()) {
-                    help.push_back('-');
-                    help.push_back(*option.shortName);
-                    help.append(", ");
-                }
-                help.append("--").append(option.name);
-                AppendOptionValue(help, option);
-                help.append("  ").append(option.summary);
-                AppendOptionPolicy(help, option);
-                help.push_back('\n');
-            }
-        }
     }  // namespace
 
     /** @copydoc CliCommandRegistry::Create */
@@ -618,63 +566,4 @@ namespace Horo::Cli {
         return found != commands_.end() && found->path == path ? std::to_address(found) : nullptr;
     }
 
-    /** @copydoc CliCommandRegistry::Discover */
-    std::vector<const CliCommandDescriptor *> CliCommandRegistry::Discover(const CommandPath &prefix) const {
-        std::vector<const CliCommandDescriptor *> discovered;
-        discovered.reserve(commands_.size());
-        for (const CliCommandDescriptor &descriptor : commands_) {
-            if (HasPrefix(descriptor.path, prefix))
-                discovered.push_back(&descriptor);
-        }
-        return discovered;
-    }
-
-    /** @copydoc CliCommandRegistry::DiscoverNextSegments */
-    std::vector<std::string_view> CliCommandRegistry::DiscoverNextSegments(const CommandPath &prefix) const {
-        std::vector<std::string_view> segments;
-        for (const CliCommandDescriptor &descriptor : commands_) {
-            if (!HasPrefix(descriptor.path, prefix) || descriptor.path.segments.size() == prefix.segments.size())
-                continue;
-            const std::string_view candidate = descriptor.path.segments[prefix.segments.size()];
-            if (std::ranges::find(segments, candidate) == segments.end())
-                segments.push_back(candidate);
-        }
-        std::ranges::sort(segments);
-        return segments;
-    }
-
-    /** @copydoc CliCommandRegistry::GenerateHelp */
-    std::string CliCommandRegistry::GenerateHelp(const std::string_view programName, const CommandPath &path) const {
-        std::string help;
-        if (path.segments.empty()) {
-            help.append("Usage: ").append(programName).append(" <command> [options]\n\nCommands:\n");
-            for (const CliCommandDescriptor &descriptor : commands_)
-                help.append("  ").append(JoinPath(descriptor.path)).append("  ").append(descriptor.summary).push_back('\n');
-            return help;
-        }
-
-        const CliCommandDescriptor *descriptor = Find(path);
-        if (!descriptor)
-            return {};
-        help.append("Usage: ").append(programName).push_back(' ');
-        help.append(JoinPath(path));
-        if (!descriptor->options.empty())
-            help.append(" [options]");
-        for (const CliPositionalDescriptor &positional : descriptor->positionals) {
-            help.append(positional.required ? " <" : " [").append(positional.name);
-            if (positional.repeatable)
-                help.append("...");
-            help.push_back(positional.required ? '>' : ']');
-        }
-        help.append("\n\n").append(descriptor->summary).push_back('\n');
-        if (!descriptor->options.empty()) {
-            help.append("\nOptions:\n");
-            AppendOptions(help, descriptor->options);
-        }
-        help.append("\nCommon options:\n");
-        AppendOptions(help, CliOptionParser::CommonOptions());
-        help.push_back('\n');
-        AppendFormats(help, descriptor->output.formats);
-        return help;
-    }
 }  // namespace Horo::Cli
