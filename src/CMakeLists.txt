@@ -383,6 +383,8 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveStorageErrors.cpp
         runtime/save/SaveProtectionErrors.cpp
         runtime/save/SaveDiagnostics.cpp
+        runtime/save/SaveTelemetry.cpp
+        runtime/save/SaveTelemetrySummary.cpp
         runtime/save/SaveRootResolver.cpp
         runtime/save/SaveFilesystemStorage.cpp
         runtime/save/SaveNamespace.cpp

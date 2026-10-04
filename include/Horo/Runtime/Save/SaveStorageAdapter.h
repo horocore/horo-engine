@@ -153,6 +153,10 @@ namespace Horo::Runtime {
             std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt) const;
 
     private:
+        /** @brief Validates and transfers an admitted request to worker ownership. */
+        [[nodiscard]] Result<SaveStorageOperation> SubmitRequest(OperationId operation, SaveStorageRequest request,
+                                                                 CancellationToken cancellation,
+                                                                 std::optional<std::chrono::steady_clock::time_point> deadline) const;
         JobSystem *jobs_{};
         std::shared_ptr<ISaveStorageProvider> provider_;
         SaveStorageLimits limits_;

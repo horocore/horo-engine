@@ -37,6 +37,7 @@ target_compile_definitions(horo-engine PRIVATE
 )
 target_link_libraries(horo-engine PRIVATE HoroEngine::Application HoroEngine::Extensions HoroHostModuleComposition
     HoroNetworkProductHost
+    HoroEngine::Runtime
     HoroEngine::CliHost
 )
 if(HORO_BUILD_NETWORK_GNS)

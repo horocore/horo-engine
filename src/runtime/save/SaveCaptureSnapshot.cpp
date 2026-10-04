@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Save/SaveCaptureSnapshot.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 
 #include <algorithm>
 #include <array>
@@ -261,6 +262,13 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSaveCaptureBuilder::CaptureParticipants */
     Result<void> RuntimeSaveCaptureBuilder::CaptureParticipants() {
+        return ObserveSaveStage(SaveTelemetryStage::Capture, 0, [this] {
+            return CaptureAllParticipants();
+        }, {});
+    }
+
+    /** @copydoc RuntimeSaveCaptureBuilder::CaptureAllParticipants */
+    Result<void> RuntimeSaveCaptureBuilder::CaptureAllParticipants() {
         if (sealed_)
             return Result<void>::Failure(MakeError(SaveErrors::CaptureAlreadySealed));
         if (captureAttempted_)
@@ -438,24 +446,26 @@ namespace Horo::Runtime {
     }
 
     Result<void> RuntimeSaveCaptureBuilder::CaptureBinding(const SaveParticipantBinding &binding) {
-        using enum CanonicalCaptureDisposition;
-        const CanonicalStateParticipantDescriptor &descriptor = binding.Descriptor();
-        ParticipantUsage *usage = FindUsage(descriptor.participant);
-        if (usage == nullptr)
-            return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
+        return ObserveSaveStage(SaveTelemetryStage::Participant, 0, [this, &binding] {
+            using enum CanonicalCaptureDisposition;
+            const CanonicalStateParticipantDescriptor &descriptor = binding.Descriptor();
+            ParticipantUsage *usage = FindUsage(descriptor.participant);
+            if (usage == nullptr)
+                return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
 
-        ParticipantCaptureSink sink{*this, descriptor};
-        const Result<CanonicalCaptureDisposition> captured = binding.Adapter()->Capture(MakeContext(binding), sink);
-        if (captured.HasError())
-            return Result<void>::Failure(captured.ErrorValue());
-        if (sink.RejectedWrite() || (captured.Value() != Captured && captured.Value() != Omitted) ||
-            (captured.Value() == Omitted && usage->recordCount != 0))
-            return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
-        usage->resolved = true;
-        usage->disposition = captured.Value();
-        if ((descriptor.required || captured.Value() == Captured) && usage->recordCount != descriptor.ownedRecords.size())
-            return Result<void>::Failure(MakeError(SaveErrors::CaptureIncomplete));
-        return Result<void>::Success();
+            ParticipantCaptureSink sink{*this, descriptor};
+            const Result<CanonicalCaptureDisposition> captured = binding.Adapter()->Capture(MakeContext(binding), sink);
+            if (captured.HasError())
+                return Result<void>::Failure(captured.ErrorValue());
+            if (sink.RejectedWrite() || (captured.Value() != Captured && captured.Value() != Omitted) ||
+                (captured.Value() == Omitted && usage->recordCount != 0))
+                return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
+            usage->resolved = true;
+            usage->disposition = captured.Value();
+            if ((descriptor.required || captured.Value() == Captured) && usage->recordCount != descriptor.ownedRecords.size())
+                return Result<void>::Failure(MakeError(SaveErrors::CaptureIncomplete));
+            return Result<void>::Success();
+        }, {});
     }
 
     bool RuntimeSaveCaptureBuilder::HasCompleteParticipantProjection(const CanonicalStateParticipantDescriptor &descriptor,

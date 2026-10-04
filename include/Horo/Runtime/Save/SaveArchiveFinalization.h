@@ -117,6 +117,8 @@ namespace Horo::Runtime {
         SaveArchiveFinalizer(std::vector<std::byte> preamble, SaveGameManifest manifest, ValidatedSaveChunkDirectory directory,
                              const SaveArchiveFinalizationLimits &limits) noexcept;
 
+        /** @brief Builds and verifies the archive under the caller's stage observation. */
+        [[nodiscard]] Result<FinalizedSaveArchive> FinalizeArchive(std::uint32_t trailerByteLength);
         [[nodiscard]] bool FitsArchive(std::uint64_t trailerByteLength) const noexcept;
 
         std::vector<std::byte> preamble_;

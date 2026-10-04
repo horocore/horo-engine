@@ -1,3 +1,8 @@
+add_test(NAME HoroSaveObservabilityDependencyPolicyTest
+    COMMAND "${CMAKE_COMMAND}" "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-observability-dependency"
+    -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunSaveObservabilityDependencyPolicyTest.cmake")
+set_tests_properties(HoroSaveObservabilityDependencyPolicyTest PROPERTIES LABELS "unit;save;architecture")
 include(Catch)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroCiSuites.cmake")
 
@@ -1294,6 +1299,11 @@ if (HORO_ENABLE_OPENTELEMETRY)
             nlohmann_json::nlohmann_json
     )
 endif ()
+add_executable(HoroSaveTelemetryDisabledBenchmark benchmarks/SaveTelemetryDisabledBenchmark.cpp)
+target_compile_features(HoroSaveTelemetryDisabledBenchmark PRIVATE cxx_std_20)
+target_link_libraries(HoroSaveTelemetryDisabledBenchmark PRIVATE HoroEngine::Runtime)
+add_test(NAME HoroSaveTelemetryDisabledBenchmark COMMAND HoroSaveTelemetryDisabledBenchmark)
+set_tests_properties(HoroSaveTelemetryDisabledBenchmark PROPERTIES LABELS "unit;save;telemetry;benchmark")
 add_executable(HoroTelemetryFastPathBenchmark
         benchmarks/TelemetryFastPathBenchmark.cpp
 )
@@ -2319,6 +2329,10 @@ add_executable(HoroRuntimeSaveIdentityTests
 )
 target_compile_features(HoroRuntimeSaveIdentityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveIdentityTests PRIVATE HoroEngine::Runtime)
+add_executable(HoroRuntimeSaveTelemetryTests unit/runtime/save/SaveTelemetryTests.cpp support/AllocationProbe.cpp)
+target_include_directories(HoroRuntimeSaveTelemetryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(HoroRuntimeSaveTelemetryTests PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeSaveTelemetryTests PRIVATE HoroEngine::Runtime HoroEngine::Application HoroEngine::PlatformServices Threads::Threads)
 add_executable(HoroRuntimeSaveDiagnosticsTests
         unit/runtime/save/SaveDiagnosticsTests.cpp
 )
@@ -3396,6 +3410,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeLifecycleTests
         HoroRuntimeSaveIdentityTests
         HoroRuntimeSaveDiagnosticsTests
+        HoroRuntimeSaveTelemetryTests
         HoroRuntimeSaveRootResolverTests
         HoroRuntimeSaveFilesystemLockTests
         HoroRuntimeSaveNamespaceTests

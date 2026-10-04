@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Save/SaveOperationArbiter.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 
 #include <algorithm>
 #include <format>
@@ -340,14 +341,27 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveOperationArbiter::Admit */
     Result<SaveArbiterAdmission> SaveOperationArbiter::Admit(SaveArbiterRequest request) {
-        if (!IsRequestValid(request) || Find(*state_, request.operation.operation) != state_->records.end())
-            return Result<SaveArbiterAdmission>::Failure(
-                ArbiterError(SaveErrors::ArbiterInvalid, "The arbiter request is malformed or reuses an operation identity."));
+        SaveStageObservation observation{SaveTelemetryStage::Queue, request.operation.operation};
+        auto admitted = [this, &request] {
+            if (!IsRequestValid(request) || Find(*state_, request.operation.operation) != state_->records.end())
+                return Result<SaveArbiterAdmission>::Failure(
+                    ArbiterError(SaveErrors::ArbiterInvalid, "The arbiter request is malformed or reuses an operation identity."));
 
-        if (const auto resolved = ResolveExistingConflict(*state_, request); resolved.has_value())
-            return *resolved;
-        const std::optional<OperationId> replaced = ReplaceQueuedEquivalent(*state_, request);
-        return AdmitNewRecord(*state_, std::move(request), replaced);
+            if (const auto resolved = ResolveExistingConflict(*state_, request); resolved.has_value())
+                return *resolved;
+            const std::optional<OperationId> replaced = ReplaceQueuedEquivalent(*state_, request);
+            return AdmitNewRecord(*state_, std::move(request), replaced);
+        }();
+        const SaveTelemetryEvidence evidence{.droppedWork = admitted.HasError() || admitted.Value().disposition ==
+                                                                                       SaveArbiterAdmissionDisposition::ReplacedQueued
+                                                                ? 1U
+                                                                : 0U,
+                                             .queueDepth = observation.IsActive() ? QueuedCount() : 0U};
+        if (admitted.HasError())
+            observation.Fail(admitted.ErrorValue(), evidence);
+        else
+            observation.Complete(SaveTelemetryOutcome::Succeeded, evidence);
+        return admitted;
     }
 
     /** @copydoc SaveOperationArbiter::StartNext */

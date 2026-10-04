@@ -34,6 +34,7 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 #if defined(HORO_HAS_OPENTELEMETRY)
 #include "Horo/Foundation/Telemetry/OpenTelemetrySink.h"
 #endif
@@ -433,6 +434,7 @@ namespace Horo::Editor {
                     std::fprintf(stderr, "[Observability] approved OTLP configuration was rejected; continuing with local sinks\n");
             }
 #endif
+            hostConfiguration.summaries.push_back(&Runtime::SummarizeSaveTelemetry);
             auto session = Application::HostObservabilitySession::Start(std::move(hostConfiguration));
             if (session == nullptr)
                 std::fprintf(stderr, "[Observability] local runtime initialization failed; emergency logging remains available\n");
@@ -584,7 +586,6 @@ namespace Horo::Editor {
                 const char *err = SDL_GetError();
                 LOG_CRITICAL("platform.sdl", "SDL_Init failed: %s", err);
                 std::fprintf(stderr, "SDL_Init: %s\n", err);
-                Log::Logger::Shutdown();
                 return false;
             }
             if (windowRequirements.presentation == Render::RenderPresentationKind::OpenGL) {
@@ -1551,6 +1552,10 @@ namespace Horo::Editor {
     int RunEditorGuiApp(const int argc, char **argv, const EditorUpdateHostServices *updateHost) {
         // ── Bootstrap logging before any subsystem ───────────────────────
         auto observabilitySession = InitializeEditorObservability();
+        auto saveTelemetryResult = Runtime::SaveTelemetryRegistration::Create();
+        if (saveTelemetryResult.HasError())
+            return 1;
+        auto saveTelemetry = std::move(saveTelemetryResult).Value();
         EditorTelemetry editorTelemetry = RegisterEditorTelemetry();
         auto structuredLogStore = std::make_shared<Log::StructuredLogStore>(4096U);
         Log::Logger::SetStructuredLogStore(structuredLogStore);
@@ -1563,6 +1568,7 @@ namespace Horo::Editor {
         Log::Logger::DumpStartupInfo();
 
         if (!MigrateStartupUserState()) {
+            saveTelemetry.reset();
             Log::Logger::Shutdown();
             return 1;
         }
@@ -1579,12 +1585,14 @@ namespace Horo::Editor {
 
         auto prepared = PrepareEditorStartup(std::move(opts));
         if (!prepared) {
+            saveTelemetry.reset();
             Log::Logger::Shutdown();
             return 1;
         }
 
         auto presentation = StartEditorPresentation(*prepared);
         if (!presentation) {
+            saveTelemetry.reset();
             Log::Logger::Shutdown();
             return 1;
         }
@@ -1596,6 +1604,7 @@ namespace Horo::Editor {
                                                               *structuredLogStore, buildOutputStore, operationStore, updateHost});
 
         ShutdownEditorPresentation(presentation->window, presentation->composition, presentation->textures);
+        saveTelemetry.reset();
         return CompleteEditorSession(*prepared, session, argv[0]);
     }
 }  // namespace Horo::Editor

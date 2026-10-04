@@ -274,6 +274,8 @@ namespace Horo::Runtime {
                                          std::size_t segmentCount) const noexcept;
         [[nodiscard]] Result<void> ValidateAdmission(const CanonicalCaptureRecord &record, std::uint64_t byteLength,
                                                      std::size_t segmentCount) const;
+        /** @brief Captures the participant set with rollback on failure. */
+        [[nodiscard]] Result<void> CaptureAllParticipants();
         [[nodiscard]] Result<void> CaptureBinding(const SaveParticipantBinding &binding);
         [[nodiscard]] static Result<void> ValidateCreationContext(const RuntimeSaveCaptureProvenance &provenance,
                                                                   const SaveParticipantRegistrySnapshot &participants,

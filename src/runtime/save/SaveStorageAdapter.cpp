@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Save/SaveStorageAdapter.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 
 #include <algorithm>
 #include <mutex>
@@ -200,8 +201,9 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> Execute(const std::shared_ptr<SaveStorageDetail::SharedOperation> &state,
                                            const std::shared_ptr<ISaveStorageProvider> &provider, const SaveStorageRequest &request,
                                            const SaveStorageLimits limits, const std::shared_ptr<SaveOperationController> &controller,
-                                           const CancellationToken &cancellation) {
+                                           const CancellationToken &cancellation, const OperationId operation) {
             const bool mutation = IsMutation(request.kind);
+            SaveStageObservation observation{mutation ? SaveTelemetryStage::Commit : SaveTelemetryStage::Restore, operation};
             if (const SaveOperationStage stage = StorageStage(request.kind);
                 controller->PublishProgress(stage, {1, 1}) != SaveOperationTransitionResult::Applied)
                 return Result<void>::Success();
@@ -212,15 +214,23 @@ namespace Horo::Runtime {
             const CancellationToken providerCancellation = mutation ? CancellationToken{} : cancellation;
             Result<SaveStorageValue> executed = ExecuteProvider(*provider, request, providerCancellation);
             if (executed.HasError()) {
+                observation.Fail(executed.ErrorValue());
                 Fail(*controller, executed.ErrorValue(), mutation);
                 return Result<void>::Success();
             }
             if (!ValidValue(request, executed.Value(), limits)) {
+                observation.Fail(MakeError(SaveErrors::StorageResultInvalid));
                 Fail(*controller, MakeError(SaveErrors::StorageResultInvalid), mutation);
                 return Result<void>::Success();
             }
+            SaveTelemetryEvidence evidence;
+            if (const auto *archive = std::get_if<ImmutableSaveArchive>(&executed.Value()); archive && archive->bytes)
+                evidence.bytes = archive->bytes->size();
+            else if (request.write && request.write->archive.bytes)
+                evidence.bytes = request.write->archive.bytes->size();
             state->StoreValue(std::move(executed).Value());
             (void)controller->Complete(mutation ? SaveOperationCommitOutcome::Committed : SaveOperationCommitOutcome::NotCommitted);
+            observation.Complete(SaveTelemetryOutcome::Succeeded, evidence);
             return Result<void>::Success();
         }
     }  // namespace
@@ -267,6 +277,15 @@ namespace Horo::Runtime {
     Result<SaveStorageOperation> SaveStorageAdapter::Submit(const OperationId operation, SaveStorageRequest request,
                                                             CancellationToken cancellation,
                                                             const std::optional<std::chrono::steady_clock::time_point> deadline) const {
+        return ObserveSaveStage(SaveTelemetryStage::Queue, operation, [this, operation, &request, &cancellation, deadline] {
+            return SubmitRequest(operation, std::move(request), cancellation, deadline);
+        }, {});
+    }
+
+    /** @copydoc SaveStorageAdapter::SubmitRequest */
+    Result<SaveStorageOperation> SaveStorageAdapter::SubmitRequest(
+        const OperationId operation, SaveStorageRequest request, CancellationToken cancellation,
+        const std::optional<std::chrono::steady_clock::time_point> deadline) const {
         if (!jobs_ || !provider_ || !ValidLimits(limits_) || !ValidRequest(request, limits_))
             return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
         if (!provider_->Capabilities().Supports(request.kind))
@@ -285,9 +304,9 @@ namespace Horo::Runtime {
             state->SetCancellation(CancellationSource(cancellation));
             state->SetScheduler(*jobs_);
             auto submitted = jobs_->SubmitResult({.parentCancellation = state->Cancellation(), .operationId = operation},
-                                                 [state, provider = provider_, request = std::move(request), limits = limits_,
-                                                  producer](const CancellationToken &token) mutable {
-                return Execute(state, provider, request, limits, producer, token);
+                                                 [state, provider = provider_, request = std::move(request), limits = limits_, producer,
+                                                  operation](const CancellationToken &token) mutable {
+                return Execute(state, provider, request, limits, producer, token, operation);
             });
             if (submitted.HasError())
                 return Result<SaveStorageOperation>::Failure(submitted.ErrorValue());
