@@ -153,6 +153,38 @@ second manifest or topology authority. Existing descriptor-only callers migrate 
 constructing the cooked aggregate at the Asset Pipeline/runtime handoff once complete
 cell metadata is available; partial/default cooked metadata is not accepted.
 
+`WorldPackageChunkAssignment` is the inert WST-004.10 release projection joining
+this manifest's existing cell artifact IDs to the validated Assets `AssetChunkPlan`.
+It copies canonical artifact/hash records and complete required chunk sets, including
+the base chunk, transitive hard-cell dependencies (cycles are co-load components),
+and transitive release-chunk dependencies. Assets retains membership, graph,
+mount-order and base/DLC compatibility authority. Mandatory cell, chunk, release-asset
+and total-requirement ceilings apply before publication. Missing artifact membership
+or invalid release compatibility returns a typed failure and leaves both inputs intact.
+No wire layout, filesystem path, installer, downloader or second topology is added.
+
+The host binds an assignment to a stable owner identity, non-zero revision and
+partition epoch. It advances revision or owner identity for any changed release
+inputs; revisions never wrap or get reused. `WorldPackageAvailabilitySnapshot`
+copies exactly one explicit state per declared release chunk, fenced by that binding
+and an independent non-zero availability revision. Installed means the host has
+verified and mounted content through Assets. Installable, Downloadable, Installing, Unavailable
+and Failed remain missing content; presence in a registry is insufficient evidence.
+`EvaluateWorldCellContent` returns the exact canonical missing chunk IDs and causes
+as a normal complete value, even while unrelated optional chunks are absent.
+Foreign or superseded assignment/availability facts, unknown enum values, undeclared
+cells, cancellation and shutdown return typed errors without partial publication.
+
+Packaged callers migrate to the package-aware `RequestStreamingCellAssets` overload.
+It checks the current release/availability context, partition epoch and exact candidate
+artifact/hash and the requested co-load component's exact metadata before starting
+any child reads; missing content returns
+`PackageChunkContentMissing`. Callers obtain detailed missing rows from the same
+availability evaluator. The existing overload remains the explicit standalone/editor
+asset-provider path. Already admitted asynchronous work owns its submission-time
+facts and retains the existing request cancellation, joining and shutdown protocol.
+These load-time contracts never schedule downloads or infer fallback content.
+
 `WorldSpatialAssignment` is the inert WST-004.3 cook-stage projection that maps
 page-scoped authored-object addresses and exact immutable authoring revisions onto
 descriptor cells. Candidate bounds use inclusive canonical millimeters and the

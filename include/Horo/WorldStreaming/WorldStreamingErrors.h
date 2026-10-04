@@ -8,6 +8,21 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::WorldStreaming::WorldStreamingErrors {
+    /** @brief Package assignment or complete availability facts are malformed. */
+    extern const ErrorCodeDescriptor PackageChunkInvalid;
+    /** @brief A package-content lifecycle or availability state is unsupported. */
+    extern const ErrorCodeDescriptor PackageChunkUnsupported;
+    /** @brief Package content names a foreign or superseded release publication. */
+    extern const ErrorCodeDescriptor PackageChunkStale;
+    /** @brief Complete package assignment exceeds mandatory storage ceilings. */
+    extern const ErrorCodeDescriptor PackageChunkCapacityExceeded;
+    /** @brief A cooked cell artifact has no declared release chunk membership. */
+    extern const ErrorCodeDescriptor PackageChunkUnassigned;
+    /** @brief Package content admission is cancelled or closed. */
+    extern const ErrorCodeDescriptor PackageChunkLifecycleUnavailable;
+    /** @brief Required cell content is not completely verified and mounted. */
+    extern const ErrorCodeDescriptor PackageChunkContentMissing;
+
     /** @brief A direction owner, demand revision or participant set is malformed. */
     extern const ErrorCodeDescriptor CellDirectionInvalid;
     /** @brief A demand or direction command is unsupported. */
