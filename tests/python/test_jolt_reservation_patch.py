@@ -1,12 +1,19 @@
 """Run the reviewed patch on real dependency sources, including Windows text writes."""
+import importlib.util
 from pathlib import Path
 import re
 import shutil
+import sys
 
 import pytest
-from scripts.dev import execute_subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
+SPEC = importlib.util.spec_from_file_location("horo_jolt_patch_runner", ROOT / "scripts/dev.py")
+assert SPEC is not None
+assert SPEC.loader is not None
+dev = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = dev
+SPEC.loader.exec_module(dev)
 PATCH = ROOT / "cmake/patches/HoroJoltConstraintReservation.cmake"
 FILES = ("Constraints/ConstraintManager.h", "Constraints/ConstraintManager.cpp", "PhysicsSystem.h")
 
@@ -28,7 +35,7 @@ def source(tmp_path):
 def apply(source):
     cmake = shutil.which("cmake")
     assert cmake is not None
-    return execute_subprocess(
+    return dev.execute_subprocess(
         [str(Path(cmake).resolve()), f"-DJOLT_SOURCE_DIR={source}", "-P", str(PATCH)], cwd=ROOT,
     )
 
