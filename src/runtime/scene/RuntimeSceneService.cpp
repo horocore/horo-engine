@@ -11,10 +11,6 @@
 
 namespace Horo::Runtime {
     namespace {
-        template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &code, std::string message) {
-            return Result<T>::Failure(MakeError(code, std::move(message)));
-        }
-
         [[nodiscard]] bool IsTerminal(const Horo::Assets::AssetLoadState state) noexcept {
             using enum Horo::Assets::AssetLoadState;
             return state == Succeeded || state == Failed || state == Cancelled;
@@ -95,12 +91,26 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSceneService::QueuePreparation */
     Result<void> RuntimeSceneService::QueuePreparation(RuntimeSceneDefinition definition, const RuntimeSceneConfig config) {
+        return QueuePreparationWithPublicationCheck(std::move(definition), {}, config);
+    }
+
+    /** @copydoc RuntimeSceneService::QueuePreparationWithPublicationCheck */
+    Result<void> RuntimeSceneService::QueuePreparationWithPublicationCheck(RuntimeSceneDefinition definition,
+                                                                           std::unique_ptr<ScenePublicationCheck> publicationCheck,
+                                                                           const RuntimeSceneConfig config) {
         if (shutdown_)
             return Result<void>::Failure(MakeError(SceneErrors::ServiceShutdown));
         if (transition_ != TransitionKind::None || structuralCommands_ || preparation_)
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+        if (publicationCheck) {
+            if (const auto valid = publicationCheck->ValidatePublication(); valid.HasError())
+                return valid;
+        }
         operationError_.reset();
-        return BeginPreparation(std::move(definition), config);
+        const auto admitted = BeginPreparation(std::move(definition), config);
+        if (admitted.HasValue())
+            publicationCheck_ = std::move(publicationCheck);
+        return admitted;
     }
 
     Result<void> RuntimeSceneService::PopulatePreparationEntries(Preparation &prep, const RuntimeSceneDefinition &definition) const {
@@ -132,16 +142,8 @@ namespace Horo::Runtime {
             return validation;
 
         if (definition.AssetDependencies().empty()) {
-            Result<std::unique_ptr<RuntimeScene>> candidate =
-                RuntimeScene::CreateResolved(definition, SceneRuntimeId{nextRuntimeId_}, config, {}, {});
-            if (candidate.HasError())
-                return Result<void>::Failure(candidate.ErrorValue());
-            ++nextRuntimeId_;
-            pending_.scene = std::move(candidate).Value();
-            if (const Result<void> prepared = PrepareParticipants(definition); prepared.HasError()) {
-                pending_.scene.reset();
-                return prepared;
-            }
+            if (const auto staged = StageCandidate(definition, config, {}, {}); staged.HasError())
+                return staged;
             transition_ = TransitionKind::Activate;
             return Result<void>::Success();
         }
@@ -175,6 +177,7 @@ namespace Horo::Runtime {
         CancelPreparation(false);
         ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
+        publicationCheck_.reset();
         transition_ = None;
         if (!active_.scene)
             return Result<void>::Success();
@@ -222,6 +225,14 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeSceneService::OnPhase */
     Result<void> RuntimeSceneService::OnPhase(const RuntimePhase phase, const FrameContext &) {
         if (phase == RuntimePhase::CommitDeferredLifecycleChanges) {
+            if (preparation_ && publicationCheck_) {
+                if (const auto valid = publicationCheck_->ValidatePublication(); valid.HasError()) {
+                    operationError_ = valid.ErrorValue();
+                    CancelPreparation(false);
+                    publicationCheck_.reset();
+                    return Result<void>::Success();
+                }
+            }
             AdvancePreparation();
             return CommitDeferredChanges();
         }
@@ -241,6 +252,7 @@ namespace Horo::Runtime {
         operationError_.reset();
         ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
+        publicationCheck_.reset();
         ShutdownCandidates(active_.candidates);
         active_.scene.reset();
         transition_ = TransitionKind::None;
@@ -303,19 +315,28 @@ namespace Horo::Runtime {
         assets.reserve(preparation_->entries.size());
         for (Preparation::Entry &entry : preparation_->entries)
             assets.emplace_back(std::move(entry.dependency), std::move(entry.payload));
-        Result<std::unique_ptr<RuntimeScene>> candidate =
-            RuntimeScene::CreateResolved(preparation_->definition, SceneRuntimeId{nextRuntimeId_}, preparation_->config,
-                                         preparation_->snapshot.Revision(), std::move(assets));
+        if (const auto staged =
+                StageCandidate(preparation_->definition, preparation_->config, preparation_->snapshot.Revision(), std::move(assets));
+            staged.HasError())
+            return staged;
+        preparation_.reset();
+        transition_ = TransitionKind::Activate;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeSceneService::StageCandidate */
+    Result<void> RuntimeSceneService::StageCandidate(const RuntimeSceneDefinition &definition, const RuntimeSceneConfig config,
+                                                     const Assets::AssetRegistryRevision revision,
+                                                     std::vector<RuntimeScene::ResolvedAsset> assets) {
+        auto candidate = RuntimeScene::CreateResolved(definition, SceneRuntimeId{nextRuntimeId_}, config, revision, std::move(assets));
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
         ++nextRuntimeId_;
         pending_.scene = std::move(candidate).Value();
-        if (const Result<void> prepared = PrepareParticipants(preparation_->definition); prepared.HasError()) {
+        if (const auto prepared = PrepareParticipants(definition); prepared.HasError()) {
             pending_.scene.reset();
             return Result<void>::Failure(prepared.ErrorValue());
         }
-        preparation_.reset();
-        transition_ = TransitionKind::Activate;
         return Result<void>::Success();
     }
 
@@ -325,6 +346,7 @@ namespace Horo::Runtime {
         if (const Result<void> processed = ProcessCompletedPreparationLoads(); processed.HasError()) {
             operationError_ = processed.ErrorValue();
             CancelPreparation(false);
+            publicationCheck_.reset();
             return;
         }
         if (preparation_->activeLoads != 0 || std::ranges::any_of(preparation_->entries, [](const Preparation::Entry &entry) {
@@ -334,6 +356,7 @@ namespace Horo::Runtime {
         if (const Result<void> finalized = FinalizePreparation(); finalized.HasError()) {
             operationError_ = finalized.ErrorValue();
             CancelPreparation(false);
+            publicationCheck_.reset();
         }
     }
 
@@ -361,12 +384,16 @@ namespace Horo::Runtime {
                 structuralResult_ = std::move(committed).Value();
         }
         if (transition_ == Activate) {
+            if (publicationCheck_) {
+                const auto valid = publicationCheck_->ValidatePublication();
+                if (valid.HasError()) {
+                    RejectPendingPublication(valid.ErrorValue());
+                    return Result<void>::Success();
+                }
+            }
             for (const auto &candidate : pending_.candidates) {
                 if (const Result<void> result = candidate->ValidatePublication(); result.HasError()) {
-                    operationError_ = result.ErrorValue();
-                    ShutdownCandidates(pending_.candidates);
-                    pending_.scene.reset();
-                    transition_ = None;
+                    RejectPendingPublication(result.ErrorValue());
                     return Result<void>::Success();
                 }
             }
@@ -374,6 +401,7 @@ namespace Horo::Runtime {
                 candidate->Publish();
             SceneAggregate retired = std::move(active_);
             active_ = std::move(pending_);
+            publicationCheck_.reset();
             ShutdownCandidates(retired.candidates);
             retired.scene.reset();
         } else if (transition_ == Unload) {
@@ -383,6 +411,15 @@ namespace Horo::Runtime {
         }
         transition_ = None;
         return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeSceneService::RejectPendingPublication */
+    void RuntimeSceneService::RejectPendingPublication(Error error) {
+        operationError_ = std::move(error);
+        ShutdownCandidates(pending_.candidates);
+        pending_.scene.reset();
+        publicationCheck_.reset();
+        transition_ = TransitionKind::None;
     }
 
     Result<void> RuntimeSceneService::PrepareParticipants(const RuntimeSceneDefinition &definition) {

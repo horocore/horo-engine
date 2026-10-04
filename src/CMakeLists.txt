@@ -1512,6 +1512,15 @@ add_library(HoroEngine::WorldStreaming ALIAS HoroWorldStreaming)
 target_compile_features(HoroWorldStreaming PUBLIC cxx_std_20)
 target_link_libraries(HoroWorldStreaming PUBLIC HoroEngine::Foundation HoroEngine::Assets)
 
+# Scene owns CoreEcs baseline semantics; this host-composed seam leaves streaming policy and ECS targets independent.
+add_library(HoroSceneCellPayload STATIC
+        runtime/scene/RuntimeSceneCellPayload.cpp
+        runtime/scene/RuntimeSceneCellPayloadErrors.cpp
+)
+add_library(HoroEngine::SceneCellPayload ALIAS HoroSceneCellPayload)
+target_compile_features(HoroSceneCellPayload PUBLIC cxx_std_20)
+target_link_libraries(HoroSceneCellPayload PUBLIC HoroEngine::RuntimeScene HoroEngine::WorldStreaming)
+
 add_library(HoroPrefab STATIC
         runtime/prefab/CookedPrefab.cpp
         runtime/prefab/CookedPrefabCodec.cpp

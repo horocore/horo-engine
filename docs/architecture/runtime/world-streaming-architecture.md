@@ -887,6 +887,16 @@ admission, activation, provider ownership, cancellation or replacement decisions
 
 ## Scene, Prefab And Navigation Reconciliation
 
+The implemented Scene-owned `HoroEngine::SceneCellPayload` seam cooks complete
+flattened typed cell snapshots into immutable `RuntimeSceneCellPayload` baselines.
+It preserves `RuntimeSceneDefinition`'s in-memory contract; Scene provider encoding
+is separate from ADR-023 container parsing. `QueueRuntimeSceneCellPayload` feeds
+Scene's existing detached preparation and retains the host authority lease until
+safe-point publication checks current content/fence, cancellation, reservations
+and provider readiness. It prepares one cell Scene domain; it does not introduce
+an independent partition authority or multi-cell merge transaction. See
+[Scene Runtime](scene-runtime.md#runtime-scene-cell-payload-production).
+
 Cell CoreEcs packages use ADR-017 Tier 0-style offline expansion: placed prefab
 instances are expanded during bake into a RuntimeSceneDefinition/component snapshot
 for the cell. Stable identities, dependency digests, opaque component preservation

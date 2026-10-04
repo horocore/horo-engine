@@ -39,6 +39,17 @@ namespace Horo::Runtime {
         virtual void Shutdown() noexcept = 0;
     };
 
+    /** @brief Owned pure admission predicate retained until deferred scene publication or cancellation. */
+    class ScenePublicationCheck {
+    public:
+        virtual ~ScenePublicationCheck() = default;
+        /** @brief Revalidates external owner evidence at the publication safe point.
+         * @return Success or a typed rejection that preserves the active scene.
+         * @details Must not mutate state, allocate resources or perform I/O. Referenced authorities must outlive the pending operation.
+         */
+        [[nodiscard]] virtual Result<void> ValidatePublication() const = 0;
+    };
+
     /** @brief Host-injected subsystem participating in aggregate runtime-scene publication. */
     class SceneActivationParticipant {
     public:
@@ -308,6 +319,16 @@ namespace Horo::Runtime {
          * the operation; lvalue callers retain source compatibility through a boundary copy. @param config Generation retirement policy.
          * @return Success when accepted, or a typed immediate validation/admission error. */
         [[nodiscard]] Result<void> QueuePreparation(RuntimeSceneDefinition definition, RuntimeSceneConfig config = {});
+        /** @brief Queues detached preparation with an additional owned pure publication check.
+         * @param definition Immutable complete runtime definition consumed by this operation.
+         * @param publicationCheck Optional predicate retained through preparation and revalidated before aggregate publication.
+         * @param config Generation retirement policy.
+         * @return Typed admission result; deferred validation failures preserve the active scene and reach TakeOperationError().
+         * @details Existing cancellation, replacement and shutdown paths retire the predicate with the pending operation.
+         */
+        [[nodiscard]] Result<void> QueuePreparationWithPublicationCheck(RuntimeSceneDefinition definition,
+                                                                        std::unique_ptr<ScenePublicationCheck> publicationCheck,
+                                                                        RuntimeSceneConfig config = {});
         /** @brief Queues active-scene unload; repeated unload with no pending transition is harmless. */
         [[nodiscard]] Result<void> QueueUnload();
         /** @brief Queues one structural batch against the current active scene. @param commands Batch consumed on success.
@@ -352,6 +373,9 @@ namespace Horo::Runtime {
         };
 
         [[nodiscard]] Result<void> BeginPreparation(RuntimeSceneDefinition definition, RuntimeSceneConfig config);
+        /** @brief Stages the validated runtime scene and its detached participant candidates without publication. */
+        [[nodiscard]] Result<void> StageCandidate(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config,
+                                                  Assets::AssetRegistryRevision revision, std::vector<RuntimeScene::ResolvedAsset> assets);
         [[nodiscard]] Result<void> PopulatePreparationEntries(Preparation &prep, const RuntimeSceneDefinition &definition) const;
         [[nodiscard]] Result<void> ProcessCompletedPreparationLoads();
         [[nodiscard]] Result<void> FinalizePreparation();
@@ -361,11 +385,14 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> PrepareParticipants(const RuntimeSceneDefinition &definition);
         static void ShutdownCandidates(std::vector<std::unique_ptr<SceneActivationCandidate>> &candidates) noexcept;
         [[nodiscard]] Result<void> CommitDeferredChanges();
+        /** @brief Records rejection and retires unpublished candidates while retaining the authority through cleanup. */
+        void RejectPendingPublication(Error error);
 
         SceneAggregate active_;
         SceneAggregate pending_;
         std::vector<std::unique_ptr<SceneActivationParticipant>> participants_;
         std::unique_ptr<Preparation> preparation_;
+        std::unique_ptr<ScenePublicationCheck> publicationCheck_;
         std::optional<SceneCommandBuffer> structuralCommands_;
         std::optional<StructuralCommitResult> structuralResult_;
         std::optional<Error> operationError_;
