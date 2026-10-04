@@ -102,7 +102,8 @@ namespace {
         REQUIRE((Read(root / "CMakeLists.txt").find("MODULE_ID game.mygame") != std::string::npos));
 
         const std::string project = Read(root / ".horo/project.json");
-        REQUIRE((project.find("\"horoVersion\": \"0.1.0\"") != std::string::npos));
+        const auto current = Horo::Application::CurrentEngineReleaseVersion();
+        REQUIRE((project.find("\"horoVersion\": \"" + Horo::Application::FormatHoroVersion(current.value) + "\"") != std::string::npos));
         REQUIRE((project.find("\"persistentContract\": \"sha256:") != std::string::npos));
         REQUIRE((project.find("\"name\": \"MyGame\"") != std::string::npos));
         REQUIRE((project.find("\"projectVersion\": \"0.1.0\"") != std::string::npos));
@@ -113,6 +114,10 @@ namespace {
         const auto compatibility = Horo::Application::InspectProjectCompatibility(root);
         REQUIRE((compatibility.status == Horo::Application::ProjectCompatibilityStatus::Current));
         REQUIRE((compatibility.metadata.has_value()));
+        REQUIRE((compatibility.metadata->horoVersion == current));
+        const auto *decision = Horo::Application::BuiltInReleaseCompatibilityRegistry().Find(current);
+        REQUIRE(decision != nullptr);
+        REQUIRE((compatibility.metadata->persistentContract == decision->persistentContract));
         REQUIRE((compatibility.metadata->projectVersion == "0.1.0"));
         REQUIRE((Read(root / ".horo/plugins.json") == "{\n  \"schemaVersion\": 1,\n  \"requestedPlugins\": []\n}\n"));
         REQUIRE((Read(root / ".horo/input.json") ==

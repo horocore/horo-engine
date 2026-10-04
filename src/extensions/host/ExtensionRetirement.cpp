@@ -6,7 +6,16 @@
 #include <utility>
 
 namespace Horo::Extensions {
-    struct ExtensionRetirementState final {
+    class ExtensionRetirementState final {
+    public:
+        ExtensionRetirementState() = default;
+
+    private:
+        friend class ExtensionRetirement;
+        friend class ExtensionExecutableLease;
+
+        [[nodiscard]] ExtensionRetirementReport Snapshot() const;
+
         std::string extensionId;
         std::vector<std::string> modules;
         std::vector<std::weak_ptr<void>> code;
@@ -30,9 +39,6 @@ namespace Horo::Extensions {
         bool revoking{};
         bool restartRequired{};
 
-    private:
-        friend class ExtensionRetirement;
-        friend class ExtensionExecutableLease;
         // Protects admission, diagnostics and publication ownership. Revocation and provider destruction run outside this mutex.
         mutable std::mutex mutex;
     };
@@ -40,20 +46,20 @@ namespace Horo::Extensions {
     namespace {
         constexpr std::size_t MaximumWork = 4096;
         constexpr std::size_t MaximumPublications = 1024;
-
-        /** @brief Copies a diagnostic while the caller holds the state mutex. */
-        ExtensionRetirementReport Snapshot(const ExtensionRetirementState &state) {
-            using enum ExtensionRetirementDisposition;
-            ExtensionRetirementReport report{.extensionId = state.extensionId};
-            if (state.retiring)
-                report.disposition = state.work.empty() && !state.revoking ? Complete : Draining;
-            if (state.restartRequired)
-                report.disposition = RestartRequired;
-            for (const auto &work : state.work)
-                report.outstanding.push_back(work.attribution);
-            return report;
-        }
     }  // namespace
+
+    /** @brief Copies a diagnostic while the owning friend holds the state mutex. */
+    ExtensionRetirementReport ExtensionRetirementState::Snapshot() const {
+        using enum ExtensionRetirementDisposition;
+        ExtensionRetirementReport report{.extensionId = extensionId};
+        if (retiring)
+            report.disposition = work.empty() && !revoking ? Complete : Draining;
+        if (restartRequired)
+            report.disposition = RestartRequired;
+        for (const auto &outstanding : work)
+            report.outstanding.push_back(outstanding.attribution);
+        return report;
+    }
 
     /** @copydoc ExtensionExecutableLease::ExtensionExecutableLease */
     ExtensionExecutableLease::ExtensionExecutableLease(ConstructionKey, std::shared_ptr<void> owner) : owner_(std::move(owner)) {}
@@ -174,7 +180,7 @@ namespace Horo::Extensions {
     /** @copydoc ExtensionRetirement::Inspect */
     ExtensionRetirementReport ExtensionRetirement::Inspect() const {
         std::scoped_lock lock{state_->mutex};
-        return Snapshot(*state_);
+        return state_->Snapshot();
     }
 
     /** @copydoc ExtensionRetirement::IsDrained */

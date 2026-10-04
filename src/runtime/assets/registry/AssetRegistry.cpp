@@ -237,31 +237,36 @@ namespace Horo::Assets {
                 AddDiagnostic(diagnostics, AssetErrors::SidecarMalformed, metadataPath, contents.ErrorValue().message);
                 return std::nullopt;
             }
-            Result<Json> parsed = ParseStrictJson(contents.Value(), AssetErrors::SidecarMalformed);
-            if (parsed.HasError()) {
-                AddDiagnostic(diagnostics, AssetErrors::SidecarMalformed, metadataPath, parsed.ErrorValue().message);
+            auto record = DecodeAssetIdentitySidecar(sourcePath, contents.Value());
+            if (record.HasError()) {
+                if (diagnostics.size() < kMaximumDiagnostics)
+                    diagnostics.emplace_back(record.ErrorValue(), metadataPath);
                 return std::nullopt;
+            }
+            return std::move(record).Value();
+        }
+
+        [[nodiscard]] Result<AssetRecord> DecodeSidecar(const std::string_view sourcePath, const std::string_view contents) {
+            Result<Json> parsed = ParseStrictJson(std::string{contents}, AssetErrors::SidecarMalformed);
+            if (parsed.HasError()) {
+                return Result<AssetRecord>::Failure(parsed.ErrorValue());
             }
             Json sidecarJson = std::move(parsed).Value();
             if (!sidecarJson.is_object() || !sidecarJson.contains("schemaVersion") || !sidecarJson["schemaVersion"].is_number_unsigned()) {
-                AddDiagnostic(diagnostics, AssetErrors::SidecarMalformed, metadataPath);
-                return std::nullopt;
+                return Result<AssetRecord>::Failure(Failure(AssetErrors::SidecarMalformed));
             }
             if (sidecarJson["schemaVersion"].get<std::uint64_t>() != 1) {
-                AddDiagnostic(diagnostics, AssetErrors::SchemaUnsupported, metadataPath);
-                return std::nullopt;
+                return Result<AssetRecord>::Failure(Failure(AssetErrors::SchemaUnsupported));
             }
             if (!sidecarJson.contains("assetId") ||
                 (sidecarJson["assetId"].is_string() && sidecarJson["assetId"].get<std::string>().empty())) {
-                AddDiagnostic(diagnostics, AssetErrors::IdentityMissing, metadataPath);
-                return std::nullopt;
+                return Result<AssetRecord>::Failure(Failure(AssetErrors::IdentityMissing));
             }
             if (!sidecarJson["assetId"].is_string()) {
-                AddDiagnostic(diagnostics, AssetErrors::SidecarMalformed, metadataPath);
-                return std::nullopt;
+                return Result<AssetRecord>::Failure(Failure(AssetErrors::SidecarMalformed));
             }
             sidecarJson["sourcePath"] = sourcePath;
-            sidecarJson["metadataPath"] = metadataPath;
+            sidecarJson["metadataPath"] = std::string{sourcePath} + ".horo";
             Result<AssetRecord> record = ParseRecord(sidecarJson);
             if (record.HasError()) {
                 const std::string_view code = record.ErrorValue().code.Value();
@@ -270,10 +275,9 @@ namespace Horo::Assets {
                     descriptor = &AssetErrors::RegistryIdentityInvalid;
                 else if (code == AssetErrors::TypeMismatch.code.Value())
                     descriptor = &AssetErrors::TypeMismatch;
-                AddDiagnostic(diagnostics, *descriptor, metadataPath, record.ErrorValue().message);
-                return std::nullopt;
+                return Result<AssetRecord>::Failure(Failure(*descriptor, record.ErrorValue().message));
             }
-            return std::move(record).Value();
+            return record;
         }
 
         /** @brief Resolves source/sidecar pairs into asset records, appending diagnostics for any failures. */
@@ -300,6 +304,15 @@ namespace Horo::Assets {
             return records;
         }
     }  // namespace
+
+    /** @copydoc DecodeAssetIdentitySidecar */
+    Result<AssetRecord> DecodeAssetIdentitySidecar(const std::string_view sourcePath, const std::string_view contents) {
+        if (sourcePath.size() > 4096U - std::string_view{".horo"}.size())
+            return Result<AssetRecord>::Failure(Failure(AssetErrors::RootInvalid, "Asset or sidecar path exceeds its portable bound."));
+        if (contents.empty() || contents.size() > kMaximumSidecarBytes)
+            return Result<AssetRecord>::Failure(Failure(AssetErrors::SidecarMalformed, "Sidecar byte count is invalid."));
+        return DecodeSidecar(sourcePath, contents);
+    }
 
     struct AssetRegistrySnapshot::State {
         AssetRegistryRevision revision;

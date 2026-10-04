@@ -3,7 +3,7 @@
 #include "Horo/Gameplay/Component.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSceneExpansion.h"
-#include "editor/document/NavigationAgentJson.h"
+#include "NavigationAgentJson.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -162,7 +162,7 @@ namespace Horo::Editor {
 
             try {
                 const Json value = Json::parse(PayloadBytes(payload.component.payload));
-                auto parsed = Detail::ParseNavigationAgentJson(value);
+                auto parsed = SceneSource::Detail::ParseNavigationAgentJson(value);
                 if (parsed.HasError())
                     return Result<Runtime::NavigationAgentComponent>::Failure(MakeError(PrefabComponentProjectionUnsupported));
                 return Result<Runtime::NavigationAgentComponent>::Success(std::move(parsed).Value());

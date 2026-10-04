@@ -18,6 +18,18 @@
 
 namespace Horo::Editor {
     using namespace ScenePersistenceDetail;
+    using SceneSource::Detail::IsContainedBy;
+    using SceneSource::Detail::IsResolvedContainedBy;
+    using SceneSource::Detail::IsSafeProjectRelativePath;
+    using SceneSource::Detail::kMaximumProjectMetadataBytes;
+    using SceneSource::Detail::kMaximumRecoveryBytes;
+    using SceneSource::Detail::kMaximumSceneBytes;
+    using SceneSource::Detail::ParsedScene;
+    using SceneSource::Detail::PersistenceError;
+    using SceneSource::Detail::ReadBoundedFile;
+    using SceneSource::Detail::SceneInvalid;
+    using SceneSource::Detail::ScenePathInvalid;
+    using SceneSource::Detail::SceneReadFailed;
 
     namespace {
         /** @brief Writes, rechecks, and atomically replaces one serialized scene payload. */
@@ -74,7 +86,7 @@ namespace Horo::Editor {
                 return Result<ProjectSceneRecoveryRecord>::Failure(
                     PersistenceError(SceneInvalid, "Recovery scene checksum does not match its payload."));
 
-            auto scene = ParseScene(record["scene"].dump());
+            auto scene = SceneSource::DecodeSceneSource(record["scene"].dump());
             if (scene.HasError())
                 return Result<ProjectSceneRecoveryRecord>::Failure(scene.ErrorValue());
             ParsedScene parsed = std::move(scene).Value();
@@ -211,7 +223,7 @@ namespace Horo::Editor {
         if (sceneBytes.HasError()) {
             return Result<LoadedProjectScene>::Failure(sceneBytes.ErrorValue());
         }
-        auto scene = ParseScene(sceneBytes.Value());
+        auto scene = SceneSource::DecodeSceneSource(sceneBytes.Value());
         if (scene.HasError()) {
             return Result<LoadedProjectScene>::Failure(scene.ErrorValue());
         }

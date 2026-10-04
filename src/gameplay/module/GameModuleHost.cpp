@@ -72,8 +72,8 @@ namespace Horo::Gameplay {
             const auto &binding = physics->Binding();
             if (binding.moduleId != moduleId)
                 return Result<std::shared_ptr<GameplayPhysicsContext>>::Failure(MakeError(GameplayErrors::PhysicsPermissionDenied));
-            const auto admission = physics->Acquire(moduleId, binding.scene, binding.sceneGeneration);
-            if (admission.HasError() && admission.ErrorValue().code.Value() != GameplayErrors::PhysicsPermissionDenied.code.Value() &&
+            if (const auto admission = physics->Acquire(moduleId, binding.scene, binding.sceneGeneration);
+                admission.HasError() && admission.ErrorValue().code.Value() != GameplayErrors::PhysicsPermissionDenied.code.Value() &&
                 admission.ErrorValue().code.Value() != GameplayErrors::PhysicsUnavailable.code.Value())
                 return Result<std::shared_ptr<GameplayPhysicsContext>>::Failure(admission.ErrorValue());
             return Result<std::shared_ptr<GameplayPhysicsContext>>::Success(physics);

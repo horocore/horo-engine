@@ -346,8 +346,8 @@ namespace Horo::Application::Internal {
             selection.nativeArtifact = arguments[1];
             selection.moduleId = arguments[2];
             const std::string_view revision = arguments[3];
-            const auto parsed = std::from_chars(revision.data(), revision.data() + revision.size(), selection.descriptorRevision);
-            if (!selection.nativeArtifact.is_absolute() || parsed.ec != std::errc{} || parsed.ptr != revision.data() + revision.size() ||
+            if (const auto parsed = std::from_chars(revision.data(), revision.data() + revision.size(), selection.descriptorRevision);
+                !selection.nativeArtifact.is_absolute() || parsed.ec != std::errc{} || parsed.ptr != revision.data() + revision.size() ||
                 selection.descriptorRevision == 0)
                 return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
             return Result<void>::Success();
@@ -361,8 +361,7 @@ namespace Horo::Application::Internal {
                               "Gameplay suffix: --game-module <absolute artifact> <module id> <revision> <grant|deny>, or "
                               "--game-script <absolute source> <absolute sidecar> <module id> <grant|deny>."));
             GameplayWorldSelection selection;
-            const std::string_view kind = arguments[0];
-            if (kind == "--game-module") {
+            if (const std::string_view kind = arguments[0]; kind == "--game-module") {
                 if (const auto valid = ParseNativeGameplay(arguments, selection); valid.HasError())
                     return Result<GameplayWorldSelection>::Failure(valid.ErrorValue());
             } else if (kind == "--game-script") {

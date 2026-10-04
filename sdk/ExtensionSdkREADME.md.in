@@ -4,6 +4,12 @@ This self-contained package is the public C ABI surface for native Horo
 extensions. It has no compile-time engine or third-party dependencies and does
 not require an engine source checkout.
 
+Read the packaged [compatibility matrix](share/horo/extension-sdk/CompatibilityMatrix.json)
+and [version-specific migration guide](share/horo/extension-sdk/MigrationGuide.md)
+before upgrading. Both work offline without this engine's source tree. They
+identify this development snapshot, distinguish native extension ABI negotiation
+from gameplay SDK generation changes, and explain rebuild and restart rollback.
+
 Point `HoroEngineExtensionSdk_DIR` at
 `lib/cmake/HoroEngineExtensionSdk`, then consume the header-only target:
 

@@ -10,6 +10,28 @@
 #include <thread>
 #include <utility>
 
+TEST_CASE("Identity sidecar decoder is bounded and uses canonical registry rules without I/O", "[unit][assets][sidecar-decoder]") {
+    using Horo::Assets::DecodeAssetIdentitySidecar;
+    constexpr auto source = "Assets/navigation.horoasset";
+    constexpr auto metadata =
+        R"({"schemaVersion":1,"assetId":"10213243-5465-7687-98a9-bacbdcedfe0f","assetType":"core.navmesh.definition"})";
+    const auto decoded = DecodeAssetIdentitySidecar(source, metadata);
+    REQUIRE(decoded.HasValue());
+    REQUIRE(decoded.Value().type.Value() == "core.navmesh.definition");
+    REQUIRE(decoded.Value().sourcePath.String() == source);
+    REQUIRE(decoded.Value().metadataPath.String() == std::string{source} + ".horo");
+    REQUIRE(DecodeAssetIdentitySidecar("../escape.horoasset", metadata).HasError());
+    REQUIRE(DecodeAssetIdentitySidecar(std::string(4092U, 'x'), metadata).HasError());
+    REQUIRE(DecodeAssetIdentitySidecar(source, "{}").HasError());
+    REQUIRE(DecodeAssetIdentitySidecar(source, "").HasError());
+    REQUIRE(DecodeAssetIdentitySidecar(source, std::string(1024U * 1024U + 1U, 'x')).HasError());
+    REQUIRE(
+        DecodeAssetIdentitySidecar(
+            source,
+            R"({"schemaVersion":1,"schemaVersion":1,"assetId":"10213243-5465-7687-98a9-bacbdcedfe0f","assetType":"core.navmesh.definition"})")
+            .HasError());
+}
+
 namespace {
     std::atomic<std::size_t> gAllocations{};
 

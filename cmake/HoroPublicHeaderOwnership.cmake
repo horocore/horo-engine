@@ -1,5 +1,12 @@
 include_guard(GLOBAL)
 
+horo_configure_target_header_boundary(HoroSceneSourceModel PUBLIC_HEADERS
+    Horo/Scene/SceneSourceModel.h
+)
+horo_configure_target_header_boundary(HoroSceneSource PUBLIC_HEADERS
+    Horo/Scene/SceneSource.h
+)
+
 # Public header ownership is intentionally explicit. Adding a header under
 # include/Horo requires assigning it to exactly one production target here.
 message(STATUS "Configuring target-specific public header boundaries")
@@ -126,6 +133,7 @@ horo_configure_target_header_boundary(HoroPlatformServicesExtension PUBLIC_HEADE
 horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Application/HostObservability.h
     Horo/Application/ProjectCompatibility.h
+    Horo/Application/ProjectSourceDocument.h
     Horo/Application/ProjectMigration.h
     Horo/Application/ProjectMigrationCatalog.h
     Horo/Application/ProjectVersion.h
@@ -144,6 +152,9 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/ReleasePreflight.h
     Horo/Release/ReleaseTargetMatrix.h
     Horo/Release/ReleaseVersion.h
+)
+horo_configure_target_header_boundary(HoroProjectSettings PUBLIC_HEADERS
+    Horo/Application/ProjectNetworkSettings.h
 )
 horo_configure_target_header_boundary(HoroReleaseGitHub PUBLIC_HEADERS
     Horo/Release/GitHubReleasePublication.h
@@ -679,6 +690,8 @@ horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
     Horo/Navigation/NavigationBackend.h
     Horo/Navigation/NavigationCapabilities.h
     Horo/Navigation/NavigationDataSerialization.h
+    Horo/Navigation/NavigationDefinition.h
+    Horo/Navigation/NavigationDefinitionSerialization.h
     Horo/Navigation/NavigationErrors.h
     Horo/Navigation/NavigationIdentity.h
     Horo/Navigation/NavigationLinkTypes.h

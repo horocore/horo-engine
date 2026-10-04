@@ -18,6 +18,7 @@ horo_allow_target_dependencies(TARGET HoroPlatformServicesExtension DEPENDENCIES
 horo_allow_target_dependencies(TARGET HoroPackages DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroPackageSecurity DEPENDENCIES HoroFoundation HoroPackages HoroSecurity)
 horo_allow_target_dependencies(TARGET HoroApplication DEPENDENCIES HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroProjectSettings DEPENDENCIES HoroApplication HoroNetworkApi)
 horo_allow_target_dependencies(TARGET HoroReleaseProcess DEPENDENCIES HoroApplication HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroReleaseService DEPENDENCIES HoroApplication HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroReleaseGitHub DEPENDENCIES HoroApplication)
@@ -29,7 +30,7 @@ horo_allow_target_dependencies(TARGET HoroUpdateDownload DEPENDENCIES HoroUpdate
 horo_allow_target_dependencies(TARGET HoroUpdateOfflineSource DEPENDENCIES HoroUpdateDiscovery HoroUpdateDownload HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroUpdateActivation DEPENDENCIES HoroUpdateDownload HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroUserStateMigration DEPENDENCIES HoroPlatform)
-horo_allow_target_dependencies(TARGET HoroProjectMigrations DEPENDENCIES HoroApplication)
+horo_allow_target_dependencies(TARGET HoroProjectMigrations DEPENDENCIES HoroApplication HoroProjectSettings HoroNavigationApi HoroAssets)
 horo_allow_target_dependencies(TARGET HoroSaveApi DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroRuntime DEPENDENCIES HoroFoundation HoroSaveApi)
 horo_allow_target_dependencies(TARGET HoroRuntimeUi DEPENDENCIES HoroFoundation HoroAssets)
@@ -127,8 +128,12 @@ horo_allow_target_dependencies(TARGET HoroRenderOpenGL)
 horo_allow_target_dependencies(TARGET HoroRenderMetal)
 horo_allow_target_dependencies(TARGET HoroRenderVulkan)
 
+horo_allow_target_dependencies(TARGET HoroSceneSourceModel
+    DEPENDENCIES HoroFoundation HoroAI HoroPrefab HoroRuntimeScene)
+horo_allow_target_dependencies(TARGET HoroSceneSource DEPENDENCIES HoroSceneSourceModel)
+horo_allow_target_dependencies(TARGET HoroSceneSourceCodecInternal DEPENDENCIES HoroSceneSource)
 horo_allow_target_dependencies(TARGET HoroEditorModel
-    DEPENDENCIES HoroFoundation HoroAI HoroPrefab HoroPrefabAuthoring HoroPrefabSceneExpansion HoroSceneModel HoroRuntimeScene)
+    DEPENDENCIES HoroFoundation HoroAI HoroPrefab HoroPrefabAuthoring HoroPrefabSceneExpansion HoroSceneModel HoroRuntimeScene HoroSceneSourceModel HoroSceneSourceCodecInternal)
 horo_allow_target_dependencies(TARGET HoroEditorViewportScene DEPENDENCIES HoroEditorModel)
 horo_allow_target_dependencies(TARGET HoroEditorViewportResources
     DEPENDENCIES HoroEditorViewportScene HoroRenderFrontend)
@@ -146,6 +151,7 @@ horo_allow_target_dependencies(TARGET HoroEditorServices
         HoroGameplayBuild
         HoroInput
         HoroProjectMigrations
+        HoroSceneSourceCodecInternal
         HoroAssets)
 horo_allow_target_dependencies(TARGET HoroEditorViewportOpenGL
     DEPENDENCIES HoroEditorViewportScene HoroEditorViewportResources HoroRenderOpenGL HoroRenderFrontend)

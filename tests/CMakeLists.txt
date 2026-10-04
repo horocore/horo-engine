@@ -867,6 +867,7 @@ add_executable(HoroNavigationApiTests
         unit/runtime/navigation/NavigationProviderTests.cpp
         unit/runtime/navigation/NavigationSourceGeometryTests.cpp
         unit/runtime/navigation/NavigationDataSerializationTests.cpp
+        unit/runtime/navigation/NavigationDefinitionTests.cpp
 )
 target_compile_features(HoroNavigationApiTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationApiTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
@@ -1167,7 +1168,8 @@ target_compile_definitions(HoroGameModuleHostTests PRIVATE
 target_link_libraries(HoroGameModuleHostTests PRIVATE HoroEngine::GameplayModuleHost)
 add_dependencies(HoroGameModuleHostTests HoroTestGameModule)
 add_executable(HoroGameplayPhysicsTests unit/gameplay/GameplayPhysicsContextTests.cpp
-    integration/gameplay/GameplayPhysicsHostTests.cpp)
+    integration/gameplay/GameplayPhysicsHostTests.cpp
+    integration/gameplay/LuaPhysicsLifecycleTests.cpp)
 target_compile_features(HoroGameplayPhysicsTests PRIVATE cxx_std_20)
 target_include_directories(HoroGameplayPhysicsTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers" "${PROJECT_SOURCE_DIR}/tests/unit/runtime/physics")
 target_compile_definitions(HoroGameplayPhysicsTests PRIVATE
@@ -1179,6 +1181,12 @@ target_link_libraries(HoroGameplayPhysicsTests PRIVATE HoroEngine::GameplayPhysi
     HoroNetworkProductHost)
 add_dependencies(HoroGameplayPhysicsTests HoroTestGameModule)
 horo_register_catch_test(HoroGameplayPhysicsTests LABELS "unit;gameplay;physics;headless")
+add_test(NAME HoroGameplayProductLaunchContract
+    COMMAND "${CMAKE_COMMAND}" "-DENGINE=$<TARGET_FILE:horo-engine>" "-DMODULE=$<TARGET_FILE:HoroTestGameModule>"
+    "-DREVISION_FILE=${HORO_TEST_GAME_MODULE_REVISION_FILE}" "-DSOURCE_ROOT=${PROJECT_SOURCE_DIR}"
+    "-DPHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GameplayProductLaunchContract.cmake")
+set_tests_properties(HoroGameplayProductLaunchContract PROPERTIES LABELS "integration;gameplay;physics;headless;product" TIMEOUT 60)
 add_executable(HoroGameplayPhysicsPublicHeaderConsumer support/GameplayPhysicsPublicHeaderConsumer.cpp)
 target_compile_features(HoroGameplayPhysicsPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroGameplayPhysicsPublicHeaderConsumer PRIVATE HoroEngine::GameplayPhysicsIntegration)
@@ -1407,9 +1415,10 @@ target_compile_features(HoroProjectMetadataTests PRIVATE cxx_std_20)
 target_link_libraries(HoroProjectMetadataTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroProjectCompatibilityTests
         unit/application/ProjectCompatibilityTests.cpp
+        unit/application/ProjectSourceDocumentTests.cpp
 )
 target_compile_features(HoroProjectCompatibilityTests PRIVATE cxx_std_20)
-target_link_libraries(HoroProjectCompatibilityTests PRIVATE HoroEngine::Application)
+target_link_libraries(HoroProjectCompatibilityTests PRIVATE HoroEngine::ProjectSettings nlohmann_json::nlohmann_json)
 add_executable(HoroReleaseVersionTests
         unit/application/ReleaseVersionTests.cpp
 )
@@ -1591,9 +1600,11 @@ target_link_libraries(HoroReleaseProcessTests PRIVATE HoroEngine::ReleaseProcess
 add_executable(HoroProjectMigrationTests
         unit/application/ProjectMigrationTests.cpp
         unit/application/ProjectMigrationCatalogTests.cpp
+        unit/application/ProjectAuthoringMigrationTests.cpp
 )
 target_compile_features(HoroProjectMigrationTests PRIVATE cxx_std_20)
-target_link_libraries(HoroProjectMigrationTests PRIVATE HoroEngine::ProjectMigrations)
+target_link_libraries(HoroProjectMigrationTests PRIVATE HoroEngine::ProjectMigrations
+        HoroEngine::NetworkApi HoroEngine::NavigationApi nlohmann_json::nlohmann_json)
 add_executable(HoroProjectMigrationTransactionTests
         unit/editor/ProjectMigrationTransactionTests.cpp
 )
@@ -1622,7 +1633,7 @@ target_compile_features(HoroProjectMigrationIntegrationTests PRIVATE cxx_std_20)
 target_include_directories(HoroProjectMigrationIntegrationTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/helpers/project_migration)
 target_link_libraries(HoroProjectMigrationIntegrationTests PRIVATE
-        HoroEngine::EditorServices HoroEngine::ProjectMigrations nlohmann_json::nlohmann_json)
+        HoroEngine::EditorServices HoroEngine::ProjectMigrations HoroEngine::NavigationApi nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroProjectMigrationIntegrationTests
         LABELS "migration")
 add_executable(HoroRecentProjectInspectionServiceTests
@@ -2084,6 +2095,11 @@ add_executable(HoroSceneDocumentPersistenceTests
 )
 target_compile_features(HoroSceneDocumentPersistenceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentPersistenceTests PRIVATE HoroEngine::EditorServices)
+add_executable(HoroSceneSourceTests unit/scene/SceneSourceTests.cpp)
+target_compile_features(HoroSceneSourceTests PRIVATE cxx_std_20)
+target_link_libraries(HoroSceneSourceTests PRIVATE HoroEngine::SceneSource Catch2::Catch2WithMain)
+catch_discover_tests(HoroSceneSourceTests TEST_PREFIX "HoroSceneSourceTests::"
+        PROPERTIES LABELS "unit;scene;serialization;headless")
 add_executable(HoroEditorViewportPickingTests
         unit/editor/EditorViewportPickingTests.cpp
 )

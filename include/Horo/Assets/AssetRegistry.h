@@ -31,6 +31,13 @@ namespace Horo::Assets {
         ProjectPath metadataPath;
     };
 
+    /** @brief Decodes committed identity metadata without filesystem access using the registry's source/type rules.
+     * @param sourcePath Canonical project-relative source path; source plus `.horo` must not exceed 4096 bytes.
+     * @param contents Bounded UTF-8 identity sidecar bytes (at most 1 MiB).
+     * @return Validated identity/type record, or the existing typed sidecar diagnostic.
+     */
+    [[nodiscard]] Result<AssetRecord> DecodeAssetIdentitySidecar(std::string_view sourcePath, std::string_view contents);
+
     /** @brief Outcome of a complete registry candidate build. */
     enum class AssetRegistryBuildStatus : std::uint8_t {
         Complete,

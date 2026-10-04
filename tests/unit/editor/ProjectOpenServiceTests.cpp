@@ -209,7 +209,11 @@ TEST_CASE("Project Open Service Tests", "[unit][editor]") {
     REQUIRE((migrationSnapshot.outcome == ProjectOpenOutcome::ReadyToActivate));
     REQUIRE((migrationSnapshot.readySession.has_value()));
     auto migratedRoot = ReadJson(legacy.root / ".horo/project.json");
-    REQUIRE((migratedRoot.at("horoVersion") == "0.1.0"));
+    const auto current = CurrentEngineReleaseVersion();
+    const auto *decision = BuiltInReleaseCompatibilityRegistry().Find(current);
+    REQUIRE(decision != nullptr);
+    REQUIRE((migratedRoot.at("horoVersion") == FormatHoroVersion(current.value)));
+    REQUIRE((migratedRoot.at("persistentContract") == FormatPersistentContractHash(decision->persistentContract)));
     REQUIRE((migratedRoot.at("settings").at("assetCompression") == "lz4"));
     REQUIRE((migratedRoot.at("settings").at("textureCompression") == "bc7"));
     REQUIRE((migratedRoot.at("settings").at("unknownNested").at("label") == "preserved"));
