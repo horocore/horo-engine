@@ -1106,8 +1106,15 @@ target_compile_definitions(HoroGameModuleHostTests PRIVATE
 )
 target_link_libraries(HoroGameModuleHostTests PRIVATE HoroEngine::GameplayModuleHost)
 add_dependencies(HoroGameModuleHostTests HoroTestGameModule)
+add_executable(HoroLuaReplicationPublicHeaderConsumer support/LuaReplicationPublicHeaderConsumer.cpp)
+target_compile_features(HoroLuaReplicationPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroLuaReplicationPublicHeaderConsumer PRIVATE HoroEngine::GameplayLua)
+add_test(NAME HoroLuaReplicationPublicHeaderConsumer COMMAND HoroLuaReplicationPublicHeaderConsumer)
+set_tests_properties(HoroLuaReplicationPublicHeaderConsumer PROPERTIES LABELS "unit;gameplay;headless")
+
 add_executable(HoroLuaBehaviorTests
         unit/gameplay/LuaBehaviorTests.cpp
+        unit/gameplay/LuaReplicationTests.cpp
 )
 target_include_directories(HoroLuaBehaviorTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 target_compile_features(HoroLuaBehaviorTests PRIVATE cxx_std_20)

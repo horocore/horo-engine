@@ -708,6 +708,8 @@ target_link_libraries(HoroGameplayModuleHost PUBLIC HoroEngine::GameplayRuntime 
 
 add_library(HoroGameplayLua STATIC
         gameplay/lua/LuaBehavior.cpp
+        gameplay/lua/LuaBehaviorMetadata.cpp
+        gameplay/lua/LuaReplicationDeclaration.cpp
 )
 
 add_library(HoroGameplayBuild STATIC
