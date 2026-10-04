@@ -5,7 +5,7 @@ include_guard(GLOBAL)
 horo_allow_target_dependencies(TARGET HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroHostErrors DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroSecurity DEPENDENCIES HoroFoundation)
-horo_allow_target_dependencies(TARGET HoroCliHost DEPENDENCIES HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroCliHost DEPENDENCIES HoroFoundation HoroHostErrors)
 horo_allow_target_dependencies(TARGET HoroMcpSession DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroMcpRegistry DEPENDENCIES HoroMcpSession)
 horo_allow_target_dependencies(TARGET HoroMcpController DEPENDENCIES HoroMcpRegistry)
@@ -159,7 +159,7 @@ horo_allow_target_dependencies(TARGET HoroHostModuleComposition DEPENDENCIES Hor
 horo_allow_target_dependencies(TARGET HoroNetworkProductHost
     DEPENDENCIES HoroNetworkRuntime HoroRuntimeScene HoroPhysics HoroRuntime)
 horo_allow_target_dependencies(TARGET horo-engine
-    DEPENDENCIES HoroApplication HoroExtensions HoroHostModuleComposition HoroNetworkProductHost HoroNetworkTransportGNS)
+    DEPENDENCIES HoroApplication HoroExtensions HoroHostModuleComposition HoroNetworkProductHost HoroNetworkTransportGNS HoroCliHost)
 horo_allow_target_dependencies(TARGET horo-extension-validate DEPENDENCIES HoroExtensions)
 horo_allow_target_dependencies(TARGET HoroExtensionSdkValidatorStage DEPENDENCIES horo-extension-validate)
 horo_allow_target_dependencies(TARGET horo-extension-conformance DEPENDENCIES HoroExtensions)

@@ -64,6 +64,7 @@ horo_configure_target_header_boundary(HoroCliHost PUBLIC_HEADERS
     Horo/Cli/CliDispatcher.h
     Horo/Cli/CliErrors.h
     Horo/Cli/CliOptionParser.h
+        Horo/Cli/CliOutputPresenter.h
 )
 
 horo_configure_target_header_boundary(HoroMcpSession PUBLIC_HEADERS
