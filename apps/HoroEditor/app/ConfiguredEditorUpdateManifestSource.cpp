@@ -94,8 +94,8 @@ namespace Horo::Editor {
             if (!handle)
                 return handle;
             auto *curl = handle.get();
-            // Keep both protocol bounds explicit: manifest requests require TLS 1.3.
-            if ((curl_easy_setopt)(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3 | CURL_SSLVERSION_MAX_TLSv1_3) != CURLE_OK)
+            // Enforce the contract's TLS 1.3 floor; libcurl retains the provider's supported maximum.
+            if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
                 return CurlHandle{nullptr, &curl_easy_cleanup};
             if (const bool configured =
                     curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) == CURLE_OK &&

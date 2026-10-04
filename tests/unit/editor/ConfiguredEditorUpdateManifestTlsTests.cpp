@@ -50,15 +50,17 @@ namespace {
 
         enum class Protocol {
             Tls13,
-            Tls12Only
+            Tls12Only,
+            Tls12To13
         };
 
         explicit LoopbackManifestTlsServer(const Reply reply, const Protocol protocol = Protocol::Tls13)
             : reply_(reply), context_(SSL_CTX_new(TLS_server_method()), &SSL_CTX_free) {
             Check(context_ != nullptr, "TLS context");
-            const int version = protocol == Protocol::Tls13 ? TLS1_3_VERSION : TLS1_2_VERSION;
-            Check(SSL_CTX_set_min_proto_version(context_.get(), version) == 1, "TLS minimum version");
-            Check(SSL_CTX_set_max_proto_version(context_.get(), version) == 1, "TLS maximum version");
+            const int minimumVersion = protocol == Protocol::Tls13 ? TLS1_3_VERSION : TLS1_2_VERSION;
+            const int maximumVersion = protocol == Protocol::Tls12Only ? TLS1_2_VERSION : TLS1_3_VERSION;
+            Check(SSL_CTX_set_min_proto_version(context_.get(), minimumVersion) == 1, "TLS minimum version");
+            Check(SSL_CTX_set_max_proto_version(context_.get(), maximumVersion) == 1, "TLS maximum version");
             CreateCertificate();
             StartListener();
             worker_ = std::jthread([this] {
@@ -204,12 +206,14 @@ namespace {
     };
 }  // namespace
 
-TEST_CASE("Editor HTTPS manifest client accepts a bounded TLS 1.3 response from the configured authority", "[editor][update][tls]") {
-    LoopbackManifestTlsServer server{LoopbackManifestTlsServer::Reply::Ok};
+TEST_CASE("Editor HTTPS manifest client accepts TLS 1.3 from strict and mixed-version servers", "[editor][update][tls]") {
     CurlEditorUpdateManifestHttpClient client;
-    auto result = client.Get(server.Url(), {.certificateAuthorityBundle = server.CertificatePath()}, {});
-    REQUIRE(result.HasValue());
-    CHECK(result.Value() == "signed-document");
+    for (const auto protocol : {LoopbackManifestTlsServer::Protocol::Tls13, LoopbackManifestTlsServer::Protocol::Tls12To13}) {
+        LoopbackManifestTlsServer server{LoopbackManifestTlsServer::Reply::Ok, protocol};
+        const auto result = client.Get(server.Url(), {.certificateAuthorityBundle = server.CertificatePath()}, {});
+        REQUIRE(result.HasValue());
+        CHECK(result.Value() == "signed-document");
+    }
 }
 
 TEST_CASE("Editor HTTPS manifest client rejects redirects and oversized bodies", "[editor][update][tls]") {
