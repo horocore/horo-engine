@@ -448,6 +448,8 @@ add_library(HoroNetworkApi STATIC
         runtime/networking/api/PacketQueue.cpp
         runtime/networking/api/ProtocolIdentityRegistry.cpp
         runtime/networking/api/ReplicationDescriptor.cpp
+        runtime/networking/api/ReplicationDeclarationPolicy.cpp
+        runtime/networking/api/NetworkReplicationInventoryCodec.cpp
         runtime/networking/api/ReplicationDescriptorRegistry.cpp
         runtime/networking/api/ReplicationSerializer.cpp
         runtime/networking/api/ReplicationSerializerErrors.cpp

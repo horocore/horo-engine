@@ -1,8 +1,10 @@
 #include "Horo/Network/NetworkProjectSettings.h"
 
 #include "Horo/Foundation/StableHash.h"
+#include "NetworkReplicationInventoryCodec.h"
 
 #include <algorithm>
+#include <new>
 #include <utility>
 
 namespace Horo::Network {
@@ -128,6 +130,10 @@ namespace Horo::Network {
             for (const char character : hostname)
                 hash.AddByte(static_cast<std::uint8_t>(character));
             hash.AddInteger(input.credentialRequirementId);
+            const auto inventory = Detail::EncodeReplicationInventory(input.replication);
+            hash.AddInteger(static_cast<std::uint64_t>(inventory.size()));
+            for (const char byte : inventory)
+                hash.AddByte(static_cast<std::uint8_t>(byte));
             const auto value = hash.Value() == 0 ? 1 : hash.Value();
             return NetworkProjectSettingsFingerprint::Create(value).Value();
         }
@@ -160,7 +166,20 @@ namespace Horo::Network {
     Result<NetworkProjectSettings> NetworkProjectSettings::Create(const NetworkProjectSettingsInput &input) {
         if (const auto validation = ValidateInput(input); validation.HasError())
             return Result<NetworkProjectSettings>::Failure(validation.ErrorValue());
-        return Result<NetworkProjectSettings>::Success(NetworkProjectSettings{input, ComputeFingerprint(input)});
+        auto inventory = Detail::CanonicalizeReplicationInventory(input.replication);
+        if (inventory.HasError())
+            return Result<NetworkProjectSettings>::Failure(inventory.ErrorValue());
+        try {
+            auto canonical = input;
+            canonical.replication = std::move(inventory).Value();
+            const auto fingerprint = ComputeFingerprint(canonical);
+            NetworkProjectSettings settings{std::move(canonical), fingerprint};
+            if (SerializeNetworkProjectSettings(settings).size() > NetworkReplicationInventory::MaximumDocumentBytes)
+                return Result<NetworkProjectSettings>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsCapacityExceeded));
+            return Result<NetworkProjectSettings>::Success(std::move(settings));
+        } catch (const std::bad_alloc &) {
+            return Result<NetworkProjectSettings>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsCapacityExceeded));
+        }
     }
 
     /** @copydoc NetworkProjectSettings::Replace */
@@ -172,9 +191,9 @@ namespace Horo::Network {
     }
 
     /** @copydoc NetworkProjectSettings::NetworkProjectSettings */
-    NetworkProjectSettings::NetworkProjectSettings(const NetworkProjectSettingsInput &input,
+    NetworkProjectSettings::NetworkProjectSettings(NetworkProjectSettingsInput input,
                                                    const NetworkProjectSettingsFingerprint fingerprint) noexcept
-        : input_(input), fingerprint_(fingerprint) {}
+        : input_(std::move(input)), fingerprint_(fingerprint) {}
 
     /** @copydoc NetworkProjectSettings::Settings */
     NetworkProjectSettingsId NetworkProjectSettings::Settings() const noexcept {
@@ -231,12 +250,31 @@ namespace Horo::Network {
         return input_.credentialRequirementId;
     }
 
+    /** @copydoc NetworkProjectSettings::ReplicationInventory */
+    const NetworkReplicationInventory &NetworkProjectSettings::ReplicationInventory() const noexcept {
+        return input_.replication;
+    }
+
+    /** @copydoc RequireCompleteNetworkReplicationInventory */
+    Result<void> RequireCompleteNetworkReplicationInventory(const NetworkProjectSettings &settings) {
+        if (settings.ReplicationInventory().completeness == NetworkReplicationInventoryCompleteness::Complete)
+            return Result<void>::Success();
+        auto error = MakeError(NetworkErrors::ReplicationDescriptorIncompatible);
+        error.diagnostics.push_back(
+            {.code = DiagnosticCode{"replication.inventory.incomplete"},
+             .severity = DiagnosticSeverity::Error,
+             .message =
+                 "The project replication inventory is unknown; supply complete authored requirements before network build or activation.",
+             .path = "replication.completeness"});
+        return Result<void>::Failure(std::move(error));
+    }
+
     /** @copydoc NetworkProjectSettingsAuthority::Create */
     Result<NetworkProjectSettingsAuthority> NetworkProjectSettingsAuthority::Create(const NetworkProjectSettingsInput &input) {
-        const auto settings = NetworkProjectSettings::Create(input);
+        auto settings = NetworkProjectSettings::Create(input);
         if (settings.HasError())
             return Result<NetworkProjectSettingsAuthority>::Failure(settings.ErrorValue());
-        return Result<NetworkProjectSettingsAuthority>::Success(NetworkProjectSettingsAuthority{settings.Value()});
+        return Result<NetworkProjectSettingsAuthority>::Success(NetworkProjectSettingsAuthority{std::move(settings).Value()});
     }
 
     /** @copydoc NetworkProjectSettingsAuthority::NetworkProjectSettingsAuthority */
@@ -250,11 +288,17 @@ namespace Horo::Network {
         if (command.expectedRevision != settings_.Revision())
             return Result<NetworkProjectSettingsSnapshot>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsStale));
 
-        const auto replacement = NetworkProjectSettings::Replace(settings_, command.candidate);
+        auto replacement = NetworkProjectSettings::Replace(settings_, command.candidate);
         if (replacement.HasError())
             return Result<NetworkProjectSettingsSnapshot>::Failure(replacement.ErrorValue());
-        settings_ = replacement.Value();
-        return Result<NetworkProjectSettingsSnapshot>::Success(Snapshot());
+        // Prepare the owning caller projection before publishing, so allocation failure preserves the old revision.
+        try {
+            auto result = Result<NetworkProjectSettingsSnapshot>::Success({replacement.Value()});
+            settings_ = std::move(replacement).Value();
+            return result;
+        } catch (const std::bad_alloc &) {
+            return Result<NetworkProjectSettingsSnapshot>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsCapacityExceeded));
+        }
     }
 
     /** @copydoc NetworkProjectSettingsAuthority::Shutdown */

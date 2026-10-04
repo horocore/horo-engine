@@ -66,6 +66,7 @@ namespace Horo::Network {
 
     /**
      * @brief Builds and validates a complete replacement without mutating the pinned prior snapshot.
+     * Retains up to 1024 attributed compatibility diagnostics; overflow adds a terminal marker and rejects.
      * @param previous Prior immutable generation that remains valid on success and failure.
      * @param descriptors Complete replacement schema contributions.
      * @param limits Explicit finite construction bounds.
@@ -74,4 +75,16 @@ namespace Horo::Network {
     [[nodiscard]] Result<ReplicationDescriptorSnapshotPtr> BuildReplicationDescriptorReplacement(
         const ReplicationDescriptorSnapshotPtr &previous, std::span<const ReplicationSchemaDescriptor> descriptors,
         const ReplicationDescriptorLimits &limits);
+
+    /**
+     * @brief Validates replacement invariants with an explicit bounded complete-diagnostic envelope.
+     * @param previous Prior immutable generation retained unchanged on every failure.
+     * @param descriptors Complete candidate schema contributions.
+     * @param limits Finite schema and field construction bounds.
+     * @param maximumDiagnostics Positive maximum retained compatibility diagnostics; overflow adds one terminal marker and rejects.
+     * @return New snapshot or attributed schema/field/version failure; overflow is never partial success.
+     */
+    [[nodiscard]] Result<ReplicationDescriptorSnapshotPtr> BuildReplicationDescriptorReplacement(
+        const ReplicationDescriptorSnapshotPtr &previous, std::span<const ReplicationSchemaDescriptor> descriptors,
+        const ReplicationDescriptorLimits &limits, std::size_t maximumDiagnostics);
 }  // namespace Horo::Network

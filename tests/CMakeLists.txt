@@ -264,6 +264,8 @@ add_executable(HoroNetworkApiTests
         unit/runtime/networking/PacketQueueTests.cpp
         unit/runtime/networking/ProtocolIdentityTests.cpp
         unit/runtime/networking/ReplicationDescriptorTests.cpp
+        unit/runtime/networking/ReplicationDeclarationPolicyTests.cpp
+        unit/runtime/networking/NetworkReplicationInventoryTests.cpp
         unit/runtime/networking/ReplicationDescriptorRegistryTests.cpp
         unit/runtime/networking/ReplicationSerializerTests.cpp
         unit/runtime/networking/ReplicationRolesTests.cpp
@@ -275,6 +277,11 @@ target_compile_features(HoroNetworkApiTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkApiTests PRIVATE HoroEngine::NetworkApi)
 target_include_directories(HoroNetworkApiTests PRIVATE $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>)
 horo_register_catch_test(HoroNetworkApiTests LABELS "unit;network;headless")
+add_executable(HoroReplicationDeclarationPublicHeaderConsumer support/ReplicationDeclarationPublicHeaderConsumer.cpp)
+target_compile_features(HoroReplicationDeclarationPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroReplicationDeclarationPublicHeaderConsumer PRIVATE HoroEngine::NetworkApi)
+add_test(NAME HoroReplicationDeclarationPublicHeaderConsumer COMMAND HoroReplicationDeclarationPublicHeaderConsumer)
+set_tests_properties(HoroReplicationDeclarationPublicHeaderConsumer PROPERTIES LABELS "unit;network;headless;public_headers")
 add_executable(HoroNetworkTransportNullTests
         support/AllocationProbe.cpp
         unit/runtime/networking/DeterministicTransportTests.cpp

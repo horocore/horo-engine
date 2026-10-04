@@ -1,4 +1,5 @@
 #include "Horo/Network/NetworkProjectSettings.h"
+#include "NetworkReplicationInventoryCodec.h"
 
 #include <algorithm>
 #include <array>
@@ -170,7 +171,7 @@ namespace Horo::Network {
             bool rejected{};
 
             bool operator()(const int depth, const Json::parse_event_t event, const Json &value) {
-                if (depth < 0 || depth > 5) {
+                if (depth < 0 || depth > 12) {
                     rejected = true;
                     return false;
                 }
@@ -265,10 +266,14 @@ namespace Horo::Network {
             if (!ReadUnsigned(root, "contractVersion", number, NetworkProjectSettingsInput::CurrentContractVersion) || number == 0)
                 return false;
             const bool legacy = number == 1;
+            const bool inventoryPresent = number == 3;
             if (legacy ? !HasFields(root, {"contractVersion", "settings", "revision", "supportedRoles", "defaultRole", "profile",
                                            "protocol", "transport"})
-                       : !HasFields(root, {"contractVersion", "settings", "revision", "supportedRoles", "defaultRole", "profile",
-                                           "protocol", "transport", "defaultEndpoint", "credentialRequirementId"}))
+                : inventoryPresent
+                    ? !HasFields(root, {"contractVersion", "settings", "revision", "supportedRoles", "defaultRole", "profile", "protocol",
+                                        "transport", "defaultEndpoint", "credentialRequirementId", "replication"})
+                    : !HasFields(root, {"contractVersion", "settings", "revision", "supportedRoles", "defaultRole", "profile", "protocol",
+                                        "transport", "defaultEndpoint", "credentialRequirementId"}))
                 return false;
             input.contractVersion = NetworkProjectSettingsInput::CurrentContractVersion;
             if (!ReadUnsigned(root, "settings", number, std::numeric_limits<std::uint64_t>::max()) || number == 0)
@@ -284,7 +289,8 @@ namespace Horo::Network {
                 return false;
             input.defaultRole = static_cast<NetworkProjectRole>(number);
             return ReadProfile(root.at("profile"), input.profile) && ReadProtocol(root.at("protocol"), input.protocol) &&
-                   ReadTransport(root.at("transport"), input.transport) && (legacy || ReadVersionTwo(root, input));
+                   ReadTransport(root.at("transport"), input.transport) && (legacy || ReadVersionTwo(root, input)) &&
+                   (!inventoryPresent || Detail::ReadReplicationInventory(root.at("replication"), input.replication));
         }
     }  // namespace
 
@@ -323,6 +329,8 @@ namespace Horo::Network {
         input.protocol.protocol = ProtocolId::Create(1).Value();
         input.protocol.supportedVersions = {.minimum = {.major = 1, .minor = 0}, .maximum = {.major = 1, .minor = 0}};
         input.protocol.schemaFingerprint = 1;
+        // Only new explicit standalone defaults certify an authored empty inventory; legacy migration never does.
+        input.replication.completeness = NetworkReplicationInventoryCompleteness::Complete;
         if (const auto validated = NetworkProjectSettings::Create(input); validated.HasError())
             return Result<NetworkProjectSettingsInput>::Failure(validated.ErrorValue());
         return Result<NetworkProjectSettingsInput>::Success(input);
@@ -353,13 +361,14 @@ namespace Horo::Network {
                                  {"deadline", static_cast<std::uint8_t>(transport.capabilities.deadline)},
                                  {"requiredMaximumDeadlineMilliseconds", transport.capabilities.requiredMaximumDeadlineMilliseconds}}},
                                {"defaultEndpoint", WriteEndpoint(settings.DefaultEndpoint())},
-                               {"credentialRequirementId", settings.CredentialRequirementId()}};
+                               {"credentialRequirementId", settings.CredentialRequirementId()},
+                               {"replication", Detail::WriteReplicationInventory(settings.ReplicationInventory())}};
         return document.dump();
     }
 
     /** @copydoc ParseNetworkProjectSettings */
     Result<NetworkProjectSettingsInput> ParseNetworkProjectSettings(const std::string_view document) {
-        if (document.size() > 64 * 1024)
+        if (document.size() > NetworkReplicationInventory::MaximumDocumentBytes)
             return Result<NetworkProjectSettingsInput>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsCapacityExceeded));
         ParseGuard guard;
         const Json parsed = Json::parse(document, std::ref(guard), false, true);
@@ -378,6 +387,8 @@ namespace Horo::Network {
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsInvalid));
         if (role == NetworkProjectRole::Standalone)
             return Result<void>::Success();
+        if (const auto complete = RequireCompleteNetworkReplicationInventory(settings); complete.HasError())
+            return complete;
         if (settings.Transport().requirement != NetworkProjectTransportRequirement::Required)
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkProjectSettingsInvalid));
         if (const auto selected = ResolveTransportCapabilities(capabilities, capabilities.revision, settings.Transport().capabilities);
