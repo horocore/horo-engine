@@ -33,6 +33,7 @@ namespace Horo::Physics {
         PhysicsWorld *world{};
         PhysicsQueryEventIdentity identity;
         std::thread::id ownerThread;
+        CancellationToken revocation;
         bool revoked{};
         bool stale{};
     };
@@ -51,8 +52,15 @@ namespace Horo::Physics {
             return access_;
         }
 
-        [[nodiscard]] Result<std::shared_ptr<const PhysicsQueryBatchCompletion>> Poll() const {
+        [[nodiscard]] Result<std::shared_ptr<const PhysicsQueryBatchCompletion>> Poll() {
             std::lock_guard lock(terminalMutex);
+            // access_ is an immutable, non-null admission pin from QueueQueryBatch. Poll reads
+            // only its cancellation token, never the owner-thread-only world pointer/flags.
+            // The terminal lock arbitrates revocation and completion; committed results never change.
+            if (!terminal && access_->revocation.IsCancellationRequested()) {
+                failureCode = &PhysicsErrors::CapabilityRevoked;
+                terminal = true;
+            }
             if (failureCode)
                 return Result<std::shared_ptr<const PhysicsQueryBatchCompletion>>::Failure(MakeError(*failureCode));
             if (failure)
@@ -82,6 +90,11 @@ namespace Horo::Physics {
             std::lock_guard lock(terminalMutex);
             if (terminal)
                 return false;
+            if (access_->revocation.IsCancellationRequested()) {
+                failureCode = &PhysicsErrors::CapabilityRevoked;
+                terminal = true;
+                return false;
+            }
             // This lock is the publication point: a prior Cancel wins and discards all prepared hits.
             completion = std::move(value);
             terminal = true;

@@ -382,12 +382,20 @@ namespace Horo::Extensions::Tests {
         });
         shutdownStarted.acquire();
         CHECK(shutdownResult.wait_for(std::chrono::milliseconds{10}) == std::future_status::timeout);
+        const auto draining = host->Inspect();
+        CHECK(draining.state == HeadlessExtensionHostState::ShuttingDown);
+        CHECK(draining.outstandingWork.size() == 1);
+        if (!draining.outstandingWork.empty()) {
+            CHECK(draining.outstandingWork.front().stage == HeadlessExtensionHostStage::Cook);
+            CHECK_FALSE(draining.outstandingWork.front().subject.empty());
+        }
 
         cooker->Release();
         operation.join();
         shutdown.join();
         CHECK(cookSucceeded);
         CHECK(host->Inspect().state == HeadlessExtensionHostState::Shutdown);
+        CHECK(host->Inspect().outstandingWork.empty());
     }
 
     TEST_CASE_METHOD(HeadlessHostFixture, "Headless diagnostics evict the oldest record at the configured bound",

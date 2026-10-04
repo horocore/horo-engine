@@ -72,6 +72,7 @@ namespace Horo::Gameplay {
         Detail::NativeRegistries registries;
         std::unique_ptr<GameplayServiceRuntime> projectServices;
         GameRuntimeContext runtimeContext;
+        std::shared_ptr<GameplayPhysicsContext> physics;
         IGameModule *gameplayModule{};
         DestroyGameModuleFunction destroy{};
         std::string moduleId;

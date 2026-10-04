@@ -9,6 +9,9 @@
 #include "Horo/Gameplay/ReplicationRegistration.h"
 #include "Horo/Gameplay/SystemRegistry.h"
 #include "gameplay/GameAssetTestSupport.h"
+#if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
+#include "Horo/Gameplay/GameplayPhysicsContext.h"
+#endif
 
 #include <algorithm>
 #include <format>
@@ -256,6 +259,17 @@ namespace {
         }
 
         Result<void> Start(GameRuntimeContext &context) override {
+#if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
+            if (!context.physics)
+                return Result<void>::Failure(MakeError(GameplayErrors::PhysicsUnavailable));
+            const auto &binding = context.physics->Binding();
+            const auto physics = context.physics->Acquire("game.tests", binding.scene, binding.sceneGeneration);
+            if (binding.permissionGranted && binding.moduleEnabled && physics.HasError() &&
+                physics.ErrorValue().code.Value() != GameplayErrors::PhysicsUnavailable.code.Value())
+                return Result<void>::Failure(physics.ErrorValue());
+            if (!binding.permissionGranted && physics.HasValue())
+                return Result<void>::Failure(MakeError(GameplayErrors::PhysicsPermissionDenied));
+#endif
             const GameplayServiceId service = GameplayServiceId::Parse("game.tests.session_service").Value();
             const GameplayCapabilityId capability = GameplayCapabilityId::Parse("game.tests.session.read").Value();
             if (context.cancellation.IsCancellationRequested() ||

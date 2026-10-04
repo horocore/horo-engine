@@ -2,6 +2,7 @@
 
 #include "GameModuleHostDetail.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Gameplay/GameplayPhysicsContext.h"
 
 #include <cstring>
 #include <utility>
@@ -61,6 +62,22 @@ namespace Horo::Gameplay {
                 return Result<std::unique_ptr<BehaviorRegistry>>::Failure(frozen.ErrorValue());
             return Result<std::unique_ptr<BehaviorRegistry>>::Success(std::move(registry));
         }
+
+        /** @brief Check the host-bound principal before factories; unavailable/denied optional access does not disable the module. */
+        Result<std::shared_ptr<GameplayPhysicsContext>> ResolvePhysicsContext(const std::shared_ptr<GameplayPhysicsContext> &physics,
+                                                                              const std::string &moduleId) {
+            if (!physics)
+                return Result<std::shared_ptr<GameplayPhysicsContext>>::Success(
+                    GameplayPhysicsContext::Withheld({.moduleId = moduleId}, GameplayPhysicsDenial::Unavailable));
+            const auto &binding = physics->Binding();
+            if (binding.moduleId != moduleId)
+                return Result<std::shared_ptr<GameplayPhysicsContext>>::Failure(MakeError(GameplayErrors::PhysicsPermissionDenied));
+            const auto admission = physics->Acquire(moduleId, binding.scene, binding.sceneGeneration);
+            if (admission.HasError() && admission.ErrorValue().code.Value() != GameplayErrors::PhysicsPermissionDenied.code.Value() &&
+                admission.ErrorValue().code.Value() != GameplayErrors::PhysicsUnavailable.code.Value())
+                return Result<std::shared_ptr<GameplayPhysicsContext>>::Failure(admission.ErrorValue());
+            return Result<std::shared_ptr<GameplayPhysicsContext>>::Success(physics);
+        }
     }  // namespace
 
     /** @copydoc GameModuleHost::Load */
@@ -85,6 +102,10 @@ namespace Horo::Gameplay {
         impl->buildFingerprint = validated.descriptor->buildFingerprint;
         impl->descriptorRevision = validated.bundle->descriptorRevision;
         impl->destroy = validated.bundle->lifecycle.destroy;
+        auto physics = ResolvePhysicsContext(physics_, impl->moduleId);
+        if (physics.HasError())
+            return Result<std::unique_ptr<LoadedGameModule>>::Failure(physics.ErrorValue());
+        impl->physics = std::move(physics).Value();
 
         auto registry = BuildRegistry(*validated.bundle);
         if (registry.HasError())

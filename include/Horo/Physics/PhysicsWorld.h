@@ -4,6 +4,7 @@
  * @brief Explicit canonical/null Physics runtime ownership and detached world lifecycle.
  */
 
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Physics/PhysicsBodyDescriptor.h"
 #include "Horo/Physics/PhysicsCapabilities.h"
@@ -164,13 +165,17 @@ namespace Horo::Physics {
          */
         [[nodiscard]] PhysicsCapabilitySupport Capability(PhysicsCapability capability) const noexcept;
 
+        /** @brief Issues one never-reused process-runtime world identity for explicit host activation.
+         * @return Fresh non-zero identity or typed affinity, unavailable or exhaustion failure.
+         * @pre Called on the runtime owner thread before publishing a world candidate.
+         * @details Consumes the identity even when later candidate preparation fails.
+         */
+        [[nodiscard]] Result<PhysicsWorldId> IssueWorldIdentity();
+
     private:
         friend class PhysicsWorld;
         friend class PhysicsSceneActivationParticipant;
         struct Impl;
-
-        /** @brief Issues one never-reused process-runtime world identity, consuming it even if later preparation fails. */
-        [[nodiscard]] Result<PhysicsWorldId> IssueWorldIdentity();
 
         /** @brief Retains the successfully prepared process owner. @param impl Owned shared runtime state. */
         explicit PhysicsRuntime(std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
@@ -326,6 +331,12 @@ namespace Horo::Physics {
          * @note The caller chooses who receives this capability; Physics applies no module policy.
          */
         [[nodiscard]] Result<PhysicsQueryEventCapability> IssueQueryEventCapability();
+        /** @brief Issues the same Physics capability with an additional host-owned revocation fence.
+         * @param revocation Token revoked before client/module/scene teardown; Physics applies no permission policy.
+         * @return Exact world capability, or a typed revoked, unavailable, affinity or capacity error.
+         * @note Retained copies observe cancellation before borrowing the world. The token retains no world.
+         */
+        [[nodiscard]] Result<PhysicsQueryEventCapability> IssueQueryEventCapability(const CancellationToken &revocation);
         /** @brief Revokes every copy of one issued capability before its client or world retires.
          * @param capability Capability issued by this exact world.
          * @return Success, or a typed foreign/stale identity or owner-thread error.

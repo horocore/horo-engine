@@ -157,6 +157,33 @@ namespace Horo::Extensions::Tests {
         RequireError(registry.Evaluate("editor.save", enabledContext), "editor_command_unknown");
     }
 
+    TEST_CASE("Extension retirement revokes a real command and invalidates retained invocation contexts",
+              "[Extensions][EditorCommand][Retirement]") {
+        auto admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorCommandRegistry registry;
+        auto context = Attach(provider, admission, SurfaceContext(EditorSurfaceKind::MenuItem, "com.example.menu", "editor.save"));
+        auto published = registry.Register(std::move(context), Command("editor.save", "save"));
+        REQUIRE(published.HasValue());
+        auto registration = std::move(published).Value();
+        auto retirement = std::make_shared<ExtensionRetirement>("com.example.extension", std::vector<std::string>{"com.example.editor"});
+        auto code = std::make_shared<int>(0);
+        REQUIRE(retirement->BindModuleCode("com.example.editor", code));
+        REQUIRE(registration.AttachRetirement(retirement));
+        CHECK_FALSE(registration.AttachRetirement(retirement));
+        auto invocation = registry.Invoke("editor.save", {});
+        REQUIRE(invocation.HasValue());
+        REQUIRE(invocation.Value().context.IsUsable());
+        const auto report = retirement->BeginRetirement();
+        CHECK_FALSE(registration.IsRegistered());
+        CHECK_FALSE(invocation.Value().context.IsUsable());
+        CHECK(registry.Invoke("editor.save", {}).HasError());
+        REQUIRE(report.outstanding.size() == 1);
+        CHECK(report.outstanding.front().subject == "editor.save");
+        registration.Reset();
+        CHECK(retirement->IsDrained());
+    }
+
     TEST_CASE("Editor command registry reports ID and shortcut collisions deterministically", "[Extensions][EditorCommand]") {
         ExtensionCapabilityAdmission admission = Admission();
         EditorSurfaceContextProvider provider;

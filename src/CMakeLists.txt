@@ -632,6 +632,7 @@ add_library(HoroGameplayApi STATIC
         gameplay/api/GameModule.cpp
         gameplay/api/GameplayComponentErrors.cpp
         gameplay/api/GameplayErrors.cpp
+        gameplay/api/GameplayPhysicsErrors.cpp
 )
 add_library(HoroEngine::GameplayApi ALIAS HoroGameplayApi)
 target_compile_features(HoroGameplayApi PUBLIC cxx_std_20)
@@ -712,6 +713,7 @@ add_library(HoroGameplayLua STATIC
         gameplay/lua/LuaBehavior.cpp
         gameplay/lua/LuaBehaviorMetadata.cpp
         gameplay/lua/LuaReplicationDeclaration.cpp
+        gameplay/lua/LuaPhysicsBinding.cpp
 )
 
 add_library(HoroGameplayBuild STATIC
@@ -1012,6 +1014,13 @@ add_library(HoroPhysics STATIC
 add_library(HoroEngine::Physics ALIAS HoroPhysics)
 target_compile_features(HoroPhysics PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysics PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::PhysicsModel)
+add_library(HoroGameplayPhysicsIntegration STATIC gameplay/runtime/GameplayPhysicsContext.cpp)
+add_library(HoroEngine::GameplayPhysicsIntegration ALIAS HoroGameplayPhysicsIntegration)
+target_compile_features(HoroGameplayPhysicsIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroGameplayPhysicsIntegration PUBLIC HoroEngine::GameplayApi HoroEngine::Physics)
+target_link_libraries(HoroGameplayRuntime PRIVATE HoroEngine::GameplayPhysicsIntegration)
+target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayPhysicsIntegration)
+target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayPhysicsIntegration)
 if(HORO_BUILD_PHYSICS_NATIVE)
     target_sources(HoroPhysics PRIVATE
         physics/CanonicalPhysicsRuntime.cpp
@@ -2224,6 +2233,10 @@ add_library(HoroExtensions STATIC
         extensions/discovery/DiscoveryPlan.cpp
         extensions/discovery/DiscoveryRootPolicy.cpp
         extensions/host/ExtensionManager.cpp
+        extensions/host/ExtensionManagerRetirement.cpp
+        extensions/host/ExtensionPlatformProviderCopy.cpp
+        extensions/host/ExtensionRetirement.cpp
+        extensions/host/EditorRegistrationRetirement.cpp
         extensions/host/ExtensionCapabilityAdmission.cpp
         extensions/host/EditorSurfaceContext.cpp
         extensions/host/EditorSurfaceRegistry.cpp
@@ -2280,6 +2293,7 @@ add_library(HoroExtensions STATIC
         extensions/registry/ExtensionInventory.cpp
         extensions/marketplace/ExtensionMarketplace.cpp
         extensions/capabilities/asset_pipeline_points/ExternalAssetImporter.cpp
+        extensions/capabilities/asset_pipeline_points/ExtensionModuleLifetime.cpp
         extensions/capabilities/asset_pipeline_points/ExternalAssetImporterConversion.cpp
         extensions/capabilities/asset_cooker/AssetCookerErrors.cpp
         extensions/capabilities/asset_cooker/AssetCookerRegistry.cpp

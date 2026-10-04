@@ -4,6 +4,47 @@
 
 This document defines how project-owned gameplay modules integrate with runtime systems: game-owned assets, input actions, scheduled systems, scene/play lifecycle, game-owned component persistence, and deferred runtime extension points.
 
+### Physics execution context (PHY-006.5)
+
+The application world owner binds the existing `PhysicsQueryEventCapability` through
+`GameplayPhysicsContext`; this holder owns admission/revocation, not another query
+or event interface. The holder borrows the explicit world only during creation and
+retains no world/Scene pointer. Acquisition validates the exact module principal,
+Scene runtime ID and activation generation. Permission is trusted resolved host
+policy, not a module claim, namespace guess or global discovery result.
+
+`GameRuntimeContext::physics` is injected before native module `Start`.
+`BehaviorRuntime` injects that same binding into native/script behavior contexts.
+Unavailable hosts inject an inert holder reporting `gameplay.physics.unavailable`;
+denied modules receive no Physics client and report `gameplay.physics.permission_denied`.
+Disabled selections fail before code activation. Retirement closes the shared
+cancellation fence before behavior/module callbacks, then releases registry and
+module/script state. World failure independently invalidates Physics admission
+before the host shuts down gameplay or releases world storage. Retained clients
+return revoked/stale errors and cannot bind a replacement generation.
+
+The production headless consumer is `GameplayWorldComposition`, invoked by
+`HeadlessNetworkServices` from `horo-engine --run-network-product`. Explicit native
+artifact/revision or script/source-sidecar selection and permission are supplied by
+the host-local invocation. Scene and Physics services share one generation-owned
+candidate record, paired at factory construction; equal Scene IDs never share
+storage or retarget old clients. The normal runtime host remains the scheduler.
+No arbitrary authored-project loading or network trust admission is implied.
+
+The editor retains its explicit Null Physics selection and core-only play clone.
+It receives unavailable behavior/module contexts, not solver activation or fallback.
+The application boundary is reusable by a future graphical world composition.
+
+`GameplayApi` remains Physics-header/solver-free. `GameplayPhysicsIntegration` owns
+the opt-in public context header and depends on the existing Physics target.
+Runtime, ModuleHost and Lua use that target privately for injection/retirement;
+this link does not select or construct a solver. The build-tree gameplay SDK
+exports Physics only through its explicitly requested `Physics` component,
+including the private static-link closure and staged target-owned headers.
+Boundary 9 changes `GameRuntimeContext` and the behavior backend vtable: all native
+modules must rebuild with the matching sdk9 fingerprint. See
+[migration and consumer contract](../../guides/gameplay-physics-capability-migration.md).
+
 ## Game-Owned Asset Types
 
 Game modules may register asset types for source assets owned by the project:

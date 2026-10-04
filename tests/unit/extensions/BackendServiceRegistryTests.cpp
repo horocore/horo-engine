@@ -367,6 +367,35 @@ namespace Horo::Extensions::Tests {
         CHECK(audit->observedProvider == "com.example.math-provider");
     }
 
+    TEST_CASE("Extension retirement revokes a real backend service and drains its admitted call",
+              "[Extensions][BackendService][Retirement]") {
+        Fixture fixture;
+        auto audit = std::make_shared<DrainingService::Audit>();
+        auto registration = RegisterService(fixture.services, Descriptor(), std::make_unique<DrainingService>(audit));
+        auto retirement =
+            std::make_shared<ExtensionRetirement>("com.example.extension", std::vector<std::string>{"com.example.math-module"});
+        auto code = std::make_shared<int>(0);
+        REQUIRE(retirement->BindModuleCode("com.example.math-module", code));
+        REQUIRE(registration.AttachRetirement(retirement));
+        CHECK_FALSE(registration.AttachRetirement(retirement));
+        const auto active = retirement->Inspect();
+        REQUIRE(active.outstanding.size() == 1);
+        CHECK(active.outstanding.front().kind == ExtensionLeaseKind::HostService);
+        CHECK(active.outstanding.front().subject == "com.example.math");
+        auto call = StartAsyncCall<DrainingService>(fixture.services, fixture.capabilities, fixture.admission,
+                                                    &DrainingService::WaitForCancellation);
+        audit->entered.wait(false, std::memory_order_acquire);
+        retirement->CloseAdmission();
+        REQUIRE(call.get().HasError());
+        CHECK(audit->shutdownAfterExit.load(std::memory_order_acquire));
+        CHECK_FALSE(registration.IsRegistered());
+        const auto rejected = fixture.services.Resolve<DrainingService>(CapabilityLease(fixture.capabilities, fixture.admission),
+                                                                        {"com.example.math"}, {"com.example.math.v1"});
+        CHECK(rejected.HasError());
+        (void)registration.Reset();
+        CHECK(retirement->IsDrained());
+    }
+
     TEST_CASE("Backend service preserves typed provider errors and caller cancellation", "[Extensions][BackendService]") {
         Fixture fixture;
         auto registration = RegisterService(fixture.services, Descriptor(),

@@ -1,6 +1,7 @@
 #include "HeadlessNetworkServices.h"
 #include "Horo/Network/DeterministicTransport.h"
 #include "Horo/Network/NetworkModeComposition.h"
+#include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "NetworkProductHost.h"
 #include "NetworkTestUtils.h"
@@ -321,33 +322,43 @@ namespace Horo::Network {
             CHECK_FALSE(host.Role(worlds[0].kind, worlds[0].scene).HasValue());
             CHECK(host.Role(replacement[0].kind, replacement[0].scene).HasValue());
         }
+
+        /** @brief Construct the exact independently routed world set used by each concrete product mode. */
+        std::size_t ProductWorlds(const NetworkProjectRole mode, std::array<NetworkModeWorld, 2> &worlds) {
+            switch (mode) {
+                case NetworkProjectRole::Standalone:
+                    worlds[0] = World(NetworkModeWorldKind::Standalone, 1);
+                    return 1;
+                case NetworkProjectRole::Client:
+                    worlds[0] = World(NetworkModeWorldKind::Client, 2);
+                    return 1;
+                case NetworkProjectRole::ListenServer:
+                    worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 3, 10);
+                    worlds[1] = World(NetworkModeWorldKind::Client, 4);
+                    return 2;
+                case NetworkProjectRole::DedicatedServer:
+                    worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 5, 11);
+                    return 1;
+                case NetworkProjectRole::Count:
+                    FAIL("Invalid closed network mode");
+            }
+            return 0;
+        }
+
+        /** @brief Require failed canonical startup to publish no partial roles when the solver is not installed. */
+        void VerifyUnavailableRoles(const Application::Internal::NetworkProductHost &host, const std::span<const NetworkModeWorld> worlds) {
+            for (const auto &world : worlds)
+                CHECK(host.Role(world.kind, world.scene).HasError());
+        }
     }  // namespace
 
-    TEST_CASE("Concrete headless product compositions reuse Scene and canonical Physics across all four modes",
+    TEST_CASE("Concrete headless product compositions honor canonical Physics availability across all four modes",
               "[integration][network][mode][headless]") {
         for (const auto mode : {NetworkProjectRole::Standalone, NetworkProjectRole::Client, NetworkProjectRole::ListenServer,
                                 NetworkProjectRole::DedicatedServer}) {
             DeterministicClock clock;
             std::array<NetworkModeWorld, 2> worlds{};
-            std::size_t count = 1;
-            switch (mode) {
-                case NetworkProjectRole::Standalone:
-                    worlds[0] = World(NetworkModeWorldKind::Standalone, 1);
-                    break;
-                case NetworkProjectRole::Client:
-                    worlds[0] = World(NetworkModeWorldKind::Client, 2);
-                    break;
-                case NetworkProjectRole::ListenServer:
-                    worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 3, 10);
-                    worlds[1] = World(NetworkModeWorldKind::Client, 4);
-                    count = 2;
-                    break;
-                case NetworkProjectRole::DedicatedServer:
-                    worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 5, 11);
-                    break;
-                case NetworkProjectRole::Count:
-                    FAIL("Invalid closed network mode");
-            }
+            const auto count = ProductWorlds(mode, worlds);
             const auto owners = std::make_shared<ProductOwners>();
             auto created = Product(clock, mode, {worlds.data(), count},
                                    {.localPlayer = mode == NetworkProjectRole::Client || mode == NetworkProjectRole::ListenServer}, owners);
@@ -355,6 +366,13 @@ namespace Horo::Network {
             auto host = std::move(created).Value();
             const auto started = host->Startup();
             INFO((started.HasError() ? started.ErrorValue().message : "Startup succeeded"));
+            if constexpr (!HORO_TEST_PHYSICS_NATIVE) {
+                REQUIRE(started.HasError());
+                CHECK(started.ErrorValue().code.Value() == Physics::PhysicsErrors::CapabilityUnavailable.code.Value());
+                VerifyUnavailableRoles(*host, {worlds.data(), count});
+                host->Shutdown();
+                continue;
+            }
             REQUIRE(started.HasValue());
             REQUIRE(host->RunFrame().HasValue());
             clock.Advance(Duration::FromNanoseconds(16'666'667));
@@ -377,16 +395,7 @@ namespace Horo::Network {
         for (const auto mode : {NetworkProjectRole::Client, NetworkProjectRole::ListenServer, NetworkProjectRole::DedicatedServer}) {
             DeterministicClock clock;
             std::array<NetworkModeWorld, 2> worlds{};
-            std::size_t count = 1;
-            if (mode == NetworkProjectRole::Client)
-                worlds[0] = World(NetworkModeWorldKind::Client, 2);
-            else {
-                worlds[0] = World(NetworkModeWorldKind::AuthorityServer, 3, 10);
-                if (mode == NetworkProjectRole::ListenServer) {
-                    worlds[1] = World(NetworkModeWorldKind::Client, 4);
-                    count = 2;
-                }
-            }
+            const auto count = ProductWorlds(mode, worlds);
             const auto owners = std::make_shared<ProductOwners>();
             const auto created = Product(clock, mode, {worlds.data(), count}, {}, owners, false, true);
             REQUIRE(created.HasError());
@@ -403,7 +412,14 @@ namespace Horo::Network {
         REQUIRE(offline.HasValue());
         const auto started = offline.Value()->Startup();
         INFO((started.HasError() ? started.ErrorValue().message : "Startup succeeded"));
-        REQUIRE(started.HasValue());
+        if constexpr (HORO_TEST_PHYSICS_NATIVE) {
+            REQUIRE(started.HasValue());
+            REQUIRE(offline.Value()->Role(worlds.front().kind, worlds.front().scene).HasValue());
+        } else {
+            REQUIRE(started.HasError());
+            REQUIRE(started.ErrorValue().code.Value() == Physics::PhysicsErrors::CapabilityUnavailable.code.Value());
+            VerifyUnavailableRoles(*offline.Value(), worlds);
+        }
         REQUIRE(owners->sceneFactoryCalls == 1);
         offline.Value()->Shutdown();
     }

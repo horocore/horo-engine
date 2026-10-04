@@ -102,6 +102,29 @@ namespace Horo::Extensions::Tests {
         }
     }  // namespace
 
+    TEST_CASE("Extension retirement withdraws a real editor surface while retaining its executable owner",
+              "[Extensions][EditorSurface][Retirement]") {
+        auto admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorSurfaceRegistry registry;
+        auto registration = RegisterSurface(registry, provider, admission);
+        auto retirement = std::make_shared<ExtensionRetirement>("com.example.tools", std::vector<std::string>{"com.example.tools.editor"});
+        auto code = std::make_shared<int>(0);
+        REQUIRE(retirement->BindModuleCode("com.example.tools.editor", code));
+        REQUIRE(registration.AttachRetirement(retirement));
+        CHECK_FALSE(registration.AttachRetirement(retirement));
+        REQUIRE(registry.Open(registration.Id()).HasValue());
+        const auto report = retirement->BeginRetirement();
+        CHECK_FALSE(registration.IsRegistered());
+        CHECK(registry.Open("com.example.tools.inspector").HasError());
+        REQUIRE(report.outstanding.size() == 1);
+        CHECK(report.outstanding.front().kind == ExtensionLeaseKind::UiSurface);
+        CHECK(report.outstanding.front().subject == "com.example.tools.inspector");
+        CHECK_FALSE(retirement->IsDrained());
+        registration.Reset();
+        CHECK(retirement->IsDrained());
+    }
+
     TEST_CASE("External editor surfaces open focus close and restore deterministically", "[Extensions][EditorSurface][Registry]") {
         auto admission = Admission();
         EditorSurfaceContextProvider provider;

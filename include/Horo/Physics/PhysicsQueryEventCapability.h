@@ -61,6 +61,8 @@ namespace Horo::Physics {
         [[nodiscard]] bool Cancel() const noexcept;
         /** @brief Reads a terminal result without waiting or accessing PhysicsWorld.
          * @return Null shared pointer while pending, immutable completed results, or a typed terminal error.
+         * @details May be called from any thread. Revocation closes pending work only; an already
+         * committed completion/error is immutable, including after module or world destruction.
          */
         [[nodiscard]] Result<std::shared_ptr<const PhysicsQueryBatchCompletion>> Poll() const;
 
@@ -98,6 +100,8 @@ namespace Horo::Physics {
      */
     class PhysicsQueryEventCapability final {
     public:
+        /** @brief Creates an inert client; access returns CapabilityStale without storage access. */
+        PhysicsQueryEventCapability() noexcept = default;
         /** @brief Returns the issued world and capability generation. @return Inert exact identity, or invalid when moved from. */
         [[nodiscard]] PhysicsQueryEventIdentity Identity() const noexcept;
         /** @brief Executes one immediate query after access, world, revision and descriptor validation.
