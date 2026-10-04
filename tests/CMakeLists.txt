@@ -1141,10 +1141,11 @@ target_link_libraries(HoroGameplayPhysicsTests PRIVATE HoroEngine::GameplayPhysi
 add_dependencies(HoroGameplayPhysicsTests HoroTestGameModule)
 horo_register_catch_test(HoroGameplayPhysicsTests LABELS "unit;gameplay;physics;headless")
 add_test(NAME HoroGameplayProductLaunchContract
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/python/gameplay_product_launch.py"
-    "$<TARGET_FILE:horo-engine>" "$<TARGET_FILE:HoroTestGameModule>"
-    "${HORO_TEST_GAME_MODULE_REVISION_FILE}" "${PROJECT_SOURCE_DIR}" "$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>")
-set_tests_properties(HoroGameplayProductLaunchContract PROPERTIES LABELS "integration;gameplay;physics;headless;product" TIMEOUT 120)
+    COMMAND "${CMAKE_COMMAND}" "-DENGINE=$<TARGET_FILE:horo-engine>" "-DMODULE=$<TARGET_FILE:HoroTestGameModule>"
+    "-DREVISION_FILE=${HORO_TEST_GAME_MODULE_REVISION_FILE}" "-DSOURCE_ROOT=${PROJECT_SOURCE_DIR}"
+    "-DPHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GameplayProductLaunchContract.cmake")
+set_tests_properties(HoroGameplayProductLaunchContract PROPERTIES LABELS "integration;gameplay;physics;headless;product" TIMEOUT 60)
 add_executable(HoroGameplayPhysicsPublicHeaderConsumer support/GameplayPhysicsPublicHeaderConsumer.cpp)
 target_compile_features(HoroGameplayPhysicsPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroGameplayPhysicsPublicHeaderConsumer PRIVATE HoroEngine::GameplayPhysicsIntegration)
