@@ -225,6 +225,11 @@ namespace Horo::Runtime {
         void Record(StagedRestorePhase phase, StagedRestoreEventOutcome outcome) noexcept;
         void Record(StagedRestorePhase phase, StagedRestoreEventOutcome outcome, std::size_t participantIndex) noexcept;
         void RollbackCandidates() noexcept;
+        /** @brief Advances the private candidates through preparation without publication. */
+        [[nodiscard]] Result<void> PrepareCandidates();
+        /** @brief Runs one participant phase and preserves failure rollback and progress. */
+        [[nodiscard]] Result<void> PrepareParticipant(StagedRestorePhase phase, std::size_t participantIndex, std::size_t visiblePlanLength,
+                                                      std::uint64_t &completedUnits, std::uint64_t totalUnits);
         [[nodiscard]] Result<void> PublishPreparationProgress(std::uint64_t completedUnits, std::uint64_t totalUnits,
                                                               StagedRestorePhase phase, std::size_t participantIndex);
         [[nodiscard]] Result<void> RunPreparationStep(StagedRestorePhase phase, std::size_t participantIndex, std::size_t visiblePlanLength,

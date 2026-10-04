@@ -7,6 +7,7 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Extensions/HeadlessExtensionHost.h"
 #include "Horo/Foundation/Utf8.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "HostModuleComposition.h"
 
 #include <algorithm>
@@ -132,11 +133,13 @@ namespace Horo::Application::Internal {
         struct HostSession final {
             std::unique_ptr<ModuleHost> modules;
             std::unique_ptr<HostObservabilitySession> observability;
+            std::unique_ptr<Runtime::SaveTelemetryRegistration> saveTelemetry;
             std::unique_ptr<Extensions::HeadlessExtensionHost> extensions;
 
             ~HostSession() {
                 if (extensions)
                     extensions->Shutdown();
+                saveTelemetry.reset();
                 if (modules)
                     modules->DeactivateAll();
             }
@@ -176,9 +179,14 @@ namespace Horo::Application::Internal {
                                                                                  .baseName = "horo-engine",
                                                                                  .hostName = "horo-engine",
                                                                                  .hostVersion = identity.engineVersion},
-                                                                     .identity = std::move(identity)});
+                                                                     .identity = std::move(identity),
+                                                                     .summaries = {&Runtime::SummarizeSaveTelemetry}});
             if (!session.observability)
                 return Result<void>::Failure(MakeError(CliErrors::HostFailure));
+            auto saveTelemetry = Runtime::SaveTelemetryRegistration::Create();
+            if (saveTelemetry.HasError())
+                return Result<void>::Failure(saveTelemetry.ErrorValue());
+            session.saveTelemetry = std::move(saveTelemetry).Value();
             auto extensions = Extensions::HeadlessExtensionHost::Create({}, toolchain, processes);
             if (extensions.HasError())
                 return Result<void>::Failure(extensions.ErrorValue());

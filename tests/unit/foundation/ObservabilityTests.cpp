@@ -1309,8 +1309,9 @@ TEST_CASE("Diagnostic bundle redaction recovers a trailing partial record and re
           "[foundation][observability][bundle][privacy][recovery]") {
     TemporaryDirectory temporary;
     const auto recoveredLog = temporary.path / "recovered.jsonl";
-    std::ofstream(recoveredLog) << R"({"message":"failed at /Users/example/project","auth.token":"secret"})" << '\n'
-                                << R"({"message":"interrupted)";
+    std::string partialRecord = R"({"message":"interrupted"})";
+    partialRecord.resize(partialRecord.size() - 2);
+    std::ofstream(recoveredLog) << R"({"message":"failed at /Users/example/project","auth.token":"secret"})" << '\n' << partialRecord;
 
     const auto recovered = Horo::Diagnostics::GenerateDiagnosticBundle({
         .outputPath = temporary.path / "recovered.zip",
@@ -1355,4 +1356,16 @@ TEST_CASE("Diagnostic bundle redaction recovers a trailing partial record and re
     });
     REQUIRE(expanding.HasError());
     REQUIRE(expanding.ErrorValue().code.Value() == "observability.bundle.size_exceeded");
+}
+
+TEST_CASE("Numeric operation identity capture excludes arbitrary ambient diagnostic fields", "[observability][context][privacy]") {
+    using namespace Horo;
+    const Telemetry::OperationContext context{.operationId = 41, .parentOperationId = 40};
+    Telemetry::ScopedOperationContext operation{context};
+    Log::LogContext privateContext{"account.id", std::string(4096, 'a'), "payload.özel", std::string(4096, 'b')};
+    const auto identity = Telemetry::CaptureOperationIdentity();
+    REQUIRE(identity.operationId == 41);
+    REQUIRE(identity.parentOperationId == 40);
+    REQUIRE(identity.diagnosticContext.Fields().empty());
+    REQUIRE(Telemetry::CaptureOperationContext().diagnosticContext.Fields().size() == 2);
 }

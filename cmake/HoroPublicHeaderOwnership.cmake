@@ -244,6 +244,7 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/RuntimeLifecycle.h
     Horo/Runtime/Scene/SceneIdentity.h
     Horo/Runtime/Save/SaveDiagnostics.h
+    Horo/Runtime/Save/SaveTelemetry.h
     Horo/Runtime/Save/SaveRootResolver.h
     Horo/Runtime/Save/SaveFilesystemStorage.h
     Horo/Runtime/Save/SaveNamespace.h

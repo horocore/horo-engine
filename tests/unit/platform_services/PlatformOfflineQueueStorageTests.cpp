@@ -5,9 +5,11 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <latch>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -33,6 +35,8 @@ namespace {
             name += "-" + std::to_string(stamp);
             root = std::filesystem::temp_directory_path() / name;
             std::filesystem::create_directories(root);
+            // Native publication authority requires canonical spelling, including macOS /var aliases.
+            root = std::filesystem::canonical(root);
         }
 
         ~TemporaryRoot() {
@@ -149,7 +153,11 @@ namespace {
                                                        const std::filesystem::path &destination) override {
             const auto attempt = replacementAttempts_.fetch_add(1);
             if (attempt == 0) {
-                replacing_.count_down();
+                {
+                    std::lock_guard lock(replacementMutex_);
+                    replacementReached_ = true;
+                }
+                replacing_.notify_all();
                 continueReplacement_.wait();
             } else if (!releaseRequested_.load()) {
                 return Horo::Result<void>::Failure(Horo::MakeError(kInjectedFailure));
@@ -166,14 +174,19 @@ namespace {
         }
 
         [[nodiscard]] bool WaitUntilReplace() {
-            replacing_.wait();
-            return replacementAttempts_.load() != 0;
+            std::unique_lock lock(replacementMutex_);
+            static_cast<void>(replacing_.wait_for(lock, std::chrono::seconds{5}, [this] {
+                return replacementReached_ || publicationFinished_;
+            }));
+            return replacementReached_;
         }
 
         void NotifyPublicationFinished() {
-            // An early storage failure must wake the test even when replacement was never reached.
-            if (replacementAttempts_.load() == 0)
-                replacing_.count_down();
+            {
+                std::lock_guard lock(replacementMutex_);
+                publicationFinished_ = true;
+            }
+            replacing_.notify_all();
         }
 
         void ContinueReplacement() {
@@ -187,7 +200,11 @@ namespace {
 
     private:
         Horo::NativeDurableFileSystem native_;
-        std::latch replacing_{1};
+        // Publisher writes and the owner observes this predicate only under replacementMutex_.
+        std::mutex replacementMutex_;
+        std::condition_variable replacing_;
+        bool replacementReached_{};
+        bool publicationFinished_{};
         std::latch continueReplacement_{1};
         std::atomic_size_t replacementAttempts_{};
         std::atomic_bool releaseRequested_{};
@@ -357,11 +374,15 @@ namespace {
             files.NotifyPublicationFinished();
         });
 
-        if (!files.WaitUntilReplace()) {
+        if (const bool reachedReplacement = files.WaitUntilReplace(); !reachedReplacement) {
+            files.ContinueReplacement();
             firstPublisher.join();
             REQUIRE(firstResult.has_value());
-            REQUIRE(firstResult->HasValue());
-            return;
+            if (firstResult->HasError()) {
+                const auto &error = firstResult->ErrorValue();
+                INFO(error.domain.Value() << "/" << error.code.Value() << ": " << error.message);
+            }
+            REQUIRE(reachedReplacement);
         }
         std::thread competingPublisher([&] {
             competingResult.emplace(store.Publish(partition, second));

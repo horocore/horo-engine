@@ -2,6 +2,8 @@
 
 #include "Horo/Foundation/MathUtils.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
+#include "SaveTelemetryInternal.h"
 
 #include <array>
 #include <exception>
@@ -192,13 +194,21 @@ namespace Horo::Runtime {
             if (!dispatch.state)
                 return;
             const SaveOperationSnapshot &snapshot = *dispatch.state->terminalSnapshot;
+            RecordSaveOperationTerminal(snapshot);
+            if (dispatch.callbacks.empty())
+                return;
+            SaveStageObservation observers{SaveTelemetryStage::Participant, snapshot.operation};
+            bool callbackFailed{};
             for (const auto &callback : dispatch.callbacks) {
                 try {
                     callback(snapshot);
                 } catch (...) {
+                    callbackFailed = true;
                     // Completion observers are isolated from operation state and from one another.
                 }
             }
+            observers.Complete(callbackFailed ? SaveTelemetryOutcome::Failed : SaveTelemetryOutcome::Succeeded,
+                               {.failureCategory = callbackFailed ? SaveFailureCategory::Participant : SaveFailureCategory::Count});
         }
 
         [[nodiscard]] SaveCancellationRequestResult RequestCancellation(const std::shared_ptr<SharedState> &state,
@@ -378,11 +388,16 @@ namespace Horo::Runtime {
                 return Result<void>::Success();
             }
         }
+        SaveStageObservation observer{SaveTelemetryStage::Participant, terminal->operation};
+        bool callbackFailed{};
         try {
             callback(*terminal);
         } catch (...) {
+            callbackFailed = true;
             // A late observer cannot affect the already immutable terminal result.
         }
+        observer.Complete(callbackFailed ? SaveTelemetryOutcome::Failed : SaveTelemetryOutcome::Succeeded,
+                          {.failureCategory = callbackFailed ? SaveFailureCategory::Participant : SaveFailureCategory::Count});
         return Result<void>::Success();
     }
 

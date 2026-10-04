@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Save/SaveArchiveFinalization.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "SaveChunkCompressionInternal.h"
 
 #include <algorithm>
@@ -117,6 +118,13 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveArchiveFinalizer::Finalize */
     Result<FinalizedSaveArchive> SaveArchiveFinalizer::Finalize(const std::uint32_t trailerByteLength) {
+        return ObserveSaveStage(SaveTelemetryStage::Encode, 0, [this, trailerByteLength] {
+            return FinalizeArchive(trailerByteLength);
+        }, {.bytes = payload_.size()});
+    }
+
+    /** @copydoc SaveArchiveFinalizer::FinalizeArchive */
+    Result<FinalizedSaveArchive> SaveArchiveFinalizer::FinalizeArchive(const std::uint32_t trailerByteLength) {
         if (finalized_)
             return Result<FinalizedSaveArchive>::Failure(MakeError(SaveErrors::CaptureAlreadySealed));
         if (nextEntry_ != directory_.Entries().size() || payload_.size() != directory_.PayloadByteLength())

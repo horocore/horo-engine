@@ -41,14 +41,19 @@ namespace Horo::Telemetry {
         }
     }  // namespace
 
-    /** @copydoc CaptureOperationContext */
-    OperationContext CaptureOperationContext() {
+    /** @copydoc CaptureOperationIdentity */
+    OperationContext CaptureOperationIdentity() noexcept {
         const auto &operations = ActiveOperations();
         if (operations.empty())
-            return {.diagnosticContext = Log::CaptureLogContext()};
-        return {.operationId = operations.back().id,
-                .parentOperationId = operations.back().parentId,
-                .diagnosticContext = Log::CaptureLogContext()};
+            return {};
+        return {.operationId = operations.back().id, .parentOperationId = operations.back().parentId};
+    }
+
+    /** @copydoc CaptureOperationContext */
+    OperationContext CaptureOperationContext() {
+        auto context = CaptureOperationIdentity();
+        context.diagnosticContext = Log::CaptureLogContext();
+        return context;
     }
 
     /** @copydoc ScopedOperationContext::ScopedOperationContext */

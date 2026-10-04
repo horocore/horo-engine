@@ -370,6 +370,14 @@ horo-engine
 horopak
 ```
 
+`horo-engine -> HoroRuntime` is an explicit executable composition edge for the
+backend-neutral Save observability contribution. The executable owns registration
+lifetime after process observability startup and supplies its capture-free retained
+log summary provider. This does not authorize `HoroApplication -> HoroRuntime` or
+`HoroFoundation -> HoroRuntime`; their generic logging/bundle contracts remain
+Runtime-neutral. Host descriptors describe the linked Runtime closure without
+registration side effects.
+
 `AudioPlatform` selects only the native implementation for the target platform;
 native audio headers remain private to that target. `NetworkTransportGNS` owns the
 optional native socket and private GNS implementation and remains separate from typed
