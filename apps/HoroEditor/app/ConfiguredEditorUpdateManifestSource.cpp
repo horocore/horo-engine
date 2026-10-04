@@ -88,10 +88,11 @@ namespace Horo::Editor {
         };
 
         /** @brief Configures a request for the exact endpoint with verified TLS and no ambient credentials. */
-        [[nodiscard]] bool ConfigureRequest(CURL *curl, const std::string &url, const EditorUpdateManifestHttpPolicy &policy,
+        [[nodiscard]] bool ConfigureRequest(const CurlHandle &handle, const std::string &url, const EditorUpdateManifestHttpPolicy &policy,
                                             ManifestResponse &response) {
+            auto *curl = handle.get();
             // TLS 1.3 is the minimum; libcurl retains its default maximum supported version.
-            if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
+            if ((curl_easy_setopt)(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
                 return false;
             return curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_USERAGENT, "horo-update/1") == CURLE_OK &&
@@ -125,7 +126,7 @@ namespace Horo::Editor {
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         ManifestResponse response{{}, cancellation};
         CurlHandle curl{curl_easy_init(), &curl_easy_cleanup};
-        if (!curl || !ConfigureRequest(curl.get(), url, policy, response))
+        if (!curl || !ConfigureRequest(curl, url, policy, response))
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         // libcurl copies CAINFO when the option is set.
         if (const std::string caBundle = policy.certificateAuthorityBundle.string();
