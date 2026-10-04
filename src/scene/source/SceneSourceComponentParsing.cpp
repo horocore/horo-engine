@@ -1,4 +1,4 @@
-#include "editor/document/SceneDocumentPersistenceInternal.h"
+#include "SceneSourceInternal.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -8,7 +8,7 @@
 #include <utility>
 #include <variant>
 
-namespace Horo::Editor::ScenePersistenceDetail {
+namespace Horo::SceneSource::Detail {
     namespace {
         [[nodiscard]] Result<AI::AiStartupPolicy> ParseAiStartupPolicy(const Json &value) {
             using enum AI::AiStartupPolicy;
@@ -448,4 +448,4 @@ namespace Horo::Editor::ScenePersistenceDetail {
         return Result<SceneObjectComponentSet>::Success(std::move(components));
     }
 
-}  // namespace Horo::Editor::ScenePersistenceDetail
+}  // namespace Horo::SceneSource::Detail

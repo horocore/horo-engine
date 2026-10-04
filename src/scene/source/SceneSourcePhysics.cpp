@@ -1,9 +1,9 @@
-#include "editor/document/SceneDocumentPersistenceInternal.h"
+#include "SceneSourceInternal.h"
 
 #include <utility>
 #include <variant>
 
-namespace Horo::Editor::ScenePersistenceDetail {
+namespace Horo::SceneSource::Detail {
     [[nodiscard]] Json PhysicsPoseJson(const Runtime::AuthoredPhysicsPose &pose) {
         return {{"translation", Vec3Json(pose.translation)},
                 {"rotation", {pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w}}};
@@ -132,4 +132,4 @@ namespace Horo::Editor::ScenePersistenceDetail {
         AppendPhysicsConstraints(value, components.physicsConstraints);
     }
 
-}  // namespace Horo::Editor::ScenePersistenceDetail
+}  // namespace Horo::SceneSource::Detail

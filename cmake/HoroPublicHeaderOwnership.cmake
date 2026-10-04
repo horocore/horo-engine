@@ -1,5 +1,12 @@
 include_guard(GLOBAL)
 
+horo_configure_target_header_boundary(HoroSceneSourceModel PUBLIC_HEADERS
+    Horo/Scene/SceneSourceModel.h
+)
+horo_configure_target_header_boundary(HoroSceneSource PUBLIC_HEADERS
+    Horo/Scene/SceneSource.h
+)
+
 # Public header ownership is intentionally explicit. Adding a header under
 # include/Horo requires assigning it to exactly one production target here.
 message(STATUS "Configuring target-specific public header boundaries")
@@ -678,6 +685,8 @@ horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
     Horo/Navigation/NavigationBackend.h
     Horo/Navigation/NavigationCapabilities.h
     Horo/Navigation/NavigationDataSerialization.h
+    Horo/Navigation/NavigationDefinition.h
+    Horo/Navigation/NavigationDefinitionSerialization.h
     Horo/Navigation/NavigationErrors.h
     Horo/Navigation/NavigationIdentity.h
     Horo/Navigation/NavigationLinkTypes.h

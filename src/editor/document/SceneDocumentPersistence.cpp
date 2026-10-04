@@ -74,7 +74,7 @@ namespace Horo::Editor {
                 return Result<ProjectSceneRecoveryRecord>::Failure(
                     PersistenceError(SceneInvalid, "Recovery scene checksum does not match its payload."));
 
-            auto scene = ParseScene(record["scene"].dump());
+            auto scene = SceneSource::DecodeSceneSource(record["scene"].dump());
             if (scene.HasError())
                 return Result<ProjectSceneRecoveryRecord>::Failure(scene.ErrorValue());
             ParsedScene parsed = std::move(scene).Value();
@@ -211,7 +211,7 @@ namespace Horo::Editor {
         if (sceneBytes.HasError()) {
             return Result<LoadedProjectScene>::Failure(sceneBytes.ErrorValue());
         }
-        auto scene = ParseScene(sceneBytes.Value());
+        auto scene = SceneSource::DecodeSceneSource(sceneBytes.Value());
         if (scene.HasError()) {
             return Result<LoadedProjectScene>::Failure(scene.ErrorValue());
         }

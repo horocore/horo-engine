@@ -1,4 +1,4 @@
-#include "editor/document/SceneDocumentPersistenceInternal.h"
+#include "SceneSourceInternal.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -6,7 +6,7 @@
 #include <utility>
 #include <variant>
 
-namespace Horo::Editor::ScenePersistenceDetail {
+namespace Horo::SceneSource::Detail {
     [[nodiscard]] Json BehaviorFieldValueJson(const Gameplay::BehaviorFieldValue &value) {
         return std::visit([]<typename T>(const T &typed) -> Json {
             if constexpr (std::is_same_v<T, std::monostate>) {
@@ -517,4 +517,4 @@ namespace Horo::Editor::ScenePersistenceDetail {
         return value;
     }
 
-}  // namespace Horo::Editor::ScenePersistenceDetail
+}  // namespace Horo::SceneSource::Detail

@@ -1,12 +1,12 @@
-#include "editor/document/NavigationAgentJson.h"
-#include "editor/document/SceneDocumentPersistenceInternal.h"
+#include "NavigationAgentJson.h"
+#include "SceneSourceInternal.h"
 
 #include <algorithm>
 #include <limits>
 #include <string>
 #include <utility>
 
-namespace Horo::Editor::ScenePersistenceDetail {
+namespace Horo::SceneSource::Detail {
     [[nodiscard]] Result<Runtime::NavigationLocalBounds> ParseNavigationBounds(const Json &value) {
         if (!value.is_object() || !value.contains("center") || !value.contains("halfExtents"))
             return Result<Runtime::NavigationLocalBounds>::Failure(PersistenceError(SceneInvalid, "Navigation bounds are invalid."));
@@ -292,11 +292,11 @@ namespace Horo::Editor::ScenePersistenceDetail {
     }
 
     [[nodiscard]] Result<Runtime::NavigationAgentComponent> ParseNavigationAgent(const Json &value) {
-        auto parsed = Detail::ParseNavigationAgentJson(value);
+        auto parsed = ParseNavigationAgentJson(value);
         if (parsed.HasError())
             return Result<Runtime::NavigationAgentComponent>::Failure(
                 PersistenceError(SceneInvalid, "Navigation agent payload is invalid."));
         return Result<Runtime::NavigationAgentComponent>::Success(std::move(parsed).Value());
     }
 
-}  // namespace Horo::Editor::ScenePersistenceDetail
+}  // namespace Horo::SceneSource::Detail

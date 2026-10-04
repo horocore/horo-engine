@@ -1,4 +1,4 @@
-#include "editor/document/SceneDocumentPersistenceInternal.h"
+#include "SceneSourceInternal.h"
 
 #include <functional>
 #include <string>
@@ -6,7 +6,7 @@
 #include <utility>
 #include <variant>
 
-namespace Horo::Editor::ScenePersistenceDetail {
+namespace Horo::SceneSource::Detail {
     [[nodiscard]] Result<Runtime::AuthoredPhysicsPose> ParsePhysicsPose(const Json &value) {
         if (!value.is_object() || !value.contains("translation") || !value.contains("rotation"))
             return Result<Runtime::AuthoredPhysicsPose>::Failure(PersistenceError(SceneInvalid, "Physics pose is incomplete."));
@@ -334,4 +334,4 @@ namespace Horo::Editor::ScenePersistenceDetail {
         return Result<std::vector<Gameplay::BehaviorComponent>>::Success(std::move(parsedList));
     }
 
-}  // namespace Horo::Editor::ScenePersistenceDetail
+}  // namespace Horo::SceneSource::Detail
