@@ -319,8 +319,10 @@ namespace {
         legacy["contractVersion"] = 1;
         legacy.erase("defaultEndpoint");
         legacy.erase("credentialRequirementId");
+        legacy.erase("replication");
         const auto migrated = ParseNetworkProjectSettings(legacy.dump());
         REQUIRE(migrated.HasValue());
+        REQUIRE(migrated.Value().replication.completeness == NetworkReplicationInventoryCompleteness::Unknown);
         const auto migratedProject = NetworkProjectSettings::Create(migrated.Value());
         REQUIRE(migratedProject.HasValue());
         REQUIRE(AssessNetworkTarget(migratedProject.Value(), fixture.product, fixture.inventory, fixture.host, fixture.requirements,
