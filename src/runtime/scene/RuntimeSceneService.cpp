@@ -191,8 +191,23 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(SceneErrors::NoActiveScene));
         if (transition_ != TransitionKind::None || structuralCommands_ || preparation_)
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+        const auto revision = assetRegistry_ ? assetRegistry_->Snapshot().Revision() : Assets::AssetRegistryRevision{};
+        if (auto admission = commands.ValidateAdmission(active_.scene->View().RuntimeId(), revision); admission.HasError())
+            return admission;
         if (!commands.Empty())
             structuralCommands_ = std::move(commands);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeSceneService::AddStructuralParticipant */
+    Result<void> RuntimeSceneService::AddStructuralParticipant(std::unique_ptr<SceneStructuralParticipant> participant) {
+        if (!participant || started_ || shutdown_)
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+        if (std::ranges::any_of(structuralParticipants_, [&](const auto &existing) {
+            return existing->Owner() == participant->Owner();
+        }))
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "A structural owner is already registered."));
+        structuralParticipants_.push_back(std::move(participant));
         return Result<void>::Success();
     }
 
@@ -376,7 +391,12 @@ namespace Horo::Runtime {
     Result<void> RuntimeSceneService::CommitDeferredChanges() {
         using enum TransitionKind;
         if (structuralCommands_) {
-            Result<StructuralCommitResult> committed = active_.scene->Commit(*structuralCommands_);
+            const auto revision = assetRegistry_ ? assetRegistry_->Snapshot().Revision() : Assets::AssetRegistryRevision{};
+            auto admitted = structuralCommands_->ValidateAdmission(active_.scene->View().RuntimeId(), revision);
+            Result<StructuralCommitResult> committed =
+                admitted.HasValue()
+                    ? active_.scene->CommitWithRegistry(*structuralCommands_, assetRegistry_, structuralParticipants_, &operationError_)
+                    : Result<StructuralCommitResult>::Failure(admitted.ErrorValue());
             structuralCommands_.reset();
             if (committed.HasError())
                 operationError_ = committed.ErrorValue();

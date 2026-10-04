@@ -5,6 +5,7 @@
  * @brief Generation-checked runtime scene ownership and deferred structural mutations.
  */
 
+#include "Horo/Assets/AssetPayloadCache.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Runtime/RuntimeLifecycle.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
@@ -117,6 +118,15 @@ namespace Horo::Runtime {
         std::span<const std::uint8_t> bytes; /**< Borrowed immutable cooked bytes. */
     };
 
+    /** @brief Exact named cooked envelope retained by every live entity in a structural group.
+     * @details Owners validate the envelope against metadata before realization; the lease pins immutable cooked resource bytes,
+     * not a source path or a mutable catalog lookup. Group retirement releases pins only after native owner retirement.
+     */
+    struct RuntimeGroupAssetLease final {
+        Assets::AssetDependency metadata;
+        Assets::AssetPayloadLease artifact;
+    };
+
     /** @brief Complete initial topology and component state for a deferred runtime create. */
     struct RuntimeEntityCreateInfo {
         Math::Transform localTransform;
@@ -124,6 +134,52 @@ namespace Horo::Runtime {
         std::optional<SceneObjectId> authoredObject;
         std::optional<PrimitiveMeshDescriptor> primitiveMesh;
         RuntimeComponentSet components;
+    };
+
+    /** @brief Typed Physics producer field receiving an exact runtime body reference after group reservation. */
+    enum class GroupPhysicsReferenceKind {
+        ColliderBody,
+        ConstraintFirst,
+        ConstraintSecond
+    };
+
+    /** @brief Dense group-local entity address, never an authored object ID or published runtime handle. */
+    struct RuntimeGroupEntitySlot final {
+        std::size_t index{};
+    };
+
+    /** @brief One complete typed Physics reference fixup.
+     * External targets must be live in the receiving committed Scene before this command buffer
+     * and remain live in its final candidate. Group-local slots may refer forward within the group.
+     */
+    struct GroupPhysicsBodyReference final {
+        GroupPhysicsReferenceKind kind;
+        std::size_t component{}; /**< Collider/constraint occurrence in this entity's typed component array. */
+        std::variant<RuntimeGroupEntitySlot, EntityRef> target;
+        PhysicsBodySlotId body; /**< Exact body slot on the target; never selected by hierarchy or display name. */
+    };
+
+    /** @brief Scene-owned generation-qualified result of a typed group reference fixup. */
+    struct ResolvedGroupPhysicsBodyReference final {
+        GroupPhysicsReferenceKind kind;
+        std::size_t component{};
+        EntityRef target;
+        PhysicsBodySlotId body;
+    };
+
+    /** @brief One complete projected entity in a parent-before-child structural group. */
+    struct RuntimeEntityGroupEntry final {
+        RuntimeEntityCreateInfo info;
+        std::optional<std::size_t> parentInGroup;                 /**< Earlier group index; mutually exclusive with info.parent. */
+        std::vector<GroupPhysicsBodyReference> physicsReferences; /**< Resolved only after the complete group is reserved. */
+    };
+
+    /** @brief Generation, catalog and cancellation evidence rechecked by Scene at structural publication. */
+    struct SceneStructuralAdmission final {
+        SceneRuntimeId scene;
+        Assets::AssetRegistryRevision registry;
+        CancellationToken cancellation;
+        CancellationToken ownerCancellation; /**< Host owner retirement closes pending publication without callbacks. */
     };
 
     /** @brief Stable token resolved to an EntityRef only after a successful structural commit. */
@@ -156,6 +212,15 @@ namespace Horo::Runtime {
         /** @brief Queues an entity with its complete initial component topology. @param createInfo Complete initial state
          * copied into the command. @return Batch-local deferred token. */
         [[nodiscard]] DeferredEntity Create(RuntimeEntityCreateInfo createInfo);
+        /** @brief Queues a complete bounded group atomically, retaining exact verified resource allocations.
+         * @param entries Nonempty parent-before-child complete runtime projections, at most 256 entities.
+         * @param resources Canonical artifact pins required by the group, at most 257 nonempty leases.
+         * @param admission Exact scene/catalog/cancellation evidence required at the safe point.
+         * @return Deferred tokens or a typed rejection without changing this buffer.
+         */
+        [[nodiscard]] Result<std::vector<DeferredEntity>> CreateGroup(std::vector<RuntimeEntityGroupEntry> entries,
+                                                                      std::vector<RuntimeGroupAssetLease> resources,
+                                                                      const SceneStructuralAdmission &admission);
         /** @brief Queues destruction of an existing generation-checked entity. @param entity Reference validated when the
          * batch commits. */
         void Destroy(EntityRef entity);
@@ -166,6 +231,7 @@ namespace Horo::Runtime {
 
     private:
         friend class RuntimeScene;
+        friend class RuntimeSceneService;
 
         struct CreateCommand {
             DeferredEntity deferred;
@@ -181,7 +247,15 @@ namespace Horo::Runtime {
             Math::Transform localTransform;
         };
 
-        using Command = std::variant<CreateCommand, DestroyCommand, SetLocalTransformCommand>;
+        struct CreateGroupCommand {
+            std::vector<RuntimeEntityGroupEntry> entries;
+            std::vector<RuntimeGroupAssetLease> resources;
+            std::vector<DeferredEntity> deferred;
+            SceneStructuralAdmission admission;
+        };
+
+        using Command = std::variant<CreateCommand, DestroyCommand, SetLocalTransformCommand, CreateGroupCommand>;
+        [[nodiscard]] Result<void> ValidateAdmission(SceneRuntimeId scene, Assets::AssetRegistryRevision registry) const;
         std::vector<Command> commands_;
         std::uint64_t nextDeferred_{1};
     };
@@ -194,6 +268,47 @@ namespace Horo::Runtime {
         const Math::Transform *localTransform{};
         const std::optional<PrimitiveMeshDescriptor> *primitiveMesh{};
         const RuntimeComponentSet *components{};
+        std::span<const ResolvedGroupPhysicsBodyReference> physicsReferences; /**< Runtime binding authority, not durable authoring. */
+        std::span<const RuntimeGroupAssetLease> groupAssets; /**< Exact named envelope pins, borrowed for this entity view. */
+    };
+
+    /** @brief Explicit subsystem ownership for staged structural changes; never backend discovery. */
+    enum class SceneStructuralOwner {
+        Physics,
+        Gameplay,
+        AI
+    };
+
+    /** @brief Unpublished subsystem additions/removals owned until aggregate commit or rollback. */
+    class SceneStructuralCandidate {
+    public:
+        virtual ~SceneStructuralCandidate() = default;
+        /** @brief Rechecks exact owner generations after every candidate has prepared. @return Typed failure without publication. */
+        [[nodiscard]] virtual Result<void> ValidatePublication() const = 0;
+        /** @brief Publishes fully reserved owner state at the drained lifecycle safe point; no callbacks/allocation/failure. */
+        virtual void Publish() noexcept = 0;
+        /** @brief Runs owner lifecycle notifications only after every owner and Scene is visible.
+         * @details Behavior construction/hook faults are reported, never structural rollback after publication.
+         * @return Notification result; failure leaves the already committed structural result available.
+         */
+        [[nodiscard]] virtual Result<void> AfterPublication() = 0;
+    };
+
+    /** @brief Application-composed subsystem participant for bounded Scene group transactions. */
+    class SceneStructuralParticipant {
+    public:
+        virtual ~SceneStructuralParticipant() = default;
+        /** @brief Names the one subsystem this participant owns. @return Stable owner category. */
+        [[nodiscard]] virtual SceneStructuralOwner Owner() const noexcept = 0;
+        /** @brief Prepares detached additions/removals without exposing native state or running gameplay hooks.
+         * @param active Existing Scene, borrowed only for this call.
+         * @param created Complete candidate entities, with generation-qualified parent references.
+         * @param destroyed Existing entities retired by the same transaction.
+         * @return Owned unpublished candidate. Its destruction rolls back uncommitted owner work.
+         */
+        [[nodiscard]] virtual Result<std::unique_ptr<SceneStructuralCandidate>> Prepare(RuntimeSceneView active,
+                                                                                        std::span<const RuntimeEntityView> created,
+                                                                                        std::span<const EntityRef> destroyed) = 0;
     };
 
     /** @brief Borrowed immutable view of one runtime scene; invalidated by structural commit or transition. */
@@ -257,12 +372,17 @@ namespace Horo::Runtime {
         [[nodiscard]] RuntimeSceneView View() const noexcept;
         /** @brief Applies a structural batch atomically, leaving the scene unchanged on failure. @param commands
          * Owner-thread command batch consumed by the operation. @return Created-token resolutions and destroy count, or the
-         * first typed error. */
+         * first typed error. Resource-bearing groups require RuntimeSceneService's authoritative registry path. */
         [[nodiscard]] Result<StructuralCommitResult> Commit(const SceneCommandBuffer &commands);
 
     private:
         friend class RuntimeSceneView;
         friend class RuntimeSceneService;
+
+        [[nodiscard]] Result<StructuralCommitResult> CommitWithRegistry(
+            const SceneCommandBuffer &commands, const Assets::AssetRegistry *registry,
+            std::span<const std::unique_ptr<SceneStructuralParticipant>> participants = {},
+            std::optional<Error> *notificationError = nullptr);
 
         [[nodiscard]] static Result<std::unique_ptr<RuntimeScene>> CreateResolved(const RuntimeSceneDefinition &definition,
                                                                                   SceneRuntimeId runtimeId, RuntimeSceneConfig config,
@@ -278,6 +398,8 @@ namespace Horo::Runtime {
             Math::Transform localTransform;
             std::optional<PrimitiveMeshDescriptor> primitiveMesh;
             RuntimeComponentSet components;
+            std::shared_ptr<const std::vector<RuntimeGroupAssetLease>> groupResources;
+            std::shared_ptr<const std::vector<ResolvedGroupPhysicsBodyReference>> groupPhysicsReferences;
         };
 
         /** @brief Copyable transactional state without a runtime-domain identity. */
@@ -334,6 +456,11 @@ namespace Horo::Runtime {
         /** @brief Queues one structural batch against the current active scene. @param commands Batch consumed on success.
          * @return Success or a typed state/pending-operation error. */
         [[nodiscard]] Result<void> QueueStructuralCommands(SceneCommandBuffer commands);
+        /** @brief Registers exactly one explicit owner adapter before service startup.
+         * @param participant Owned adapter; its borrowed subsystem authority outlives the service.
+         * @return Success or null/duplicate/late registration failure without replacing another owner.
+         */
+        [[nodiscard]] Result<void> AddStructuralParticipant(std::unique_ptr<SceneStructuralParticipant> participant);
         /** @brief Returns the current immutable active scene view. */
         [[nodiscard]] std::optional<RuntimeSceneView> ActiveScene() const noexcept;
         /**
@@ -391,6 +518,7 @@ namespace Horo::Runtime {
         SceneAggregate active_;
         SceneAggregate pending_;
         std::vector<std::unique_ptr<SceneActivationParticipant>> participants_;
+        std::vector<std::unique_ptr<SceneStructuralParticipant>> structuralParticipants_;
         std::unique_ptr<Preparation> preparation_;
         std::unique_ptr<ScenePublicationCheck> publicationCheck_;
         std::optional<SceneCommandBuffer> structuralCommands_;

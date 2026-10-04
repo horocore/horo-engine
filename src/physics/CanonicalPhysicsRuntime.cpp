@@ -77,6 +77,7 @@ namespace Horo::Physics::Detail {
     }
 
     CanonicalWorld::~CanonicalWorld() {
+        CancelPendingCanonicalSceneBodies({this});
         if (native.system != nullptr) {
             for (const CanonicalSceneConstraintRecord &constraint : scene.constraints)
                 native.system->RemoveConstraint(constraint.constraint.GetPtr());

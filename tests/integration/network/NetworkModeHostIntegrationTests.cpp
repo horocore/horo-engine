@@ -1,3 +1,4 @@
+#include "GameplayWorldComposition.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/Network/DeterministicTransport.h"
 #include "Horo/Network/NetworkModeComposition.h"
@@ -434,3 +435,11 @@ namespace Horo::Network {
         CHECK(owners->constructedTransport == 0);
     }
 }  // namespace Horo::Network
+
+namespace {
+    template <typename Slot>
+    concept BorrowableGameplaySlot =
+        requires(Slot &&slot) { Horo::Application::Internal::MakeGameplayStructuralParticipant(std::forward<Slot>(slot)); };
+    static_assert(BorrowableGameplaySlot<Horo::Application::Internal::GameplayWorldComposition *&>);
+    static_assert(!BorrowableGameplaySlot<Horo::Application::Internal::GameplayWorldComposition *>);
+}  // namespace

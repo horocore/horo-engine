@@ -445,6 +445,15 @@ def test_is_formattable_filters_cpp_extensions_and_ignores_vendor() -> None:
     assert dev._is_formattable(Path("scripts/dev.py")) is False
 
 
+def test_format_exclusions_apply_inside_the_repository(monkeypatch, tmp_path) -> None:
+    root = tmp_path / "build" / "checkout"
+    monkeypatch.setattr(dev, "REPOSITORY_ROOT", root)
+    assert dev._is_formattable(root / "src" / "main.cpp") is True
+    assert dev._is_formattable(root / "build" / "generated.cpp") is False
+    assert dev._is_formattable(root / "vendor" / "external.cpp") is False
+    assert dev._is_formattable(tmp_path / "outside.cpp") is False
+
+
 def test_main_format_command_invokes_clang_format(
     monkeypatch: pytest.MonkeyPatch, subprocess_calls: list[list[str]], tmp_path: Path
 ) -> None:

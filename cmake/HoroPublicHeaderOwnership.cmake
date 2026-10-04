@@ -830,6 +830,10 @@ horo_configure_target_header_boundary(HoroPrefab PUBLIC_HEADERS
     Horo/Prefab/PrefabLimits.h
 )
 
+horo_configure_target_header_boundary(HoroPrefabRuntime PUBLIC_HEADERS
+    Horo/Prefab/PrefabTemplateProvider.h
+)
+
 horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS
 Horo/Prefab/PrefabAssetDependencyClosure.h
 Horo/Prefab/PrefabDependencyGraph.h

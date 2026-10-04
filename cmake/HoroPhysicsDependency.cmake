@@ -44,8 +44,15 @@ function(horo_add_canonical_physics_dependency)
         URL_HASH SHA256=1f32328fb763135de10a244568d6ccb2ed9b1e6593fafe6dc6db5b2719d330bd
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR Build
+        PATCH_COMMAND "${CMAKE_COMMAND}" "-DJOLT_SOURCE_DIR=<SOURCE_DIR>"
+            -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/HoroJoltConstraintReservation.cmake"
     )
     FetchContent_MakeAvailable(horo_jolt)
+
+    # PATCH_COMMAND handles fresh population; this verified idempotent pass also covers existing build trees.
+    execute_process(COMMAND "${CMAKE_COMMAND}" "-DJOLT_SOURCE_DIR=${horo_jolt_SOURCE_DIR}"
+        -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/HoroJoltConstraintReservation.cmake"
+        COMMAND_ERROR_IS_FATAL ANY)
 
     file(SHA256 "${horo_jolt_SOURCE_DIR}/LICENSE" horo_jolt_license_digest)
     if(NOT horo_jolt_license_digest STREQUAL "800abe35d64ad9defd636ff1ee8c961e06f0ebca3ef8d10083e8aa0e8ef86ac3")
@@ -54,6 +61,7 @@ function(horo_add_canonical_physics_dependency)
     install(FILES "${horo_jolt_SOURCE_DIR}/LICENSE"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/horo-engine/licenses"
         RENAME JoltPhysics-5.6.0-LICENSE COMPONENT PhysicsNotices)
+    file(SHA256 "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/patches/HoroJoltConstraintReservation.cmake" horo_jolt_patch_digest)
     file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/third-party/JoltPhysics.txt" CONTENT
 "Name: Jolt Physics
 Version: 5.6.0
@@ -63,6 +71,9 @@ Commit: e77f175595e64cb44218cc9d9d56fc365ad0e36a
 Archive-SHA256: 1f32328fb763135de10a244568d6ccb2ed9b1e6593fafe6dc6db5b2719d330bd
 License-SHA256: 800abe35d64ad9defd636ff1ee8c961e06f0ebca3ef8d10083e8aa0e8ef86ac3
 License-File: JoltPhysics-5.6.0-LICENSE
+Horo-Patch: cmake/patches/HoroJoltConstraintReservation.cmake (HORO-1038)
+Patch-Purpose: Locked constraint capacity reservation without registration or activation
+Patch-SHA256: ${horo_jolt_patch_digest}
 ")
     install(FILES "${CMAKE_BINARY_DIR}/third-party/JoltPhysics.txt"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/horo-engine/licenses" COMPONENT PhysicsNotices)
