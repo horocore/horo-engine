@@ -65,13 +65,13 @@ namespace Horo::Cinematic {
             return Result<void>::Success();
         }
 
-        void OnCamera(void *context, const SequenceFrameCameraCutRequest &cut) noexcept {
-            auto &probe = *static_cast<HookProbe *>(context);
-            probe.cuts[probe.cutCount++] = cut;
+        void OnCamera(const BorrowedCallbackContext &context, const SequenceFrameCameraCutRequest &cut) noexcept {
+            if (auto *probe = context.Get<HookProbe>(); probe)
+                probe->cuts[probe->cutCount++] = cut;
         }
 
         [[nodiscard]] SequenceFrameHooks Hooks(HookProbe &probe) {
-            return {BorrowedCallbackContext{&probe}, OnEvent, &probe, OnCamera};
+            return {BorrowedCallbackContext{&probe}, OnEvent, BorrowedCallbackContext{&probe}, OnCamera};
         }
 
         struct ScratchStorage final {

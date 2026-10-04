@@ -33,6 +33,7 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         "HoroVfxApiTests", "HoroCinematicModelTests", "HoroCinematicRuntimeTests",
         "HoroCinematicPropertyIntegrationTests", "HoroCinematicModelPublicHeaderConsumer",
         "HoroCinematicRuntimePublicHeaderConsumer", "HoroEditorServicesPublicHeaderConsumer",
+        "HoroCameraCutRuntimeTests", "HoroCameraCutPublicHeaderConsumer",
         "HoroPrefabTests", "HoroPrefabSceneExpansionTests", "HoroPrefabSceneExpansionContractConsumer",
         "HoroAssetRegistryTests", "HoroInputTests", "HoroInputSdlTests", "HoroRuntimeUiInputTests",
         "HoroInputPublicHeaderConsumer", "HoroExtensionManagerTests", "HoroMcpSessionTests",

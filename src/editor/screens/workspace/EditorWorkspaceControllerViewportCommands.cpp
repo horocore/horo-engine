@@ -9,6 +9,10 @@ namespace Horo::Editor {
             LOG_ERROR("editor.viewport", "%s failed: %s", action, result.ErrorValue().message.c_str());
             return;
         }
+        if (m_cameraPreview) {
+            SynchronizeRuntimeScenePreview();
+            return;
+        }
         m_viewportScene.camera = m_viewport.Current().camera;
         m_viewModel.viewportCamera = m_viewport.Current().camera;
     }

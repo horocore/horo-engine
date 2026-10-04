@@ -152,6 +152,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::BeginPlaySession() {
+        StopCameraCutPreview();
         LOG_INFO("editor.play_session", "Beginning play session for '%s'...", m_viewModel.projectRoot.c_str());
         if (m_gameplayRegistry == nullptr)
             m_gameplayRegistry = ProjectGameplayRegistry::Discover(m_viewModel.projectRoot);

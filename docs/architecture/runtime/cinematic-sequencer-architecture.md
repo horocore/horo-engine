@@ -426,6 +426,15 @@ camera snapshot, selection epoch and generic discontinuity evidence without choo
 camera authority or exposing backend APIs to Cinematic Runtime. ADR-119 owns the
 complete contract.
 
+The implemented baseline composition is `HoroEngine::CinematicCameraRuntime`:
+`CinematicCameraPlayback` consumes the canonical frame-plan camera keys and
+required scene bindings, then submits copied proposals to the view's
+`HoroEngine::CameraRuntime` owner. The editor viewport controller uses the same
+composition for programmatic preview and extracts its committed camera without
+changing the authoring camera. See the
+[hard-cut runtime integration guide](../../guides/hard-camera-cut-runtime-migration.md)
+for public target ownership, lifecycle and caller migration.
+
 ### 4. Event Track
 
 Cook resolves authoring event names into typed bindings and immutable payloads:

@@ -655,6 +655,13 @@ horo_configure_target_header_boundary(HoroCinematicRuntime PUBLIC_HEADERS
     Horo/Cinematic/SequencePlaybackRuntime.h
     Horo/Cinematic/SequencePlaybackRuntimeErrors.h
 )
+horo_configure_target_header_boundary(HoroCameraRuntime PUBLIC_HEADERS
+    Horo/Runtime/Camera/CameraErrors.h
+    Horo/Runtime/Camera/CameraService.h
+)
+horo_configure_target_header_boundary(HoroCinematicCameraRuntime PUBLIC_HEADERS
+    Horo/Cinematic/CameraCutRuntime.h
+)
 horo_configure_target_header_boundary(HoroCinematicScriptBridge PUBLIC_HEADERS
     Horo/Cinematic/GameplayEventAdapter.h
     Horo/Cinematic/ScriptEventCook.h

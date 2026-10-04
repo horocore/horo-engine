@@ -770,6 +770,8 @@ add_executable(HoroCinematicRuntimeTests
         unit/runtime/cinematic/SequencePlayerTests.cpp
         unit/runtime/cinematic/SequencePlaybackRuntimeCoverageTests.cpp
         unit/runtime/cinematic/SequencePlaybackRuntimeTests.cpp
+        unit/runtime/cinematic/SequencePlaybackCoordinationTests.cpp
+        unit/runtime/cinematic/SequencePlaybackLifecycleTests.cpp
         unit/runtime/cinematic/EventTrackDispatchTests.cpp
         unit/runtime/cinematic/EventTrackNativeIntegrationTests.cpp
 )
@@ -789,6 +791,20 @@ target_compile_features(HoroCinematicPropertyIntegrationTests PRIVATE cxx_std_20
 target_include_directories(HoroCinematicPropertyIntegrationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroCinematicPropertyIntegrationTests PRIVATE HoroEngine::EditorServices)
 horo_register_catch_test(HoroCinematicPropertyIntegrationTests LABELS "unit;cinematic;editor;headless")
+add_executable(HoroCameraCutRuntimeTests
+        support/AllocationProbe.cpp
+        unit/runtime/cinematic/CameraCutRuntimeTests.cpp
+)
+target_compile_features(HoroCameraCutRuntimeTests PRIVATE cxx_std_20)
+target_include_directories(HoroCameraCutRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroCameraCutRuntimeTests PRIVATE HoroEngine::CinematicCameraRuntime)
+horo_register_catch_test(HoroCameraCutRuntimeTests LABELS "unit;cinematic;camera;headless")
+add_executable(HoroCameraCutPublicHeaderConsumer support/CameraCutPublicHeaderConsumer.cpp)
+target_compile_features(HoroCameraCutPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroCameraCutPublicHeaderConsumer PRIVATE HoroEngine::CinematicCameraRuntime)
+add_test(NAME HoroCameraCutPublicHeaderConsumer COMMAND HoroCameraCutPublicHeaderConsumer)
+set_tests_properties(HoroCameraCutPublicHeaderConsumer PROPERTIES LABELS "cinematic;camera;headless")
+
 add_executable(HoroCinematicCurveSamplingBenchmark EXCLUDE_FROM_ALL
         benchmarks/cinematic/CurveSamplingBenchmark.cpp
 )
@@ -1615,6 +1631,11 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEngine::Gui nlohmann_json::nlohmann_json)
     add_dependencies(HoroEditorWorkspaceControllerTests HoroTestGameModule)
+    add_executable(HoroCameraCutEditorIntegrationTests unit/runtime/cinematic/CameraCutEditorIntegrationTests.cpp)
+    target_compile_features(HoroCameraCutEditorIntegrationTests PRIVATE cxx_std_20)
+    target_include_directories(HoroCameraCutEditorIntegrationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(HoroCameraCutEditorIntegrationTests PRIVATE HoroEngine::Gui)
+    horo_register_catch_test(HoroCameraCutEditorIntegrationTests LABELS "unit;cinematic;camera;editor;headless")
 endif ()
 
 add_executable(HoroGameplayBehaviorFilenameModalStateTests
@@ -2012,6 +2033,7 @@ target_link_libraries(HoroEditorViewportResourceTests
 add_library(HoroEditorTestInternals INTERFACE)
 target_include_directories(HoroEditorTestInternals INTERFACE ${PROJECT_SOURCE_DIR}/src)
 set(HORO_EDITOR_WHITE_BOX_TEST_TARGETS
+        HoroCameraCutEditorIntegrationTests
         HoroEditorPlaySessionControllerTests
         HoroUpdateExperienceSessionTests
         HoroProjectGameplayRegistryTests
