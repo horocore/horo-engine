@@ -774,7 +774,15 @@ Each copy names one exact world generation and a never-reused capability generat
 At most 256 usable capability states may be issued by one world at once; expired or
 explicitly revoked states release their admission slot.
 The host decides which client receives it and may explicitly revoke it; Physics
-does not decide module permissions. A command carries that identity and the exact
+does not decide module permissions. The host may issue the existing capability
+with an explicit cancellation token; module/Scene/play retirement closes that
+fence before storage destruction. Client and queued-batch access check the same
+fence. A committed batch completion remains immutable after cancellation or world
+retirement, while a pending batch becomes terminal. Batch polling is thread-safe
+and never dereferences the retired world. Gameplay host binding and SDK migration
+are specified in [Gameplay Runtime Integration](../extensions/gameplay-runtime-integration.md)
+and [its migration guide](../../guides/gameplay-physics-capability-migration.md).
+A command carries that identity and the exact
 completed publication revision. Query submission is synchronous owner-thread
 immediate execution and returns the completed tick/revision with bounded hit
 metadata. Snapshot and asynchronous submission remain unsupported until a

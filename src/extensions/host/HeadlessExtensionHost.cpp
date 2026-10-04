@@ -2,8 +2,11 @@
 
 #include "Horo/Extensions/ExtensionErrors.h"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -37,6 +40,34 @@ namespace Horo::Extensions {
         std::atomic<HeadlessExtensionHostState> state{HeadlessExtensionHostState::Configuring};
         std::vector<std::string> discoveredPackages;
         std::vector<Discovery::RootDiagnostic> rootDiagnostics;
+        std::vector<std::shared_ptr<ExtensionRetirement>> retirementOwners;
+
+        struct AdmittedWork final {
+            std::size_t id;
+            HeadlessExtensionOutstandingWork work;
+        };
+
+        mutable std::vector<AdmittedWork> admittedWork;
+        mutable std::size_t nextWorkId{1};
+
+        class WorkGuard final {
+        public:
+            WorkGuard(const Impl &owner, const std::size_t id) noexcept : owner_(owner), id_(id) {}
+
+            ~WorkGuard() {
+                std::scoped_lock lock{owner_.diagnosticMutex};
+                std::erase_if(owner_.admittedWork, [id = id_](const auto &work) {
+                    return work.id == id;
+                });
+            }
+
+            WorkGuard(const WorkGuard &) = delete;
+            WorkGuard &operator=(const WorkGuard &) = delete;
+
+        private:
+            const Impl &owner_;
+            std::size_t id_;
+        };
 
         std::unique_ptr<Assets::AssetImporterCatalog> importers{std::make_unique<Assets::AssetImporterCatalog>()};
         std::unique_ptr<ExtensionManager> manager;
@@ -111,6 +142,16 @@ namespace Horo::Extensions {
                 Record(stage, std::move(subject), *error);
                 return OperationResult::Failure(*error);
             }
+            std::size_t workId{};
+            {
+                std::scoped_lock workLock{diagnosticMutex};
+                if (admittedWork.size() >= 4096U || nextWorkId == 0)
+                    return OperationResult::Failure(
+                        MakeError(ExtensionErrors::HeadlessHostStateInvalid, "Headless admitted-work retention bound exceeded."));
+                workId = nextWorkId++;
+                admittedWork.push_back({workId, {stage, subject}});
+            }
+            const WorkGuard work{*this, workId};
             OperationResult result = operation();
             if (result.HasError())
                 Record(stage, std::move(subject), result.ErrorValue());
@@ -128,11 +169,66 @@ namespace Horo::Extensions {
             static_cast<void>(state.compare_exchange_strong(expected, HeadlessExtensionHostState::Failed));
             return Result<void>::Failure(std::move(error));
         }
+
+        /** @brief Retains discovery evidence independently of whether the later activation succeeds. */
+        void RecordDiscovery(const Discovery::DiscoveryPlan &plan) {
+            std::scoped_lock lock{diagnosticMutex};
+            rootDiagnostics = plan.rootDiagnostics;
+            discoveredPackages.reserve(plan.packages.size());
+            for (const auto &package : plan.packages)
+                discoveredPackages.push_back(package.packageId);
+            retirementOwners.reserve(plan.packages.size());
+        }
+
+        /** @brief Activates dependency-ordered packages and retains only their successfully established retirement owners. */
+        [[nodiscard]] Result<void> ActivatePackages(const std::vector<const Discovery::DiscoveredPackage *> &packages) {
+            for (const auto *selected : packages) {
+                if (auto configuring = RequireConfiguring(); configuring.HasError())
+                    return FailStartup(HeadlessExtensionHostStage::Activation, selected->packageId, configuring.ErrorValue());
+                const auto &package = *selected;
+                auto activated = manager->LoadExtension(package.canonicalPath.string(), package.providerPackageIds);
+                if (activated.HasError()) {
+                    Error failure = WrapError(ExtensionErrors::HeadlessHostActivationFailed, activated.ErrorValue(),
+                                              "Headless package activation failed: " + package.packageId);
+                    return FailStartup(HeadlessExtensionHostStage::Activation, package.packageId, std::move(failure));
+                }
+                if (activated.Value() != package.packageId)
+                    return FailStartup(HeadlessExtensionHostStage::Activation, package.packageId,
+                                       MakeError(ExtensionErrors::HeadlessHostActivationFailed,
+                                                 "Activated extension identity differs from its declared package identity."));
+                std::scoped_lock lock{diagnosticMutex};
+                retirementOwners.push_back(manager->Retirement(activated.Value()));
+            }
+            return Result<void>::Success();
+        }
     };
 
     namespace {
         constexpr std::size_t MaximumRetainedHeadlessDiagnostics = 4096U;
-    }
+
+        /** @brief Resolves package-authority provider edges before any native activation can become visible. */
+        [[nodiscard]] Result<std::vector<const Discovery::DiscoveredPackage *>> ResolveActivationOrder(
+            const Discovery::DiscoveryPlan &plan) {
+            std::vector<const Discovery::DiscoveredPackage *> order;
+            order.reserve(plan.packages.size());
+            while (order.size() < plan.packages.size()) {
+                const auto next = std::ranges::find_if(plan.packages, [&order](const auto &package) {
+                    return std::ranges::find(order, &package) == order.end() &&
+                           std::ranges::all_of(package.providerPackageIds, [&order](const auto &provider) {
+                        return std::ranges::any_of(order, [&provider](const auto *activated) {
+                            return activated->packageId == provider;
+                        });
+                    });
+                });
+                if (next == plan.packages.end())
+                    return Result<std::vector<const Discovery::DiscoveredPackage *>>::Failure(
+                        MakeError(ExtensionErrors::HeadlessHostActivationFailed,
+                                  "Declared extension provider graph is cyclic or refers to an unavailable package."));
+                order.push_back(std::to_address(next));
+            }
+            return Result<std::vector<const Discovery::DiscoveredPackage *>>::Success(std::move(order));
+        }
+    }  // namespace
 
     /** @copydoc HeadlessExtensionHost::Create */
     Result<std::unique_ptr<HeadlessExtensionHost>> HeadlessExtensionHost::Create(HeadlessExtensionHostConfiguration configuration,
@@ -228,17 +324,12 @@ namespace Horo::Extensions {
             return impl_->FailStartup(HeadlessExtensionHostStage::Discovery, "declared-packages", std::move(failure));
         }
         Discovery::DiscoveryPlan plan = std::move(discovered).Value();
-        impl_->rootDiagnostics = plan.rootDiagnostics;
-        impl_->discoveredPackages.reserve(plan.packages.size());
-        for (const Discovery::DiscoveredPackage &package : plan.packages) {
-            impl_->discoveredPackages.push_back(package.packageId);
-            auto activated = impl_->manager->LoadExtension(package.canonicalPath.string());
-            if (activated.HasError()) {
-                Error failure = WrapError(ExtensionErrors::HeadlessHostActivationFailed, activated.ErrorValue(),
-                                          "Headless package activation failed: " + package.packageId);
-                return impl_->FailStartup(HeadlessExtensionHostStage::Activation, package.packageId, std::move(failure));
-            }
-        }
+        impl_->RecordDiscovery(plan);
+        auto ordered = ResolveActivationOrder(plan);
+        if (ordered.HasError())
+            return impl_->FailStartup(HeadlessExtensionHostStage::Activation, "package-dependencies", ordered.ErrorValue());
+        if (auto activated = impl_->ActivatePackages(ordered.Value()); activated.HasError())
+            return activated;
 
         auto published = impl_->importers->Publish();
         if (published.HasError()) {
@@ -322,13 +413,19 @@ namespace Horo::Extensions {
     /** @copydoc HeadlessExtensionHost::Inspect */
     HeadlessExtensionHostSnapshot HeadlessExtensionHost::Inspect() const {
         HeadlessExtensionHostSnapshot snapshot;
-        std::shared_lock lifecycleLock{impl_->synchronization.Lifecycle()};
+        std::scoped_lock diagnosticLock{impl_->diagnosticMutex};
         snapshot.state = impl_->state.load();
         snapshot.discoveredPackages = impl_->discoveredPackages;
         snapshot.rootDiagnostics = impl_->rootDiagnostics;
-        if (impl_->manager != nullptr)
-            snapshot.loadedExtensions = impl_->manager->GetLoadedExtensionIds();
-        std::scoped_lock diagnosticLock{impl_->diagnosticMutex};
+        for (const auto &owner : impl_->retirementOwners) {
+            auto report = owner->Inspect();
+            if (report.disposition == ExtensionRetirementDisposition::Active)
+                snapshot.loadedExtensions.push_back(report.extensionId);
+            snapshot.retirements.push_back(std::move(report));
+        }
+        std::ranges::sort(snapshot.loadedExtensions);
+        for (const auto &work : impl_->admittedWork)
+            snapshot.outstandingWork.push_back(work.work);
         snapshot.diagnostics.assign(impl_->diagnostics.begin(), impl_->diagnostics.end());
         return snapshot;
     }
@@ -341,6 +438,18 @@ namespace Horo::Extensions {
         if (impl_->state.load() == HeadlessExtensionHostState::Shutdown)
             return;
         impl_->state.store(HeadlessExtensionHostState::ShuttingDown);
+
+        std::array<std::shared_ptr<ExtensionRetirement>, 1024> nativeOwners;
+        std::size_t nativeOwnerCount{};
+        {
+            std::scoped_lock diagnosticLock{impl_->diagnosticMutex};
+            for (const auto &owner : impl_->retirementOwners) {
+                if (nativeOwnerCount < nativeOwners.size())
+                    nativeOwners[nativeOwnerCount++] = owner;
+            }
+        }
+        while (nativeOwnerCount > 0)
+            nativeOwners[--nativeOwnerCount]->CloseAdmission();
 
         impl_->toolchains.BeginShutdown();
         impl_->pipeline.BeginShutdown();

@@ -850,9 +850,12 @@ external descriptor is copied and validated in a load-local candidate first,
 then the complete batch is admitted or rejected without mutating the catalog.
 Contribution IDs must also be declared as `asset.importer` entries in the
 manifest and bind to the module being loaded. Catalog snapshots retain a shared
-module lease through their C ABI adapters. `UnloadExtension` therefore releases
-the manager lease but cannot unload executable code while an importer or preview
-snapshot can still call it.
+module lease through their C ABI adapters. `UnloadExtension` begins terminal
+retirement: it closes new importer/preview calls, withdraws catalog publications,
+and retains native records while already admitted calls or resource owners remain.
+An old snapshot remains memory-safe but no longer admits new executable work.
+After the final work lease releases, the host explicitly finalizes native records
+on the module activation lane; a worker's final lease release never unloads code.
 
 Before publication, the extension host owns the complete activation transaction.
 Failure destroys staged contribution adapters in reverse registration order and
@@ -1335,6 +1338,47 @@ manager, catalog, importer, or preview lease remains. The current asset importer
 adapter implements this conservative lease rule; it does not force-unload a
 library that still has callable function pointers.
 
+The extension retirement controller attributes callback, job, resource, UI surface
+and host-service leases to module and contribution/work identities. The native
+importer and platform-provider adapters acquire these leases at their real ABI
+boundaries. Host-owned editor surface/command and backend-service registrations
+bind to the same controller before publication to callers; binding does not
+introduce a new native UI or service ABI. Headless operation admission is closed
+before cancellation and registry teardown, while admitted operations retain their
+existing registry and process-session ownership through completion.
+
+Package authority supplies provider package identities explicitly. Providers
+activate before dependents; retirement withdraws dependents before providers.
+Each native module retains its executable provider closure, conservatively
+including the dependency-first activation prefix, until its final owner releases.
+`RetireExtension` reports `Draining` with outstanding identities, or sticky
+`RestartRequired` after a failed drain/withdrawal. Report allocation failure cannot
+prevent admission closure or registered contribution revocation.
+
+If the manager is destroyed before draining completes, its native records are
+deliberately retained for process lifetime, not successfully unloaded. The 1024
+activation-record bound is per manager, not a global quarantine limit. Composition
+must honor restart-required and must not repeatedly recreate failed hosts.
+Disable, update and removal remain restart-applied; retirement does not authorize
+live replacement.
+
+Migration: managers are nonmovable because destination replacement could bypass
+retirement. Construct them in place or transfer a `unique_ptr` on the owner lane.
+Callers previously invoking a retained importer after `UnloadExtension` must move
+that call before retirement, or retain an already admitted operation. Keep the
+manager alive until owners release and call `FinalizeRetirements` on the activation
+lane; destroying a busy manager instead chooses the restart-only retention path.
+
+Retirement controller operations and backend registration attachment are logically
+const handle operations: they mutate shared, synchronized lifecycle state, not
+the handle identity. Const handles do not relax admission or owner-lane rules.
+Ordinary calls remain source-compatible; callers storing member-function pointers
+must update their signatures to include `const` and rebuild the owning consumers.
+Executable lease construction remains controller-only through a non-publicly
+constructible passkey; consumers acquire tokens through `Acquire`, never by
+constructing an untracked token. Allocation precedes the admission lock, and
+rollback destroys provider owners and executable pins only after unlocking.
+
 Safe runtime unload requires all of the following to be proven for a specific
 module API:
 
@@ -1491,8 +1535,10 @@ Required tests cover:
 The repository's executable reference fixture lives under
 `examples/extensions/asset-importer-basic`. Its automated contract test loads
 the real platform library, binds manifest/module/contribution versions,
-imports, generates a preview, releases the manager lease, invokes the
-snapshot-pinned importer again, and performs an identity-preserving reimport.
+imports, generates a preview, performs an identity-preserving reimport, retires
+the package, and verifies withdrawal plus rejection of new snapshot-pinned calls.
+Native ABI coverage releases retained adapters on a worker and verifies native
+unload occurs only during explicit owner-lane finalization.
 
 ## Related Documents
 

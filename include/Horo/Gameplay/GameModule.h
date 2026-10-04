@@ -29,8 +29,9 @@ namespace Horo::Gameplay {
     class PersistenceRegistrationRegistry;
     class SystemRegistry;
     class GameEventRegistry;
+    class GameplayPhysicsContext;
 
-    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 8;
+    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 9;
     inline constexpr std::uint32_t GameplayDescriptorBundleSchemaVersion = 1;
     inline constexpr std::uint32_t GameModuleReloadSnapshotSchemaVersion = 1;
     inline constexpr std::size_t MaximumGeneratedBehaviorDescriptors = 4096;
@@ -56,9 +57,10 @@ namespace Horo::Gameplay {
 
     /** @brief Narrow generation-scoped runtime capabilities supplied after project services start. */
     struct GameRuntimeContext {
-        CancellationToken cancellation;                     /**< Revoked before module shutdown or replacement. */
-        std::span<const GameplayServiceId> activeServices;  /**< Active project-scoped services in dependency order. */
-        std::span<const GameplayCapabilityId> capabilities; /**< Explicit host and project-service capability grants. */
+        CancellationToken cancellation;                        /**< Revoked before module shutdown or replacement. */
+        std::span<const GameplayServiceId> activeServices;     /**< Active project-scoped services in dependency order. */
+        std::span<const GameplayCapabilityId> capabilities;    /**< Explicit host and project-service capability grants. */
+        std::shared_ptr<const GameplayPhysicsContext> physics; /**< Optional exact module/play-world binding; no discovery. */
     };
 
     /** @brief Module-global state captured only after owned work and callbacks are quiescent. */

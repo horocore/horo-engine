@@ -157,10 +157,19 @@ namespace Horo::Application::Internal {
             return host;
         }
 
-        [[nodiscard]] Result<std::shared_ptr<const Runtime::RuntimeSceneDefinition>> ProductScene() {
+        [[nodiscard]] Result<std::shared_ptr<const Runtime::RuntimeSceneDefinition>> ProductScene(
+            const std::optional<GameplayWorldSelection> &gameplay) {
             Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
             Runtime::RuntimeEntityDefinition entity;
             entity.object = Runtime::SceneObjectId{1};
+            if (gameplay && !gameplay->scriptSource.empty()) {
+                auto program = Gameplay::LuaBehaviorProgram::LoadFiles(gameplay->scriptSource, gameplay->scriptSidecar);
+                if (program.HasError())
+                    return Result<std::shared_ptr<const Runtime::RuntimeSceneDefinition>>::Failure(program.ErrorValue());
+                const auto &descriptor = program.Value()->Descriptor();
+                entity.components.behaviors.emplace_back(Gameplay::BehaviorInstanceId{1}, descriptor.typeId, descriptor.schemaVersion, true,
+                                                         std::vector<Gameplay::BehaviorField>{});
+            }
             builder.Add(std::move(entity));
             auto created = std::move(builder).Build();
             if (created.HasError())
@@ -329,7 +338,67 @@ namespace Horo::Application::Internal {
             std::uint32_t frames{};
             Net::NetworkAddress bind;
             Net::NetworkAddress connect;
+            std::optional<GameplayWorldSelection> gameplay;
         };
+
+        /** @brief Validate one native artifact's absolute identity and non-zero descriptor revision. */
+        Result<void> ParseNativeGameplay(const std::span<char *> arguments, GameplayWorldSelection &selection) {
+            selection.nativeArtifact = arguments[1];
+            selection.moduleId = arguments[2];
+            const std::string_view revision = arguments[3];
+            const auto parsed = std::from_chars(revision.data(), revision.data() + revision.size(), selection.descriptorRevision);
+            if (!selection.nativeArtifact.is_absolute() || parsed.ec != std::errc{} || parsed.ptr != revision.data() + revision.size() ||
+                selection.descriptorRevision == 0)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
+            return Result<void>::Success();
+        }
+
+        /** @brief Decode a host-local explicit artifact request; permissions default to denied and are never module claims. */
+        [[nodiscard]] Result<GameplayWorldSelection> ParseGameplaySelection(const std::span<char *> arguments) {
+            if (arguments.size() != 5)
+                return Result<GameplayWorldSelection>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                              "Gameplay suffix: --game-module <absolute artifact> <module id> <revision> <grant|deny>, or "
+                              "--game-script <absolute source> <absolute sidecar> <module id> <grant|deny>."));
+            GameplayWorldSelection selection;
+            const std::string_view kind = arguments[0];
+            if (kind == "--game-module") {
+                if (const auto valid = ParseNativeGameplay(arguments, selection); valid.HasError())
+                    return Result<GameplayWorldSelection>::Failure(valid.ErrorValue());
+            } else if (kind == "--game-script") {
+                selection.scriptSource = arguments[1];
+                selection.scriptSidecar = arguments[2];
+                selection.moduleId = arguments[3];
+                if (!selection.scriptSource.is_absolute() || !selection.scriptSidecar.is_absolute())
+                    return Result<GameplayWorldSelection>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
+            } else
+                return Result<GameplayWorldSelection>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
+            const std::string_view permission = arguments[4];
+            if (permission != "grant" && permission != "deny")
+                return Result<GameplayWorldSelection>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
+            selection.physicsPermission = permission == "grant" ? GameplayPhysicsPermission::Granted : GameplayPhysicsPermission::Denied;
+            return Result<GameplayWorldSelection>::Success(std::move(selection));
+        }
+
+        /** @brief Validate the selected mode's explicit endpoints before extending its gameplay selection. */
+        Result<void> ParseProductEndpoints(const std::span<char *> arguments, ProductLaunch &launch, const bool listener,
+                                           const bool outbound) {
+            std::size_t endpointIndex = 2;
+            if (listener) {
+                auto parsed = Net::NetworkAddress::Parse(arguments[endpointIndex++]);
+                if (parsed.HasError() || parsed.Value().RequiresResolution())
+                    return Result<void>::Failure(
+                        MakeError(Net::NetworkErrors::NetworkModeInvalid, "Listener needs a numeric bind endpoint."));
+                launch.bind = parsed.Value();
+            }
+            if (outbound) {
+                auto parsed = Net::NetworkAddress::Parse(arguments[endpointIndex]);
+                if (parsed.HasError())
+                    return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid outbound endpoint."));
+                launch.connect = parsed.Value();
+            }
+            return Result<void>::Success();
+        }
 
         [[nodiscard]] Result<ProductLaunch> ParseProductLaunch(const std::span<char *> arguments) {
             if (arguments.size() < 2) {
@@ -345,22 +414,17 @@ namespace Horo::Application::Internal {
             launch.role = *role;
             const bool listener = *role == Net::NetworkProjectRole::DedicatedServer || *role == Net::NetworkProjectRole::ListenServer;
             const bool outbound = *role == Net::NetworkProjectRole::Client || *role == Net::NetworkProjectRole::ListenServer;
-            if (arguments.size() != 2 + static_cast<std::size_t>(listener) + static_cast<std::size_t>(outbound))
+            const std::size_t modeArgumentCount = 2 + static_cast<std::size_t>(listener) + static_cast<std::size_t>(outbound);
+            if (arguments.size() != modeArgumentCount && arguments.size() != modeArgumentCount + 5)
                 return Result<ProductLaunch>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid, "Selected mode requires exact explicit bind/connect endpoints."));
-            std::size_t endpointIndex = 2;
-            if (listener) {
-                auto parsed = Net::NetworkAddress::Parse(arguments[endpointIndex++]);
-                if (parsed.HasError() || parsed.Value().RequiresResolution())
-                    return Result<ProductLaunch>::Failure(
-                        MakeError(Net::NetworkErrors::NetworkModeInvalid, "Listener needs a numeric bind endpoint."));
-                launch.bind = parsed.Value();
-            }
-            if (outbound) {
-                auto parsed = Net::NetworkAddress::Parse(arguments[endpointIndex]);
-                if (parsed.HasError())
-                    return Result<ProductLaunch>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid outbound endpoint."));
-                launch.connect = parsed.Value();
+            if (const auto valid = ParseProductEndpoints(arguments, launch, listener, outbound); valid.HasError())
+                return Result<ProductLaunch>::Failure(valid.ErrorValue());
+            if (arguments.size() > modeArgumentCount) {
+                auto selection = ParseGameplaySelection(arguments.subspan(modeArgumentCount));
+                if (selection.HasError())
+                    return Result<ProductLaunch>::Failure(selection.ErrorValue());
+                launch.gameplay = std::move(selection).Value();
             }
             return Result<ProductLaunch>::Success(std::move(launch));
         }
@@ -428,7 +492,8 @@ namespace Horo::Application::Internal {
                                                {worlds.values.data(), worlds.count},
                                                presentation},
                                               ComposeHeadlessNetworkServices(std::move(scene),
-                                                                             ProductFactories(launch.role, launch.bind, launch.connect)),
+                                                                             ProductFactories(launch.role, launch.bind, launch.connect),
+                                                                             launch.gameplay),
                                               &diagnostic);
         }
 
@@ -462,7 +527,7 @@ namespace Horo::Application::Internal {
             return 2;
         }
         auto project = ProjectSettings();
-        auto scene = ProductScene();
+        auto scene = ProductScene(launch.Value().gameplay);
         if (project.HasError() || scene.HasError()) {
             std::cerr << "horo-engine: built product metadata or Scene is invalid\n";
             return 3;

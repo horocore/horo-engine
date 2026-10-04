@@ -236,7 +236,7 @@ namespace Horo::Extensions {
     }
 
     EditorSurfaceRegistration::EditorSurfaceRegistration(EditorSurfaceRegistration &&other) noexcept
-        : registry_(std::move(other.registry_)), surface_(std::move(other.surface_)) {}
+        : registry_(std::move(other.registry_)), surface_(std::move(other.surface_)), retirementLease_(std::move(other.retirementLease_)) {}
 
     EditorSurfaceRegistration &EditorSurfaceRegistration::operator=(EditorSurfaceRegistration &&other) noexcept {
         if (this == &other)
@@ -244,6 +244,7 @@ namespace Horo::Extensions {
         Reset();
         registry_ = std::move(other.registry_);
         surface_ = std::move(other.surface_);
+        retirementLease_ = std::move(other.retirementLease_);
         return *this;
     }
 
@@ -258,6 +259,7 @@ namespace Horo::Extensions {
             surface->registered.store(false, std::memory_order_release);
         surface_.reset();
         registry_.reset();
+        retirementLease_.reset();
     }
 
     /** @copydoc EditorSurfaceRegistration::IsRegistered */

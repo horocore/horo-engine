@@ -224,6 +224,8 @@ namespace Horo::Extensions {
 
             ~ExternalImporterInstance() {
                 DestroyExternalImporter(destroy, context);
+                lifetime.reset();
+                executableLease.reset();
             }
 
             ExternalImporterInstance(const ExternalImporterInstance &) = delete;
@@ -233,11 +235,23 @@ namespace Horo::Extensions {
             ExternalImporterInstance &operator=(ExternalImporterInstance &&) = delete;
 
             std::shared_ptr<ExtensionModuleLifetime> lifetime;
+            std::shared_ptr<ExtensionRetirement> retirement;
+            std::shared_ptr<ExtensionExecutableLease> executableLease;
+            std::string moduleId;
+            std::string contributionId;
             void *context{};
             HoroAssetImporterDestroyFunc destroy{};
             HoroAssetImportFunc importFn{};
             HoroAssetPreviewFunc preview{};
         };
+
+        /** @brief Admits a real adapter call while retaining the provider and executable dependency closure. */
+        [[nodiscard]] std::shared_ptr<ExtensionExecutableLease> AcquireExternalCall(
+            const std::shared_ptr<ExternalImporterInstance> &instance) {
+            return instance->retirement
+                       ? instance->retirement->Acquire(instance->moduleId, ExtensionLeaseKind::Callback, instance->contributionId, instance)
+                       : nullptr;
+        }
 
         template <typename Invoker> [[nodiscard]] HoroExtensionStatus SafeInvoke(Invoker &&invoker, const char *operation) {
             try {
@@ -258,6 +272,17 @@ namespace Horo::Extensions {
 
         [[nodiscard]] Result<Assets::PreparedAssetImport> ImportFailure(const std::string_view message) {
             return Result<Assets::PreparedAssetImport>::Failure(MakeError(ExtensionErrors::InvocationFailed, std::string{message}));
+        }
+
+        /** @brief Validates cancellation and bounded input before borrowing caller data into the native ABI. */
+        [[nodiscard]] Result<void> ValidateImportInput(const Assets::AssetImportInput &input, const CancellationToken &cancellation) {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(
+                    MakeError(ExtensionErrors::InvocationFailed, "External asset import was cancelled before provider entry."));
+            if (input.settings.size() > kMaxListEntries || input.sourceExtension.size() > kMaxTextBytes)
+                return Result<void>::Failure(
+                    MakeError(ExtensionErrors::InvocationFailed, "External asset import input exceeded ABI bounds."));
+            return Result<void>::Success();
         }
 
         [[nodiscard]] std::vector<HoroAssetImportSettingValue> BuildAbiSettings(const Assets::AssetImportInput &input) {
@@ -311,21 +336,23 @@ namespace Horo::Extensions {
 
             [[nodiscard]] Result<Assets::PreparedAssetImport> Import(const Assets::AssetImportInput &input,
                                                                      const CancellationToken &cancellation) const override {
-                if (cancellation.IsCancellationRequested())
-                    return ImportFailure("External asset import was cancelled before provider entry.");
-                if (input.settings.size() > kMaxListEntries || input.sourceExtension.size() > kMaxTextBytes)
-                    return ImportFailure("External asset import input exceeded ABI bounds.");
+                // The admitted branch owns executable code through every native invocation and result check.
+                if (const auto call = AcquireExternalCall(instance_); call || !instance_->retirement) {
+                    if (auto inputValid = ValidateImportInput(input, cancellation); inputValid.HasError())
+                        return Result<Assets::PreparedAssetImport>::Failure(inputValid.ErrorValue());
 
-                Assets::PreparedAssetImport prepared;
-                bool outputRejected{};
-                const HoroExtensionStatus status = InvokeExternalImporter(instance_, input, cancellation, prepared, outputRejected);
-                if (cancellation.IsCancellationRequested() || status == HORO_EXTENSION_ERROR_CANCELLED)
-                    return ImportFailure("External asset importer callback was cancelled.");
-                if (status != HORO_EXTENSION_SUCCESS || outputRejected)
-                    return ImportFailure("External asset importer callback failed or produced rejected output.");
-                if (prepared.type.Value().empty() || prepared.editorPayload.empty())
-                    return ImportFailure("External importer returned invalid or empty output.");
-                return Result<Assets::PreparedAssetImport>::Success(std::move(prepared));
+                    Assets::PreparedAssetImport prepared;
+                    bool outputRejected{};
+                    const HoroExtensionStatus status = InvokeExternalImporter(instance_, input, cancellation, prepared, outputRejected);
+                    if (cancellation.IsCancellationRequested() || status == HORO_EXTENSION_ERROR_CANCELLED)
+                        return ImportFailure("External asset importer callback was cancelled.");
+                    if (status != HORO_EXTENSION_SUCCESS || outputRejected)
+                        return ImportFailure("External asset importer callback failed or produced rejected output.");
+                    if (prepared.type.Value().empty() || prepared.editorPayload.empty())
+                        return ImportFailure("External importer returned invalid or empty output.");
+                    return Result<Assets::PreparedAssetImport>::Success(std::move(prepared));
+                }
+                return ImportFailure("External importer is retiring; release outstanding work or restart.");
             }
 
         private:
@@ -338,35 +365,40 @@ namespace Horo::Extensions {
 
             [[nodiscard]] Result<Assets::AssetPreviewImage> GeneratePreview(const Assets::AssetPreviewInput &input,
                                                                             const CancellationToken &cancellation) const override {
-                if (input.width == 0 || input.height == 0 || input.width > kMaxPreviewDimension || input.height > kMaxPreviewDimension)
-                    return Result<Assets::AssetPreviewImage>::Failure(
-                        MakeError(ExtensionErrors::InvocationFailed, "External preview dimensions are invalid."));
+                // Keep the admission lease alive until the preview callback and response validation finish.
+                if (const auto call = AcquireExternalCall(instance_); call || !instance_->retirement) {
+                    if (input.width == 0 || input.height == 0 || input.width > kMaxPreviewDimension || input.height > kMaxPreviewDimension)
+                        return Result<Assets::AssetPreviewImage>::Failure(
+                            MakeError(ExtensionErrors::InvocationFailed, "External preview dimensions are invalid."));
 
-                Assets::AssetPreviewImage image;
-                HoroAssetPreviewRequest request{
-                    .structSize = sizeof(HoroAssetPreviewRequest),
-                    .editorPayload = input.editorPayload.data(),
-                    .editorPayloadByteCount = input.editorPayload.size(),
-                    .absoluteAssetPath = {input.absoluteAssetPath.data(), static_cast<std::uint32_t>(input.absoluteAssetPath.size())},
-                    .assetType = {input.assetType.Value().data(), static_cast<std::uint32_t>(input.assetType.Value().size())},
-                    .width = input.width,
-                    .height = input.height,
-                    .cancellation = {&cancellation, IsCancelled},
-                };
-                HoroAssetPreviewResponse response{
-                    .structSize = sizeof(HoroAssetPreviewResponse),
-                    .rgba8Pixels = {&image.pixels, ResizeVector},
-                };
-                const HoroExtensionStatus status = SafeInvoke([&instance = instance_, &request, &response] {
-                    return instance->preview(instance->context, &request, &response);
-                }, "preview");
+                    Assets::AssetPreviewImage image;
+                    HoroAssetPreviewRequest request{
+                        .structSize = sizeof(HoroAssetPreviewRequest),
+                        .editorPayload = input.editorPayload.data(),
+                        .editorPayloadByteCount = input.editorPayload.size(),
+                        .absoluteAssetPath = {input.absoluteAssetPath.data(), static_cast<std::uint32_t>(input.absoluteAssetPath.size())},
+                        .assetType = {input.assetType.Value().data(), static_cast<std::uint32_t>(input.assetType.Value().size())},
+                        .width = input.width,
+                        .height = input.height,
+                        .cancellation = {&cancellation, IsCancelled},
+                    };
+                    HoroAssetPreviewResponse response{
+                        .structSize = sizeof(HoroAssetPreviewResponse),
+                        .rgba8Pixels = {&image.pixels, ResizeVector},
+                    };
+                    const HoroExtensionStatus status = SafeInvoke([&instance = instance_, &request, &response] {
+                        return instance->preview(instance->context, &request, &response);
+                    }, "preview");
 
-                image.width = response.width;
-                image.height = response.height;
-                if (status != HORO_EXTENSION_SUCCESS || !image.IsValid())
-                    return Result<Assets::AssetPreviewImage>::Failure(
-                        MakeError(ExtensionErrors::InvocationFailed, "External preview callback returned invalid output."));
-                return Result<Assets::AssetPreviewImage>::Success(std::move(image));
+                    image.width = response.width;
+                    image.height = response.height;
+                    if (status != HORO_EXTENSION_SUCCESS || !image.IsValid())
+                        return Result<Assets::AssetPreviewImage>::Failure(
+                            MakeError(ExtensionErrors::InvocationFailed, "External preview callback returned invalid output."));
+                    return Result<Assets::AssetPreviewImage>::Success(std::move(image));
+                }
+                return Result<Assets::AssetPreviewImage>::Failure(
+                    MakeError(ExtensionErrors::InvocationFailed, "External preview is retiring; release outstanding work or restart."));
             }
 
         private:
@@ -374,38 +406,6 @@ namespace Horo::Extensions {
         };
 
     }  // namespace
-
-    ExtensionModuleLifetime::~ExtensionModuleLifetime() {
-        (void)UnloadNow();
-    }
-
-    /** @copydoc ExtensionModuleLifetime::UnloadNow */
-    bool ExtensionModuleLifetime::UnloadNow() noexcept {
-        if (!loaded)
-            return true;
-        loaded = false;
-        if (unload != nullptr && moduleApi.moduleContext != nullptr) {
-            try {
-                unload(&moduleApi);
-            } catch (const std::runtime_error &exception) {
-                LOG_WARN("extensions.importer", "Runtime error during module unload: %s", exception.what());
-                return false;
-            } catch (const std::logic_error &exception) {
-                LOG_WARN("extensions.importer", "Logic error during module unload: %s", exception.what());
-                return false;
-            } catch (const std::bad_alloc &exception) {
-                LOG_WARN("extensions.importer", "Bad alloc during module unload: %s", exception.what());
-                return false;
-            } catch (const std::exception &exception) {  // NOSONAR(cpp:S1181)
-                LOG_WARN("extensions.importer", "Exception during module unload: %s", exception.what());
-                return false;
-            } catch (...) {  // NOSONAR(cpp:S1181)
-                LOG_WARN("extensions.importer", "Unknown exception during module unload.");
-                return false;
-            }
-        }
-        return true;
-    }
 
     namespace {
         /** @brief Bound each declared span before dereferencing any element. */
@@ -497,6 +497,15 @@ namespace Horo::Extensions {
 
             auto instance = std::make_shared<ExternalImporterInstance>();
             instance->lifetime = session->lifetime;
+            instance->retirement = session->retirement;
+            instance->moduleId = contribution.moduleId;
+            instance->contributionId = contribution.contributionId;
+            if (instance->retirement) {
+                instance->executableLease = instance->retirement->Acquire(instance->moduleId, ExtensionLeaseKind::Resource,
+                                                                          instance->contributionId, instance->lifetime);
+                if (!instance->executableLease)
+                    throw std::invalid_argument{"Importer executable lease admission failed"};
+            }
             instance->context = descriptor->importerContext;
             instance->importFn = descriptor->importAsset;
             instance->preview = descriptor->generatePreview;

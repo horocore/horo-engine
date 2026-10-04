@@ -388,6 +388,9 @@ horo_configure_target_header_boundary(HoroGameplayRuntime PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroGameplayPerceptionIntegration PUBLIC_HEADERS
     Horo/Gameplay/PerceptionEventSource.h
 )
+horo_configure_target_header_boundary(HoroGameplayPhysicsIntegration PUBLIC_HEADERS
+    Horo/Gameplay/GameplayPhysicsContext.h
+)
 horo_configure_target_header_boundary(HoroGameplayModuleHost PUBLIC_HEADERS
     Horo/Gameplay/GameModuleHost.h
 )
@@ -1002,6 +1005,7 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ExtensionErrors.h
     Horo/Extensions/ExtensionInventory.h
     Horo/Extensions/ExtensionManager.h
+    Horo/Extensions/ExtensionRetirement.h
     Horo/Extensions/ExtensionManifest.h
     Horo/Extensions/ExtensionModuleResolution.h
     Horo/Extensions/ExtensionPlatformProvider.h
