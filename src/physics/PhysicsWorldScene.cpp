@@ -45,7 +45,7 @@ namespace Horo::Physics {
     /** @copydoc PhysicsSceneBodyPreparation::PrepareRetirement */
     Result<void> PhysicsSceneBodyPreparation::PrepareRetirement(const std::span<const BodyHandle> bodies,
                                                                 const std::span<const ShapeHandle> shapes,
-                                                                const std::span<const ConstraintHandle> constraints) {
+                                                                const std::span<const ConstraintHandle> constraints) const {
         if (const auto valid = ValidatePublication(); valid.HasError())
             return valid;
         try {
@@ -56,7 +56,7 @@ namespace Horo::Physics {
     }
 
     /** @copydoc PhysicsSceneBodyPreparation::PrepareConstraints */
-    Result<void> PhysicsSceneBodyPreparation::PrepareConstraints(const std::span<const PhysicsConstraintDescriptor> descriptors) {
+    Result<void> PhysicsSceneBodyPreparation::PrepareConstraints(const std::span<const PhysicsConstraintDescriptor> descriptors) const {
         if (const auto valid = ValidatePublication(); valid.HasError())
             return valid;
         try {

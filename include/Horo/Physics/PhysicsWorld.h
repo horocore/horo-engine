@@ -160,7 +160,7 @@ namespace Horo::Physics {
          * @details Call once before PrepareConstraints. Retirement publishes before additions at the same no-fail fence.
          */
         [[nodiscard]] Result<void> PrepareRetirement(std::span<const BodyHandle> bodies, std::span<const ShapeHandle> shapes,
-                                                     std::span<const ConstraintHandle> constraints);
+                                                     std::span<const ConstraintHandle> constraints) const;
         /** @brief Returns the complete retirement closure, including constraints attached to retiring bodies. */
         [[nodiscard]] std::span<const ConstraintHandle> RetiredConstraints() const noexcept;
         /** @brief Prepares constraints referencing reserved group bodies or resident world bodies.
@@ -169,7 +169,7 @@ namespace Horo::Physics {
          * @details Call once, on the owner lane before final validation. No fixed step or public binding observes
          * the private native capacity preparation. Constraint teardown precedes detached body teardown.
          */
-        [[nodiscard]] Result<void> PrepareConstraints(std::span<const PhysicsConstraintDescriptor> descriptors);
+        [[nodiscard]] Result<void> PrepareConstraints(std::span<const PhysicsConstraintDescriptor> descriptors) const;
         /** @brief Rechecks exact world, lifecycle and publication revision after every Scene owner has prepared.
          * @return Success or stale/affinity/lifecycle failure before any new body is exposed.
          */

@@ -7,6 +7,7 @@ namespace Horo::Physics::Detail {
     CanonicalSceneBodyBatch::CanonicalSceneBodyBatch(std::shared_ptr<CanonicalSceneBodyBatchState> state) noexcept
         : state_(std::move(state)) {}
 
+    /** @copydoc CanonicalSceneBodyBatch::~CanonicalSceneBodyBatch */
     CanonicalSceneBodyBatch::~CanonicalSceneBodyBatch() {
         state_.reset();
     }

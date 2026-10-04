@@ -80,4 +80,6 @@ namespace Horo::Application::Internal {
      */
     [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeGameplayStructuralParticipant(
         GameplayWorldComposition *const &active);
+    /** @brief Rejects temporary pointer slots that would dangle before the returned participant is used. */
+    std::unique_ptr<Runtime::SceneStructuralParticipant> MakeGameplayStructuralParticipant(GameplayWorldComposition *&&active) = delete;
 }  // namespace Horo::Application::Internal

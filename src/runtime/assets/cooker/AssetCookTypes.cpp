@@ -62,6 +62,14 @@ namespace Horo::Assets {
             return digest;
         }
 
+        /** @brief Copies a bounds-checked envelope text field without pointer alias casts. */
+        [[nodiscard]] std::string ReadText(const std::span<const std::byte> bytes, const std::size_t offset, const std::size_t count) {
+            std::string text(count, '\0');
+            if (count != 0)
+                std::memcpy(text.data(), bytes.data() + offset, count);
+            return text;
+        }
+
         [[nodiscard]] Result<AssetCookArtifact> MakeMalformedError() {
             return Result<AssetCookArtifact>::Failure(MakeError(MalformedArtifact, "Cooked artifact is malformed."));
         }
@@ -127,8 +135,8 @@ namespace Horo::Assets {
         if (payloadSize > limits.maximumArtifactBytes)
             return Result<AssetCookArtifact>::Failure(MakeError(TooLarge, "Cooked artifact payload exceeds the maximum size."));
 
-        std::string targetText(reinterpret_cast<const char *>(bytes.data() + FixedHeaderSize), targetLen);
-        std::string typeText(reinterpret_cast<const char *>(bytes.data() + FixedHeaderSize + targetLen), typeLen);
+        const std::string targetText = ReadText(bytes, FixedHeaderSize, targetLen);
+        const std::string typeText = ReadText(bytes, FixedHeaderSize + targetLen, typeLen);
 
         auto targetResult = AssetCookTargetId::Parse(targetText);
         if (targetResult.HasError())

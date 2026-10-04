@@ -134,8 +134,9 @@ foundation, not full integrated owner behavior or complete HORO-1038 acceptance.
 
 ## Quality repair migration
 
-The provider observation/cancellation operations, Gameplay runner dispatch and
-AI safe-point operations now expose const-qualified wrapper methods. They still
+The provider observation/cancellation operations, Gameplay runner dispatch,
+native preparation operations and AI safe-point operations now expose
+const-qualified wrapper methods. They still
 mutate their explicitly owned or borrowed runtime state on the documented owner
 lane; const qualification does not grant concurrent access. Existing ordinary
 call expressions remain valid, but affected C++ consumers and member-function
@@ -145,7 +146,8 @@ borrowed by const reference and copied into the owned command buffer.
 The non-installed Gameplay structural composition factory now borrows a raw
 pointer slot by reference. A host updates that slot only at drained lifecycle
 boundaries and keeps the slot and pointed-to composition alive through each
-transaction. It does not transfer ownership or capture a stale pointer snapshot.
+transaction. It does not transfer ownership or capture a stale pointer snapshot. Temporary
+pointer slots are rejected at compile time; pass the host-owned pointer variable.
 
 `DecodeCookedArtifactBytes` accepts immutable cache byte leases directly. The
 existing integer-buffer decoder forwards to that same implementation without
