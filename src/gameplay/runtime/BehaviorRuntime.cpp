@@ -45,7 +45,7 @@ namespace Horo::Gameplay {
         struct Instance {
             Runtime::EntityRef entity;
             BehaviorComponent component;
-            const BehaviorRegistration *registration{};
+            BehaviorFactoryBinding factory;
             IBehaviorInstance *implementation{};
             bool created{};
             bool enabledCallbackActive{};
@@ -132,7 +132,7 @@ namespace Horo::Gameplay {
                 if (implementation == nullptr)
                     return Result<void>::Failure(
                         MakeError(GameplayErrors::InvalidBehaviorComponent, "Behavior factory returned no instance."));
-                instances.emplace_back(entity.entity, component, registration, implementation);
+                instances.emplace_back(entity.entity, component, registration->factory, implementation);
             }
             return Result<void>::Success();
         }
@@ -160,8 +160,16 @@ namespace Horo::Gameplay {
                 return left.component.instanceId < right.component.instanceId;
             });
 
+            return ActivateInstances(0);
+        }
+
+        /** @brief Activates only newly constructed attachments after their entire entity group is visible. */
+        [[nodiscard]] Result<void> ActivateInstances(const std::size_t first) {
             Runtime::SceneCommandBuffer commands;
-            for (Instance &instance : instances) {
+            for (std::size_t index = first; index < instances.size(); ++index) {
+                if (shutdownRequested)
+                    return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
+                Instance &instance = instances[index];
                 ContextBackend backend{*this, instance, {}, commands, false};
                 BehaviorContext context{backend};
                 instance.created = true;
@@ -171,6 +179,8 @@ namespace Horo::Gameplay {
                     return Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed, "Behavior OnCreate threw an exception."));
                 }
                 if (instance.component.enabled) {
+                    if (shutdownRequested)
+                        return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
                     instance.enabledCallbackActive = true;
                     try {
                         instance.implementation->OnEnable(context);
@@ -180,6 +190,8 @@ namespace Horo::Gameplay {
                     }
                 }
             }
+            if (shutdownRequested)
+                return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
             if (!commands.Empty()) {
                 Result<Runtime::StructuralCommitResult> committed = scene.Commit(commands);
                 if (committed.HasError())
@@ -187,6 +199,150 @@ namespace Horo::Gameplay {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Detached metadata; its lifetime excludes concurrent owner-lane runner mutation. */
+        struct StructuralCandidate final : Runtime::SceneStructuralCandidate {
+            explicit StructuralCandidate(std::shared_ptr<Impl> lifetime)
+                : lifetime(std::move(lifetime)), owner(*this->lifetime), scene(owner.scene.View()) {}
+
+            ~StructuralCandidate() override {
+                owner.structuralPending = false;
+                if (owner.shutdownRequested)
+                    owner.ShutdownNow();
+            }
+
+            [[nodiscard]] Result<void> ValidatePublication() const override {
+                if (owner.shutdown || owner.shutdownRequested || !scene.IsCurrent() || !owner.structuralPending)
+                    return Result<void>::Failure(
+                        MakeError(GameplayErrors::InvalidBehaviorComponent, "Gameplay structural candidate lost its active scene."));
+                return Result<void>::Success();
+            }
+
+            void Publish() noexcept override {
+                published = true;
+            }
+
+            [[nodiscard]] Result<void> AfterPublication() override {
+                if (!published || notified)
+                    return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
+                notified = true;
+                bool teardownComplete = true;
+                for (Instance &instance : owner.instances) {
+                    if (std::ranges::find(destroyed, instance.entity) != destroyed.end())
+                        teardownComplete = owner.RollbackInstance(instance) && teardownComplete;
+                }
+                std::erase_if(owner.instances, [](const Instance &instance) {
+                    return instance.destroyed;
+                });
+                const std::size_t first = owner.instances.size();
+                for (Instance &instance : additions) {
+                    if (owner.shutdownRequested)
+                        return FailAdditions(first, "Gameplay shutdown requested during structural notifications.");
+                    try {
+                        instance.implementation = instance.factory.create(instance.factory.userData);
+                    } catch (...) {
+                        return FailAdditions(first, "Spawned behavior factory threw an exception.");
+                    }
+                    if (instance.implementation == nullptr)
+                        return FailAdditions(first, "Spawned behavior factory returned no instance.");
+                    // Capacity and all component copies were prepared before the aggregate commit fence.
+                    owner.instances.push_back(std::move(instance));
+                }
+                if (auto activated = owner.ActivateInstances(first); activated.HasError()) {
+                    const Error error = activated.ErrorValue();
+                    RollbackAdditions(first);
+                    return Result<void>::Failure(error);
+                }
+                std::ranges::sort(owner.instances, [](const Instance &left, const Instance &right) {
+                    if (left.component.typeId != right.component.typeId)
+                        return left.component.typeId < right.component.typeId;
+                    if (left.entity.entity.index != right.entity.entity.index)
+                        return left.entity.entity.index < right.entity.entity.index;
+                    return left.component.instanceId < right.component.instanceId;
+                });
+                return teardownComplete ? Result<void>::Success()
+                                        : Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed,
+                                                                          "Retired behavior callbacks failed after structural commit."));
+            }
+
+            /** @brief Releases only this group's constructed instances, never revoking the existing runner's capability. */
+            void RollbackAdditions(const std::size_t first) noexcept {
+                for (std::size_t index = owner.instances.size(); index > first; --index)
+                    (void)owner.RollbackInstance(owner.instances[index - 1]);
+                owner.instances.resize(first);
+            }
+
+            /** @brief Reports a postcommit factory fault after deterministic partial-instance teardown. */
+            [[nodiscard]] Result<void> FailAdditions(const std::size_t first, const char *message) {
+                RollbackAdditions(first);
+                return Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed, message));
+            }
+
+            std::shared_ptr<Impl> lifetime;
+            Impl &owner;
+            Runtime::RuntimeSceneView scene;
+            std::vector<Instance> additions;
+            std::vector<Runtime::EntityRef> destroyed;
+            bool published{};
+            bool notified{};
+        };
+
+        /** @brief Explicit Gameplay participant borrowing this scene's existing runner, not a replacement population. */
+        struct StructuralParticipant final : Runtime::SceneStructuralParticipant {
+            explicit StructuralParticipant(std::shared_ptr<Impl> lifetime) : lifetime(std::move(lifetime)), owner(*this->lifetime) {}
+
+            [[nodiscard]] Runtime::SceneStructuralOwner Owner() const noexcept override {
+                return Runtime::SceneStructuralOwner::Gameplay;
+            }
+
+            [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(
+                const Runtime::RuntimeSceneView active, const std::span<const Runtime::RuntimeEntityView> created,
+                const std::span<const Runtime::EntityRef> destroyed) override {
+                if (owner.shutdown || owner.shutdownRequested || owner.structuralPending || !active.IsCurrent() ||
+                    active.RuntimeId() != owner.scene.View().RuntimeId())
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
+                        MakeError(GameplayErrors::InvalidBehaviorComponent, "Gameplay runner cannot admit this Scene transaction."));
+                auto candidate = std::make_unique<StructuralCandidate>(lifetime);
+                candidate->destroyed.assign(destroyed.begin(), destroyed.end());
+                const std::size_t retiring = std::ranges::count_if(owner.instances, [&](const Instance &instance) {
+                    return std::ranges::find(destroyed, instance.entity) != destroyed.end();
+                });
+                for (const Runtime::RuntimeEntityView &entity : created) {
+                    if (entity.components == nullptr || entity.entity.runtime != active.RuntimeId())
+                        return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
+                            MakeError(GameplayErrors::InvalidBehaviorComponent));
+                    std::unordered_map<std::string_view, std::size_t> multiplicity;
+                    for (const BehaviorComponent &component : entity.components->behaviors) {
+                        if (auto valid = ValidateBehaviorComponent(component); valid.HasError())
+                            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(valid.ErrorValue());
+                        const BehaviorRegistration *registration = owner.registry.Find(component.typeId);
+                        if (registration == nullptr)
+                            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
+                                MakeError(GameplayErrors::BehaviorNotRegistered));
+                        const auto sameIdentity = [&](const Instance &existing) {
+                            return existing.component.instanceId == component.instanceId &&
+                                   std::ranges::find(destroyed, existing.entity) == destroyed.end();
+                        };
+                        if (std::ranges::any_of(owner.instances, sameIdentity) || std::ranges::any_of(candidate->additions, sameIdentity))
+                            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
+                                MakeError(GameplayErrors::InvalidBehaviorInstanceId));
+                        if (++multiplicity[component.typeId.Value()] > 1 && !registration->descriptor.allowMultiple)
+                            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
+                                MakeError(GameplayErrors::BehaviorMultiplicityViolation));
+                        if (owner.instances.size() - retiring + candidate->additions.size() >= owner.limits.maximumInstances)
+                            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
+                                MakeError(GameplayErrors::InvalidBehaviorComponent, "Scene behavior instance budget was exceeded."));
+                        candidate->additions.emplace_back(entity.entity, component, registration->factory);
+                    }
+                }
+                owner.instances.reserve(owner.instances.size() + candidate->additions.size());
+                owner.structuralPending = true;
+                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
+            }
+
+            std::shared_ptr<Impl> lifetime;
+            Impl &owner;
+        };
 
         [[nodiscard]] bool RollbackInstance(Instance &instance) noexcept {
             bool complete = true;
@@ -207,9 +363,25 @@ namespace Horo::Gameplay {
                     complete = false;
                 }
             }
-            instance.registration->factory.destroy(instance.registration->factory.userData, instance.implementation);
+            instance.factory.destroy(instance.factory.userData, instance.implementation);
             instance.destroyed = true;
             return complete;
+        }
+
+        /** @brief Tears down after structural notification references have left their callback scope. */
+        void ShutdownNow() noexcept {
+            if (shutdown)
+                return;
+            shutdown = true;
+            if (physics)
+                physics->Revoke();
+            for (auto iterator = instances.rbegin(); iterator != instances.rend(); ++iterator) {
+                if (!RollbackInstance(*iterator))
+                    LOG_WARN("gameplay.runtime", "Behavior shutdown callback threw; factory instance was still released.");
+            }
+            instances.clear();
+            events.current.clear();
+            events.next.clear();
         }
 
         Runtime::RuntimeScene &scene;
@@ -220,9 +392,11 @@ namespace Horo::Gameplay {
         std::shared_ptr<const GameplayPhysicsContext> physics;
         std::vector<Instance> instances;
         bool shutdown{};
+        bool structuralPending{};
+        bool shutdownRequested{};
     };
 
-    BehaviorRuntime::BehaviorRuntime(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+    BehaviorRuntime::BehaviorRuntime(std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     /** @copydoc BehaviorRuntime::Create */
     Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
@@ -240,7 +414,7 @@ namespace Horo::Gameplay {
         auto generationLease = registry.AcquireGenerationLease();
         if (generationLease.HasError())
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(generationLease.ErrorValue());
-        auto impl = std::make_unique<Impl>(scene, registry, limits, std::move(generationLease).Value());
+        auto impl = std::make_shared<Impl>(scene, registry, limits, std::move(generationLease).Value());
         impl->physics = std::move(physics);
         if (Result<void> built = impl->BuildInstances(); built.HasError()) {
             if (impl->physics)
@@ -264,7 +438,7 @@ namespace Horo::Gameplay {
 
     /** @copydoc BehaviorRuntime::FixedUpdate */
     Result<void> BehaviorRuntime::FixedUpdate(const std::span<const GameplayInputAction> input, const FixedDeltaTime delta) {
-        if (impl_->shutdown)
+        if (impl_->shutdown || impl_->structuralPending)
             return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, "Behavior runtime is shut down."));
         impl_->events.BeginTick();
         Runtime::SceneCommandBuffer commands;
@@ -297,7 +471,7 @@ namespace Horo::Gameplay {
 
     /** @copydoc BehaviorRuntime::PresentationUpdate */
     void BehaviorRuntime::PresentationUpdate(const FrameDeltaTime delta) {
-        if (impl_->shutdown)
+        if (impl_->shutdown || impl_->structuralPending)
             return;
         Runtime::SceneCommandBuffer rejectedCommands;
         for (Impl::Instance &instance : impl_->instances) {
@@ -311,6 +485,8 @@ namespace Horo::Gameplay {
 
     /** @copydoc BehaviorRuntime::SetEnabled */
     Result<void> BehaviorRuntime::SetEnabled(const BehaviorInstanceId instanceId, const bool enabled) {
+        if (impl_->shutdown || impl_->structuralPending)
+            return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
         const auto found = std::ranges::find(impl_->instances, instanceId, [](const Impl::Instance &instance) {
             return instance.component.instanceId;
         });
@@ -342,7 +518,7 @@ namespace Horo::Gameplay {
 
     /** @copydoc BehaviorRuntime::CaptureReloadSnapshot */
     Result<BehaviorRuntimeReloadSnapshot> BehaviorRuntime::CaptureReloadSnapshot() const {
-        if (!impl_ || impl_->shutdown)
+        if (!impl_ || impl_->shutdown || impl_->structuralPending)
             return Result<BehaviorRuntimeReloadSnapshot>::Failure(MakeError(GameplayErrors::GameplayReloadSnapshotInvalid));
         BehaviorRuntimeReloadSnapshot snapshot;
         snapshot.instances.reserve(impl_->instances.size());
@@ -368,7 +544,7 @@ namespace Horo::Gameplay {
 
     /** @copydoc BehaviorRuntime::RestoreReloadSnapshot */
     Result<void> BehaviorRuntime::RestoreReloadSnapshot(const BehaviorRuntimeReloadSnapshot &snapshot) {
-        if (!impl_ || impl_->shutdown || snapshot.instances.size() != impl_->instances.size())
+        if (!impl_ || impl_->shutdown || impl_->structuralPending || snapshot.instances.size() != impl_->instances.size())
             return Result<void>::Failure(MakeError(GameplayErrors::GameplayReloadSnapshotInvalid));
         std::unordered_map<std::uint64_t, const BehaviorInstanceReloadState *> states;
         states.reserve(snapshot.instances.size());
@@ -400,20 +576,18 @@ namespace Horo::Gameplay {
     void BehaviorRuntime::Shutdown() noexcept {
         if (!impl_ || impl_->shutdown)
             return;
-        impl_->shutdown = true;
-        if (impl_->physics)
-            impl_->physics->Revoke();
-        for (auto iterator = impl_->instances.rbegin(); iterator != impl_->instances.rend(); ++iterator) {
-            if (!impl_->RollbackInstance(*iterator))
-                LOG_WARN("gameplay.runtime", "Behavior shutdown callback threw; factory instance was still released.");
-        }
-        impl_->instances.clear();
-        impl_->events.current.clear();
-        impl_->events.next.clear();
+        impl_->shutdownRequested = true;
+        if (!impl_->structuralPending)
+            impl_->ShutdownNow();
     }
 
     /** @copydoc BehaviorRuntime::InstanceCount */
     std::size_t BehaviorRuntime::InstanceCount() const noexcept {
         return impl_->instances.size();
+    }
+
+    /** @copydoc BehaviorRuntime::MakeStructuralParticipant */
+    std::unique_ptr<Runtime::SceneStructuralParticipant> BehaviorRuntime::MakeStructuralParticipant() {
+        return std::make_unique<Impl::StructuralParticipant>(impl_);
     }
 }  // namespace Horo::Gameplay

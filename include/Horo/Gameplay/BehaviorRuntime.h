@@ -79,10 +79,20 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<void> RestoreReloadSnapshot(const BehaviorRuntimeReloadSnapshot &snapshot);
         /** @brief Reports the number of constructed scene-scoped instances. */
         [[nodiscard]] std::size_t InstanceCount() const noexcept;
+        /**
+         * @brief Creates the Gameplay owner for Scene's aggregate group transaction.
+         * @details Preparation validates and reserves attachment metadata without calling factories.
+         * Existing instances are preserved. Construction and disable/destroy notifications run only
+         * after aggregate publication; a callback fault does not roll back committed entities.
+         * The runner and its frozen registry must outlive the participant and all its candidates.
+         * All preparation, publication, callbacks and destruction use the runner's owner lane.
+         * @return Application-owned participant, explicitly registered before Scene service startup.
+         */
+        [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant();
 
     private:
         struct Impl;
-        explicit BehaviorRuntime(std::unique_ptr<Impl> impl) noexcept;
-        std::unique_ptr<Impl> impl_;
+        explicit BehaviorRuntime(std::shared_ptr<Impl> impl) noexcept;
+        std::shared_ptr<Impl> impl_;
     };
 }  // namespace Horo::Gameplay

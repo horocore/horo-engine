@@ -1058,6 +1058,7 @@ endif()
 
 add_library(HoroPhysicsSceneIntegration STATIC
         physics/PhysicsSceneActivation.cpp
+        physics/PhysicsSceneStructural.cpp
         physics/PhysicsSceneActivationPlan.cpp
         physics/PhysicsSceneActivationCapabilities.cpp
         physics/PhysicsSceneActivationLifecycle.cpp)
@@ -1103,6 +1104,7 @@ target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::AI)
 
 add_library(HoroAISceneIntegration STATIC
         runtime/ai/integration/AISceneActivation.cpp
+        runtime/ai/integration/AISceneStructural.cpp
         runtime/ai/integration/AISceneRestore.cpp
         runtime/ai/integration/AIScenePerceptionSource.cpp
         runtime/ai/integration/EnvironmentQueryContexts.cpp
@@ -1577,6 +1579,15 @@ add_library(HoroPrefab STATIC
 add_library(HoroEngine::Prefab ALIAS HoroPrefab)
 target_compile_features(HoroPrefab PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefab PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::GameplayApi)
+
+# Runtime-only integration: Scene remains independent from Prefab and source authoring.
+add_library(HoroPrefabRuntime STATIC
+        runtime/prefab/PrefabTemplateProvider.cpp
+        runtime/prefab/PrefabTemplateLoading.cpp
+)
+add_library(HoroEngine::PrefabRuntime ALIAS HoroPrefabRuntime)
+target_compile_features(HoroPrefabRuntime PUBLIC cxx_std_20)
+target_link_libraries(HoroPrefabRuntime PUBLIC HoroEngine::Prefab HoroEngine::RuntimeScene)
 
 add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabAssetDependencyClosure.cpp

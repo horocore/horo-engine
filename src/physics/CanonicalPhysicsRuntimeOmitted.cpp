@@ -2,6 +2,76 @@
 #include "Horo/Physics/PhysicsErrors.h"
 
 namespace Horo::Physics::Detail {
+    /** @brief No native ownership exists in an omitted canonical composition. */
+    struct CanonicalSceneBodyBatchState {};
+
+    CanonicalSceneBodyBatch::CanonicalSceneBodyBatch(std::shared_ptr<CanonicalSceneBodyBatchState> state) noexcept
+        : state_(std::move(state)) {}
+
+    CanonicalSceneBodyBatch::~CanonicalSceneBodyBatch() = default;
+    CanonicalSceneBodyBatch::CanonicalSceneBodyBatch(CanonicalSceneBodyBatch &&) noexcept = default;
+    CanonicalSceneBodyBatch &CanonicalSceneBodyBatch::operator=(CanonicalSceneBodyBatch &&) noexcept = default;
+
+    /** @copydoc CanonicalSceneBodyBatch::Handles */
+    std::span<const BodyHandle> CanonicalSceneBodyBatch::Handles() const noexcept {
+        return {};
+    }
+
+    /** @copydoc CanonicalSceneBodyBatch::Shapes */
+    std::span<const ShapeHandle> CanonicalSceneBodyBatch::Shapes() const noexcept {
+        return {};
+    }
+
+    /** @copydoc CanonicalSceneBodyBatch::Constraints */
+    std::span<const ConstraintHandle> CanonicalSceneBodyBatch::Constraints() const noexcept {
+        return {};
+    }
+
+    /** @copydoc CanonicalSceneBodyBatch::IsPending */
+    bool CanonicalSceneBodyBatch::IsPending() const noexcept {
+        return false;
+    }
+
+    /** @copydoc CanonicalSceneBodyBatch::ValidatePublication */
+    Result<void> CanonicalSceneBodyBatch::ValidatePublication() const {
+        return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc CanonicalSceneBodyBatch::PrepareConstraints */
+    Result<void> CanonicalSceneBodyBatch::PrepareConstraints(std::span<const PhysicsConstraintDescriptor>) {
+        return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc CanonicalSceneBodyBatch::PrepareRetirement */
+    Result<void> CanonicalSceneBodyBatch::PrepareRetirement(std::span<const BodyHandle>, std::span<const ShapeHandle>,
+                                                            std::span<const ConstraintHandle>) {
+        return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc CanonicalSceneBodyBatch::RetiredConstraints */
+    std::span<const ConstraintHandle> CanonicalSceneBodyBatch::RetiredConstraints() const noexcept {
+        return {};
+    }
+
+    /** @copydoc CanonicalSceneBodyBatch::Publish */
+    void CanonicalSceneBodyBatch::Publish() noexcept {}
+
+    /** @copydoc PrepareCanonicalSceneBodies */
+    Result<CanonicalSceneBodyBatch> PrepareCanonicalSceneBodies(CanonicalWorldHandle, PhysicsWorldId,
+                                                                std::span<const PhysicsSceneBodyDescriptor>,
+                                                                std::span<const PhysicsSceneGroupShape>,
+                                                                std::span<const PhysicsSceneGroupBody>) {
+        return Result<CanonicalSceneBodyBatch>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+    }
+
+    /** @copydoc HasPendingCanonicalSceneBodies */
+    bool HasPendingCanonicalSceneBodies(CanonicalWorldHandle) noexcept {
+        return false;
+    }
+
+    /** @copydoc CancelPendingCanonicalSceneBodies */
+    void CancelPendingCanonicalSceneBodies(CanonicalWorldHandle) noexcept {}
+
     /** @copydoc ProjectCanonicalDebug */
     CanonicalDebugProjection ProjectCanonicalDebug(const CanonicalWorldHandle, const PhysicsDebugBudget &) {
         return {};

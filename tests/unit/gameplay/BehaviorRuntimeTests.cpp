@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -26,6 +27,9 @@ namespace {
         bool throwOnEnable{};
         bool throwOnDisable{};
         bool throwOnDestroy{};
+        std::function<void()> onFactory;
+        std::function<void()> onCreate;
+        std::function<void()> onEnable;
     };
 
     class RecordingBehavior final : public IBehaviorInstance {
@@ -34,12 +38,16 @@ namespace {
 
         void OnCreate(BehaviorContext &) override {
             recorder_->calls.emplace_back("create");
+            if (recorder_->onCreate)
+                recorder_->onCreate();
             if (recorder_->throwOnCreate)
                 throw std::runtime_error{"OnCreate failure"};
         }
 
         void OnEnable(BehaviorContext &) override {
             recorder_->calls.emplace_back("enable");
+            if (recorder_->onEnable)
+                recorder_->onEnable();
             if (recorder_->throwOnEnable)
                 throw std::runtime_error{"OnEnable failure"};
         }
@@ -108,7 +116,10 @@ namespace {
     };
 
     IBehaviorInstance *Create(void *userData) {
-        return new RecordingBehavior{*static_cast<Recorder *>(userData)};
+        auto &recorder = *static_cast<Recorder *>(userData);
+        if (recorder.onFactory)
+            recorder.onFactory();
+        return new RecordingBehavior{recorder};
     }
 
     void Destroy(void *userData, IBehaviorInstance *instance) noexcept {
@@ -139,6 +150,144 @@ namespace {
         return std::move(definition).Value();
     }
 }  // namespace
+
+TEST_CASE("Gameplay group preparation never constructs callbacks and preserves the existing runner", "[prefab][gameplay]") {
+    Recorder recorder;
+    BehaviorRegistry registry = Registry(recorder);
+    auto sceneResult = RuntimeScene::Create(Definition(), SceneRuntimeId{12});
+    REQUIRE(sceneResult.HasValue());
+    auto scene = std::move(sceneResult).Value();
+    auto runtimeResult = BehaviorRuntime::Create(*scene, registry);
+    REQUIRE(runtimeResult.HasValue());
+    auto runtime = std::move(runtimeResult).Value();
+    auto participant = runtime->MakeStructuralParticipant();
+    RuntimeComponentSet components;
+    components.behaviors.push_back({BehaviorInstanceId{2}, Type(), 1, true, {}});
+    const RuntimeEntityView projected{.entity = {SceneRuntimeId{12}, EntityId{1, 1}}, .components = &components};
+    const auto before = recorder.calls;
+    {
+        auto preparation = participant->Prepare(scene->View(), {&projected, 1}, {});
+        REQUIRE(preparation.HasValue());
+        auto candidate = std::move(preparation).Value();
+        CHECK(candidate->ValidatePublication().HasValue());
+        CHECK(recorder.calls == before);
+        CHECK(runtime->InstanceCount() == 1);
+        CHECK(runtime->FixedUpdate({}, FixedDeltaTime{}).HasError());
+        // Rollback is metadata-only: no factory, no hooks, no existing instance teardown.
+    }
+    CHECK(recorder.calls == before);
+    CHECK(recorder.destroyed == 0);
+    {
+        auto preparation = participant->Prepare(scene->View(), {&projected, 1}, {});
+        REQUIRE(preparation.HasValue());
+        auto candidate = std::move(preparation).Value();
+        SceneCommandBuffer commands;
+        (void)commands.Create({.components = components});
+        REQUIRE(candidate->ValidatePublication().HasValue());
+        REQUIRE(scene->Commit(commands).HasValue());
+        candidate->Publish();
+        REQUIRE(candidate->AfterPublication().HasValue());
+        CHECK(runtime->InstanceCount() == 2);
+        CHECK(std::ranges::count(recorder.calls, "create") == 2);
+        CHECK(recorder.destroyed == 0);
+    }
+    runtime->Shutdown();
+    CHECK(recorder.destroyed == 2);
+}
+
+TEST_CASE("Gameplay structural admission rejects unknown attachments without factory side effects", "[prefab][gameplay]") {
+    Recorder recorder;
+    BehaviorRegistry registry = Registry(recorder);
+    auto sceneResult = RuntimeScene::Create(Definition(), SceneRuntimeId{12});
+    REQUIRE(sceneResult.HasValue());
+    auto scene = std::move(sceneResult).Value();
+    auto runtimeResult = BehaviorRuntime::Create(*scene, registry);
+    REQUIRE(runtimeResult.HasValue());
+    auto runtime = std::move(runtimeResult).Value();
+    auto participant = runtime->MakeStructuralParticipant();
+    RuntimeComponentSet components;
+    components.behaviors.push_back({BehaviorInstanceId{2}, Type("game.tests.unknown"), 1, true, {}});
+    const RuntimeEntityView projected{.entity = {SceneRuntimeId{12}, EntityId{1, 1}}, .components = &components};
+    const auto before = recorder.calls;
+    CHECK(participant->Prepare(scene->View(), {&projected, 1}, {}).HasError());
+    CHECK(recorder.calls == before);
+    CHECK(runtime->InstanceCount() == 1);
+    CHECK(recorder.destroyed == 0);
+}
+
+TEST_CASE("Gameplay structural callbacks defer reentrant shutdown until borrowed instances are released", "[prefab][gameplay]") {
+    Recorder recorder;
+    BehaviorRegistry registry = Registry(recorder);
+    auto sceneResult = RuntimeScene::Create(Definition(), SceneRuntimeId{12});
+    REQUIRE(sceneResult.HasValue());
+    auto scene = std::move(sceneResult).Value();
+    auto runtimeResult = BehaviorRuntime::Create(*scene, registry);
+    REQUIRE(runtimeResult.HasValue());
+    auto runtime = std::move(runtimeResult).Value();
+    auto participant = runtime->MakeStructuralParticipant();
+    RuntimeComponentSet components;
+    components.behaviors.push_back({BehaviorInstanceId{2}, Type(), 1, true, {}});
+    const RuntimeEntityView projected{.entity = {SceneRuntimeId{12}, EntityId{1, 1}}, .components = &components};
+    auto preparation = participant->Prepare(scene->View(), {&projected, 1}, {});
+    REQUIRE(preparation.HasValue());
+    auto candidate = std::move(preparation).Value();
+    const auto requestShutdown = [&] {
+        runtime->Shutdown();
+        CHECK(recorder.destroyed == 0);
+    };
+    SECTION("factory") {
+        recorder.onFactory = requestShutdown;
+    }
+    SECTION("OnCreate") {
+        recorder.onCreate = requestShutdown;
+    }
+    SECTION("OnEnable") {
+        recorder.onEnable = requestShutdown;
+    }
+    SceneCommandBuffer commands;
+    (void)commands.Create({.components = components});
+    REQUIRE(candidate->ValidatePublication().HasValue());
+    REQUIRE(scene->Commit(commands).HasValue());
+    candidate->Publish();
+    CHECK(candidate->AfterPublication().HasError());
+    candidate.reset();
+    CHECK(runtime->InstanceCount() == 0);
+    CHECK(recorder.destroyed == 2);
+    CHECK(scene->View().EntityAt(1).has_value());
+}
+
+TEST_CASE("Gameplay group replacement admits retiring instances at the full live budget", "[prefab][gameplay]") {
+    Recorder recorder;
+    BehaviorRegistry registry = Registry(recorder);
+    auto sceneResult = RuntimeScene::Create(Definition(), SceneRuntimeId{12});
+    REQUIRE(sceneResult.HasValue());
+    auto scene = std::move(sceneResult).Value();
+    auto runtimeResult = BehaviorRuntime::Create(*scene, registry, {.maximumInstances = 1});
+    REQUIRE(runtimeResult.HasValue());
+    auto runtime = std::move(runtimeResult).Value();
+    auto participant = runtime->MakeStructuralParticipant();
+    const auto old = scene->View().Find(SceneObjectId{9});
+    REQUIRE(old.has_value());
+    RuntimeComponentSet components;
+    components.behaviors.push_back({BehaviorInstanceId{2}, Type(), 1, true, {}});
+    const RuntimeEntityView projected{.entity = {SceneRuntimeId{12}, EntityId{0, 2}}, .components = &components};
+    auto preparation = participant->Prepare(scene->View(), {&projected, 1}, {&*old, 1});
+    REQUIRE(preparation.HasValue());
+    auto candidate = std::move(preparation).Value();
+    CHECK(recorder.destroyed == 0);
+    SceneCommandBuffer commands;
+    commands.Destroy(*old);
+    (void)commands.Create({.components = components});
+    REQUIRE(candidate->ValidatePublication().HasValue());
+    REQUIRE(scene->Commit(commands).HasValue());
+    candidate->Publish();
+    REQUIRE(candidate->AfterPublication().HasValue());
+    candidate.reset();
+    CHECK(runtime->InstanceCount() == 1);
+    CHECK(recorder.destroyed == 1);
+    runtime->Shutdown();
+    CHECK(recorder.destroyed == 2);
+}
 
 TEST_CASE("behavior runtime owns deterministic lifecycle input events and deferred transform mutation") {
     Recorder recorder;

@@ -45,16 +45,20 @@ namespace Horo::Physics::Detail {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<CanonicalConstraintBodies> ResolveCanonicalConstraintBodies(const CanonicalWorld &world,
-                                                                                         const PhysicsWorldId owner,
-                                                                                         const PhysicsConstraintDescriptor &descriptor) {
+        [[nodiscard]] Result<CanonicalConstraintBodies> ResolveCanonicalConstraintBodies(
+            const CanonicalWorld &world, const PhysicsWorldId owner, const PhysicsConstraintDescriptor &descriptor,
+            const std::span<const CanonicalSceneBodyRecord> staged = {}) {
             if (const Result<void> valid = ValidatePhysicsConstraintDescriptor(descriptor, owner); valid.HasError())
                 return Result<CanonicalConstraintBodies>::Failure(valid.ErrorValue());
-            const auto *first = FindSceneBody(world, descriptor.first.body);
+            const auto find = [&](const BodyHandle handle) {
+                const auto found = std::ranges::find(staged, handle, &CanonicalSceneBodyRecord::handle);
+                return found == staged.end() ? FindSceneBody(world, handle) : std::to_address(found);
+            };
+            const auto *first = find(descriptor.first.body);
             if (first == nullptr)
                 return Result<CanonicalConstraintBodies>::Failure(MakeError(PhysicsErrors::HandleStale));
             const auto *secondBody = std::get_if<PhysicsBodyAnchor>(&descriptor.second);
-            const auto *second = secondBody == nullptr ? nullptr : FindSceneBody(world, secondBody->body);
+            const auto *second = secondBody == nullptr ? nullptr : find(secondBody->body);
             if (secondBody != nullptr && second == nullptr)
                 return Result<CanonicalConstraintBodies>::Failure(MakeError(PhysicsErrors::HandleStale));
             return Result<CanonicalConstraintBodies>::Success(CanonicalConstraintBodies{first, second});
@@ -404,17 +408,22 @@ namespace Horo::Physics::Detail {
         return Result<void>::Success();
     }
 
-    /** @copydoc CreateCanonicalSceneConstraint */
-    Result<ConstraintHandle> CreateCanonicalSceneConstraint(const CanonicalWorldHandle world, const PhysicsWorldId owner,
-                                                            const PhysicsConstraintDescriptor &descriptor) {
+    /** @copydoc PrepareCanonicalConstraintRecord */
+    Result<CanonicalSceneConstraintRecord> PrepareCanonicalConstraintRecord(const CanonicalWorldHandle world, const PhysicsWorldId owner,
+                                                                            const PhysicsConstraintDescriptor &descriptor,
+                                                                            const std::span<const CanonicalSceneBodyRecord> staged) {
+        using Prepared = Result<CanonicalSceneConstraintRecord>;
         if (world.value == nullptr || !owner.IsValid())
-            return Result<ConstraintHandle>::Failure(MakeError(PhysicsErrors::WorldInvalid));
+            return Prepared::Failure(MakeError(PhysicsErrors::WorldInvalid));
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
         if (!HasCanonicalConstraintCapacity(canonical))
-            return Result<ConstraintHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-        const Result<CanonicalConstraintBodies> bodies = ResolveCanonicalConstraintBodies(canonical, owner, descriptor);
+            return Prepared::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+        if (std::holds_alternative<PhysicsBodyAnchor>(descriptor.second) &&
+            descriptor.collisionPolicy == PhysicsJointCollisionPolicy::AllowBetweenBodies)
+            return Prepared::Failure(MakeError(PhysicsErrors::OperationUnsupported));
+        const Result<CanonicalConstraintBodies> bodies = ResolveCanonicalConstraintBodies(canonical, owner, descriptor, staged);
         if (bodies.HasError())
-            return Result<ConstraintHandle>::Failure(bodies.ErrorValue());
+            return Prepared::Failure(bodies.ErrorValue());
         const CanonicalSceneBodyRecord *first = bodies.Value().first;
         const CanonicalSceneBodyRecord *second = bodies.Value().second;
         const auto *secondBody = std::get_if<PhysicsBodyAnchor>(&descriptor.second);
@@ -423,7 +432,7 @@ namespace Horo::Physics::Detail {
         JPH::BodyLockWrite secondLock(canonical.native.system->GetBodyLockInterfaceNoLock(),
                                       second != nullptr ? second->nativeBody : JPH::BodyID{});
         if (const Result<void> locks = ValidateCanonicalConstraintLocks(firstLock, secondLock, second); locks.HasError())
-            return Result<ConstraintHandle>::Failure(locks.ErrorValue());
+            return Prepared::Failure(locks.ErrorValue());
 
         const PhysicsPose firstFrame = ComposePhysicsPose(first->pose, descriptor.first.localFrame);
         const PhysicsPose secondFrame = second != nullptr ? ComposePhysicsPose(second->pose, secondBody->localFrame)
@@ -431,26 +440,37 @@ namespace Horo::Physics::Detail {
         const Result<JPH::Ref<JPH::Constraint>> nativeConstraint =
             CreateNativeSceneConstraint(firstLock, secondLock, second, firstFrame, secondFrame, descriptor.parameters);
         if (nativeConstraint.HasError())
-            return Result<ConstraintHandle>::Failure(nativeConstraint.ErrorValue());
+            return Prepared::Failure(nativeConstraint.ErrorValue());
 
         const JPH::BodyID secondNativeBody = second == nullptr ? JPH::BodyID{} : second->nativeBody;
+        const ConstraintHandle identity{owner, {canonical.scene.nextConstraintSlot++, 1}};
+        return Prepared::Success({.handle = identity,
+                                  .constraint = nativeConstraint.Value(),
+                                  .first = descriptor.first.body,
+                                  .second = secondBody != nullptr ? secondBody->body : BodyHandle{},
+                                  .firstBody = first->nativeBody,
+                                  .secondBody = secondNativeBody,
+                                  .collisionPolicy = descriptor.collisionPolicy});
+    }
+
+    /** @copydoc CreateCanonicalSceneConstraint */
+    Result<ConstraintHandle> CreateCanonicalSceneConstraint(const CanonicalWorldHandle world, const PhysicsWorldId owner,
+                                                            const PhysicsConstraintDescriptor &descriptor) {
+        auto prepared = PrepareCanonicalConstraintRecord(world, owner, descriptor, {});
+        if (prepared.HasError())
+            return Result<ConstraintHandle>::Failure(prepared.ErrorValue());
+        auto &canonical = *static_cast<CanonicalWorld *>(world.value);
+        auto &record = prepared.Value();
+        const auto *second = std::get_if<PhysicsBodyAnchor>(&descriptor.second);
         if (second != nullptr && descriptor.collisionPolicy == PhysicsJointCollisionPolicy::DisableBetweenBodies) {
-            const std::uint64_t key = CollisionPairKey(first->nativeBody, secondNativeBody);
+            const std::uint64_t key = CollisionPairKey(record.firstBody, record.secondBody);
             const auto insertion = std::ranges::lower_bound(canonical.scene.disabledJointCollisionPairs, key);
             if (insertion == canonical.scene.disabledJointCollisionPairs.end() || *insertion != key)
                 canonical.scene.disabledJointCollisionPairs.insert(insertion, key);
         }
-        canonical.native.system->AddConstraint(nativeConstraint.Value().GetPtr());
-        const std::uint32_t slot = canonical.scene.nextConstraintSlot++;
-        const ConstraintHandle identity{owner, {slot, 1}};
-        canonical.scene.constraints.emplace_back(
-            CanonicalSceneConstraintRecord{.handle = identity,
-                                           .constraint = nativeConstraint.Value(),
-                                           .first = descriptor.first.body,
-                                           .second = secondBody != nullptr ? secondBody->body : BodyHandle{},
-                                           .firstBody = first->nativeBody,
-                                           .secondBody = secondNativeBody,
-                                           .collisionPolicy = descriptor.collisionPolicy});
+        canonical.native.system->AddConstraint(record.constraint.GetPtr());
+        const auto identity = record.handle;
+        canonical.scene.constraints.push_back(std::move(record));
         return Result<ConstraintHandle>::Success(identity);
     }
 

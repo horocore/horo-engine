@@ -156,6 +156,13 @@ namespace Horo::Physics {
                                                                          PhysicsSceneActivationSettings settings) noexcept
         : runtime_(&runtime), authority_(&authority), settings_(std::move(settings)) {}
 
+    /** @copydoc PhysicsSceneActivationParticipant::MakeStructuralParticipant */
+    std::unique_ptr<Runtime::SceneStructuralParticipant> PhysicsSceneActivationParticipant::MakeStructuralParticipant() {
+        if (!structuralRegistration_)
+            structuralRegistration_ = std::make_shared<Detail::PhysicsStructuralRegistration>();
+        return Detail::MakePhysicsStructuralParticipant(structuralRegistration_);
+    }
+
     /** @copydoc PhysicsSceneActivationParticipant::Prepare */
     Result<std::unique_ptr<Runtime::SceneActivationCandidate>> PhysicsSceneActivationParticipant::Prepare(
         const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene) {
@@ -191,6 +198,38 @@ namespace Horo::Physics {
             if (staged.HasError())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(staged.ErrorValue());
             Detail::StagedPhysicsScene resources = std::move(staged).Value();
+            std::shared_ptr<Detail::PhysicsStructuralState> structural;
+            if (structuralRegistration_) {
+                structural = std::make_shared<Detail::PhysicsStructuralState>();
+                structural->world = resources.physics.get();
+                structural->scene = scene.RuntimeId();
+                structural->authority = authority_;
+                structural->evidence = evidence;
+                structural->bodies.reserve(resources.bodyBindings.size());
+                for (const auto &binding : resources.bodyBindings) {
+                    const auto entity = scene.Find(binding.object);
+                    if (!entity)
+                        return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(PhysicsErrors::HandleStale));
+                    structural->bodies.push_back({*entity, binding.body, binding.handle});
+                }
+                structural->shapes.reserve(resources.shapeBindings.size());
+                for (const auto &binding : resources.shapeBindings) {
+                    const auto entity = scene.Find(binding.object);
+                    if (!entity)
+                        return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(PhysicsErrors::HandleStale));
+                    structural->shapes.push_back({*entity, binding.collider, binding.handle, binding.body});
+                }
+                structural->constraints.reserve(resources.constraintBindings.size());
+                for (const auto &binding : resources.constraintBindings) {
+                    const auto entity = scene.Find(binding.object);
+                    if (!entity)
+                        return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(PhysicsErrors::HandleStale));
+                    structural->constraints.push_back({*entity, binding.constraint, binding.handle});
+                }
+                structural->authoredBodies = std::move(resources.bodyBindings);
+                structural->authoredShapes = std::move(resources.shapeBindings);
+                structural->authoredConstraints = std::move(resources.constraintBindings);
+            }
             auto candidate = PhysicsSceneActivationCandidate::Create({.physics = std::move(resources.physics),
                                                                       .character = std::move(resources.character),
                                                                       .runtime = runtime_,
@@ -198,7 +237,9 @@ namespace Horo::Physics {
                                                                       .evidence = evidence,
                                                                       .bodyBindings = std::move(resources.bodyBindings),
                                                                       .shapeBindings = std::move(resources.shapeBindings),
-                                                                      .constraintBindings = std::move(resources.constraintBindings)});
+                                                                      .constraintBindings = std::move(resources.constraintBindings),
+                                                                      .structuralRegistration = structuralRegistration_,
+                                                                      .structuralState = std::move(structural)});
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(std::move(candidate));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(

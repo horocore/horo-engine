@@ -605,6 +605,28 @@ target_compile_definitions(HoroPhysicsTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<B
 target_link_libraries(HoroPhysicsTests PRIVATE HoroEngine::Physics HoroEngine::PhysicsSceneIntegration HoroEngine::Runtime HoroEngine::Platform)
 horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
 
+add_executable(HoroPrefabPhysicsGroupTests unit/runtime/physics/PrefabPhysicsGroupTests.cpp)
+target_compile_features(HoroPrefabPhysicsGroupTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroPrefabPhysicsGroupTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
+target_link_libraries(HoroPrefabPhysicsGroupTests PRIVATE HoroEngine::Physics)
+horo_register_catch_test(HoroPrefabPhysicsGroupTests LABELS "unit;physics;prefab;headless")
+
+add_executable(HoroPrefabPhysicsPublicHeaderConsumer support/PrefabPhysicsPublicHeaderConsumer.cpp)
+target_compile_features(HoroPrefabPhysicsPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabPhysicsPublicHeaderConsumer PRIVATE HoroEngine::PhysicsSceneIntegration)
+add_test(NAME HoroPrefabPhysicsPublicHeaderConsumer COMMAND HoroPrefabPhysicsPublicHeaderConsumer)
+
+add_executable(HoroPrefabAIGroupTests unit/runtime/ai/PrefabAIGroupTests.cpp)
+target_compile_features(HoroPrefabAIGroupTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabAIGroupTests PRIVATE HoroEngine::AISceneIntegration)
+target_include_directories(HoroPrefabAIGroupTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+horo_register_catch_test(HoroPrefabAIGroupTests LABELS "unit;ai;prefab;headless")
+
+add_executable(HoroPrefabAIPublicHeaderConsumer support/PrefabAIPublicHeaderConsumer.cpp)
+target_compile_features(HoroPrefabAIPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabAIPublicHeaderConsumer PRIVATE HoroEngine::AISceneIntegration)
+add_test(NAME HoroPrefabAIPublicHeaderConsumer COMMAND HoroPrefabAIPublicHeaderConsumer)
+
 add_executable(HoroAITests
         support/AllocationProbe.cpp
         unit/runtime/ai/AICanonicalStateTests.cpp
@@ -1046,6 +1068,17 @@ add_executable(HoroCookedPrefabTests unit/runtime/prefab/CookedPrefabTests.cpp)
 target_compile_features(HoroCookedPrefabTests PRIVATE cxx_std_20)
 target_link_libraries(HoroCookedPrefabTests PRIVATE HoroEngine::Prefab)
 horo_register_catch_test(HoroCookedPrefabTests LABELS "unit;prefab;headless")
+
+add_executable(HoroPrefabTemplateProviderTests unit/runtime/prefab/PrefabTemplateProviderTests.cpp)
+target_compile_features(HoroPrefabTemplateProviderTests PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabTemplateProviderTests PRIVATE HoroEngine::PrefabRuntime)
+horo_register_catch_test(HoroPrefabTemplateProviderTests LABELS "unit;prefab;headless")
+
+add_executable(HoroPrefabTemplateProviderPublicHeaderConsumer support/PrefabTemplateProviderPublicHeaderConsumer.cpp)
+target_compile_features(HoroPrefabTemplateProviderPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabTemplateProviderPublicHeaderConsumer PRIVATE HoroEngine::PrefabRuntime)
+add_test(NAME HoroPrefabTemplateProviderPublicHeaderConsumer COMMAND HoroPrefabTemplateProviderPublicHeaderConsumer)
+set_tests_properties(HoroPrefabTemplateProviderPublicHeaderConsumer PROPERTIES LABELS "unit;prefab;headless")
 
 add_executable(HoroPrefabTests
         unit/runtime/prefab/PrefabDependencyGraphTests.cpp
@@ -2657,6 +2690,7 @@ add_executable(HoroRuntimeSceneTests
         unit/runtime/scene/NavigationSceneLinkCaptureTests.cpp
         unit/runtime/scene/PhysicsSceneComponentsTests.cpp
         unit/runtime/scene/RuntimeSceneTests.cpp
+        unit/runtime/scene/RuntimeSceneGroupReferenceTests.cpp
 )
 target_compile_features(HoroRuntimeSceneTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSceneTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)

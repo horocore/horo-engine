@@ -1,6 +1,7 @@
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsSceneActivation.h"
+#include "PhysicsSceneActivationInternal.h"
 
 #include <algorithm>
 #include <cassert>
@@ -14,7 +15,8 @@ namespace Horo::Physics {
     PhysicsSceneActivationCandidate::PhysicsSceneActivationCandidate(ConstructionData data) noexcept
         : physics_(std::move(data.physics)), character_(std::move(data.character)), runtime_(data.runtime), authority_(data.authority),
           evidence_(data.evidence), bodyBindings_(std::move(data.bodyBindings)), shapeBindings_(std::move(data.shapeBindings)),
-          constraintBindings_(std::move(data.constraintBindings)) {
+          constraintBindings_(std::move(data.constraintBindings)), structuralRegistration_(std::move(data.structuralRegistration)),
+          structuralState_(std::move(data.structuralState)) {
         physics_->SetQuarantineSink(*this);
     }
 
@@ -23,12 +25,29 @@ namespace Horo::Physics {
         const auto found = std::ranges::find_if(bodyBindings_, [body](const auto &binding) {
             return binding.handle == body;
         });
-        if (found == bodyBindings_.end())
-            return;
-        bodyBindings_.erase(found);
+        if (found != bodyBindings_.end())
+            bodyBindings_.erase(found);
         std::erase_if(shapeBindings_, [body](const auto &binding) {
             return binding.body == body;
         });
+        if (structuralState_) {
+            std::erase_if(structuralState_->authoredBodies, [body](const auto &binding) {
+                return binding.handle == body;
+            });
+            std::erase_if(structuralState_->authoredShapes, [body](const auto &binding) {
+                return binding.body == body;
+            });
+            std::erase_if(structuralState_->bodies, [body](const auto &binding) {
+                return binding.handle == body;
+            });
+            std::erase_if(structuralState_->shapes, [body](const auto &binding) {
+                return binding.body == body;
+            });
+            if (structuralState_->revision == std::numeric_limits<std::uint64_t>::max())
+                structuralState_->closed = true;
+            else
+                ++structuralState_->revision;
+        }
     }
 
     /** @copydoc PhysicsSceneActivationCandidate::Retire(ConstraintHandle) */
@@ -36,6 +55,18 @@ namespace Horo::Physics {
         std::erase_if(constraintBindings_, [constraint](const auto &binding) {
             return binding.handle == constraint;
         });
+        if (structuralState_) {
+            std::erase_if(structuralState_->authoredConstraints, [constraint](const auto &binding) {
+                return binding.handle == constraint;
+            });
+            std::erase_if(structuralState_->constraints, [constraint](const auto &binding) {
+                return binding.handle == constraint;
+            });
+            if (structuralState_->revision == std::numeric_limits<std::uint64_t>::max())
+                structuralState_->closed = true;
+            else
+                ++structuralState_->revision;
+        }
     }
 
     std::unique_ptr<PhysicsSceneActivationCandidate> PhysicsSceneActivationCandidate::Create(ConstructionData data) {
@@ -43,7 +74,15 @@ namespace Horo::Physics {
     }
 
     /** @copydoc PhysicsSceneActivationCandidate::~PhysicsSceneActivationCandidate */
-    PhysicsSceneActivationCandidate::~PhysicsSceneActivationCandidate() = default;
+    PhysicsSceneActivationCandidate::~PhysicsSceneActivationCandidate() {
+        Shutdown();
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::Publish */
+    void PhysicsSceneActivationCandidate::Publish() noexcept {
+        if (structuralRegistration_ && structuralState_ && !structuralState_->closed)
+            structuralRegistration_->active = structuralState_;
+    }
 
     /** @copydoc PhysicsSceneActivationCandidate::ValidatePublication */
     Result<void> PhysicsSceneActivationCandidate::ValidatePublication() const {
@@ -60,6 +99,10 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsSceneActivationCandidate::Shutdown */
     void PhysicsSceneActivationCandidate::Shutdown() noexcept {
+        if (structuralState_)
+            structuralState_->closed = true;
+        if (structuralRegistration_ && structuralRegistration_->active == structuralState_)
+            structuralRegistration_->active.reset();
         if (character_)
             character_->Shutdown();
         if (physics_)
@@ -67,6 +110,14 @@ namespace Horo::Physics {
         bodyBindings_.clear();
         shapeBindings_.clear();
         constraintBindings_.clear();
+        if (structuralState_) {
+            structuralState_->bodies.clear();
+            structuralState_->shapes.clear();
+            structuralState_->constraints.clear();
+            structuralState_->authoredBodies.clear();
+            structuralState_->authoredShapes.clear();
+            structuralState_->authoredConstraints.clear();
+        }
     }
 
     /** @copydoc PhysicsSceneActivationCandidate::WorldIdentity */
@@ -76,44 +127,81 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsSceneActivationCandidate::BodyBindings */
     std::span<const PhysicsSceneBodyBinding> PhysicsSceneActivationCandidate::BodyBindings() const noexcept {
-        return bodyBindings_;
+        return structuralState_ ? std::span<const PhysicsSceneBodyBinding>{structuralState_->authoredBodies} : bodyBindings_;
     }
 
     /** @copydoc PhysicsSceneActivationCandidate::ShapeBindings */
     std::span<const PhysicsSceneShapeBinding> PhysicsSceneActivationCandidate::ShapeBindings() const noexcept {
-        return shapeBindings_;
+        return structuralState_ ? std::span<const PhysicsSceneShapeBinding>{structuralState_->authoredShapes} : shapeBindings_;
     }
 
     /** @copydoc PhysicsSceneActivationCandidate::ConstraintBindings */
     std::span<const PhysicsSceneConstraintBinding> PhysicsSceneActivationCandidate::ConstraintBindings() const noexcept {
-        return constraintBindings_;
+        return structuralState_ ? std::span<const PhysicsSceneConstraintBinding>{structuralState_->authoredConstraints}
+                                : constraintBindings_;
     }
 
     /** @copydoc PhysicsSceneActivationCandidate::FindBody */
     std::optional<BodyHandle> PhysicsSceneActivationCandidate::FindBody(const Runtime::SceneObjectId object,
                                                                         const Runtime::PhysicsBodySlotId body) const noexcept {
-        const auto found = std::ranges::find_if(bodyBindings_, [object, body](const auto &binding) {
+        const auto bindings = BodyBindings();
+        const auto found = std::ranges::find_if(bindings, [object, body](const auto &binding) {
             return binding.object == object && binding.body == body;
         });
-        return found == bodyBindings_.end() ? std::nullopt : std::optional<BodyHandle>{found->handle};
+        return found == bindings.end() ? std::nullopt : std::optional<BodyHandle>{found->handle};
     }
 
     /** @copydoc PhysicsSceneActivationCandidate::FindShape */
     std::optional<ShapeHandle> PhysicsSceneActivationCandidate::FindShape(const Runtime::SceneObjectId object,
                                                                           const Runtime::PhysicsColliderSlotId collider) const noexcept {
-        const auto found = std::ranges::find_if(shapeBindings_, [object, collider](const auto &binding) {
+        const auto bindings = ShapeBindings();
+        const auto found = std::ranges::find_if(bindings, [object, collider](const auto &binding) {
             return binding.object == object && binding.collider == collider;
         });
-        return found == shapeBindings_.end() ? std::nullopt : std::optional<ShapeHandle>{found->handle};
+        return found == bindings.end() ? std::nullopt : std::optional<ShapeHandle>{found->handle};
     }
 
     /** @copydoc PhysicsSceneActivationCandidate::FindConstraint */
     std::optional<ConstraintHandle> PhysicsSceneActivationCandidate::FindConstraint(
         const Runtime::SceneObjectId object, const Runtime::PhysicsConstraintSlotId constraint) const noexcept {
-        const auto found = std::ranges::find_if(constraintBindings_, [object, constraint](const auto &binding) {
+        const auto bindings = ConstraintBindings();
+        const auto found = std::ranges::find_if(bindings, [object, constraint](const auto &binding) {
             return binding.object == object && binding.constraint == constraint;
         });
-        return found == constraintBindings_.end() ? std::nullopt : std::optional<ConstraintHandle>{found->handle};
+        return found == bindings.end() ? std::nullopt : std::optional<ConstraintHandle>{found->handle};
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::FindRuntimeBody */
+    std::optional<BodyHandle> PhysicsSceneActivationCandidate::FindRuntimeBody(const Runtime::EntityRef entity,
+                                                                               const Runtime::PhysicsBodySlotId body) const noexcept {
+        if (!structuralState_ || structuralState_->closed || !authority_->IsCurrent(evidence_))
+            return std::nullopt;
+        const auto found = std::ranges::find_if(structuralState_->bodies, [&](const auto &binding) {
+            return binding.entity == entity && binding.slot == body;
+        });
+        return found == structuralState_->bodies.end() ? std::nullopt : std::optional<BodyHandle>{found->handle};
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::FindRuntimeShape */
+    std::optional<ShapeHandle> PhysicsSceneActivationCandidate::FindRuntimeShape(
+        const Runtime::EntityRef entity, const Runtime::PhysicsColliderSlotId collider) const noexcept {
+        if (!structuralState_ || structuralState_->closed || !authority_->IsCurrent(evidence_))
+            return std::nullopt;
+        const auto found = std::ranges::find_if(structuralState_->shapes, [&](const auto &binding) {
+            return binding.entity == entity && binding.slot == collider;
+        });
+        return found == structuralState_->shapes.end() ? std::nullopt : std::optional<ShapeHandle>{found->handle};
+    }
+
+    /** @copydoc PhysicsSceneActivationCandidate::FindRuntimeConstraint */
+    std::optional<ConstraintHandle> PhysicsSceneActivationCandidate::FindRuntimeConstraint(
+        const Runtime::EntityRef entity, const Runtime::PhysicsConstraintSlotId constraint) const noexcept {
+        if (!structuralState_ || structuralState_->closed || !authority_->IsCurrent(evidence_))
+            return std::nullopt;
+        const auto found = std::ranges::find_if(structuralState_->constraints, [&](const auto &binding) {
+            return binding.entity == entity && binding.slot == constraint;
+        });
+        return found == structuralState_->constraints.end() ? std::nullopt : std::optional<ConstraintHandle>{found->handle};
     }
 
     /** @copydoc PhysicsSceneActivationAuthority::PhysicsSceneActivationAuthority */

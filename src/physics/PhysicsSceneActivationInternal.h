@@ -11,6 +11,56 @@
 #include <vector>
 
 namespace Horo::Physics::Detail {
+    /** @brief Generation-qualified runtime binding; template-local/authored IDs never become native entity identity. */
+    struct StructuralBodyBinding final {
+        Runtime::EntityRef entity;
+        Runtime::PhysicsBodySlotId slot;
+        BodyHandle handle;
+    };
+
+    /** @brief Exact runtime collider occurrence and its native owning body. */
+    struct StructuralShapeBinding final {
+        Runtime::EntityRef entity;
+        Runtime::PhysicsColliderSlotId slot;
+        ShapeHandle handle;
+        BodyHandle body;
+    };
+
+    /** @brief Exact runtime constraint occurrence; never an authored or template-local handle. */
+    struct StructuralConstraintBinding final {
+        Runtime::EntityRef entity;
+        Runtime::PhysicsConstraintSlotId slot;
+        ConstraintHandle handle;
+    };
+
+    /** @brief Retained publication fence; closed before the borrowed world can be destroyed. */
+    struct PhysicsStructuralState final {
+        PhysicsWorld *world{};
+        Runtime::SceneRuntimeId scene;
+        const PhysicsSceneActivationAuthority *authority{};
+        PhysicsSceneActivationEvidence evidence;
+        std::vector<StructuralBodyBinding> bodies;
+        std::vector<StructuralShapeBinding> shapes;
+        std::vector<StructuralConstraintBinding> constraints;
+        std::vector<PhysicsSceneBodyBinding> authoredBodies;
+        std::vector<PhysicsSceneShapeBinding> authoredShapes;
+        std::vector<PhysicsSceneConstraintBinding> authoredConstraints;
+        std::uint64_t revision{1};
+        bool closed{};
+    };
+
+    /** @brief Explicit application owner slot populated only by whole-Scene activation publication. */
+    struct PhysicsStructuralRegistration final {
+        std::shared_ptr<PhysicsStructuralState> active;
+    };
+
+    /** @brief Creates the concrete Physics structural adapter without selecting a backend or discovering services. */
+    [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakePhysicsStructuralParticipant(
+        std::shared_ptr<PhysicsStructuralRegistration> registration);
+
+    /** @brief Resolves the shared unit-world-scale native body pose policy for activation and structural groups. */
+    [[nodiscard]] Result<PhysicsPose> ToBodyPhysicsPose(const Math::Transform &transform);
+
     struct AuthoredBodyKey final {
         std::uint64_t object{};
         std::uint64_t body{};
