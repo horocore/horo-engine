@@ -6,7 +6,7 @@
 #include "editor/document/SceneDocumentPersistence.h"
 
 namespace Horo::Editor::ScenePersistenceDetail {
-    using namespace SceneSource::Detail;
+    using SceneSource::Detail::Json;
     [[nodiscard]] Json SceneJson(const SceneDocumentSnapshot &snapshot);
     [[nodiscard]] std::vector<std::byte> Bytes(std::string_view value);
     [[nodiscard]] std::filesystem::path RecoveryPath(const std::filesystem::path &absoluteProjectRoot);

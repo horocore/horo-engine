@@ -90,21 +90,23 @@ namespace Horo::Application {
 
             /** @brief Retains bounded root markers even when a later callback discards an over-limit DOM. */
             void CaptureRootAuthority(const int depth, const Json::parse_event_t event, const Json &parsed) {
+                using enum RootMarker;
                 if (depth != 1)
                     return;
                 if (event == Json::parse_event_t::key) {
                     const auto &value = parsed.get_ref<const std::string &>();
-                    rootMarker = value == "horoVersion"          ? RootMarker::Release
-                                 : value == "persistentContract" ? RootMarker::Contract
-                                                                 : RootMarker::None;
+                    rootMarker = None;
+                    if (value == "horoVersion")
+                        rootMarker = Release;
+                    else if (value == "persistentContract")
+                        rootMarker = Contract;
                 } else if (event == Json::parse_event_t::value && parsed.is_string()) {
                     const auto &value = parsed.get_ref<const std::string &>();
-                    constexpr std::size_t maximumMarkerBytes = 7U + 64U;  // Canonical sha256: identity.
-                    if (value.size() > maximumMarkerBytes)
+                    if (constexpr std::size_t maximumMarkerBytes = 7U + 64U; value.size() > maximumMarkerBytes)
                         return;
-                    if (rootMarker == RootMarker::Release)
+                    if (rootMarker == Release)
                         release = value;
-                    else if (rootMarker == RootMarker::Contract)
+                    else if (rootMarker == Contract)
                         contract = value;
                 }
             }
@@ -347,8 +349,7 @@ namespace Horo::Application {
         if (metadata.HasError())
             return Result<ProjectSourceDocument>::Failure(metadata.ErrorValue());
         std::optional<std::string> network;
-        const auto &settings = parsed.Value()["settings"];
-        if (settings.contains("network")) {
+        if (const auto &settings = parsed.Value()["settings"]; settings.contains("network")) {
             // Network schema interpretation belongs exclusively to its codec. Legacy metadata
             // inspection must not start rejecting previously ignored settings members.
             network = settings["network"].dump();
@@ -363,8 +364,8 @@ namespace Horo::Application {
         if (projectRoot.empty() || error)
             return Result<ProjectSourceDocument>::Failure(MetadataError(ProjectErrors::MetadataReadFailed));
         const auto path = std::filesystem::weakly_canonical(root / ".horo/project.json", error);
-        const auto relative = path.lexically_relative(root);
-        if (error || relative.empty() || relative.is_absolute() || *relative.begin() == "..")
+        if (const auto relative = path.lexically_relative(root);
+            error || relative.empty() || relative.is_absolute() || *relative.begin() == "..")
             return Result<ProjectSourceDocument>::Failure(
                 MetadataError(ProjectErrors::MetadataReadFailed, "Project metadata escapes the authorized project root."));
         auto contents = ReadMetadata(path);

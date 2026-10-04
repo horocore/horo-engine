@@ -2,6 +2,7 @@
 
 #include "Horo/Navigation/NavigationDefinitionSerialization.h"
 
+#include <algorithm>
 #include <bit>
 #include <utility>
 
@@ -30,7 +31,7 @@ namespace Horo::Navigation::DefinitionCodec {
             U32(std::bit_cast<std::uint32_t>(value == 0.0F ? 0.0F : value));
         }
 
-        void Text(const std::string &value) {
+        void Text(const std::string_view value) {
             U32(static_cast<std::uint32_t>(value.size()));
             const auto source = std::as_bytes(std::span{value.data(), value.size()});
             bytes.insert(bytes.end(), source.begin(), source.end());
@@ -74,7 +75,11 @@ namespace Horo::Navigation::DefinitionCodec {
             const auto count = Count(NavigationDefinition::MaximumProfileNameBytes, 1);
             const auto source = bytes.subspan(offset, count);
             offset += count;
-            return {reinterpret_cast<const char *>(source.data()), source.size()};
+            std::string text(source.size(), '\0');
+            std::ranges::transform(source, text.begin(), [](const std::byte value) {
+                return std::bit_cast<char>(value);
+            });
+            return text;
         }
 
         template <typename Identity> Identity Id() {

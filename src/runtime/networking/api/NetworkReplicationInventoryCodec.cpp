@@ -53,7 +53,8 @@ namespace Horo::Network::Detail {
         bool Version(const Json &value, ReplicationSchemaVersion &output) {
             if (!Shape(value, {"major", "minor"}))
                 return false;
-            std::uint64_t major{}, minor{};
+            std::uint64_t major{};
+            std::uint64_t minor{};
             if (!Number(value.at("major"), major, std::numeric_limits<std::uint16_t>::max()) ||
                 !Number(value.at("minor"), minor, std::numeric_limits<std::uint16_t>::max()))
                 return false;
@@ -72,9 +73,8 @@ namespace Horo::Network::Detail {
             std::string text;
             text.reserve(bytes.size() * 2);
             for (const auto byte : bytes) {
-                const auto value = std::to_integer<std::uint8_t>(byte);
-                text.push_back(digits[value >> 4U]);
-                text.push_back(digits[value & 15U]);
+                text.push_back(digits[std::to_integer<std::size_t>(byte >> 4U)]);
+                text.push_back(digits[std::to_integer<std::size_t>(byte & std::byte{15})]);
             }
             return text;
         }
@@ -112,7 +112,8 @@ namespace Horo::Network::Detail {
 
         /** @brief Reads bounded payload/default metadata and an optional inert condition identity. */
         bool FieldPayload(const Json &value, ReplicationFieldDescriptor &output) {
-            std::uint64_t bytes{}, elements{};
+            std::uint64_t bytes{};
+            std::uint64_t elements{};
             if (!Number(value.at("limits").at("maximumEncodedBytes"), bytes, std::numeric_limits<std::uint32_t>::max()) ||
                 !Number(value.at("limits").at("maximumElementCount"), elements, std::numeric_limits<std::uint32_t>::max()) ||
                 !Default(value.at("canonicalDefault"), output.canonicalDefault))
@@ -159,8 +160,8 @@ namespace Horo::Network::Detail {
                 return false;
             const auto &owner = value.at("owner").get_ref<const std::string &>();
             const auto &fields = value.at("fields");
-            const auto &tombstones = value.at("tombstones");
-            if (owner.size() > NetworkReplicationInventory::DescriptorLimits.maximumOwnerIdentityBytes ||
+            if (const auto &tombstones = value.at("tombstones");
+                owner.size() > NetworkReplicationInventory::DescriptorLimits.maximumOwnerIdentityBytes ||
                 fields.size() + tombstones.size() > NetworkReplicationInventory::DescriptorLimits.maximumFieldsPerSchema)
                 return false;
             return true;

@@ -18,6 +18,18 @@
 
 namespace Horo::Editor {
     using namespace ScenePersistenceDetail;
+    using SceneSource::Detail::IsContainedBy;
+    using SceneSource::Detail::IsResolvedContainedBy;
+    using SceneSource::Detail::IsSafeProjectRelativePath;
+    using SceneSource::Detail::kMaximumProjectMetadataBytes;
+    using SceneSource::Detail::kMaximumRecoveryBytes;
+    using SceneSource::Detail::kMaximumSceneBytes;
+    using SceneSource::Detail::ParsedScene;
+    using SceneSource::Detail::PersistenceError;
+    using SceneSource::Detail::ReadBoundedFile;
+    using SceneSource::Detail::SceneInvalid;
+    using SceneSource::Detail::ScenePathInvalid;
+    using SceneSource::Detail::SceneReadFailed;
 
     namespace {
         /** @brief Writes, rechecks, and atomically replaces one serialized scene payload. */

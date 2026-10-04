@@ -60,6 +60,22 @@ namespace Horo::Navigation {
         REQUIRE(DeserializeNavigationSourceRecords(bytes.Value()).HasError());
     }
 
+    TEST_CASE("navigation definition preserves UTF8 profile text and canonical payload bytes", "[unit][navigation][definition]") {
+        auto input = DefinitionInput();
+        const std::string name = "Yürüyüş 地面";
+        input.profiles.back().displayName = name;
+        const auto definition = NavigationDefinition::Create(std::move(input));
+        REQUIRE(definition.HasValue());
+        const auto encoded = EncodeNavigationDefinitionRecord(definition.Value(), Id<NavigationAuthoredRecordId>(9));
+        REQUIRE(encoded.HasValue());
+        const auto decoded = DecodeNavigationDefinitionRecord(encoded.Value());
+        REQUIRE(decoded.HasValue());
+        REQUIRE(decoded.Value().Profiles().front().displayName == name);
+        const auto reencoded = EncodeNavigationDefinitionRecord(decoded.Value(), encoded.Value().id);
+        REQUIRE(reencoded.HasValue());
+        REQUIRE(reencoded.Value() == encoded.Value());
+    }
+
     TEST_CASE("navigation definition rejects missing semantics and invalid stable descriptor references",
               "[unit][navigation][definition]") {
         auto input = DefinitionInput();
