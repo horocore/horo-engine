@@ -762,6 +762,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/StreamingCellOperation.h
     Horo/WorldStreaming/StreamingCellCandidate.h
     Horo/WorldStreaming/StreamingCellAssetRequest.h
+    Horo/WorldStreaming/WorldPackageChunkAssignment.h
     Horo/WorldStreaming/StreamingCellActivation.h
     Horo/WorldStreaming/StreamingCellDirection.h
     Horo/WorldStreaming/StreamingCellState.h

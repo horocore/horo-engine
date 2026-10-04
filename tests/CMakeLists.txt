@@ -976,6 +976,7 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/StreamingCellCandidateTests.cpp
         unit/runtime/world_streaming/StreamingCellArtifactTests.cpp
         unit/runtime/world_streaming/StreamingCellAssetRequestTests.cpp
+        unit/runtime/world_streaming/WorldPackageChunkAssignmentTests.cpp
         unit/runtime/world_streaming/StreamingCellActivationTests.cpp
         unit/runtime/world_streaming/StreamingCellDirectionTests.cpp
         unit/runtime/world_streaming/StreamingCellStateTests.cpp
@@ -3386,3 +3387,9 @@ add_test(NAME HoroScriptCapabilityPublicHeaderConsumer COMMAND HoroScriptCapabil
 set_tests_properties(HoroScriptCapabilityPublicHeaderConsumer PROPERTIES LABELS "unit;extensions;headless")
 
 horo_finalize_ci_suites()
+
+add_executable(HoroWorldPackageChunkPublicConsumer support/WorldPackageChunkPublicConsumer.cpp)
+target_compile_features(HoroWorldPackageChunkPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroWorldPackageChunkPublicConsumer PRIVATE HoroEngine::WorldStreaming)
+add_test(NAME HoroWorldPackageChunkPublicConsumer COMMAND HoroWorldPackageChunkPublicConsumer)
+set_tests_properties(HoroWorldPackageChunkPublicConsumer PROPERTIES LABELS "unit;world_streaming;headless")

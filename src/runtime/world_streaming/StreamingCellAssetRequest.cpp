@@ -43,6 +43,34 @@ namespace Horo::WorldStreaming {
             return state == Succeeded || state == Failed || state == Cancelled;
         }
 
+        /** @brief Compares exact candidate publication facts before any child read is admitted. */
+        [[nodiscard]] bool MatchesCandidatePublication(const CookedWorldIndexManifest &manifest, const StreamingCellCandidate &candidate,
+                                                       const StreamingCellId cell) {
+            const auto manifestCell = FindManifestCellIndex(manifest, cell);
+            const auto *descriptorCell = FindCell(manifest, cell);
+            return manifestCell && descriptorCell && Matches(manifest.Cells()[*manifestCell], candidate.ManifestEntry()) &&
+                   descriptorCell->package.chunkAsset == candidate.ChunkAsset() &&
+                   std::ranges::equal(manifest.HardDependencies(*manifestCell), candidate.HardDependencies());
+        }
+
+        /** @brief Summarizes child terminal facts without changing cancellation or ownership state. */
+        struct ChildLoadSummary final {
+            bool loading{};
+            bool failed{};
+            bool cancelled{};
+        };
+
+        [[nodiscard]] ChildLoadSummary SummarizeChildren(const std::span<const Assets::AssetLoadHandle> handles) {
+            ChildLoadSummary summary;
+            for (const auto &handle : handles) {
+                const auto state = handle.State();
+                summary.loading = summary.loading || !IsTerminal(state);
+                summary.failed = summary.failed || state == Assets::AssetLoadState::Failed;
+                summary.cancelled = summary.cancelled || state == Assets::AssetLoadState::Cancelled;
+            }
+            return summary;
+        }
+
         [[nodiscard]] Result<void> ValidateAdmissionContext(const CookedWorldIndexManifest &manifest,
                                                             const StreamingCellCandidate &candidate,
                                                             const StreamingCellAssetRequestContext &context) {
@@ -52,11 +80,7 @@ namespace Horo::WorldStreaming {
                 return Internal::Failure<void>(WorldStreamingErrors::CellAssetRequestLifecycleUnavailable);
             if (context.operation != candidate.Operation() || context.operation.fence.partition != manifest.Descriptor().Partition())
                 return Internal::Failure<void>(WorldStreamingErrors::CellAssetRequestStale);
-            const auto manifestCell = FindManifestCellIndex(manifest, context.operation.fence.cell);
-            if (const auto *descriptorCell = FindCell(manifest, context.operation.fence.cell);
-                !manifestCell || !descriptorCell || !Matches(manifest.Cells()[*manifestCell], candidate.ManifestEntry()) ||
-                descriptorCell->package.chunkAsset != candidate.ChunkAsset() ||
-                !std::ranges::equal(manifest.HardDependencies(*manifestCell), candidate.HardDependencies()))
+            if (!MatchesCandidatePublication(manifest, candidate, context.operation.fence.cell))
                 return Internal::Failure<void>(WorldStreamingErrors::CellAssetRequestStale);
             if (candidate.HardDependencies().size() >= context.maximumRequests)
                 return Internal::Failure<void>(WorldStreamingErrors::CellAssetRequestCapacityExceeded);
@@ -94,26 +118,18 @@ namespace Horo::WorldStreaming {
         bool consumed{};
 
         [[nodiscard]] StreamingCellAssetRequestState RefreshState() {
-            using enum Assets::AssetLoadState;
-            bool anyLoading{};
-            bool anyFailed{};
-            bool anyCancelled{};
-            for (const auto &handle : handles) {
-                const auto state = handle.State();
-                anyLoading = anyLoading || !IsTerminal(state);
-                anyFailed = anyFailed || state == Failed;
-                anyCancelled = anyCancelled || state == Cancelled;
-            }
-            if (anyLoading) {
-                if ((anyFailed || anyCancelled) && !cancellationRequested)
+            using enum StreamingCellAssetRequestState;
+            const auto summary = SummarizeChildren(handles);
+            if (summary.loading) {
+                if ((summary.failed || summary.cancelled) && !cancellationRequested)
                     CancelChildren();
-                return cancellationRequested ? StreamingCellAssetRequestState::Cancelling : StreamingCellAssetRequestState::Loading;
+                return cancellationRequested ? Cancelling : Loading;
             }
-            if (anyFailed)
-                return StreamingCellAssetRequestState::Failed;
-            if (anyCancelled || cancellationRequested)
-                return StreamingCellAssetRequestState::Cancelled;
-            return StreamingCellAssetRequestState::Ready;
+            if (summary.failed)
+                return Failed;
+            if (summary.cancelled || cancellationRequested)
+                return Cancelled;
+            return Ready;
         }
 
         void CancelChildren() {
@@ -221,5 +237,27 @@ namespace Horo::WorldStreaming {
             state->handles.push_back(std::move(submitted).Value());
         }
         return Result<StreamingCellAssetRequest>::Success(StreamingCellAssetRequest{std::move(state)});
+    }
+
+    /** @copydoc RequestStreamingCellAssets */
+    Result<StreamingCellAssetRequest> RequestStreamingCellAssets(Assets::AssetLoadService &service,
+                                                                 const Assets::AssetRegistrySnapshot &registry,
+                                                                 const CookedWorldIndexManifest &manifest,
+                                                                 const StreamingCellCandidate &candidate,
+                                                                 const StreamingCellAssetRequestContext &context,
+                                                                 const WorldPackageCellAdmission &content) {
+        const auto &assignment = content.assignment;
+        if (const auto valid = ValidateAdmissionContext(manifest, candidate, context); valid.HasError())
+            return Result<StreamingCellAssetRequest>::Failure(valid.ErrorValue());
+        if (assignment.Partition() != context.operation.fence.partition || assignment.Binding().epoch != context.operation.fence.epoch)
+            return Internal::Failure<StreamingCellAssetRequest>(WorldStreamingErrors::PackageChunkStale);
+        if (const auto valid = assignment.ValidateCell(manifest, context.operation.fence.cell); valid.HasError())
+            return Result<StreamingCellAssetRequest>::Failure(valid.ErrorValue());
+        const auto evaluated = EvaluateWorldCellContent(assignment, content.availability, context.operation.fence.cell, content.context);
+        if (evaluated.HasError())
+            return Result<StreamingCellAssetRequest>::Failure(evaluated.ErrorValue());
+        if (!evaluated.Value().IsAvailable())
+            return Internal::Failure<StreamingCellAssetRequest>(WorldStreamingErrors::PackageChunkContentMissing);
+        return RequestStreamingCellAssets(service, registry, manifest, candidate, context);
     }
 }  // namespace Horo::WorldStreaming
