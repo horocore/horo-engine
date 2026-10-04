@@ -69,6 +69,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] std::span<const GameplayCapabilityId> Capabilities() const noexcept;
         /** @brief Returns the cancellation token revoked before module shutdown or replacement. */
         [[nodiscard]] CancellationToken Cancellation() const noexcept;
+        /** @brief Returns this module generation's explicit Physics binding, if composed by the host. */
+        [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept;
         /**
          * @brief Cancels and quiesces module-owned work, captures state, and stops callbacks before unload.
          * @return Bounded module snapshot only when the generation proves it is safe to unload.
@@ -96,6 +98,11 @@ namespace Horo::Gameplay {
          * @param hostCapabilities Capabilities composed by the owning headless or graphical host.
          */
         explicit GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities = {});
+        /** @brief Creates a loader bound to one explicitly admitted module and play world.
+         * @param hostCapabilities Inert host grants used by registration validation.
+         * @param physics Exact per-module binding, revoked before module shutdown; cannot be reused after retirement.
+         */
+        GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics);
         /**
          * @brief Loads and starts one gameplay candidate after complete compatibility validation.
          * @param libraryPath Absolute dynamic-library artifact path.
@@ -121,5 +128,6 @@ namespace Horo::Gameplay {
 
     private:
         std::vector<GameplayCapabilityId> hostCapabilities_;
+        std::shared_ptr<GameplayPhysicsContext> physics_;
     };
 }  // namespace Horo::Gameplay

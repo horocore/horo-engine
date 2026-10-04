@@ -62,6 +62,7 @@ endif()
 horo_allow_target_dependencies(TARGET HoroPhysicsModel DEPENDENCIES HoroFoundation HoroAssets HoroRuntime)
 horo_allow_target_dependencies(TARGET HoroPhysics DEPENDENCIES HoroFoundation HoroAssets HoroPhysicsModel)
 horo_allow_target_dependencies(TARGET HoroPhysicsSceneIntegration DEPENDENCIES HoroPhysics HoroRuntimeScene)
+horo_allow_target_dependencies(TARGET HoroGameplayPhysicsIntegration DEPENDENCIES HoroGameplayApi HoroPhysics)
 horo_allow_target_dependencies(TARGET HoroAI DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroAISceneIntegration DEPENDENCIES HoroAI HoroRuntimeScene)
 horo_allow_target_dependencies(TARGET HoroGameplayPerceptionIntegration DEPENDENCIES HoroAISceneIntegration HoroNetworkRuntime)
@@ -107,12 +108,12 @@ horo_allow_target_dependencies(TARGET HoroGameplayApi DEPENDENCIES HoroFoundatio
 horo_allow_target_dependencies(TARGET HoroRuntimeScene
     DEPENDENCIES HoroFoundation HoroRuntime HoroAssets HoroGameplayApi HoroNavigationApi HoroPhysicsModel HoroSceneModel HoroRuntimeUi HoroAI)
 horo_allow_target_dependencies(TARGET HoroGameplayRuntime
-    DEPENDENCIES HoroGameplayApi HoroRuntimeScene HoroRuntime)
+    DEPENDENCIES HoroGameplayApi HoroRuntimeScene HoroRuntime HoroGameplayPhysicsIntegration)
 horo_allow_target_dependencies(TARGET HoroGameplayModuleHost
-    DEPENDENCIES HoroGameplayRuntime HoroPlatform)
+    DEPENDENCIES HoroGameplayRuntime HoroPlatform HoroGameplayPhysicsIntegration)
 horo_allow_target_dependencies(TARGET HoroGameplayBuild
     DEPENDENCIES HoroFoundation HoroPlatform HoroGameplayModuleHost)
-horo_allow_target_dependencies(TARGET HoroGameplayLua DEPENDENCIES HoroGameplayRuntime)
+horo_allow_target_dependencies(TARGET HoroGameplayLua DEPENDENCIES HoroGameplayRuntime HoroGameplayPhysicsIntegration)
 
 horo_allow_target_dependencies(TARGET HoroRenderApi DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroShaderCompilerToolchain DEPENDENCIES HoroRenderApi HoroPlatform)
@@ -157,7 +158,7 @@ horo_allow_target_dependencies(TARGET HoroExtensions
 # Executables are composition roots and may select any production module.
 horo_allow_target_dependencies(TARGET HoroHostModuleComposition DEPENDENCIES HoroFoundation HoroPlatformServices)
 horo_allow_target_dependencies(TARGET HoroNetworkProductHost
-    DEPENDENCIES HoroNetworkRuntime HoroRuntimeScene HoroPhysics HoroRuntime)
+    DEPENDENCIES HoroNetworkRuntime HoroRuntimeScene HoroPhysics HoroRuntime HoroGameplayModuleHost HoroGameplayLua HoroGameplayPhysicsIntegration)
 horo_allow_target_dependencies(TARGET horo-engine
     DEPENDENCIES HoroApplication HoroExtensions HoroHostModuleComposition HoroNetworkProductHost HoroNetworkTransportGNS)
 horo_allow_target_dependencies(TARGET horo-extension-validate DEPENDENCIES HoroExtensions)

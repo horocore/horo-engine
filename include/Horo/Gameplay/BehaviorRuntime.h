@@ -44,6 +44,16 @@ namespace Horo::Gameplay {
          */
         [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
                                                                              BehaviorRuntimeLimits limits = {});
+        /** @brief Activates callbacks with an explicitly permitted Physics context for this exact scene.
+         * @param scene Runtime scene that outlives the runner.
+         * @param registry Frozen module registry.
+         * @param limits Admission budgets.
+         * @param physics Host-admitted module/world binding; revoked before shutdown callbacks.
+         * @return Active runner or typed foreign-scene/activation error without partial clients.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
+                                                                             BehaviorRuntimeLimits limits,
+                                                                             std::shared_ptr<const GameplayPhysicsContext> physics);
         ~BehaviorRuntime();
         BehaviorRuntime(const BehaviorRuntime &) = delete;
         BehaviorRuntime &operator=(const BehaviorRuntime &) = delete;

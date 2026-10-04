@@ -35,6 +35,8 @@ namespace Horo::Gameplay::GameplayErrors {
     extern const ErrorCodeDescriptor SystemDependencyMissing;
     extern const ErrorCodeDescriptor ServiceDependencyMissing;
     extern const ErrorCodeDescriptor CapabilityMissing;
+    extern const ErrorCodeDescriptor PhysicsPermissionDenied;
+    extern const ErrorCodeDescriptor PhysicsUnavailable;
     extern const ErrorCodeDescriptor SystemScheduleCycle;
     extern const ErrorCodeDescriptor ServiceDependencyCycle;
     extern const ErrorCodeDescriptor SystemAccessConflict;
