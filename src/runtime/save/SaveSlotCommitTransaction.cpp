@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Save/SaveSlotCommitTransaction.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 
 #include <utility>
 
@@ -176,58 +177,63 @@ namespace Horo::Runtime {
     Result<SaveSlotCommitResult> SaveSlotCommitTransaction::Execute(OperationId operation, SaveStorageAddress address,
                                                                     std::optional<SaveSlotCatalogEntry> previous,
                                                                     SaveSlotCatalogEntry candidate, ImmutableSaveArchive archive) {
-        SaveSlotCommitJournal journal{.operation = operation,
-                                      .address = std::move(address),
-                                      .previous = std::move(previous),
-                                      .candidate = std::move(candidate),
-                                      .phase = SaveSlotCommitPhase::Preparing};
-        if (auto valid = ValidateJournal(journal); valid.HasError())
-            return Result<SaveSlotCommitResult>::Failure(valid.ErrorValue());
-        if (!archive.bytes || archive.bytes->empty())
-            return Result<SaveSlotCommitResult>::Failure(Invalid("Slot commit requires a non-empty owned finalized archive."));
+        return ObserveSaveStage(SaveTelemetryStage::Commit, operation, [&]() -> Result<SaveSlotCommitResult> {
+            SaveSlotCommitJournal journal{.operation = operation,
+                                          .address = std::move(address),
+                                          .previous = std::move(previous),
+                                          .candidate = std::move(candidate),
+                                          .phase = SaveSlotCommitPhase::Preparing};
+            if (auto valid = ValidateJournal(journal); valid.HasError())
+                return Result<SaveSlotCommitResult>::Failure(valid.ErrorValue());
+            if (!archive.bytes || archive.bytes->empty())
+                return Result<SaveSlotCommitResult>::Failure(Invalid("Slot commit requires a non-empty owned finalized archive."));
 
-        auto lease = store_->AcquireLease(journal.address);
-        if (lease.HasError())
-            return Result<SaveSlotCommitResult>::Failure(lease.ErrorValue());
-        if (!lease.Value())
-            return Result<SaveSlotCommitResult>::Failure(Invalid("The store returned an empty operation lease."));
-        if (auto admitted = ValidateAdmission(*store_, journal); admitted.HasError())
-            return Result<SaveSlotCommitResult>::Failure(admitted.ErrorValue());
-        if (auto prepared = PrepareForPublishing(*store_, journal, archive); prepared.HasError())
-            return Result<SaveSlotCommitResult>::Failure(prepared.ErrorValue());
-        if (auto published = Publish(*store_, journal); published.HasError())
-            return Result<SaveSlotCommitResult>::Failure(published.ErrorValue());
-        const auto removed = store_->RemoveJournal(journal);
-        return Result<SaveSlotCommitResult>::Success({.cleanupDeferred = removed.HasError()});
+            auto lease = store_->AcquireLease(journal.address);
+            if (lease.HasError())
+                return Result<SaveSlotCommitResult>::Failure(lease.ErrorValue());
+            if (!lease.Value())
+                return Result<SaveSlotCommitResult>::Failure(Invalid("The store returned an empty operation lease."));
+            if (auto admitted = ValidateAdmission(*store_, journal); admitted.HasError())
+                return Result<SaveSlotCommitResult>::Failure(admitted.ErrorValue());
+            if (auto prepared = PrepareForPublishing(*store_, journal, archive); prepared.HasError())
+                return Result<SaveSlotCommitResult>::Failure(prepared.ErrorValue());
+            if (auto published = Publish(*store_, journal); published.HasError())
+                return Result<SaveSlotCommitResult>::Failure(published.ErrorValue());
+            const auto removed = store_->RemoveJournal(journal);
+            return Result<SaveSlotCommitResult>::Success({.cleanupDeferred = removed.HasError()});
+        }, {.bytes = archive.bytes ? archive.bytes->size() : 0U});
     }
 
     /** @copydoc SaveSlotCommitTransaction::Recover */
     Result<SaveSlotRecoveryAction> SaveSlotCommitTransaction::Recover(const SaveStorageAddress &address) {
-        if (!address.namespaceAccess.expected.IsValid() || address.namespaceAccess.expectedRevision == 0 || !address.slot.IsValid())
-            return Result<SaveSlotRecoveryAction>::Failure(Invalid("Slot recovery requires a valid namespace binding and slot."));
-        auto lease = store_->AcquireLease(address);
-        if (lease.HasError())
-            return Result<SaveSlotRecoveryAction>::Failure(lease.ErrorValue());
-        if (!lease.Value())
-            return Result<SaveSlotRecoveryAction>::Failure(Invalid("The store returned an empty operation lease."));
-        const auto loaded = store_->LoadJournal(address);
-        if (loaded.HasError())
-            return Result<SaveSlotRecoveryAction>::Failure(
-                RecoveryFailure(loaded.ErrorValue(), "Slot recovery journal could not be read."));
-        if (!loaded.Value())
-            return Result<SaveSlotRecoveryAction>::Success(SaveSlotRecoveryAction::None);
+        return ObserveSaveStage(SaveTelemetryStage::Recovery, 0, [&]() -> Result<SaveSlotRecoveryAction> {
+            if (!address.namespaceAccess.expected.IsValid() || address.namespaceAccess.expectedRevision == 0 || !address.slot.IsValid())
+                return Result<SaveSlotRecoveryAction>::Failure(Invalid("Slot recovery requires a valid namespace binding and slot."));
+            auto lease = store_->AcquireLease(address);
+            if (lease.HasError())
+                return Result<SaveSlotRecoveryAction>::Failure(lease.ErrorValue());
+            if (!lease.Value())
+                return Result<SaveSlotRecoveryAction>::Failure(Invalid("The store returned an empty operation lease."));
+            const auto loaded = store_->LoadJournal(address);
+            if (loaded.HasError())
+                return Result<SaveSlotRecoveryAction>::Failure(
+                    RecoveryFailure(loaded.ErrorValue(), "Slot recovery journal could not be read."));
+            if (!loaded.Value())
+                return Result<SaveSlotRecoveryAction>::Success(SaveSlotRecoveryAction::None);
 
-        SaveSlotCommitJournal journal = *loaded.Value();
-        if (auto valid = ValidateJournal(journal); valid.HasError())
-            return Result<SaveSlotRecoveryAction>::Failure(
-                RecoveryFailure(valid.ErrorValue(), "Slot recovery journal is malformed or addresses another authority."));
-        if (!Addresses(journal, address))
-            return Result<SaveSlotRecoveryAction>::Failure(Invalid("Loaded slot recovery journal does not match the requested address."));
+            SaveSlotCommitJournal journal = *loaded.Value();
+            if (auto valid = ValidateJournal(journal); valid.HasError())
+                return Result<SaveSlotRecoveryAction>::Failure(
+                    RecoveryFailure(valid.ErrorValue(), "Slot recovery journal is malformed or addresses another authority."));
+            if (!Addresses(journal, address))
+                return Result<SaveSlotRecoveryAction>::Failure(
+                    Invalid("Loaded slot recovery journal does not match the requested address."));
 
-        const auto observed = store_->Observe(journal);
-        if (observed.HasError())
-            return Result<SaveSlotRecoveryAction>::Failure(
-                RecoveryFailure(observed.ErrorValue(), "Slot publication evidence could not be inspected."));
-        return RecoverObserved(*store_, std::move(journal), observed.Value());
+            const auto observed = store_->Observe(journal);
+            if (observed.HasError())
+                return Result<SaveSlotRecoveryAction>::Failure(
+                    RecoveryFailure(observed.ErrorValue(), "Slot publication evidence could not be inspected."));
+            return RecoverObserved(*store_, std::move(journal), observed.Value());
+        }, {});
     }
 }  // namespace Horo::Runtime

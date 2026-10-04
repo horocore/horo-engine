@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Save/SaveArchiveFinalization.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "SaveChunkCompressionInternal.h"
 
 #include <algorithm>
@@ -117,35 +118,37 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveArchiveFinalizer::Finalize */
     Result<FinalizedSaveArchive> SaveArchiveFinalizer::Finalize(const std::uint32_t trailerByteLength) {
-        if (finalized_)
-            return Result<FinalizedSaveArchive>::Failure(MakeError(SaveErrors::CaptureAlreadySealed));
-        if (nextEntry_ != directory_.Entries().size() || payload_.size() != directory_.PayloadByteLength())
-            return Result<FinalizedSaveArchive>::Failure(MakeError(SaveErrors::CaptureIncomplete));
-        if (!FitsArchive(trailerByteLength))
-            return Result<FinalizedSaveArchive>::Failure(MakeError(SaveErrors::ArchiveFramingLimitExceeded));
+        return ObserveSaveStage(SaveTelemetryStage::Encode, 0, [&]() -> Result<FinalizedSaveArchive> {
+            if (finalized_)
+                return Result<FinalizedSaveArchive>::Failure(MakeError(SaveErrors::CaptureAlreadySealed));
+            if (nextEntry_ != directory_.Entries().size() || payload_.size() != directory_.PayloadByteLength())
+                return Result<FinalizedSaveArchive>::Failure(MakeError(SaveErrors::CaptureIncomplete));
+            if (!FitsArchive(trailerByteLength))
+                return Result<FinalizedSaveArchive>::Failure(MakeError(SaveErrors::ArchiveFramingLimitExceeded));
 
-        const auto integrity = FinalizeSaveArchiveIntegrity(preamble_, payload_, trailerByteLength);
-        if (integrity.HasError())
-            return Result<FinalizedSaveArchive>::Failure(integrity.ErrorValue());
-        try {
-            auto archive = std::make_shared<std::vector<std::byte>>();
-            archive->reserve(preamble_.size() + payload_.size() + trailerByteLength);
-            archive->insert(archive->end(), preamble_.begin(), preamble_.end());
-            archive->insert(archive->end(), payload_.begin(), payload_.end());
-            archive->insert(archive->end(), trailerByteLength, std::byte{});
-            SerializeIntegrityTrailer(*archive, integrity.Value());
-            if (const auto verified = VerifySaveArchiveIntegrity(integrity.Value(), *archive, directory_); verified.HasError())
-                return Result<FinalizedSaveArchive>::Failure(verified.ErrorValue());
-            finalized_ = true;
-            const SaveArchiveFinalizationSummary summary{.integrity = integrity.Value(),
-                                                         .canonicalState = manifest_.canonicalState,
-                                                         .archiveByteLength = archive->size(),
-                                                         .payloadByteLength = payload_.size(),
-                                                         .entryCount = directory_.Entries().size()};
-            return Result<FinalizedSaveArchive>::Success(FinalizedSaveArchive{std::move(archive), summary});
-        } catch (const std::bad_alloc &) {
-            return Result<FinalizedSaveArchive>::Failure(MakeError(SaveErrors::CanonicalCodecAllocationFailed));
-        }
+            const auto integrity = FinalizeSaveArchiveIntegrity(preamble_, payload_, trailerByteLength);
+            if (integrity.HasError())
+                return Result<FinalizedSaveArchive>::Failure(integrity.ErrorValue());
+            try {
+                auto archive = std::make_shared<std::vector<std::byte>>();
+                archive->reserve(preamble_.size() + payload_.size() + trailerByteLength);
+                archive->insert(archive->end(), preamble_.begin(), preamble_.end());
+                archive->insert(archive->end(), payload_.begin(), payload_.end());
+                archive->insert(archive->end(), trailerByteLength, std::byte{});
+                SerializeIntegrityTrailer(*archive, integrity.Value());
+                if (const auto verified = VerifySaveArchiveIntegrity(integrity.Value(), *archive, directory_); verified.HasError())
+                    return Result<FinalizedSaveArchive>::Failure(verified.ErrorValue());
+                finalized_ = true;
+                const SaveArchiveFinalizationSummary summary{.integrity = integrity.Value(),
+                                                             .canonicalState = manifest_.canonicalState,
+                                                             .archiveByteLength = archive->size(),
+                                                             .payloadByteLength = payload_.size(),
+                                                             .entryCount = directory_.Entries().size()};
+                return Result<FinalizedSaveArchive>::Success(FinalizedSaveArchive{std::move(archive), summary});
+            } catch (const std::bad_alloc &) {
+                return Result<FinalizedSaveArchive>::Failure(MakeError(SaveErrors::CanonicalCodecAllocationFailed));
+            }
+        }, {.bytes = payload_.size()});
     }
 
     /** @copydoc SaveArchiveFinalizer::FinalizeTo */

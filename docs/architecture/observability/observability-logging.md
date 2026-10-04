@@ -515,6 +515,19 @@ const LogContext importContext =
 the previous context on destruction. Nested scopes may add fields. A nested
 field with the same key overrides the parent value only for that scope.
 
+`Telemetry::CaptureOperationIdentity` supplies numeric lineage with empty diagnostic
+fields and no clock reads or allocation when a classified producer cannot inherit
+arbitrary ambient context. Full `CaptureOperationContext` remains unchanged.
+
+`LogContextSnapshot::Isolated` is an additive privacy boundary for classified
+operations. Binding one hides all outer fields while preserving explicit inner
+fields. `With`, snapshot capture and deferred job/platform-request rebinding
+preserve that boundary. RAII destruction restores the previous ambient frame;
+ordinary snapshots retain their existing merge/override semantics. The snapshot
+owns its fields, so deferred work never borrows the caller's context storage.
+Isolation is not redaction of arbitrary record-local fields: producers still
+classify and allowlist every emitted field.
+
 Thread-local storage alone is insufficient. Work submitted to a worker pool,
 coroutine scheduler, process runner, or callback queue captures the current
 `LogContext` and binds it while executing:

@@ -114,8 +114,17 @@ linked into each executable into the descriptor graph consumed by `ModuleHost`:
 
 | Host profile | Required participation | Optional selection |
 |---|---|---|
-| `horo-engine` | Foundation, Application, CLI host | None in the current implementation |
+| `horo-engine` | Foundation, Application, linked backend-neutral Runtime (including Save), CLI host | None in the current implementation |
 | `HoroEditor` | The linked application, runtime, scene, asset, input, gameplay, editor, extension, GUI, and renderer-neutral modules | Exactly one compiled interactive renderer and viewport adapter; OpenTelemetry when linked |
+
+The headless executable directly links Runtime to explicitly compose its Save
+observability registration and retained-log summary provider. Its inert runtime
+descriptor represents that linked closure; descriptor construction and ModuleHost
+activation do not register telemetry. The executable creates the registration only
+after process observability starts and retires Save producers before its owner and
+process observability are destroyed. Application remains Foundation-only and
+HostModuleComposition remains inert metadata composition; neither discovers or
+activates a Runtime Save contribution implicitly.
 
 The profile is validated and activated before the host creates platform windows
 or presentation resources. An impossible profile therefore fails before any

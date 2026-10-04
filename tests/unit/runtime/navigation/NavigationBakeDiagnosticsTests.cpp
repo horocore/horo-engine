@@ -166,7 +166,7 @@ namespace Horo::Application {
             service.reset();
             jobs.Shutdown(ShutdownPolicy::Drain);
             REQUIRE(Telemetry::Runtime::Flush());
-            REQUIRE(config.output->SnapshotIfChanged(0)->records.back().result == BuildOutputResult::Failed);
+            RequireTerminalProjection(*config.output, id, BuildOutputResult::Failed);
         }
         auto recoveredConfig = DiagnosticConfig(directory);
         auto recovered = NavigationBakeDiagnostics::Create(recoveredConfig).Value();

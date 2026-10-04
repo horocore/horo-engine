@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Save/SaveRestoreTransaction.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 
 #include <algorithm>
 #include <exception>
@@ -252,33 +253,36 @@ namespace Horo::Runtime {
 
     /** @copydoc StagedRestoreTransaction::Prepare */
     Result<void> StagedRestoreTransaction::Prepare() {
-        if (state_ != StagedRestoreTransactionState::Created)
-            return Failure<void>(SaveErrors::RestoreTransitionInvalid);
-        state_ = StagedRestoreTransactionState::Preparing;
-        const std::uint64_t totalUnits = static_cast<std::uint64_t>(staged_.size()) * 5U + 1U;
-        std::uint64_t completedUnits{};
+        return ObserveSaveStage(SaveTelemetryStage::Restore, context_.operation, [&]() -> Result<void> {
+            if (state_ != StagedRestoreTransactionState::Created)
+                return Failure<void>(SaveErrors::RestoreTransitionInvalid);
+            state_ = StagedRestoreTransactionState::Preparing;
+            const std::uint64_t totalUnits = static_cast<std::uint64_t>(staged_.size()) * 5U + 1U;
+            std::uint64_t completedUnits{};
 
-        if (auto progress = PublishPreparationProgress(completedUnits, totalUnits, StagedRestorePhase::Plan, requirements_.size());
-            progress.HasError())
-            return progress;
-        if (auto decoded = RunIdentityPhase(StagedRestorePhase::Decode, completedUnits, totalUnits); decoded.HasError())
-            return decoded;
-        if (auto validated = RunIdentityPhase(StagedRestorePhase::Validate, completedUnits, totalUnits); validated.HasError())
-            return validated;
+            if (auto progress = PublishPreparationProgress(completedUnits, totalUnits, StagedRestorePhase::Plan, requirements_.size());
+                progress.HasError())
+                return progress;
+            if (auto decoded = RunIdentityPhase(StagedRestorePhase::Decode, completedUnits, totalUnits); decoded.HasError())
+                return decoded;
+            if (auto validated = RunIdentityPhase(StagedRestorePhase::Validate, completedUnits, totalUnits); validated.HasError())
+                return validated;
 
-        Record(StagedRestorePhase::Plan, StagedRestoreEventOutcome::Succeeded);
-        ++completedUnits;
-        if (auto progress = PublishPreparationProgress(completedUnits, totalUnits, StagedRestorePhase::Plan, requirements_.size());
-            progress.HasError())
-            return progress;
-        if (auto instantiated = RunRestorePlanPhase(StagedRestorePhase::Instantiate, completedUnits, totalUnits); instantiated.HasError())
-            return instantiated;
-        if (auto applied = RunRestorePlanPhase(StagedRestorePhase::ApplyState, completedUnits, totalUnits); applied.HasError())
-            return applied;
-        if (auto fixedUp = RunRestorePlanPhase(StagedRestorePhase::FixupReferences, completedUnits, totalUnits); fixedUp.HasError())
-            return fixedUp;
+            Record(StagedRestorePhase::Plan, StagedRestoreEventOutcome::Succeeded);
+            ++completedUnits;
+            if (auto progress = PublishPreparationProgress(completedUnits, totalUnits, StagedRestorePhase::Plan, requirements_.size());
+                progress.HasError())
+                return progress;
+            if (auto instantiated = RunRestorePlanPhase(StagedRestorePhase::Instantiate, completedUnits, totalUnits);
+                instantiated.HasError())
+                return instantiated;
+            if (auto applied = RunRestorePlanPhase(StagedRestorePhase::ApplyState, completedUnits, totalUnits); applied.HasError())
+                return applied;
+            if (auto fixedUp = RunRestorePlanPhase(StagedRestorePhase::FixupReferences, completedUnits, totalUnits); fixedUp.HasError())
+                return fixedUp;
 
-        return EnterReadyToActivate();
+            return EnterReadyToActivate();
+        }, {});
     }
 
     Result<void> StagedRestoreTransaction::EnterReadyToActivate() {
@@ -410,40 +414,42 @@ namespace Horo::Runtime {
     Result<void> StagedRestoreTransaction::RunPreparationStep(const StagedRestorePhase phase, const std::size_t participantIndex,
                                                               const std::size_t visiblePlanLength, std::uint64_t &completedUnits,
                                                               const std::uint64_t totalUnits) {
-        Result<void> result = Result<void>::Success();
-        try {
-            RestoreDependencyLookup dependencies{participants_, requirements_, staged_,
-                                                 std::span<const std::size_t>{restorePlan_}.first(visiblePlanLength), participantIndex};
-            switch (phase) {
-                case StagedRestorePhase::Decode:
-                    result = staged_[participantIndex]->Decode(context_);
-                    break;
-                case StagedRestorePhase::Validate:
-                    result = staged_[participantIndex]->Validate(context_);
-                    break;
-                case StagedRestorePhase::Instantiate:
-                    result = staged_[participantIndex]->Instantiate(context_);
-                    break;
-                case StagedRestorePhase::ApplyState:
-                    result = staged_[participantIndex]->ApplyState(dependencies);
-                    break;
-                case StagedRestorePhase::FixupReferences:
-                    result = staged_[participantIndex]->FixupReferences(dependencies);
-                    break;
-                default:
-                    result = Failure<void>(SaveErrors::RestoreTransitionInvalid);
-                    break;
+        return ObserveSaveStage(SaveTelemetryStage::Participant, context_.operation, [&]() -> Result<void> {
+            Result<void> result = Result<void>::Success();
+            try {
+                RestoreDependencyLookup dependencies{participants_, requirements_, staged_,
+                                                     std::span<const std::size_t>{restorePlan_}.first(visiblePlanLength), participantIndex};
+                switch (phase) {
+                    case StagedRestorePhase::Decode:
+                        result = staged_[participantIndex]->Decode(context_);
+                        break;
+                    case StagedRestorePhase::Validate:
+                        result = staged_[participantIndex]->Validate(context_);
+                        break;
+                    case StagedRestorePhase::Instantiate:
+                        result = staged_[participantIndex]->Instantiate(context_);
+                        break;
+                    case StagedRestorePhase::ApplyState:
+                        result = staged_[participantIndex]->ApplyState(dependencies);
+                        break;
+                    case StagedRestorePhase::FixupReferences:
+                        result = staged_[participantIndex]->FixupReferences(dependencies);
+                        break;
+                    default:
+                        result = Failure<void>(SaveErrors::RestoreTransitionInvalid);
+                        break;
+                }
+            } catch (...) {  // NOSONAR -- Participant implementations are foreign contract boundaries and may throw non-standard values.
+                result = Failure<void>(SaveErrors::RestoreAdapterContractInvalid);
             }
-        } catch (...) {  // NOSONAR -- Participant implementations are foreign contract boundaries and may throw non-standard values.
-            result = Failure<void>(SaveErrors::RestoreAdapterContractInvalid);
-        }
-        if (result.HasError())
-            return FailPreparation(result.ErrorValue(), phase, participantIndex);
-        if (phase == StagedRestorePhase::Instantiate && staged_[participantIndex]->PreparedState() == nullptr)
-            return FailPreparation(MakeError(SaveErrors::RestoreAdapterContractInvalid), phase, participantIndex);
-        Record(phase, StagedRestoreEventOutcome::Succeeded, participantIndex);
-        ++completedUnits;
-        return PublishPreparationProgress(completedUnits, totalUnits, phase, participantIndex);
+            if (result.HasError())
+                return FailPreparation(result.ErrorValue(), phase, participantIndex);
+            if (phase == StagedRestorePhase::Instantiate && staged_[participantIndex]->PreparedState() == nullptr)
+                return FailPreparation(MakeError(SaveErrors::RestoreAdapterContractInvalid), phase, participantIndex);
+            Record(phase, StagedRestoreEventOutcome::Succeeded, participantIndex);
+            ++completedUnits;
+            return PublishPreparationProgress(completedUnits, totalUnits, phase, participantIndex);
+        }, {});
     }
 
     Result<void> StagedRestoreTransaction::RunIdentityPhase(const StagedRestorePhase phase, std::uint64_t &completedUnits,

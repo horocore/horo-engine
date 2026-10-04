@@ -101,6 +101,24 @@ jobs:
       - name: Setup build tools
         uses: ./.github/actions/setup-build-tools
 
+      # Native publication requires a canonical parent. macOS TMPDIR may contain
+      # /var aliases; establish the host temp root before tools and tests use it.
+      - name: Canonicalize macOS temporary directory
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          import pathlib
+          import tempfile
+
+          root = pathlib.Path(tempfile.gettempdir()).resolve(strict=True)
+          if not root.is_dir() or "\n" in str(root) or "\r" in str(root):
+              raise RuntimeError("The temporary directory must be an existing canonical directory")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              environment.write(f"TMPDIR={root}\n")
+          PYTHON
+
       - name: Restore dependency and compiler caches
         id: cache
         uses: ./.github/actions/restore-native-cache

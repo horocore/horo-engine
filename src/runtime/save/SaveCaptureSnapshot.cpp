@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Save/SaveCaptureSnapshot.h"
 
 #include "Horo/Runtime/Save/SaveErrors.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 
 #include <algorithm>
 #include <array>
@@ -261,35 +262,37 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSaveCaptureBuilder::CaptureParticipants */
     Result<void> RuntimeSaveCaptureBuilder::CaptureParticipants() {
-        if (sealed_)
-            return Result<void>::Failure(MakeError(SaveErrors::CaptureAlreadySealed));
-        if (captureAttempted_)
-            return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
+        return ObserveSaveStage(SaveTelemetryStage::Capture, 0, [&]() -> Result<void> {
+            if (sealed_)
+                return Result<void>::Failure(MakeError(SaveErrors::CaptureAlreadySealed));
+            if (captureAttempted_)
+                return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
 
-        const std::size_t initialRecordCount = records_.size();
-        const std::uint64_t initialPayloadBytes = payloadByteLength_;
-        const std::size_t initialSegmentCount = segmentCount_;
-        std::vector<ParticipantUsage> usageCheckpoint;
+            const std::size_t initialRecordCount = records_.size();
+            const std::uint64_t initialPayloadBytes = payloadByteLength_;
+            const std::size_t initialSegmentCount = segmentCount_;
+            std::vector<ParticipantUsage> usageCheckpoint;
 
-        try {
-            usageCheckpoint = usage_;
-            for (const SaveParticipantBinding &binding : participants_.CaptureBindings()) {
-                const Result<void> captured = CaptureBinding(binding);
-                if (captured.HasError()) {
-                    Error error = captured.ErrorValue();
-                    RollbackCapture(initialRecordCount, initialPayloadBytes, initialSegmentCount, std::move(usageCheckpoint));
-                    return Result<void>::Failure(std::move(error));
+            try {
+                usageCheckpoint = usage_;
+                for (const SaveParticipantBinding &binding : participants_.CaptureBindings()) {
+                    const Result<void> captured = CaptureBinding(binding);
+                    if (captured.HasError()) {
+                        Error error = captured.ErrorValue();
+                        RollbackCapture(initialRecordCount, initialPayloadBytes, initialSegmentCount, std::move(usageCheckpoint));
+                        return Result<void>::Failure(std::move(error));
+                    }
                 }
+                captureAttempted_ = true;
+                return Result<void>::Success();
+            } catch (const std::bad_alloc &) {
+                RollbackCapture(initialRecordCount, initialPayloadBytes, initialSegmentCount, std::move(usageCheckpoint));
+                return Result<void>::Failure(MakeError(SaveErrors::CaptureAllocationFailed));
+            } catch (...) {  // NOSONAR -- adapter boundaries must normalize non-standard exceptions into the typed contract error.
+                RollbackCapture(initialRecordCount, initialPayloadBytes, initialSegmentCount, std::move(usageCheckpoint));
+                return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
             }
-            captureAttempted_ = true;
-            return Result<void>::Success();
-        } catch (const std::bad_alloc &) {
-            RollbackCapture(initialRecordCount, initialPayloadBytes, initialSegmentCount, std::move(usageCheckpoint));
-            return Result<void>::Failure(MakeError(SaveErrors::CaptureAllocationFailed));
-        } catch (...) {  // NOSONAR -- adapter boundaries must normalize non-standard exceptions into the typed contract error.
-            RollbackCapture(initialRecordCount, initialPayloadBytes, initialSegmentCount, std::move(usageCheckpoint));
-            return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
-        }
+        }, {});
     }
 
     /** @copydoc RuntimeSaveCaptureBuilder::AddRecord */
@@ -438,24 +441,26 @@ namespace Horo::Runtime {
     }
 
     Result<void> RuntimeSaveCaptureBuilder::CaptureBinding(const SaveParticipantBinding &binding) {
-        using enum CanonicalCaptureDisposition;
-        const CanonicalStateParticipantDescriptor &descriptor = binding.Descriptor();
-        ParticipantUsage *usage = FindUsage(descriptor.participant);
-        if (usage == nullptr)
-            return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
+        return ObserveSaveStage(SaveTelemetryStage::Participant, 0, [&]() -> Result<void> {
+            using enum CanonicalCaptureDisposition;
+            const CanonicalStateParticipantDescriptor &descriptor = binding.Descriptor();
+            ParticipantUsage *usage = FindUsage(descriptor.participant);
+            if (usage == nullptr)
+                return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
 
-        ParticipantCaptureSink sink{*this, descriptor};
-        const Result<CanonicalCaptureDisposition> captured = binding.Adapter()->Capture(MakeContext(binding), sink);
-        if (captured.HasError())
-            return Result<void>::Failure(captured.ErrorValue());
-        if (sink.RejectedWrite() || (captured.Value() != Captured && captured.Value() != Omitted) ||
-            (captured.Value() == Omitted && usage->recordCount != 0))
-            return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
-        usage->resolved = true;
-        usage->disposition = captured.Value();
-        if ((descriptor.required || captured.Value() == Captured) && usage->recordCount != descriptor.ownedRecords.size())
-            return Result<void>::Failure(MakeError(SaveErrors::CaptureIncomplete));
-        return Result<void>::Success();
+            ParticipantCaptureSink sink{*this, descriptor};
+            const Result<CanonicalCaptureDisposition> captured = binding.Adapter()->Capture(MakeContext(binding), sink);
+            if (captured.HasError())
+                return Result<void>::Failure(captured.ErrorValue());
+            if (sink.RejectedWrite() || (captured.Value() != Captured && captured.Value() != Omitted) ||
+                (captured.Value() == Omitted && usage->recordCount != 0))
+                return Result<void>::Failure(MakeError(SaveErrors::CaptureAdapterContractInvalid));
+            usage->resolved = true;
+            usage->disposition = captured.Value();
+            if ((descriptor.required || captured.Value() == Captured) && usage->recordCount != descriptor.ownedRecords.size())
+                return Result<void>::Failure(MakeError(SaveErrors::CaptureIncomplete));
+            return Result<void>::Success();
+        }, {});
     }
 
     bool RuntimeSaveCaptureBuilder::HasCompleteParticipantProjection(const CanonicalStateParticipantDescriptor &descriptor,

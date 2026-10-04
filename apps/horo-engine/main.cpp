@@ -3,6 +3,7 @@
 #include "Horo/Extensions/HeadlessExtensionHost.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Telemetry/Telemetry.h"
+#include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "HostModuleComposition.h"
 #include "NetworkProductLaunch.h"
 
@@ -36,7 +37,8 @@ namespace {
                 .identity = {.processRole = "cli",
                              .engineVersion = HORO_ENGINE_VERSION_STRING,
                              .buildConfiguration = HORO_BUILD_CONFIGURATION,
-                             .sourceRevision = HORO_SOURCE_REVISION}};
+                             .sourceRevision = HORO_SOURCE_REVISION},
+                .summaries = {&Horo::Runtime::SummarizeSaveTelemetry}};
     }
 
     [[nodiscard]] Options ParseOptions(const std::span<char *> arguments) {
@@ -58,6 +60,18 @@ namespace {
             }
         }
         return options;
+    }
+
+    /** @brief Emits the explicitly requested headless observability smoke workload. */
+    void EmitObservabilitySmoke() {
+        const auto gameCounter = Horo::Telemetry::Runtime::RegisterCounter(
+            {.name = "game.smoke.completed", .subsystem = "Game.Smoke", .unit = Horo::Telemetry::MetricUnit::Count});
+        const auto pluginGauge = Horo::Telemetry::Runtime::RegisterGauge(
+            {.name = "plugin.example.active", .subsystem = "Plugin.example", .unit = Horo::Telemetry::MetricUnit::Count});
+        gameCounter.Add();
+        pluginGauge.Set(1.0);
+        static_cast<void>(Horo::Telemetry::Runtime::EmitEvent("Game.Smoke", "game.smoke.completed", Horo::Log::Level::Info,
+                                                              "Headless observability smoke completed"));
     }
 
 }  // namespace
@@ -85,6 +99,13 @@ int main(const int argc, char **argv) {
         return 2;
     }
 
+    auto saveTelemetryResult = Horo::Runtime::SaveTelemetryRegistration::Create();
+    if (saveTelemetryResult.HasError()) {
+        std::cerr << "horo-engine: save observability registration failed\n";
+        return 2;
+    }
+    auto saveTelemetry = std::move(saveTelemetryResult).Value();
+
     DenyToolchainPolicy toolchainPolicy;
     Horo::NativeExternalProcessRunner externalProcesses;
     auto extensionHost = Horo::Extensions::HeadlessExtensionHost::Create({}, toolchainPolicy, externalProcesses);
@@ -94,16 +115,8 @@ int main(const int argc, char **argv) {
     }
 
     HORO_LOG_INFO("foundation.host", "Headless host initialized");
-    if (options.emitSmoke) {
-        const auto gameCounter = Horo::Telemetry::Runtime::RegisterCounter(
-            {.name = "game.smoke.completed", .subsystem = "Game.Smoke", .unit = Horo::Telemetry::MetricUnit::Count});
-        const auto pluginGauge = Horo::Telemetry::Runtime::RegisterGauge(
-            {.name = "plugin.example.active", .subsystem = "Plugin.example", .unit = Horo::Telemetry::MetricUnit::Count});
-        gameCounter.Add();
-        pluginGauge.Set(1.0);
-        static_cast<void>(Horo::Telemetry::Runtime::EmitEvent("Game.Smoke", "game.smoke.completed", Horo::Log::Level::Info,
-                                                              "Headless observability smoke completed"));
-    }
+    if (options.emitSmoke)
+        EmitObservabilitySmoke();
 
     if (!options.diagnosticBundle.empty()) {
         const auto result = observability->GenerateDiagnosticBundle({.outputPath = options.diagnosticBundle});
@@ -114,6 +127,7 @@ int main(const int argc, char **argv) {
         std::cout << result.Value().outputPath.string() << '\n';  // NOSONAR(cpp:S5145)
     }
     extensionHost.Value()->Shutdown();
+    saveTelemetry.reset();
     moduleHost->DeactivateAll();
     return 0;
 }

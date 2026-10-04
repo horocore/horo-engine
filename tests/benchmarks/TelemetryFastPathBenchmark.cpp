@@ -1,3 +1,4 @@
+#include "../support/BenchmarkAllocationProbe.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Telemetry/Telemetry.h"
 
@@ -13,9 +14,6 @@
 #include <vector>
 
 namespace {
-    thread_local bool g_trackAllocations{};
-    thread_local std::size_t g_trackedAllocations{};
-
     class NullSink final : public Horo::Telemetry::ISink {
     public:
         void Export(const Horo::Telemetry::Record &, const Horo::Telemetry::InstrumentDescriptor *) override {}
@@ -23,34 +21,6 @@ namespace {
         void Flush() override {}
     };
 }  // namespace
-
-void *operator new(const std::size_t size) {
-    if (g_trackAllocations)
-        ++g_trackedAllocations;
-    if (void *memory = std::malloc(size); memory != nullptr)
-        return memory;
-    throw std::bad_alloc{};
-}
-
-void *operator new[](const std::size_t size) {
-    return ::operator new(size);
-}
-
-void operator delete(void *memory) noexcept {
-    std::free(memory);
-}
-
-void operator delete[](void *memory) noexcept {
-    std::free(memory);
-}
-
-void operator delete(void *memory, std::size_t) noexcept {
-    std::free(memory);
-}
-
-void operator delete[](void *memory, std::size_t) noexcept {
-    std::free(memory);
-}
 
 int main() {
     constexpr std::size_t kIterations = 100'000;

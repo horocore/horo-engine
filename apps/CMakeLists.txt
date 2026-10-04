@@ -29,7 +29,7 @@ target_compile_definitions(horo-engine PRIVATE
     HORO_PRODUCT_HAS_GNS=$<BOOL:${HORO_BUILD_NETWORK_GNS}>
 )
 target_link_libraries(horo-engine PRIVATE HoroEngine::Application HoroEngine::Extensions HoroHostModuleComposition
-    HoroNetworkProductHost)
+    HoroNetworkProductHost HoroEngine::Runtime)
 if(HORO_BUILD_NETWORK_GNS)
     target_link_libraries(horo-engine PRIVATE HoroEngine::NetworkTransportGNS)
 endif()

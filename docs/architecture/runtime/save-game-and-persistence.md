@@ -1521,6 +1521,50 @@ raw callback reaches a destroyed session and no worker is detached from freed st
 A commit already past its gate finishes or reports Unknown and leaves recovery data;
 shutdown must not relabel it Cancelled or discard a potentially committed archive.
 
+## Save Observability Contribution
+
+Hosts explicitly create `SaveTelemetryRegistration` after process observability
+startup and retire every Save producer before destroying that owner. Descriptors
+remain inert; feature code neither discovers services nor installs sinks.
+`SaveStageObservation` uses the existing Foundation dispatcher, bounded metric
+series and privacy-safe structured logs. Disabled/unregistered scopes return
+before clocks, context capture, formatting or allocation. Evidence collection
+that scans bounded owner state is gated by `IsActive` as well.
+
+The closed stage taxonomy is capture, encode, migrate, commit, restore, sync,
+queue, recovery and participant. Stage outcomes, duration, byte count, retries,
+dropped work and queue depth are observational; authoritative typed Results,
+commit knowledge and completion callbacks retain their existing behavior.
+Failed stages use common logging WARN delivery, including its bounded emergency
+reporting when the normal queue rejects a record. Save never adds producer retries,
+flushes or drain waits. Low-severity logs, spans and metrics retain the Foundation
+best-effort/drop accounting contract. Operation terminal records are attempted
+once after the lifecycle lock is released,
+including cancellation, abandonment and shutdown. They do not invent a duration
+for work that never ran. Metrics use only stage/outcome dimensions. Correlation
+uses safe numeric operation and parent IDs in an isolated diagnostic snapshot;
+paths, display names, accounts, payloads and raw provider/error text are excluded.
+JobSystem and retained PlatformRequest contexts preserve this snapshot boundary.
+
+Current production hooks cover participant capture, archive finalization,
+migration execution, slot commit/recovery, staged restore preparation, arbiter
+admission and storage jobs. The sync event contract is available for explicit
+application/profile coordinator work and is tested across platform request
+completion. This tree has cloud revision/request contracts but no live
+CloudSaveCoordinator transfer/retry implementation; live cloud transfer timing,
+retry and completion instrumentation remains unproven until that owner exists.
+Local storage work is never labelled successful cloud synchronization.
+
+Application host composition accepts at most eight capture-free diagnostic summary
+providers. During user-requested export, after flushing the existing log dispatcher,
+the Save provider derives `save.summary` from the host's retained canonical JSONL
+inputs. It creates no second event store. Input work is bounded to 32 sources,
+2,048 rows, 4,096 bytes per row and 8 MiB total; malformed, partial, oversized or
+missing input is represented explicitly. Only closed stage/outcome names and
+validated unsigned aggregates enter the summary; raw rows and source paths are
+never copied. The summary describes retained observations, not lifetime totals;
+queue/dispatcher drops and retention can limit evidence.
+
 ## Qualification And Implementation Status
 
 The following are required implementation tests, not test suites delivered by this

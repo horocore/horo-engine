@@ -1135,3 +1135,72 @@ namespace {
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 }  // namespace
+
+TEST_CASE("Isolated diagnostic snapshots preserve nesting job propagation and worker reuse", "[unit][foundation][jobs][context][privacy]") {
+    using namespace Horo;
+    Log::LogContextSnapshot retained;
+    {
+        Log::LogContext ambient{"account.id", "private-account", "path", "/private/context/path"};
+        {
+            Log::ScopedLogContext isolated{Log::LogContextSnapshot::Isolated({{"save.operation", "41"}})};
+            {
+                Log::LogContext nested{"safe.phase", "capture"};
+                retained = Log::CaptureLogContext();
+                REQUIRE(retained.IsIsolationBoundary());
+                REQUIRE(retained.Fields().size() == 2);
+                REQUIRE_FALSE(HasContextField(retained, "account.id", "private-account"));
+            }
+            REQUIRE(Log::CaptureLogContext().Fields().size() == 1);
+        }
+        REQUIRE_FALSE(Log::CaptureLogContext().IsIsolationBoundary());
+        REQUIRE(HasContextField(Log::CaptureLogContext(), "account.id", "private-account"));
+    }
+    JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 4}};
+    std::atomic<bool> exact{}, leaked{};
+    {
+        Log::LogContext otherAmbient{"display.name", "private-display"};
+        Log::ScopedLogContext binding{retained.With("safe.phase", "restore")};
+        auto submitted = jobs.Submit({}, [&](const CancellationToken &) {
+            const auto snapshot = Log::CaptureLogContext();
+            exact.store(snapshot.IsIsolationBoundary() && snapshot.Fields().size() == 2 &&
+                        HasContextField(snapshot, "save.operation", "41") && HasContextField(snapshot, "safe.phase", "restore"));
+        });
+        REQUIRE(submitted.HasValue());
+        REQUIRE(submitted.Value().Wait().HasValue());
+    }
+    auto reused = jobs.Submit({}, [&](const CancellationToken &) {
+        leaked.store(Log::CaptureLogContext().IsIsolationBoundary() || !Log::CaptureLogContext().Fields().empty());
+    });
+    REQUIRE(reused.HasValue());
+    REQUIRE(reused.Value().Wait().HasValue());
+    jobs.Shutdown(ShutdownPolicy::Drain);
+    REQUIRE(exact.load());
+    REQUIRE_FALSE(leaked.load());
+}
+
+TEST_CASE("Cancelled isolated queued work releases context without contaminating replacement work",
+          "[unit][foundation][jobs][context][privacy][cancel]") {
+    using namespace Horo;
+    JobSystem jobs{JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
+    bool called{};
+    std::optional<JobHandle> cancelled;
+    {
+        Log::ScopedLogContext binding{Log::LogContextSnapshot::Isolated({{"save.operation", "51"}})};
+        auto submitted = jobs.Submit({}, [&](const CancellationToken &) {
+            called = true;
+        });
+        REQUIRE(submitted.HasValue());
+        cancelled.emplace(std::move(submitted).Value());
+    }
+    REQUIRE(cancelled->RequestCancel().HasValue());
+    bool clean{};
+    auto replacement = jobs.Submit({}, [&](const CancellationToken &) {
+        clean = Log::CaptureLogContext().Fields().empty() && !Log::CaptureLogContext().IsIsolationBoundary();
+    });
+    REQUIRE(replacement.HasValue());
+    REQUIRE(
+        replacement.Value().Wait({.waitPolicy = WaitPolicy::MainThreadPumpAllowed, .timeout = Duration::FromMilliseconds(100)}).HasValue());
+    jobs.Shutdown(ShutdownPolicy::Cancel);
+    REQUIRE_FALSE(called);
+    REQUIRE(clean);
+}
