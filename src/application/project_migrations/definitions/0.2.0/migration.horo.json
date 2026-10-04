@@ -1,0 +1,12 @@
+{
+  "id": "core.authoring.navigation_network",
+  "fromBaseline": "0.1.0",
+  "toBaseline": "0.2.0",
+  "sourceContract": "sha256:997e790fc23515b362847c755006156aa35353ce7f2624518acf7ed1214ddb03",
+  "targetContract": "sha256:e068efe802defac5ec18d9742f0b1e1c50b1bfda5b26f8fc4a3a02eaf478065c",
+  "storageEstimate": {
+    "maximumOutputRatioPermille": 2000,
+    "maximumAddedBytesPerDocument": 1024,
+    "maximumFixedBytes": 4096
+  }
+}

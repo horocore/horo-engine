@@ -357,8 +357,14 @@ target_include_directories(HoroProjectMigrations
         PUBLIC ${PROJECT_SOURCE_DIR}/include
         PRIVATE ${PROJECT_SOURCE_DIR} ${HORO_GENERATED_DIR}
 )
-target_link_libraries(HoroProjectMigrations PUBLIC HoroEngine::Application PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(HoroProjectMigrations PUBLIC HoroEngine::Application
+        PRIVATE HoroEngine::ProjectSettings HoroEngine::NavigationApi HoroEngine::Assets nlohmann_json::nlohmann_json)
 add_dependencies(HoroProjectMigrations HoroProjectMigrationCatalog)
+
+add_library(HoroProjectSettings STATIC application/project/ProjectNetworkSettings.cpp)
+add_library(HoroEngine::ProjectSettings ALIAS HoroProjectSettings)
+target_compile_features(HoroProjectSettings PUBLIC cxx_std_20)
+target_link_libraries(HoroProjectSettings PUBLIC HoroEngine::Application HoroEngine::NetworkApi)
 
 add_library(HoroSaveApi STATIC
         runtime/save/SaveErrors.cpp
@@ -1302,6 +1308,9 @@ add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavigationDataSerialization.cpp
         runtime/navigation/api/NavigationDataSerializationDecode.cpp
         runtime/navigation/api/NavigationDataSerializationMigration.cpp
+        runtime/navigation/api/NavigationDefinition.cpp
+        runtime/navigation/api/NavigationDefinitionSerialization.cpp
+        runtime/navigation/api/NavigationDefinitionDecode.cpp
         runtime/navigation/api/NavigationDynamicErrors.cpp
         runtime/navigation/api/NavigationErrors.cpp
         runtime/navigation/api/NavigationErrorsScene.cpp
@@ -1852,10 +1861,47 @@ if (HORO_BUILD_RENDER_VULKAN)
     )
 endif ()
 
+add_library(HoroSceneSourceModel INTERFACE)
+add_library(HoroEngine::SceneSourceModel ALIAS HoroSceneSourceModel)
+target_compile_features(HoroSceneSourceModel INTERFACE cxx_std_20)
+target_link_libraries(HoroSceneSourceModel INTERFACE
+        HoroEngine::Foundation
+        HoroEngine::AI
+        HoroEngine::Prefab
+        HoroEngine::RuntimeScene
+)
+
+add_library(HoroSceneSource STATIC
+        scene/source/SceneSource.cpp
+        scene/source/SceneSourceCommon.cpp
+        scene/source/SceneSourceComponents.cpp
+        scene/source/SceneSourcePhysics.cpp
+        scene/source/SceneSourceComponentParsing.cpp
+        scene/source/SceneSourceNavigationParsing.cpp
+        scene/source/SceneSourcePhysicsParsing.cpp
+        scene/source/SceneSourceScene.cpp
+        scene/source/NavigationAgentJson.cpp
+)
+add_library(HoroEngine::SceneSource ALIAS HoroSceneSource)
+target_compile_features(HoroSceneSource PUBLIC cxx_std_20)
+target_link_libraries(HoroSceneSource
+        PUBLIC HoroEngine::SceneSourceModel
+        PRIVATE nlohmann_json::nlohmann_json
+)
+
+# Non-installed, narrow codec bridge for existing Editor JSON adapters.
+# Headless applications consume SceneSource, never these implementation headers.
+add_library(HoroSceneSourceCodecInternal INTERFACE)
+target_include_directories(HoroSceneSourceCodecInternal INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/scene/source>
+)
+target_link_libraries(HoroSceneSourceCodecInternal INTERFACE
+        HoroEngine::SceneSource nlohmann_json::nlohmann_json
+)
+
 add_library(HoroEditorModel STATIC
         editor/data_bus/EditorDataBus.cpp
         editor/update/UpdateExperienceSession.cpp
-        editor/document/NavigationAgentJson.cpp
         editor/document/SceneDocument.cpp
         editor/document/SceneDocumentCommands.cpp
         editor/document/SceneDocumentObjectCommands.cpp
@@ -1875,6 +1921,7 @@ target_include_directories(HoroEditorModel
 )
 target_link_libraries(HoroEditorModel
         PUBLIC
+        HoroEngine::SceneSourceModel
         HoroEngine::Foundation
         HoroEngine::AI
         HoroEngine::Prefab
@@ -1882,7 +1929,7 @@ target_link_libraries(HoroEditorModel
         HoroEngine::PrefabSceneExpansion
         HoroEngine::SceneModel
         HoroEngine::RuntimeScene
-        PRIVATE nlohmann_json::nlohmann_json
+        PRIVATE nlohmann_json::nlohmann_json HoroSceneSourceCodecInternal
 )
 
 add_library(HoroEditorViewportScene STATIC
@@ -1979,12 +2026,6 @@ add_library(HoroEditorServices STATIC
         editor/UiCanvasDocumentSerialization.cpp
         editor/document/SceneDocumentComparison.cpp
         editor/document/SceneDocumentPersistence.cpp
-        editor/document/SceneDocumentPersistenceCommon.cpp
-        editor/document/SceneDocumentPersistenceComponents.cpp
-        editor/document/SceneDocumentPersistencePhysics.cpp
-        editor/document/SceneDocumentPersistenceComponentParsing.cpp
-        editor/document/SceneDocumentPersistenceNavigationParsing.cpp
-        editor/document/SceneDocumentPersistencePhysicsParsing.cpp
         editor/document/SceneDocumentPersistenceScene.cpp
         editor/document/SceneFileWatchService.cpp
         editor/screens/welcome/WelcomeController.cpp
@@ -2050,6 +2091,7 @@ target_link_libraries(HoroEditorServices
         HoroEngine::ProjectMigrations
         PRIVATE
         HoroEngine::Assets
+        HoroSceneSourceCodecInternal
         nlohmann_json::nlohmann_json
 )
 

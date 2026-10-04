@@ -1,5 +1,5 @@
 #include "Horo/Runtime/Scene/PrimitiveCatalog.h"
-#include "editor/document/SceneDocumentPersistenceInternal.h"
+#include "SceneSourceInternal.h"
 
 #include <algorithm>
 #include <fstream>
@@ -9,7 +9,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace Horo::Editor::ScenePersistenceDetail {
+namespace Horo::SceneSource::Detail {
     const ErrorDomainId ScenePersistenceDomain{"horo.editor.scene_persistence"};
     const ErrorCodeDescriptor ScenePathInvalid{
         .domain = ScenePersistenceDomain,
@@ -326,4 +326,4 @@ namespace Horo::Editor::ScenePersistenceDetail {
         descriptor.parameters = std::move(parsedParams).Value();
         return Result<PrimitiveMeshDescriptor>::Success(std::move(descriptor));
     }
-}  // namespace Horo::Editor::ScenePersistenceDetail
+}  // namespace Horo::SceneSource::Detail

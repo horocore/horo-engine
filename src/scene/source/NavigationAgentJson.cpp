@@ -1,4 +1,4 @@
-#include "editor/document/NavigationAgentJson.h"
+#include "NavigationAgentJson.h"
 
 #include "Horo/Navigation/NavigationErrors.h"
 
@@ -6,7 +6,7 @@
 #include <string>
 #include <utility>
 
-namespace Horo::Editor::Detail {
+namespace Horo::SceneSource::Detail {
     namespace {
         using Json = nlohmann::json;
 
@@ -49,4 +49,4 @@ namespace Horo::Editor::Detail {
             return InvalidAgentJson();
         }
     }
-}  // namespace Horo::Editor::Detail
+}  // namespace Horo::SceneSource::Detail
