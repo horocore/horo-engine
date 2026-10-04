@@ -154,6 +154,19 @@ must identify exact refs/keys and preserve needed main checkpoints.
 
 ### Native Test And Audio Checkpoints
 
+CI groups Debug and Release audio qualification into one runner per platform,
+with separate build directories and JUnit reports. The `audio-safety-v2`
+checkpoint contains both compiler configurations under `Debug-Release` and is
+bounded to 512 MB (the previous two 256 MB budgets combined). The first run of
+this namespace is cold until main saves it. Both configurations must pass the
+aggregate gate; a failure in one does not skip the other.
+
+Windows CLI/process/ZIP, VFX, cinematic and prefab qualification share the
+`windows-contracts-v1` headless configure/build and a 1 GB compiler checkpoint.
+Their test steps and JUnit reports remain separate, and every suite must pass.
+The SDL input composition remains independent. These grouped checkpoints use
+the same main-only writer policy and never store test results or build trees.
+
 The active `ci.yml` native-test and Audio Real-Time Safety jobs restore caches
 through `.github/actions/restore-native-cache` and checkpoint them through
 `.github/actions/save-native-cache`. This bounded rollout uses the existing

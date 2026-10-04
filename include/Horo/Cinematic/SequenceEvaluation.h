@@ -111,7 +111,7 @@ namespace Horo::Cinematic {
 
     using SequenceEventStageHook = Result<void> (*)(const BorrowedCallbackContext &context,
                                                     std::span<const SequenceFrameEventOccurrence> occurrences);
-    using SequenceCameraCutHook = void (*)(void *context, const SequenceFrameCameraCutRequest &request) noexcept;
+    using SequenceCameraCutHook = void (*)(const BorrowedCallbackContext &context, const SequenceFrameCameraCutRequest &request) noexcept;
     using SequenceFinishedHook = void (*)(void *context, const SequencePlayerHandle &player) noexcept;
 
     /** @brief Typed owner hooks injected by runtime composition. The event stage hook reserves the complete batch before
@@ -122,7 +122,7 @@ namespace Horo::Cinematic {
     struct SequenceFrameHooks final {
         BorrowedCallbackContext eventContext;
         SequenceEventStageHook eventStage{};
-        void *cameraContext{};
+        BorrowedCallbackContext cameraContext; /**< Synchronous exact-type borrow retained through camera dispatch. */
         SequenceCameraCutHook cameraHook{};
         void *finishedContext{};
         SequenceFinishedHook finishedHook{};
@@ -238,6 +238,9 @@ namespace Horo::Cinematic {
         [[nodiscard]] std::span<const SequenceFrameEventKey> EventKeys() const noexcept;
         /** @brief Returns immutable camera-cut count. @return Number of compiled camera keys. */
         [[nodiscard]] std::size_t CameraCutCount() const noexcept;
+        /** @brief Returns canonical authored camera keys for owner binding and random-access selection.
+         * @return Immutable storage borrowed only while this plan exists. */
+        [[nodiscard]] std::span<const SequenceFrameCameraCutKey> CameraKeys() const noexcept;
         /** @brief Returns the activation loop policy. @return Once, Loop, or PingPong. */
         [[nodiscard]] SequenceLoopMode LoopMode() const noexcept;
         /** @brief Returns the per-player crossing ceiling captured at activation. @return Maximum crossings per evaluation. */

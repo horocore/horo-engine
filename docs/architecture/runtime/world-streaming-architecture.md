@@ -153,6 +153,38 @@ second manifest or topology authority. Existing descriptor-only callers migrate 
 constructing the cooked aggregate at the Asset Pipeline/runtime handoff once complete
 cell metadata is available; partial/default cooked metadata is not accepted.
 
+`WorldPackageChunkAssignment` is the inert WST-004.10 release projection joining
+this manifest's existing cell artifact IDs to the validated Assets `AssetChunkPlan`.
+It copies canonical artifact/hash records and complete required chunk sets, including
+the base chunk, transitive hard-cell dependencies (cycles are co-load components),
+and transitive release-chunk dependencies. Assets retains membership, graph,
+mount-order and base/DLC compatibility authority. Mandatory cell, chunk, release-asset
+and total-requirement ceilings apply before publication. Missing artifact membership
+or invalid release compatibility returns a typed failure and leaves both inputs intact.
+No wire layout, filesystem path, installer, downloader or second topology is added.
+
+The host binds an assignment to a stable owner identity, non-zero revision and
+partition epoch. It advances revision or owner identity for any changed release
+inputs; revisions never wrap or get reused. `WorldPackageAvailabilitySnapshot`
+copies exactly one explicit state per declared release chunk, fenced by that binding
+and an independent non-zero availability revision. Installed means the host has
+verified and mounted content through Assets. Installable, Downloadable, Installing, Unavailable
+and Failed remain missing content; presence in a registry is insufficient evidence.
+`EvaluateWorldCellContent` returns the exact canonical missing chunk IDs and causes
+as a normal complete value, even while unrelated optional chunks are absent.
+Foreign or superseded assignment/availability facts, unknown enum values, undeclared
+cells, cancellation and shutdown return typed errors without partial publication.
+
+Packaged callers migrate to the package-aware `RequestStreamingCellAssets` overload.
+It checks the current release/availability context, partition epoch and exact candidate
+artifact/hash and the requested co-load component's exact metadata before starting
+any child reads; missing content returns
+`PackageChunkContentMissing`. Callers obtain detailed missing rows from the same
+availability evaluator. The existing overload remains the explicit standalone/editor
+asset-provider path. Already admitted asynchronous work owns its submission-time
+facts and retains the existing request cancellation, joining and shutdown protocol.
+These load-time contracts never schedule downloads or infer fallback content.
+
 `WorldSpatialAssignment` is the inert WST-004.3 cook-stage projection that maps
 page-scoped authored-object addresses and exact immutable authoring revisions onto
 descriptor cells. Candidate bounds use inclusive canonical millimeters and the
@@ -416,6 +448,55 @@ Slow optional cleanup still participates in this barrier. Cleanup timeout keeps 
 attempt Evicting with RetirementStalled; it never frees resources still in use or
 pretends the cell is Unloaded. Rapid reload cannot reuse that attempt's slots; a
 new admitted generation cannot evade accounting for the retiring one.
+
+### Cancellation and direction reversal owner
+
+`StreamingCellDirectionOwner` is the WST-003.10 owner-side seam over one canonical
+scheduler operation, not another residency ledger. The partition authority supplies
+the exact queued operation, a non-zero effective-demand revision, complete owned
+retirement adapters in the host-validated dependency order, and bounded participant
+and scheduler capacity. Validation precedes admission and consumes no participant
+ownership on rejection. Controllers are composed before admission; domain work
+starts only after successful reservation and the matching forward stage boundary.
+An unstarted controller acknowledges retirement without inventing resources.
+The scheduler is borrowed exclusively for that reservation
+and must outlive the owner; all mutation runs on StreamingAuthorityRole.
+
+Strictly newer demand replaces the retained intent transactionally. Load-to-Unloaded
+and Activate-to-Loaded/Unloaded enter Retiring immediately and revoke every
+participant's new access/publication before cleanup starts. Retire-to-Loaded/Activated
+and returning demand during cancelled work retain the new intent but never reverse
+cleanup or reuse the old fence. After every matching acknowledgement, a typed
+`RequiresFreshAttempt` decision tells the authority to issue and separately admit a
+fresh generation. Other changes retain the immutable operation target; a successful
+Load with Activated demand still needs the separate activation barrier.
+
+Each adapter owns the exact started asset, Scene, provider, worker or lease attempt;
+it is a retirement controller rather than a second feature-provider hierarchy.
+Domain services remain alive through drain, and native-affinity operations are
+scheduled by their adapters. Ordered asynchronous cleanup starts only after each
+predecessor acknowledges its immutable participant identity/revision and operation
+fence. Pending, failed, stale or mismatched polls keep all retained owners and the
+scheduler charge. Cleanup failure is diagnostic, never an acknowledgement. Only the
+complete barrier advances the canonical operation to Terminal and releases its exact
+reservation. The host must drain or transfer an interrupted owner before destruction;
+dropping an adapter must leave in-flight resources retained by its domain owner.
+
+Forward completion carries the complete current canonical phase snapshot, so a
+pre-reversal result cannot publish. Activation commits through the existing owned
+receipt transaction at the Scene safe point using the current operation and scheduler
+lifecycle; reversal/shutdown rolls prepared publication back. Explicit cancellation,
+failure, replacement and shutdown close new demand updates and preserve the first
+retirement disposition. Terminal results consume exactly once. Successful resources
+transfer explicitly to their resident/active owner; operation-capacity release does
+not release separately accounted resident resources.
+
+Existing scheduler, asset-request, activation and residency APIs remain intact.
+Hosts integrating this seam stop advancing its reservation directly, wrap their
+started participants in lifetime-safe adapters, supply their validated retirement
+order, and transfer successful controllers with residency ownership. The generated
+HoroWorldStreaming public-header consumer now covers this narrow additional header;
+no target dependency changes are needed.
 
 ## Budget Reservation And Admission
 
@@ -837,6 +918,16 @@ shutdown races publication. Observability loss therefore cannot change streaming
 admission, activation, provider ownership, cancellation or replacement decisions.
 
 ## Scene, Prefab And Navigation Reconciliation
+
+The implemented Scene-owned `HoroEngine::SceneCellPayload` seam cooks complete
+flattened typed cell snapshots into immutable `RuntimeSceneCellPayload` baselines.
+It preserves `RuntimeSceneDefinition`'s in-memory contract; Scene provider encoding
+is separate from ADR-023 container parsing. `QueueRuntimeSceneCellPayload` feeds
+Scene's existing detached preparation and retains the host authority lease until
+safe-point publication checks current content/fence, cancellation, reservations
+and provider readiness. It prepares one cell Scene domain; it does not introduce
+an independent partition authority or multi-cell merge transaction. See
+[Scene Runtime](scene-runtime.md#runtime-scene-cell-payload-production).
 
 Cell CoreEcs packages use ADR-017 Tier 0-style offline expansion: placed prefab
 instances are expanded during bake into a RuntimeSceneDefinition/component snapshot
@@ -1687,7 +1778,10 @@ request set and exact canonical dependency slice before submission, and forwards
 explicit parent cancellation token to every `AssetLoadService` child. The move-only
 aggregate controller never blocks while polling, requests cancellation on drop, and
 publishes owned bytes only after every child reaches success. Partial admission, provider
-failure, cancellation, replacement, and shutdown publish no batch; callers must revalidate
+failure, cancellation, replacement, and shutdown publish no batch; cancellation
+accepted after child success but before batch consumption also suppresses publication
+with `CellAssetRequestCancelled`. Cancellation after terminal consumption is rejected
+without changing the published result; callers must revalidate
 the retained operation fence before commit. World Streaming does not discover a provider,
 retry with another backend, or translate a missing hard dependency into an optional result.
 

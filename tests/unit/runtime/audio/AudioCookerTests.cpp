@@ -1,7 +1,9 @@
+#include "Horo/Assets/AssetArchive.h"
 #include "Horo/Assets/AssetCookService.h"
 #include "Horo/Audio/AudioCooker.h"
 #include "Horo/Audio/AudioErrors.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "assets/AssetCookPublicationFixture.h"
 
 #include <algorithm>
 #include <array>
@@ -11,8 +13,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <span>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace Horo::Audio {
@@ -70,6 +74,9 @@ namespace Horo::Audio {
                 std::filesystem::create_directories(path / "assets");
             }
 
+            TemporaryCookRoot(const TemporaryCookRoot &) = delete;
+            TemporaryCookRoot &operator=(const TemporaryCookRoot &) = delete;
+
             ~TemporaryCookRoot() {
                 std::error_code error;
                 std::filesystem::remove_all(path, error);
@@ -110,7 +117,164 @@ namespace Horo::Audio {
             Assets::AssetCookService service(jobs, snapshot.Value());
             return service.Cook(request, CancellationToken{});
         }
+
+        /** @brief Real cooked generation shared by filesystem and release-package integration cases. */
+        struct CookedStreamFixture final {
+            const AssetCookTargetId target = Target("linux-desktop");
+            const Assets::AssetTypeId type = Assets::AssetTypeId::Parse("audio.clip").Value();
+            const Assets::AssetId asset = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000544").Value();
+            static constexpr std::size_t artifactLimit = 4'096;
+            AudioProcessingFormat format;
+            std::vector<std::uint8_t> encoded;
+            TemporaryCookRoot root;
+
+            CookedStreamFixture() {
+                AudioCookProfile profile;
+                profile.defaults.streamThresholdFrames = 2;
+                profile.defaults.streamChunkFrames = 2;
+                auto cooked = CookAudioSource(WaveFixture(), profile, target, Toolchain());
+                REQUIRE(cooked.HasValue());
+                Assets::AssetCookArtifact artifact;
+                artifact.id = asset;
+                artifact.type = type;
+                artifact.target = target;
+                artifact.sourceDigest = cooked.Value().manifest.sourceDigest;
+                artifact.payload = cooked.Value().bytes;
+                artifact.payloadDigest = ComputeSha256(std::as_bytes(std::span(artifact.payload)));
+                artifact.cacheKeyDigest = artifact.payloadDigest;
+                auto encoding = Assets::EncodeCookedArtifact(artifact);
+                REQUIRE(encoding.HasValue());
+                encoded = std::move(encoding).Value();
+                format = cooked.Value().manifest.format;
+                REQUIRE(encoded.size() <= artifactLimit);
+            }
+
+            std::shared_ptr<const Assets::IAssetProvider> Filesystem(const std::filesystem::path &directory,
+                                                                     const std::size_t providerLimit = artifactLimit) const {
+                std::filesystem::create_directories(directory);
+                std::ofstream file(directory / (asset.ToString() + ".cooked"), std::ios::binary);
+                file.write(reinterpret_cast<const char *>(encoded.data()), static_cast<std::streamsize>(encoded.size()));
+                REQUIRE(file.good());
+                file.close();
+                return std::make_shared<Assets::FilesystemAssetProvider>(directory, Assets::AssetProviderLimits{providerLimit});
+            }
+
+            std::shared_ptr<const Assets::IAssetProvider> Archive() const {
+                const auto chunk = Assets::AssetChunkId::Parse("core").Value();
+                auto plan = Assets::AssetChunkPlan::Create(std::array{Assets::AssetChunkDefinition{.id = chunk, .assets = {asset}}});
+                REQUIRE(plan.HasValue());
+                auto archive = Assets::BuildAssetArchive(plan.Value(), target, std::array{Assets::AssetArchiveInput{asset, encoded}},
+                                                         {.maximumAssetBytes = artifactLimit});
+                REQUIRE(archive.HasValue());
+                auto opened = Assets::AssetArchiveProvider::Open(archive.Value(), target, {.maximumAssetBytes = artifactLimit});
+                REQUIRE(opened.HasValue());
+                return std::make_shared<Assets::AssetArchiveProvider>(std::move(opened).Value());
+            }
+
+            void CheckOutput(const AudioStreamSnapshot &terminal, const AudioStreamRenderResult output,
+                             const std::span<const AudioSample> left, const std::span<const AudioSample> right,
+                             const bool expectFailure) const {
+                if (expectFailure) {
+                    REQUIRE(terminal.failed);
+                    REQUIRE(terminal.failure.has_value());
+                    CHECK(output.availableFrames == 0);
+                    CHECK(output.silentFrames == 8);
+                    CHECK(output.stopped);
+                } else {
+                    REQUIRE(terminal.sourceEnded);
+                    CHECK(output.availableFrames == 4);
+                    CHECK(output.silentFrames == 4);
+                    CHECK(output.ended);
+                    CHECK_FALSE(output.stopped);
+                    const std::array<AudioSample, 8> expectedLeft{0.0F, 32'767.0F / 32'768.0F, -0.5F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F};
+                    const std::array<AudioSample, 8> expectedRight{0.5F, -1.0F, 0.25F, -0.25F, 0.0F, 0.0F, 0.0F, 0.0F};
+                    CHECK(std::equal(left.begin(), left.end(), expectedLeft.begin(), expectedLeft.end()));
+                    CHECK(std::equal(right.begin(), right.end(), expectedRight.begin(), expectedRight.end()));
+                }
+            }
+
+            AudioStreamRequest Request() const {
+                AudioStreamRequest request;
+                request.asset = asset;
+                request.decoder = {AudioCodecIds::Pcm, format, 4, 2, 0, true};
+                request.ringFrames = 4;
+                request.lookaheadFrames = 4;
+                request.maximumPackageBytes = artifactLimit * 3;
+                request.underrunPolicy = AudioStreamUnderrunPolicy::StopWithSilence;
+                return request;
+            }
+
+            void Run(std::shared_ptr<const Assets::IAssetProvider> provider, const bool expectFailure,
+                     const std::optional<Error> &expectedError = std::nullopt) const {
+                REQUIRE(provider);
+                std::weak_ptr<const Assets::IAssetProvider> retained = provider;
+                auto source = MakeCookedAudioStreamSource(provider, target, type, artifactLimit);
+                REQUIRE(source.HasValue());
+                if (!expectFailure) {
+                    const auto &binding = source.Value();
+                    auto opened = binding.open(binding.context, asset, Request().decoder, artifactLimit * 3, CancellationToken{});
+                    REQUIRE(opened.HasValue());
+                    auto decoder = std::move(opened).Value();
+                    REQUIRE(decoder.Seek(2).HasValue());
+                    CHECK(decoder.CursorFrame() == 2);
+                }
+                JobSystem jobs({.workerCount = 1});
+                auto created = AudioStreamingService::Create(jobs, std::move(source).Value());
+                REQUIRE(created.HasValue());
+                auto service = std::move(created).Value();
+                provider.reset();
+                CHECK_FALSE(retained.expired());
+                const auto admitted = service->Admit(Request());
+                REQUIRE(admitted.HasValue());
+                auto port = std::move(service->RenderPort(admitted.Value())).Value();
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+                while (!service->Snapshot(admitted.Value()).Value().sourceEnded && !service->Snapshot(admitted.Value()).Value().failed &&
+                       std::chrono::steady_clock::now() < deadline) {
+                    service->Pump();
+                    std::this_thread::yield();
+                }
+                const auto terminal = service->Snapshot(admitted.Value()).Value();
+                alignas(64) std::array<AudioSample, 8> left{};
+                alignas(64) std::array<AudioSample, 8> right{};
+                std::array<AudioSample *, 2> planes{left.data(), right.data()};
+                const auto output = port.Render(planes, 8);
+                CheckOutput(terminal, output, left, right, expectFailure);
+                if (expectedError) {
+                    REQUIRE(terminal.failure.has_value());
+                    CHECK(terminal.failure->code.Value() == expectedError->code.Value());
+                }
+                REQUIRE(service->Retire(admitted.Value()).HasValue());
+                service.reset();
+                CHECK(retained.expired());
+            }
+        };
     }  // namespace
+
+    TEST_CASE("Cooked streaming feeds identical PCM from bounded filesystem and release-package providers",
+              "[unit][audio][streaming][cook]") {
+        CookedStreamFixture fixture;
+        SECTION("Pinned filesystem generation with spaces and non-ASCII path") {
+            fixture.Run(fixture.Filesystem(fixture.root.path / "cooked generation ö"), false);
+        }
+        SECTION("Immutable verified assets.horo package") {
+            fixture.Run(fixture.Archive(), false);
+        }
+        SECTION("Missing cooked artifact never falls back to source media") {
+            fixture.Run(std::make_shared<Assets::FilesystemAssetProvider>(fixture.root.path,
+                                                                          Assets::AssetProviderLimits{CookedStreamFixture::artifactLimit}),
+                        true);
+        }
+        SECTION("Corrupt envelope fails before any PCM publication") {
+            std::as_writable_bytes(std::span(fixture.encoded)).back() ^= std::byte{1};
+            fixture.Run(fixture.Filesystem(fixture.root.path), true);
+        }
+        SECTION("Provider rejects an oversized load before allocation") {
+            auto provider = fixture.Filesystem(fixture.root.path, 1);
+            const auto rejected = provider->Load(fixture.asset, CancellationToken{});
+            REQUIRE(rejected.HasError());
+            fixture.Run(std::move(provider), true, rejected.ErrorValue());
+        }
+    }
 
     TEST_CASE("Audio cook produces identical PCM payload and compatibility manifest for exact inputs", "[unit][audio][cook]") {
         const auto source = WaveFixture();
@@ -334,6 +498,7 @@ namespace Horo::Audio {
             .registry = registry.Snapshot(),
             .target = target,
         };
+        Horo::Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(request);
         JobSystem jobs;
         const AudioCookProfile baseline;
         auto first = RunAudioCook(request, type.Value(), target, jobs, baseline);

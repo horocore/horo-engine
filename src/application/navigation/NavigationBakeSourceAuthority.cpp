@@ -1,0 +1,87 @@
+#include "Horo/Application/NavigationBakeSourceAuthority.h"
+
+#include "Horo/Navigation/NavigationErrors.h"
+
+#include <algorithm>
+#include <tuple>
+
+namespace Horo::Application {
+    namespace NavigationBakeDetail {
+        /** @brief Protected authoritative evidence; an adoption lease excludes host source transactions. */
+        struct SourceState {
+            std::mutex mutex;
+            Navigation::NavigationBakeInputRevisions revisions;
+            std::vector<Navigation::NavigationSourceObservation> sources;
+        };
+    }  // namespace NavigationBakeDetail
+
+    namespace {
+        /** @brief Requires each authoritative revision to name a concrete host transaction. */
+        [[nodiscard]] bool ValidRevisions(const Navigation::NavigationBakeInputRevisions &revisions) {
+            return revisions.requestGeneration.IsValid() && revisions.definition.IsValid() && revisions.scene.IsValid() &&
+                   revisions.areaRegistry.IsValid() && revisions.projectProfile.IsValid() && revisions.coordinates.IsValid() &&
+                   revisions.geometry.IsValid();
+        }
+
+        /** @brief Requires stable producer identity, source revision and content evidence. */
+        [[nodiscard]] bool ValidSource(const Navigation::NavigationSourceObservation &source) {
+            return source.producer.IsValid() && source.contribution.IsValid() && source.revision.IsValid() &&
+                   source.kind < Navigation::NavigationSourceProducerKind::Count && source.contentDigest != Sha256Digest{};
+        }
+
+        /** @brief Validates and orders the complete source inventory before it can replace authoritative evidence. */
+        [[nodiscard]] Result<void> NormalizeSources(std::vector<Navigation::NavigationSourceObservation> &sources) {
+            using namespace Navigation;
+            if (sources.size() > NavigationSourceGeometryLimits::MaximumContributions)
+                return Result<void>::Failure(MakeError(NavigationErrors::CapacityExceeded));
+            if (!std::ranges::all_of(sources, ValidSource))
+                return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+            std::ranges::sort(sources, [](const auto &a, const auto &b) {
+                return std::tie(a.producer, a.contribution) < std::tie(b.producer, b.contribution);
+            });
+            if (std::ranges::adjacent_find(sources, [](const auto &a, const auto &b) {
+                return a.producer == b.producer && a.contribution == b.contribution;
+            }) != sources.end())
+                return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+            return Result<void>::Success();
+        }
+    }  // namespace
+
+    /** @copydoc NavigationBakeSourceLease::NavigationBakeSourceLease */
+    NavigationBakeSourceLease::NavigationBakeSourceLease(std::shared_ptr<NavigationBakeDetail::SourceState> state,
+                                                         std::unique_lock<std::mutex> lock) noexcept
+        : state_(std::move(state)), lock_(std::move(lock)) {}
+
+    /** @copydoc NavigationBakeSourceAuthority::NavigationBakeSourceAuthority */
+    NavigationBakeSourceAuthority::NavigationBakeSourceAuthority() : state_(std::make_shared<NavigationBakeDetail::SourceState>()) {}
+
+    /** @copydoc NavigationBakeSourceAuthority::UpdateCurrent */
+    Result<void> NavigationBakeSourceAuthority::UpdateCurrent(const Navigation::NavigationBakeInputRevisions &revisions,
+                                                              std::vector<Navigation::NavigationSourceObservation> sources) const {
+        using namespace Navigation;
+        if (!ValidRevisions(revisions))
+            return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+        if (auto normalized = NormalizeSources(sources); normalized.HasError())
+            return normalized;
+        if (std::unique_lock lock(state_->mutex, std::try_to_lock); lock.owns_lock()) {
+            state_->revisions = revisions;
+            state_->sources = std::move(sources);
+            return Result<void>::Success();
+        }
+        return Result<void>::Failure(MakeError(NavigationErrors::BakeJobAdmissionRejected));
+    }
+
+    /** @copydoc NavigationBakeSourceAuthority::TryAcquirePublication */
+    Result<NavigationBakeSourceLease> NavigationBakeSourceAuthority::TryAcquirePublication(
+        const Navigation::NavigationBakeInputSnapshot &input, const CancellationToken &cancellation) const {
+        std::unique_lock lock(state_->mutex, std::try_to_lock);
+        if (!lock.owns_lock())
+            return Result<NavigationBakeSourceLease>::Failure(MakeError(Navigation::NavigationErrors::BakeJobAdmissionRejected));
+        if (cancellation.IsCancellationRequested())
+            return Result<NavigationBakeSourceLease>::Failure(MakeError(Navigation::NavigationErrors::BakeInputCancelled));
+        if (auto fresh = input.ValidatePublication(input.Revisions().requestGeneration, state_->revisions, state_->sources);
+            fresh.HasError())
+            return Result<NavigationBakeSourceLease>::Failure(fresh.ErrorValue());
+        return Result<NavigationBakeSourceLease>::Success(NavigationBakeSourceLease(state_, std::move(lock)));
+    }
+}  // namespace Horo::Application

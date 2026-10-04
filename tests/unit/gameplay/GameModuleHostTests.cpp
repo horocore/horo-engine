@@ -3,18 +3,33 @@
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameAssetTypeRegistry.h"
+#include "Horo/Gameplay/GameEventRegistry.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayRegistrationRuntime.h"
 #include "Horo/Gameplay/ReplicationRegistration.h"
+#include "Horo/Runtime/Save/SaveErrors.h"
+#include "Horo/Runtime/Save/SaveParticipation.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <format>
 
 namespace {
     using namespace Horo;
     using namespace Horo::Gameplay;
     using namespace Horo::Runtime;
+
+    class NoSaveOperations final : public ISaveParticipationOperationHost {
+    public:
+        Result<SaveOperationHandle> RequestSave(const SaveParticipationSaveRequest &) override {
+            return Result<SaveOperationHandle>::Failure(MakeError(SaveErrors::LifecycleUnavailable));
+        }
+
+        Result<SaveOperationHandle> RequestLoad(const SaveParticipationLoadRequest &) override {
+            return Result<SaveOperationHandle>::Failure(MakeError(SaveErrors::LifecycleUnavailable));
+        }
+    };
 
     GameModuleLoadExpectation Expectation() {
         return {
@@ -120,7 +135,100 @@ namespace {
         REQUIRE(loaded.Systems().IsFrozen());
         REQUIRE(loaded.Systems().Registrations().size() == 1);
     }
+
+    /** @brief Explicitly composes all four module declarations with a save participation host. */
+    [[nodiscard]] std::vector<std::shared_ptr<GameplayPersistenceAdapter>> RegisterDurableParticipants(
+        const LoadedGameModule &loaded, const SaveParticipationClient &client) {
+        std::vector<std::shared_ptr<GameplayPersistenceAdapter>> adapters;
+        for (unsigned index = 0; index < 4; ++index) {
+            auto adapter = loaded.AcquirePersistence(SaveParticipantId::Parse(std::format("game.tests.durable{}", index)).Value());
+            REQUIRE(adapter.HasValue());
+            REQUIRE(client.RegisterParticipant(adapter.Value()->Descriptor().participant, adapter.Value()).HasValue());
+            adapters.push_back(std::move(adapter).Value());
+        }
+        return adapters;
+    }
+
+    /** @brief Stages detached archive bytes without altering the original capture snapshot. */
+    [[nodiscard]] std::vector<std::unique_ptr<IStagedRestoreParticipant>> StageDurableParticipants(
+        const std::span<const std::shared_ptr<GameplayPersistenceAdapter>> adapters, const RuntimeSaveSnapshot &snapshot) {
+        std::vector<std::unique_ptr<IStagedRestoreParticipant>> receipts;
+        for (std::size_t index = 0; index < adapters.size(); ++index) {
+            const auto &record = snapshot.Records()[index];
+            CHECK(record.Segment(0).back() == std::byte{0x31});
+            std::vector<std::byte> detached{record.Segment(0).begin(), record.Segment(0).end()};
+            detached.back() = std::byte{0x42};
+            auto receipt = adapters[index]->StageRestore(adapters[index]->Descriptor().participant.schemaVersion,
+                                                         adapters[index]->Descriptor().record, detached);
+            REQUIRE(receipt.HasValue());
+            receipts.push_back(std::move(receipt).Value());
+        }
+        return receipts;
+    }
+
+    /** @brief Captures registered module records with valid scene and generation provenance. */
+    [[nodiscard]] RuntimeSaveSnapshot CaptureDurableParticipants(const SaveParticipantRegistrySnapshot &participants) {
+        SaveIdentityDetail::Bytes captureId{};
+        captureId.back() = 1;
+        auto builder = RuntimeSaveCaptureBuilder::Create({.capturedState = CapturedStateId::FromBytes(captureId).Value(),
+                                                          .epoch = CanonicalCaptureEpoch{1},
+                                                          .sceneIncarnation = 1,
+                                                          .sceneRevision = 1,
+                                                          .registryGeneration = participants.Generation()},
+                                                         participants)
+                           .Value();
+        REQUIRE(builder.CaptureParticipants().HasValue());
+        return builder.Seal().Value();
+    }
 }  // namespace
+
+TEST_CASE("loaded gameplay declarations participate in durable capture and aggregate restore", "[unit][gameplay][save]") {
+    using namespace Horo::Runtime;
+    GameModuleHost moduleHost;
+    auto loadedResult = moduleHost.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+    REQUIRE(loadedResult.HasValue());
+    auto loaded = std::move(loadedResult).Value();
+    auto event = loaded->Events().Acquire(90, 1, 91, 1, loaded->Cancellation());
+    REQUIRE(event.HasValue());
+    CanonicalStateParticipantRegistry registry;
+    NoSaveOperations operations;
+    auto participationResult =
+        SaveParticipationHost::Create(1436, {.captureParticipants = true, .restoreParticipants = true}, registry, operations);
+    REQUIRE(participationResult.HasValue());
+    auto participation = std::move(participationResult).Value();
+    const auto adapters = RegisterDurableParticipants(*loaded, participation.Client());
+    CHECK(loaded->AcquirePersistence(SaveParticipantId::Parse("game.tests.absent").Value()).ErrorValue().code.Value() ==
+          SaveErrors::ParticipantAdapterMissing.code.Value());
+    auto participants = registry.Snapshot().Value();
+    auto snapshot = CaptureDurableParticipants(participants);
+    REQUIRE(snapshot.Records().size() == 4);
+    auto receipts = StageDurableParticipants(adapters, snapshot);
+    RequireRestartRequired(loaded->PrepareReload());
+    RequireRestartRequired(loaded->AcquirePersistence(adapters.front()->Descriptor().participant.participant));
+    CHECK(loaded->Events().Acquire(90, 1, 91, 1, loaded->Cancellation()).HasError());
+    CHECK(event.Value()->Invoke({}) == GameplayEventOutcome::CapabilityUnavailable);
+    REQUIRE(participation.Close().HasValue());
+    loaded.reset();
+    auto operation = CreateSaveOperation({.operation = 1436, .kind = SaveOperationKind::Load, .maximumCompletionCallbacks = 4}).Value();
+    auto created = StagedRestoreTransaction::Create({.operation = 1436,
+                                                     .registryGeneration = participants.Generation(),
+                                                     .sessionGeneration = 1,
+                                                     .sceneIncarnation = 1,
+                                                     .maximumParticipants = 4},
+                                                    std::move(operation), participants, std::move(receipts));
+    REQUIRE(created.HasValue());
+    auto transaction = std::move(created).Value();
+    REQUIRE(transaction.Prepare().HasValue());
+    REQUIRE(
+        transaction.Activate({.registryGeneration = participants.Generation(), .sessionGeneration = 1, .sceneIncarnation = 1}).HasValue());
+    auto restoredCapture = RuntimeSaveCaptureBuilder::Create(snapshot.Provenance(), participants).Value();
+    REQUIRE(restoredCapture.CaptureParticipants().HasValue());
+    auto restored = restoredCapture.Seal().Value();
+    for (const auto &record : restored.Records())
+        CHECK(record.Segment(0).back() == std::byte{0x42});
+    for (const auto &record : snapshot.Records())
+        CHECK(record.Segment(0).back() == std::byte{0x31});
+}
 
 TEST_CASE("game module host validates fingerprint and keeps factories alive through behavior shutdown") {
     GameModuleHost host;
@@ -260,6 +368,31 @@ TEST_CASE("generated gameplay bundle validation rejects incompatible identity be
     const auto mismatch = ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected);
     REQUIRE(mismatch.HasError());
     REQUIRE(mismatch.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
+}
+
+TEST_CASE("persistence SDK boundary rejects previous native registration layouts before activation", "[unit][gameplay][sdk]") {
+    ValidBundleStorage storage;
+    const GameModuleLoadExpectation expected{
+        .moduleId = "game.tests",
+        .buildFingerprint = CurrentGameplayBuildFingerprint(),
+        .descriptorRevision = 7,
+    };
+    GameModuleDescriptor descriptor{
+        .moduleId = "game.tests",
+        .buildFingerprint = CurrentGameplayBuildFingerprint().data(),
+    };
+    REQUIRE(ValidateGameModuleDescriptor(descriptor, expected).HasValue());
+    REQUIRE(ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected).HasValue());
+    for (const std::uint32_t previousLayout : {6U, 7U}) {
+        descriptor.sdkBoundaryVersion = previousLayout;
+        storage.bundle.sdkBoundaryVersion = previousLayout;
+        const auto oldModule = ValidateGameModuleDescriptor(descriptor, expected);
+        const auto oldBundle = ValidateGeneratedGameplayDescriptorBundle(storage.bundle, expected);
+        REQUIRE(oldModule.HasError());
+        REQUIRE(oldBundle.HasError());
+        CHECK(oldModule.ErrorValue().code.Value() == GameplayErrors::IncompatibleGameModule.code.Value());
+        CHECK(oldBundle.ErrorValue().code.Value() == GameplayErrors::InvalidGeneratedDescriptorBundle.code.Value());
+    }
 }
 
 TEST_CASE("generated gameplay bundle validation rejects incomplete bindings and bounded diagnostics") {

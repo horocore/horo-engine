@@ -165,8 +165,15 @@ namespace {
             return native_.SyncDirectory(path);
         }
 
-        void WaitUntilReplace() {
+        [[nodiscard]] bool WaitUntilReplace() {
             replacing_.wait();
+            return replacementAttempts_.load() != 0;
+        }
+
+        void NotifyPublicationFinished() {
+            // An early storage failure must wake the test even when replacement was never reached.
+            if (replacementAttempts_.load() == 0)
+                replacing_.count_down();
         }
 
         void ContinueReplacement() {
@@ -347,9 +354,15 @@ namespace {
         std::optional<Horo::Result<void>> competingResult;
         std::thread firstPublisher([&] {
             firstResult.emplace(store.Publish(partition, first));
+            files.NotifyPublicationFinished();
         });
 
-        files.WaitUntilReplace();
+        if (!files.WaitUntilReplace()) {
+            firstPublisher.join();
+            REQUIRE(firstResult.has_value());
+            REQUIRE(firstResult->HasValue());
+            return;
+        }
         std::thread competingPublisher([&] {
             competingResult.emplace(store.Publish(partition, second));
         });
@@ -368,6 +381,30 @@ namespace {
         CHECK(firstSnapshot.Value() == first);
         REQUIRE(store.Publish(partition, second).HasValue());
         CHECK(store.Load(partition).Value() == second);
+    }
+
+    TEST_CASE("Offline queue storage concurrency fixture wakes after an early publication failure",
+              "[platform-services][offline][storage][atomic]") {
+        TemporaryRoot temporary;
+        BlockingReplaceDurableFileSystem files;
+        const auto created = PlatformOfflineQueueStorage::Create(files, temporary.root);
+        REQUIRE(created.HasValue());
+        auto store = std::move(created).Value();
+        const auto invalid = Record(0, 11, 1, "invalid-identity");
+        std::optional<Horo::Result<void>> result;
+        std::thread publisher([&] {
+            result.emplace(store.Publish(Partition(11), std::span{&invalid, 1}));
+            files.NotifyPublicationFinished();
+        });
+        const bool reachedReplacement = files.WaitUntilReplace();
+        files.ContinueReplacement();
+        publisher.join();
+
+        CHECK_FALSE(reachedReplacement);
+        REQUIRE(result.has_value());
+        REQUIRE(result->HasError());
+        CHECK(result->ErrorValue().code.Value() == "platform.offline.invalid_record");
+        CHECK(files.ReplacementAttempts() == 0);
     }
 
     TEST_CASE("Offline queue storage preserves non-ASCII native root paths", "[platform-services][offline][storage][paths]") {

@@ -16,7 +16,7 @@ namespace Horo::Audio {
                                             const AudioStreamDecoderLimits &limits) {
             if (!ValidLimits(limits) || !spec.codec.IsValid() ||
                 !ValidateAudioProcessingFormat(spec.outputFormat, limits.maximumChannels) || spec.maximumFramesPerDecode == 0 ||
-                provider.context == nullptr || provider.decode == nullptr || provider.release == nullptr ||
+                !provider.context.IsValid() || provider.decode == nullptr || provider.release == nullptr ||
                 (provider.seek != nullptr) != spec.seekable)
                 return Result<void>::Failure(MakeError(AudioStreamDecoderErrors::Invalid));
             if (spec.frameCount > limits.maximumFrames || spec.maximumFramesPerDecode > limits.maximumFramesPerDecode ||

@@ -71,13 +71,15 @@ namespace Horo::Gameplay {
         registries.systems = std::make_unique<SystemRegistry>(moduleId);
         registries.replication = std::make_unique<ReplicationRegistrationRegistry>(moduleId);
         registries.events = std::make_unique<GameEventRegistry>();
+        registries.persistence = std::make_unique<PersistenceRegistrationRegistry>(moduleId);
         GameRegistrationContext registration{moduleId,
                                              *registries.components,
                                              *registries.systems,
                                              *registries.services,
                                              *registries.assetTypes,
                                              *registries.replication,
-                                             *registries.events};
+                                             *registries.events,
+                                             *registries.persistence};
         if (Result<void> registered = InvokeRegister(*gameplayModule, registration); registered.HasError())
             return registered;
         if (Result<void> frozen = registries.components->Freeze(); frozen.HasError())
@@ -96,6 +98,10 @@ namespace Horo::Gameplay {
             return frozen;
         Detail::GenerationLeaseBinding::Bind(*registries.registry, *registries.systems, weak_from_this(), runtimeLeaseAdmission);
         Detail::GenerationLeaseBinding::Bind(*registries.replication, weak_from_this(), runtimeLeaseAdmission);
+        if (Result<void> frozen =
+                registries.persistence->Freeze(registries.registry->Registrations(), registries.services->Registrations());
+            frozen.HasError())
+            return frozen;
         registries.events->Freeze();
         Detail::GenerationLeaseBinding::Bind(*registries.events, weak_from_this(), runtimeLeaseAdmission);
 
@@ -146,6 +152,7 @@ namespace Horo::Gameplay {
         registries.assetTypes.reset();
         registries.replication.reset();
         registries.events.reset();
+        registries.persistence.reset();
         if (gameplayModule != nullptr) {
             destroy(gameplayModule);
             gameplayModule = nullptr;

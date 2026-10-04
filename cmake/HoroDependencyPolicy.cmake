@@ -30,7 +30,8 @@ horo_allow_target_dependencies(TARGET HoroUpdateOfflineSource DEPENDENCIES HoroU
 horo_allow_target_dependencies(TARGET HoroUpdateActivation DEPENDENCIES HoroUpdateDownload HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroUserStateMigration DEPENDENCIES HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroProjectMigrations DEPENDENCIES HoroApplication)
-horo_allow_target_dependencies(TARGET HoroRuntime DEPENDENCIES HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroSaveApi DEPENDENCIES HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroRuntime DEPENDENCIES HoroFoundation HoroSaveApi)
 horo_allow_target_dependencies(TARGET HoroRuntimeUi DEPENDENCIES HoroFoundation HoroAssets)
 horo_allow_target_dependencies(TARGET HoroUiTemplateGraph DEPENDENCIES HoroFoundation HoroAssets HoroPackages)
 horo_allow_target_dependencies(TARGET HoroRuntimeUiInput DEPENDENCIES HoroInput HoroRuntimeUi)
@@ -77,6 +78,8 @@ horo_allow_target_dependencies(TARGET HoroDestructionApplication DEPENDENCIES Ho
 horo_allow_target_dependencies(TARGET HoroDestructionReplication DEPENDENCIES HoroDestructionApi HoroNetworkApi)
 horo_allow_target_dependencies(TARGET HoroCinematicModel DEPENDENCIES HoroFoundation HoroRuntime HoroAssets HoroSceneModel)
 horo_allow_target_dependencies(TARGET HoroCinematicRuntime DEPENDENCIES HoroCinematicModel)
+horo_allow_target_dependencies(TARGET HoroCameraRuntime DEPENDENCIES HoroRuntimeScene HoroRenderApi)
+horo_allow_target_dependencies(TARGET HoroCinematicCameraRuntime DEPENDENCIES HoroCinematicRuntime HoroCameraRuntime)
 horo_allow_target_dependencies(TARGET HoroCinematicScriptBridge DEPENDENCIES HoroCinematicRuntime HoroExtensions HoroGameplayModuleHost)
 horo_allow_target_dependencies(TARGET HoroNavigationApi DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroNavigationRuntime DEPENDENCIES HoroNavigationApi)
@@ -93,17 +96,18 @@ horo_allow_target_dependencies(TARGET HoroNavigationNull DEPENDENCIES HoroNaviga
 horo_allow_target_dependencies(TARGET HoroNavigationRecastDetour DEPENDENCIES HoroNavigationApi)
 horo_allow_target_dependencies(TARGET HoroNavigationCrowdDetour DEPENDENCIES HoroNavigationRuntime)
 horo_allow_target_dependencies(TARGET HoroWorldStreaming DEPENDENCIES HoroFoundation HoroAssets)
+horo_allow_target_dependencies(TARGET HoroSceneCellPayload DEPENDENCIES HoroRuntimeScene HoroWorldStreaming)
 horo_allow_target_dependencies(TARGET HoroPrefab DEPENDENCIES HoroFoundation HoroAssets HoroGameplayApi)
 horo_allow_target_dependencies(TARGET HoroPrefabAuthoring DEPENDENCIES HoroPrefab HoroApplication)
 horo_allow_target_dependencies(TARGET HoroPrefabSceneExpansion DEPENDENCIES HoroPrefabAuthoring HoroRuntimeScene)
 horo_allow_target_dependencies(TARGET HoroInput DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroInputSdl DEPENDENCIES HoroInput)
 
-horo_allow_target_dependencies(TARGET HoroGameplayApi DEPENDENCIES HoroFoundation HoroNetworkApi)
+horo_allow_target_dependencies(TARGET HoroGameplayApi DEPENDENCIES HoroFoundation HoroNetworkApi HoroSaveApi)
 horo_allow_target_dependencies(TARGET HoroRuntimeScene
     DEPENDENCIES HoroFoundation HoroRuntime HoroAssets HoroGameplayApi HoroNavigationApi HoroPhysicsModel HoroSceneModel HoroRuntimeUi HoroAI)
 horo_allow_target_dependencies(TARGET HoroGameplayRuntime
-    DEPENDENCIES HoroGameplayApi HoroRuntimeScene)
+    DEPENDENCIES HoroGameplayApi HoroRuntimeScene HoroRuntime)
 horo_allow_target_dependencies(TARGET HoroGameplayModuleHost
     DEPENDENCIES HoroGameplayRuntime HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroGameplayBuild
@@ -146,7 +150,7 @@ horo_allow_target_dependencies(TARGET HoroEditorViewportOpenGL
 horo_allow_target_dependencies(TARGET HoroEditorViewportMetal
     DEPENDENCIES HoroEditorViewportScene HoroEditorViewportResources HoroRenderMetal HoroRenderFrontend)
 horo_allow_target_dependencies(TARGET HoroGui
-    DEPENDENCIES HoroEditorServices HoroFoundation HoroEditorRenderExtraction HoroExtensions)
+    DEPENDENCIES HoroEditorServices HoroCinematicCameraRuntime HoroFoundation HoroEditorRenderExtraction HoroExtensions)
 horo_allow_target_dependencies(TARGET HoroExtensions
     DEPENDENCIES HoroFoundation HoroPlatform HoroAssets HoroSecurity)
 
@@ -224,3 +228,24 @@ horo_allow_temporary_dependency_exception(
     OWNER "Rendering"
     REMOVAL_TICKET "#62"
     REASON "Static backend registration predates the renderer module host")
+
+option(HORO_VERIFY_NETWORK_DISABLED "Verify that no production network dependency is populated or configured" OFF)
+if(HORO_VERIFY_NETWORK_DISABLED)
+    if(HORO_BUILD_NETWORK_GNS)
+        message(FATAL_ERROR "Network-disabled verification requires HORO_BUILD_NETWORK_GNS=OFF")
+    endif()
+    foreach(target HoroNetworkTransportGNS GameNetworkingSockets_s libprotobuf protoc c-ares::cares)
+        if(TARGET ${target})
+            message(FATAL_ERROR "Production network target is present in the disabled graph: ${target}")
+        endif()
+    endforeach()
+    # Cached source directories may exist from the ON build. The current
+    # configure must not populate them or add their targets when networking is OFF.
+    foreach(dependency horo_gns horo_protobuf horo_cares)
+        FetchContent_GetProperties(${dependency} POPULATED populated)
+        if(populated)
+            message(FATAL_ERROR "Production network dependency was populated while disabled: ${dependency}")
+        endif()
+    endforeach()
+    message(STATUS "Network disabled: production targets and FetchContent dependencies are absent")
+endif()

@@ -1,12 +1,13 @@
 #include "Horo/Foundation/Platform.h"
 
+#include "PlatformFileInternal.h"
+
 #include <algorithm>
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <limits>
-#include <mutex>
-#include <unordered_set>
 #include <vector>
 
 #if defined(_WIN32)
@@ -22,51 +23,13 @@
 #endif
 
 namespace Horo {
+    using PlatformFileInternal::FsError;
+    using PlatformFileInternal::IoFailed;
+    using PlatformFileInternal::LockBusy;
+#if !defined(_WIN32)
+    using PlatformFileInternal::FlushFileDescriptor;
+#endif
     namespace {
-        const ErrorDomainId PlatformDomain{"horo.platform.filesystem"};
-        const ErrorCodeDescriptor IoFailed{.domain = PlatformDomain,
-                                           .code = ErrorCode{"filesystem.io_failed"},
-                                           .defaultSeverity = ErrorSeverity::Error,
-                                           .summary = "Durable filesystem operation failed.",
-                                           .remediationHint = "Check filesystem permissions and available storage.",
-                                           .retryable = true,
-                                           .userActionable = true};
-        const ErrorCodeDescriptor LockBusy{.domain = PlatformDomain,
-                                           .code = ErrorCode{"filesystem.lock_busy"},
-                                           .defaultSeverity = ErrorSeverity::Error,
-                                           .summary = "The file is locked by another operation.",
-                                           .remediationHint = "Wait for the other project mutation to finish.",
-                                           .retryable = true,
-                                           .userActionable = true};
-
-        struct StringHash {
-            using is_transparent = void;
-
-            [[nodiscard]] std::size_t operator()(const std::string_view sv) const noexcept {
-                return std::hash<std::string_view>{}(sv);
-            }
-        };
-
-        struct ProcessLockRegistry {
-            std::mutex mutex;
-            std::unordered_set<std::string, StringHash, std::equal_to<>> locks;
-        };
-
-        ProcessLockRegistry &GetProcessLockRegistry() {
-            static ProcessLockRegistry registry;
-            return registry;
-        }
-
-        [[nodiscard]] Error FsError(const ErrorCodeDescriptor &code, const std::filesystem::path &path) {
-            return MakeError(code, std::string(code.summary) + " Path: " + path.generic_string());
-        }
-
-        [[nodiscard]] std::string LockKey(const std::filesystem::path &path) {
-            std::error_code error;
-            const auto parent = std::filesystem::weakly_canonical(path.parent_path(), error);
-            return (error ? path.lexically_normal() : parent / path.filename()).generic_string();
-        }
-
 #if defined(_WIN32)
         /** @brief Appends only through a private Windows regular-file handle at the exact offset. */
         [[nodiscard]] bool AppendPrivateBytes(const std::filesystem::path &path, const std::uint64_t expectedOffset,
@@ -99,14 +62,6 @@ namespace Horo {
             return ok;
         }
 #else
-        [[nodiscard]] bool FlushFileDescriptor(const int descriptor) {
-#if defined(__APPLE__) && defined(F_FULLFSYNC)
-            if (fcntl(descriptor, F_FULLFSYNC) == 0)
-                return true;
-#endif
-            return fsync(descriptor) == 0;
-        }
-
         /** @brief Appends only through a private POSIX regular-file descriptor at the exact offset. */
         [[nodiscard]] bool AppendPrivateBytes(const std::filesystem::path &path, const std::uint64_t expectedOffset,
                                               const std::span<const std::byte> bytes) {
@@ -139,80 +94,6 @@ namespace Horo {
         }
 #endif
     }  // namespace
-
-    struct ExclusiveFileLock::State {
-        State() = default;
-        State(const State &) = delete;
-        State &operator=(const State &) = delete;
-
-        State(State &&other) noexcept : processKey(std::move(other.processKey)) {
-#if defined(_WIN32)
-            handle = std::exchange(other.handle, INVALID_HANDLE_VALUE);
-#else
-            descriptor = std::exchange(other.descriptor, -1);
-#endif
-        }
-
-        State &operator=(State &&other) noexcept {
-            if (this != &other) {
-                Release();
-                processKey = std::move(other.processKey);
-#if defined(_WIN32)
-                handle = std::exchange(other.handle, INVALID_HANDLE_VALUE);
-#else
-                descriptor = std::exchange(other.descriptor, -1);
-#endif
-            }
-            return *this;
-        }
-
-        std::string processKey;
-#if defined(_WIN32)
-        HANDLE handle{INVALID_HANDLE_VALUE};
-#else
-        int descriptor{-1};
-#endif
-
-        void Release() noexcept {
-#if defined(_WIN32)
-            if (handle != INVALID_HANDLE_VALUE) {
-                CloseHandle(handle);
-                handle = INVALID_HANDLE_VALUE;
-            }
-#else
-            if (descriptor >= 0) {
-                struct flock unlock = {};
-                unlock.l_type = F_UNLCK;
-                unlock.l_whence = SEEK_SET;
-                static_cast<void>(fcntl(descriptor, F_SETLK, &unlock));
-                close(descriptor);
-                descriptor = -1;
-            }
-#endif
-            if (!processKey.empty()) {
-                auto &registry = GetProcessLockRegistry();
-                std::lock_guard lock(registry.mutex);
-                registry.locks.erase(processKey);
-                processKey.clear();
-            }
-        }
-
-        ~State() {
-            Release();
-        }
-    };
-
-    ExclusiveFileLock::ExclusiveFileLock() noexcept = default;
-
-    ExclusiveFileLock::ExclusiveFileLock(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
-
-    ExclusiveFileLock::~ExclusiveFileLock() = default;
-    ExclusiveFileLock::ExclusiveFileLock(ExclusiveFileLock &&) noexcept = default;
-    ExclusiveFileLock &ExclusiveFileLock::operator=(ExclusiveFileLock &&) noexcept = default;
-
-    ExclusiveFileLock::operator bool() const noexcept {
-        return state_ != nullptr;
-    }
 
     struct ProductLaunchLease::State {
         State() = default;
@@ -318,52 +199,6 @@ namespace Horo {
         return Result<ProductLaunchLease>::Success(ProductLaunchLease(std::move(state)));
     }
 
-    /** @copydoc DurableFileSystem::TryAcquireExclusive */
-    Result<ExclusiveFileLock> NativeDurableFileSystem::TryAcquireExclusive(const std::filesystem::path &path,
-                                                                           const std::string_view ownerMetadata) {
-        std::error_code error;
-        std::filesystem::create_directories(path.parent_path(), error);
-        if (error)
-            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
-        const std::string key = LockKey(path);
-        {
-            auto &registry = GetProcessLockRegistry();
-            std::lock_guard lock(registry.mutex);
-            if (!registry.locks.emplace(key).second)
-                return Result<ExclusiveFileLock>::Failure(FsError(LockBusy, path));
-        }
-        auto state = std::make_unique<ExclusiveFileLock::State>();
-
-        state->processKey = key;
-#if defined(_WIN32)
-        state->handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (state->handle == INVALID_HANDLE_VALUE)
-            return Result<ExclusiveFileLock>::Failure(FsError(GetLastError() == ERROR_SHARING_VIOLATION ? LockBusy : IoFailed, path));
-        LARGE_INTEGER zero{};
-        SetFilePointerEx(state->handle, zero, nullptr, FILE_BEGIN);
-        SetEndOfFile(state->handle);
-        DWORD written{};
-        WriteFile(state->handle, ownerMetadata.data(), static_cast<DWORD>(ownerMetadata.size()), &written, nullptr);
-        FlushFileBuffers(state->handle);
-#else
-        state->descriptor = open(path.c_str(), O_RDWR | O_CREAT, 0600);
-        if (state->descriptor < 0)
-            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
-
-        struct flock lock = {};
-
-        lock.l_type = F_WRLCK;
-        lock.l_whence = SEEK_SET;
-        if (fcntl(state->descriptor, F_SETLK, &lock) != 0)
-            return Result<ExclusiveFileLock>::Failure(FsError(LockBusy, path));
-        if (ftruncate(state->descriptor, 0) != 0 ||
-            (!ownerMetadata.empty() && write(state->descriptor, ownerMetadata.data(), ownerMetadata.size()) < 0) ||
-            !FlushFileDescriptor(state->descriptor))
-            return Result<ExclusiveFileLock>::Failure(FsError(IoFailed, path));
-#endif
-        return Result<ExclusiveFileLock>::Success(ExclusiveFileLock(std::move(state)));
-    }
-
     /** @copydoc DurableFileSystem::AvailableBytes */
     Result<std::uint64_t> NativeDurableFileSystem::AvailableBytes(const std::filesystem::path &path) const {
         std::error_code error;
@@ -446,6 +281,16 @@ namespace Horo {
 
     /** @copydoc DurableFileSystem::AtomicReplace */
     Result<void> NativeDurableFileSystem::AtomicReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) {
+        AtomicFileReplacementReceipt receipt;
+        return AtomicReplaceTracked(prepared, destination, receipt);
+    }
+
+    /** @copydoc NativeDurableFileSystem::AtomicReplaceTracked */
+    Result<void> NativeDurableFileSystem::AtomicReplaceTracked(const std::filesystem::path &prepared,
+                                                               const std::filesystem::path &destination,
+                                                               AtomicFileReplacementReceipt &receipt) {
+        if (receipt.WasCommitted())
+            return Result<void>::Failure(FsError(IoFailed, destination));
         std::error_code error;
         std::filesystem::create_directories(destination.parent_path(), error);
         if (error)
@@ -454,10 +299,10 @@ namespace Horo {
         if (const BOOL ok = MoveFileExW(prepared.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH); !ok)
             return Result<void>::Failure(FsError(IoFailed, destination));
 #else
-        std::filesystem::rename(prepared, destination, error);
-        if (error)
+        if (::rename(prepared.c_str(), destination.c_str()) != 0)
             return Result<void>::Failure(FsError(IoFailed, destination));
 #endif
+        receipt.RecordCommitted();
         return SyncDirectory(destination.parent_path());
     }
 
