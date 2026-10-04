@@ -2,14 +2,14 @@
 
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "LuaBehaviorMetadata.h"
+#include "LuaReplicationDeclaration.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdlib>
-#include <fstream>
 #include <limits>
 #include <memory>
-#include <nlohmann/json.hpp>
-#include <sstream>
 #include <type_traits>
 
 extern "C" {
@@ -78,81 +78,14 @@ namespace Horo::Gameplay {
             return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, message));
         }
 
-        [[nodiscard]] BehaviorFieldValue ReadDefault(lua_State *state, const int index) {
-            switch (lua_type(state, index)) {
-                case LUA_TBOOLEAN:
-                    return lua_toboolean(state, index) != 0;
-                case LUA_TNUMBER:
-                    if (lua_isinteger(state, index))
-                        return static_cast<std::int64_t>(lua_tointeger(state, index));
-                    return static_cast<double>(lua_tonumber(state, index));
-                case LUA_TSTRING:
-                    return std::string{lua_tostring(state, index)};
-                default:
-                    return std::monostate{};
-            }
-        }
-
-        [[nodiscard]] Result<BehaviorDescriptor> ReadDescriptor(lua_State *state, const BehaviorTypeId &canonicalTypeId) {
-            if (!lua_istable(state, -1))
-                return Result<BehaviorDescriptor>::Failure(
-                    MakeError(GameplayErrors::InvalidBehaviorComponent, "Lua behavior source must return a descriptor table."));
-            BehaviorDescriptor descriptor;
-            descriptor.typeId = canonicalTypeId;
-            lua_getfield(state, -1, "type_id");
-            if (!lua_isnil(state, -1) && (!lua_isstring(state, -1) || canonicalTypeId.Value() != lua_tostring(state, -1)))
-                return Result<BehaviorDescriptor>::Failure(
-                    MakeError(GameplayErrors::InvalidBehaviorComponent, "Lua source type_id does not match its sidecar identity."));
-            lua_pop(state, 1);
-            lua_getfield(state, -1, "display_name");
-            if (!lua_isstring(state, -1))
-                return Result<BehaviorDescriptor>::Failure(
-                    MakeError(GameplayErrors::InvalidBehaviorComponent, "Lua behavior requires display_name."));
-            descriptor.displayName = lua_tostring(state, -1);
-            lua_pop(state, 1);
-            lua_getfield(state, -1, "category");
-            if (lua_isstring(state, -1))
-                descriptor.category = lua_tostring(state, -1);
-            lua_pop(state, 1);
-            lua_getfield(state, -1, "schema_version");
-            if (lua_isinteger(state, -1))
-                descriptor.schemaVersion = static_cast<std::uint32_t>(lua_tointeger(state, -1));
-            lua_pop(state, 1);
-            lua_getfield(state, -1, "allow_multiple");
-            descriptor.allowMultiple = lua_toboolean(state, -1) != 0;
-            lua_pop(state, 1);
-            lua_getfield(state, -1, "fields");
-            if (lua_istable(state, -1)) {
-                const lua_Integer count = luaL_len(state, -1);
-                if (count < 0 || count > static_cast<lua_Integer>(MaximumBehaviorFields))
-                    return Result<BehaviorDescriptor>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
-                for (lua_Integer index = 1; index <= count; ++index) {
-                    lua_geti(state, -1, index);
-                    if (!lua_istable(state, -1))
-                        return Result<BehaviorDescriptor>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
-                    lua_getfield(state, -1, "name");
-                    if (!lua_isstring(state, -1))
-                        return Result<BehaviorDescriptor>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
-                    std::string name = lua_tostring(state, -1);
-                    lua_pop(state, 1);
-                    lua_getfield(state, -1, "default");
-                    BehaviorFieldValue defaultValue = ReadDefault(state, -1);
-                    lua_pop(state, 1);
-                    descriptor.fields.emplace_back(std::move(name), std::move(defaultValue));
-                    lua_pop(state, 1);
-                }
-            }
-            lua_pop(state, 1);
-            descriptor.phases.push_back({BehaviorPhase::Gameplay, canonicalTypeId.Value(), {}, {}, {}});
-            return Result<BehaviorDescriptor>::Success(std::move(descriptor));
-        }
-
         struct ParsedProgram {
             BehaviorDescriptor descriptor;
+            std::optional<GameplayReplicationRegistration> replication;
         };
 
         [[nodiscard]] Result<ParsedProgram> ParseProgram(std::string_view source, const BehaviorTypeId &canonicalTypeId,
-                                                         const std::string &sourceName, const LuaBehaviorLimits limits) {
+                                                         const std::string &sourceName, const LuaBehaviorLimits limits,
+                                                         const Network::ReplicationSchemaId schema, const ModuleId &moduleId) {
             LuaBudget budget{0, limits.maximumMemoryBytes};
             lua_State *state = lua_newstate(BudgetAllocate, &budget);
             if (state == nullptr)
@@ -165,11 +98,16 @@ namespace Horo::Gameplay {
                 lua_close(state);
                 return Result<ParsedProgram>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, message));
             }
-            auto descriptor = ReadDescriptor(state, canonicalTypeId);
-            lua_close(state);
-            if (descriptor.HasError())
+            auto descriptor = Detail::ReadLuaBehaviorDescriptor(state, canonicalTypeId);
+            if (descriptor.HasError()) {
+                lua_close(state);
                 return Result<ParsedProgram>::Failure(descriptor.ErrorValue());
-            return Result<ParsedProgram>::Success({std::move(descriptor).Value()});
+            }
+            auto replication = Detail::ReadLuaReplicationDeclaration(state, canonicalTypeId, schema, moduleId);
+            lua_close(state);
+            if (replication.HasError())
+                return Result<ParsedProgram>::Failure(replication.ErrorValue());
+            return Result<ParsedProgram>::Success({std::move(descriptor).Value(), std::move(replication).Value()});
         }
 
         [[nodiscard]] bool Compatible(const BehaviorDescriptor &active, const BehaviorDescriptor &candidate) {
@@ -184,10 +122,21 @@ namespace Horo::Gameplay {
             }
             return true;
         }
+
+        /** @brief Reloads preserve gameplay ownership, schema major version and simulation safe points. */
+        bool CompatibleReplicationSchedule(const GameplayReplicationRegistration &active,
+                                           const GameplayReplicationRegistration &replacement) {
+            return active.owner == replacement.owner && active.schema.version.major == replacement.schema.version.major &&
+                   active.schedule.capturePhase == replacement.schedule.capturePhase &&
+                   active.schedule.applyPhase == replacement.schedule.applyPhase;
+        }
+
     }  // namespace
 
     struct LuaBehaviorProgram::Impl {
         BehaviorDescriptor descriptor;
+        std::optional<GameplayReplicationRegistration> replication;
+        std::unique_ptr<ReplicationRegistrationRegistry> replicationRegistry;
         std::string source;
         std::string sourceName;
         LuaBehaviorLimits limits;
@@ -304,25 +253,28 @@ namespace Horo::Gameplay {
             return 0;
         }
 
+        /** @brief Pushes one typed scalar field consistently for callback lookup and event delivery. */
+        static void PushFieldValue(lua_State *state, const BehaviorFieldValue &value) {
+            std::visit([state]<typename T>(const T &value) {
+                if constexpr (std::is_same_v<T, bool>)
+                    lua_pushboolean(state, value);
+                else if constexpr (std::is_same_v<T, std::int64_t>)
+                    lua_pushinteger(state, static_cast<lua_Integer>(value));
+                else if constexpr (std::is_same_v<T, double>)
+                    lua_pushnumber(state, value);
+                else if constexpr (std::is_same_v<T, std::string>)
+                    lua_pushlstring(state, value.data(), value.size());
+                else
+                    lua_pushnil(state);
+            }, value);
+        }
+
         static int Field(lua_State *state) {
             const std::string_view name = luaL_checkstring(state, 1);
             for (const BehaviorField &field : Context(state).Fields()) {
                 if (field.name != name)
                     continue;
-                std::visit([state]<typename T>(const T &value) {
-                    if constexpr (std::is_same_v<T, std::monostate>)
-                        lua_pushnil(state);
-                    else if constexpr (std::is_same_v<T, bool>)
-                        lua_pushboolean(state, value);
-                    else if constexpr (std::is_same_v<T, std::int64_t>)
-                        lua_pushinteger(state, static_cast<lua_Integer>(value));
-                    else if constexpr (std::is_same_v<T, double>)
-                        lua_pushnumber(state, value);
-                    else if constexpr (std::is_same_v<T, std::string>)
-                        lua_pushlstring(state, value.data(), value.size());
-                    else
-                        lua_pushnil(state);
-                }, field.value);
+                PushFieldValue(state, field.value);
                 return 1;
             }
             lua_pushnil(state);
@@ -383,6 +335,11 @@ namespace Horo::Gameplay {
             if (vm_.state != nullptr && vm_.revision == program_->Revision())
                 return true;
             Close();
+            return LoadCurrentProgram();
+        }
+
+        /** @brief Recreates the instance VM only after its source generation changes. */
+        [[nodiscard]] bool LoadCurrentProgram() {
             const auto &impl = *program_->impl_;
             vm_.budget = {0, impl.limits.maximumMemoryBytes};
             vm_.state = lua_newstate(BudgetAllocate, &vm_.budget);
@@ -429,18 +386,7 @@ namespace Horo::Gameplay {
             lua_setfield(state, -2, "schema_version");
             lua_newtable(state);
             for (const BehaviorField &field : event.fields) {
-                std::visit([state]<typename T>(const T &value) {
-                    if constexpr (std::is_same_v<T, bool>)
-                        lua_pushboolean(state, value);
-                    else if constexpr (std::is_same_v<T, std::int64_t>)
-                        lua_pushinteger(state, static_cast<lua_Integer>(value));
-                    else if constexpr (std::is_same_v<T, double>)
-                        lua_pushnumber(state, value);
-                    else if constexpr (std::is_same_v<T, std::string>)
-                        lua_pushlstring(state, value.data(), value.size());
-                    else
-                        lua_pushnil(state);
-                }, field.value);
+                PushFieldValue(state, field.value);
                 lua_setfield(state, -2, field.name.c_str());
             }
             lua_setfield(state, -2, "fields");
@@ -487,54 +433,47 @@ namespace Horo::Gameplay {
 
     LuaBehaviorProgram::~LuaBehaviorProgram() = default;
 
-    /** @copydoc LuaBehaviorProgram::Compile */
+    /** @copydoc LuaBehaviorProgram::Compile(std::string,const BehaviorTypeId&,std::string,LuaBehaviorLimits) */
     Result<std::unique_ptr<LuaBehaviorProgram>> LuaBehaviorProgram::Compile(std::string source, const BehaviorTypeId &canonicalTypeId,
                                                                             std::string sourceName, const LuaBehaviorLimits limits) {
+        return Compile(std::move(source), canonicalTypeId, std::move(sourceName), limits, {}, {});
+    }
+
+    /** @copydoc LuaBehaviorProgram::Compile(std::string,const
+     * BehaviorTypeId&,std::string,LuaBehaviorLimits,Network::ReplicationSchemaId,const ModuleId&) */
+    Result<std::unique_ptr<LuaBehaviorProgram>> LuaBehaviorProgram::Compile(std::string source, const BehaviorTypeId &canonicalTypeId,
+                                                                            std::string sourceName, const LuaBehaviorLimits limits,
+                                                                            const Network::ReplicationSchemaId canonicalSchemaId,
+                                                                            const ModuleId &canonicalModuleId) {
         if (source.empty() || source.size() > 2U * 1024U * 1024U || !canonicalTypeId.IsValid() || limits.maximumMemoryBytes < 64U * 1024U ||
             limits.maximumInstructionsPerCallback == 0 ||
             limits.maximumInstructionsPerCallback > static_cast<std::uint32_t>(std::numeric_limits<int>::max()))
-            return Result<std::unique_ptr<LuaBehaviorProgram>>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
-        auto parsed = ParseProgram(source, canonicalTypeId, sourceName, limits);
-        if (parsed.HasError())
-            return Result<std::unique_ptr<LuaBehaviorProgram>>::Failure(parsed.ErrorValue());
+            return Result<std::unique_ptr<LuaBehaviorProgram>>::Failure(
+                MakeError(GameplayErrors::InvalidBehaviorComponent, sourceName + ": Invalid source, identity, or Lua compiler budget."));
+        auto parsed = ParseProgram(source, canonicalTypeId, sourceName, limits, canonicalSchemaId, canonicalModuleId);
+        if (parsed.HasError()) {
+            auto error = parsed.ErrorValue();
+            error.message = sourceName + ": " + error.message;
+            return Result<std::unique_ptr<LuaBehaviorProgram>>::Failure(std::move(error));
+        }
         auto impl = std::make_unique<Impl>();
-        impl->descriptor = std::move(parsed).Value().descriptor;
+        ParsedProgram data = std::move(parsed).Value();
+        impl->descriptor = std::move(data.descriptor);
+        impl->replication = std::move(data.replication);
+        if (impl->replication) {
+            auto registry = Detail::BuildLuaReplicationRegistry(*impl->replication, impl->descriptor);
+            if (registry.HasError()) {
+                auto error = registry.ErrorValue();
+                error.message = sourceName + ": " + error.message;
+                return Result<std::unique_ptr<LuaBehaviorProgram>>::Failure(std::move(error));
+            }
+            impl->replicationRegistry = std::move(registry).Value();
+        }
         impl->source = std::move(source);
         impl->sourceName = std::move(sourceName);
         impl->limits = limits;
         return Result<std::unique_ptr<LuaBehaviorProgram>>::Success(
             std::unique_ptr<LuaBehaviorProgram>{new LuaBehaviorProgram{std::move(impl)}});  // NOSONAR(cpp:S5950)
-    }
-
-    /** @copydoc LuaBehaviorProgram::LoadFiles */
-    Result<std::unique_ptr<LuaBehaviorProgram>> LuaBehaviorProgram::LoadFiles(const std::filesystem::path &sourcePath,
-                                                                              const std::filesystem::path &sidecarPath,
-                                                                              const LuaBehaviorLimits limits) {
-        std::error_code error;
-        if (const auto sourceSize = std::filesystem::file_size(sourcePath, error);
-            error || sourceSize == 0 || sourceSize > 2U * 1024U * 1024U)
-            return Result<std::unique_ptr<LuaBehaviorProgram>>::Failure(
-                MakeError(GameplayErrors::InvalidBehaviorComponent, "Lua behavior source is missing or oversized."));
-        if (const auto sidecarSize = std::filesystem::file_size(sidecarPath, error); error || sidecarSize == 0 || sidecarSize > 64U * 1024U)
-            return Result<std::unique_ptr<LuaBehaviorProgram>>::Failure(
-                MakeError(GameplayErrors::InvalidBehaviorComponent, "Lua behavior sidecar is missing or oversized."));
-        std::ifstream sourceInput(sourcePath, std::ios::binary);
-        std::ifstream sidecarInput(sidecarPath, std::ios::binary);
-        std::ostringstream source;
-        source << sourceInput.rdbuf();
-        try {
-            const nlohmann::json sidecar = nlohmann::json::parse(sidecarInput);
-            if (!sidecar.is_object() || sidecar.value("schemaVersion", 0) != 1 || sidecar.value("runtime", "") != "lua" ||
-                !sidecar.contains("behaviorTypeId") || !sidecar["behaviorTypeId"].is_string())
-                return Result<std::unique_ptr<LuaBehaviorProgram>>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
-            auto typeId = BehaviorTypeId::Parse(sidecar["behaviorTypeId"].get<std::string>());
-            if (typeId.HasError())
-                return Result<std::unique_ptr<LuaBehaviorProgram>>::Failure(typeId.ErrorValue());
-            return Compile(source.str(), std::move(typeId).Value(), sourcePath.string(), limits);
-        } catch (const nlohmann::json::exception &exception) {
-            return Result<std::unique_ptr<LuaBehaviorProgram>>::Failure(
-                MakeError(GameplayErrors::InvalidBehaviorComponent, exception.what()));
-        }
     }
 
     /** @copydoc LuaBehaviorProgram::Descriptor */
@@ -549,7 +488,9 @@ namespace Horo::Gameplay {
 
     /** @copydoc LuaBehaviorProgram::Clone */
     Result<std::unique_ptr<LuaBehaviorProgram>> LuaBehaviorProgram::Clone() const {
-        auto cloned = Compile(impl_->source, impl_->descriptor.typeId, impl_->sourceName, impl_->limits);
+        auto cloned = Compile(impl_->source, impl_->descriptor.typeId, impl_->sourceName, impl_->limits,
+                              impl_->replication ? impl_->replication->schema.id : Network::ReplicationSchemaId{},
+                              impl_->replication ? impl_->replication->schema.owner : ModuleId{});
         if (cloned.HasError())
             return Result<std::unique_ptr<LuaBehaviorProgram>>::Failure(cloned.ErrorValue());
         std::unique_ptr<LuaBehaviorProgram> program = std::move(cloned).Value();
@@ -560,14 +501,56 @@ namespace Horo::Gameplay {
     /** @copydoc LuaBehaviorProgram::ReplaceCompatible */
     Result<void> LuaBehaviorProgram::ReplaceCompatible(std::unique_ptr<LuaBehaviorProgram> candidate) {
         if (!candidate || !Compatible(impl_->descriptor, candidate->impl_->descriptor))
-            return LuaFailure("Lua behavior reload requires a schema-compatible candidate or play-session restart.");
-        impl_->descriptor.displayName = candidate->impl_->descriptor.displayName;
-        impl_->descriptor.category = candidate->impl_->descriptor.category;
+            return LuaFailure((candidate ? candidate->impl_->sourceName : impl_->sourceName) +
+                              ": Lua behavior reload requires a schema-compatible candidate or play-session restart.");
+        if (impl_->replication.has_value() != candidate->impl_->replication.has_value())
+            return LuaFailure(candidate->impl_->sourceName + ": Lua replication reload requires the previous schema declaration.");
+        if (impl_->replication) {
+            const auto &active = *impl_->replication;
+            const auto &replacement = *candidate->impl_->replication;
+            if (!CompatibleReplicationSchedule(active, replacement))
+                return LuaFailure(candidate->impl_->sourceName + ": Lua replication reload changed owner or safe points.");
+            const auto previous = impl_->replicationRegistry->Acquire().Value();
+            if (const auto compatible = Network::BuildReplicationDescriptorReplacement(previous.Descriptors(), {&replacement.schema, 1},
+                                                                                       GameplayReplicationRegistryLimits{}.descriptors);
+                compatible.HasError()) {
+                auto error = compatible.ErrorValue();
+                error.message = candidate->impl_->sourceName + ": " + error.message;
+                return Result<void>::Failure(std::move(error));
+            }
+            const auto codecs = Detail::ValidateLuaReplicationCodecs(active, replacement, candidate->impl_->sourceName);
+            if (codecs.HasError())
+                return codecs;
+        }
+        impl_->replication = std::move(candidate->impl_->replication);
+        impl_->replicationRegistry = std::move(candidate->impl_->replicationRegistry);
+        impl_->descriptor.displayName = std::move(candidate->impl_->descriptor.displayName);
+        impl_->descriptor.category = std::move(candidate->impl_->descriptor.category);
         impl_->source = std::move(candidate->impl_->source);
         impl_->sourceName = std::move(candidate->impl_->sourceName);
         impl_->limits = candidate->impl_->limits;
         ++impl_->revision;
         return Result<void>::Success();
+    }
+
+    /** @copydoc LuaBehaviorProgram::ReplicationDeclaration */
+    const GameplayReplicationRegistration *LuaBehaviorProgram::ReplicationDeclaration() const noexcept {
+        return impl_->replication ? &*impl_->replication : nullptr;
+    }
+
+    /** @copydoc LuaBehaviorProgram::AcquireReplication */
+    Result<GameplayReplicationLease> LuaBehaviorProgram::AcquireReplication() const {
+        return impl_->replicationRegistry
+                   ? impl_->replicationRegistry->Acquire()
+                   : Result<GameplayReplicationLease>::Failure(MakeError(GameplayErrors::InvalidReplicationRegistration));
+    }
+
+    /** @copydoc LuaBehaviorProgram::ReloadFiles */
+    Result<void> LuaBehaviorProgram::ReloadFiles(const std::filesystem::path &sourcePath, const std::filesystem::path &sidecarPath) {
+        auto candidate = LoadFiles(sourcePath, sidecarPath, impl_->limits);
+        if (candidate.HasError())
+            return Result<void>::Failure(candidate.ErrorValue());
+        return ReplaceCompatible(std::move(candidate).Value());
     }
 
     /** @copydoc LuaBehaviorProgram::Revision */
