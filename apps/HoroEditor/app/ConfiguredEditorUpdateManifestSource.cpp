@@ -88,9 +88,8 @@ namespace Horo::Editor {
         };
 
         /** @brief Configures the exact endpoint, verification, bounded callbacks, and no ambient credentials. */
-        [[nodiscard]] bool ConfigureRequest(const CurlHandle &handle, const std::string &url, const EditorUpdateManifestHttpPolicy &policy,
+        [[nodiscard]] bool ConfigureRequest(CURL *curl, const std::string &url, const EditorUpdateManifestHttpPolicy &policy,
                                             ManifestResponse &response) {
-            auto *curl = handle.get();
             return curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_USERAGENT, "horo-update/1") == CURLE_OK &&
                    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https") == CURLE_OK &&
@@ -129,7 +128,7 @@ namespace Horo::Editor {
         // The owning transfer scope enforces TLS 1.3 before any configuration or perform call.
         if (curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK)
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
-        if (!ConfigureRequest(handle, url, policy, response))
+        if (!ConfigureRequest(curl, url, policy, response))
             return Result<std::string>::Failure(MakeError(Release::UpdateTransferErrors::TransportFailed));
         // libcurl copies CAINFO when the option is set.
         if (const std::string caBundle = policy.certificateAuthorityBundle.string();
