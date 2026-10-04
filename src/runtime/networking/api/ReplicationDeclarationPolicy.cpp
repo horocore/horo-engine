@@ -38,7 +38,7 @@ namespace Horo::Network {
                     if (std::ranges::find(expected.tombstonedFields, id) == expected.tombstonedFields.end())
                         result.push_back(id);
             std::ranges::sort(result);
-            result.erase(std::unique(result.begin(), result.end()), result.end());
+            result.erase(std::ranges::unique(result).begin(), result.end());
             return result;
         }
 
@@ -59,8 +59,8 @@ namespace Horo::Network {
                     return;
                 }
                 const auto &expected = declaration.schema;
-                diagnostics.push_back(
-                    {index, expected.id, field, expected.version, version, problem, true, malformed ? ModuleId{} : expected.owner});
+                diagnostics.emplace_back(index, expected.id, field, expected.version, version, problem, true,
+                                         malformed ? ModuleId{} : expected.owner);
             }
         };
 
@@ -110,6 +110,64 @@ namespace Horo::Network {
             for (const auto field : IncompatibleFields(expected, *actual))
                 add(ReplicationDeclarationProblem::FieldIncompatible, field, actual->version);
             return result;
+        }
+
+        /** @brief Requires every descriptor budget independently before any subtraction or descriptor inspection. */
+        [[nodiscard]] bool HasFiniteDescriptorLimits(const ReplicationDescriptorLimits &limits) noexcept {
+            return limits.maximumSchemas != 0 && limits.maximumFieldsPerSchema != 0 && limits.maximumOwnerIdentityBytes != 0 &&
+                   limits.maximumDefaultBytesPerField != 0 && limits.maximumTotalDefaultBytes != 0;
+        }
+
+        /** @brief Validates bounded owner identities without interpreting availability as schema or execution authority. */
+        [[nodiscard]] Result<void> ValidateAvailableModuleOwners(const std::span<const ModuleId> owners,
+                                                                 const std::size_t maximumIdentityBytes) {
+            if (std::ranges::any_of(owners, [&](const ModuleId &owner) {
+                return owner.value.empty() || owner.value.size() > maximumIdentityBytes;
+            }))
+                return Result<void>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
+            return Result<void>::Success();
+        }
+
+        /** @brief Rejects invalid assessment inputs and finite-budget overflow before inspecting declarations. */
+        [[nodiscard]] Result<void> ValidateAssessmentInputs(const std::span<const ReplicationDeclaration> declarations,
+                                                            const ReplicationDescriptorSnapshotPtr &registered,
+                                                            const std::span<const ModuleId> availableModules,
+                                                            const ReplicationDeclarationUse use,
+                                                            const ReplicationDeclarationPolicyLimits &limits) {
+            if (use >= ReplicationDeclarationUse::Count || limits.maximumModules == 0 || limits.maximumDiagnostics == 0 ||
+                !HasFiniteDescriptorLimits(limits.descriptors))
+                return Result<void>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
+            if (declarations.size() > limits.descriptors.maximumSchemas || availableModules.size() > limits.maximumModules ||
+                (registered != nullptr && registered->Schemas().size() > limits.descriptors.maximumSchemas))
+                return Result<void>::Failure(MakeError(NetworkErrors::ReplicationCapacityExceeded));
+            return ValidateAvailableModuleOwners(availableModules, limits.descriptors.maximumOwnerIdentityBytes);
+        }
+
+        /** @brief Charges canonical defaults across valid declarations without exceeding the aggregate budget. */
+        [[nodiscard]] bool AccountDeclarationDefaults(const ReplicationDeclaration &declaration, const std::size_t maximumBytes,
+                                                      std::size_t &totalBytes) noexcept {
+            for (const auto &field : declaration.schema.fields) {
+                const auto bytes = field.canonicalDefault ? field.canonicalDefault->canonicalBytes.size() : 0;
+                if (bytes > maximumBytes - totalBytes)
+                    return false;
+                totalBytes += bytes;
+            }
+            return true;
+        }
+
+        /** @brief Keeps malformed declarations blocking and separates optional omission from inspection-only metadata. */
+        void ClassifyDeclaration(const ReplicationDeclaration &declaration, DeclarationProblems &problems,
+                                 const ReplicationDeclarationUse use, std::vector<ReplicationSchemaId> &admitted,
+                                 std::vector<ReplicationDeclaration> &opaque) {
+            if (problems.malformed)
+                return;
+            if (declaration.requirement == ReplicationDeclarationRequirement::Optional)
+                for (auto &diagnostic : problems.diagnostics)
+                    diagnostic.blocking = false;
+            if (!problems.found)
+                admitted.push_back(declaration.schema.id);
+            else if (use == ReplicationDeclarationUse::EditorInspection)
+                opaque.push_back(declaration);
         }
 
         /** @brief Safe closed text for local diagnostic presentation; no remote input or payload is embedded. */
@@ -197,18 +255,9 @@ namespace Horo::Network {
                                                                            const std::span<const ModuleId> availableModules,
                                                                            const ReplicationDeclarationUse use,
                                                                            const ReplicationDeclarationPolicyLimits &limits) {
-        if (use >= ReplicationDeclarationUse::Count || limits.maximumModules == 0 || limits.maximumDiagnostics == 0 ||
-            limits.descriptors.maximumSchemas == 0 || limits.descriptors.maximumFieldsPerSchema == 0 ||
-            limits.descriptors.maximumOwnerIdentityBytes == 0 || limits.descriptors.maximumDefaultBytesPerField == 0 ||
-            limits.descriptors.maximumTotalDefaultBytes == 0)
-            return Result<ReplicationDeclarationAssessment>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
-        if (declarations.size() > limits.descriptors.maximumSchemas || availableModules.size() > limits.maximumModules ||
-            (registered != nullptr && registered->Schemas().size() > limits.descriptors.maximumSchemas))
-            return Result<ReplicationDeclarationAssessment>::Failure(MakeError(NetworkErrors::ReplicationCapacityExceeded));
-        if (std::ranges::any_of(availableModules, [&](const ModuleId &module) {
-            return module.value.empty() || module.value.size() > limits.descriptors.maximumOwnerIdentityBytes;
-        }))
-            return Result<ReplicationDeclarationAssessment>::Failure(MakeError(NetworkErrors::ReplicationDescriptorInvalid));
+        const auto inputValidation = ValidateAssessmentInputs(declarations, registered, availableModules, use, limits);
+        if (inputValidation.HasError())
+            return Result<ReplicationDeclarationAssessment>::Failure(inputValidation.ErrorValue());
         try {
             ReplicationDeclarationAssessment assessment;
             assessment.use_ = use;
@@ -217,28 +266,18 @@ namespace Horo::Network {
                 const auto &declaration = declarations[index];
                 const auto remaining = limits.maximumDiagnostics - assessment.diagnostics_.size();
                 auto problems = Inspect(declaration, index, registered, availableModules, limits.descriptors, remaining);
-                const auto duplicate = std::ranges::count(declarations, declaration.schema.id, [](const auto &value) {
+                if (const auto duplicate = std::ranges::count(declarations, declaration.schema.id,
+                                                              [](const auto &value) {
                     return value.schema.id;
                 }) > 1;
-                if (duplicate) {
+                    duplicate) {
                     problems.Add(declaration, index, ReplicationDeclarationProblem::DuplicateSchema);
                     problems.malformed = true;
                 }
-                if (!problems.malformed) {
-                    for (const auto &field : declaration.schema.fields) {
-                        const auto bytes = field.canonicalDefault ? field.canonicalDefault->canonicalBytes.size() : 0;
-                        if (bytes > limits.descriptors.maximumTotalDefaultBytes - defaultBytes)
-                            return Result<ReplicationDeclarationAssessment>::Failure(MakeError(NetworkErrors::ReplicationCapacityExceeded));
-                        defaultBytes += bytes;
-                    }
-                    if (declaration.requirement == ReplicationDeclarationRequirement::Optional)
-                        for (auto &diagnostic : problems.diagnostics)
-                            diagnostic.blocking = false;
-                    if (!problems.found)
-                        assessment.admittedSchemas_.push_back(declaration.schema.id);
-                    else if (use == ReplicationDeclarationUse::EditorInspection)
-                        assessment.opaqueDeclarations_.push_back(declaration);
-                }
+                if (!problems.malformed &&
+                    !AccountDeclarationDefaults(declaration, limits.descriptors.maximumTotalDefaultBytes, defaultBytes))
+                    return Result<ReplicationDeclarationAssessment>::Failure(MakeError(NetworkErrors::ReplicationCapacityExceeded));
+                ClassifyDeclaration(declaration, problems, use, assessment.admittedSchemas_, assessment.opaqueDeclarations_);
                 assessment.diagnosticsOverflowed_ |= problems.overflowed;
                 assessment.diagnostics_.insert(assessment.diagnostics_.end(), problems.diagnostics.begin(), problems.diagnostics.end());
             }

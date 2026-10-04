@@ -228,9 +228,15 @@ namespace Horo::Network {
               "[unit][network][replication][declaration-policy]") {
         const std::array declarations{ReplicationDeclaration{Schema()}};
         auto limits = PolicyLimits;
-        limits.descriptors.maximumSchemas = 0;
-        RequireError(AssessReplicationDeclarations(declarations, Registered(), Modules, ReplicationDeclarationUse::Cook, limits),
-                     NetworkErrors::ReplicationDescriptorInvalid);
+        for (const auto budget :
+             {&ReplicationDescriptorLimits::maximumSchemas, &ReplicationDescriptorLimits::maximumFieldsPerSchema,
+              &ReplicationDescriptorLimits::maximumOwnerIdentityBytes, &ReplicationDescriptorLimits::maximumDefaultBytesPerField,
+              &ReplicationDescriptorLimits::maximumTotalDefaultBytes}) {
+            limits = PolicyLimits;
+            limits.descriptors.*budget = 0;
+            RequireError(AssessReplicationDeclarations(declarations, Registered(), Modules, ReplicationDeclarationUse::Cook, limits),
+                         NetworkErrors::ReplicationDescriptorInvalid);
+        }
         limits = PolicyLimits;
         limits.maximumDiagnostics = 0;
         RequireError(AssessReplicationDeclarations(declarations, Registered(), Modules, ReplicationDeclarationUse::Cook, limits),
@@ -241,6 +247,51 @@ namespace Horo::Network {
         limits.maximumModules = 1;
         const std::array<ModuleId, 2> modules{{{"game.replication"}, {"other.module"}}};
         RequireError(AssessReplicationDeclarations(declarations, Registered(), modules, ReplicationDeclarationUse::Cook, limits),
+                     NetworkErrors::ReplicationCapacityExceeded);
+    }
+
+    TEST_CASE("Replication declaration owner inputs preserve capacity and invalid envelope precedence",
+              "[unit][network][replication][declaration-policy]") {
+        const std::array declarations{ReplicationDeclaration{Schema()}};
+        auto owners = Modules;
+        for (const auto &identity : {std::string{}, std::string(PolicyLimits.descriptors.maximumOwnerIdentityBytes + 1, 'x')}) {
+            owners.front().value = identity;
+            RequireError(AssessReplicationDeclarations(declarations, Registered(), owners, ReplicationDeclarationUse::Cook, PolicyLimits),
+                         NetworkErrors::ReplicationDescriptorInvalid);
+        }
+        const std::array<ModuleId, 2> mixedOwners{Modules.front(), ModuleId{}};
+        auto limits = PolicyLimits;
+        limits.maximumModules = 1;
+        RequireError(AssessReplicationDeclarations(declarations, Registered(), mixedOwners, ReplicationDeclarationUse::Cook, limits),
+                     NetworkErrors::ReplicationCapacityExceeded);
+        limits.descriptors.maximumSchemas = 0;
+        RequireError(AssessReplicationDeclarations(declarations, Registered(), mixedOwners, ReplicationDeclarationUse::Cook, limits),
+                     NetworkErrors::ReplicationDescriptorInvalid);
+        const std::array<ModuleId, 2> boundedOwners{Modules.front(),
+                                                    ModuleId{std::string(PolicyLimits.descriptors.maximumOwnerIdentityBytes, 'x')}};
+        const auto bounded =
+            AssessReplicationDeclarations(declarations, Registered(), boundedOwners, ReplicationDeclarationUse::Cook, PolicyLimits);
+        REQUIRE(bounded.HasValue());
+        REQUIRE(bounded.Value().Admitted());
+    }
+
+    TEST_CASE("Optional unresolved declarations still consume the aggregate canonical default budget",
+              "[unit][network][replication][declaration-policy]") {
+        auto field = Field();
+        field.requirement = ReplicationFieldRequirement::Optional;
+        field.limits.maximumEncodedBytes = 16;
+        field.canonicalDefault = ReplicationFieldDefault{std::vector<std::byte>(16, std::byte{42})};
+        const std::array declarations{ReplicationDeclaration{Schema(10, {field}), ReplicationDeclarationRequirement::Optional},
+                                      ReplicationDeclaration{Schema(20, {field}), ReplicationDeclarationRequirement::Optional},
+                                      ReplicationDeclaration{Schema(30, {field}), ReplicationDeclarationRequirement::Optional}};
+        const auto exact =
+            AssessReplicationDeclarations(std::span{declarations}.first(2), {}, Modules, ReplicationDeclarationUse::Cook, PolicyLimits);
+        REQUIRE(exact.HasValue());
+        REQUIRE(exact.Value().Admitted());
+        REQUIRE(exact.Value().AdmittedSchemas().empty());
+        REQUIRE(exact.Value().Diagnostics().size() == 2);
+        REQUIRE(std::ranges::none_of(exact.Value().Diagnostics(), &ReplicationDeclarationDiagnostic::blocking));
+        RequireError(AssessReplicationDeclarations(declarations, {}, Modules, ReplicationDeclarationUse::Cook, PolicyLimits),
                      NetworkErrors::ReplicationCapacityExceeded);
     }
 

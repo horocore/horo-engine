@@ -74,6 +74,34 @@ namespace Horo::Network {
         REQUIRE(settings.ReplicationInventory().declarations.size() == 2);
     }
 
+    TEST_CASE("Network inventory canonical defaults preserve every byte through lowercase hex", "[unit][network][settings][inventory]") {
+        auto input = DeclaredProject();
+        auto &field = input.replication.declarations.front().schema.fields.front();
+        field.requirement = ReplicationFieldRequirement::Optional;
+        field.limits.maximumEncodedBytes = 256;
+        field.canonicalDefault = ReplicationFieldDefault{};
+        std::string expectedHex;
+        constexpr std::string_view digits = "0123456789abcdef";
+        for (std::size_t high = 0; high < digits.size(); ++high) {
+            for (std::size_t low = 0; low < digits.size(); ++low) {
+                field.canonicalDefault->canonicalBytes.push_back(static_cast<std::byte>(high * digits.size() + low));
+                expectedHex.push_back(digits[high]);
+                expectedHex.push_back(digits[low]);
+            }
+        }
+        const auto created = NetworkProjectSettings::Create(input);
+        REQUIRE(created.HasValue());
+        const auto encoded = SerializeNetworkProjectSettings(created.Value());
+        const auto document = nlohmann::json::parse(encoded);
+        REQUIRE(document["replication"]["declarations"][0]["schema"]["fields"][0]["canonicalDefault"] == expectedHex);
+        const auto parsed = ParseNetworkProjectSettings(encoded);
+        REQUIRE(parsed.HasValue());
+        REQUIRE(parsed.Value().replication.declarations.front().schema.fields.front().canonicalDefault == field.canonicalDefault);
+        const auto roundTrip = NetworkProjectSettings::Create(parsed.Value());
+        REQUIRE(roundTrip.HasValue());
+        REQUIRE(roundTrip.Value().Fingerprint() == created.Value().Fingerprint());
+    }
+
     TEST_CASE("Network inventory fingerprints include requirements ownership versions fields and tombstones",
               "[unit][network][settings][inventory]") {
         auto input = DeclaredProject();
