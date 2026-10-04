@@ -1,0 +1,41 @@
+local retained
+local function stale_or_unpublished(value, err)
+    assert(value == nil)
+    assert(err.code == "physics.query.snapshot_stale" or err.code == "physics.capability.unavailable")
+end
+return horo.behavior {
+    type_id = "game.tests.physics_context",
+    display_name = "Physics Context Contract",
+    category = "Tests",
+    schema_version = 1,
+    fields = {},
+    on_create = function(ctx)
+        local capability, err = ctx.physics.acquire()
+        if capability then
+            retained = capability
+            local world, generation = capability:identity()
+            assert(world > 0 and generation > 0)
+        else
+            assert(err.code == "gameplay.physics.permission_denied" or err.code == "gameplay.physics.unavailable")
+        end
+    end,
+    on_fixed_update = function(ctx, dt)
+        if retained then
+            -- Deliberately stale publication evidence proves all three operations delegate
+            -- to the existing Physics client, including unpublished production worlds.
+            stale_or_unpublished(retained:submit(999, ctx.physics.scene_generation,
+                "12345678-1234-4234-8234-123456789abc", 0, 0, 0, 0, 0, 1, 10, 1))
+            stale_or_unpublished(retained:submit_batch(999, ctx.physics.scene_generation,
+                "12345678-1234-4234-8234-123456789abc", 0, 0, 0, 0, 0, 1, 10, 1))
+            stale_or_unpublished(retained:read_events(999, 999, 1))
+        end
+    end,
+    on_destroy = function(ctx)
+        local capability, err = ctx.physics.acquire()
+        assert(capability == nil and err.code == "physics.capability.revoked")
+        if retained then
+            local records, retired = retained:read_events(1, 1, 1)
+            assert(records == nil and retired.code == "physics.capability.revoked")
+        end
+    end
+}
