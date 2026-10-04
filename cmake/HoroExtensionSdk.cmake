@@ -1,6 +1,15 @@
 include_guard(GLOBAL)
 
 function(horo_configure_extension_sdk)
+    # Source-free authoring artifacts identify a snapshot, not merely the
+    # repeatedly used development SDK version. Standalone packaging fixtures
+    # deliberately have no engine checkout/revision authority.
+    if(NOT DEFINED HORO_ENGINE_VERSION)
+        set(HORO_ENGINE_VERSION "${HORO_EXTENSION_SDK_VERSION}")
+    endif()
+    if(NOT DEFINED HORO_SOURCE_REVISION)
+        set(HORO_SOURCE_REVISION "unknown")
+    endif()
     set(package_parent "${CMAKE_BINARY_DIR}/sdk/extensions")
     cmake_path(NORMAL_PATH package_parent)
     set(package_root "${package_parent}/${HORO_EXTENSION_SDK_VERSION}")
@@ -65,6 +74,12 @@ function(horo_configure_extension_sdk)
         "${PROJECT_SOURCE_DIR}/sdk/ExtensionSdkREADME.md.in"
         "${package_root}/README.md"
         @ONLY)
+    foreach(artifact IN ITEMS CompatibilityMatrix.json MigrationGuide.md)
+        configure_file(
+            "${PROJECT_SOURCE_DIR}/sdk/${artifact}.in"
+            "${package_root}/share/horo/extension-sdk/${artifact}"
+            @ONLY)
+    endforeach()
 
     configure_package_config_file(
         "${PROJECT_SOURCE_DIR}/sdk/cmake/HoroEngineExtensionSdkConfig.cmake.in"
