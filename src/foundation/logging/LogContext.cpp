@@ -36,7 +36,7 @@ namespace Horo::Log {
         std::size_t PushContextFrame(std::vector<MdcField> fields, const bool isolated = false) {
             auto &state = MdcState();
             const std::size_t index = state.frames.size();
-            state.frames.push_back({std::move(fields), isolated});
+            state.frames.emplace_back(std::move(fields), isolated);
             return index;
         }
 

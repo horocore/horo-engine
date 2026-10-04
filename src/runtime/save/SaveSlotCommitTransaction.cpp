@@ -168,16 +168,11 @@ namespace Horo::Runtime {
                 return RecoverUnpublished(store, journal, observation);
             return RecoverPublishing(store, std::move(journal), observation);
         }
-    }  // namespace
 
-    /** @copydoc SaveSlotCommitTransaction::SaveSlotCommitTransaction */
-    SaveSlotCommitTransaction::SaveSlotCommitTransaction(ISaveSlotCommitStore &store) noexcept : store_(&store) {}
-
-    /** @copydoc SaveSlotCommitTransaction::Execute */
-    Result<SaveSlotCommitResult> SaveSlotCommitTransaction::Execute(OperationId operation, SaveStorageAddress address,
-                                                                    std::optional<SaveSlotCatalogEntry> previous,
-                                                                    SaveSlotCatalogEntry candidate, ImmutableSaveArchive archive) {
-        return ObserveSaveStage(SaveTelemetryStage::Commit, operation, [&]() -> Result<SaveSlotCommitResult> {
+        /** @brief Publishes one leased slot generation with durable recovery evidence. */
+        Result<SaveSlotCommitResult> ExecuteCommit(ISaveSlotCommitStore &store, OperationId operation, SaveStorageAddress address,
+                                                   std::optional<SaveSlotCatalogEntry> previous, SaveSlotCatalogEntry candidate,
+                                                   ImmutableSaveArchive archive) {
             SaveSlotCommitJournal journal{.operation = operation,
                                           .address = std::move(address),
                                           .previous = std::move(previous),
@@ -188,33 +183,31 @@ namespace Horo::Runtime {
             if (!archive.bytes || archive.bytes->empty())
                 return Result<SaveSlotCommitResult>::Failure(Invalid("Slot commit requires a non-empty owned finalized archive."));
 
-            auto lease = store_->AcquireLease(journal.address);
+            auto lease = store.AcquireLease(journal.address);
             if (lease.HasError())
                 return Result<SaveSlotCommitResult>::Failure(lease.ErrorValue());
             if (!lease.Value())
                 return Result<SaveSlotCommitResult>::Failure(Invalid("The store returned an empty operation lease."));
-            if (auto admitted = ValidateAdmission(*store_, journal); admitted.HasError())
+            if (auto admitted = ValidateAdmission(store, journal); admitted.HasError())
                 return Result<SaveSlotCommitResult>::Failure(admitted.ErrorValue());
-            if (auto prepared = PrepareForPublishing(*store_, journal, archive); prepared.HasError())
+            if (auto prepared = PrepareForPublishing(store, journal, archive); prepared.HasError())
                 return Result<SaveSlotCommitResult>::Failure(prepared.ErrorValue());
-            if (auto published = Publish(*store_, journal); published.HasError())
+            if (auto published = Publish(store, journal); published.HasError())
                 return Result<SaveSlotCommitResult>::Failure(published.ErrorValue());
-            const auto removed = store_->RemoveJournal(journal);
+            const auto removed = store.RemoveJournal(journal);
             return Result<SaveSlotCommitResult>::Success({.cleanupDeferred = removed.HasError()});
-        }, {.bytes = archive.bytes ? archive.bytes->size() : 0U});
-    }
+        }
 
-    /** @copydoc SaveSlotCommitTransaction::Recover */
-    Result<SaveSlotRecoveryAction> SaveSlotCommitTransaction::Recover(const SaveStorageAddress &address) {
-        return ObserveSaveStage(SaveTelemetryStage::Recovery, 0, [&]() -> Result<SaveSlotRecoveryAction> {
+        /** @brief Recovers one leased slot from durable publication evidence. */
+        Result<SaveSlotRecoveryAction> RecoverSlot(ISaveSlotCommitStore &store, const SaveStorageAddress &address) {
             if (!address.namespaceAccess.expected.IsValid() || address.namespaceAccess.expectedRevision == 0 || !address.slot.IsValid())
                 return Result<SaveSlotRecoveryAction>::Failure(Invalid("Slot recovery requires a valid namespace binding and slot."));
-            auto lease = store_->AcquireLease(address);
+            auto lease = store.AcquireLease(address);
             if (lease.HasError())
                 return Result<SaveSlotRecoveryAction>::Failure(lease.ErrorValue());
             if (!lease.Value())
                 return Result<SaveSlotRecoveryAction>::Failure(Invalid("The store returned an empty operation lease."));
-            const auto loaded = store_->LoadJournal(address);
+            const auto loaded = store.LoadJournal(address);
             if (loaded.HasError())
                 return Result<SaveSlotRecoveryAction>::Failure(
                     RecoveryFailure(loaded.ErrorValue(), "Slot recovery journal could not be read."));
@@ -229,11 +222,30 @@ namespace Horo::Runtime {
                 return Result<SaveSlotRecoveryAction>::Failure(
                     Invalid("Loaded slot recovery journal does not match the requested address."));
 
-            const auto observed = store_->Observe(journal);
+            const auto observed = store.Observe(journal);
             if (observed.HasError())
                 return Result<SaveSlotRecoveryAction>::Failure(
                     RecoveryFailure(observed.ErrorValue(), "Slot publication evidence could not be inspected."));
-            return RecoverObserved(*store_, std::move(journal), observed.Value());
+            return RecoverObserved(store, std::move(journal), observed.Value());
+        }
+    }  // namespace
+
+    /** @copydoc SaveSlotCommitTransaction::SaveSlotCommitTransaction */
+    SaveSlotCommitTransaction::SaveSlotCommitTransaction(ISaveSlotCommitStore &store) noexcept : store_(&store) {}
+
+    /** @copydoc SaveSlotCommitTransaction::Execute */
+    Result<SaveSlotCommitResult> SaveSlotCommitTransaction::Execute(OperationId operation, SaveStorageAddress address,
+                                                                    std::optional<SaveSlotCatalogEntry> previous,
+                                                                    SaveSlotCatalogEntry candidate, ImmutableSaveArchive archive) {
+        return ObserveSaveStage(SaveTelemetryStage::Commit, operation, [this, operation, &address, &previous, &candidate, &archive] {
+            return ExecuteCommit(*store_, operation, std::move(address), std::move(previous), std::move(candidate), archive);
+        }, {.bytes = archive.bytes ? archive.bytes->size() : 0U});
+    }
+
+    /** @copydoc SaveSlotCommitTransaction::Recover */
+    Result<SaveSlotRecoveryAction> SaveSlotCommitTransaction::Recover(const SaveStorageAddress &address) {
+        return ObserveSaveStage(SaveTelemetryStage::Recovery, 0, [this, &address] {
+            return RecoverSlot(*store_, address);
         }, {});
     }
 }  // namespace Horo::Runtime

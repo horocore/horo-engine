@@ -86,7 +86,7 @@ namespace Horo::Application {
 
         /** @brief Appends bounded host-registered summaries from retained log entries. */
         [[nodiscard]] Result<void> AppendConfiguredSummaries(Diagnostics::DiagnosticBundleRequest &bundle,
-                                                             const std::vector<HostDiagnosticSummaryProvider> &providers) {
+                                                             const std::span<const HostDiagnosticSummaryProvider> providers) {
             std::vector<std::filesystem::path> retainedLogs;
             for (const auto &entry : bundle.entries) {
                 if (entry.archivePath.parent_path() == "logs")

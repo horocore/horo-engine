@@ -342,7 +342,7 @@ namespace Horo::Runtime {
     /** @copydoc SaveOperationArbiter::Admit */
     Result<SaveArbiterAdmission> SaveOperationArbiter::Admit(SaveArbiterRequest request) {
         SaveStageObservation observation{SaveTelemetryStage::Queue, request.operation.operation};
-        auto admitted = [&]() -> Result<SaveArbiterAdmission> {
+        auto admitted = [this, &request] {
             if (!IsRequestValid(request) || Find(*state_, request.operation.operation) != state_->records.end())
                 return Result<SaveArbiterAdmission>::Failure(
                     ArbiterError(SaveErrors::ArbiterInvalid, "The arbiter request is malformed or reuses an operation identity."));

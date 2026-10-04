@@ -1539,8 +1539,9 @@ Failed stages use common logging WARN delivery, including its bounded emergency
 reporting when the normal queue rejects a record. Save never adds producer retries,
 flushes or drain waits. Low-severity logs, spans and metrics retain the Foundation
 best-effort/drop accounting contract. Operation terminal records are attempted
-once after the lifecycle lock is released,
-including cancellation, abandonment and shutdown. They do not invent a duration
+once after the lifecycle lock is released, including cancellation, abandonment
+and shutdown. Optional observation exceptions use the common bounded emergency
+logger with fixed text and no private context. They do not invent a duration
 for work that never ran. Metrics use only stage/outcome dimensions. Correlation
 uses safe numeric operation and parent IDs in an isolated diagnostic snapshot;
 paths, display names, accounts, payloads and raw provider/error text are excluded.

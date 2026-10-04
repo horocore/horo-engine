@@ -386,11 +386,10 @@ namespace Horo::Runtime {
                     MigrationError(SaveErrors::MigrationPlanInvalid, "Migration plan does not bind to its supplied source or limits."));
             return ValidateState(source, limits);
         }
-    }  // namespace
 
-    Result<SaveMigrationCandidate> SaveMigrationExecutor::Migrate(const SaveMigrationSource &source, const SaveMigrationPlan &plan,
-                                                                  const SaveMigrationLimits &limits) {
-        return ObserveSaveStage(SaveTelemetryStage::Migrate, 0, [&]() -> Result<SaveMigrationCandidate> {
+        /** @brief Executes and validates a bounded migration candidate without publishing it. */
+        Result<SaveMigrationCandidate> MigrateCandidate(const SaveMigrationSource &source, const SaveMigrationPlan &plan,
+                                                        const SaveMigrationLimits &limits) {
             try {
                 if (const auto binding = ValidatePlanBinding(source, plan, limits); binding.HasError())
                     return Result<SaveMigrationCandidate>::Failure(binding.ErrorValue());
@@ -413,6 +412,13 @@ namespace Horo::Runtime {
             } catch (const std::bad_alloc &) {
                 return Result<SaveMigrationCandidate>::Failure(MigrationError(SaveErrors::MigrationAllocationFailed));
             }
+        }
+    }  // namespace
+
+    Result<SaveMigrationCandidate> SaveMigrationExecutor::Migrate(const SaveMigrationSource &source, const SaveMigrationPlan &plan,
+                                                                  const SaveMigrationLimits &limits) {
+        return ObserveSaveStage(SaveTelemetryStage::Migrate, 0, [&source, &plan, &limits] {
+            return MigrateCandidate(source, plan, limits);
         }, {});
     }
 }  // namespace Horo::Runtime

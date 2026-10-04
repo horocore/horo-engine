@@ -7,15 +7,23 @@
 #include <cstdlib>
 #include <new>
 
-namespace {
-    thread_local bool g_trackAllocations{};
-    thread_local std::size_t g_trackedAllocations{};
+namespace Horo::Tests::BenchmarkAllocationProbe {
+    /** @brief Calling-thread measurement state; no allocation is needed to start or reset a probe. */
+    struct State final {
+        bool trackAllocations{};
+        std::size_t trackedAllocations{};
+    };
 
-}  // namespace
+    /** @brief Returns the calling thread's probe state. @return Thread-local allocation measurement. */
+    inline State &AllocationState() noexcept {
+        thread_local State state;
+        return state;
+    }
+}  // namespace Horo::Tests::BenchmarkAllocationProbe
 
 void *operator new(const std::size_t size) {
-    if (g_trackAllocations)
-        ++g_trackedAllocations;
+    if (auto &state = Horo::Tests::BenchmarkAllocationProbe::AllocationState(); state.trackAllocations)
+        ++state.trackedAllocations;
     if (void *memory = std::malloc(size); memory != nullptr)
         return memory;
     throw std::bad_alloc{};

@@ -277,36 +277,43 @@ namespace Horo::Runtime {
     Result<SaveStorageOperation> SaveStorageAdapter::Submit(const OperationId operation, SaveStorageRequest request,
                                                             CancellationToken cancellation,
                                                             const std::optional<std::chrono::steady_clock::time_point> deadline) const {
-        return ObserveSaveStage(SaveTelemetryStage::Queue, operation, [&]() -> Result<SaveStorageOperation> {
-            if (!jobs_ || !provider_ || !ValidLimits(limits_) || !ValidRequest(request, limits_))
-                return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
-            if (!provider_->Capabilities().Supports(request.kind))
-                return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::StorageCapabilityUnsupported));
-            try {
-                auto controller = CreateSaveOperation({.operation = operation,
-                                                       .kind = LifecycleKind(request.kind),
-                                                       .maximumCompletionCallbacks = 1,
-                                                       .deadline = deadline,
-                                                       .parentCancellation = cancellation});
-                if (controller.HasError())
-                    return Result<SaveStorageOperation>::Failure(controller.ErrorValue());
-                auto producer = std::make_shared<SaveOperationController>(std::move(controller).Value());
-                auto state = std::make_shared<SaveStorageDetail::SharedOperation>();
-                state->SetOperation(producer->Handle());
-                state->SetCancellation(CancellationSource(cancellation));
-                state->SetScheduler(*jobs_);
-                auto submitted = jobs_->SubmitResult({.parentCancellation = state->Cancellation(), .operationId = operation},
-                                                     [state, provider = provider_, request = std::move(request), limits = limits_, producer,
-                                                      operation](const CancellationToken &token) mutable {
-                    return Execute(state, provider, request, limits, producer, token, operation);
-                });
-                if (submitted.HasError())
-                    return Result<SaveStorageOperation>::Failure(submitted.ErrorValue());
-                state->SetJob(submitted.Value().Id());
-                return Result<SaveStorageOperation>::Success(SaveStorageOperation{std::move(state)});
-            } catch (const std::bad_alloc &) {
-                return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::StorageAllocationFailed));
-            }
+        return ObserveSaveStage(SaveTelemetryStage::Queue, operation, [this, operation, &request, &cancellation, deadline] {
+            return SubmitRequest(operation, std::move(request), cancellation, deadline);
         }, {});
+    }
+
+    /** @copydoc SaveStorageAdapter::SubmitRequest */
+    Result<SaveStorageOperation> SaveStorageAdapter::SubmitRequest(
+        const OperationId operation, SaveStorageRequest request, CancellationToken cancellation,
+        const std::optional<std::chrono::steady_clock::time_point> deadline) const {
+        if (!jobs_ || !provider_ || !ValidLimits(limits_) || !ValidRequest(request, limits_))
+            return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::StorageOperationInvalid));
+        if (!provider_->Capabilities().Supports(request.kind))
+            return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::StorageCapabilityUnsupported));
+        try {
+            auto controller = CreateSaveOperation({.operation = operation,
+                                                   .kind = LifecycleKind(request.kind),
+                                                   .maximumCompletionCallbacks = 1,
+                                                   .deadline = deadline,
+                                                   .parentCancellation = cancellation});
+            if (controller.HasError())
+                return Result<SaveStorageOperation>::Failure(controller.ErrorValue());
+            auto producer = std::make_shared<SaveOperationController>(std::move(controller).Value());
+            auto state = std::make_shared<SaveStorageDetail::SharedOperation>();
+            state->SetOperation(producer->Handle());
+            state->SetCancellation(CancellationSource(cancellation));
+            state->SetScheduler(*jobs_);
+            auto submitted = jobs_->SubmitResult({.parentCancellation = state->Cancellation(), .operationId = operation},
+                                                 [state, provider = provider_, request = std::move(request), limits = limits_, producer,
+                                                  operation](const CancellationToken &token) mutable {
+                return Execute(state, provider, request, limits, producer, token, operation);
+            });
+            if (submitted.HasError())
+                return Result<SaveStorageOperation>::Failure(submitted.ErrorValue());
+            state->SetJob(submitted.Value().Id());
+            return Result<SaveStorageOperation>::Success(SaveStorageOperation{std::move(state)});
+        } catch (const std::bad_alloc &) {
+            return Result<SaveStorageOperation>::Failure(MakeError(SaveErrors::StorageAllocationFailed));
+        }
     }
 }  // namespace Horo::Runtime

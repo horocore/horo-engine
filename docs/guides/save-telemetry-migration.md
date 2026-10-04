@@ -29,3 +29,18 @@ Do not use counters, logs or summaries to decide publication, retries or success
 Keep existing typed Results and operation snapshots as authority. Sync hooks are
 contracts for the future application/profile coordinator, not proof of a live
 cloud transfer implementation. No archive format or migration schema changes.
+
+## Sonar correction compatibility
+
+`SaveStageObservation::Complete`, `Fail` and `ObserveSaveStage` borrow scalar
+`SaveTelemetryEvidence` by const reference for the duration of the synchronous
+call. Existing value, designated-initializer and default-argument callers remain
+source compatible; recompile consumers for the updated member signatures.
+`Fail` projects its failure category into a local copy, preserving caller evidence.
+The registration constructor uses a private explicit construction key so the
+factory can use `std::make_unique`; hosts still create owners only through `Create`.
+The Runtime header ownership and dependency graph remain unchanged.
+
+Exceptions during optional observation are reported through the existing bounded,
+allocation-free emergency logger using fixed text only. No exception text or
+ambient private context is included, and the authoritative Save result is retained.

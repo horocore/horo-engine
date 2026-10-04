@@ -1309,8 +1309,9 @@ TEST_CASE("Diagnostic bundle redaction recovers a trailing partial record and re
           "[foundation][observability][bundle][privacy][recovery]") {
     TemporaryDirectory temporary;
     const auto recoveredLog = temporary.path / "recovered.jsonl";
-    std::ofstream(recoveredLog) << R"({"message":"failed at /Users/example/project","auth.token":"secret"})" << '\n'
-                                << R"({"message":"interrupted)";
+    std::string partialRecord = R"({"message":"interrupted"})";
+    partialRecord.resize(partialRecord.size() - 2);
+    std::ofstream(recoveredLog) << R"({"message":"failed at /Users/example/project","auth.token":"secret"})" << '\n' << partialRecord;
 
     const auto recovered = Horo::Diagnostics::GenerateDiagnosticBundle({
         .outputPath = temporary.path / "recovered.zip",

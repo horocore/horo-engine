@@ -63,7 +63,19 @@ namespace Horo::Runtime {
      * Producer threads borrow immutable bound handles; registration never selects sinks or owns an event store.
      */
     class SaveTelemetryRegistration final {
+        /** @brief Factory-only key keeping inert allocation inaccessible to hosts. */
+        struct ConstructionKey final {
+            explicit ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Creates inert storage with a factory-only key; only Create can supply the key.
+         * @param key Unforgeable admission key owned by the registration factory.
+         */
+        explicit SaveTelemetryRegistration(ConstructionKey key) noexcept {
+            static_cast<void>(key);
+        }
+
         /** @brief Registers fixed descriptors and bounded stage/outcome series.
          * @return Owned registration or a typed invalid/allocation error. Disabled builds return an inert owner.
          */
@@ -74,7 +86,6 @@ namespace Horo::Runtime {
         SaveTelemetryRegistration &operator=(const SaveTelemetryRegistration &) = delete;
 
     private:
-        SaveTelemetryRegistration() = default;
         friend class SaveStageObservation;
         static constexpr std::size_t Stages = static_cast<std::size_t>(SaveTelemetryStage::Count);
         static constexpr std::size_t Outcomes = static_cast<std::size_t>(SaveTelemetryOutcome::Count);
@@ -116,12 +127,12 @@ namespace Horo::Runtime {
          * @param outcome Closed stage outcome, never parsed to determine application success.
          * @param evidence Allowlisted scalar evidence; no private data is admitted.
          */
-        void Complete(SaveTelemetryOutcome outcome, SaveTelemetryEvidence evidence = {}) noexcept;
+        void Complete(SaveTelemetryOutcome outcome, const SaveTelemetryEvidence &evidence = {}) noexcept;
         /** @brief Projects only the canonical typed failure category, discarding all private error text.
          * @param error Authoritative error retained unchanged by the caller.
          * @param evidence Allowlisted scalar stage observations.
          */
-        void Fail(const Error &error, SaveTelemetryEvidence evidence = {}) noexcept;
+        void Fail(const Error &error, const SaveTelemetryEvidence &evidence = {}) noexcept;
 
     private:
         const SaveTelemetryRegistration *registration_{};
@@ -142,7 +153,7 @@ namespace Horo::Runtime {
      */
     template <typename Work>
     [[nodiscard]] auto ObserveSaveStage(const SaveTelemetryStage stage, const std::uint64_t operation, Work &&work,
-                                        const SaveTelemetryEvidence evidence = {}) {
+                                        const SaveTelemetryEvidence &evidence = {}) {
         SaveStageObservation observation{stage, operation};
         auto result = std::forward<Work>(work)();
         if (result.HasError())

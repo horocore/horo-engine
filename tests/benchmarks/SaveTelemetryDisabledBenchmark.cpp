@@ -6,22 +6,29 @@
 #include <iostream>
 #include <memory>
 
+using Horo::Tests::BenchmarkAllocationProbe::AllocationState;
+
 namespace {
     struct Measurement {
-        std::size_t completed{}, allocations{};
+        std::size_t completed{};
+        std::size_t allocations{};
         std::int64_t nanoseconds{};
     };
 
     class PolicySink final : public Horo::Telemetry::ISink {
-        void Export(const Horo::Telemetry::Record &, const Horo::Telemetry::InstrumentDescriptor *) override {}
+        void Export(const Horo::Telemetry::Record &, const Horo::Telemetry::InstrumentDescriptor *) override {
+            // This fixture deliberately discards records; it measures producer behavior only.
+        }
 
-        void Flush() override {}
+        void Flush() override {
+            // This fixture retains no records to flush.
+        }
     };
 
     Measurement MeasureStages(const std::size_t iterations) {
         Measurement result;
-        g_trackedAllocations = 0;
-        g_trackAllocations = true;
+        AllocationState().trackedAllocations = 0;
+        AllocationState().trackAllocations = true;
         const auto start = std::chrono::steady_clock::now();
         for (std::size_t iteration = 0; iteration < iterations; ++iteration) {
             const auto work = Horo::Runtime::ObserveSaveStage(Horo::Runtime::SaveTelemetryStage::Capture, 1, [] {
@@ -30,8 +37,8 @@ namespace {
             result.completed += work.HasValue() ? 1U : 0U;
         }
         result.nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
-        g_trackAllocations = false;
-        result.allocations = g_trackedAllocations;
+        AllocationState().trackAllocations = false;
+        result.allocations = AllocationState().trackedAllocations;
         return result;
     }
 }  // namespace
@@ -46,15 +53,15 @@ int main() {
     Horo::Telemetry::ScopedOperationContext operation{Horo::Telemetry::OperationContext{.operationId = 41, .parentOperationId = 40}};
     Horo::Log::LogContext ambient{"account.id", std::string(4096, 'a'), "payload.özel", std::string(4096, 'b')};
     std::size_t identityFailures{};
-    g_trackedAllocations = 0;
-    g_trackAllocations = true;
+    AllocationState().trackedAllocations = 0;
+    AllocationState().trackAllocations = true;
     for (std::size_t iteration = 0; iteration < iterations; ++iteration) {
         const auto identity = Horo::Telemetry::CaptureOperationIdentity();
         identityFailures +=
             identity.operationId != 41 || identity.parentOperationId != 40 || !identity.diagnosticContext.Fields().empty() ? 1U : 0U;
     }
-    g_trackAllocations = false;
-    const auto identityAllocations = g_trackedAllocations;
+    AllocationState().trackAllocations = false;
+    const auto identityAllocations = AllocationState().trackedAllocations;
     const auto disabled = MeasureStages(iterations);
     registration.reset();
     if (!Horo::Telemetry::Runtime::Initialize({.subsystemPrefixes = {"other"},

@@ -2205,7 +2205,8 @@ add_executable(HoroRuntimeSaveIdentityTests
 )
 target_compile_features(HoroRuntimeSaveIdentityTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveIdentityTests PRIVATE HoroEngine::Runtime)
-add_executable(HoroRuntimeSaveTelemetryTests unit/runtime/save/SaveTelemetryTests.cpp)
+add_executable(HoroRuntimeSaveTelemetryTests unit/runtime/save/SaveTelemetryTests.cpp support/AllocationProbe.cpp)
+target_include_directories(HoroRuntimeSaveTelemetryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(HoroRuntimeSaveTelemetryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveTelemetryTests PRIVATE HoroEngine::Runtime HoroEngine::Application HoroEngine::PlatformServices Threads::Threads)
 add_executable(HoroRuntimeSaveDiagnosticsTests

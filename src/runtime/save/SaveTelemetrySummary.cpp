@@ -17,7 +17,10 @@ namespace Horo::Runtime {
         struct Summary {
             std::array<std::array<std::uint64_t, 4>, 9> counts{};
             std::array<std::array<std::uint64_t, 5>, 9> evidence{};
-            std::uint64_t rows{}, invalid{}, missing{}, inspected{};
+            std::uint64_t rows{};
+            std::uint64_t invalid{};
+            std::uint64_t missing{};
+            std::uint64_t inspected{};
             bool truncated{};
         };
 
@@ -33,15 +36,15 @@ namespace Horo::Runtime {
                 ++summary.invalid;
                 return;
             }
-            const auto category = record.find("category");
-            if (category == record.end() || *category != "runtime.save.stage")
+            if (const auto category = record.find("category"); category == record.end() || *category != "runtime.save.stage")
                 return;
             const auto fields = record.find("fields");
             if (fields == record.end() || !fields->is_object()) {
                 ++summary.invalid;
                 return;
             }
-            const auto stage = fields->find("stage"), outcome = fields->find("outcome");
+            const auto stage = fields->find("stage");
+            const auto outcome = fields->find("outcome");
             if (stage == fields->end() || outcome == fields->end() || !stage->is_string() || !outcome->is_string()) {
                 ++summary.invalid;
                 return;

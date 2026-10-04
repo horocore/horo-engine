@@ -6,12 +6,21 @@
 #include "SaveTelemetryInternal.h"
 
 #include <atomic>
+#include <format>
 #include <new>
 
 namespace Horo::Runtime {
     namespace {
-        // Host publication is release/acquire; the host retires all producer threads before destroying the immutable owner.
-        std::atomic<const SaveTelemetryRegistration *> ActiveRegistration{};
+        /** @brief Publishes the immutable host owner; the host retires all producers before destruction. */
+        std::atomic<const SaveTelemetryRegistration *> &ActiveRegistration() {
+            static std::atomic<const SaveTelemetryRegistration *> registration{};
+            return registration;
+        }
+
+        /** @brief Reports an instrumentation failure without formatting private exception or ambient context. */
+        void ReportObservationFailure() noexcept {
+            Log::Logger::WriteEmergency("runtime.save.telemetry", Log::Level::Warn, "Save telemetry observation could not be recorded");
+        }
 
 #if HORO_ENABLE_TELEMETRY
         constexpr std::array<std::string_view, 9> StageNames{"capture", "encode", "migrate",  "commit",     "restore",
@@ -38,7 +47,7 @@ namespace Horo::Runtime {
 
         /** @brief Emits one canonical safe log/span pair into the common asynchronous dispatcher. */
         void EmitObservation(const std::size_t stage, const SaveTelemetryOutcome outcome, const std::uint64_t operation,
-                             const std::uint64_t parent, const std::chrono::nanoseconds duration, const SaveTelemetryEvidence evidence) {
+                             const std::uint64_t parent, const std::chrono::nanoseconds duration, const SaveTelemetryEvidence &evidence) {
             const std::array fields{Telemetry::Field{"stage", std::string{StageNames[stage]}},
                                     Telemetry::Field{"outcome", std::string{OutcomeNames[static_cast<std::size_t>(outcome)]}},
                                     Telemetry::Field{"operation", operation},
@@ -53,15 +62,16 @@ namespace Horo::Runtime {
             const auto severity = outcome == SaveTelemetryOutcome::Failed ? Log::Level::Warn : Log::Level::Info;
             {
                 const Log::ScopedLogContext binding{context};
-                const std::string message = "Save stage " + std::string{StageNames[stage]} + " " +
-                                            std::string{OutcomeNames[static_cast<std::size_t>(outcome)]} +
-                                            " operation=" + std::to_string(operation);
+                const std::string message = std::format("Save stage {} {} operation={}", StageNames[stage],
+                                                        OutcomeNames[static_cast<std::size_t>(outcome)], operation);
                 // Common logging owns high-severity emergency delivery when its bounded queue rejects a record.
                 Log::Logger::Write("runtime.save.stage", severity, message, fields);
             }
-            const auto status = outcome == SaveTelemetryOutcome::Succeeded ? Telemetry::SpanStatus::Succeeded
-                                : outcome == SaveTelemetryOutcome::Failed  ? Telemetry::SpanStatus::Failed
-                                                                           : Telemetry::SpanStatus::Cancelled;
+            auto status = Telemetry::SpanStatus::Cancelled;
+            if (outcome == SaveTelemetryOutcome::Succeeded)
+                status = Telemetry::SpanStatus::Succeeded;
+            else if (outcome == SaveTelemetryOutcome::Failed)
+                status = Telemetry::SpanStatus::Failed;
             static_cast<void>(Telemetry::Runtime::EmitRecord({.subsystem = "runtime.save",
                                                               .context = context,
                                                               .payload = Telemetry::SpanRecord{.operationId = operation,
@@ -76,20 +86,20 @@ namespace Horo::Runtime {
 
     /** @copydoc SaveTelemetryRegistration::Create */
     Result<std::unique_ptr<SaveTelemetryRegistration>> SaveTelemetryRegistration::Create() {
-        if (ActiveRegistration.load(std::memory_order_acquire))
+        if (ActiveRegistration().load())
             return Result<std::unique_ptr<SaveTelemetryRegistration>>::Failure(MakeError(SaveErrors::DiagnosticInvalid));
         try {
-            auto registration = std::unique_ptr<SaveTelemetryRegistration>{new SaveTelemetryRegistration};
+            auto registration = std::make_unique<SaveTelemetryRegistration>(ConstructionKey{});
 #if HORO_ENABLE_TELEMETRY
-            const auto outcomes =
-                Telemetry::Runtime::RegisterCounter(Descriptor("save.stage.outcomes", Telemetry::MetricUnit::Count, true));
-            const auto duration = Telemetry::Runtime::RegisterTiming(Descriptor("save.stage.duration", Telemetry::MetricUnit::Seconds));
-            const auto bytes = Telemetry::Runtime::RegisterHistogram(Descriptor("save.stage.bytes", Telemetry::MetricUnit::Bytes));
-            const auto retries = Telemetry::Runtime::RegisterCounter(Descriptor("save.stage.retries", Telemetry::MetricUnit::Count));
-            const auto dropped = Telemetry::Runtime::RegisterCounter(Descriptor("save.stage.dropped", Telemetry::MetricUnit::Count));
+            using enum Telemetry::MetricUnit;
+            const auto outcomes = Telemetry::Runtime::RegisterCounter(Descriptor("save.stage.outcomes", Count, true));
+            const auto duration = Telemetry::Runtime::RegisterTiming(Descriptor("save.stage.duration", Seconds));
+            const auto bytes = Telemetry::Runtime::RegisterHistogram(Descriptor("save.stage.bytes", Bytes));
+            const auto retries = Telemetry::Runtime::RegisterCounter(Descriptor("save.stage.retries", Count));
+            const auto dropped = Telemetry::Runtime::RegisterCounter(Descriptor("save.stage.dropped", Count));
             registration->queueDepth_ = Telemetry::Runtime::RegisterGauge({.name = "save.queue.depth",
                                                                            .subsystem = "runtime.save",
-                                                                           .unit = Telemetry::MetricUnit::Count,
+                                                                           .unit = Count,
                                                                            .description = "Current admitted Save queue depth"});
             for (std::size_t stage = 0; stage < Stages; ++stage) {
                 const std::array dimensions{Telemetry::DimensionValue{"stage", StageNames[stage]}};
@@ -108,7 +118,7 @@ namespace Horo::Runtime {
                 }
             }
 #endif
-            ActiveRegistration.store(registration.get(), std::memory_order_release);
+            ActiveRegistration().store(registration.get());
             return Result<std::unique_ptr<SaveTelemetryRegistration>>::Success(std::move(registration));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<SaveTelemetryRegistration>>::Failure(MakeError(SaveErrors::OperationAllocationFailed));
@@ -118,7 +128,7 @@ namespace Horo::Runtime {
     /** @copydoc SaveTelemetryRegistration::~SaveTelemetryRegistration */
     SaveTelemetryRegistration::~SaveTelemetryRegistration() {
         const auto *expected = this;
-        static_cast<void>(ActiveRegistration.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel));
+        static_cast<void>(ActiveRegistration().compare_exchange_strong(expected, nullptr));
     }
 
     /** @copydoc SaveStageObservation::SaveStageObservation */
@@ -126,7 +136,7 @@ namespace Horo::Runtime {
 #if HORO_ENABLE_TELEMETRY
         if (stage >= SaveTelemetryStage::Count || !Telemetry::Runtime::IsEnabled())
             return;
-        const auto *registration = ActiveRegistration.load(std::memory_order_acquire);
+        const auto *registration = ActiveRegistration().load();
         if (!registration || (!registration->hasMetrics_ && !Telemetry::Runtime::IsEventEnabled("runtime.save", Log::Level::Warn)))
             return;
         try {
@@ -145,7 +155,7 @@ namespace Horo::Runtime {
             started_ = std::chrono::steady_clock::now();
             registration_ = registration;
         } catch (...) {
-            // Instrumentation admission must not alter the authoritative Save operation.
+            ReportObservationFailure();
         }
 #else
         static_cast<void>(operation);
@@ -158,7 +168,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SaveStageObservation::Complete */
-    void SaveStageObservation::Complete(const SaveTelemetryOutcome outcome, const SaveTelemetryEvidence evidence) noexcept {
+    void SaveStageObservation::Complete(const SaveTelemetryOutcome outcome, const SaveTelemetryEvidence &evidence) noexcept {
         if (!registration_ || completed_ || outcome >= SaveTelemetryOutcome::Count)
             return;
         completed_ = true;
@@ -171,33 +181,36 @@ namespace Horo::Runtime {
         registration_->dropped_[stage].Add(evidence.droppedWork);
         if (stage_ == SaveTelemetryStage::Queue)
             registration_->queueDepth_.Set(static_cast<double>(evidence.queueDepth));
+#if HORO_ENABLE_TELEMETRY
         try {
             EmitObservation(stage, outcome, operation_, parent_, duration, evidence);
         } catch (...) {
-            // Common bounded instrumentation is best effort; Save results remain authoritative.
+            ReportObservationFailure();
         }
+#endif
     }
 
     /** @copydoc SaveStageObservation::Fail */
-    void SaveStageObservation::Fail(const Error &error, SaveTelemetryEvidence evidence) noexcept {
+    void SaveStageObservation::Fail(const Error &error, const SaveTelemetryEvidence &evidence) noexcept {
         if (!registration_ || completed_)
             return;
+        auto failureEvidence = evidence;
         try {
             const auto diagnostic = MakeSaveDiagnosticRecord(error);
             if (diagnostic.HasValue())
-                evidence.failureCategory = diagnostic.Value().Category();
+                failureEvidence.failureCategory = diagnostic.Value().Category();
         } catch (...) {
-            // Best-effort category projection cannot replace the authoritative failure.
+            ReportObservationFailure();
         }
-        Complete(evidence.failureCategory == SaveFailureCategory::Cancellation ? SaveTelemetryOutcome::Cancelled
-                                                                               : SaveTelemetryOutcome::Failed,
-                 evidence);
+        Complete(failureEvidence.failureCategory == SaveFailureCategory::Cancellation ? SaveTelemetryOutcome::Cancelled
+                                                                                      : SaveTelemetryOutcome::Failed,
+                 failureEvidence);
     }
 
     /** @copydoc RecordSaveOperationTerminal */
     void RecordSaveOperationTerminal(const SaveOperationSnapshot &snapshot) noexcept {
 #if HORO_ENABLE_TELEMETRY
-        if (!Telemetry::Runtime::IsEventEnabled("runtime.save", Log::Level::Info) || !ActiveRegistration.load(std::memory_order_acquire))
+        if (!Telemetry::Runtime::IsEventEnabled("runtime.save", Log::Level::Info) || !ActiveRegistration().load())
             return;
         try {
             auto category = SaveFailureCategory::Count;
@@ -221,7 +234,7 @@ namespace Horo::Runtime {
                                                                                               .message = "Save operation terminal outcome",
                                                                                               .fields = {fields.begin(), fields.end()}}}));
         } catch (...) {
-            // Non-blocking observation never alters terminal ownership or completion callbacks.
+            ReportObservationFailure();
         }
 #else
         static_cast<void>(snapshot);

@@ -6,14 +6,17 @@
 #include "Horo/Runtime/Save/SaveStorageAdapter.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "SaveTestUtils.h"
+#include "support/AllocationProbe.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <format>
 #include <mutex>
 #include <stdexcept>
+#include <type_traits>
 
 #if defined(_WIN32)
 #include <io.h>
@@ -28,11 +31,29 @@ namespace {
     using namespace Horo;
     using namespace Horo::Runtime;
 
+    static_assert(!std::is_default_constructible_v<SaveTelemetryRegistration>);
+    static_assert(!std::is_copy_constructible_v<SaveTelemetryRegistration>);
+
+    class FixtureFailure final : public std::runtime_error {
+    public:
+        using std::runtime_error::runtime_error;
+    };
+
+    /** @brief Atomically claims a fresh test directory before any fixture file is opened. */
+    std::filesystem::path CreateTestDirectory() {
+        const auto parent = std::filesystem::temp_directory_path();
+        const auto identity = std::chrono::steady_clock::now().time_since_epoch().count();
+        for (std::size_t attempt = 0; attempt < 32; ++attempt) {
+            const auto path = parent / std::format("horo-save-telemetry-{}-{}", identity, attempt);
+            if (std::filesystem::create_directory(path))
+                return path;
+        }
+        throw FixtureFailure("Save telemetry fixture could not claim a fresh directory");
+    }
+
     class Session final {
     public:
-        explicit Session(const bool includeSave = true)
-            : directory(std::filesystem::temp_directory_path() /
-                        ("horo-save-telemetry-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+        explicit Session(const bool includeSave = true) {
             host = Application::HostObservabilitySession::Start(
                 {.logging = {.logDirectory = directory,
                              .baseName = "save",
@@ -59,7 +80,7 @@ namespace {
             return true;
         }
 
-        std::filesystem::path directory;
+        std::filesystem::path directory{CreateTestDirectory()};
         std::unique_ptr<Application::HostObservabilitySession> host;
         std::unique_ptr<SaveTelemetryRegistration> registration;
     };
@@ -84,15 +105,14 @@ namespace {
     /** @brief Captures bounded emergency output and restores process stderr before assertion reporting. */
     class EmergencyCapture final {
     public:
-        explicit EmergencyCapture(const std::filesystem::path &path)
-            : file_(std::fopen(path.string().c_str(), "w+b")), saved_(DuplicateDescriptor(FileDescriptor(stderr))) {
+        explicit EmergencyCapture(const std::filesystem::path &path) : file_(std::fopen(path.string().c_str(), "w+b")) {
             std::fflush(stderr);
             if (!file_ || saved_ < 0 || ReplaceDescriptor(FileDescriptor(file_), FileDescriptor(stderr)) < 0) {
                 if (file_)
                     std::fclose(file_);
                 if (saved_ >= 0)
                     CloseDescriptor(saved_);
-                throw std::runtime_error("Emergency capture could not acquire stderr");
+                throw FixtureFailure("Emergency capture could not acquire stderr");
             }
         }
 
@@ -115,7 +135,7 @@ namespace {
 
     private:
         std::FILE *file_;
-        int saved_;
+        int saved_{DuplicateDescriptor(FileDescriptor(stderr))};
     };
 
     /** @brief Holds the dispatcher outside its queue lock for a bounded deterministic queue-full fixture. */
@@ -130,7 +150,9 @@ namespace {
             });
         }
 
-        void Flush() override {}
+        void Flush() override {
+            // The blocking fixture retains no records to flush.
+        }
 
         bool WaitUntilEntered() {
             std::unique_lock lock(mutex_);
@@ -148,12 +170,14 @@ namespace {
     private:
         std::mutex mutex_;
         std::condition_variable condition_;
-        bool entered_{}, released_{};
+        bool entered_{};
+        bool released_{};
     };
 
     /** @brief Counts accepted terminal logs separately from permitted low-severity dispatcher drops. */
-    std::size_t CountTerminalRecords(const std::string &log) {
-        std::size_t count{}, offset{};
+    std::size_t CountTerminalRecords(const std::string_view log) {
+        std::size_t count{};
+        std::size_t offset{};
         while ((offset = log.find("Save operation terminal outcome", offset)) != std::string::npos) {
             ++count;
             ++offset;
@@ -328,7 +352,7 @@ TEST_CASE("Save safe lineage survives retained platform request completion under
     }
     Log::LogContext unrelated{"payload", "private-later-payload"};
     Log::LogContextSnapshot observed;
-    auto subscription = requests.OnComplete<int>(*handle, [&](const PlatformRequestSnapshot<int> &) {
+    auto subscription = requests.OnComplete<int>(*handle, [&observed](const PlatformRequestSnapshot<int> &) {
         observed = Log::CaptureLogContext();
     });
     REQUIRE(subscription.HasValue());
@@ -410,8 +434,11 @@ TEST_CASE("Save failed stages retain safe emergency evidence when the bounded no
     REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = 1, .metricCollectionLevel = Telemetry::MetricCollectionLevel::Off}, sink));
     REQUIRE(session.Register());
     bool accepted{};
-    for (std::size_t attempt = 0; attempt < 64 && !accepted; ++attempt)
+    for (std::size_t attempt = 0; attempt < 64; ++attempt) {
         accepted = Telemetry::Runtime::EmitEvent("runtime.save", "test.queue.block", Log::Level::Info, "Safe queue fixture");
+        if (accepted)
+            break;
+    }
     REQUIRE(accepted);
     REQUIRE(sink->WaitUntilEntered());
     REQUIRE(Telemetry::Runtime::EmitEvent("runtime.save", "test.queue.fill", Log::Level::Info, "Safe queue fixture"));
@@ -430,4 +457,65 @@ TEST_CASE("Save failed stages retain safe emergency evidence when the bounded no
     REQUIRE(output.find("private-account") == std::string::npos);
     REQUIRE(output.find("/private/path") == std::string::npos);
     REQUIRE(output.find("private-provider-account") == std::string::npos);
+}
+
+namespace {
+    /** @brief Throws foreign work failure to verify interrupted observations and caller exception preservation. */
+    [[noreturn]] Result<void> ThrowSaveWorkFailure() {
+        throw FixtureFailure("private-unwind-error");
+    }
+}  // namespace
+
+TEST_CASE("Save stage failures preserve caller evidence and restore context after unwinding", "[save][telemetry][failure][privacy]") {
+    Session session;
+    REQUIRE(session.host);
+    REQUIRE(session.Register());
+    Log::LogContext ambient{"account.id", "private-unwind-account"};
+    const SaveTelemetryEvidence evidence{.bytes = 64, .retries = 2};
+    {
+        SaveStageObservation observation{SaveTelemetryStage::Capture, 101};
+        REQUIRE(observation.IsActive());
+        observation.Fail(MakeError(SaveErrors::OperationCancelled, "private-cancel-text"), evidence);
+        REQUIRE(evidence.failureCategory == SaveFailureCategory::Count);
+        REQUIRE(evidence.bytes == 64);
+        REQUIRE(evidence.retries == 2);
+    }
+    REQUIRE_FALSE(Log::CaptureLogContext().IsIsolationBoundary());
+    REQUIRE_THROWS_AS(ObserveSaveStage(SaveTelemetryStage::Participant, 102, &ThrowSaveWorkFailure), FixtureFailure);
+    REQUIRE_FALSE(Log::CaptureLogContext().IsIsolationBoundary());
+    REQUIRE((Log::CaptureLogContext().Fields().front() == Log::MdcField{"account.id", "private-unwind-account"}));
+    REQUIRE(Log::Logger::Flush());
+    const auto log = Read(session.directory / "save.jsonl");
+    REQUIRE(log.find("private-unwind") == std::string::npos);
+    REQUIRE(log.find("private-cancel-text") == std::string::npos);
+}
+
+TEST_CASE("Save observation allocation failures report bounded safe evidence", "[save][telemetry][allocation][emergency]") {
+    Session session;
+    REQUIRE(session.host);
+    auto sink = std::make_shared<BlockingSink>();
+    REQUIRE(Telemetry::Runtime::Initialize({.queueCapacity = 4, .metricCollectionLevel = Telemetry::MetricCollectionLevel::Off}, sink));
+    REQUIRE(session.Register());
+    REQUIRE(Telemetry::Runtime::EmitEvent("runtime.save", "test.block", Log::Level::Info, "Safe allocation fixture"));
+    REQUIRE(sink->WaitUntilEntered());
+    EmergencyCapture capture{session.directory / "allocation-emergency.txt"};
+    Log::LogContext ambient{"account.id", "private-allocation-account"};
+    const auto before = Log::Logger::Statistics().emergencyRecords;
+    bool active{};
+    {
+        Tests::AllocationProbe::ScopedFailure failure;
+        SaveStageObservation observation{SaveTelemetryStage::Capture, 103};
+        active = observation.IsActive();
+    }
+    SaveStageObservation completion{SaveTelemetryStage::Encode, 103};
+    {
+        Tests::AllocationProbe::ScopedFailure failure;
+        completion.Complete(SaveTelemetryOutcome::Succeeded);
+    }
+    sink->Release();
+    REQUIRE_FALSE(active);
+    REQUIRE(Log::Logger::Statistics().emergencyRecords == before + 2);
+    const auto output = capture.ReadOutput();
+    REQUIRE(output.find("Save telemetry observation could not be recorded") != std::string::npos);
+    REQUIRE(output.find("private-allocation-account") == std::string::npos);
 }

@@ -1156,11 +1156,12 @@ TEST_CASE("Isolated diagnostic snapshots preserve nesting job propagation and wo
         REQUIRE(HasContextField(Log::CaptureLogContext(), "account.id", "private-account"));
     }
     JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 4}};
-    std::atomic<bool> exact{}, leaked{};
+    std::atomic<bool> exact{};
+    std::atomic<bool> leaked{};
     {
         Log::LogContext otherAmbient{"display.name", "private-display"};
         Log::ScopedLogContext binding{retained.With("safe.phase", "restore")};
-        auto submitted = jobs.Submit({}, [&](const CancellationToken &) {
+        auto submitted = jobs.Submit({}, [&exact](const CancellationToken &) {
             const auto snapshot = Log::CaptureLogContext();
             exact.store(snapshot.IsIsolationBoundary() && snapshot.Fields().size() == 2 &&
                         HasContextField(snapshot, "save.operation", "41") && HasContextField(snapshot, "safe.phase", "restore"));
@@ -1168,7 +1169,7 @@ TEST_CASE("Isolated diagnostic snapshots preserve nesting job propagation and wo
         REQUIRE(submitted.HasValue());
         REQUIRE(submitted.Value().Wait().HasValue());
     }
-    auto reused = jobs.Submit({}, [&](const CancellationToken &) {
+    auto reused = jobs.Submit({}, [&leaked](const CancellationToken &) {
         leaked.store(Log::CaptureLogContext().IsIsolationBoundary() || !Log::CaptureLogContext().Fields().empty());
     });
     REQUIRE(reused.HasValue());
@@ -1186,7 +1187,7 @@ TEST_CASE("Cancelled isolated queued work releases context without contaminating
     std::optional<JobHandle> cancelled;
     {
         Log::ScopedLogContext binding{Log::LogContextSnapshot::Isolated({{"save.operation", "51"}})};
-        auto submitted = jobs.Submit({}, [&](const CancellationToken &) {
+        auto submitted = jobs.Submit({}, [&called](const CancellationToken &) {
             called = true;
         });
         REQUIRE(submitted.HasValue());
@@ -1194,7 +1195,7 @@ TEST_CASE("Cancelled isolated queued work releases context without contaminating
     }
     REQUIRE(cancelled->RequestCancel().HasValue());
     bool clean{};
-    auto replacement = jobs.Submit({}, [&](const CancellationToken &) {
+    auto replacement = jobs.Submit({}, [&clean](const CancellationToken &) {
         clean = Log::CaptureLogContext().Fields().empty() && !Log::CaptureLogContext().IsIsolationBoundary();
     });
     REQUIRE(replacement.HasValue());
