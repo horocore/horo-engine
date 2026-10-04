@@ -17,6 +17,7 @@
 #include "NavigationErrors.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/status_bar/EditorStatusBar.h"
+#include "editor/update/UpdateExperienceSession.h"
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
 
 #include <algorithm>
@@ -404,6 +405,8 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::OnUpdate(float dt) {
+        if (!shutdown_ && context_ != nullptr && context_->updates != nullptr)
+            context_->updates->Poll();
         if (localization_ != nullptr) {
             static_cast<void>(
                 statusItemRegistry_.Update("horo.status.navigation",

@@ -205,7 +205,6 @@ namespace Horo::Editor::SettingsModalInternal {
             return;
         }
         auto &session = *ctx.updates;
-        session.Poll();
         DrawPolicy(state, session, ctx);
         DrawProgress(session.Snapshot(), ctx);
         DrawActions(state, session, ctx);
