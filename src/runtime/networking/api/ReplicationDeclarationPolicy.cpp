@@ -255,8 +255,8 @@ namespace Horo::Network {
                                                                            const std::span<const ModuleId> availableModules,
                                                                            const ReplicationDeclarationUse use,
                                                                            const ReplicationDeclarationPolicyLimits &limits) {
-        const auto inputValidation = ValidateAssessmentInputs(declarations, registered, availableModules, use, limits);
-        if (inputValidation.HasError())
+        if (const auto inputValidation = ValidateAssessmentInputs(declarations, registered, availableModules, use, limits);
+            inputValidation.HasError())
             return Result<ReplicationDeclarationAssessment>::Failure(inputValidation.ErrorValue());
         try {
             ReplicationDeclarationAssessment assessment;
