@@ -1,5 +1,6 @@
 #include "../world_streaming/StreamingCellCandidateTestSupport.h"
 #include "Horo/Assets/AssetProvider.h"
+#include "Horo/Runtime/Scene/AudioSceneExtraction.h"
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -180,6 +181,37 @@ namespace Horo::Runtime {
                     .code.Value() == "scene.cell_payload.cancelled");
         source.entities = {};
         REQUIRE(CookRuntimeSceneCellPayload(manifest.Descriptor(), source, Identity(), Limits()).HasValue());
+    }
+
+    TEST_CASE("Cell baseline retains authored listeners through storage admission and runtime extraction", "[scene][cell_payload][audio]") {
+        const auto manifest = W::CandidateTestSupport::Manifest();
+        std::vector entities{Entity(1)};
+        entities[0].localTransform.translation = {3, 4, 5};
+        entities[0].components.audioListener = AudioListenerComponent{2, 7, 3};
+        entities[0].components.audioSource = AudioSourceComponent{};
+        auto cooked = CookRuntimeSceneCellPayload(manifest.Descriptor(), {Identity(), entities}, Identity(), Limits());
+        REQUIRE(cooked.HasValue());
+        entities.clear();
+        const auto &payload = cooked.Value();
+        auto limits = Limits();
+        limits.maximumRetainedBytes = payload.RetainedBytes();
+        SceneCellPayloadSource retained{Identity(), payload.Definition().Entities()};
+        REQUIRE(CookRuntimeSceneCellPayload(manifest.Descriptor(), retained, Identity(), limits).HasValue());
+        --limits.maximumRetainedBytes;
+        REQUIRE(CookRuntimeSceneCellPayload(manifest.Descriptor(), retained, Identity(), limits).HasError());
+        auto scene = RuntimeScene::Create(payload.Definition(), {12});
+        REQUIRE(scene.HasValue());
+        AudioSceneExtractor extractor;
+        auto frame = extractor.Capture(scene.Value()->View(), {.context = {Audio::AudioRuntimeId::Create(4).Value(), 1, 1},
+                                                               .sequence = 1,
+                                                               .elapsedSeconds = 0.5F,
+                                                               .policy = Audio::AudioListenerPolicy::PerView});
+        REQUIRE(frame.HasValue());
+        REQUIRE(frame.Value().listenerCount == 1);
+        REQUIRE(frame.Value().Listeners()[0].view == 2);
+        REQUIRE(frame.Value().Listeners()[0].priority == 7);
+        REQUIRE(frame.Value().Listeners()[0].motion.current.position == Math::Vec3{3, 4, 5});
+        REQUIRE(frame.Value().sourceCount == 1);
     }
 
     TEST_CASE("Cell baseline deduplicates identical dependencies and preserves conflicting-type errors", "[scene][cell_payload][cook]") {

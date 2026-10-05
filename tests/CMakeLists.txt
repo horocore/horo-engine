@@ -384,7 +384,7 @@ target_compile_features(HoroNetworkTransportCompositionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkTransportCompositionTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
 add_dependencies(HoroNetworkTransportCompositionTests HoroNetworkDisabledLinkProbe HoroNetworkNullLinkProbe)
 horo_register_catch_test(HoroNetworkTransportCompositionTests LABELS "unit;network;headless")
-target_sources(HoroAudioApiPublicHeaderConsumer PRIVATE support/AudioStreamingFactoryPublicContract.cpp)
+target_sources(HoroAudioApiPublicHeaderConsumer PRIVATE support/AudioStreamingFactoryPublicContract.cpp support/AudioSpatialPublicContract.cpp)
 add_executable(HoroAudioApiTests
         support/AllocationProbe.cpp
         unit/runtime/audio/AudioAcousticQueryTests.cpp
@@ -2723,13 +2723,16 @@ add_executable(HoroRuntimeSaveTestCompositionsTests
 target_compile_features(HoroRuntimeSaveTestCompositionsTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveTestCompositionsTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSceneTests
+        unit/runtime/scene/AudioSceneExtractionTests.cpp
         unit/runtime/scene/NavigationSceneComponentsTests.cpp
         unit/runtime/scene/NavigationSceneActivationTests.cpp
         unit/runtime/scene/NavigationSceneLinkCaptureTests.cpp
         unit/runtime/scene/PhysicsSceneComponentsTests.cpp
+        unit/runtime/scene/RuntimeSceneLifecycleTests.cpp
         unit/runtime/scene/RuntimeSceneTests.cpp
         unit/runtime/scene/RuntimeSceneGroupReferenceTests.cpp
 )
+target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/AudioScenePublicContract.cpp)
 target_compile_features(HoroRuntimeSceneTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSceneTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSceneTests PRIVATE HoroEngine::NavigationSceneIntegration HoroEngine::RuntimeScene)

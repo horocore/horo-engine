@@ -18,17 +18,12 @@ namespace Horo::Prefab {
 
         /** @brief Counts every typed component occurrence without interpreting payload semantics. */
         [[nodiscard]] std::size_t ComponentCount(const Runtime::RuntimeComponentSet &components) noexcept {
-            const std::array present{components.camera.has_value(),
-                                     components.light.has_value(),
-                                     components.audioSource.has_value(),
-                                     components.uiCanvas.has_value(),
-                                     components.navigationSurface.has_value(),
-                                     components.navigationRegion.has_value(),
-                                     components.navigationModifier.has_value(),
-                                     components.navigationLink.has_value(),
-                                     components.navigationAgent.has_value(),
-                                     components.aiAgent.has_value(),
-                                     components.aiController.has_value(),
+            const std::array present{components.camera.has_value(),           components.light.has_value(),
+                                     components.audioSource.has_value(),      components.audioListener.has_value(),
+                                     components.uiCanvas.has_value(),         components.navigationSurface.has_value(),
+                                     components.navigationRegion.has_value(), components.navigationModifier.has_value(),
+                                     components.navigationLink.has_value(),   components.navigationAgent.has_value(),
+                                     components.aiAgent.has_value(),          components.aiController.has_value(),
                                      components.rigidBody.has_value()};
             return static_cast<std::size_t>(std::ranges::count(present, true)) + components.colliders.size() +
                    components.physicsConstraints.size() + components.behaviors.size() + components.gameplayComponents.size();
