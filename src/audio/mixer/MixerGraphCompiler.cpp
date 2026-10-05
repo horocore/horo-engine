@@ -205,7 +205,9 @@ namespace Horo::Audio {
                                .paused = bus.defaults.paused,
                                .preFaderOffset = taps.Value(),
                                .postFaderOffset = taps.Value() + tapBytes});
-            MixerDetail::BusState processing{.format = {s.profile.sampleRate, bus.layout}};
+            MixerDetail::BusState processing{.format = {s.profile.sampleRate, bus.layout},
+                                             .gain = gain.Value(),
+                                             .muted = bus.defaults.muted};
             if (!bus.effects.empty() && factory == nullptr)
                 return Invalid("Mixer effect requires an explicit prepared DSP factory.");
             for (const MixerEffectDescriptor &effect : bus.effects) {
@@ -221,6 +223,7 @@ namespace Horo::Audio {
             std::unordered_map<std::uint64_t, std::uint32_t> indices;
             for (std::uint32_t i = 0; i < s.buses.size(); ++i)
                 indices.emplace(s.buses[i].id.Value(), i);
+            s.routeState.reserve(asset.routes.size());
             for (MixerCompiledBus &bus : s.buses) {
                 std::vector<const MixerRouteDescriptor *> incoming;
                 for (const MixerRouteDescriptor &route : asset.routes)
@@ -236,6 +239,7 @@ namespace Horo::Audio {
                     if (gain.HasError())
                         return Result<void>::Failure(gain.ErrorValue());
                     s.routes.emplace_back(route->id, indices.at(route->source.Value()), route->tap, gain.Value());
+                    s.routeState.push_back({gain.Value(), route->kind});
                 }
                 if (const Result<void> charged = ChargeWork(work,
                                                             static_cast<std::uint64_t>(incoming.size()) *
@@ -304,7 +308,13 @@ namespace Horo::Audio {
             }
             if (const Result<void> routes = BuildRoutes(s, asset, work); routes.HasError())
                 return routes;
-            return PrepareStorage(s);
+            s.sampleOperations = work;
+            s.metadataBytes = s.routeState.capacity() * sizeof(MixerDetail::RouteState);
+            if (const auto prepared = PrepareStorage(s); prepared.HasError())
+                return prepared;
+            if (s.metadataBytes > s.profile.maximumStorageBytes - s.storageBytes)
+                return Invalid("Mixer mutable routing storage budget exceeded.");
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -362,6 +372,6 @@ namespace Horo::Audio {
 
     /** @copydoc MixerRenderPlan::StorageBytes */
     std::size_t MixerRenderPlan::StorageBytes() const noexcept {
-        return state_->storageBytes;
+        return state_->storageBytes + state_->metadataBytes;
     }
 }  // namespace Horo::Audio

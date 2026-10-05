@@ -1323,6 +1323,62 @@ Dialogue starts
   -> Voice unchanged
 ```
 
+### AUD-004.9 bounded mixer snapshots
+
+`HoroEngine::AudioMixer` owns `MixerSnapshot.h`. A version-one named snapshot
+contains a stable mixer asset reference and at most eight stable bus, send or DSP
+parameter references with finite model-unit targets. Names are presentation only.
+The fixed little-endian `MSNP` version-one codec persists only these values;
+runtime generations, clock timestamps, precedence and editor solo/debug state are
+excluded. Decode admits exact framing and bounded counts before reading records,
+rejects unsupported versions, duplicates and trailing fields, and publishes no
+partial asset. The codec is an additive snapshot format, not a MixerAsset schema
+change. Hosts own catalog resolution and storage.
+
+Control resolves every reference against its prepared live automation binding
+set, pinning exact runtime and graph generations. `PreparedMixerSnapshot` retains
+one ordinary `ScheduledAudioCommandBatch` plus transition ID and priority metadata.
+The host uses `MakeScheduledAudioBatchCommand` and existing staging/SPSC transport,
+retains the whole sidecar through callback acknowledgement, and resolves that exact
+storage on dispatch. Applying its batch directly bypasses snapshot precedence and
+is not a snapshot dispatch. At the exact target sample, the callback first advances
+its sealed automation engine, then dispatches to `MixerSnapshotTransitions::Apply`.
+Late, stale, closed or capacity-rejected work remains the host's reconciliation
+responsibility; neither preparation nor queue publication proves application.
+
+One callback owns the transition controller and borrowed automation engine. Higher
+priority wins while any owned trajectory remains pending/active; equal-priority
+later IDs replace. This is whole-preset precedence, not per-bus stacking or automatic
+restoration. Replacement atomically cancels the old group's remaining requests and
+admits every new target via `ApplyBatch`; the eight-target ceiling reserves room
+for eight cancellations within the existing sixteen-command batch limit. All
+ranges, continuity limits, request ordering and capacity are rechecked transactionally.
+Failure preserves previous trajectories and both identity sequences. Completed
+groups release precedence. Explicit cancellation holds current values; unrelated
+future requests remain queued. Cancelled/completed IDs cannot be replayed. Matching
+unload/reset closes the borrowed engine through its existing normal FIFO path.
+
+Control binds exact descriptors through `MixerRenderPlan::BindAutomation` before
+publication. This freezes projections into callback-exclusive bus/send gain and
+DSP value/target cells, separate from immutable compiled descriptors. Binding
+storage and worst-case per-sample engine/DAG dispatch are charged to the compile
+profile; failed admission leaves the plan unchanged. Published plans cannot be
+rebound, and stale graph generations never acquire replacement cells.
+
+`MixerGraphRuntime::RenderAutomated` validates the complete clock, scene and sealed
+binding table before advancement, resolves opaque engine-owned value selectors
+once per block, then projects every target before rendering each sample. The
+optional retained sidecar admits atomically at its interior start sample; rejection
+reports separately and the previous trajectories continue rendering. Aligned
+sample-zero scratch taps preserve DSP alignment while voice reads use the actual
+source offset. The existing DSP process contract accepts any positive frame count
+up to its prepared maximum; strategies retain state across one-frame calls, with
+normal bypass, fault and retirement handling. This path makes no speed claim.
+Static `Render` preserves ordinary block processing. Actual compiled-graph tests
+cover bus, send and real core gain output, block partition invariance, stale bindings,
+failed admission, immutable metadata and zero callback allocation/deallocation.
+Dedicated editor authoring UI remains AUD-009's responsibility.
+
 Advanced adaptive music and procedural modulation remain package or extension
 features. Adaptive-music product delivery is AUD-015 Post-1.0; the 1.0 core
 snapshot and music transport systems provide predictable ducking, mix-state
