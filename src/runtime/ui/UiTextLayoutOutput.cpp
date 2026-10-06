@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Ui/UiTextUnicode.h"
 #include "UiTextLayoutInternal.h"
 
 #include <algorithm>
@@ -5,6 +6,23 @@
 #include <limits>
 
 namespace Horo::Runtime::Ui {
+    /** @copydoc UiTextLayoutInternal::PrepareGlyphGeometry */
+    Result<UiTextLayoutInternal::GlyphGeometry> UiTextLayoutInternal::PrepareGlyphGeometry(const UiTextShapedGlyph &glyph,
+                                                                                           const UiTextScale scale,
+                                                                                           const UiLogicalPoint lineOrigin,
+                                                                                           const std::int64_t cursor) {
+        const auto offsetX = ScaleValue(glyph.offset.x, scale);
+        const auto offsetY = ScaleValue(glyph.offset.y, scale);
+        const auto advanceX = ScaleValue(glyph.advance.x, scale);
+        if (offsetX.HasError() || offsetY.HasError() || advanceX.HasError())
+            return Failure<GlyphGeometry>(UiErrors::TextLayoutCapacityExceeded);
+        const auto glyphX = AddValue(cursor, offsetX.Value());
+        const auto glyphY = AddValue(lineOrigin.y, offsetY.Value());
+        if (glyphX.HasError() || glyphY.HasError())
+            return Failure<GlyphGeometry>(UiErrors::TextLayoutCapacityExceeded);
+        return Result<GlyphGeometry>::Success({{glyphX.Value(), glyphY.Value()}, {advanceX.Value(), 0}});
+    }
+
     using UiTextLayoutInternal::Failure;
 
     Result<void> UiTextLayoutEngine::Storage::PrepareEllipsis(const UiTextLayoutRequest &request, const bool needsEllipsis) {
@@ -110,32 +128,35 @@ namespace Horo::Runtime::Ui {
 
     Result<void> UiTextLayoutEngine::Storage::AppendSourceCluster(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
                                                                   const std::uint32_t clusterIndex,
-                                                                  UiTextLayoutInternal::SourceAppendState &state) {
+                                                                  UiTextLayoutInternal::SourceAppendState &state,
+                                                                  const std::uint8_t lineLevel) {
         const auto &cluster = request.shaped.clusters[clusterIndex];
+        const auto clusterOrigin = state.cursor;
         for (std::uint32_t glyphOffset = 0; glyphOffset < cluster.glyphCount; ++glyphOffset) {
             const auto &glyph = request.shaped.glyphs[cluster.firstGlyph + glyphOffset];
-            const auto offsetX = UiTextLayoutInternal::ScaleValue(glyph.offset.x, request.options.scale);
-            const auto offsetY = UiTextLayoutInternal::ScaleValue(glyph.offset.y, request.options.scale);
-            const auto advanceX = UiTextLayoutInternal::ScaleValue(glyph.advance.x, request.options.scale);
-            if (offsetX.HasError() || offsetY.HasError() || advanceX.HasError())
-                return Failure(UiErrors::TextLayoutCapacityExceeded);
-            const auto glyphX = UiTextLayoutInternal::AddValue(state.cursor, offsetX.Value());
-            const auto glyphY = UiTextLayoutInternal::AddValue(state.lineOrigin.y, offsetY.Value());
-            if (glyphX.HasError() || glyphY.HasError())
-                return Failure(UiErrors::TextLayoutCapacityExceeded);
+            const auto geometry = UiTextLayoutInternal::PrepareGlyphGeometry(glyph, request.options.scale, state.lineOrigin, state.cursor);
+            if (geometry.HasError())
+                return Result<void>::Failure(geometry.ErrorValue());
             const UiTextLayoutInternal::GlyphAppend placement{glyphFaces[cluster.firstGlyph + glyphOffset],
                                                               glyph.glyph,
                                                               clusterIndex,
-                                                              {glyphX.Value(), glyphY.Value()},
-                                                              {advanceX.Value(), 0},
+                                                              geometry.Value().origin,
+                                                              geometry.Value().advance,
                                                               state.lineIndex,
                                                               false};
             if (const auto appended = AppendGlyph(slot, placement); appended.HasError())
                 return appended;
-            state.cursor += advanceX.Value();
+            state.cursor += geometry.Value().advance.x;
         }
 
-        state.cursor = state.lineOriginX + (clusterPrefix[clusterIndex + 1U] - clusterPrefix[state.start]) + state.justificationAdded;
+        state.cursor = clusterOrigin + scaledClusterAdvances[clusterIndex];
+        slot.clusters.push_back({clusterIndex,
+                                 cluster.byteStart,
+                                 cluster.byteEnd,
+                                 state.lineIndex,
+                                 {static_cast<std::int32_t>(clusterOrigin), state.lineOrigin.y},
+                                 scaledClusterAdvances[clusterIndex],
+                                 (lineLevel & 1U) != 0});
         if (cluster.breakOpportunity == UiTextBreakOpportunity::Optional && state.gapIndex < state.optionalGaps) {
             const auto addition = state.justifyExtra + (state.justifyRemainder-- > 0 ? 1 : 0);
             state.cursor += addition;
@@ -147,8 +168,34 @@ namespace Horo::Runtime::Ui {
 
     Result<void> UiTextLayoutEngine::Storage::AppendSourceRange(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
                                                                 const std::uint32_t end, UiTextLayoutInternal::SourceAppendState &state) {
+        if (request.unicode != nullptr && end > state.start) {
+            const auto clusters = request.shaped.clusters;
+            const auto ordered = request.unicodeAnalyzer->OrderLine(*request.unicode, clusters[state.start].byteStart,
+                                                                    clusters[end - 1].byteEnd, visualScalars, visualLevels);
+            if (ordered.HasError())
+                return Result<void>::Failure(ordered.ErrorValue());
+            std::uint32_t previous = NoUiTextLayoutCluster;
+            for (std::uint32_t index = 0; index < ordered.Value(); ++index) {
+                const auto scalar = request.unicode->Scalars()[visualScalars[index]];
+                const auto upper = std::ranges::upper_bound(clusters, scalar.byteStart, {}, &UiTextShapedCluster::byteStart);
+                if (upper == clusters.begin())
+                    return Failure(UiErrors::TextLayoutInputInvalid);
+                const auto clusterIndex = static_cast<std::uint32_t>(std::prev(upper) - clusters.begin());
+                if (clusterIndex < state.start || clusterIndex >= end || scalar.byteEnd > clusters[clusterIndex].byteEnd)
+                    return Failure(UiErrors::TextLayoutInputInvalid);
+                if (clusterIndex != previous) {
+                    if (const auto appended = AppendSourceCluster(request, slot, clusterIndex, state, visualLevels[index]);
+                        appended.HasError())
+                        return appended;
+                    previous = clusterIndex;
+                }
+            }
+            return Result<void>::Success();
+        }
         for (std::uint32_t clusterIndex = state.start; clusterIndex < end; ++clusterIndex) {
-            if (const auto appended = AppendSourceCluster(request, slot, clusterIndex, state); appended.HasError())
+            if (const auto appended =
+                    AppendSourceCluster(request, slot, clusterIndex, state, request.shaped.clusters[clusterIndex].bidiLevel);
+                appended.HasError())
                 return appended;
         }
         return Result<void>::Success();
@@ -180,25 +227,19 @@ namespace Horo::Runtime::Ui {
                                                                    const UiLogicalPoint lineOrigin, std::int64_t &cursor) {
         for (std::uint32_t glyphOffset = 0; glyphOffset < glyphCount; ++glyphOffset) {
             const auto &glyph = request.ellipsis->glyphs[glyphOffset];
-            const auto offsetX = UiTextLayoutInternal::ScaleValue(glyph.offset.x, request.options.scale);
-            const auto offsetY = UiTextLayoutInternal::ScaleValue(glyph.offset.y, request.options.scale);
-            const auto advanceX = UiTextLayoutInternal::ScaleValue(glyph.advance.x, request.options.scale);
-            if (offsetX.HasError() || offsetY.HasError() || advanceX.HasError())
-                return Failure(UiErrors::TextLayoutCapacityExceeded);
-            const auto glyphX = UiTextLayoutInternal::AddValue(cursor, offsetX.Value());
-            const auto glyphY = UiTextLayoutInternal::AddValue(lineOrigin.y, offsetY.Value());
-            if (glyphX.HasError() || glyphY.HasError())
-                return Failure(UiErrors::TextLayoutCapacityExceeded);
+            const auto geometry = UiTextLayoutInternal::PrepareGlyphGeometry(glyph, request.options.scale, lineOrigin, cursor);
+            if (geometry.HasError())
+                return Result<void>::Failure(geometry.ErrorValue());
             const UiTextLayoutInternal::GlyphAppend placement{ellipsisFaces[glyphOffset],
                                                               glyph.glyph,
                                                               NoUiTextLayoutCluster,
-                                                              {glyphX.Value(), glyphY.Value()},
-                                                              {advanceX.Value(), 0},
+                                                              geometry.Value().origin,
+                                                              geometry.Value().advance,
                                                               lineIndex,
                                                               true};
             if (const auto appended = AppendGlyph(slot, placement); appended.HasError())
                 return appended;
-            cursor += advanceX.Value();
+            cursor += geometry.Value().advance.x;
         }
         return Result<void>::Success();
     }
@@ -256,19 +297,48 @@ namespace Horo::Runtime::Ui {
                                                       .justifyExtra = justifyExtra,
                                                       .justifyRemainder = optionalGaps == 0 ? 0 : placement.freeWidth % optionalGaps};
 
-        if (const auto appended = AppendSourceRange(request, slot, window.end, state); appended.HasError())
+        if (const auto appended = AppendLineContent(request, slot, window, state); appended.HasError())
             return appended;
-        if (window.ellipsis) {
-            if (const auto appended =
-                    AppendEllipsisGlyphs(request, slot, window.ellipsisGlyphCount, context.lineIndex, state.lineOrigin, state.cursor);
-                appended.HasError())
-                return appended;
-        }
-
         const auto renderedWidth = UiTextLayoutInternal::AddValue(0, state.cursor - placement.originX);
         if (renderedWidth.HasError())
             return Result<void>::Failure(renderedWidth.ErrorValue());
         return AppendLineRecord(request, slot, context, window, placement, renderedWidth.Value());
+    }
+
+    /** @copydoc UiTextLayoutEngine::Storage::AppendLineContent */
+    Result<void> UiTextLayoutEngine::Storage::AppendLineContent(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,
+                                                                const UiTextLayoutInternal::LineWindow &window,
+                                                                UiTextLayoutInternal::SourceAppendState &state) {
+        // Truncation retains a logical prefix. Its omission marker occupies the
+        // visual trailing edge, which precedes the source glyphs for RTL flow.
+        const bool leadingEllipsis = window.ellipsis && request.options.direction == UiTextFlowDirection::RightToLeft;
+        if (leadingEllipsis) {
+            if (const auto appended =
+                    AppendEllipsisGlyphs(request, slot, window.ellipsisGlyphCount, state.lineIndex, state.lineOrigin, state.cursor);
+                appended.HasError())
+                return appended;
+        }
+        if (const auto appended = AppendSourceRange(request, slot, window.end, state); appended.HasError())
+            return appended;
+        const auto sourceEnd = linePlans[state.lineIndex].firstCluster + linePlans[state.lineIndex].clusterCount;
+        if (linePlans[state.lineIndex].hardBreak && window.end < sourceEnd) {
+            const auto &hardBreak = request.shaped.clusters[sourceEnd - 1];
+            slot.clusters.push_back({sourceEnd - 1,
+                                     hardBreak.byteStart,
+                                     hardBreak.byteEnd,
+                                     state.lineIndex,
+                                     {static_cast<std::int32_t>(state.cursor), state.lineOrigin.y},
+                                     0,
+                                     (hardBreak.bidiLevel & 1U) != 0});
+        }
+        if (window.ellipsis && !leadingEllipsis) {
+            if (const auto appended =
+                    AppendEllipsisGlyphs(request, slot, window.ellipsisGlyphCount, state.lineIndex, state.lineOrigin, state.cursor);
+                appended.HasError())
+                return appended;
+        }
+
+        return Result<void>::Success();
     }
 
     Result<void> UiTextLayoutEngine::Storage::BuildOutput(const UiTextLayoutRequest &request, UiTextLayoutResult::Storage &slot,

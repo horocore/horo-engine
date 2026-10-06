@@ -586,6 +586,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiTextLayoutOutput.cpp
         runtime/ui/UiTextLayoutPlanning.cpp
         runtime/ui/UiTextLayoutPublication.cpp
+        runtime/ui/UiTextLayoutShaped.cpp
         runtime/ui/UiTextLayoutTypes.cpp
         runtime/ui/UiGlyphAtlas.cpp
         runtime/ui/UiGlyphAtlasStorage.cpp
@@ -606,12 +607,14 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiTextErrors.cpp
         runtime/ui/UiTextShape.cpp
         runtime/ui/UiTextShaper.cpp
+        runtime/ui/UiTextSourceAnalysis.cpp
+        runtime/ui/UiTextUnicode.cpp
 )
 add_library(HoroEngine::RuntimeUi ALIAS HoroRuntimeUi)
 target_compile_features(HoroRuntimeUi PUBLIC cxx_std_20)
 target_include_directories(HoroRuntimeUi PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
 target_link_libraries(HoroRuntimeUi PUBLIC HoroEngine::Foundation HoroEngine::Assets
-        PRIVATE nlohmann_json::nlohmann_json utf8proc harfbuzz)
+        PRIVATE nlohmann_json::nlohmann_json utf8proc harfbuzz HoroThirdParty::Unicode)
 
 add_library(HoroUiTemplateGraph STATIC
         ui_templates/UiTemplateDependencyGraph.cpp

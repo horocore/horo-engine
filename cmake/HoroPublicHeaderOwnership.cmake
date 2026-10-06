@@ -313,6 +313,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiRenderGeometry.h
     Horo/Runtime/Ui/UiPresentationReceipt.h
     Horo/Runtime/Ui/UiTextShaping.h
+    Horo/Runtime/Ui/UiTextUnicode.h
 )
 horo_configure_target_header_boundary(HoroUiTemplateGraph PUBLIC_HEADERS
     Horo/UiTemplates/UiTemplateDependencyGraph.h

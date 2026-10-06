@@ -40,11 +40,32 @@ namespace Horo::Runtime::Ui::TextShapingDetail {
         UiTextScript script;
         UiTextDirection direction{UiTextDirection::LeftToRight};
         bool missing{};
+        std::uint8_t bidiLevel{};
+        bool hardBreak{};
     };
 
     struct HbFontDeleter final {
         void operator()(hb_font_t *font) const noexcept;
     };
+
+    /** @brief Synchronous borrowed source-analysis inputs; the shaper retains every native/font/scalar owner. */
+    struct SourceAnalysisContext final {
+        std::span<const UiFontFace> faces;
+        std::span<hb_font_t *const> fonts;
+        const std::vector<DecodedScalar> &scalars;
+        UiMissingGlyphPolicy missingPolicy;
+    };
+
+    /**
+     * @brief Resolves script, Unicode direction and whole-cluster fallback before native run shaping.
+     * @param request Validated immutable shaping request.
+     * @param context Matching face/native-font tables and decoded source, borrowed for this call only.
+     * @param clusters Reserved complete source clusters to populate.
+     * @return Success or typed invalid source, unsupported script or missing coverage failure.
+     * @pre All cluster scalar ranges came from the owning shaper's bounded segmentation.
+     */
+    [[nodiscard]] Result<void> ResolveSourceClusters(const UiTextShapingRequest &request, const SourceAnalysisContext &context,
+                                                     std::span<SourceCluster> clusters);
 
     using HbFontOwner = std::unique_ptr<hb_font_t, HbFontDeleter>;
 

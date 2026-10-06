@@ -36,7 +36,12 @@ namespace Horo::Runtime::Ui {
     }
 
     bool UiTextLayoutEngine::Storage::ValidateOutput(const UiTextLayoutResult::Storage &slot) const noexcept {
-        return slot.descriptor.IsValid() &&
+        return slot.descriptor.IsValid() && slot.clusters.size() <= descriptor.limits.clusters &&
+               std::ranges::all_of(slot.clusters,
+                                   [this, &slot](const auto &cluster) {
+            return cluster.logicalCluster < descriptor.limits.clusters && cluster.byteStart < cluster.byteEnd &&
+                   cluster.byteEnd <= descriptor.limits.sourceBytes && cluster.line < slot.lines.size() && cluster.advance >= 0;
+        }) &&
                std::ranges::all_of(slot.lines,
                                    [&slot](const UiTextLayoutLine &line) {
             return line.IsValid(slot.glyphs.size(), slot.runs.size());
