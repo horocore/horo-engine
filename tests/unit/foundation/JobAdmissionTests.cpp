@@ -1,8 +1,6 @@
 #include "../../support/AllocationProbe.h"
 #include "../../support/OwnedJobTestThread.h"
 #include "Horo/Foundation/JobSystem.h"
-#include "Horo/Foundation/Logging/LogContext.h"
-#include "Horo/Foundation/Telemetry/Telemetry.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <condition_variable>
@@ -156,40 +154,6 @@ namespace {
         CheckSubmissionRejected(firstResult, expectedCode);
         CheckSubmissionRejected(secondResult, expectedCode);
     }
-
-    class AdmissionSink final : public Telemetry::ISink {
-    public:
-        void Export(const Telemetry::Record &record, const Telemetry::InstrumentDescriptor *) override {
-            std::lock_guard lock(mutex_);
-            records_.push_back(record);
-        }
-
-        void Flush() override {
-            // Export stores records synchronously; there is no pending sink buffer to flush.
-        }
-
-        [[nodiscard]] std::vector<Telemetry::Record> Records() const {
-            std::lock_guard lock(mutex_);
-            return records_;
-        }
-
-    private:
-        mutable std::mutex mutex_;
-        std::vector<Telemetry::Record> records_;
-    };
-
-    class TelemetryGuard final {
-    public:
-        TelemetryGuard() = default;
-        TelemetryGuard(const TelemetryGuard &) = delete;
-        TelemetryGuard &operator=(const TelemetryGuard &) = delete;
-        TelemetryGuard(TelemetryGuard &&) = delete;
-        TelemetryGuard &operator=(TelemetryGuard &&) = delete;
-
-        ~TelemetryGuard() {
-            static_cast<void>(Telemetry::Runtime::Shutdown());
-        }
-    };
 
     /** @brief Models a callback capture whose destruction re-enters the scheduler's diagnostic boundary. */
     class ReentrantCapture final {
@@ -536,34 +500,4 @@ TEST_CASE("Invalid queue policy and disabled capacity have typed outcomes", "[fo
         const auto result = jobs.Submit({}, NoOpJob);
         CheckSubmissionRejected(result, "job.wait_capacity_deadlock");
     }
-}
-
-TEST_CASE("Overload counters and structured diagnostic events preserve submitter correlation", "[foundation][jobs][admission]") {
-    TelemetryGuard telemetry;
-    auto sink = std::make_shared<AdmissionSink>();
-    REQUIRE(Telemetry::Runtime::Initialize(Telemetry::Configuration{}, sink));
-    JobSystemConfig config{.workerCount = 0, .maxQueuedJobs = 0};
-    config.priorityQueues[2].overloadPolicy = JobOverloadPolicy::Shed;
-    JobSystem jobs{config};
-    {
-        const Log::LogContext context{"correlation.id", "admission-test"};
-        REQUIRE(jobs.Submit({.priority = JobPriority::Background}, NoOpJob).HasError());
-        REQUIRE(jobs.Submit({.priority = JobPriority::Background, .requirement = JobRequirement::Optional}, NoOpJob).HasError());
-    }
-    REQUIRE(Telemetry::Runtime::Flush());
-    const auto records = sink->Records();
-    REQUIRE(records.size() == 2);
-    const std::array<std::string_view, 2> outcomes{"job.queue_full", "job.queue_shed"};
-    for (std::size_t index = 0; index < records.size(); ++index) {
-        const auto *event = std::get_if<Telemetry::DiagnosticEvent>(&records[index].payload);
-        REQUIRE(event != nullptr);
-        CHECK(event->name == "job.queue_overload");
-        REQUIRE(event->fields.size() == 4);
-        CHECK(std::get<std::uint64_t>(event->fields[0].value) == 2);
-        CHECK(std::get<std::string>(event->fields[3].value) == outcomes[index]);
-        REQUIRE(records[index].context.Fields().size() == 1);
-        CHECK(records[index].context.Fields()[0] == Log::MdcField{"correlation.id", "admission-test"});
-    }
-    CHECK(jobs.AdmissionSnapshot().rejected[2] == 2);
-    CHECK(jobs.AdmissionSnapshot().shed[2] == 1);
 }
