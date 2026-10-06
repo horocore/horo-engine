@@ -1219,6 +1219,13 @@ target_link_libraries(HoroLuaReplicationPublicHeaderConsumer PRIVATE HoroEngine:
 add_test(NAME HoroLuaReplicationPublicHeaderConsumer COMMAND HoroLuaReplicationPublicHeaderConsumer)
 set_tests_properties(HoroLuaReplicationPublicHeaderConsumer PROPERTIES LABELS "unit;gameplay;headless")
 
+# Only the declared gameplay dependency closure is visible; no root includes or concrete backend targets.
+add_executable(HoroGameplayReplicationPublicHeaderConsumer support/GameplayReplicationPublicHeaderConsumer.cpp)
+target_compile_features(HoroGameplayReplicationPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroGameplayReplicationPublicHeaderConsumer PRIVATE HoroEngine::GameplayLua)
+add_test(NAME HoroGameplayReplicationPublicHeaderConsumer COMMAND HoroGameplayReplicationPublicHeaderConsumer)
+set_tests_properties(HoroGameplayReplicationPublicHeaderConsumer PROPERTIES LABELS "unit;gameplay;headless;public_headers")
+
 add_executable(HoroLuaBehaviorTests
         unit/gameplay/LuaBehaviorTests.cpp
         unit/gameplay/LuaReplicationTests.cpp

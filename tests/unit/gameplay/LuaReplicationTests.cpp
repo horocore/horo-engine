@@ -102,6 +102,10 @@ TEST_CASE("script metadata and native declarations produce equivalent canonical 
     REQUIRE(native.Freeze({}, behaviors, {}).HasValue());
     const auto nativeLease = native.Acquire().Value();
     const auto scriptLease = program.Value()->AcquireReplication().Value();
+    // Fixed v1 canonical wire vector, independently encoded in big-endian order (137 bytes).
+    constexpr std::string_view fingerprint = "sha256:4baf64ed25af9cc8f64b622de9c6eb3f089244456252553b637a5787a15f72f7";
+    CHECK(FormatSha256(nativeLease.Descriptors()->Fingerprint()) == fingerprint);
+    CHECK(FormatSha256(scriptLease.Descriptors()->Fingerprint()) == fingerprint);
     CHECK(nativeLease.Descriptors()->Fingerprint() == scriptLease.Descriptors()->Fingerprint());
     CHECK(nativeLease.Descriptors()->Schemas().front() == scriptLease.Descriptors()->Schemas().front());
     CHECK(std::get<BehaviorTypeId>(scriptLease.Registrations().front().owner) == Owner());
@@ -157,6 +161,8 @@ TEST_CASE("script replication accepts compatible optional additions and pins old
     auto candidate = Compile(Source(fields, 1));
     REQUIRE(candidate.HasValue());
     REQUIRE(program->ReplaceCompatible(std::move(candidate).Value()).HasValue());
+    CHECK(FormatSha256(program->AcquireReplication().Value().Descriptors()->Fingerprint()) ==
+          "sha256:c80416267e305c91974697b75e721236450d060e07b2b2fb038cd7f6908cced7");
     CHECK(program->Revision() == 2);
     CHECK(previous.Descriptors()->Schemas().front().fields.size() == 1);
     CHECK(program->AcquireReplication().Value().Descriptors()->Schemas().front().fields.size() == 2);
@@ -314,4 +320,35 @@ TEST_CASE("declaration compilation reads inert behavior metadata without author 
     compiled = Compile(source);
     REQUIRE(compiled.HasValue());
     CHECK(compiled.Value()->Descriptor().displayName == "123");
+}
+
+TEST_CASE("script source sidecar and display renames retain canonical replication identity", "[gameplay][replication][lua]") {
+    Directory directory;
+    const auto source = directory.path / "Replicated.horo_script";
+    const auto sidecar = directory.path / "Replicated.horo_script.meta";
+    Write(source, Source());
+    Write(
+        sidecar,
+        R"({"schemaVersion":1,"runtime":"lua","behaviorTypeId":"game.tests.replicated","replicationSchemaId":42,"replicationModuleId":"game.tests"})");
+    auto loaded = LuaBehaviorProgram::LoadFiles(source, sidecar);
+    REQUIRE(loaded.HasValue());
+    auto program = std::move(loaded).Value();
+    const auto prior = program->AcquireReplication().Value();
+    const auto renamedSource = directory.path / "Renamed behavior.horo_script";
+    const auto renamedSidecar = directory.path / "Renamed behavior.horo_script.meta";
+    std::filesystem::rename(source, renamedSource);
+    std::filesystem::rename(sidecar, renamedSidecar);
+    auto renamed = Source();
+    renamed.replace(renamed.find("display_name=\"Replicated\""), std::string_view{"display_name=\"Replicated\""}.size(),
+                    "display_name=\"Renamed presentation\"");
+    Write(renamedSource, renamed);
+    REQUIRE(program->ReloadFiles(renamedSource, renamedSidecar).HasValue());
+    const auto current = program->AcquireReplication().Value();
+    CHECK(program->Registration().descriptor.displayName == "Renamed presentation");
+    CHECK(current.Descriptors()->Fingerprint() == prior.Descriptors()->Fingerprint());
+    CHECK(current.Registrations().front().owner == prior.Registrations().front().owner);
+    CHECK(current.Serializers().Encode(Schema(), FieldId::Create(7).Value(), 4.5).Value() ==
+          prior.Serializers().Encode(Schema(), FieldId::Create(7).Value(), 4.5).Value());
+    std::filesystem::remove(renamedSource);
+    CheckRejectedReload(*program, program->ReloadFiles(renamedSource, renamedSidecar), renamedSource, current, 2);
 }
