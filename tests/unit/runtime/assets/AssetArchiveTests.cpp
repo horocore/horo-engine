@@ -99,12 +99,20 @@ TEST_CASE("Selected release archive exposes only admitted chunk assets", "[asset
 
     auto coreOnly = AssetArchiveProvider::OpenSelected(encoded.Value(), target, plan, std::array{Chunk("core")}, base);
     REQUIRE(coreOnly.HasValue());
+    REQUIRE(coreOnly.Value().MountedChunks().size() == 1);
+    CHECK(coreOnly.Value().MountedChunks().front().id == Chunk("core"));
+    CHECK(coreOnly.Value().Target() == target);
+    CHECK(coreOnly.Value().ArchiveDigest() == ComputeSha256(std::as_bytes(std::span{encoded.Value()})));
     CHECK(coreOnly.Value().Exists(first, cancellation).Value());
     CHECK_FALSE(coreOnly.Value().Exists(second, cancellation).Value());
     CHECK(coreOnly.Value().Load(second, cancellation).HasError());
+    CHECK(coreOnly.Value().StoredByteLength(first) == inputs[0].bytes.size());
+    CHECK_FALSE(coreOnly.Value().StoredByteLength(second).has_value());
 
     auto withOptional = AssetArchiveProvider::OpenSelected(encoded.Value(), target, plan, std::array{Chunk("world"), Chunk("core")}, base);
     REQUIRE(withOptional.HasValue());
+    CHECK(withOptional.Value().MountedChunks().size() == 2);
+    CHECK(withOptional.Value().ArchiveDigest() == coreOnly.Value().ArchiveDigest());
     CHECK(withOptional.Value().Load(second, cancellation).Value() == inputs[1].bytes);
     CHECK(AssetArchiveProvider::OpenSelected(encoded.Value(), target, plan, std::array{Chunk("world")}, base).HasError());
     CHECK(AssetArchiveProvider::OpenSelected(encoded.Value(), target, plan, std::array{Chunk("core"), Chunk("core")}, base).HasError());

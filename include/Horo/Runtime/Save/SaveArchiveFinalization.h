@@ -52,6 +52,7 @@ namespace Horo::Runtime {
         SaveArchiveFinalizationSummary summary_;
 
         friend class SaveArchiveFinalizer;
+        friend class SaveArchiveContainerWriter;
     };
 
     /**

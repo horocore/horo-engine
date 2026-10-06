@@ -375,8 +375,9 @@ namespace Horo::Assets {
     }
 
     AssetArchiveProvider::AssetArchiveProvider(std::vector<std::uint8_t> bytes, std::vector<Entry> entries,
-                                               std::vector<AssetChunkDefinition> chunks)
-        : bytes_(std::move(bytes)), entries_(std::move(entries)), chunks_(std::move(chunks)) {}
+                                               std::vector<AssetChunkDefinition> chunks, AssetCookTargetId target)
+        : bytes_(std::move(bytes)), entries_(std::move(entries)), chunks_(std::move(chunks)), target_(std::move(target)),
+          archiveDigest_(Digest(bytes_)) {}
 
     /** @copydoc AssetArchiveProvider::Open */
     Result<AssetArchiveProvider> AssetArchiveProvider::Open(const std::span<const std::uint8_t> bytes,
@@ -385,7 +386,6 @@ namespace Horo::Assets {
         if (opened.HasError())
             return opened;
         auto provider = std::move(opened).Value();
-        provider.chunks_ = {};
         return Result<AssetArchiveProvider>::Success(std::move(provider));
     }
 
@@ -430,7 +430,8 @@ namespace Horo::Assets {
         std::ranges::sort(entries, {}, &Entry::id);
         return Result<AssetArchiveProvider>::Success(
             AssetArchiveProvider{std::vector<std::uint8_t>(bytes.begin(), bytes.end()), std::move(entries),
-                                 std::vector<AssetChunkDefinition>{plan.Value().Chunks().begin(), plan.Value().Chunks().end()}});
+                                 std::vector<AssetChunkDefinition>{plan.Value().Chunks().begin(), plan.Value().Chunks().end()},
+                                 expectedTarget});
     }
 
     /** @copydoc AssetArchiveProvider::OpenSelected */
@@ -458,8 +459,32 @@ namespace Horo::Assets {
         std::erase_if(provider.entries_, [&visible](const Entry &entry) {
             return !std::ranges::binary_search(visible, entry.id);
         });
-        provider.chunks_ = {};
+        std::erase_if(provider.chunks_, [&order](const AssetChunkDefinition &chunk) {
+            return std::ranges::find(order.Value(), chunk.id) == order.Value().end();
+        });
         return Result<AssetArchiveProvider>::Success(std::move(provider));
+    }
+
+    /** @copydoc AssetArchiveProvider::StoredByteLength */
+    std::optional<std::size_t> AssetArchiveProvider::StoredByteLength(const AssetId id) const noexcept {
+        if (const auto found = std::ranges::lower_bound(entries_, id, {}, &Entry::id); found != entries_.end() && found->id == id)
+            return found->size;
+        return std::nullopt;
+    }
+
+    /** @copydoc AssetArchiveProvider::MountedChunks */
+    std::span<const AssetChunkDefinition> AssetArchiveProvider::MountedChunks() const noexcept {
+        return chunks_;
+    }
+
+    /** @copydoc AssetArchiveProvider::Target */
+    const AssetCookTargetId &AssetArchiveProvider::Target() const noexcept {
+        return target_;
+    }
+
+    /** @copydoc AssetArchiveProvider::ArchiveDigest */
+    const Sha256Digest &AssetArchiveProvider::ArchiveDigest() const noexcept {
+        return archiveDigest_;
     }
 
     Result<bool> AssetArchiveProvider::Exists(const AssetId id, const CancellationToken &cancellation) const {

@@ -93,6 +93,9 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroGameplayApiPublicHeaderConsumer PRIVATE support/PersistenceInstallationPublicHeaderConsumer.cpp)
+target_sources(HoroRuntimePublicHeaderConsumer PRIVATE support/SaveSceneCanonicalPublicHeaderConsumer.cpp)
+target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/SaveContentWorldPublicHeaderConsumer.cpp)
 
 execute_process(
         COMMAND "${Python3_EXECUTABLE}" -c "import pytest; print(pytest.__version__)"
@@ -2662,6 +2665,7 @@ target_compile_features(HoroRuntimeSaveMigrationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveMigrationTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveCanonicalCodecTests
         unit/runtime/save/SaveCanonicalCodecTests.cpp
+        unit/runtime/save/SaveSceneCanonicalStateTests.cpp
 )
 target_compile_features(HoroRuntimeSaveCanonicalCodecTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveCanonicalCodecTests PRIVATE HoroEngine::Runtime)
@@ -2800,6 +2804,9 @@ horo_register_catch_test(HoroRuntimeSceneCellPayloadTests LABELS "unit;scene;wor
 target_sources(HoroSceneCellPayloadPublicHeaderConsumer PRIVATE support/SceneCellPayloadPublicHeaderConsumer.cpp)
 add_executable(HoroRuntimeSavedSceneBootstrapTests
         unit/runtime/scene/SavedSceneBootstrapTests.cpp
+        unit/runtime/scene/SaveContentRequirementsTests.cpp
+        unit/runtime/scene/SaveContentWorldTests.cpp
+        support/AllocationProbe.cpp
 )
 target_compile_features(HoroRuntimeSavedSceneBootstrapTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSavedSceneBootstrapTests PRIVATE HoroEngine::RuntimeScene)

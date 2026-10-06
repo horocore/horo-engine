@@ -98,6 +98,11 @@ namespace Horo::Navigation {
                 return Result<void>::Success();
             }
 
+            /** @brief The prepared navigation root owns runtime navigation state, not a persistent-world dataset identity. */
+            Runtime::SceneCanonicalDatasetProjection CanonicalDatasetProjection() const noexcept override {
+                return Runtime::SceneCanonicalDatasetProjection::Absent;
+            }
+
             void Publish() noexcept override {
                 state_->active = world_;
                 state_->provenance = provenance_;

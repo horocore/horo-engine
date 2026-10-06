@@ -80,6 +80,20 @@ namespace Horo::Assets {
             std::span<const std::uint8_t> bytes, const AssetCookTargetId &expectedTarget, const AssetChunkPlan &expectedPlan,
             std::span<const AssetChunkId> selected, const Sha256Digest &baseManifest, const AssetArchiveLimits &limits = {});
 
+        /** @brief Returns a visible cooked envelope's exact stored size without copying it.
+         * @param id Stable asset identity.
+         * @return Verified byte length, or empty when the asset is not mounted.
+         */
+        [[nodiscard]] std::optional<std::size_t> StoredByteLength(AssetId id) const noexcept;
+        /** @brief Returns only verified mounted chunk definitions, including selected dependency closure.
+         * @return Immutable mount evidence valid for this provider's lifetime; never an unmounted release inventory.
+         */
+        [[nodiscard]] std::span<const AssetChunkDefinition> MountedChunks() const noexcept;
+        /** @brief Returns the target verified in every retained cooked envelope. @return Exact immutable cook target. */
+        [[nodiscard]] const AssetCookTargetId &Target() const noexcept;
+        /** @brief Returns the digest of the complete verified archive bytes. @return Immutable package identity. */
+        [[nodiscard]] const Sha256Digest &ArchiveDigest() const noexcept;
+
         [[nodiscard]] Result<bool> Exists(AssetId id, const CancellationToken &cancellation) const override;
         [[nodiscard]] Result<std::vector<std::uint8_t>> Load(AssetId id, const CancellationToken &cancellation) const override;
 
@@ -90,7 +104,8 @@ namespace Horo::Assets {
             std::size_t size{};
         };
 
-        AssetArchiveProvider(std::vector<std::uint8_t> bytes, std::vector<Entry> entries, std::vector<AssetChunkDefinition> chunks);
+        AssetArchiveProvider(std::vector<std::uint8_t> bytes, std::vector<Entry> entries, std::vector<AssetChunkDefinition> chunks,
+                             AssetCookTargetId target);
         /** @brief Parses the complete archive and retains its internal graph for selected admission. */
         [[nodiscard]] static Result<AssetArchiveProvider> OpenParsed(std::span<const std::uint8_t> bytes,
                                                                      const AssetCookTargetId &expectedTarget,
@@ -99,5 +114,7 @@ namespace Horo::Assets {
         std::vector<std::uint8_t> bytes_;
         std::vector<Entry> entries_;
         std::vector<AssetChunkDefinition> chunks_;
+        AssetCookTargetId target_;
+        Sha256Digest archiveDigest_;
     };
 }  // namespace Horo::Assets

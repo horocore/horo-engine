@@ -2,6 +2,7 @@
 
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "SaveArchiveReaderInternal.h"
+#include "SaveChunkCompressionInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -173,8 +174,7 @@ namespace Horo::Runtime {
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveExtensionInvalid, recordOffset, "entry/extension"));
             if (entry.kind != Header && entry.kind != Manifest && entry.kind != Chunk)
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveEntryInvalid, recordOffset, "entry/kind"));
-            if (entry.codec != static_cast<std::uint16_t>(SaveChunkCodec::Raw) &&
-                (entry.kind != Chunk || archiveVersion < 2 || entry.codec != static_cast<std::uint16_t>(SaveChunkCodec::Deflate)))
+            if (entry.codec != static_cast<std::uint16_t>(SaveChunkCodec::Raw) && (entry.kind != Chunk || archiveVersion < 2))
                 return Result<void>::Failure(ReaderError(SaveErrors::ArchiveCodecUnsupported, recordOffset, "entry/codec"));
             return Result<void>::Success();
         }
@@ -311,7 +311,8 @@ namespace Horo::Runtime {
                     if (metadata.HasError())
                         return Result<ValidatedSaveArchive>::Failure(metadata.ErrorValue());
                     auto metadataValue = std::move(metadata).Value();
-                    auto validatedDirectory = BuildDirectory(payload, entries, metadataValue.manifest, limits);
+                    auto validatedDirectory =
+                        BuildDirectory(payload, entries, metadataValue.manifest, limits, preamble.archiveFormatVersion.Value());
                     if (validatedDirectory.HasError())
                         return Result<ValidatedSaveArchive>::Failure(validatedDirectory.ErrorValue());
                     auto validated = std::move(validatedDirectory).Value();
@@ -373,6 +374,8 @@ namespace Horo::Runtime {
         const auto entries = directory_.Entries();
         if (const auto found = std::ranges::lower_bound(entries, record, {}, &SaveChunkDirectoryEntry::record);
             found != entries.end() && found->record == record) {
+            if (!SaveChunkCompressionDetail::Supports(found->codec))
+                return Result<std::optional<std::vector<std::byte>>>::Failure(MakeError(SaveErrors::ArchiveCodecUnsupported));
             std::uint64_t remaining = remainingReadWork_->load(std::memory_order_relaxed);
             while (true) {
                 const std::uint64_t work = found->storedByteLength + (found->codec == SaveChunkCodec::Raw ? 0 : found->decodedByteLength);

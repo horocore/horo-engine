@@ -7,9 +7,31 @@
 #include <limits>
 #include <new>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace Horo::Runtime {
+    namespace ScenePublicationDetail {
+        struct State final {
+            std::thread::id owner{std::this_thread::get_id()};
+            ScenePublicationSnapshot snapshot;
+        };
+    }  // namespace ScenePublicationDetail
+
+    /** @copydoc ScenePublicationReceipt::Snapshot */
+    Result<ScenePublicationSnapshot> ScenePublicationReceipt::Snapshot() const {
+        if (!state_ || state_->owner != std::this_thread::get_id())
+            return Result<ScenePublicationSnapshot>::Failure(MakeError(SceneErrors::StaleView));
+        return Result<ScenePublicationSnapshot>::Success(state_->snapshot);
+    }
+
+    /** @copydoc RuntimeSceneService::RetirePublicationReceipt */
+    void RuntimeSceneService::RetirePublicationReceipt(const ScenePublicationStatus status) noexcept {
+        if (publicationReceipt_ && publicationReceipt_->snapshot.status == ScenePublicationStatus::Pending)
+            publicationReceipt_->snapshot.status = status;
+        publicationReceipt_.reset();
+    }
+
     namespace {
         [[nodiscard]] bool IsTerminal(const Horo::Assets::AssetLoadState state) noexcept {
             using enum Horo::Assets::AssetLoadState;
@@ -85,32 +107,50 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Scene activation participant is null."));
         if (started_ || shutdown_ || transition_ != TransitionKind::None || preparation_ || pending_.scene)
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+        if (participants_.size() >= MaximumSceneActivationParticipants)
+            return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Scene activation participant capacity exceeded."));
         participants_.push_back(std::move(participant));
         return Result<void>::Success();
     }
 
     /** @copydoc RuntimeSceneService::QueuePreparation */
     Result<void> RuntimeSceneService::QueuePreparation(RuntimeSceneDefinition definition, const RuntimeSceneConfig config) {
-        return QueuePreparationWithPublicationCheck(std::move(definition), {}, config);
+        auto queued = QueuePreparationWithPublicationCheck(std::move(definition), {}, config);
+        return queued.HasError() ? Result<void>::Failure(queued.ErrorValue()) : Result<void>::Success();
     }
 
     /** @copydoc RuntimeSceneService::QueuePreparationWithPublicationCheck */
-    Result<void> RuntimeSceneService::QueuePreparationWithPublicationCheck(RuntimeSceneDefinition definition,
-                                                                           std::unique_ptr<ScenePublicationCheck> publicationCheck,
-                                                                           const RuntimeSceneConfig config) {
+    Result<ScenePublicationReceipt> RuntimeSceneService::QueuePreparationWithPublicationCheck(
+        RuntimeSceneDefinition definition, std::unique_ptr<ScenePublicationCheck> publicationCheck, const RuntimeSceneConfig config) {
         if (shutdown_)
-            return Result<void>::Failure(MakeError(SceneErrors::ServiceShutdown));
+            return Result<ScenePublicationReceipt>::Failure(MakeError(SceneErrors::ServiceShutdown));
         if (transition_ != TransitionKind::None || structuralCommands_ || preparation_)
-            return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+            return Result<ScenePublicationReceipt>::Failure(MakeError(SceneErrors::OperationInProgress));
         if (publicationCheck) {
             if (const auto valid = publicationCheck->ValidatePublication(); valid.HasError())
-                return valid;
+                return Result<ScenePublicationReceipt>::Failure(valid.ErrorValue());
         }
-        operationError_.reset();
-        const auto admitted = BeginPreparation(std::move(definition), config);
-        if (admitted.HasValue())
+        try {
+            // Receipt storage is admitted before world preparation. Publication fills only bounded values, with no callbacks.
+            auto receipt = publicationCheck ? std::make_shared<ScenePublicationDetail::State>() : nullptr;
+            operationError_.reset();
+            const auto admitted = BeginPreparation(std::move(definition), config);
+            if (admitted.HasError())
+                return Result<ScenePublicationReceipt>::Failure(admitted.ErrorValue());
+            if (pending_.scene && publicationCheck) {
+                const auto composition = publicationCheck->ValidatePreparedComposition(pending_.datasets);
+                if (composition.HasError()) {
+                    RejectPendingPublication(composition.ErrorValue());
+                    return Result<ScenePublicationReceipt>::Failure(composition.ErrorValue());
+                }
+            }
             publicationCheck_ = std::move(publicationCheck);
-        return admitted;
+            publicationReceipt_ = receipt;
+            return Result<ScenePublicationReceipt>::Success(ScenePublicationReceipt{std::move(receipt)});
+        } catch (const std::bad_alloc &) {
+            return Result<ScenePublicationReceipt>::Failure(
+                MakeError(SceneErrors::InvalidCandidate, "Scene publication receipt allocation failed."));
+        }
     }
 
     Result<void> RuntimeSceneService::PopulatePreparationEntries(Preparation &prep, const RuntimeSceneDefinition &definition) const {
@@ -177,6 +217,7 @@ namespace Horo::Runtime {
         CancelPreparation(false);
         ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
+        RetirePublicationReceipt(ScenePublicationStatus::Cancelled);
         publicationCheck_.reset();
         transition_ = None;
         if (!active_.scene)
@@ -244,6 +285,7 @@ namespace Horo::Runtime {
                 if (const auto valid = publicationCheck_->ValidatePublication(); valid.HasError()) {
                     operationError_ = valid.ErrorValue();
                     CancelPreparation(false);
+                    RetirePublicationReceipt(ScenePublicationStatus::Rejected);
                     publicationCheck_.reset();
                     return Result<void>::Success();
                 }
@@ -267,6 +309,7 @@ namespace Horo::Runtime {
         operationError_.reset();
         ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
+        RetirePublicationReceipt(ScenePublicationStatus::Cancelled);
         publicationCheck_.reset();
         ShutdownCandidates(active_.candidates);
         active_.scene.reset();
@@ -361,6 +404,7 @@ namespace Horo::Runtime {
         if (const Result<void> processed = ProcessCompletedPreparationLoads(); processed.HasError()) {
             operationError_ = processed.ErrorValue();
             CancelPreparation(false);
+            RetirePublicationReceipt(ScenePublicationStatus::Rejected);
             publicationCheck_.reset();
             return;
         }
@@ -371,6 +415,7 @@ namespace Horo::Runtime {
         if (const Result<void> finalized = FinalizePreparation(); finalized.HasError()) {
             operationError_ = finalized.ErrorValue();
             CancelPreparation(false);
+            RetirePublicationReceipt(ScenePublicationStatus::Rejected);
             publicationCheck_.reset();
         }
     }
@@ -410,6 +455,11 @@ namespace Horo::Runtime {
                     RejectPendingPublication(valid.ErrorValue());
                     return Result<void>::Success();
                 }
+                const auto composition = publicationCheck_->ValidatePreparedComposition(pending_.datasets);
+                if (composition.HasError()) {
+                    RejectPendingPublication(composition.ErrorValue());
+                    return Result<void>::Success();
+                }
             }
             for (const auto &candidate : pending_.candidates) {
                 if (const Result<void> result = candidate->ValidatePublication(); result.HasError()) {
@@ -421,6 +471,12 @@ namespace Horo::Runtime {
                 candidate->Publish();
             SceneAggregate retired = std::move(active_);
             active_ = std::move(pending_);
+            if (publicationReceipt_) {
+                const auto view = active_.scene->View();
+                publicationReceipt_->snapshot = {ScenePublicationStatus::Published, view.RuntimeId(), view.StructuralRevision(),
+                                                 active_.datasets};
+            }
+            RetirePublicationReceipt(ScenePublicationStatus::Rejected);
             publicationCheck_.reset();
             ShutdownCandidates(retired.candidates);
             retired.scene.reset();
@@ -438,12 +494,14 @@ namespace Horo::Runtime {
         operationError_ = std::move(error);
         ShutdownCandidates(pending_.candidates);
         pending_.scene.reset();
+        RetirePublicationReceipt(ScenePublicationStatus::Rejected);
         publicationCheck_.reset();
         transition_ = TransitionKind::None;
     }
 
     Result<void> RuntimeSceneService::PrepareParticipants(const RuntimeSceneDefinition &definition) {
         ShutdownCandidates(pending_.candidates);
+        pending_.datasets = SceneCanonicalDatasetProjection::Absent;
         try {
             pending_.candidates.reserve(participants_.size());
             for (const auto &participant : participants_) {
@@ -456,6 +514,12 @@ namespace Horo::Runtime {
                     ShutdownCandidates(pending_.candidates);
                     return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Participant returned a null candidate."));
                 }
+                const auto datasets = prepared.Value()->CanonicalDatasetProjection();
+                if (datasets == SceneCanonicalDatasetProjection::PersistentWorld)
+                    pending_.datasets = SceneCanonicalDatasetProjection::PersistentWorld;
+                else if (datasets != SceneCanonicalDatasetProjection::Absent &&
+                         pending_.datasets != SceneCanonicalDatasetProjection::PersistentWorld)
+                    pending_.datasets = SceneCanonicalDatasetProjection::Unqualified;
                 pending_.candidates.push_back(std::move(prepared).Value());
             }
         } catch (const std::bad_alloc &) {

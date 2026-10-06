@@ -1,3 +1,4 @@
+#include "../runtime/scene/SaveContentWorldTestHelpers.h"
 #include "GameplayModuleTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
@@ -11,9 +12,11 @@
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveParticipation.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <format>
+#include <future>
 
 namespace {
     using namespace Horo;
@@ -197,6 +200,13 @@ TEST_CASE("loaded gameplay declarations participate in durable capture and aggre
     REQUIRE(participationResult.HasValue());
     auto participation = std::move(participationResult).Value();
     const auto adapters = RegisterDurableParticipants(*loaded, participation.Client());
+    auto installed = loaded->AcquireInstalledPersistence(adapters.front()->Descriptor().participant.participant);
+    REQUIRE(installed.HasValue());
+    CHECK(installed.Value().CanUse());
+    CHECK(installed.Value().Descriptor().moduleId == adapters.front()->Descriptor().moduleId);
+    CHECK(installed.Value().Descriptor().moduleVersion == adapters.front()->Descriptor().moduleVersion);
+    REQUIRE(installed.Value().AcquireAdapter() != nullptr);
+    CHECK(loaded->AcquireInstalledPersistence(SaveParticipantId::Parse("game.tests.absent").Value()).HasError());
     CHECK(loaded->AcquirePersistence(SaveParticipantId::Parse("game.tests.absent").Value()).ErrorValue().code.Value() ==
           SaveErrors::ParticipantAdapterMissing.code.Value());
     auto participants = registry.Snapshot().Value();
@@ -204,6 +214,9 @@ TEST_CASE("loaded gameplay declarations participate in durable capture and aggre
     REQUIRE(snapshot.Records().size() == 4);
     auto receipts = StageDurableParticipants(adapters, snapshot);
     RequireRestartRequired(loaded->PrepareReload());
+    CHECK_FALSE(installed.Value().CanUse());
+    CHECK(installed.Value().AcquireAdapter() == nullptr);
+    CHECK(loaded->AcquireInstalledPersistence(adapters.front()->Descriptor().participant.participant).HasError());
     RequireRestartRequired(loaded->AcquirePersistence(adapters.front()->Descriptor().participant.participant));
     CHECK(loaded->Events().Acquire(90, 1, 91, 1, loaded->Cancellation()).HasError());
     CHECK(event.Value()->Invoke({}) == GameplayEventOutcome::CapabilityUnavailable);
@@ -469,4 +482,79 @@ TEST_CASE("native module restart after releasing generation leases preserves rep
     CHECK(current.Value().Descriptors()->Fingerprint() == fingerprint);
     CHECK(current.Value().Serializers().Encode(schema, field, 3.5).Value() == encodedEvidence);
     CHECK(current.Value().Registrations().front().owner == owner);
+}
+
+namespace {
+    template <typename T>
+    concept FabricablePersistenceInstallation = requires { T{{}, {}, {}}; };
+    static_assert(!FabricablePersistenceInstallation<Horo::Runtime::GameplayPersistenceInstallation>);
+}  // namespace
+
+TEST_CASE("actual installed SlotPlayer capture survives native retirement and re-admits its schema2 content declarations",
+          "[unit][gameplay][save][content]") {
+    using namespace Horo::Runtime;
+    GameModuleHost host;
+    auto loadedResult = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+    REQUIRE(loadedResult.HasValue());
+    auto loaded = std::move(loadedResult).Value();
+    const auto participant = SaveParticipantId::Parse("game.tests.durable3").Value();
+    auto receiptResult = loaded->AcquireInstalledPersistence(participant);
+    REQUIRE(receiptResult.HasValue());
+    auto receipt = std::move(receiptResult).Value();
+    const auto descriptor = receipt.Descriptor().participant;
+    REQUIRE(descriptor.scope == SaveParticipantScope::SlotPlayer);
+    auto adapter = receipt.AcquireAdapter();
+    REQUIRE(adapter);
+    std::vector<GameplayPersistenceInstallation> receipts;
+    receipts.push_back(std::move(receipt));
+    SceneContentWorldTest::WorldFixture fixture{std::move(receipts), {{descriptor, adapter}}};
+    auto accepted = fixture.Capture();
+    auto encoded = accepted.ReSave(fixture.Header(), SceneContentTest::V<ArchiveFormatVersion>());
+    if (encoded.HasError()) {
+        INFO("native content re-save: " << encoded.ErrorValue().code.Value() << ": " << encoded.ErrorValue().message);
+        REQUIRE(encoded.HasValue());
+    }
+    REQUIRE(encoded.HasValue());
+    const auto output = encoded.Value().Archive();
+    auto policy = fixture.source.policy;
+    policy.compatibility.saveSchemaVersions.direct = {SceneContentTest::V<SaveSchemaVersion>(2), SceneContentTest::V<SaveSchemaVersion>(2)};
+    const auto schema = SceneContentTest::V<ParticipantSchemaVersion>();
+    policy.compatibility.participants = {{participant, {{schema, schema}, {}}, false, {}},
+                                         {SaveParticipantId::Parse("project.state").Value(), {{schema, schema}, {}}, false, {}}};
+    std::ranges::sort(policy.compatibility.participants, {}, &SaveParticipantCompatibility::participant);
+    auto readmitted = ReconciledSaveContent::Prepare(*fixture.source.installed, output, policy, fixture.source.cancellation.Token());
+    REQUIRE(readmitted.HasValue());
+    CHECK(std::ranges::any_of(readmitted.Value().Diagnostics(), [participant](const SaveContentDiagnostic &entry) {
+        return entry.requirement.owner == participant;
+    }));
+    auto next = PrepareSavedSceneBootstrap(fixture.source.descriptor, SceneContentTest::SceneType(), std::move(readmitted).Value(),
+                                           &fixture.source.decoder);
+    REQUIRE(next.HasValue());
+    auto admitted = SaveArchiveReader{}.Read(output.bytes);
+    REQUIRE(admitted.HasValue());
+    auto declarationBytes = admitted.Value().SelectChunk(SaveContentRequirementsRecord());
+    REQUIRE(declarationBytes.HasValue());
+    REQUIRE(declarationBytes.Value());
+    auto declarations = DecodeSaveContentRequirements(*declarationBytes.Value());
+    REQUIRE(declarations.HasValue());
+    auto changedDeclarations = std::move(declarations).Value();
+    auto nativeDeclaration = std::ranges::find(changedDeclarations, participant, &SaveContentRequirement::owner);
+    REQUIRE(nativeDeclaration != changedDeclarations.end());
+    auto &moduleVersion = std::get<SaveModuleContentRequirement>(nativeDeclaration->content);
+    ++moduleVersion.version;
+    const auto incompatible = SceneContentWorldTest::RewriteRequirements(output, changedDeclarations);
+    const auto decoderCalls = fixture.source.decoder.calls;
+    CHECK(ReconciledSaveContent::Prepare(*fixture.source.installed, incompatible, policy, fixture.source.cancellation.Token()).HasError());
+    CHECK(fixture.source.decoder.calls == decoderCalls);
+    fixture.service->Shutdown();
+    RequireRestartRequired(loaded->PrepareReload());
+    CHECK(ReconciledSaveContent::Prepare(*fixture.source.installed, output, policy, fixture.source.cancellation.Token()).HasError());
+    loaded.reset();
+    adapter.reset();
+    auto worker = std::async(std::launch::async, [accepted, header = fixture.Header()] {
+        return accepted.ReSave(header, SceneContentTest::V<ArchiveFormatVersion>());
+    });
+    auto afterRetirement = worker.get();
+    REQUIRE(afterRetirement.HasValue());
+    CHECK(afterRetirement.Value().Summary().canonicalState == encoded.Value().Summary().canonicalState);
 }
