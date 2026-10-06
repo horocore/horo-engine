@@ -328,6 +328,17 @@ add_executable(HoroNetworkRuntimeTests
 target_compile_features(HoroNetworkRuntimeTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkRuntimeTests PRIVATE HoroEngine::NetworkRuntime HoroEngine::NetworkTransportNull)
 horo_register_catch_test(HoroNetworkRuntimeTests LABELS "unit;network;headless")
+add_executable(HoroReplicationStateCaptureTests
+        support/AllocationProbe.cpp
+        unit/runtime/networking/ReplicationStateCaptureTests.cpp
+        unit/runtime/networking/ReplicationCaptureContainerTests.cpp
+        unit/runtime/networking/ReplicationCaptureSchedulingTests.cpp
+        unit/runtime/networking/SceneReplicationCommitSourceTests.cpp
+)
+target_compile_features(HoroReplicationStateCaptureTests PRIVATE cxx_std_20)
+target_include_directories(HoroReplicationStateCaptureTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroReplicationStateCaptureTests PRIVATE HoroEngine::NetworkRuntime)
+horo_register_catch_test(HoroReplicationStateCaptureTests LABELS "unit;network;headless;replication_capture")
 add_executable(HoroNetworkModePublicHeaderConsumer support/NetworkModePublicHeaderConsumer.cpp)
 target_compile_features(HoroNetworkModePublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroNetworkModePublicHeaderConsumer PRIVATE HoroEngine::NetworkRuntime)
@@ -2482,6 +2493,19 @@ add_test(NAME HoroRuntimeUiBindingWritePublicHeaderConsumer COMMAND HoroRuntimeU
 set_tests_properties(HoroRuntimeUiBindingWritePublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless")
 target_compile_features(HoroRuntimeUiBindingStoreTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiBindingStoreTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiHotReloadTests
+        unit/runtime/ui/UiHotReloadTests.cpp
+        unit/runtime/ui/UiHotReloadTestFixture.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiHotReloadTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiHotReloadTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiHotReloadTests PRIVATE HoroEngine::RuntimeUi)
+add_executable(HoroRuntimeUiHotReloadPublicHeaderConsumer support/RuntimeUiHotReloadPublicHeaderConsumer.cpp)
+target_compile_features(HoroRuntimeUiHotReloadPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiHotReloadPublicHeaderConsumer PRIVATE HoroEngine::RuntimeUi)
+add_test(NAME HoroRuntimeUiHotReloadPublicHeaderConsumer COMMAND HoroRuntimeUiHotReloadPublicHeaderConsumer)
+set_tests_properties(HoroRuntimeUiHotReloadPublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless")
 add_executable(HoroRuntimeUiDocumentTests
         unit/runtime/ui/UiDocumentTests.cpp
         unit/runtime/ui/UiAssetLoadingTests.cpp
@@ -3487,6 +3511,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeUiBindingStoreTests
         HoroRuntimeUiBindingWriteTests
         HoroRuntimeUiDocumentTests
+        HoroRuntimeUiHotReloadTests
         HoroRuntimeUiLocalizationTests
         HoroRuntimeUiCanvasSpaceTests
         HoroRuntimeUiDiagnosticsTests

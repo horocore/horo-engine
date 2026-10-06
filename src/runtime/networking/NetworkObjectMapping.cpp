@@ -120,6 +120,13 @@ namespace Horo::Network {
         return Result<Runtime::EntityRef>::Success(found->live->entity);
     }
 
+    /** @copydoc NetworkObjectMapping::ResolveEntry */
+    Result<NetworkObjectMappingEntry> NetworkObjectMapping::ResolveEntry(const NetworkObjectId object) const {
+        if (const auto entity = Resolve(object); entity.HasError())
+            return Result<NetworkObjectMappingEntry>::Failure(entity.ErrorValue());
+        return Result<NetworkObjectMappingEntry>::Success(*LowerBound(object.Slot())->live);
+    }
+
     /** @copydoc NetworkObjectMapping::Find */
     Result<NetworkObjectId> NetworkObjectMapping::Find(const Runtime::EntityRef entity) const {
         if (const auto active = RequireActive(); active.HasError())

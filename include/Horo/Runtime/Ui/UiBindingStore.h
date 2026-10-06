@@ -314,6 +314,18 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<std::size_t> DrainDirty(std::span<UiBindingTargetDirty> output);
         /** @brief Returns current publication/content evidence without polling providers. @return Latest committed summary. */
         [[nodiscard]] UiBindingApplyResult Current() const noexcept;
+        /** @brief Validates the retained store's actual tree/source lineage without invoking a provider.
+         * @param tree Exact active owning tree. @return Success or typed stale/lifecycle failure.
+         */
+        [[nodiscard]] Result<void> ValidateOwner(const UiElementTree &tree) const;
+        /** @brief Qualifies a stable element's actual value-binding and admitted write contract for draft preservation.
+         * @param source Old active store. @param sourceTree Its exact tree. @param tree Replacement tree.
+         * @param element Stable authored control identity. @return True only when actual provider/schema/property,
+         * committed revision, direction and write permission contracts match; no authority callback runs.
+         */
+        [[nodiscard]] bool ReloadCompatible(const UiBindingStore &source, const UiElementTree &sourceTree, const UiElementTree &tree,
+                                            UiElementId element) const;
+
         /**
          * @brief Atomically admits a complete bounded write capability batch at load time, once per store.
          * @param tree Exact retained tree. @param admissions Exact bindings, presented owners and leased capabilities.
@@ -367,6 +379,16 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> ReconcileControl(const UiElementTree &tree, UiBindingId binding, UiControlStateMachine &control) const;
         /** @brief Closes admission and target borrows; existing immutable downstream snapshots remain owned by their consumers. */
         void BeginRetirement() noexcept;
+        /** @brief Closes reload admission and records cancellations without invoking an external write authority.
+         * @return Success or reentrant/lifecycle failure; admitted authority/module pins stay retained until DrainReloadRetirement.
+         * @pre Owner safe point, outside ProcessWrite/provider callbacks.
+         */
+        [[nodiscard]] Result<void> CloseReloadAdmission();
+        /** @brief Abandons deferred reload reservations exactly once outside frame-hot publication.
+         * @return Success or reentrant failure. The store retains all authority/module leases until this drain completes.
+         */
+        [[nodiscard]] Result<void> DrainReloadRetirement();
+
         /** @brief Idempotently abandons pending provider reservations before releasing owned storage and authority leases. */
         void Shutdown() noexcept;
 

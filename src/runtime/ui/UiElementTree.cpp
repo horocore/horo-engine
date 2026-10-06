@@ -46,9 +46,13 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc UiElementSlotAllocator::Create */
-    Result<UiElementSlotAllocator> UiElementSlotAllocator::Create(const UiOwnershipGeneration ownership) {
-        return ownership.IsValid() ? Result<UiElementSlotAllocator>::Success(UiElementSlotAllocator{ownership})
-                                   : Failure<UiElementSlotAllocator>(UiErrors::OwnershipGenerationInvalid);
+    Result<UiElementSlotAllocator> UiElementSlotAllocator::Create(const UiOwnershipGeneration ownership,
+                                                                  const std::uint32_t previousIssuedSlot) {
+        if (!ownership.IsValid())
+            return Failure<UiElementSlotAllocator>(UiErrors::OwnershipGenerationInvalid);
+        UiElementSlotAllocator allocator{ownership};
+        allocator.nextSlot_ = std::uint64_t(previousIssuedSlot) + 1;
+        return Result<UiElementSlotAllocator>::Success(std::move(allocator));
     }
 
     /** @copydoc UiElementSlotAllocator::UiElementSlotAllocator */
@@ -476,6 +480,13 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiElementTree::Size */
     std::uint32_t UiElementTree::Size() const noexcept {
         return state_ ? state_->size : 0;
+    }
+
+    /** @copydoc UiElementTree::ReservedSlots */
+    Result<UiElementSlotRange> UiElementTree::ReservedSlots() const {
+        if (!state_ || state_->lifecycle == UiElementTreeState::Stopped)
+            return Failure<UiElementSlotRange>(UiErrors::ElementTreeLifecycleUnavailable);
+        return Result<UiElementSlotRange>::Success(state_->elementSlots);
     }
 
     /** @copydoc UiElementTree::Root */

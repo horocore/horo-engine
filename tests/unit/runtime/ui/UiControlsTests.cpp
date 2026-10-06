@@ -434,6 +434,49 @@ namespace Horo::Runtime::Ui {
             CHECK(after == before);
         }
 
+        TEST_CASE("Control reload preserves compatible draft Cancel baseline and exact source stamp", "[runtime_ui][controls][reload]") {
+            auto source = std::move(UiControlStateMachine::Create(UiTextInputControlDescriptor{Base(), Text("base"), 32, true})).Value();
+            REQUIRE(source.Handle(Input(UiControlInputKind::FocusGained, 1)).HasValue());
+            REQUIRE(source
+                        .Handle(Input(UiControlInputKind::TextInput, 2, UiControlActivationSource::Keyboard, 0, UiControlAdjustment::Count,
+                                      Text(" draft")))
+                        .HasValue());
+            const auto stamp = source.CaptureReloadStamp();
+            REQUIRE(stamp.HasValue());
+            CHECK(source.MatchesReloadStamp(stamp.Value()));
+            auto replacement =
+                std::move(UiControlStateMachine::Create(UiTextInputControlDescriptor{Base(), Text("new"), 32, true})).Value();
+            const auto before = ::Horo::Tests::AllocationProbe::Count();
+            const auto restored = replacement.ReconcileReload(source, true);
+            const auto after = ::Horo::Tests::AllocationProbe::Count();
+            REQUIRE(restored.HasValue());
+            CHECK(restored.Value());
+            CHECK(after == before);
+            CHECK(std::get<UiTextInputControlState>(replacement.Snapshot().Value()).text.View() == "base draft");
+            REQUIRE(replacement.Handle(Input(UiControlInputKind::Cancel, 1)).HasValue());
+            CHECK(std::get<UiTextInputControlState>(replacement.Snapshot().Value()).text.View() == "base");
+            REQUIRE(source.Handle(Input(UiControlInputKind::FocusLost, 3)).HasValue());
+            CHECK_FALSE(source.MatchesReloadStamp(stamp.Value()));
+        }
+
+        TEST_CASE("Control reload rejects new bounds or action contract without changing authored values",
+                  "[runtime_ui][controls][reload]") {
+            auto source = std::move(UiControlStateMachine::Create(UiSliderControlDescriptor{Base(), 0, 10, 1, 8})).Value();
+            auto replacement = std::move(UiControlStateMachine::Create(UiSliderControlDescriptor{Base(), 0, 5, 1, 2})).Value();
+            CHECK_FALSE(replacement.ReconcileReload(source, true).Value());
+            CHECK(std::get<UiSliderControlState>(replacement.Snapshot().Value()).value == 2);
+            auto changedAction = Base();
+            changedAction.action = AuthoredId<UiActionId>(10);
+            auto wrongAction = std::move(UiControlStateMachine::Create(UiSliderControlDescriptor{changedAction, 0, 10, 1, 2})).Value();
+            CHECK_FALSE(wrongAction.ReconcileReload(source, true).Value());
+            auto same = std::move(UiControlStateMachine::Create(UiSliderControlDescriptor{Base(), 0, 10, 1, 2})).Value();
+            CHECK(same.ReconcileReload(source, false).Value());
+            CHECK(std::get<UiSliderControlState>(same.Snapshot().Value()).value == 8);
+            source.Shutdown();
+            CHECK(same.ReconcileReload(source, false).HasError());
+            CHECK(source.CaptureReloadStamp().HasError());
+        }
+
         TEST_CASE("Control errors use unique actionable descriptors", "[runtime_ui][controls][errors]") {
             const std::array descriptors{&UiErrors::ControlDescriptorInvalid, &UiErrors::ControlInputInvalid,
                                          &UiErrors::ControlSourceStale,       &UiErrors::ControlDefaultPending,

@@ -28,7 +28,8 @@ namespace Horo::Runtime::Ui {
     struct UiScreenStack::Storage final {
         explicit Storage(const UiScreenStackDescriptor &descriptor)
             : ownership(descriptor.ownership), stack(descriptor.stack),
-              definitions(descriptor.definitions.begin(), descriptor.definitions.end()), maximumRoutes(descriptor.maximumRoutes) {
+              definitions(descriptor.definitions.begin(), descriptor.definitions.end()), maximumRoutes(descriptor.maximumRoutes),
+              lastRouteIncarnation(descriptor.previousRouteIncarnation) {
             routes.reserve(maximumRoutes);
             actions.reserve(maximumRoutes);
         }
@@ -56,13 +57,9 @@ namespace Horo::Runtime::Ui {
         }
 
         [[nodiscard]] Result<UiRouteInstanceId> NextInstance() {
-            if (nextInstanceSlot == 0)
+            if (lastRouteIncarnation == std::numeric_limits<std::uint32_t>::max())
                 return Failure<UiRouteInstanceId>(UiErrors::GenerationExhausted);
-            const UiRouteInstanceId instance{ownership, nextInstanceSlot, 1};
-            if (nextInstanceSlot == std::numeric_limits<std::uint32_t>::max())
-                nextInstanceSlot = 0;
-            else
-                ++nextInstanceSlot;
+            const UiRouteInstanceId instance{ownership, stack.slot, ++lastRouteIncarnation};
             return Result<UiRouteInstanceId>::Success(instance);
         }
 
@@ -91,7 +88,7 @@ namespace Horo::Runtime::Ui {
 
         std::size_t maximumRoutes;
         UiRouteStackRevision revision{UiRouteStackRevision::Create(1).Value()};
-        std::uint32_t nextInstanceSlot{1};
+        std::uint32_t lastRouteIncarnation{};
         std::uint64_t nextOperationSequence{1};
         UiRouteOperationId activeOperation;
         UiScreenStackState state{UiScreenStackState::Active};
@@ -411,6 +408,16 @@ namespace Horo::Runtime::Ui {
         return storage_ ? storage_->revision : UiRouteStackRevision{};
     }
 
+    /** @copydoc UiScreenStack::LastIssuedRouteIncarnation */
+    std::uint32_t UiScreenStack::LastIssuedRouteIncarnation() const noexcept {
+        return storage_ ? storage_->lastRouteIncarnation : 0;
+    }
+
+    /** @copydoc UiScreenStack::CanRetire */
+    bool UiScreenStack::CanRetire() const noexcept {
+        return storage_ && storage_->state == UiScreenStackState::Active && !storage_->busy;
+    }
+
     /** @copydoc UiScreenStack::State */
     UiScreenStackState UiScreenStack::State() const noexcept {
         return storage_ ? storage_->state : UiScreenStackState::Stopped;
@@ -431,6 +438,11 @@ namespace Horo::Runtime::Ui {
         if (!storage_ || storage_->routes.empty())
             return std::nullopt;
         return storage_->routes.back();
+    }
+
+    /** @copydoc UiScreenStack::Definitions */
+    std::span<const UiRouteMetadata> UiScreenStack::Definitions() const noexcept {
+        return storage_ ? std::span<const UiRouteMetadata>{storage_->definitions} : std::span<const UiRouteMetadata>{};
     }
 
     /** @copydoc UiScreenStack::Routes */

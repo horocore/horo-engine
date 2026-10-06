@@ -562,6 +562,13 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiFocusSpatialNavigation.cpp
         runtime/ui/UiControls.cpp
         runtime/ui/UiControlStateMachine.cpp
+        runtime/ui/UiControlStateMachineReload.cpp
+        runtime/ui/UiHotReload.cpp
+        runtime/ui/UiHotReloadGeneration.cpp
+        runtime/ui/UiHotReloadValidation.cpp
+        runtime/ui/UiHotReloadReconciliation.cpp
+        runtime/ui/UiHotReloadSource.cpp
+        runtime/ui/UiHotReloadPresentation.cpp
         runtime/ui/UiControlStateMachineInput.cpp
         runtime/ui/UiLayout.cpp
         runtime/ui/UiLayoutClipping.cpp
@@ -684,6 +691,10 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/NetworkTickAlignment.cpp
         runtime/networking/PeerSessionLifecycle.cpp
         runtime/networking/ReplicationWorldLifecycle.cpp
+        runtime/networking/ReplicationStateCapture.cpp
+        runtime/networking/ReplicationCapturePreparation.cpp
+        runtime/networking/ReplicationCaptureWriter.cpp
+        runtime/networking/SceneReplicationCommitSource.cpp
         runtime/networking/RpcGameplayDispatch.cpp
         runtime/networking/RpcGameplayDispatchReceive.cpp
         runtime/networking/RpcGameplayDispatchGameplay.cpp
