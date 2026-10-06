@@ -392,6 +392,10 @@ namespace {
         });
         REQUIRE((completed.HasValue()));
         REQUIRE((completed.Value().Wait().HasValue()));
+        // Terminal publication precedes capture destruction so destructors may safely reenter Wait().
+        const auto releaseDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!completedProbe.expired() && std::chrono::steady_clock::now() < releaseDeadline)
+            std::this_thread::yield();
         REQUIRE((completedProbe.expired()));
 
         Horo::JobSystem queuedJobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1}};
