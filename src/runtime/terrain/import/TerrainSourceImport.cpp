@@ -1,5 +1,6 @@
 #include "Horo/Terrain/TerrainSourceImport.h"
 
+#include "Horo/Terrain/TerrainMaterial.h"
 #include "TerrainPngDecoder.h"
 
 #include <algorithm>
@@ -288,29 +289,14 @@ namespace Horo::Terrain {
             if (weights.empty())
                 return Result<void>::Success();
             std::array<std::uint32_t, TerrainDescriptorHardLimits::LayersPerTile> raw{};
-            std::array<std::uint64_t, TerrainDescriptorHardLimits::LayersPerTile> remainders{};
-            std::uint64_t sum = 0;
             for (std::size_t layer = 0; layer < weights.size(); ++layer) {
                 const auto &raster = weights[layer];
                 raw[layer] = ReadBits(raster, SourceIndex(raster, x, z), raster.format == TerrainRasterFormat::RawU8 ? 1U : 2U);
-                sum += raw[layer];
             }
-            if (sum == 0)
+            const auto normalized = NormalizeTerrainMaterialWeights(std::span{raw}.first(weights.size()));
+            if (normalized.HasError())
                 return Failed<void>(TerrainSourceErrors::InvalidSample);
-            std::uint32_t assigned = 0;
-            for (std::size_t layer = 0; layer < weights.size(); ++layer) {
-                const std::uint64_t numerator = static_cast<std::uint64_t>(raw[layer]) * 65'535U;
-                output[layer] = static_cast<std::uint16_t>(numerator / sum);
-                remainders[layer] = numerator % sum;
-                assigned += output[layer];
-            }
-            while (assigned < 65'535U) {
-                const auto best = std::max_element(remainders.begin(), remainders.begin() + static_cast<std::ptrdiff_t>(weights.size()));
-                const auto layer = static_cast<std::size_t>(best - remainders.begin());
-                ++output[layer];
-                *best = 0;
-                ++assigned;
-            }
+            std::copy_n(normalized.Value().values.begin(), weights.size(), output.begin());
             return Result<void>::Success();
         }
 

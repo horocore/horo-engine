@@ -1010,6 +1010,21 @@ target_compile_features(HoroTerrainApiTests PRIVATE cxx_std_20)
 target_link_libraries(HoroTerrainApiTests PRIVATE HoroEngine::TerrainApi Threads::Threads)
 horo_register_catch_test(HoroTerrainApiTests LABELS "unit;terrain;headless")
 
+add_executable(HoroTerrainMaterialTests
+        support/AllocationProbe.cpp
+        unit/runtime/terrain/TerrainMaterialTests.cpp
+        unit/runtime/terrain/TerrainMaterialBindingTests.cpp
+)
+target_compile_features(HoroTerrainMaterialTests PRIVATE cxx_std_20)
+target_include_directories(HoroTerrainMaterialTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroTerrainMaterialTests PRIVATE HoroEngine::TerrainRender Threads::Threads)
+horo_register_catch_test(HoroTerrainMaterialTests LABELS "unit;terrain;renderer;headless;lifecycle")
+add_executable(HoroTerrainMaterialPublicHeaderConsumer support/TerrainMaterialPublicHeaderConsumer.cpp)
+target_compile_features(HoroTerrainMaterialPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroTerrainMaterialPublicHeaderConsumer PRIVATE HoroEngine::TerrainRender)
+add_test(NAME HoroTerrainMaterialPublicHeaderConsumer COMMAND HoroTerrainMaterialPublicHeaderConsumer)
+set_tests_properties(HoroTerrainMaterialPublicHeaderConsumer PROPERTIES LABELS "unit;terrain;renderer;headless")
+
 add_executable(HoroTerrainImportTests
         unit/runtime/terrain/TerrainSourceImportTests.cpp
 )
