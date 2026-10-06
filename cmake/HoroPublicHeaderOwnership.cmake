@@ -361,6 +361,8 @@ horo_configure_target_header_boundary(HoroNetworkRuntime PUBLIC_HEADERS
     Horo/Network/NetworkTickAlignment.h
     Horo/Network/PeerSessionLifecycle.h
     Horo/Network/ReplicationWorldLifecycle.h
+    Horo/Network/ReplicationStateCapture.h
+    Horo/Network/SceneReplicationCommitSource.h
     Horo/Network/RpcGameplayDispatch.h
 )
 horo_configure_target_header_boundary(HoroNetworkTransportNull PUBLIC_HEADERS

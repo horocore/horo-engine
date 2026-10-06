@@ -690,6 +690,10 @@ add_library(HoroNetworkRuntime STATIC
         runtime/networking/NetworkTickAlignment.cpp
         runtime/networking/PeerSessionLifecycle.cpp
         runtime/networking/ReplicationWorldLifecycle.cpp
+        runtime/networking/ReplicationStateCapture.cpp
+        runtime/networking/ReplicationCapturePreparation.cpp
+        runtime/networking/ReplicationCaptureWriter.cpp
+        runtime/networking/SceneReplicationCommitSource.cpp
         runtime/networking/RpcGameplayDispatch.cpp
         runtime/networking/RpcGameplayDispatchReceive.cpp
         runtime/networking/RpcGameplayDispatchGameplay.cpp

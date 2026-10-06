@@ -155,6 +155,12 @@ namespace Horo::Network {
         [[nodiscard]] Result<bool> CanonicallyEqual(ReplicationSchemaId schema, FieldId field, const ReplicationRuntimeValue &left,
                                                     const ReplicationRuntimeValue &right) const;
 
+        /** @brief Borrows validated metadata for preparing bounded typed capture storage.
+         * @param schema Exact schema identity. @param field Exact field identity.
+         * @return Registry-owned metadata or a typed lookup error; the registry pin owns its lifetime.
+         */
+        [[nodiscard]] Result<const ReplicationSerializerDescriptor *> DescriptorFor(ReplicationSchemaId schema, FieldId field) const;
+
         /** @brief Returns the pinned schema generation used by every lookup and codec call. */
         [[nodiscard]] const ReplicationDescriptorSnapshotPtr &Schemas() const noexcept;
 

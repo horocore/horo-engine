@@ -4,7 +4,9 @@
 #include "Horo/Network/NetworkMetrics.h"
 
 #include <algorithm>
+#include <limits>
 #include <new>
+#include <thread>
 #include <utility>
 
 namespace Horo::Network {
@@ -20,6 +22,8 @@ namespace Horo::Network {
             NetworkObjectMapping mapping;
             CancellationSource cancellation;
             std::atomic<bool> revoked{false};
+            std::atomic<std::uint64_t> mappingRevision{1};
+            std::thread::id owner{std::this_thread::get_id()};
         };
     }  // namespace Detail
 
@@ -250,7 +254,11 @@ namespace Horo::Network {
         const Runtime::SceneRuntimeId scene, const NetworkSessionGeneration session, const NetworkObjectMappingEntry &entry) {
         if (const auto active = RequireActive(scene, session); active.HasError())
             return active;
+        if (active_->mappingRevision.load() == std::numeric_limits<std::uint64_t>::max())
+            return Failure<void>(NetworkErrors::ReplicationWorldCapacityExceeded);
         auto result = active_->mapping.Register(entry);
+        if (result.HasValue())
+            active_->mappingRevision.fetch_add(1);
         if (result.HasValue() && metrics_)
             (void)metrics_->RecordReplication(NetworkMetricReplication::ObjectRegistered);
         return result;
@@ -262,7 +270,11 @@ namespace Horo::Network {
         const Runtime::SceneRuntimeId scene, const NetworkSessionGeneration session, const NetworkObjectId object) {
         if (const auto active = RequireActive(scene, session); active.HasError())
             return active;
+        if (active_->mappingRevision.load() == std::numeric_limits<std::uint64_t>::max())
+            return Failure<void>(NetworkErrors::ReplicationWorldCapacityExceeded);
         auto result = active_->mapping.Retire(object);
+        if (result.HasValue())
+            active_->mappingRevision.fetch_add(1);
         if (result.HasValue() && metrics_)
             (void)metrics_->RecordReplication(NetworkMetricReplication::ObjectRetired);
         return result;
@@ -307,6 +319,56 @@ namespace Horo::Network {
         } catch (const std::bad_alloc &) {
             return Failure<ReplicationWorldReadLease>(NetworkErrors::ReplicationWorldCapacityExceeded);
         }
+    }
+
+    /** @copydoc ReplicationWorldCaptureRead::ReplicationWorldCaptureRead */
+    ReplicationWorldCaptureRead::ReplicationWorldCaptureRead(std::shared_ptr<const Detail::ReplicationWorldRecord> record,
+                                                             const std::uint64_t revision, const std::uint64_t tick) noexcept
+        : record_(std::move(record)), revision_(revision), tick_(tick) {}
+
+    /** @copydoc ReplicationWorldCaptureRead::IsCurrent */
+    bool ReplicationWorldCaptureRead::IsCurrent() const noexcept {
+        return record_ && !record_->revoked.load() && record_->mappingRevision.load() == revision_;
+    }
+
+    /** @copydoc ReplicationWorldCaptureRead::Descriptor */
+    const ReplicationWorldActivationDescriptor &ReplicationWorldCaptureRead::Descriptor() const noexcept {
+        return record_->descriptor;
+    }
+
+    /** @copydoc ReplicationWorldCaptureRead::MappingRevision */
+    std::uint64_t ReplicationWorldCaptureRead::MappingRevision() const noexcept {
+        return revision_;
+    }
+
+    /** @copydoc ReplicationWorldCaptureRead::SimulationTick */
+    std::uint64_t ReplicationWorldCaptureRead::SimulationTick() const noexcept {
+        return tick_;
+    }
+
+    /** @copydoc ReplicationWorldCaptureRead::Resolve */
+    Result<NetworkObjectMappingEntry> ReplicationWorldCaptureRead::Resolve(const NetworkObjectId object) const {
+        if (!IsCurrent() || record_->owner != std::this_thread::get_id())
+            return Failure<NetworkObjectMappingEntry>(NetworkErrors::ReplicationWorldStale);
+        return record_->mapping.ResolveEntry(object);
+    }
+
+    /** @copydoc ReplicationWorldLifecycle::AcquireCaptureRead */
+    Result<ReplicationWorldCaptureRead> ReplicationWorldLifecycle::AcquireCaptureRead(const ReplicationWorldWorkRequest &request) const {
+        if (const auto active = RequireActive(request.scene, request.session); active.HasError())
+            return Result<ReplicationWorldCaptureRead>::Failure(active.ErrorValue());
+        if (active_->owner != std::this_thread::get_id() || state_ != ReplicationWorldLifecycleState::Active)
+            return Failure<ReplicationWorldCaptureRead>(NetworkErrors::ReplicationWorldUnavailable);
+        if (request.phase != Runtime::RuntimePhase::NetworkFlush || !active_->descriptor.phases.Contains(request.phase))
+            return Failure<ReplicationWorldCaptureRead>(NetworkErrors::ReplicationWorldPhaseInvalid);
+        if (request.simulationTick == 0)
+            return Failure<ReplicationWorldCaptureRead>(NetworkErrors::ReplicationWorldInvalid);
+        if (request.cancellation.IsCancellationRequested() || active_->cancellation.Token().IsCancellationRequested())
+            return Failure<ReplicationWorldCaptureRead>(NetworkErrors::ReplicationWorldCancelled);
+        if (!active_->capabilities.captureCanonicalState)
+            return Failure<ReplicationWorldCaptureRead>(NetworkErrors::ReplicationAuthorityDenied);
+        return Result<ReplicationWorldCaptureRead>::Success(
+            ReplicationWorldCaptureRead{active_, active_->mappingRevision.load(), request.simulationTick});
     }
 
     /** @copydoc ReplicationWorldLifecycle::BeginShutdown */

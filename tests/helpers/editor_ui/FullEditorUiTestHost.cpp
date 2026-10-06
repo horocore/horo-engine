@@ -146,7 +146,7 @@ namespace Horo::Tests {
     }  // namespace
 
     struct FullEditorUiTestHost::State {
-        State(IEditorUiTestSurface &testSurface, std::string locale, std::optional<std::string> recentProjectName)
+        State(IEditorUiTestSurface &testSurface, const std::string &locale, std::optional<std::string> recentProjectName)
             : root(MakeIsolatedRoot()), home(root / "home"), projectsRoot(root / "projects"), scopedHome(home),
               jobs(JobSystemConfig{2, 256}), creation(jobs, engineEvents), localization(Editor::LocaleTag{"en-US"}),
               configuration(Editor::CreateEditorConfigurationService(Editor::DefaultEditorSettings())),
@@ -321,6 +321,10 @@ namespace Horo::Tests {
                 result += record.stage + ": " + record.message + "\n";
         }
         return result;
+    }
+
+    bool FullEditorUiTestHost::IsGameplayBuildUpToDate(const std::filesystem::path &projectRoot) const {
+        return state_->gameplayBuilds.IsUpToDate({.projectRoot = projectRoot, .environment = state_->gameplayBuildEnvironment});
     }
 
     Editor::GuiRouteKind FullEditorUiTestHost::ActiveRoute() const noexcept {
