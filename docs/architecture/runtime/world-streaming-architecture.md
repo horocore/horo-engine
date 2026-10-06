@@ -491,7 +491,9 @@ retirement disposition. Terminal results consume exactly once. Successful resour
 transfer explicitly to their resident/active owner; operation-capacity release does
 not release separately accounted resident resources.
 
-Existing scheduler, asset-request, activation and residency APIs remain intact.
+Scheduler, asset-request and residency APIs retain their existing contracts.
+Activation/direction publication and retirement now require the shared owner-frame
+budget documented in WST-003.8 below; unbudgeted entry points are removed.
 Hosts integrating this seam stop advancing its reservation directly, wrap their
 started participants in lifetime-safe adapters, supply their validated retirement
 order, and transfer successful controllers with residency ownership. The generated
