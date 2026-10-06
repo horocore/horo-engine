@@ -237,6 +237,7 @@ horo_configure_target_header_boundary(HoroSaveApi PUBLIC_HEADERS
     Horo/Runtime/Save/SaveErrors.h
     Horo/Runtime/Save/SaveIdentity.h
     Horo/Runtime/Save/SaveParticipantRegistry.h
+    Horo/Runtime/Save/SaveRestoreReferenceContext.h
 )
 horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/FrameScheduler.h
@@ -392,6 +393,8 @@ horo_configure_target_header_boundary(HoroRuntimeScene PUBLIC_HEADERS
     Horo/Runtime/Scene/NavigationSceneComponents.h
     Horo/Runtime/Scene/PersistentEntityIdentity.h
     Horo/Runtime/Scene/SaveableComponentState.h
+    Horo/Runtime/Scene/RestoreReferenceGraph.h
+    Horo/Runtime/Scene/SceneRestoreBundle.h
     Horo/Runtime/Scene/RuntimeScene.h
     Horo/Runtime/Scene/RuntimeSceneDefinition.h
     Horo/Runtime/Scene/SavedSceneBootstrap.h

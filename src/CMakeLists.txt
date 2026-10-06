@@ -370,6 +370,7 @@ add_library(HoroSaveApi STATIC
         runtime/save/SaveErrors.cpp
         runtime/save/SaveIdentity.cpp
         runtime/save/SaveParticipantRegistry.cpp
+        runtime/save/SaveRestoreReferenceContext.cpp
 )
 add_library(HoroEngine::SaveApi ALIAS HoroSaveApi)
 target_compile_features(HoroSaveApi PUBLIC cxx_std_20)
@@ -391,6 +392,7 @@ add_library(HoroRuntime STATIC
         runtime/save/SaveParticipation.cpp
         runtime/save/SaveCaptureSnapshot.cpp
         runtime/save/SaveRestoreTransaction.cpp
+        runtime/save/SaveRestoreTransactionReferences.cpp
         runtime/save/SaveArchiveMetadata.cpp
         runtime/save/SaveCompatibility.cpp
         runtime/save/SaveMigration.cpp
@@ -665,11 +667,14 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/NavigationSceneComponents.cpp
         runtime/scene/PersistentEntityIdentity.cpp
         runtime/scene/SaveableComponentState.cpp
+        runtime/scene/RestoreReferenceGraph.cpp
+        runtime/scene/SceneRestoreBundle.cpp
         runtime/scene/RuntimeSceneDefinition.cpp
         runtime/scene/SavedSceneBootstrap.cpp
         runtime/scene/RuntimeScene.cpp
         runtime/scene/RuntimeSceneView.cpp
         runtime/scene/RuntimeSceneService.cpp
+        runtime/scene/RuntimeSceneServicePublication.cpp
         runtime/scene/RuntimeSceneErrors.cpp
 )
 add_library(HoroEngine::RuntimeScene ALIAS HoroRuntimeScene)
