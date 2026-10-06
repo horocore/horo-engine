@@ -307,7 +307,12 @@ TEST_CASE("Dynamic host captures required portable schemas and rejects their abs
                                                    Prefab::PrefabLimitProfile::Create({}).Value());
     REQUIRE(document.HasValue());
     fixture.WriteText("assets/hierarchy.prefab", document.Value().SerializeCanonical().Value());
-    fixture.WriteText("assets/level.scene", SceneSource::EncodeSceneSource({{}, {}}));
+    // Static scene projection uses a plain prefab; portable members belong to the selected runtime template.
+    const auto staticPrefab = fixture.AddSpawnableRoot();
+    const std::vector<SceneSource::ScenePrefabInstance> placements{
+        {.instanceId = Prefab::PrefabInstanceId::Create(7).Value(),
+         .sourcePrefab = Prefab::PrefabAssetReference::Create(staticPrefab).Value()}};
+    fixture.WriteText("assets/level.scene", SceneSource::EncodeSceneSource({{}, placements}));
     const auto first = fixture.Cook();
     REQUIRE(first.HasValue());
     const auto artifact = GenerationArtifact(first.Value().generation, fixture.prefabId);
