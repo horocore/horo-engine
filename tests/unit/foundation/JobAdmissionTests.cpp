@@ -273,13 +273,16 @@ TEST_CASE("Admission publication allocation failures leave no orphan records or 
         JobSystem jobs{JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 64, .maxRetainedTerminalJobs = 128}};
         REQUIRE(PrimePublication(jobs));
         const auto before = jobs.SnapshotIfChanged(0);
-        auto work = ReentrantWork(jobs, observed);
         bool allocationFailed = false;
-        try {
-            const Tests::AllocationProbe::ScopedFailure failure{failureIndex};
-            static_cast<void>(jobs.Submit({.parentCancellation = cancellation.Token()}, std::move(work)));
-        } catch (const std::bad_alloc &) {
-            allocationFailed = true;
+        {
+            // A moved-from std::function may retain its capture. Release the caller's owner before checking scheduler cleanup.
+            auto work = ReentrantWork(jobs, observed);
+            try {
+                const Tests::AllocationProbe::ScopedFailure failure{failureIndex};
+                static_cast<void>(jobs.Submit({.parentCancellation = cancellation.Token()}, std::move(work)));
+            } catch (const std::bad_alloc &) {
+                allocationFailed = true;
+            }
         }
         CHECK(allocationFailed);
         CHECK(observed);
