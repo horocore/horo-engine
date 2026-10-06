@@ -64,8 +64,8 @@ namespace Horo::Terrain {
     Result<void> ValidateTerrainMaterialWeights(const TerrainMaterialWeights &weights, const TerrainMaterialLayerSet &layers,
                                                 const std::uint16_t tileLayerMask) {
         const auto count = layers.Data().layerCount;
-        const auto knownMask = (std::uint32_t{1} << count) - 1U;
-        if (weights.layerCount != count || tileLayerMask == 0 || (tileLayerMask & ~knownMask) != 0)
+        if (const auto knownMask = (std::uint32_t{1} << count) - 1U;
+            weights.layerCount != count || tileLayerMask == 0 || (tileLayerMask & ~knownMask) != 0)
             return Result<void>::Failure(MakeError(TerrainErrors::DescriptorInvalid));
         std::uint32_t sum = 0;
         for (std::size_t index = 0; index < weights.values.size(); ++index) {

@@ -49,8 +49,8 @@ namespace Horo::TerrainRender {
                 return Result<void>::Failure(MakeError(TerrainErrors::RevisionStale));
             if (request.materials.size() != request.layers.Data().layerCount)
                 return Result<void>::Failure(MakeError(TerrainMaterialBindingErrors::Invalid));
-            const auto revalidated = TerrainMaterialLayerSet::Create(request.layers.Data(), request.configuration);
-            if (revalidated.HasError())
+            if (const auto revalidated = TerrainMaterialLayerSet::Create(request.layers.Data(), request.configuration);
+                revalidated.HasError())
                 return Result<void>::Failure(revalidated.ErrorValue());
             return Result<void>::Success();
         }
@@ -60,8 +60,8 @@ namespace Horo::TerrainRender {
             const auto alpha = request.materials.front().descriptor.alphaMode;
             for (std::size_t index = 0; index < request.materials.size(); ++index) {
                 const auto &input = request.materials[index];
-                const auto &layer = request.layers.Data().layers[index];
-                if (input.layer != layer.id || input.asset != layer.material || input.descriptor.alphaMode != alpha ||
+                if (const auto &layer = request.layers.Data().layers[index];
+                    input.layer != layer.id || input.asset != layer.material || input.descriptor.alphaMode != alpha ||
                     input.resident.generation != request.context.renderGeneration ||
                     input.resident.pipeline.owner != request.variant.pipeline.owner ||
                     input.reflection.backend != request.variant.artifact.backend ||
@@ -78,8 +78,8 @@ namespace Horo::TerrainRender {
         /** @brief Requires the exact declared cooked target/artifact/pass before material allocation. */
         [[nodiscard]] Result<void> ValidateCookedVariant(const TerrainMaterialBindingRequest &request,
                                                          const Render::ShaderPermutationKey &key) {
-            const auto &variant = request.variant;
-            if (variant.key != key || (variant.expectedArtifact == Sha256Digest{}) ||
+            if (const auto &variant = request.variant;
+                variant.key != key || (variant.expectedArtifact == Sha256Digest{}) ||
                 variant.artifact.artifactKey != variant.expectedArtifact || variant.artifact.payload.empty() ||
                 variant.artifact.payload.size() > 64U * 1024U * 1024U || !variant.pipeline.IsValid() || variant.pass != request.pass ||
                 variant.target.backend != variant.artifact.backend || variant.target.payloadFormat != variant.artifact.payloadFormat ||
@@ -105,7 +105,7 @@ namespace Horo::TerrainRender {
         if (manifest.targets.size() > targets.size())
             return Result<PreparedTerrainMaterialShader>::Failure(MakeError(TerrainMaterialBindingErrors::Invalid));
         const auto targetCount = static_cast<std::uint8_t>(manifest.targets.size());
-        std::copy(manifest.targets.begin(), manifest.targets.end(), targets.begin());
+        std::ranges::copy(manifest.targets, targets.begin());
         auto prepared = Render::PrepareShaderPermutationModel(std::move(manifest), std::move(model));
         if (prepared.HasError())
             return Result<PreparedTerrainMaterialShader>::Failure(prepared.ErrorValue());
@@ -124,11 +124,9 @@ namespace Horo::TerrainRender {
             return std::tie(value.backend, value.payloadFormat, value.descriptorVersion, value.interfaceSchemaVersion,
                             value.maximumBindings, value.maximumInlineConstantBytes, value.supportsCompute, value.supportsStorageResources);
         };
-        for (const auto &declared : std::span{targets_}.first(targetCount_)) {
-            if (fields(declared) == fields(target))
-                return true;
-        }
-        return false;
+        return std::ranges::any_of(std::span{targets_}.first(targetCount_), [&](const Render::ShaderTargetRequirement &declared) {
+            return fields(declared) == fields(target);
+        });
     }
 
     /** @copydoc TerrainMaterialFeatureMask */
@@ -145,8 +143,7 @@ namespace Horo::TerrainRender {
     Result<TerrainPbrLayerSample> BlendTerrainPbrSamples(const Terrain::TerrainMaterialLayerSet &layers,
                                                          const Terrain::TerrainMaterialWeights &weights, const std::uint16_t tileLayerMask,
                                                          const std::span<const TerrainPbrLayerSample> samples) {
-        const auto validWeights = Terrain::ValidateTerrainMaterialWeights(weights, layers, tileLayerMask);
-        if (validWeights.HasError())
+        if (const auto validWeights = Terrain::ValidateTerrainMaterialWeights(weights, layers, tileLayerMask); validWeights.HasError())
             return Result<TerrainPbrLayerSample>::Failure(validWeights.ErrorValue());
         if (samples.size() != weights.layerCount)
             return Result<TerrainPbrLayerSample>::Failure(MakeError(TerrainMaterialBindingErrors::Invalid));
@@ -160,9 +157,9 @@ namespace Horo::TerrainRender {
         TerrainPbrLayerSample result{.normal = {}, .occlusion = 0.0F, .opacity = 0.0F};
         for (std::size_t index = 0; index < samples.size(); ++index) {
             const auto &sample = samples[index];
-            const float lengthSquared =
-                sample.normal.x * sample.normal.x + sample.normal.y * sample.normal.y + sample.normal.z * sample.normal.z;
-            if (!color(sample.albedo) || !color(sample.emissive) || !unit(sample.metallic) || !unit(sample.roughness) ||
+            if (const float lengthSquared =
+                    sample.normal.x * sample.normal.x + sample.normal.y * sample.normal.y + sample.normal.z * sample.normal.z;
+                !color(sample.albedo) || !color(sample.emissive) || !unit(sample.metallic) || !unit(sample.roughness) ||
                 !unit(sample.occlusion) || !unit(sample.opacity) || !std::isfinite(lengthSquared) ||
                 std::abs(lengthSquared - 1.0F) > 0.001F)
                 return Result<TerrainPbrLayerSample>::Failure(MakeError(TerrainMaterialBindingErrors::Invalid));
