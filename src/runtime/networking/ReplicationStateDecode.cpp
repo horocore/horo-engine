@@ -148,24 +148,31 @@ namespace Horo::Network {
         const auto schema = serializers_->Schemas()->Find(recipient_.schema);
         if (const auto framed = ValidateFields(reader, header.count, projection_, *schema.Value()); framed.HasError())
             return Result<ReplicationDecodedState>::Failure(framed.ErrorValue());
+        ReplicationDecodedState state;
+        state.object_ = expected.object;
+        state.mapping_ = expected;
+        state.schema_ = recipient_.schema;
+        state.version_ = recipient_.schemaVersion;
+        state.tick_ = header.tick;
+        state.revision_ = header.revision;
+        state.serializers_ = serializers_;
+        state.admission_ = admission_;
+        return CompleteState(std::move(state), wire.subspan(reader.offset), header.count, header.delta ? baseline : nullptr, cancellation);
+    }
+
+    /** @copydoc ReplicationStateCodec::CompleteState */
+    Result<ReplicationDecodedState> ReplicationStateCodec::CompleteState(ReplicationDecodedState state,
+                                                                         const std::span<const std::byte> fields, const std::uint64_t count,
+                                                                         const ReplicationDecodedState *baseline,
+                                                                         const CancellationToken &cancellation) {
         OperationGuard guard{operating_};
         try {
-            ReplicationDecodedState state;
-            state.object_ = expected.object;
-            state.mapping_ = expected;
-            state.schema_ = recipient_.schema;
-            state.version_ = recipient_.schemaVersion;
-            state.tick_ = header.tick;
-            state.revision_ = header.revision;
-            state.serializers_ = serializers_;
-            state.admission_ = admission_;
             // Foreign callbacks cannot invalidate the already-validated suffix by mutating the caller's borrowed record.
-            const auto suffix = wire.subspan(reader.offset);
-            const std::vector<std::byte> fieldBytes{suffix.begin(), suffix.end()};
-            auto fields = Reconstruct(fieldBytes, header.count, header.delta ? baseline : nullptr, cancellation);
-            if (fields.HasError())
-                return Result<ReplicationDecodedState>::Failure(fields.ErrorValue());
-            state.fields_ = std::move(fields).Value();
+            const std::vector<std::byte> fieldBytes{fields.begin(), fields.end()};
+            auto reconstructed = Reconstruct(fieldBytes, count, baseline, cancellation);
+            if (reconstructed.HasError())
+                return Result<ReplicationDecodedState>::Failure(reconstructed.ErrorValue());
+            state.fields_ = std::move(reconstructed).Value();
             return Result<ReplicationDecodedState>::Success(std::move(state));
         } catch (const std::bad_alloc &) {
             return Fail<ReplicationDecodedState>(ReplicationStateErrors::Capacity);

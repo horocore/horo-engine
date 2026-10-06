@@ -42,6 +42,23 @@ namespace Horo::Network {
         return Result<std::optional<ReplicationEncodedValue>>::Success(std::move(encoded).Value());
     }
 
+    /** @copydoc ReplicationStateCodec::AppendHeader */
+    void ReplicationStateCodec::AppendHeader(std::vector<std::byte> &wire, const ReplicationCapturedStatePin &source,
+                                             const ReplicationAcknowledgedBaseline *baseline) const {
+        Append(wire, Magic, 4);
+        Append(wire, 1, 1);
+        Append(wire, baseline ? 1 : 0, 1);
+        Append(wire, 0, 2);
+        AppendIdentity(wire, recipient_, generation_);
+        Append(wire, source->SimulationTick(), 8);
+        Append(wire, source->PublicationRevision(), 8);
+        Append(wire, baseline ? baseline->state->SimulationTick() : 0, 8);
+        Append(wire, baseline ? baseline->publicationRevision : 0, 8);
+        AppendDigest(wire, serializers_->Schemas()->Fingerprint());
+        AppendDigest(wire, fingerprint_);
+        Append(wire, 0, 4);
+    }
+
     /** @copydoc ReplicationStateCodec::Encode */
     Result<std::vector<std::byte>> ReplicationStateCodec::Encode(ReplicationCapturedStatePin source,
                                                                  ReplicationAcknowledgedBaseline baseline,
@@ -57,18 +74,7 @@ namespace Horo::Network {
         try {
             std::vector<std::byte> wire;
             wire.reserve(wireCapacity_);
-            Append(wire, Magic, 4);
-            Append(wire, 1, 1);
-            Append(wire, delta ? 1 : 0, 1);
-            Append(wire, 0, 2);
-            AppendIdentity(wire, recipient_, generation_);
-            Append(wire, source->SimulationTick(), 8);
-            Append(wire, source->PublicationRevision(), 8);
-            Append(wire, delta ? baseline.state->SimulationTick() : 0, 8);
-            Append(wire, delta ? baseline.publicationRevision : 0, 8);
-            AppendDigest(wire, serializers_->Schemas()->Fingerprint());
-            AppendDigest(wire, fingerprint_);
-            Append(wire, 0, 4);
+            AppendHeader(wire, source, delta ? &baseline : nullptr);
             std::uint32_t count{};
             for (const auto field : projection_) {
                 const auto encoded = EncodeField(field, source, delta ? &baseline : nullptr, cancellation);

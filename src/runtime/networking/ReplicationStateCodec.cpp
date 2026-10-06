@@ -130,7 +130,7 @@ namespace Horo::Network {
             admission_->store(false);
     }
 
-    /** @brief Checks owner affinity, permanent session closure and caller cancellation. */
+    /** @copydoc ReplicationStateCodec::Admit */
     Result<void> ReplicationStateCodec::Admit(const CancellationToken &cancellation) const {
         if (owner_ != std::this_thread::get_id())
             return Fail<void>(ReplicationStateErrors::Invalid);
@@ -141,7 +141,7 @@ namespace Horo::Network {
         return Result<void>::Success();
     }
 
-    /** @brief Fences captured source authority and exact composed immutable schema/session/object occurrence. */
+    /** @copydoc ReplicationStateCodec::CurrentSource */
     bool ReplicationStateCodec::CurrentSource(const ReplicationCapturedStatePin &source) const noexcept {
         return source && source->IsCurrent() && source->Descriptors() == serializers_->Schemas() &&
                source->World().Descriptor().session == recipient_.session &&
@@ -150,7 +150,7 @@ namespace Horo::Network {
                source->Object().provenance.schemaVersion == recipient_.schemaVersion;
     }
 
-    /** @brief Only acknowledged same-generation source pins may serve as a delta root. */
+    /** @copydoc ReplicationStateCodec::UsableBaseline */
     bool ReplicationStateCodec::UsableBaseline(const ReplicationCapturedStatePin &source,
                                                const ReplicationAcknowledgedBaseline &baseline) const noexcept {
         return CurrentSource(baseline.state) && baseline.roleRevision == recipient_.revision &&

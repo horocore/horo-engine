@@ -3,13 +3,19 @@
 namespace Horo::Network {
     using namespace StateCodecTestSupport;
 
+    namespace {
+        std::shared_ptr<Runtime::RuntimeScene> MakeScene() {
+            Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, {1}};
+            Runtime::RuntimeEntityDefinition definition;
+            definition.object = Runtime::SceneObjectId{1};
+            builder.Add(definition);
+            return std::shared_ptr<Runtime::RuntimeScene>{
+                Runtime::RuntimeScene::Create(std::move(builder).Build().Value(), Runtime::SceneRuntimeId{10}).Value()};
+        }
+    }  // namespace
+
     TEST_CASE("State encoding consumes actual committed Scene snapshots without reopening owner reads", "[network][state-codec][scene]") {
-        Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, {1}};
-        Runtime::RuntimeEntityDefinition definition;
-        definition.object = Runtime::SceneObjectId{1};
-        builder.Add(definition);
-        auto scene = std::shared_ptr<Runtime::RuntimeScene>{
-            Runtime::RuntimeScene::Create(std::move(builder).Build().Value(), Runtime::SceneRuntimeId{10}).Value()};
+        const auto scene = MakeScene();
         const auto entity = *scene->View().Find(Runtime::SceneObjectId{1});
         const std::array fields{SceneReplicationFieldBinding{FieldIdValue(1), SceneReplicationProperty::TranslationX},
                                 SceneReplicationFieldBinding{FieldIdValue(2), SceneReplicationProperty::TranslationY},

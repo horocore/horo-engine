@@ -153,10 +153,20 @@ namespace Horo::Network {
         ReplicationStateCodec(std::shared_ptr<const ReplicationSerializerRegistry> serializers, ReplicationRoleBinding recipient,
                               std::uint64_t generation, ReplicationStateCodecLimits limits, std::vector<FieldId> projection,
                               Sha256Digest fingerprint);
+        /** @brief Checks owner affinity, permanent session closure and caller cancellation. */
         [[nodiscard]] Result<void> Admit(const CancellationToken &cancellation) const;
+        /** @brief Fences captured authority and exact composed immutable schema/session/object occurrence. */
         [[nodiscard]] bool CurrentSource(const ReplicationCapturedStatePin &source) const noexcept;
+        /** @brief Tests acknowledged same-generation source pin eligibility as a delta root. */
         [[nodiscard]] bool UsableBaseline(const ReplicationCapturedStatePin &source,
                                           const ReplicationAcknowledgedBaseline &baseline) const noexcept;
+        /** @brief Appends exact versioned framing for a full record or acknowledged delta. */
+        void AppendHeader(std::vector<std::byte> &wire, const ReplicationCapturedStatePin &source,
+                          const ReplicationAcknowledgedBaseline *baseline) const;
+        /** @brief Owns validated field bytes and contains faults until a complete immutable candidate is ready. */
+        [[nodiscard]] Result<ReplicationDecodedState> CompleteState(ReplicationDecodedState state, std::span<const std::byte> fields,
+                                                                    std::uint64_t count, const ReplicationDecodedState *baseline,
+                                                                    const CancellationToken &cancellation);
         /** @brief Revalidates cancellation, closure and captured pins after a foreign codec callback. */
         [[nodiscard]] Result<void> ContinueEncoding(const ReplicationCapturedStatePin &source,
                                                     const ReplicationAcknowledgedBaseline *baseline,
