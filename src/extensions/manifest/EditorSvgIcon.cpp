@@ -143,8 +143,8 @@ namespace Horo::Extensions {
                 return false;
             if (name == "stroke-width")
                 return scalar >= 0.0 && scalar <= 64.0;
-            constexpr std::array opacityNames{"opacity", "fill-opacity", "stroke-opacity", "stop-opacity", "offset"};
-            if (std::ranges::find(opacityNames, name) != opacityNames.end())
+            if (constexpr std::array opacityNames{"opacity", "fill-opacity", "stroke-opacity", "stop-opacity", "offset"};
+                std::ranges::find(opacityNames, name) != opacityNames.end())
                 return scalar >= 0.0 && scalar <= 1.0;
             return true;
         }

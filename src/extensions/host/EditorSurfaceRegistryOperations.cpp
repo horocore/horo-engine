@@ -53,15 +53,13 @@ namespace Horo::Extensions {
         [[nodiscard]] bool AllowsForm(const EditorSurfaceContext &context, const EditorUiForm &form) {
             if (!AllowsText(context, form.title) || !AllowsText(context, form.description))
                 return false;
-            for (const auto &node : form.nodes) {
-                if (const auto &base = EditorUiNodeBaseOf(node); !AllowsText(context, base.label) ||
-                                                                 !AllowsText(context, base.description) ||
-                                                                 !AllowsText(context, base.accessibleLabel))
+            return std::ranges::all_of(form.nodes, [&context](const auto &node) {
+                const auto &base = EditorUiNodeBaseOf(node);
+                if (!AllowsText(context, base.label) || !AllowsText(context, base.description) ||
+                    !AllowsText(context, base.accessibleLabel))
                     return false;
-                if (!AllowsPayload(context, node.payload))
-                    return false;
-            }
-            return true;
+                return AllowsPayload(context, node.payload);
+            });
         }
 
         /** @brief Validates staged paired open/focus and destination exclusivity after drawer ownership admission. */
@@ -124,7 +122,7 @@ namespace Horo::Extensions {
         }
 
         /** @brief Withdraws a paired activity/drawer while the caller holds the registry owner lock. */
-        void CloseActivityPair(EditorSurfaceRegistryState &state, EditorSurfaceState &activity) {
+        void CloseActivityPair(const EditorSurfaceRegistryState &state, EditorSurfaceState &activity) {
             activity.desiredOpen = false;
             activity.desiredFocused = false;
             if (const auto drawer = FindSurface(state, activity.descriptor.activity->drawerId)) {
@@ -422,19 +420,15 @@ namespace Horo::Extensions {
         auto lock = state_->Lock();
         if (state_->shutdown)
             return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryShutdown);
-        if (const std::shared_ptr<EditorSurfaceState> surface = FindSurface(*state_, surfaceId); surface != nullptr) {
+        if (const auto surface = FindSurface(*state_, surfaceId); surface != nullptr) {
             ++state_->revision;
             const bool wasOpen = surface->desiredOpen;
             for (const auto &candidate : state_->surfaces) {
-                if (candidate->descriptor.activity.has_value() &&
-                    (candidate == surface || candidate->descriptor.activity->drawerId == surfaceId)) {
-                    candidate->desiredOpen = false;
-                    candidate->desiredFocused = false;
-                    if (const auto drawer = FindSurface(*state_, candidate->descriptor.activity->drawerId); drawer != nullptr) {
-                        drawer->desiredOpen = false;
-                        drawer->desiredFocused = false;
-                    }
-                }
+                if (!candidate->descriptor.activity.has_value())
+                    continue;
+                if (candidate != surface && candidate->descriptor.activity->drawerId != surfaceId)
+                    continue;
+                CloseActivityPair(*state_, *candidate);
             }
             if (!wasOpen)
                 return Result<EditorSurfaceOperation>::Success({AlreadyClosed});

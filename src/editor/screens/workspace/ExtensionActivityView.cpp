@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <ranges>
 #include <tuple>
 #include <utility>
@@ -51,7 +52,7 @@ namespace Horo::Editor {
                    entry.projection.surface.descriptor.provider == projection.surface.descriptor.provider;
         });
         Entry entry{.projection = projection};
-        PrepareResources(entry, previous != entries_.end() ? &*previous : nullptr);
+        PrepareResources(entry, previous != entries_.end() ? std::to_address(previous) : nullptr);
         const auto &descriptor = projection.surface.descriptor;
         entry.label = host_->LocalizedText(descriptor.provider, descriptor.labelLocalizationKey, locale);
         entry.tooltip = host_->LocalizedText(descriptor.provider, descriptor.tooltipLocalizationKey, locale);
@@ -245,8 +246,7 @@ namespace Horo::Editor {
     /** @copydoc ExtensionActivityView::ActivateEntry */
     bool ExtensionActivityView::ActivateEntry(const Entry &entry) {
         const auto &surface = entry.projection.surface;
-        const auto toggled = host_->Registry().ToggleActivity(surface.descriptor.provider, surface.descriptor.id);
-        if (toggled.HasError())
+        if (const auto toggled = host_->Registry().ToggleActivity(surface.descriptor.provider, surface.descriptor.id); toggled.HasError())
             return false;
         nativePanelClear_[static_cast<std::size_t>(surface.descriptor.activity->side)] = entry.token;
         return true;

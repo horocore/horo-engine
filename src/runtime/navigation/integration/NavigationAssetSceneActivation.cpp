@@ -186,10 +186,10 @@ namespace Horo::Navigation {
             return Result<std::size_t>::Success(state.limits.maximumReservedProviderBytes - retainedBytes);
         }
 
-        /** @brief Close preparation on invalid host bounds or absent explicit composition. */
-        [[nodiscard]] bool ValidState(const Detail::NavigationAssetSceneState &state) noexcept {
-            return !state.closed && static_cast<bool>(state.factory) && state.limits.maximumLiveWorlds > 0 &&
-                   state.limits.maximumLiveWorlds <= 64 && state.limits.maximumReservedProviderBytes > 0;
+        /** @brief Close preparation on shutdown or invalid host bounds, independently of provider availability. */
+        [[nodiscard]] bool ValidPreparationBounds(const Detail::NavigationAssetSceneState &state) noexcept {
+            return !state.closed && state.limits.maximumLiveWorlds > 0 && state.limits.maximumLiveWorlds <= 64 &&
+                   state.limits.maximumReservedProviderBytes > 0;
         }
 
         /** @brief Transfer preparation byte pins into the unique backend lifetime owner. */
@@ -253,9 +253,11 @@ namespace Horo::Navigation {
     /** @copydoc NavigationAssetSceneActivationParticipant::Prepare */
     Result<std::unique_ptr<Runtime::SceneActivationCandidate>> NavigationAssetSceneActivationParticipant::Prepare(
         const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene) {
-        if (!ValidState(*state_)) {
+        if (!ValidPreparationBounds(*state_)) {
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(NavigationErrors::CapacityExceeded));
         }
+        if (!state_->factory)
+            return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(NavigationErrors::CapabilityUnavailable));
         const auto descriptor = Descriptor(scene);
         if (descriptor.HasError())
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(descriptor.ErrorValue());

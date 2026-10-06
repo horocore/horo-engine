@@ -57,6 +57,11 @@ namespace Horo::Application::Internal {
         void UnloadModule() noexcept;
         /** @brief Borrow the immutable Physics execution context for integrated host diagnostics. */
         [[nodiscard]] std::shared_ptr<const Gameplay::GameplayPhysicsContext> PhysicsContext() const noexcept;
+        /** @brief Borrows this active runner for an aggregate Scene group transaction.
+         * @return Gameplay participant or null when the selected module is not active.
+         * @pre This composition outlives the returned adapter and its prepared candidates.
+         */
+        [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant();
 
     private:
         /** @brief Validates artifacts and activates callbacks only after Physics admission is resolved. */
@@ -67,4 +72,14 @@ namespace Horo::Application::Internal {
         Gameplay::BehaviorRegistry registry_;
         std::unique_ptr<Gameplay::BehaviorRuntime> behaviors_;
     };
+
+    /** @brief Composes the Gameplay structural owner before Scene startup using an explicit application-owned active slot.
+     * @param active Host slot populated only after successful module/scene activation, retired at drained lifecycle safe points.
+     * @return Owned adapter; the slot and its current composition outlive each synchronous group transaction.
+     * @details Empty/retired slots reject required Gameplay work rather than discover or load another module.
+     */
+    [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeGameplayStructuralParticipant(
+        GameplayWorldComposition *const &active);
+    /** @brief Rejects temporary pointer slots that would dangle before the returned participant is used. */
+    std::unique_ptr<Runtime::SceneStructuralParticipant> MakeGameplayStructuralParticipant(GameplayWorldComposition *&&active) = delete;
 }  // namespace Horo::Application::Internal

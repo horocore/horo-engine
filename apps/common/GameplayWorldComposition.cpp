@@ -16,6 +16,29 @@ namespace Horo::Application::Internal {
                     GameplayPhysicsContext::Withheld(binding, GameplayPhysicsDenial::PermissionDenied));
             return GameplayPhysicsContext::Create(binding, world);
         }
+
+        /** @brief Explicit host slot, not a backend locator; the active module runner owns every constructed attachment. */
+        class GameplayStructuralParticipant final : public Runtime::SceneStructuralParticipant {
+        public:
+            explicit GameplayStructuralParticipant(GameplayWorldComposition *const &active) : active_(active) {}
+
+            [[nodiscard]] Runtime::SceneStructuralOwner Owner() const noexcept override {
+                return Runtime::SceneStructuralOwner::Gameplay;
+            }
+
+            [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(
+                const Runtime::RuntimeSceneView scene, const std::span<const Runtime::RuntimeEntityView> created,
+                const std::span<const Runtime::EntityRef> destroyed) override {
+                auto participant = active_ ? active_->MakeStructuralParticipant() : nullptr;
+                if (!participant)
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
+                        MakeError(Gameplay::GameplayErrors::InvalidBehaviorComponent, "No active Gameplay owner for this Scene group."));
+                return participant->Prepare(scene, created, destroyed);
+            }
+
+        private:
+            GameplayWorldComposition *const &active_;
+        };
     }  // namespace
 
     /** @copydoc GameplayWorldComposition::Create */
@@ -109,5 +132,15 @@ namespace Horo::Application::Internal {
     /** @copydoc GameplayWorldComposition::PhysicsContext */
     std::shared_ptr<const Gameplay::GameplayPhysicsContext> GameplayWorldComposition::PhysicsContext() const noexcept {
         return physics_;
+    }
+
+    /** @copydoc GameplayWorldComposition::MakeStructuralParticipant */
+    std::unique_ptr<Runtime::SceneStructuralParticipant> GameplayWorldComposition::MakeStructuralParticipant() {
+        return behaviors_ ? behaviors_->MakeStructuralParticipant() : nullptr;
+    }
+
+    /** @copydoc MakeGameplayStructuralParticipant */
+    std::unique_ptr<Runtime::SceneStructuralParticipant> MakeGameplayStructuralParticipant(GameplayWorldComposition *const &active) {
+        return std::make_unique<GameplayStructuralParticipant>(active);
     }
 }  // namespace Horo::Application::Internal

@@ -34,6 +34,21 @@ namespace Horo::Audio {
             std::array<AudioSample *, MaximumAudioChannels> post{};
             std::array<AudioSample *, MaximumAudioChannels> work{};
             std::vector<Insert> inserts;
+            float gain{1.0F}; /**< Callback value, separate from the immutable compiled fader descriptor. */
+            bool muted{};
+        };
+
+        /** @brief Mutable route value and immutable authored route role retained by the prepared plan. */
+        struct RouteState final {
+            float gain{1.0F};
+            MixerRouteKind kind{MixerRouteKind::Primary};
+        };
+
+        /** @brief Control-resolved physical cells; every pointer belongs to this retained plan generation. */
+        struct ParameterProjection final {
+            AudioAutomationParameter binding;
+            float *value{};
+            float *target{};
         };
 
         /** @brief Align a previously bounded reservation size to the DSP storage contract. */
@@ -44,6 +59,15 @@ namespace Horo::Audio {
         /** @brief Fixed callback entry; metadata and storage were admitted before publication. */
         MixerRenderStatus RenderPlan(MixerRenderPlan::State &state, std::span<const MixerVoiceInput> voices,
                                      const AudioPlanarBlockView &output) noexcept;
+        /** @brief Validate exact sealed binding and clock before touching retained signal state. */
+        bool ValidateAutomationContext(const MixerRenderPlan::State &state, const MixerAutomationRenderContext &context,
+                                       std::uint32_t frames, std::span<AudioAutomationValueSelector> selectors) noexcept;
+        /** @brief Write the complete prepared projection at one sample. */
+        bool ProjectAutomation(MixerRenderPlan::State &state, const AudioParameterAutomation &automation,
+                               std::span<const AudioAutomationValueSelector> selectors) noexcept;
+        /** @brief Sample automation into physical cells before processing the actual compiled graph. */
+        MixerRenderResult RenderAutomatedPlan(MixerRenderPlan::State &state, std::span<const MixerVoiceInput> voices,
+                                              const AudioPlanarBlockView &output, const MixerAutomationRenderContext &automation) noexcept;
         /** @brief Write canonical silence only within caller-admitted storage. */
         void Silence(const AudioPlanarBlockView &output) noexcept;
         /** @brief Shared control-only profile admission, avoiding divergent runtime/compiler validation. */
@@ -63,6 +87,12 @@ namespace Horo::Audio {
         std::size_t scratchBytes{};
         MixerDetail::Storage storage;
         std::vector<MixerDetail::BusState> processing;
+        std::vector<MixerDetail::RouteState> routeState;
+        std::vector<MixerDetail::ParameterProjection> projections;
+        std::size_t metadataBytes{};
+        std::uint64_t sampleOperations{};
+        bool automationBound{};
+
         AudioMemoryHandle handle; /**< Assigned once before release-publication, never changed while visible. */
         std::uint64_t sequence{};
     };

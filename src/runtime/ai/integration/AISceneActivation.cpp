@@ -94,6 +94,7 @@ namespace Horo::AI {
 
         /** @copydoc ShutdownStateContents */
         void ShutdownStateContents(AiSceneRuntimeState &state) noexcept {
+            state.closed = true;
             for (AgentRuntimeState &agent : state.agents)
                 CancelOwnedWork(agent);
             state.agents.clear();
@@ -159,12 +160,13 @@ namespace Horo::AI {
         [[nodiscard]] Result<void> PrepareAgentRuntimeState(const AiSceneActivationBinding binding, const AiSceneAgentDescriptor &input,
                                                             const std::span<const AiControllerDescriptor> descriptors,
                                                             const AiCapabilitySet availableCapabilities, const std::uint32_t slotIndex,
-                                                            std::optional<AgentRuntimeState> &prepared) {
+                                                            std::optional<AgentRuntimeState> &prepared,
+                                                            const std::uint32_t generation = 1) {
             prepared.reset();
             const bool sceneStartup = input.agent.enabled && input.agent.startupPolicy == AiStartupPolicy::OnSceneActivation;
             const bool controllerStartup =
                 input.controller && input.controller->enabled && input.controller->startupPolicy == AiStartupPolicy::OnSceneActivation;
-            const AgentHandle handle{binding.incarnation, Horo::Handle<AgentHandleTag>{slotIndex, 1}};
+            const AgentHandle handle{binding.incarnation, Horo::Handle<AgentHandleTag>{slotIndex, generation}};
             const AiControllerDescriptor *descriptor =
                 input.controller ? FindDescriptor(descriptors, input.controller->controller) : nullptr;
             const auto schemaPublication = ResolveAgentSchema(descriptor, input.controller, handle);
@@ -241,6 +243,32 @@ namespace Horo::AI {
         }
     }  // namespace
 
+    /** @copydoc Detail::PrepareStructuralAgents */
+    Result<std::vector<Detail::AgentRuntimeState>> Detail::PrepareStructuralAgents(
+        const AiSceneActivationBinding binding, const std::span<const AiSceneAgentDescriptor> agents,
+        const std::span<const AiControllerDescriptor> descriptors, const AiCapabilitySet capabilities,
+        const std::span<const Horo::Handle<AgentHandleTag>> slots) {
+        if (const auto valid = ValidateSceneInputs(agents, descriptors, binding); valid.HasError())
+            return Result<std::vector<AgentRuntimeState>>::Failure(valid.ErrorValue());
+        std::vector<AgentRuntimeState> result;
+        result.reserve(agents.size());
+        for (std::size_t index = 0; index < agents.size(); ++index) {
+            std::optional<AgentRuntimeState> prepared;
+            if (const auto ready = PrepareAgentRuntimeState(binding, agents[index], descriptors, capabilities, slots[index].index, prepared,
+                                                            slots[index].generation);
+                ready.HasError())
+                return Result<std::vector<AgentRuntimeState>>::Failure(ready.ErrorValue());
+            result.push_back(std::move(*prepared));
+        }
+        return Result<std::vector<AgentRuntimeState>>::Success(std::move(result));
+    }
+
+    /** @copydoc AiSceneRuntime::MakeStructuralParticipant */
+    std::unique_ptr<Runtime::SceneStructuralParticipant> AiSceneRuntime::MakeStructuralParticipant(
+        const std::span<const AiControllerDescriptor> descriptors) {
+        return Detail::MakeStructuralParticipant(*this, descriptors);
+    }
+
     /** @copydoc AiSceneSnapshot::Find */
     Result<AiAgentRuntimeRecord> AiSceneSnapshot::Find(const AgentHandle handle) const {
         if (const Result<void> valid = ValidateAiRuntimeHandle(handle, binding_.incarnation); valid.HasError())
@@ -254,7 +282,7 @@ namespace Horo::AI {
     }
 
     AiSceneActivationCandidate::AiSceneActivationCandidate(AiSceneRuntime &runtime, const AiSceneActivationBinding binding,
-                                                           std::unique_ptr<Detail::AiSceneRuntimeState> state,
+                                                           std::shared_ptr<Detail::AiSceneRuntimeState> state,
                                                            const std::uint64_t publicationToken) noexcept
         : runtime_(&runtime), binding_(binding), state_(std::move(state)), publicationToken_(publicationToken) {}
 
@@ -340,7 +368,8 @@ namespace Horo::AI {
         }
         const std::uint64_t publicationToken = nextPublicationToken_++;
         try {
-            auto candidate = std::make_unique<AiSceneActivationCandidate>(*this, binding, std::move(ownedState), publicationToken);
+            std::shared_ptr<Detail::AiSceneRuntimeState> retainedState = std::move(ownedState);
+            auto candidate = std::make_unique<AiSceneActivationCandidate>(*this, binding, std::move(retainedState), publicationToken);
             return Result<std::unique_ptr<AiSceneActivationCandidate>>::Success(std::move(candidate));
         } catch (const std::bad_alloc &) {
             if (ownedState != nullptr)
@@ -351,7 +380,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiSceneRuntime::StartTaskAtSafePoint */
-    Result<TaskHandle> AiSceneRuntime::StartTaskAtSafePoint(const AgentHandle agent, const TaskId taskDefinition) {
+    Result<TaskHandle> AiSceneRuntime::StartTaskAtSafePoint(const AgentHandle agent, const TaskId taskDefinition) const {
         if (shutdown_ || active_ == nullptr)
             return Failure<TaskHandle>(AIErrors::RuntimeUnavailable, "The AI scene runtime is not active.");
         if (active_->revision == std::numeric_limits<std::uint64_t>::max())
@@ -384,7 +413,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiSceneRuntime::DisableAtSafePoint */
-    Result<void> AiSceneRuntime::DisableAtSafePoint(const AgentHandle agent) {
+    Result<void> AiSceneRuntime::DisableAtSafePoint(const AgentHandle agent) const {
         if (shutdown_ || active_ == nullptr)
             return Failure(AIErrors::RuntimeUnavailable, "The AI scene runtime is not active.");
         if (active_->revision == std::numeric_limits<std::uint64_t>::max())
@@ -403,7 +432,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiSceneRuntime::RetireOwnerAtSafePoint */
-    Result<std::size_t> AiSceneRuntime::RetireOwnerAtSafePoint(const Runtime::EntityRef owner) {
+    Result<std::size_t> AiSceneRuntime::RetireOwnerAtSafePoint(const Runtime::EntityRef owner) const {
         if (shutdown_ || active_ == nullptr)
             return Failure<std::size_t>(AIErrors::RuntimeUnavailable, "The AI scene runtime is not active.");
         if (active_->revision == std::numeric_limits<std::uint64_t>::max())
@@ -487,11 +516,11 @@ namespace Horo::AI {
         return Result<void>::Success();
     }
 
-    bool AiSceneRuntime::PublishCandidate(std::unique_ptr<Detail::AiSceneRuntimeState> &state, const AiSceneActivationBinding &binding,
+    bool AiSceneRuntime::PublishCandidate(std::shared_ptr<Detail::AiSceneRuntimeState> &state, const AiSceneActivationBinding &binding,
                                           const std::uint64_t publicationToken) noexcept {
         if (shutdown_ || state == nullptr || state->binding != binding)
             return false;
-        std::unique_ptr<Detail::AiSceneRuntimeState> previous = std::move(active_);
+        std::shared_ptr<Detail::AiSceneRuntimeState> previous = std::move(active_);
         active_ = std::move(state);
         activePublicationToken_ = publicationToken;
         if (previous != nullptr)
@@ -506,7 +535,7 @@ namespace Horo::AI {
     void AiSceneRuntime::RetirePublication(const std::uint64_t publicationToken) noexcept {
         if (publicationToken == 0 || publicationToken != activePublicationToken_)
             return;
-        std::unique_ptr<Detail::AiSceneRuntimeState> previous = std::move(active_);
+        std::shared_ptr<Detail::AiSceneRuntimeState> previous = std::move(active_);
         activePublicationToken_ = 0;
         if (previous != nullptr)
             ShutdownStateContents(*previous);

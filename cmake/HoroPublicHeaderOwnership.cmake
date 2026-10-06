@@ -385,6 +385,7 @@ horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS
     Horo/Gameplay/SystemRegistry.h
 )
 horo_configure_target_header_boundary(HoroRuntimeScene PUBLIC_HEADERS
+    Horo/Runtime/Scene/AudioSceneExtraction.h
     Horo/Runtime/Scene/NavigationSceneComponents.h
     Horo/Runtime/Scene/PersistentEntityIdentity.h
     Horo/Runtime/Scene/SaveableComponentState.h
@@ -440,6 +441,7 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/PreFracturedSource.h
 )
 horo_configure_target_header_boundary(HoroAudioApi PUBLIC_HEADERS
+    Horo/Audio/AudioSpatialModel.h
     Horo/Audio/AudioAssetSchema.h
     Horo/Audio/AudioBackendCapabilities.h
     Horo/Audio/AudioCallbackEvents.h
@@ -486,6 +488,7 @@ horo_configure_target_header_boundary(HoroAudioMemory PUBLIC_HEADERS
     Horo/Audio/AudioMemory.h
 )
 horo_configure_target_header_boundary(HoroAudioMixer PUBLIC_HEADERS
+    Horo/Audio/MixerSnapshot.h
     Horo/Audio/MixerGraphCompiler.h
 )
 horo_configure_target_header_boundary(HoroAudioCommands PUBLIC_HEADERS
@@ -828,6 +831,10 @@ horo_configure_target_header_boundary(HoroPrefab PUBLIC_HEADERS
     Horo/Prefab/PrefabErrors.h
     Horo/Prefab/PrefabIdentity.h
     Horo/Prefab/PrefabLimits.h
+)
+
+horo_configure_target_header_boundary(HoroPrefabRuntime PUBLIC_HEADERS
+    Horo/Prefab/PrefabTemplateProvider.h
 )
 
 horo_configure_target_header_boundary(HoroPrefabAuthoring PUBLIC_HEADERS

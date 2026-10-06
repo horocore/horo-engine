@@ -149,6 +149,11 @@ namespace Horo::Physics::Detail {
         PhysicsJointCollisionPolicy collisionPolicy{};
     };
 
+    /** @brief Constructs a detached native constraint against resident or staged body records; never registers it. */
+    [[nodiscard]] Result<CanonicalSceneConstraintRecord> PrepareCanonicalConstraintRecord(CanonicalWorldHandle world, PhysicsWorldId owner,
+                                                                                          const PhysicsConstraintDescriptor &descriptor,
+                                                                                          std::span<const CanonicalSceneBodyRecord> staged);
+
     /** @brief Native solver objects retained in dependency order for one world. */
     struct CanonicalWorldNativeState final {
         std::unique_ptr<JPH::TempAllocatorImpl> scratch;
@@ -207,6 +212,7 @@ namespace Horo::Physics::Detail {
         DiagnosticInbox diagnostics;
         std::atomic<ContactCaptureRoute *> contactRoute{};
         CanonicalWorldSceneState scene;
+        std::weak_ptr<CanonicalSceneBodyBatchState> pendingBodyBatch;
         CanonicalWorldQueryState query;
     };
 
