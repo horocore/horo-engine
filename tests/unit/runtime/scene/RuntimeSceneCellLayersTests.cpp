@@ -106,6 +106,51 @@ namespace Horo::Runtime {
             return std::move(result).Value();
         }
 
+        /** @brief Owns one mutable negative-test request and proves failed encoding never consumes its baseline. */
+        struct EncodingFixture final {
+            W::WorldPartitionDescriptor partition{Partition()};
+            RuntimeSceneCellPayload baseline{Baseline()};
+            const RuntimeEntityDefinition *original{baseline.Definition().Entities().data()};
+            std::array<SceneCellDataLayer, 3> layers{Layers()};
+            std::array<SceneCellLayerMembership, 3> edges{Edges()};
+            SceneCellLayerLimits limits{Limits()};
+            SceneCellPayloadIdentity expected{Identity()};
+
+            /** @brief Encodes the current complete request without consuming the source on failure. */
+            Result<RuntimeSceneCellLayers> Encode() {
+                return EncodeRuntimeSceneCellLayers(partition, std::move(baseline), expected, layers, edges, limits);
+            }
+
+            /** @brief Checks the original complete baseline remains owned after each rejection. */
+            void RequireUnconsumed() const {
+                REQUIRE(baseline.Definition().Entities().data() == original);
+                REQUIRE(baseline.Definition().Entities().size() == 3);
+            }
+        };
+
+        /** @brief Owns one independent complete policy/ownership/state snapshot for negative filtering cases. */
+        struct FilteringFixture final {
+            RuntimeSceneCellLayers encoded{Encoded()};
+            std::array<W::WorldLayerFilterCandidate, 3> candidates{Candidates()};
+            std::array<W::WorldLayerStateRecord, 3> states{States()};
+            W::WorldLayerFilterPolicy policy{Policy()};
+            W::WorldLayerFilterContext context{Context()};
+
+            /** @brief Projects the current complete snapshot without changing the encoded baseline. */
+            Result<RuntimeSceneCellLayerSelection> Filter() const {
+                return FilterRuntimeSceneCellLayers(encoded, policy, candidates, states, context);
+            }
+        };
+
+        /** @brief Publishes or replaces the exact registry dependency used by the asynchronous asset regression. */
+        void PublishMesh(Assets::AssetRegistry &registry, const SceneAssetDependency &dependency) {
+            REQUIRE(registry
+                        .Publish(std::vector<Assets::AssetRecord>{{dependency.id, dependency.expectedType,
+                                                                   ProjectPath::Parse("assets/mesh.bin").Value(),
+                                                                   ProjectPath::Parse("assets/mesh.bin.horo").Value()}})
+                        .status == Assets::AssetRegistryBuildStatus::Complete);
+        }
+
         void Commit(RuntimeSceneService &service) {
             REQUIRE(service.OnPhase(RuntimePhase::CommitDeferredLifecycleChanges, FrameContext{1, {}, 0.0, 0, {}, false, {}}).HasValue());
         }
@@ -151,77 +196,71 @@ namespace Horo::Runtime {
         REQUIRE(moved.IsUsable());
     }
 
-    TEST_CASE("Data layer encoding rejects invalid stale and overcapacity metadata without consuming baseline",
-              "[scene][cell_layers][failure]") {
-        const auto partition = Partition();
-        auto baseline = Baseline();
-        const auto *original = baseline.Definition().Entities().data();
-        auto layers = Layers();
-        auto edges = Edges();
-        auto limits = Limits();
-        auto expected = Identity();
-        auto encode = [&] {
-            return EncodeRuntimeSceneCellLayers(partition, std::move(baseline), expected, layers, edges, limits);
-        };
+    TEST_CASE("Data layer encoding rejects invalid and stale references without consuming baseline", "[scene][cell_layers][failure]") {
+        EncodingFixture fixture;
         SECTION("stale source") {
-            expected.revision.value = 2;
-            REQUIRE(encode().ErrorValue().code.Value() == "scene.cell_payload.stale");
+            fixture.expected.revision.value = 2;
+            REQUIRE(fixture.Encode().ErrorValue().code.Value() == "scene.cell_payload.stale");
         }
         SECTION("stale flags") {
-            layers[1].flags = W::WorldLayerFlags::None;
-            REQUIRE(encode().HasError());
+            fixture.layers[1].flags = W::WorldLayerFlags::None;
+            REQUIRE(fixture.Encode().HasError());
         }
         SECTION("missing layer") {
-            layers[2].layer = Layer(9);
-            REQUIRE(encode().HasError());
+            fixture.layers[2].layer = Layer(9);
+            REQUIRE(fixture.Encode().HasError());
         }
         SECTION("invalid revision") {
-            layers[1].ownershipRevision = {};
-            REQUIRE(encode().HasError());
+            fixture.layers[1].ownershipRevision = {};
+            REQUIRE(fixture.Encode().HasError());
         }
         SECTION("duplicate layers") {
-            layers[1] = layers[0];
-            REQUIRE(encode().HasError());
+            fixture.layers[1] = fixture.layers[0];
+            REQUIRE(fixture.Encode().HasError());
         }
         SECTION("duplicate edges") {
-            edges[1] = edges[0];
-            REQUIRE(encode().HasError());
+            fixture.edges[1] = fixture.edges[0];
+            REQUIRE(fixture.Encode().HasError());
         }
         SECTION("unknown object") {
-            edges[2].object = {99};
-            REQUIRE(encode().HasError());
+            fixture.edges[2].object = {99};
+            REQUIRE(fixture.Encode().HasError());
         }
         SECTION("unknown membership layer") {
-            edges[2].layer = Layer(9);
-            REQUIRE(encode().HasError());
+            fixture.edges[2].layer = Layer(9);
+            REQUIRE(fixture.Encode().HasError());
         }
         SECTION("unsorted edges") {
-            std::swap(edges[0], edges[2]);
-            REQUIRE(encode().HasError());
+            std::swap(fixture.edges[0], fixture.edges[2]);
+            REQUIRE(fixture.Encode().HasError());
         }
+        fixture.RequireUnconsumed();
+    }
+
+    TEST_CASE("Data layer encoding enforces storage ceilings without consuming rejected baseline", "[scene][cell_layers][capacity]") {
+        EncodingFixture fixture;
         SECTION("zero ceiling") {
-            limits.maximumLayers = 0;
-            REQUIRE(encode().HasError());
+            fixture.limits.maximumLayers = 0;
+            REQUIRE(fixture.Encode().HasError());
         }
         SECTION("layer ceiling") {
-            limits.maximumLayers = 2;
-            REQUIRE(encode().HasError());
+            fixture.limits.maximumLayers = 2;
+            REQUIRE(fixture.Encode().HasError());
         }
         SECTION("edge ceiling") {
-            limits.maximumMemberships = 2;
-            REQUIRE(encode().HasError());
+            fixture.limits.maximumMemberships = 2;
+            REQUIRE(fixture.Encode().HasError());
         }
         SECTION("byte ceiling") {
-            limits.maximumRetainedBytes = baseline.RetainedBytes();
-            REQUIRE(encode().HasError());
+            fixture.limits.maximumRetainedBytes = fixture.baseline.RetainedBytes();
+            REQUIRE(fixture.Encode().HasError());
         }
         SECTION("extreme ceiling") {
-            limits.maximumRetainedBytes = std::numeric_limits<std::size_t>::max();
-            REQUIRE(encode().HasValue());
+            fixture.limits.maximumRetainedBytes = std::numeric_limits<std::size_t>::max();
+            REQUIRE(fixture.Encode().HasValue());
             return;
         }
-        REQUIRE(baseline.Definition().Entities().data() == original);
-        REQUIRE(baseline.Definition().Entities().size() == 3);
+        fixture.RequireUnconsumed();
     }
 
     TEST_CASE("Layer selection uses union membership activated state and target policy in authored order", "[scene][cell_layers][filter]") {
@@ -253,61 +292,61 @@ namespace Horo::Runtime {
         REQUIRE(select().Value().Definition().Entities().size() == 1);
     }
 
-    TEST_CASE("Layer filtering rejects incomplete unsupported stale cancelled and closed snapshots", "[scene][cell_layers][failure]") {
-        const auto encoded = Encoded();
-        auto candidates = Candidates();
-        auto states = States();
-        auto policy = Policy();
-        auto context = Context();
-        auto filter = [&] {
-            return FilterRuntimeSceneCellLayers(encoded, policy, candidates, states, context);
-        };
+    TEST_CASE("Layer filtering rejects incomplete unsupported and stale snapshots", "[scene][cell_layers][failure]") {
+        FilteringFixture fixture;
         SECTION("ownership replacement") {
-            candidates[0].ownership.revision = IdentityFrom<W::WorldLayerRevision>(2);
-            REQUIRE(filter().HasError());
+            fixture.candidates[0].ownership.revision = IdentityFrom<W::WorldLayerRevision>(2);
+            REQUIRE(fixture.Filter().HasError());
         }
         SECTION("state ownership mismatch") {
-            states[0].ownership.owner.world.epoch = IdentityFrom<W::PartitionEpoch>(2);
-            REQUIRE(filter().HasError());
+            fixture.states[0].ownership.owner.world.epoch = IdentityFrom<W::PartitionEpoch>(2);
+            REQUIRE(fixture.Filter().HasError());
         }
         SECTION("world replacement") {
-            context.expectedWorld.epoch = IdentityFrom<W::PartitionEpoch>(2);
-            REQUIRE(filter().HasError());
+            fixture.context.expectedWorld.epoch = IdentityFrom<W::PartitionEpoch>(2);
+            REQUIRE(fixture.Filter().HasError());
         }
         SECTION("policy replacement") {
-            context.expectedPolicyRevision = IdentityFrom<W::WorldLayerFilterPolicyRevision>(2);
-            REQUIRE(filter().HasError());
+            fixture.context.expectedPolicyRevision = IdentityFrom<W::WorldLayerFilterPolicyRevision>(2);
+            REQUIRE(fixture.Filter().HasError());
         }
         SECTION("unsupported target") {
-            policy.target = static_cast<W::WorldLayerExecutionTarget>(99);
-            REQUIRE(filter().HasError());
+            fixture.policy.target = static_cast<W::WorldLayerExecutionTarget>(99);
+            REQUIRE(fixture.Filter().HasError());
         }
         SECTION("unknown state") {
-            states[0].state = static_cast<W::WorldLayerState>(99);
-            REQUIRE(filter().HasError());
-        }
-        SECTION("capacity") {
-            context.maximumCandidates = 2;
-            REQUIRE(filter().HasError());
-        }
-        SECTION("cancelling") {
-            context.authorityState = W::WorldLayerFilterAuthorityState::Cancelling;
-            REQUIRE(filter().HasError());
-        }
-        SECTION("closed") {
-            context.authorityState = W::WorldLayerFilterAuthorityState::Closed;
-            REQUIRE(filter().HasError());
+            fixture.states[0].state = static_cast<W::WorldLayerState>(99);
+            REQUIRE(fixture.Filter().HasError());
         }
         SECTION("missing state") {
-            REQUIRE(FilterRuntimeSceneCellLayers(encoded, policy, candidates, {}, context).HasError());
+            REQUIRE(FilterRuntimeSceneCellLayers(fixture.encoded, fixture.policy, fixture.candidates, {}, fixture.context).HasError());
+        }
+        REQUIRE(fixture.encoded.Baseline().Definition().Entities().size() == 3);
+    }
+
+    TEST_CASE("Layer filtering rejects capacity cancellation and closed admission", "[scene][cell_layers][lifecycle]") {
+        FilteringFixture fixture;
+        SECTION("capacity") {
+            fixture.context.maximumCandidates = 2;
+            REQUIRE(fixture.Filter().HasError());
+        }
+        SECTION("cancelling") {
+            fixture.context.authorityState = W::WorldLayerFilterAuthorityState::Cancelling;
+            REQUIRE(fixture.Filter().HasError());
+        }
+        SECTION("closed") {
+            fixture.context.authorityState = W::WorldLayerFilterAuthorityState::Closed;
+            REQUIRE(fixture.Filter().HasError());
         }
         SECTION("cancelled") {
             CancellationSource cancel;
             cancel.RequestCancellation();
-            REQUIRE(FilterRuntimeSceneCellLayers(encoded, policy, candidates, states, context, cancel.Token()).ErrorValue().code.Value() ==
-                    "scene.cell_payload.cancelled");
+            REQUIRE(FilterRuntimeSceneCellLayers(fixture.encoded, fixture.policy, fixture.candidates, fixture.states, fixture.context,
+                                                 cancel.Token())
+                        .ErrorValue()
+                        .code.Value() == "scene.cell_payload.cancelled");
         }
-        REQUIRE(encoded.Baseline().Definition().Entities().size() == 3);
+        REQUIRE(fixture.encoded.Baseline().Definition().Entities().size() == 3);
     }
 
     TEST_CASE("Layer selection rejects an excluded required parent instead of silently changing transforms",
@@ -442,11 +481,7 @@ namespace Horo::Runtime {
         REQUIRE(selected.HasValue());
         REQUIRE(selected.Value().Definition().AssetDependencies().size() == 1);
         Assets::AssetRegistry registry;
-        REQUIRE(registry
-                    .Publish(std::vector<Assets::AssetRecord>{{dependency.id, dependency.expectedType,
-                                                               ProjectPath::Parse("assets/mesh.bin").Value(),
-                                                               ProjectPath::Parse("assets/mesh.bin.horo").Value()}})
-                    .status == Assets::AssetRegistryBuildStatus::Complete);
+        PublishMesh(registry, dependency);
         Assets::MemoryAssetProvider provider;
         provider.Insert(dependency.id, {1, 2, 3});
         JobSystem jobs{JobSystemConfig{1, 8}};
@@ -465,11 +500,7 @@ namespace Horo::Runtime {
         REQUIRE(service.ActiveScene()->FindAsset(dependency.id)->bytes.size() == 3);
         const auto original = service.ActiveScene()->Find(SceneObjectId{1}).value();
         provider.Remove(dependency.id);
-        REQUIRE(registry
-                    .Publish(std::vector<Assets::AssetRecord>{{dependency.id, dependency.expectedType,
-                                                               ProjectPath::Parse("assets/mesh.bin").Value(),
-                                                               ProjectPath::Parse("assets/mesh.bin.horo").Value()}})
-                    .status == Assets::AssetRegistryBuildStatus::Complete);
+        PublishMesh(registry, dependency);
         REQUIRE(QueueRuntimeSceneCellLayers(service, selected.Value(), Fence(), authority).HasValue());
         std::optional<Error> failure;
         const auto failDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};

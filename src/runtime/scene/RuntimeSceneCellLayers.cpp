@@ -265,8 +265,7 @@ namespace Horo::Runtime {
         if (const auto valid = ValidateStates(payload, candidates, states); valid.HasError())
             return Result<RuntimeSceneCellLayerSelection>::Failure(valid.ErrorValue());
         std::vector<W::WorldLayerFilterDecision> decisions(candidates.size());
-        const auto filtered = W::FilterWorldLayers(policy, candidates, context, decisions);
-        if (filtered.HasError())
+        if (const auto filtered = W::FilterWorldLayers(policy, candidates, context, decisions); filtered.HasError())
             return Result<RuntimeSceneCellLayerSelection>::Failure(filtered.ErrorValue());
         auto definition = SelectDefinition(payload, decisions, states, cancellation);
         if (definition.HasError())
