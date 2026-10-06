@@ -1878,6 +1878,18 @@ sample rate, channel layout, and streaming thresholds.
 
 ## Editor Tooling
 
+`MixerAssetDocument` in `HoroEngine::EditorServices` is the editor owner of
+validated mixer authoring state, typed bus/route/effect transactions and bounded
+semantic undo/redo history. It reuses `MixerAssetSchema` validation/migration from
+AudioApi; Audio has no Editor dependency. Source snapshots are immutable owned
+captures correlated to host-issued document identity and monotonic revision.
+Dirty state follows semantic saved-state identity, while reload fences old
+captures and clears history. Source I/O, workspace routing and derived Audio
+compilation/publication remain explicit host/application operations. The document
+creates no device/backend and retains no preview, scene or callback state. See
+[Mixer document commands](../../guides/mixer-document-commands.md) for the additive
+consumer contract, lifecycle and migration path.
+
 [AUD-009](https://github.com/HoroCore/horo-engine/issues/615) delivers these
 workflows for M5 — 1.0. Middleware/procedural/capture-specific authoring surfaces
 follow their Post-1.0 capability boundaries and are not implied by the core tools.
