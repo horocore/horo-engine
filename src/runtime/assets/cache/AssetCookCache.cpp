@@ -7,10 +7,12 @@
 #include "../AssetErrors.h"
 #include "Horo/Foundation/Sha256.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -79,6 +81,7 @@ namespace Horo::Assets {
     // BuildAssetCookCacheKey
     // ---------------------------------------------------------------------------
 
+    /** @copydoc BuildAssetCookCacheKey */
     AssetCookCacheKey BuildAssetCookCacheKey(const AssetCookCacheKeyInputs &inputs) {
         // Canonical cache key pre-image format (length-delimited, LE):
         //
@@ -116,6 +119,34 @@ namespace Horo::Assets {
         AppendLE32(preimage, inputs.artifactFormatVersion);
 
         return AssetCookCacheKey{ComputeSha256(std::as_bytes(std::span{preimage}))};
+    }
+
+    /** @copydoc BuildAssetCookCacheKeyV2 */
+    Result<AssetCookCacheKey> BuildAssetCookCacheKeyV2(const AssetCookCacheKeyInputs &inputs,
+                                                       const std::span<const AssetCookDependencyIdentity> dependencies,
+                                                       const Sha256Digest &semanticInputsDigest, const std::size_t maximumDependencies) {
+        if (maximumDependencies == 0 || dependencies.size() > maximumDependencies ||
+            dependencies.size() > std::numeric_limits<std::uint32_t>::max())
+            return Result<AssetCookCacheKey>::Failure(MakeError(CookErrors::TooLarge));
+        std::vector<AssetCookDependencyIdentity> ordered(dependencies.begin(), dependencies.end());
+        std::ranges::sort(ordered, {}, &AssetCookDependencyIdentity::id);
+        std::vector<std::uint8_t> preimage;
+        constexpr std::string_view domain = "horo.asset.cook-cache.v2";
+        preimage.insert(preimage.end(), domain.begin(), domain.end());
+        preimage.push_back(0);
+        AppendDigest(preimage, BuildAssetCookCacheKey(inputs).digest);
+        AppendDigest(preimage, semanticInputsDigest);
+        AppendLE32(preimage, static_cast<std::uint32_t>(ordered.size()));
+        std::optional<AssetId> previous;
+        for (const auto &dependency : ordered) {
+            if (!dependency.id.IsValid() || dependency.type.Value().empty() || previous == dependency.id)
+                return Result<AssetCookCacheKey>::Failure(MakeError(CookErrors::MalformedArtifact));
+            AppendId(preimage, dependency.id);
+            AppendDelimited(preimage, dependency.type.Value());
+            AppendDigest(preimage, dependency.artifactDigest);
+            previous = dependency.id;
+        }
+        return Result<AssetCookCacheKey>::Success({ComputeSha256(std::as_bytes(std::span{preimage}))});
     }
 
     // ---------------------------------------------------------------------------

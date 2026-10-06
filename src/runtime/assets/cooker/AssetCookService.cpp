@@ -72,6 +72,21 @@ namespace Horo::Assets {
             std::optional<Error> cookError;
         };
 
+        /** @brief Applies the same requested envelope and domain validation to both fresh and cached output. */
+        Result<void> ValidateCachedSlot(const AssetCookRequest &request, const CookerCatalogSnapshot &catalog, const CookSlot &slot,
+                                        std::span<const std::uint8_t> bytes);
+
+        /** @brief Validates byte drift under the host's project authority before a generation can be selected. */
+        Result<void> ValidatePinnedInputs(const AssetCookRequest &request, const CancellationToken &cancellation) {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(CookErrors::Cancelled));
+            if (request.pinnedInputs) {
+                if (auto unchanged = request.pinnedInputs->VerifyUnchanged(cancellation); unchanged.HasError())
+                    return unchanged;
+            }
+            return request.validateHostInputs ? request.validateHostInputs() : Result<void>::Success();
+        }
+
         /** @brief Adds authoritative source navigation to a typed asset-scoped result. */
         void PublishAssetResult(const AssetCookRequest &request, const AssetRecord &record, const CookOperationScope &operation,
                                 BuildOutputRecord result) {
@@ -94,9 +109,8 @@ namespace Horo::Assets {
             auto lock = request.publicationFiles->TryAcquireExclusive(request.cookedRoot / ".cook-writer.lock", "asset cook publication");
             if (lock.HasError())
                 return Result<AssetCookGeneration>::Failure(lock.ErrorValue());
-            const AssetCookPublicationPolicy policy{.files = request.publicationFiles.get(), .beforeCommit = [&cancellation] {
-                return cancellation.IsCancellationRequested() ? Result<void>::Failure(MakeError(CookErrors::Cancelled))
-                                                              : Result<void>::Success();
+            const AssetCookPublicationPolicy policy{.files = request.publicationFiles.get(), .beforeCommit = [&request, &cancellation] {
+                return ValidatePinnedInputs(request, cancellation);
             }, .afterCommit = [&operation](const AssetCookGeneration &) noexcept {
                 operation.RecordCommitted();
             }, .newOperationId = request.newPublicationOperationId, .writerLease = &lock.Value()};
@@ -128,8 +142,9 @@ namespace Horo::Assets {
             return Result<AssetCookReport>::Success(AssetCookReport{.generation = std::move(generation).Value()});
         }
 
-        Result<void> CookAndEncodeSlot(const CookerCatalogSnapshot &catalog, CookSlot &slot, const AssetCookTargetId &target,
+        Result<void> CookAndEncodeSlot(const CookerCatalogSnapshot &catalog, CookSlot &slot, const AssetCookRequest &request,
                                        const CancellationToken &cancellation) {
+            const auto &target = request.target;
             const auto *strategy = catalog.Find(slot.record.type, target);
 
             if (!strategy)
@@ -149,8 +164,6 @@ namespace Horo::Assets {
                 return Result<void>::Failure(cookResult.ErrorValue());
 
             auto sink = std::move(cookResult).Value();
-            if (auto validated = strategy->ValidateCookedPayload(sourceView, sink.payload); validated.HasError())
-                return Result<void>::Failure(validated.ErrorValue());
             const AssetCookArtifact artifact{
                 .id = sourceView.id,
                 .type = sourceView.type,
@@ -161,23 +174,23 @@ namespace Horo::Assets {
                 .payload = std::move(sink.payload),
             };
 
-            auto encodeResult = EncodeCookedArtifact(artifact);
+            auto encodeResult = EncodeCookedArtifact(artifact, request.limits);
             if (encodeResult.HasError())
                 return Result<void>::Failure(encodeResult.ErrorValue());
 
             slot.cookedArtifact = std::move(encodeResult).Value();
-            return Result<void>::Success();
+            return ValidateCachedSlot(request, catalog, slot, slot.cookedArtifact);
         }
 
         /** @brief Retains source-scoped failures before the joined job boundary handles an unexpected exception. */
-        Result<void> ExecuteCookWork(CookSlot &slot, const CookerCatalogSnapshot &catalog, const AssetCookTargetId &target,
+        Result<void> ExecuteCookWork(CookSlot &slot, const CookerCatalogSnapshot &catalog, const AssetCookRequest &request,
                                      const CancellationToken &jobCancellation) {
             if (jobCancellation.IsCancellationRequested()) {
                 slot.cookError = MakeError(CookErrors::Cancelled);
                 return JobCancelled(*slot.cookError);
             }
             try {
-                Result<void> cooked = CookAndEncodeSlot(catalog, slot, target, jobCancellation);
+                Result<void> cooked = CookAndEncodeSlot(catalog, slot, request, jobCancellation);
                 if (cooked.HasError())
                     slot.cookError = cooked.ErrorValue();
                 if (cooked.HasError() &&
@@ -195,9 +208,9 @@ namespace Horo::Assets {
         }
 
         /** @brief Borrows one slot/catalog until the caller joins all submitted work. */
-        JobFunction MakeCookWork(CookSlot &slot, const CookerCatalogSnapshot &catalog, const AssetCookTargetId &target) {
-            return [&slot, &catalog, &target](const CancellationToken &jobCancellation) {
-                return ExecuteCookWork(slot, catalog, target, jobCancellation);
+        JobFunction MakeCookWork(CookSlot &slot, const CookerCatalogSnapshot &catalog, const AssetCookRequest &request) {
+            return [&slot, &catalog, &request](const CancellationToken &jobCancellation) {
+                return ExecuteCookWork(slot, catalog, request, jobCancellation);
             };
         }
 
@@ -249,7 +262,7 @@ namespace Horo::Assets {
             for (CookSlot &slot : slots) {
                 if (slot.cacheHit)
                     continue;
-                if (auto spawned = group.Spawn({}, MakeCookWork(slot, catalog, request.target)); spawned.HasError()) {
+                if (auto spawned = group.Spawn({}, MakeCookWork(slot, catalog, request)); spawned.HasError()) {
                     slot.cookError = IsJobCancelled(spawned.ErrorValue()) ? MakeError(CookErrors::Cancelled) : spawned.ErrorValue();
                     admissionError = spawned.ErrorValue();
                     group.RequestCancel();
@@ -315,7 +328,8 @@ namespace Horo::Assets {
         }
 
         Result<std::vector<CookSlot>> PrepareCookSlots(const AssetCookRequest &request, const CookerCatalogSnapshot &catalog,
-                                                       std::span<const AssetRecord> records, CookOperationScope &operation) {
+                                                       std::span<const AssetRecord> records, CookOperationScope &operation,
+                                                       const std::span<const AssetCookDependencyIdentity> dependencies = {}) {
             std::vector<CookSlot> slots;
             slots.reserve(records.size());
             operation.Update("prepare", "Reading asset sources", 0.1F);
@@ -331,7 +345,16 @@ namespace Horo::Assets {
                     return Result<std::vector<CookSlot>>::Failure(Error{CookErrors::CookerMissing.code});
                 }
 
-                auto readResult = ReadSourceBytes(request.sourceRoot, record.sourcePath.String(), request.limits.maximumSourceBytes);
+                const auto *pinned = request.pinnedInputs ? request.pinnedInputs->Find(record.id) : nullptr;
+                if (request.pinnedInputs &&
+                    (pinned == nullptr || pinned->record.type != record.type ||
+                     pinned->record.sourcePath.String() != record.sourcePath.String() ||
+                     pinned->record.metadataPath.String() != record.metadataPath.String() ||
+                     request.pinnedInputs->SourceRoot() != request.sourceRoot || pinned->bytes.size() > request.limits.maximumSourceBytes))
+                    return Result<std::vector<CookSlot>>::Failure(MakeError(CookErrors::MalformedArtifact));
+                auto readResult = pinned
+                                      ? Result<std::vector<std::uint8_t>>::Success(pinned->bytes)
+                                      : ReadSourceBytes(request.sourceRoot, record.sourcePath.String(), request.limits.maximumSourceBytes);
                 if (readResult.HasError()) {
                     PublishAssetResult(request, record, operation,
                                        {.severity = DiagnosticSeverity::Error,
@@ -344,17 +367,27 @@ namespace Horo::Assets {
                 auto sourceBytes = std::move(readResult).Value();
                 auto sourceDigest = ComputeSha256(std::as_bytes(std::span{sourceBytes}));
                 const auto identity = contribution->strategy->CacheIdentity();
-                auto cacheKey = BuildAssetCookCacheKey(AssetCookCacheKeyInputs{
+                const AssetCookCacheKeyInputs inputs{
                     .assetId = record.id,
                     .assetType = record.type,
                     .sourceDigest = sourceDigest,
+                    .metadataDigest = pinned ? pinned->metadataDigest : Sha256Digest{},
+                    .metadataSchemaVersion = pinned ? 1U : 0U,
                     .settingsDigest = identity.settingsDigest,
                     .settingsSchemaVersion = identity.settingsSchemaVersion,
                     .cookerContributionId = contribution->contributionId,
                     .cookerVersion = identity.version,
                     .target = request.target,
                     .artifactFormatVersion = AssetCookArtifact::CurrentFormatVersion,
-                });
+                };
+                auto cacheKey = BuildAssetCookCacheKey(inputs);
+                if (request.pinnedInputs) {
+                    auto key =
+                        BuildAssetCookCacheKeyV2(inputs, dependencies, request.pinnedInputs->ClosureDigest(), request.limits.maximumAssets);
+                    if (key.HasError())
+                        return Result<std::vector<CookSlot>>::Failure(key.ErrorValue());
+                    cacheKey = key.Value();
+                }
 
                 slots.push_back(CookSlot{
                     .record = record,
@@ -460,6 +493,78 @@ namespace Horo::Assets {
             return Result<std::optional<OperationId>>::Success(operation);
         }
 
+        /** @brief Joins one candidate phase without cache writes or generation publication. */
+        Result<std::vector<CookSlot>> PrepareCandidateGroup(JobSystem &jobs, const CookerCatalogSnapshot &catalog,
+                                                            const AssetCookRequest &request, const std::span<const AssetRecord> records,
+                                                            const CancellationToken &cancellation, CookOperationScope &operation,
+                                                            const std::span<const AssetCookDependencyIdentity> dependencies = {}) {
+            auto slots = PrepareCookSlots(request, catalog, records, operation, dependencies);
+            if (slots.HasError())
+                return slots;
+            const AssetCookCache cache{request.cacheRoot, request.limits};
+            auto hits = ResolveCacheHits(request, catalog, cache, slots.Value(), cancellation, operation);
+            if (hits.HasError())
+                return Result<std::vector<CookSlot>>::Failure(hits.ErrorValue());
+            if (hits.Value() < slots.Value().size()) {
+                if (auto cooked = CookUncachedSlots(jobs, catalog, request, slots.Value(), cancellation, operation); cooked.HasError())
+                    return Result<std::vector<CookSlot>>::Failure(cooked.ErrorValue());
+            }
+            return slots;
+        }
+
+        /** @brief Completes a dependent phase against exact first-phase bytes, then publishes both phases once. */
+        Result<AssetCookReport> CookDependentRecords(JobSystem &jobs, const CookerCatalogSnapshot &catalog, const AssetCookRequest &request,
+                                                     const CancellationToken &cancellation, CookOperationScope &operation) {
+            const auto &phase = *request.dependentPhase;
+            const auto records = request.registry.Records();
+            if (!request.pinnedInputs || !phase.makeCatalog || phase.resourceIds.size() > request.limits.maximumAssets ||
+                records.size() > request.limits.maximumAssets)
+                return Result<AssetCookReport>::Failure(MakeError(CookErrors::MalformedArtifact));
+            auto ids = phase.resourceIds;
+            std::ranges::sort(ids);
+            if (std::adjacent_find(ids.begin(), ids.end()) != ids.end())
+                return Result<AssetCookReport>::Failure(MakeError(CookErrors::MalformedArtifact));
+            std::vector<AssetRecord> resources;
+            std::vector<AssetRecord> remaining;
+            for (const auto &record : records) {
+                if (std::binary_search(ids.begin(), ids.end(), record.id))
+                    resources.push_back(record);
+                else
+                    remaining.push_back(record);
+            }
+            if (resources.size() != ids.size())
+                return Result<AssetCookReport>::Failure(MakeError(CookErrors::MalformedArtifact));
+            auto first = PrepareCandidateGroup(jobs, catalog, request, resources, cancellation, operation);
+            if (first.HasError())
+                return Result<AssetCookReport>::Failure(first.ErrorValue());
+            if (auto current = ValidatePinnedInputs(request, cancellation); current.HasError())
+                return Result<AssetCookReport>::Failure(current.ErrorValue());
+            std::vector<AssetCookDependencyIdentity> dependencies;
+            std::vector<AssetCookCandidateArtifactView> views;
+            for (const auto &slot : first.Value()) {
+                dependencies.push_back({slot.record.id, slot.record.type, ComputeSha256(std::as_bytes(std::span{slot.cookedArtifact}))});
+                views.push_back({dependencies.back(), slot.cookedArtifact});
+            }
+            auto dependentCatalog = phase.makeCatalog(views, cancellation);
+            if (dependentCatalog.HasError())
+                return Result<AssetCookReport>::Failure(dependentCatalog.ErrorValue());
+            if (!dependentCatalog.Value())
+                return Result<AssetCookReport>::Failure(MakeError(CookErrors::CookerMissing));
+            if (auto current = ValidatePinnedInputs(request, cancellation); current.HasError())
+                return Result<AssetCookReport>::Failure(current.ErrorValue());
+            auto second = PrepareCandidateGroup(jobs, *dependentCatalog.Value(), request, remaining, cancellation, operation, dependencies);
+            if (second.HasError())
+                return Result<AssetCookReport>::Failure(second.ErrorValue());
+            auto slots = std::move(first).Value();
+            for (auto &slot : second.Value())
+                slots.push_back(std::move(slot));
+            std::ranges::sort(slots, {}, [](const CookSlot &slot) {
+                return slot.record.id;
+            });
+            const auto hits = static_cast<std::size_t>(std::ranges::count(slots, true, &CookSlot::cacheHit));
+            return PublishCookedSlots(request, AssetCookCache{request.cacheRoot, request.limits}, slots, hits, cancellation, operation);
+        }
+
         /** @brief Executes the admitted immutable registry closure and preserves typed stage outcomes until publication. */
         [[nodiscard]] Result<AssetCookReport> CookRegistryRecords(JobSystem &jobs, const CookerCatalogSnapshot &catalog,
                                                                   const AssetCookRequest &request,
@@ -510,6 +615,9 @@ namespace Horo::Assets {
         if (!HasValidCookComposition(request, static_cast<bool>(catalog_)))
             return Result<AssetCookReport>::Failure(Error{CookErrors::MalformedArtifact.code});
 
+        if (auto unchanged = ValidatePinnedInputs(request, cancellation); unchanged.HasError())
+            return Result<AssetCookReport>::Failure(unchanged.ErrorValue());
+
         auto records = request.registry.Records();
 
         Result<std::optional<BuildOutputSessionId>> outputSession = BeginOutputSession(request.buildOutputStore);
@@ -531,7 +639,11 @@ namespace Horo::Assets {
             });
         }
 
-        return CookRegistryRecords(jobs_, *catalog_, request, records, cancellation, operation);
+        auto result = request.dependentPhase ? CookDependentRecords(jobs_, *catalog_, request, cancellation, operation)
+                                             : CookRegistryRecords(jobs_, *catalog_, request, records, cancellation, operation);
+        if (result.HasError())
+            operation.RecordError(result.ErrorValue());
+        return result;
     }
 
 }  // namespace Horo::Assets

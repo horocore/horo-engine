@@ -148,6 +148,7 @@ add_executable(HoroPackageValidationTests
     unit/packages/PackageInstallTests.cpp
     unit/packages/PackageDependencyResolverTests.cpp
     unit/packages/PackageLockfileTests.cpp
+    unit/packages/PackageRequestTests.cpp
     unit/packages/PackagePathTests.cpp
     unit/packages/PackageArchiveTests.cpp
     unit/packages/PackageCacheTests.cpp
@@ -1114,6 +1115,22 @@ add_executable(HoroPrefabSceneExpansionTests unit/runtime/prefab/PrefabSceneExpa
 target_compile_features(HoroPrefabSceneExpansionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabSceneExpansionTests PRIVATE HoroEngine::PrefabSceneExpansion)
 horo_register_catch_test(HoroPrefabSceneExpansionTests LABELS "unit;prefab;headless")
+
+add_executable(HoroSceneRuntimeConversionTests unit/scene/SceneRuntimeConversionTests.cpp unit/scene/CookedSceneDefinitionTests.cpp)
+target_compile_features(HoroSceneRuntimeConversionTests PRIVATE cxx_std_20)
+target_link_libraries(HoroSceneRuntimeConversionTests PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook)
+horo_register_catch_test(HoroSceneRuntimeConversionTests LABELS "unit;scene;prefab;headless")
+
+add_executable(HoroPrefabCookPublicHeaderConsumer support/PrefabCookPublicHeaderConsumer.cpp)
+add_executable(HoroPrefabSceneCookHostTests unit/application/PrefabSceneCookHostTests.cpp unit/application/PrefabCookSchemaContextTests.cpp)
+target_compile_features(HoroPrefabSceneCookHostTests PRIVATE cxx_std_20)
+target_include_directories(HoroPrefabSceneCookHostTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PrefabCookHost HoroEngine::SceneSource nlohmann_json::nlohmann_json miniz)
+horo_register_catch_test(HoroPrefabSceneCookHostTests LABELS "unit;prefab;headless;host")
+target_compile_features(HoroPrefabCookPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabCookPublicHeaderConsumer PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook HoroEngine::Assets HoroEngine::PrefabCookHost)
+add_test(NAME HoroPrefabCookPublicHeaderConsumer COMMAND HoroPrefabCookPublicHeaderConsumer)
+set_tests_properties(HoroPrefabCookPublicHeaderConsumer PROPERTIES LABELS "unit;prefab;headless;public_headers")
 
 add_executable(HoroCookedPrefabTests unit/runtime/prefab/CookedPrefabTests.cpp)
 target_compile_features(HoroCookedPrefabTests PRIVATE cxx_std_20)
@@ -2871,6 +2888,7 @@ target_include_directories(HoroAssetCookOutputTests PRIVATE ${PROJECT_SOURCE_DIR
 add_executable(HoroAssetCookServiceTests
         unit/runtime/assets/AssetCookServiceTests.cpp
         unit/runtime/assets/AssetCookServicePublicationTests.cpp
+        unit/runtime/assets/AssetCookInputSnapshotTests.cpp
 )
 target_compile_features(HoroAssetCookServiceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAssetCookServiceTests PRIVATE HoroEngine::Assets HoroEngine::Foundation HoroEngine::Platform)
