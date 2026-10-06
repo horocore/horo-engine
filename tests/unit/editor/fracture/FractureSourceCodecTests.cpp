@@ -92,8 +92,7 @@ namespace Horo::Editor {
         ErrorIs(ValidateFractureAssetSource(source), FractureDocumentErrors::LimitExceeded);
     }
 
-    TEST_CASE("Fracture source validates exact references stable ordering capabilities and finite policy",
-              "[unit][editor][fracture][validation]") {
+    TEST_CASE("Fracture hierarchy validation rejects missing stable nodes cycles and tier depth", "[unit][editor][fracture][validation]") {
         auto source = Source();
         REQUIRE(ValidateFractureAssetSource(source).HasValue());
         SECTION("duplicate stable chunks") {
@@ -105,12 +104,22 @@ namespace Horo::Editor {
         SECTION("hierarchy cycle") {
             source.chunks.front().parent = source.chunks.back().id;
         }
-        SECTION("missing material") {
-            source.chunks.front().materialSlot = 99;
+        SECTION("missing chunk identity") {
+            source.chunks.front().id = {};
         }
-        SECTION("duplicate material slot") {
-            source.materials.push_back(source.materials.front());
+        SECTION("unknown tier") {
+            source.settings.tier = static_cast<DestructionFeatureTier>(99);
         }
+        SECTION("tier hierarchy depth") {
+            source.settings.tier = DestructionFeatureTier::Baseline;
+        }
+        CHECK(ValidateFractureAssetSource(source).HasError());
+        CHECK(EncodeFractureAssetSource(source).HasError());
+    }
+
+    TEST_CASE("Fracture source validation requires exact dependency and recipe identities", "[unit][editor][fracture][validation]") {
+        auto source = Source();
+        REQUIRE(ValidateFractureAssetSource(source).HasValue());
         SECTION("missing dependency") {
             source.settings.sourceMesh = {};
         }
@@ -123,18 +132,58 @@ namespace Horo::Editor {
         SECTION("zero recipe") {
             source.settings.recipe = 0;
         }
+        SECTION("missing source identity") {
+            source.asset = {};
+        }
+        SECTION("missing source revision") {
+            source.settings.sourceRevision = 0;
+        }
+        SECTION("missing source digest") {
+            source.settings.sourceDigest = {};
+        }
+        SECTION("missing recipe revision") {
+            source.settings.recipeRevision = 0;
+        }
+        SECTION("missing algorithm version") {
+            source.settings.algorithmVersion = 0;
+        }
         SECTION("nonfinite UV") {
             source.settings.interiorUvScale = std::numeric_limits<double>::infinity();
         }
-        SECTION("nonfinite damage") {
-            source.damage.health.maximumHealth = std::numeric_limits<float>::quiet_NaN();
+        SECTION("zero UV") {
+            source.settings.exteriorUvScale = 0;
         }
-        SECTION("invalid thresholds") {
-            source.damage.health.fractureHealthThreshold = 99;
+        CHECK(ValidateFractureAssetSource(source).HasError());
+        CHECK(EncodeFractureAssetSource(source).HasError());
+    }
+
+    TEST_CASE("Fracture materials require ordered valid dependencies and complete slot references",
+              "[unit][editor][fracture][validation]") {
+        auto source = Source();
+        REQUIRE(ValidateFractureAssetSource(source).HasValue());
+        SECTION("missing material") {
+            source.chunks.front().materialSlot = 99;
         }
-        SECTION("unknown damage policy") {
-            source.damage.behavior.trigger = static_cast<DestructionTriggerPolicy>(99);
+        SECTION("duplicate material slot") {
+            source.materials.push_back(source.materials.front());
         }
+        SECTION("missing material identity") {
+            source.materials.front().asset = {};
+        }
+        SECTION("missing material digest") {
+            source.materials.front().digest = {};
+        }
+        SECTION("missing interior material") {
+            source.settings.interiorMaterialSlot = 99;
+        }
+        CHECK(ValidateFractureAssetSource(source).HasError());
+        CHECK(EncodeFractureAssetSource(source).HasError());
+    }
+
+    TEST_CASE("Fracture contacts require canonical endpoints finite weights and anchored required support",
+              "[unit][editor][fracture][validation]") {
+        auto source = Source();
+        REQUIRE(ValidateFractureAssetSource(source).HasValue());
         SECTION("invalid edge order") {
             std::swap(source.contacts.front().low, source.contacts.front().high);
         }
@@ -153,50 +202,30 @@ namespace Horo::Editor {
         SECTION("required graph without anchors") {
             source.chunks.front().anchor = false;
         }
+        SECTION("nonfinite weight") {
+            source.contacts.front().weight = std::numeric_limits<double>::quiet_NaN();
+        }
+        CHECK(ValidateFractureAssetSource(source).HasError());
+        CHECK(EncodeFractureAssetSource(source).HasError());
+    }
+
+    TEST_CASE("Fracture damage and feature intent rejects invalid policies without fallback", "[unit][editor][fracture][validation]") {
+        auto source = Source();
+        REQUIRE(ValidateFractureAssetSource(source).HasValue());
+        SECTION("nonfinite damage") {
+            source.damage.health.maximumHealth = std::numeric_limits<float>::quiet_NaN();
+        }
+        SECTION("invalid thresholds") {
+            source.damage.health.fractureHealthThreshold = 99;
+        }
+        SECTION("unknown damage policy") {
+            source.damage.behavior.trigger = static_cast<DestructionTriggerPolicy>(99);
+        }
         SECTION("unknown required feature") {
             source.settings.requiredFeatures.bits |= 0x80000000U;
         }
         SECTION("unsupported runtime cutting") {
             source.settings.requiredFeatures.bits |= DestructionFeatureBit<DestructionFeature::RuntimeGeometryGeneration>;
-        }
-        SECTION("missing source identity") {
-            source.asset = {};
-        }
-        SECTION("missing source revision") {
-            source.settings.sourceRevision = 0;
-        }
-        SECTION("missing source digest") {
-            source.settings.sourceDigest = {};
-        }
-        SECTION("missing recipe revision") {
-            source.settings.recipeRevision = 0;
-        }
-        SECTION("missing algorithm version") {
-            source.settings.algorithmVersion = 0;
-        }
-        SECTION("missing chunk identity") {
-            source.chunks.front().id = {};
-        }
-        SECTION("missing material identity") {
-            source.materials.front().asset = {};
-        }
-        SECTION("missing material digest") {
-            source.materials.front().digest = {};
-        }
-        SECTION("missing interior material") {
-            source.settings.interiorMaterialSlot = 99;
-        }
-        SECTION("zero UV") {
-            source.settings.exteriorUvScale = 0;
-        }
-        SECTION("nonfinite weight") {
-            source.contacts.front().weight = std::numeric_limits<double>::quiet_NaN();
-        }
-        SECTION("unknown tier") {
-            source.settings.tier = static_cast<DestructionFeatureTier>(99);
-        }
-        SECTION("tier hierarchy depth") {
-            source.settings.tier = DestructionFeatureTier::Baseline;
         }
         CHECK(ValidateFractureAssetSource(source).HasError());
         CHECK(EncodeFractureAssetSource(source).HasError());

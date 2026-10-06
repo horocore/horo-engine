@@ -55,52 +55,70 @@ namespace Horo::Editor {
             }
         }
 
-        /** @brief Applies typed intent only to detached storage, preserving inverse values in operation order. */
-        void ApplyOperation(FractureAssetSource &source, const FractureSourceOperation &operation, FractureSourcePatch &inverse) {
-            const auto chunkKey = [](const FractureSourceChunk &value) {
+        /** @brief Applies a stable chunk edit and records its exact before-value. */
+        template <typename Operation>
+        void ApplyChunk(FractureAssetSource &source, const Operation &operation, FractureSourcePatch &inverse) {
+            const auto key = [](const FractureSourceChunk &value) {
                 return value.id;
             };
-            const auto contactKey = [](const FractureSourceContact &value) {
+            const auto put = [](auto before) {
+                return PutFractureChunk{before};
+            };
+            if constexpr (std::is_same_v<Operation, PutFractureChunk>)
+                PutValue(source.chunks, operation.value, key, inverse, put, [](auto id) {
+                    return RemoveFractureChunk{id};
+                });
+            else
+                RemoveValue(source.chunks, operation.id, key, inverse, put);
+        }
+
+        /** @brief Applies an ordered contact edit and records its exact before-value. */
+        template <typename Operation>
+        void ApplyContact(FractureAssetSource &source, const Operation &operation, FractureSourcePatch &inverse) {
+            const auto key = [](const FractureSourceContact &value) {
                 return std::pair{value.low, value.high};
             };
-            const auto materialKey = [](const FractureSourceMaterial &value) {
+            const auto put = [](auto before) {
+                return PutFractureContact{before};
+            };
+            if constexpr (std::is_same_v<Operation, PutFractureContact>)
+                PutValue(source.contacts, operation.value, key, inverse, put, [](auto endpoints) {
+                    return RemoveFractureContact{endpoints.first, endpoints.second};
+                });
+            else
+                RemoveValue(source.contacts, std::pair{operation.low, operation.high}, key, inverse, put);
+        }
+
+        /** @brief Applies a material-slot edit and records its exact before-value. */
+        template <typename Operation>
+        void ApplyMaterial(FractureAssetSource &source, const Operation &operation, FractureSourcePatch &inverse) {
+            const auto key = [](const FractureSourceMaterial &value) {
                 return value.slot;
             };
+            const auto put = [](auto before) {
+                return PutFractureMaterial{before};
+            };
+            if constexpr (std::is_same_v<Operation, PutFractureMaterial>)
+                PutValue(source.materials, operation.value, key, inverse, put, [](auto slot) {
+                    return RemoveFractureMaterial{slot};
+                });
+            else
+                RemoveValue(source.materials, operation.slot, key, inverse, put);
+        }
+
+        /** @brief Dispatches typed intent only to detached storage, preserving inverse values in operation order. */
+        void ApplyOperation(FractureAssetSource &source, const FractureSourceOperation &operation, FractureSourcePatch &inverse) {
             std::visit([&](const auto &value) {
                 using T = std::decay_t<decltype(value)>;
                 if constexpr (std::is_same_v<T, SetFractureSettings>) {
                     inverse.operations.emplace_back(SetFractureSettings{source.settings});
                     source.settings = value.value;
-                } else if constexpr (std::is_same_v<T, PutFractureChunk>) {
-                    PutValue(source.chunks, value.value, chunkKey, inverse, [](auto before) {
-                        return PutFractureChunk{before};
-                    }, [](auto key) {
-                        return RemoveFractureChunk{key};
-                    });
-                } else if constexpr (std::is_same_v<T, RemoveFractureChunk>) {
-                    RemoveValue(source.chunks, value.id, chunkKey, inverse, [](auto before) {
-                        return PutFractureChunk{before};
-                    });
-                } else if constexpr (std::is_same_v<T, PutFractureContact>) {
-                    PutValue(source.contacts, value.value, contactKey, inverse, [](auto before) {
-                        return PutFractureContact{before};
-                    }, [](auto key) {
-                        return RemoveFractureContact{key.first, key.second};
-                    });
-                } else if constexpr (std::is_same_v<T, RemoveFractureContact>) {
-                    RemoveValue(source.contacts, std::pair{value.low, value.high}, contactKey, inverse, [](auto before) {
-                        return PutFractureContact{before};
-                    });
-                } else if constexpr (std::is_same_v<T, PutFractureMaterial>) {
-                    PutValue(source.materials, value.value, materialKey, inverse, [](auto before) {
-                        return PutFractureMaterial{before};
-                    }, [](auto key) {
-                        return RemoveFractureMaterial{key};
-                    });
-                } else if constexpr (std::is_same_v<T, RemoveFractureMaterial>) {
-                    RemoveValue(source.materials, value.slot, materialKey, inverse, [](auto before) {
-                        return PutFractureMaterial{before};
-                    });
+                } else if constexpr (std::is_same_v<T, PutFractureChunk> || std::is_same_v<T, RemoveFractureChunk>) {
+                    ApplyChunk(source, value, inverse);
+                } else if constexpr (std::is_same_v<T, PutFractureContact> || std::is_same_v<T, RemoveFractureContact>) {
+                    ApplyContact(source, value, inverse);
+                } else if constexpr (std::is_same_v<T, PutFractureMaterial> || std::is_same_v<T, RemoveFractureMaterial>) {
+                    ApplyMaterial(source, value, inverse);
                 } else if constexpr (std::is_same_v<T, SetFractureDamage>) {
                     inverse.operations.emplace_back(SetFractureDamage{source.damage});
                     source.damage = value.value;
