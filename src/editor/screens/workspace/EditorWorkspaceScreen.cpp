@@ -68,6 +68,17 @@ namespace Horo::Editor {
             std::uint64_t viewportScene{0};
         };
 
+        /** @brief Workspace-scoped input ownership; frames are released before their context, and the router is borrowed. */
+        struct WorkspaceInputState {
+            explicit WorkspaceInputState(Input::InputRouter &inputRouter)
+                : router(inputRouter),
+                  context(router.PushContext(Input::InputContextId{"editor.workspace"}, Input::InputContextKind::EditorWorkspace)) {}
+
+            Input::InputRouter &router;
+            Input::InputContextToken context;
+            Input::GameplayInputFrameBuilder gameplayFrames{Input::ActionId{kGameplayMoveAction}, {}, {}, {}};
+        };
+
         [[nodiscard]] std::filesystem::path NormalizeAbsolutePath(const std::filesystem::path &path) {
             std::error_code error;
             const std::filesystem::path absolute = std::filesystem::absolute(path, error).lexically_normal();
@@ -128,10 +139,8 @@ namespace Horo::Editor {
             explicit EditorWorkspaceScreen(const EditorServiceRegistry &services)
                 : host_(services.Get<GuiScreenHost>()), services_(services), modalHost_(services.Get<EditorModalHost>()),
                   context_(services.GetConst<EditorGuiContext>()), registry_(services.Get<WorkspacePanelRegistry>()),
-                  statusItems_(services.Get<EditorStatusItemRegistry>()), inputRouter_(services.Get<Input::InputRouter>()),
-                  workspaceInputContext_(
-                      inputRouter_.PushContext(Input::InputContextId{"editor.workspace"}, Input::InputContextKind::EditorWorkspace)),
-                  view_(context_, registry_, services.Get<std::uintptr_t>(), inputRouter_, workspaceInputContext_,
+                  statusItems_(services.Get<EditorStatusItemRegistry>()), input_(services.Get<Input::InputRouter>()),
+                  view_(context_, registry_, services.Get<std::uintptr_t>(), input_.router, input_.context,
                         services.TryGet<Extensions::EditorActivityHost>(), services.TryGet<IEditorGuiRenderer>()),
                   viewportSceneState_(services.Get<EditorViewportSceneState>()),
                   runtimeScene_(services.Get<Runtime::RuntimeSceneService>()), settings_(services.Get<EditorSettingsService>()),
@@ -208,8 +217,8 @@ namespace Horo::Editor {
                     .dataBus = controller_->DataBus(),
                     .guiRenderer = panelServices_.guiRenderer,
                     .viewportRenderer = panelServices_.viewportRenderer,
-                    .inputRouter = &inputRouter_,
-                    .workspaceInputContext = &workspaceInputContext_,
+                    .inputRouter = &input_.router,
+                    .workspaceInputContext = &input_.context,
                     .logQuery = panelServices_.logQuery,
                     .buildOutputQuery = panelServices_.buildOutputQuery,
                     .gameplayBuilds = panelServices_.gameplayBuilds,
@@ -253,10 +262,10 @@ namespace Horo::Editor {
             void OnInputSnapshot() override {
                 if (!controller_ || (controller_->ViewModel().playState != EditorPlayState::Playing &&
                                      controller_->ViewModel().playState != EditorPlayState::Paused)) {
-                    gameplayInputFrames_.Reset();
+                    input_.gameplayFrames.Reset();
                     return;
                 }
-                gameplayInputFrames_.Capture(inputRouter_, workspaceInputContext_);
+                input_.gameplayFrames.Capture(input_.router, input_.context);
             }
 
             void OnFixedUpdate(const std::uint64_t simulationTick, const double fixedDeltaSeconds) override {
@@ -264,7 +273,7 @@ namespace Horo::Editor {
                                      controller_->ViewModel().playState != EditorPlayState::Paused)) {
                     return;
                 }
-                const Input::GameplayInputFrame command = gameplayInputFrames_.Consume(simulationTick);
+                const Input::GameplayInputFrame command = input_.gameplayFrames.Consume(simulationTick);
                 const Gameplay::GameplayInputAction action{Gameplay::GameplayActionId{kGameplayMoveAction},
                                                            command.moveX,
                                                            command.moveY,
@@ -361,8 +370,8 @@ namespace Horo::Editor {
                     const std::filesystem::path projectRoot{controller_->ViewModel().projectRoot};
                     const std::filesystem::path suggestedPath = currentPath.value_or(ProjectLayout::ScenesRoot(projectRoot) / "main.horo");
 
-                    auto nativeDialogContext = inputRouter_.PushContext(Input::InputContextId{"editor.native_dialog.scene_save"},
-                                                                        Input::InputContextKind::NativeDialog);
+                    auto nativeDialogContext = input_.router.PushContext(Input::InputContextId{"editor.native_dialog.scene_save"},
+                                                                         Input::InputContextKind::NativeDialog);
                     const bool copyOnly = action == EditorMenuAction::SaveSceneCopyAs;
 #if defined(__APPLE__)
                     // portable-file-dialogs forwards this value to AppleScript's
@@ -478,12 +487,12 @@ namespace Horo::Editor {
                 static_cast<void>(statusItems_.Update("horo.status.selection", EditorStatusItemContent{.available = false}));
                 registry_.DetachAll();
                 if (previousInputProfile_.has_value()) {
-                    if (const Result<void> restored = inputRouter_.SetProfile(std::move(*previousInputProfile_)); restored.HasError()) {
+                    if (const Result<void> restored = input_.router.SetProfile(std::move(*previousInputProfile_)); restored.HasError()) {
                         LOG_ERROR("editor.input", "Unable to restore editor input profile: %s", restored.ErrorValue().message.c_str());
                     }
                     previousInputProfile_.reset();
                 }
-                workspaceInputContext_.Reset();
+                input_.context.Reset();
                 viewportSceneState_.Clear();
                 publishedRevisions_ = {};
                 controller_.reset();
@@ -606,7 +615,7 @@ namespace Horo::Editor {
             }
 
             void LoadProjectInputProfile(const std::filesystem::path &projectRoot) {
-                previousInputProfile_ = inputRouter_.Profile();
+                previousInputProfile_ = input_.router.Profile();
                 Input::InputBindingProfile merged{.profileId = "project-composed"};
                 const auto mergeProfile = [&](const Input::InputBindingProfile &profile, const std::string &source) {
                     Result<Input::InputBindingProfile> layered = Input::MergeBindingProfiles(merged, profile);
@@ -642,7 +651,7 @@ namespace Horo::Editor {
                     return;
                 }
 
-                const Result<void> applied = inputRouter_.SetProfile(std::move(merged));
+                const Result<void> applied = input_.router.SetProfile(std::move(merged));
                 if (applied.HasError()) {
                     LOG_ERROR("editor.input", "Keeping last valid input profile for project '%s': %s", projectRoot.string().c_str(),
                               applied.ErrorValue().message.c_str());
@@ -651,7 +660,7 @@ namespace Horo::Editor {
 
             void RouteInputAction(EditorWorkspaceViewCommandData &command) {
                 const auto pressed = [this](const char *id) {
-                    return inputRouter_.ReadAction(workspaceInputContext_, Input::ActionId{id}).pressed;
+                    return input_.router.ReadAction(input_.context, Input::ActionId{id}).pressed;
                 };
                 if (pressed(kActionRedo)) {
                     command.command = EditorWorkspaceViewCommand::RedoScene;
@@ -730,9 +739,7 @@ namespace Horo::Editor {
             const EditorGuiContext &context_;
             WorkspacePanelRegistry &registry_;
             EditorStatusItemRegistry &statusItems_;
-            Input::InputRouter &inputRouter_;
-            Input::InputContextToken workspaceInputContext_;
-            Input::GameplayInputFrameBuilder gameplayInputFrames_{Input::ActionId{kGameplayMoveAction}, {}, {}, {}};
+            WorkspaceInputState input_;
             EditorWorkspaceView view_;
             EditorViewportSceneState &viewportSceneState_;
             Runtime::RuntimeSceneService &runtimeScene_;

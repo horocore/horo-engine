@@ -25,7 +25,8 @@ namespace Horo::Editor::Ui {
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::Hover());
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, Theme::AccentSoft());
         const bool pressed = ImGui::Button(props.id, props.size);
-        const auto buttonItem = GImGui->LastItemData;
+        // Own the identity: Badge/tooltip submission overwrites the mutable global LastItemData.
+        const ImGuiLastItemData buttonItem{GImGui->LastItemData};
         ImGui::PopStyleColor(3);
         const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
         const auto minimum = ImGui::GetItemRectMin();

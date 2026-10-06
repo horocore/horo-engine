@@ -13,6 +13,13 @@ _Static_assert(sizeof(((HoroExtensionHostApi *)0)->abiVersion) == sizeof(uint32_
 _Static_assert(offsetof(HoroExtensionHostApi, registerEditorActivity) > offsetof(HoroExtensionHostApi, registerPlatformServicesProvider),
                "Activity ABI appends after the old host prefix");
 _Static_assert(sizeof(((HoroEditorActivitySnapshot *)0)->revision) == sizeof(uint64_t), "Projection revision has fixed width");
+_Static_assert(offsetof(HoroExtensionHostApi, registerEditorActivity) ==
+                   offsetof(HoroExtensionHostApi, registerPlatformServicesProvider) + sizeof(HoroRegisterPlatformServicesProviderFunc),
+               "Activity callback does not change the legacy host prefix");
+_Static_assert(_Generic((HoroRegisterEditorActivityFunc)0,
+                   HoroExtensionStatus (*)(void *, const struct HoroEditorActivityDescriptor *, struct HoroEditorActivitySessionApi *): 1,
+                   default: 0),
+               "C11 registration callback source contract is unchanged");
 
 /** @brief Compile the public ABI as C, independently of C++ language extensions. */
 int main(void) {

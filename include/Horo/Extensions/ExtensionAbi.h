@@ -390,8 +390,13 @@ struct HoroEditorActivityDescriptor;
 /** @brief Versioned live session operations populated only after validated publication. */
 struct HoroEditorActivitySessionApi;
 /** @brief Copies a manifest-declared editor activity contribution into the package activation transaction. */
+#ifdef __cplusplus
+using HoroRegisterEditorActivityFunc = HoroExtensionStatus (*)(void *hostContext, const struct HoroEditorActivityDescriptor *descriptor,
+                                                               struct HoroEditorActivitySessionApi *session);
+#else
 typedef HoroExtensionStatus (*HoroRegisterEditorActivityFunc)(void *hostContext, const struct HoroEditorActivityDescriptor *descriptor,
                                                               struct HoroEditorActivitySessionApi *session);
+#endif
 
 struct HoroExtensionHostApi {
     /** @brief Size of this struct for append-only ABI negotiation. */

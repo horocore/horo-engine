@@ -24,6 +24,15 @@ namespace Horo::Extensions::Tests {
             }
             REQUIRE(loaded.HasValue());
         }
+
+        /** @brief Pumps the owner lane until the admitted worker publishes a newer revision or the bounded deadline expires. */
+        void WaitForActivityRevision(EditorActivityHost &host, const std::uint64_t previousRevision) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+            while (host.Prepared().front().revision == previousRevision && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+                host.Update();
+            }
+        }
     }  // namespace
 
     TEST_CASE("External ABI activity package publishes real copied SVG/form data and retires its exact generation",
@@ -31,6 +40,7 @@ namespace Horo::Extensions::Tests {
         Horo::Tests::EditorActivityPackage package;
         JobSystem jobs;
         auto host = std::make_shared<EditorActivityHost>(jobs);
+        const EditorActivityHost &commands = *host;
         ExtensionManager manager{nullptr,
                                  ExtensionHostProfile::Interactive,
                                  {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
@@ -50,23 +60,20 @@ namespace Horo::Extensions::Tests {
         REQUIRE(host->Registry().ToggleActivity(initial.surface.descriptor.provider, "fixture.activity").HasValue());
         host->Update();
         CHECK(host->Prepared().front().surface.open);
-        REQUIRE(host->QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.run", "fixture.run", 1).HasValue());
+        REQUIRE(commands.QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.run", "fixture.run", 1).HasValue());
+        CHECK(commands.QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.run", "fixture.run", 1).HasError());
         host->Update();
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
-        while (host->Prepared().front().revision == 1 && std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds{1});
-            host->Update();
-        }
+        WaitForActivityRevision(*host, 1);
         CHECK(host->Prepared().front().revision == 2);
         CHECK(host->Prepared().front().surface.activity.badgeCount == 1);
-        CHECK(host->QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.run", "fixture.run", 1).HasError());
+        CHECK(commands.QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.run", "fixture.run", 1).HasError());
         REQUIRE(host->Registry().SetActivityVisibility("fixture.activity", false).HasValue());
         const auto saved = host->Registry().Save();
         manager.UnloadExtension("fixture.package");
         host->Update();
         CHECK(host->Prepared().empty());
         CHECK_FALSE(host->IsLive(initial.surface.descriptor.provider));
-        CHECK(host->QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.run", "fixture.run", 2).HasError());
+        CHECK(commands.QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.run", "fixture.run", 2).HasError());
         RequirePackageLoad(manager, package.root);
         host->Update();
         REQUIRE(host->Prepared().size() == 1);

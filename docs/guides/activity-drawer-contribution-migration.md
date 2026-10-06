@@ -18,6 +18,23 @@ cannot target a later activation with the same stable contribution ID.
 
 ## ABI compatibility plan
 
+The activity provider's callback/context pair is retained only by a private
+standard-layout C ABI adapter. Internal action execution uses that typed endpoint
+and an owned result handoff. Actual host callback adapters have C language linkage;
+provider invocation is a non-allocating `noexcept` boundary that translates both
+standard and non-standard throws to `HORO_EXTENSION_ERROR_INIT_FAILED`. The job's
+existing retirement lease still pins native code and context until it returns.
+No ABI field, table size, version, prefix negotiation or C11 source spelling changes.
+The activity registration alias uses `using` under C++ and `typedef` under C11;
+both describe the same C callback signature.
+
+`EditorActivityHost::QueueAction` is now const-qualified as a host-facade operation
+on separately owned live sessions. Owner-lane affinity, admission and pending-command
+mutation are unchanged; const does not authorize concurrent dispatch. Ordinary
+callers need no source change. C++ member-function-pointer consumers must add the
+const qualifier, and statically linked C++ consumers must rebuild for the changed
+symbol. This internal host API is not part of the installed C11 extension ABI.
+
 The current native host ABI is 1.3. The activity/drawer bridge appends the
 versioned editor contribution entry point after the existing host API prefix
 and increments the host minor version to 1.4. Existing 1.0–1.3 modules retain

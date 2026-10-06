@@ -1,62 +1,80 @@
 #include "EditorActivitySessionState.h"
 
+#include <exception>
+
+// These C endpoints have C name linkage but are not part of the exported SDK.
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC visibility push(hidden)
+#endif
+extern "C" {
+/** @brief C ABI cancellation adapter; the token borrow ends when the provider returns. */
+std::uint8_t HoroActivityActionCancelled(const void *context) noexcept {
+    return static_cast<std::uint8_t>(static_cast<const Horo::CancellationToken *>(context)->IsCancellationRequested());
+}
+
+/** @brief C ABI sink copies provider bytes into the strongly typed owned worker result. */
+HoroExtensionStatus HoroPublishActivityActionResult(void *context, const HoroEditorActivitySnapshot *snapshot) noexcept {
+    if (!context || !snapshot)
+        return HORO_EXTENSION_ERROR_INVALID_ARGS;
+    try {
+        auto &result = *static_cast<Horo::Extensions::EditorActivitySession::ActionResult *>(context);
+        auto copied = Horo::Extensions::Detail::CopyActivityForm(*snapshot, result.drawerId, result.titleKey);
+        if (copied.HasError())
+            return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+        const Horo::Extensions::EditorActivityPresentation presentation{(snapshot->presentationFlags & HORO_EDITOR_ACTIVITY_HIDDEN) == 0,
+                                                                        (snapshot->presentationFlags & HORO_EDITOR_ACTIVITY_DISABLED) == 0,
+                                                                        snapshot->badgeCount};
+        std::lock_guard lock{result.mutex};
+        if (result.form || snapshot->revision <= result.revision)
+            return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+        result.form = std::move(copied).Value();
+        result.presentation = presentation;
+        result.revision = snapshot->revision;
+        return HORO_EXTENSION_SUCCESS;
+    } catch (...) {
+        return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+    }
+}
+}  // extern "C"
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC visibility pop
+#endif
+
 namespace Horo::Extensions {
     namespace {
-        std::uint8_t ActionCancelled(const void *context) {
-            return static_cast<std::uint8_t>(static_cast<const CancellationToken *>(context)->IsCancellationRequested());
-        }
-
-        HoroExtensionStatus PublishActionResult(void *context, const HoroEditorActivitySnapshot *snapshot) noexcept {
-            if (!context || !snapshot)
-                return HORO_EXTENSION_ERROR_INVALID_ARGS;
-            try {
-                auto &result = *static_cast<EditorActivitySession::ActionResult *>(context);
-                auto copied = Detail::CopyActivityForm(*snapshot, result.drawerId, result.titleKey);
-                if (copied.HasError())
-                    return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
-                const EditorActivityPresentation presentation{(snapshot->presentationFlags & HORO_EDITOR_ACTIVITY_HIDDEN) == 0,
-                                                              (snapshot->presentationFlags & HORO_EDITOR_ACTIVITY_DISABLED) == 0,
-                                                              snapshot->badgeCount};
-                std::lock_guard lock{result.mutex};
-                if (result.form || snapshot->revision <= result.revision)
-                    return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
-                result.form = std::move(copied).Value();
-                result.presentation = presentation;
-                result.revision = snapshot->revision;
-                return HORO_EXTENSION_SUCCESS;
-            } catch (...) {
-                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
-            }
-        }
+        static_assert(std::is_convertible_v<decltype(&HoroPublishActivityActionResult), decltype(HoroEditorActivitySnapshotSink::publish)>);
+        static_assert(
+            std::is_convertible_v<decltype(&HoroActivityActionCancelled), decltype(HoroExtensionCancellation::isCancellationRequested)>);
 
         /** @brief Publishes only completed owned results at the owner boundary, then releases the completed job handoff. */
         void PublishCompletedAction(EditorActivitySession &session) {
-            if (session.result && session.result->ready.load(std::memory_order_acquire)) {
-                const auto completed = session.result;
+            if (session.actions.result && session.actions.result->ready.load(std::memory_order_acquire)) {
+                const auto completed = session.actions.result;
                 std::lock_guard lock{completed->mutex};
-                if (session.result->form && session.result->revision > session.revision) {
+                if (session.actions.result->form && session.actions.result->revision > session.revision) {
                     if (const auto host = session.host.lock();
                         host &&
                         host->Registry()
-                            .PublishForm(session.drawer.surface.provider, session.drawer.surface.id, *session.result->form)
+                            .PublishForm(session.drawer.surface.provider, session.drawer.surface.id, *session.actions.result->form)
                             .HasValue() &&
                         host->Registry()
-                            .PublishActivity(session.activity.surface.provider, session.activity.surface.id, session.result->presentation)
+                            .PublishActivity(session.activity.surface.provider, session.activity.surface.id,
+                                             session.actions.result->presentation)
                             .HasValue()) {
-                        session.form = std::move(*session.result->form);
-                        session.presentation = session.result->presentation;
-                        session.revision = session.result->revision;
+                        session.form = std::move(*session.actions.result->form);
+                        session.presentation = session.actions.result->presentation;
+                        session.revision = session.actions.result->revision;
                     }
                 }
-                session.job.reset();
-                session.result.reset();
+                session.actions.job.reset();
+                session.actions.result.reset();
             }
         }
 
         /** @brief Executes one provider callback with a retirement lease owned by the scheduled closure. */
         Result<void> ExecuteAction(const std::shared_ptr<EditorActivitySession::ActionResult> &result,
-                                   const EditorActivitySession::PendingAction &action, const HoroEditorActivityActionFunc invoke,
-                                   void *moduleContext, const CancellationToken &cancellation) {
+                                   const EditorActivitySession::PendingAction &action, const EditorActivityProviderAction &provider,
+                                   const CancellationToken &cancellation) {
             if (cancellation.IsCancellationRequested()) {
                 result->ready.store(true, std::memory_order_release);
                 return JobCancelled();
@@ -65,14 +83,9 @@ namespace Horo::Extensions {
                                            {action.node.data(), static_cast<std::uint32_t>(action.node.size())},
                                            {action.action.data(), static_cast<std::uint32_t>(action.action.size())},
                                            action.revision,
-                                           {&cancellation, ActionCancelled}};
-            const HoroEditorActivitySnapshotSink sink{result.get(), PublishActionResult};
-            HoroExtensionStatus status = HORO_EXTENSION_ERROR_INIT_FAILED;
-            try {
-                status = invoke(moduleContext, &input, &sink);
-            } catch (...) {
-                status = HORO_EXTENSION_ERROR_INIT_FAILED;
-            }
+                                           {&cancellation, HoroActivityActionCancelled}};
+            const auto sink = MakeEditorActivityResultSink(*result);
+            const HoroExtensionStatus status = provider.Invoke(input, sink);
             if (status != HORO_EXTENSION_SUCCESS || cancellation.IsCancellationRequested()) {
                 std::lock_guard lock{result->mutex};
                 result->form.reset();
@@ -89,34 +102,53 @@ namespace Horo::Extensions {
             if (session.revoked || !session.committed)
                 return;
             PublishCompletedAction(session);
-            if (!session.pendingAction || session.job)
+            if (!session.actions.pending || session.actions.job)
                 return;
             const auto retirement = session.retirement.lock();
             const auto lease = retirement ? retirement->Acquire(session.activity.surface.provider.moduleId, ExtensionLeaseKind::Job,
                                                                 session.activity.surface.id, owner)
                                           : nullptr;
             if (!lease) {
-                session.pendingAction.reset();
+                session.actions.pending.reset();
                 return;
             }
-            auto action = std::move(*session.pendingAction);
-            session.pendingAction.reset();
+            auto action = std::move(*session.actions.pending);
+            session.actions.pending.reset();
             auto result = std::make_shared<EditorActivitySession::ActionResult>();
             result->drawerId = session.drawer.surface.id;
             result->titleKey = session.drawer.surface.labelLocalizationKey;
             result->revision = session.revision;
-            const auto invoke = session.invoke;
-            void *const moduleContext = session.moduleContext;
-            auto accepted = jobs.SubmitResult({}, [lease, result, action = std::move(action), invoke,
-                                                   moduleContext](const CancellationToken &cancellation) {
-                return ExecuteAction(result, action, invoke, moduleContext, cancellation);
+            const auto provider = session.actions.provider;
+            auto accepted =
+                jobs.SubmitResult({}, [lease, result, action = std::move(action), provider](const CancellationToken &cancellation) {
+                return ExecuteAction(result, action, provider, cancellation);
             });
             if (accepted.HasValue()) {
-                session.job.emplace(std::move(accepted).Value());
-                session.result = std::move(result);
+                session.actions.job.emplace(std::move(accepted).Value());
+                session.actions.result = std::move(result);
             }
         }
     }  // namespace
+
+    /** @copydoc MakeEditorActivityResultSink */
+    HoroEditorActivitySnapshotSink MakeEditorActivityResultSink(EditorActivitySession::ActionResult &result) noexcept {
+        return {&result, HoroPublishActivityActionResult};
+    }
+
+    /** @copydoc EditorActivityProviderAction::Invoke */
+    HoroExtensionStatus EditorActivityProviderAction::Invoke(const HoroEditorActivityAction &action,
+                                                             const HoroEditorActivitySnapshotSink &sink) const noexcept {
+        if (!invoke_)
+            return HORO_EXTENSION_ERROR_INIT_FAILED;
+        try {
+            return invoke_(context_, &action, &sink);
+        } catch (const std::exception &) {
+            return HORO_EXTENSION_ERROR_INIT_FAILED;
+        } catch (...) {
+            // Contract-violating non-standard throws must not cross the foreign invocation boundary either.
+            return HORO_EXTENSION_ERROR_INIT_FAILED;
+        }
+    }
 
     /** @copydoc PumpEditorActivityAction */
     void PumpEditorActivityAction(EditorActivitySession &session, const JobSystem &jobs,

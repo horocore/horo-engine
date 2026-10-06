@@ -44,9 +44,11 @@ namespace Horo::Extensions {
         /** @brief Queues an exact prepared-form semantic action; dispatch occurs at the next owner-lane Update.
          * @param provider Exact live provider generation. @param activityId Registered activity identity.
          * @param nodeId Enabled action node in the current copied form. @param actionId Approved semantic action identity.
-         * @param revision Exact prepared snapshot revision. @return Success or explicit stale, unknown, disabled or busy rejection. */
+         * @param revision Exact prepared snapshot revision. @return Success or explicit stale, unknown, disabled or busy rejection.
+         * @details Const refers to the host facade; the separately owned live session receives the pending command.
+         * This still requires the editor owner lane and is not a thread-safe query. */
         [[nodiscard]] Result<void> QueueAction(const EditorSurfaceProviderIdentity &provider, std::string_view activityId,
-                                               std::string_view nodeId, std::string_view actionId, std::uint64_t revision);
+                                               std::string_view nodeId, std::string_view actionId, std::uint64_t revision) const;
         /** @brief Returns retained prepared data until the next owner-lane Update. */
         [[nodiscard]] std::span<const EditorActivityProjection> Prepared() const noexcept;
         /** @brief Revokes every session and clears pending focus before host shutdown. */

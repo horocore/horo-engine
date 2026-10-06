@@ -15,17 +15,29 @@
 #include <thread>
 #include <tuple>
 
+// This C endpoint is target-private, not an exported extension entry point.
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC visibility push(hidden)
+#endif
+extern "C" {
+/** @brief C ABI session adapter; all copied publication and generation validation remain typed. */
+HoroExtensionStatus HoroPublishActivitySession(void *context, const HoroEditorActivitySnapshot *snapshot) noexcept {
+    if (context == nullptr || snapshot == nullptr)
+        return HORO_EXTENSION_ERROR_INVALID_ARGS;
+    try {
+        return static_cast<Horo::Extensions::EditorActivitySession *>(context)->Publish(*snapshot);
+    } catch (...) {
+        return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+    }
+}
+}  // extern "C"
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC visibility pop
+#endif
+
 namespace Horo::Extensions {
     namespace {
-        HoroExtensionStatus PublishSession(void *context, const HoroEditorActivitySnapshot *snapshot) noexcept {
-            if (context == nullptr || snapshot == nullptr)
-                return HORO_EXTENSION_ERROR_INVALID_ARGS;
-            try {
-                return static_cast<EditorActivitySession *>(context)->Publish(*snapshot);
-            } catch (...) {
-                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
-            }
-        }
+        static_assert(std::is_convertible_v<decltype(&HoroPublishActivitySession), decltype(HoroEditorActivitySessionApi::publish)>);
 
         bool Declared(const AssetImporterRegistrationSession &load, const std::string_view type, const std::string &id) {
             return std::ranges::any_of(load.manifest->contributions, [&](const auto &claim) {
@@ -158,17 +170,17 @@ namespace Horo::Extensions {
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
             session->messages.push_back(std::move(message));
         }
-        if (!session->drawer.commands.empty() && !session->invoke)
+        if (!session->drawer.commands.empty() && !session->actions.provider.IsAvailable())
             return HORO_EXTENSION_ERROR_INVALID_ARGS;
         return HORO_EXTENSION_SUCCESS;
     }
 
     /** @brief Validates and copies one complete ABI contribution before admission. */
-    static HoroExtensionStatus RegisterEditorActivityImpl(void *context, const HoroEditorActivityDescriptor *descriptor,
+    static HoroExtensionStatus RegisterEditorActivityImpl(AssetImporterRegistrationSession &load,
+                                                          const HoroEditorActivityDescriptor *descriptor,
                                                           HoroEditorActivitySessionApi *api) noexcept {
-        if (context == nullptr || descriptor == nullptr || api == nullptr || api->structSize < sizeof(HoroEditorActivitySessionApi))
+        if (descriptor == nullptr || api == nullptr || api->structSize < sizeof(HoroEditorActivitySessionApi))
             return HORO_EXTENSION_ERROR_INVALID_ARGS;
-        auto &load = *static_cast<AssetImporterRegistrationSession *>(context);
         try {
             if (!load.editorHost || !load.manifest || !load.extensionModule || !load.lifetime || !load.retirement ||
                 load.lifetime->ownerThread != std::this_thread::get_id() || descriptor->structSize < sizeof(HoroEditorActivityDescriptor) ||
@@ -178,8 +190,7 @@ namespace Horo::Extensions {
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
             auto session = std::make_shared<EditorActivitySession>();
             session->host = load.editorHost;
-            session->invoke = descriptor->invokeAction;
-            session->moduleContext = descriptor->moduleContext;
+            session->actions.provider = EditorActivityProviderAction{*descriptor};
             session->retirement = load.retirement;
             std::string resource;
             if (const auto status = CopyDescriptors(session, load, descriptor, resource); status != HORO_EXTENSION_SUCCESS)
@@ -204,29 +215,37 @@ namespace Horo::Extensions {
                 !load.retirement->RegisterContribution(load.extensionModule->id, session))
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             load.lifetime->editorActivities.push_back(session);
-            *api = {sizeof(HoroEditorActivitySessionApi), HORO_EDITOR_ACTIVITY_SESSION_VERSION, 31U, session.get(), PublishSession};
+            *api = {sizeof(HoroEditorActivitySessionApi), HORO_EDITOR_ACTIVITY_SESSION_VERSION, 31U, session.get(),
+                    HoroPublishActivitySession};
             return HORO_EXTENSION_SUCCESS;
         } catch (...) {
             return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
         }
     }
 
-    /** @copydoc RegisterExternalEditorActivity */
-    HoroExtensionStatus RegisterExternalEditorActivity(void *context, const HoroEditorActivityDescriptor *descriptor,
-                                                       HoroEditorActivitySessionApi *session) noexcept {
-        const auto status = RegisterEditorActivityImpl(context, descriptor, session);
-        if (context && status != HORO_EXTENSION_SUCCESS) {
-            auto &load = *static_cast<AssetImporterRegistrationSession *>(context);
-            load.failed = true;
-            try {
-                load.error = MakeError(ExtensionErrors::ContributionRejected, "Editor activity ABI publication was rejected.");
-            } catch (...) {
-                // The typed ABI failure and sticky rejection remain authoritative when diagnostics cannot allocate.
-                return status;
-            }
+}  // namespace Horo::Extensions
+
+/** @copydoc RegisterExternalEditorActivity */
+extern "C" HoroExtensionStatus RegisterExternalEditorActivity(void *context, const HoroEditorActivityDescriptor *descriptor,
+                                                              HoroEditorActivitySessionApi *session) noexcept {
+    if (!context)
+        return HORO_EXTENSION_ERROR_INVALID_ARGS;
+    auto &load = *static_cast<Horo::Extensions::AssetImporterRegistrationSession *>(context);
+    const auto status = Horo::Extensions::RegisterEditorActivityImpl(load, descriptor, session);
+    if (status != HORO_EXTENSION_SUCCESS) {
+        load.failed = true;
+        try {
+            load.error =
+                Horo::MakeError(Horo::Extensions::ExtensionErrors::ContributionRejected, "Editor activity ABI publication was rejected.");
+        } catch (...) {
+            // The typed ABI failure and sticky rejection remain authoritative when diagnostics cannot allocate.
+            return status;
         }
-        return status;
     }
+    return status;
+}
+
+namespace Horo::Extensions {
 
     /** @brief Rolls back the entire admitted batch after a failed commit, before returning the original error. */
     static void RevokeEditorActivities(const std::span<const std::shared_ptr<ExtensionModuleLifetime>> lifetimes) noexcept {
@@ -274,17 +293,18 @@ namespace Horo::Extensions {
 
     Result<void> EditorActivityHost::QueueAction(const EditorSurfaceProviderIdentity &provider, const std::string_view activityId,
                                                  const std::string_view nodeId, const std::string_view actionId,
-                                                 const std::uint64_t revision) {
+                                                 const std::uint64_t revision) const {
         for (const auto &weak : state_->sessions) {
             const auto session = weak.lock();
             if (!session || !session->committed || session->revoked || session->activity.surface.id != activityId ||
-                session->activity.surface.provider != provider || revision != session->revision || !session->invoke ||
-                session->pendingAction || session->job || !session->presentation.visible || !session->presentation.enabled)
+                session->activity.surface.provider != provider || revision != session->revision ||
+                !session->actions.provider.IsAvailable() || session->actions.pending || session->actions.job ||
+                !session->presentation.visible || !session->presentation.enabled)
                 continue;
             for (const auto &node : session->form.nodes) {
                 const auto *action = std::get_if<EditorUiActionNode>(&node.payload);
                 if (action && action->base.id.value == nodeId && action->action.value == actionId && action->base.enabled) {
-                    session->pendingAction = EditorActivitySession::PendingAction{std::string{nodeId}, std::string{actionId}, revision};
+                    session->actions.pending = EditorActivitySession::PendingAction{std::string{nodeId}, std::string{actionId}, revision};
                     return Result<void>::Success();
                 }
             }

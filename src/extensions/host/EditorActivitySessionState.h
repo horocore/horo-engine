@@ -1,5 +1,6 @@
 #pragma once
 #include "EditorActivityAbiConversion.h"
+#include "EditorActivityProviderAction.h"
 #include "EditorActivitySession.h"
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -54,9 +55,6 @@ namespace Horo::Extensions {
             std::uint64_t revision{};
         };
 
-        std::optional<PendingAction> pendingAction;
-        std::optional<JobHandle> job;
-
         struct ActionResult {
             std::string drawerId;
             std::string titleKey;
@@ -67,9 +65,15 @@ namespace Horo::Extensions {
             std::atomic_bool ready{};
         };
 
-        std::shared_ptr<ActionResult> result;
-        HoroEditorActivityActionFunc invoke{};
-        void *moduleContext{};
+        /** @brief One admitted action and its worker handoff; destruction releases results before job and pending input. */
+        struct ActionState {
+            std::optional<PendingAction> pending;
+            std::optional<JobHandle> job;
+            std::shared_ptr<ActionResult> result;
+            EditorActivityProviderAction provider;
+        };
+
+        ActionState actions;
         std::uint64_t revision{};
         bool revoked{};
         bool committed{};
@@ -77,9 +81,9 @@ namespace Horo::Extensions {
         void Revoke() noexcept override {
             revoked = true;
             committed = false;
-            pendingAction.reset();
-            if (job)
-                static_cast<void>(job->RequestCancel());
+            actions.pending.reset();
+            if (actions.job)
+                static_cast<void>(actions.job->RequestCancel());
             if (admission)
                 admission->Revoke();
             if (activityRegistration)
@@ -138,6 +142,10 @@ namespace Horo::Extensions {
             return Result<void>::Success();
         }
     };
+
+    /** @brief Borrows the owned result for one native provider call.
+     * @param result Worker handoff retained by the executing job. @return C ABI sink valid only while result is alive. */
+    [[nodiscard]] HoroEditorActivitySnapshotSink MakeEditorActivityResultSink(EditorActivitySession::ActionResult &result) noexcept;
 
     /** @brief The sole friend that mutates load-time host session ownership. */
     struct EditorActivityHostAccess final {

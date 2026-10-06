@@ -1906,6 +1906,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroExtensionActivityViewTests PRIVATE HoroEngine::Gui HoroEngine::Extensions HoroThirdParty::ImGui)
     add_executable(HoroEditorUiComponentsRenderTests
             unit/editor/EditorUiComponentsRenderTests.cpp
+            unit/editor/ActivityButtonIdentityTests.cpp
     )
 
     target_compile_features(HoroEditorUiComponentsRenderTests PRIVATE cxx_std_20)
@@ -2923,10 +2924,25 @@ target_link_libraries(HoroExtensionDiscoveryTests PRIVATE HoroEngine::Extensions
 add_test(NAME HoroExtensionDiscoveryTests COMMAND HoroExtensionDiscoveryTests)
 
 add_executable(HoroExtensionAbiCConsumer unit/extensions/ExtensionAbiCConsumer.c)
+target_sources(HoroExtensionsPublicHeaderConsumer PRIVATE support/EditorActivityPublicContract.cpp)
 target_compile_features(HoroExtensionAbiCConsumer PRIVATE c_std_11)
 set_target_properties(HoroExtensionAbiCConsumer PROPERTIES C_EXTENSIONS OFF)
 target_link_libraries(HoroExtensionAbiCConsumer PRIVATE HoroEngine::Extensions)
 add_test(NAME HoroExtensionAbiCConsumer COMMAND HoroExtensionAbiCConsumer)
+
+# Compile the external plugin source in the root graph against the owning staged
+# C ABI headers and generated SDK compatibility contract. The relocated installed
+# SDK configure/build/load test above remains the packaging authority.
+add_library(HoroExtensionSdkCContract OBJECT cmake/extension_sdk_consumer/ExternalExtension.c)
+target_compile_features(HoroExtensionSdkCContract PRIVATE c_std_11)
+set_target_properties(HoroExtensionSdkCContract PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+target_link_libraries(HoroExtensionSdkCContract PRIVATE HoroEngine::Extensions)
+target_compile_definitions(HoroExtensionSdkCContract PRIVATE
+    "HORO_EXTENSION_SDK_ABI_MAJOR=${HORO_EXTENSION_ABI_MAJOR_VERSION}"
+    "HORO_EXTENSION_SDK_ABI_PUBLISHED_MINOR=${HORO_EXTENSION_ABI_PUBLISHED_MINOR}"
+    "HORO_EXTENSION_SDK_ABI_MIN_HOST_MINOR=${HORO_EXTENSION_ABI_MIN_HOST_MINOR}"
+    "HORO_EXTENSION_SDK_ABI_MAX_HOST_MAJOR_EXCLUSIVE=${HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE}")
+add_dependencies(HoroExtensionAbiCConsumer HoroExtensionSdkCContract)
 
 add_executable(HoroExtensionRetirementPublicHeaderConsumer support/ExtensionRetirementPublicHeaderConsumer.cpp)
 target_compile_features(HoroExtensionRetirementPublicHeaderConsumer PRIVATE cxx_std_20)
@@ -2987,6 +3003,16 @@ add_test(NAME HoroPackageAuthorCommands
         "${HORO_EXTENSION_SDK_PACKAGE_DIR}"
         "${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/horo-package${CMAKE_EXECUTABLE_SUFFIX}")
 set_tests_properties(HoroPackageAuthorCommands PROPERTIES LABELS "packages;sdk;cli")
+
+add_executable(HoroEditorActivityBoundaryTests
+        unit/extensions/EditorActivityBoundaryTests.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroEditorActivityBoundaryTests PRIVATE cxx_std_20)
+target_include_directories(HoroEditorActivityBoundaryTests PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/extensions/host ${PROJECT_SOURCE_DIR}/tests/support)
+target_link_libraries(HoroEditorActivityBoundaryTests PRIVATE HoroEngine::Extensions Catch2::Catch2WithMain)
+add_test(NAME HoroEditorActivityBoundaryTests COMMAND HoroEditorActivityBoundaryTests)
+set_tests_properties(HoroEditorActivityBoundaryTests PROPERTIES LABELS "unit;extensions;headless;sonar-coverage;ci-windows")
 
 add_executable(HoroExtensionManagerTests
         unit/extensions/ApplicationCapabilityRegistryTests.cpp
