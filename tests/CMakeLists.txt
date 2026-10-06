@@ -507,7 +507,10 @@ if(MSVC)
     target_compile_definitions(HoroMixerAllocationFailureWorker PRIVATE NOMINMAX)
     target_link_libraries(HoroMixerAllocationFailureWorker PRIVATE Dbghelp)
 endif()
+target_sources(HoroAudioMixerPublicHeaderConsumer PRIVATE support/MixerSnapshotPublicContract.cpp)
 add_executable(HoroAudioMixerTests
+        unit/runtime/audio/MixerSnapshotRenderTests.cpp
+        unit/runtime/audio/MixerSnapshotTests.cpp
         unit/runtime/audio/MixerGraphCompilerTests.cpp
         unit/runtime/audio/MixerGraphRuntimeTests.cpp
         unit/runtime/audio/MixerRenderPlanTests.cpp

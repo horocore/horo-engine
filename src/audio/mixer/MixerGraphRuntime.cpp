@@ -135,6 +135,20 @@ namespace Horo::Audio {
     MixerRenderResult MixerGraphRuntime::Render(const AudioCommandScope &scope, const AudioCommandRecord *swap,
                                                 const std::span<const MixerVoiceInput> voices,
                                                 const AudioPlanarBlockView &output) noexcept {
+        return RenderCore(scope, swap, voices, output, nullptr);
+    }
+
+    /** @copydoc MixerGraphRuntime::RenderAutomated */
+    MixerRenderResult MixerGraphRuntime::RenderAutomated(const AudioCommandScope &scope, const AudioCommandRecord *swap,
+                                                         const std::span<const MixerVoiceInput> voices, const AudioPlanarBlockView &output,
+                                                         const MixerAutomationRenderContext &automation) noexcept {
+        return RenderCore(scope, swap, voices, output, &automation);
+    }
+
+    /** @copydoc MixerGraphRuntime::RenderCore */
+    MixerRenderResult MixerGraphRuntime::RenderCore(const AudioCommandScope &scope, const AudioCommandRecord *swap,
+                                                    const std::span<const MixerVoiceInput> voices, const AudioPlanarBlockView &output,
+                                                    const MixerAutomationRenderContext *automation) noexcept {
         using enum MixerRenderStatus;
         State &s = *state_;
         if (!ValidRenderBuffer(s, output))
@@ -162,7 +176,16 @@ namespace Horo::Audio {
         }
         MixerRenderResult result;
         if (s.active != nullptr) {
-            result.status = MixerDetail::RenderPlan(*s.active->state_, voices, output);
+            if (automation) {
+                if (automation->automation.SceneContext() != scope.scene) {
+                    MixerDetail::Silence(output);
+                    result.status = InvalidEpoch;
+                } else {
+                    result = MixerDetail::RenderAutomatedPlan(*s.active->state_, voices, output, *automation);
+                }
+            } else {
+                result.status = MixerDetail::RenderPlan(*s.active->state_, voices, output);
+            }
             result.generation = s.active->Identity().generation;
         } else {
             MixerDetail::Silence(output);

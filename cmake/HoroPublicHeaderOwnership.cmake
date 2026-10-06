@@ -486,6 +486,7 @@ horo_configure_target_header_boundary(HoroAudioMemory PUBLIC_HEADERS
     Horo/Audio/AudioMemory.h
 )
 horo_configure_target_header_boundary(HoroAudioMixer PUBLIC_HEADERS
+    Horo/Audio/MixerSnapshot.h
     Horo/Audio/MixerGraphCompiler.h
 )
 horo_configure_target_header_boundary(HoroAudioCommands PUBLIC_HEADERS
