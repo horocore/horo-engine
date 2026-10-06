@@ -26,10 +26,10 @@ namespace Horo::Editor::FractureTest {
         FractureAssetSource source;
         source.asset = FractureAssetId::Create(Asset(1)).Value();
         source.settings = {.sourceMesh = Asset(2),
-                           .sourceRevision = 3,
+                           .sourceRevision = Id<FractureSourceRevision>(3),
                            .sourceDigest = Digest(4),
-                           .recipe = 5,
-                           .recipeRevision = 6,
+                           .recipe = Id<FractureRecipeId>(5),
+                           .recipeRevision = Id<FractureRecipeRevision>(6),
                            .seed = 7,
                            .toolchainDigest = Digest(8),
                            .tier = DestructionFeatureTier::Standard,
@@ -43,7 +43,7 @@ namespace Horo::Editor::FractureTest {
     }
 
     inline FractureAssetDocument Document(FractureDocumentHistoryLimits limits = {}) {
-        auto opened = FractureAssetDocument::Open(Source(), 11, Id<FractureDocumentSession>(12), limits);
+        auto opened = FractureAssetDocument::Open(Source(), Id<FractureSourceRevision>(11), Id<FractureDocumentSession>(12), limits);
         REQUIRE(opened.HasValue());
         return std::move(opened.Value());
     }

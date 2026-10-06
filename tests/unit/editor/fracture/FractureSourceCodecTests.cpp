@@ -130,19 +130,19 @@ namespace Horo::Editor {
             source.settings.algorithm = static_cast<FractureSourceAlgorithm>(2);
         }
         SECTION("zero recipe") {
-            source.settings.recipe = 0;
+            source.settings.recipe = {};
         }
         SECTION("missing source identity") {
             source.asset = {};
         }
         SECTION("missing source revision") {
-            source.settings.sourceRevision = 0;
+            source.settings.sourceRevision = {};
         }
         SECTION("missing source digest") {
             source.settings.sourceDigest = {};
         }
         SECTION("missing recipe revision") {
-            source.settings.recipeRevision = 0;
+            source.settings.recipeRevision = {};
         }
         SECTION("missing algorithm version") {
             source.settings.algorithmVersion = 0;

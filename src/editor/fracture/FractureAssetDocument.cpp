@@ -179,9 +179,9 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc FractureAssetDocument::Open */
-    Result<FractureAssetDocument> FractureAssetDocument::Open(FractureAssetSource source, const std::uint64_t sourceRevision,
+    Result<FractureAssetDocument> FractureAssetDocument::Open(FractureAssetSource source, const FractureSourceRevision sourceRevision,
                                                               FractureDocumentSession session, FractureDocumentHistoryLimits limits) {
-        if (!session.IsValid() || sourceRevision == 0 || limits.maximumEntries == 0 || limits.maximumEntries > 128 ||
+        if (!session.IsValid() || !sourceRevision.IsValid() || limits.maximumEntries == 0 || limits.maximumEntries > 128 ||
             limits.maximumBytes == 0 || limits.maximumBytes > 16 * MaximumFractureSourceBytes)
             return Result<FractureAssetDocument>::Failure(MakeError(FractureDocumentErrors::LimitExceeded));
         const auto valid = ValidateFractureAssetSource(source);
@@ -319,7 +319,8 @@ namespace Horo::Editor {
     }
 
     /** @copydoc FractureAssetDocument::AcknowledgeSave */
-    Result<void> FractureAssetDocument::AcknowledgeSave(const FractureDocumentSave &save, const std::uint64_t publishedSourceRevision) {
+    Result<void> FractureAssetDocument::AcknowledgeSave(const FractureDocumentSave &save,
+                                                        const FractureSourceRevision publishedSourceRevision) {
         if (closed_ || !source_)
             return Result<void>::Failure(MakeError(FractureDocumentErrors::Closed));
         if (save.snapshot_.session != session_ || !save.snapshot_.source || save.snapshot_.source->asset != source_->asset)

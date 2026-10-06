@@ -19,6 +19,12 @@ accepted source bytes, then open with the durable Assets source revision. All
 mutation, save acknowledgement and close calls run on that single editor owner;
 workers may retain immutable snapshots, never the mutable document.
 
+`FractureSourceRevision`, `FractureRecipeId` and `FractureRecipeRevision`
+preserve distinct nonzero identities across publication/recipe boundaries.
+Source publication revisions cannot be interchanged with editor mutation revisions;
+the public consumer checks this at compile time. These wrappers retain the same
+explicit uint64 wire representation in schema 1.
+
 Transactions carry the exact session and current monotonic document revision,
 host-selected edit permission and cancellation token. Operations address stable
 chunk IDs, ordered endpoint pairs and material slots. Settings, graph, hierarchy,

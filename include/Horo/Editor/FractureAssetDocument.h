@@ -32,12 +32,21 @@ namespace Horo::Editor {
     struct FractureDocumentSessionTag;
     struct FractureDocumentRevisionTag;
     struct FractureDocumentStateTag;
+    struct FractureSourceRevisionTag;
+    struct FractureRecipeTag;
+    struct FractureRecipeRevisionTag;
     /** @brief Host-issued nonzero lifetime of one writable asset document. */
     using FractureDocumentSession = Destruction::DestructionStableIdentity<FractureDocumentSessionTag>;
     /** @brief Non-wrapping revision advanced by edits, undo and redo. */
     using FractureDocumentRevision = Destruction::DestructionStableIdentity<FractureDocumentRevisionTag>;
     /** @brief Session-local content identity restored by semantic undo/redo. */
     using FractureDocumentStateId = Destruction::DestructionStableIdentity<FractureDocumentStateTag>;
+    /** @brief Exact nonzero Assets source publication revision, distinct from editor mutation revision. */
+    using FractureSourceRevision = Destruction::DestructionStableIdentity<FractureSourceRevisionTag>;
+    /** @brief Stable host-selected offline recipe identity. */
+    using FractureRecipeId = Destruction::DestructionStableIdentity<FractureRecipeTag>;
+    /** @brief Exact nonzero accepted offline recipe revision. */
+    using FractureRecipeRevision = Destruction::DestructionStableIdentity<FractureRecipeRevisionTag>;
 
     inline constexpr std::uint32_t FractureSourceSchemaVersion = 1;
     inline constexpr std::size_t MaximumFractureSourceBytes = 1024 * 1024;
@@ -61,11 +70,11 @@ namespace Horo::Editor {
     /** @brief Exact dependencies and deterministic offline recipe settings. */
     struct FractureSourceSettings final {
         Assets::AssetId sourceMesh;
-        std::uint64_t sourceRevision{};
+        FractureSourceRevision sourceRevision;
         Sha256Digest sourceDigest;
         FractureSourceAlgorithm algorithm{FractureSourceAlgorithm::PreFractured};
-        std::uint64_t recipe{};
-        std::uint64_t recipeRevision{};
+        FractureRecipeId recipe;
+        FractureRecipeRevision recipeRevision;
         std::uint64_t seed{};
         std::uint32_t algorithmVersion{1};
         Sha256Digest toolchainDigest;
@@ -231,14 +240,14 @@ namespace Horo::Editor {
         }
 
         /** @brief Returns the accepted source revision to compare before publication. @return Nonzero durable revision. */
-        [[nodiscard]] std::uint64_t ExpectedSourceRevision() const noexcept {
+        [[nodiscard]] FractureSourceRevision ExpectedSourceRevision() const noexcept {
             return expectedSourceRevision_;
         }
 
     private:
         friend class FractureAssetDocument;
         FractureDocumentSnapshot snapshot_;
-        std::uint64_t expectedSourceRevision_{};
+        FractureSourceRevision expectedSourceRevision_;
         std::vector<std::byte> bytes_;
     };
 
@@ -256,7 +265,7 @@ namespace Horo::Editor {
          * @param limits Finite history budgets.
          * @return Clean document or typed validation/allocation failure.
          */
-        [[nodiscard]] static Result<FractureAssetDocument> Open(FractureAssetSource source, std::uint64_t sourceRevision,
+        [[nodiscard]] static Result<FractureAssetDocument> Open(FractureAssetSource source, FractureSourceRevision sourceRevision,
                                                                 FractureDocumentSession session, FractureDocumentHistoryLimits limits = {});
         FractureAssetDocument(FractureAssetDocument &&) noexcept = default;
         FractureAssetDocument &operator=(FractureAssetDocument &&) noexcept = default;
@@ -309,7 +318,7 @@ namespace Horo::Editor {
          * @return Success or a typed conflict/session/closed failure; duplicate receipt is idempotent.
          * @pre Assets verified that the ticket bytes were durably published against its expected revision.
          */
-        [[nodiscard]] Result<void> AcknowledgeSave(const FractureDocumentSave &save, std::uint64_t publishedSourceRevision);
+        [[nodiscard]] Result<void> AcknowledgeSave(const FractureDocumentSave &save, FractureSourceRevision publishedSourceRevision);
 
         /** @brief Fences late edit/save completions without invalidating immutable readers. */
         void Close() noexcept {
@@ -338,7 +347,7 @@ namespace Horo::Editor {
         FractureDocumentStateId state_{FractureDocumentStateId::Create(1).Value()};
         FractureDocumentStateId savedState_{state_};
         std::uint64_t nextState_{2};
-        std::uint64_t sourceRevision_{};
+        FractureSourceRevision sourceRevision_;
         FractureDocumentHistoryLimits limits_;
         std::vector<HistoryEntry> history_;
         std::size_t cursor_{};

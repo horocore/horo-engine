@@ -126,11 +126,12 @@ namespace Horo::Editor {
         if (source.chunks.size() > DestructionHardLimits::ChunksPerDestructible || source.contacts.size() > MaximumFractureContacts ||
             source.materials.size() > MaximumFractureMaterials || settings.sites.size() > DestructionHardLimits::ChunksPerDestructible)
             return fail(FractureDocumentErrors::LimitExceeded);
-        if (!source.asset.IsValid() || !settings.sourceMesh.IsValid() || settings.sourceRevision == 0 ||
-            !HasDigest(settings.sourceDigest) || settings.recipe == 0 || settings.recipeRevision == 0 || settings.algorithmVersion == 0 ||
-            !HasDigest(settings.toolchainDigest) || settings.algorithm > FractureSourceAlgorithm::Voronoi ||
-            !std::isfinite(settings.exteriorUvScale) || !std::isfinite(settings.interiorUvScale) || settings.exteriorUvScale <= 0 ||
-            settings.interiorUvScale <= 0 || source.chunks.empty())
+        if (!source.asset.IsValid() || !settings.sourceMesh.IsValid() || !settings.sourceRevision.IsValid() ||
+            !HasDigest(settings.sourceDigest) || !settings.recipe.IsValid() || !settings.recipeRevision.IsValid() ||
+            settings.algorithmVersion == 0 || !HasDigest(settings.toolchainDigest) ||
+            settings.algorithm > FractureSourceAlgorithm::Voronoi || !std::isfinite(settings.exteriorUvScale) ||
+            !std::isfinite(settings.interiorUvScale) || settings.exteriorUvScale <= 0 || settings.interiorUvScale <= 0 ||
+            source.chunks.empty())
             return fail(FractureDocumentErrors::InvalidSource);
         const auto profile = GetDestructionTierProfile(settings.tier);
         if (profile.HasError())

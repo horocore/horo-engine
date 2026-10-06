@@ -5,19 +5,20 @@ namespace Horo::Editor {
     using namespace Destruction;
 
     TEST_CASE("Fracture open validates source lifetime and explicit history envelopes", "[unit][editor][fracture][open]") {
-        ErrorIs(FractureAssetDocument::Open(Source(), 0, Id<FractureDocumentSession>(12)), FractureDocumentErrors::LimitExceeded);
-        ErrorIs(FractureAssetDocument::Open(Source(), 11, {}), FractureDocumentErrors::LimitExceeded);
-        ErrorIs(FractureAssetDocument::Open(Source(), 11, Id<FractureDocumentSession>(12), {0, 1024}),
+        ErrorIs(FractureAssetDocument::Open(Source(), {}, Id<FractureDocumentSession>(12)), FractureDocumentErrors::LimitExceeded);
+        ErrorIs(FractureAssetDocument::Open(Source(), Id<FractureSourceRevision>(11), {}), FractureDocumentErrors::LimitExceeded);
+        ErrorIs(FractureAssetDocument::Open(Source(), Id<FractureSourceRevision>(11), Id<FractureDocumentSession>(12), {0, 1024}),
                 FractureDocumentErrors::LimitExceeded);
-        ErrorIs(FractureAssetDocument::Open(Source(), 11, Id<FractureDocumentSession>(12), {129, 1024}),
+        ErrorIs(FractureAssetDocument::Open(Source(), Id<FractureSourceRevision>(11), Id<FractureDocumentSession>(12), {129, 1024}),
                 FractureDocumentErrors::LimitExceeded);
-        ErrorIs(FractureAssetDocument::Open(Source(), 11, Id<FractureDocumentSession>(12), {128, 0}),
+        ErrorIs(FractureAssetDocument::Open(Source(), Id<FractureSourceRevision>(11), Id<FractureDocumentSession>(12), {128, 0}),
                 FractureDocumentErrors::LimitExceeded);
-        ErrorIs(FractureAssetDocument::Open(Source(), 11, Id<FractureDocumentSession>(12), {128, 16 * MaximumFractureSourceBytes + 1}),
+        ErrorIs(FractureAssetDocument::Open(Source(), Id<FractureSourceRevision>(11), Id<FractureDocumentSession>(12),
+                                            {128, 16 * MaximumFractureSourceBytes + 1}),
                 FractureDocumentErrors::LimitExceeded);
         auto invalid = Source();
         invalid.chunks.clear();
-        ErrorIs(FractureAssetDocument::Open(std::move(invalid), 11, Id<FractureDocumentSession>(12)),
+        ErrorIs(FractureAssetDocument::Open(std::move(invalid), Id<FractureSourceRevision>(11), Id<FractureDocumentSession>(12)),
                 FractureDocumentErrors::InvalidSource);
         auto document = Document();
         const auto before = document.Snapshot();
@@ -141,7 +142,7 @@ namespace Horo::Editor {
         ErrorIs(document.Undo(Context(document)), FractureDocumentErrors::Closed);
         ErrorIs(document.Redo(Context(document)), FractureDocumentErrors::Closed);
         ErrorIs(document.CaptureSave(), FractureDocumentErrors::Closed);
-        ErrorIs(document.AcknowledgeSave(save.Value(), 12), FractureDocumentErrors::Closed);
+        ErrorIs(document.AcknowledgeSave(save.Value(), Id<FractureSourceRevision>(12)), FractureDocumentErrors::Closed);
         CHECK(original.source->settings.seed == 7);
         CHECK(DecodeFractureAssetSource(save.Value().Bytes()).HasValue());
     }
@@ -152,27 +153,28 @@ namespace Horo::Editor {
         const auto save = document.CaptureSave();
         REQUIRE(save.HasValue());
         CHECK(document.IsDirty());
-        CHECK(save.Value().ExpectedSourceRevision() == 11);
+        CHECK(save.Value().ExpectedSourceRevision() == Id<FractureSourceRevision>(11));
         REQUIRE(document.Apply(SeedPatch(document, 43), Context(document)).HasValue());
-        ErrorIs(document.AcknowledgeSave(save.Value(), 11), FractureDocumentErrors::PublicationConflict);
-        REQUIRE(document.AcknowledgeSave(save.Value(), 12).HasValue());
-        REQUIRE(document.AcknowledgeSave(save.Value(), 12).HasValue());
+        ErrorIs(document.AcknowledgeSave(save.Value(), Id<FractureSourceRevision>(11)), FractureDocumentErrors::PublicationConflict);
+        REQUIRE(document.AcknowledgeSave(save.Value(), Id<FractureSourceRevision>(12)).HasValue());
+        REQUIRE(document.AcknowledgeSave(save.Value(), Id<FractureSourceRevision>(12)).HasValue());
         CHECK(document.IsDirty());
         REQUIRE(document.Undo(Context(document)).HasValue());
         CHECK_FALSE(document.IsDirty());
         auto decoded = DecodeFractureAssetSource(save.Value().Bytes());
         REQUIRE(decoded.HasValue());
-        auto reopened = FractureAssetDocument::Open(std::move(decoded.Value()), 12, Id<FractureDocumentSession>(99));
+        auto reopened =
+            FractureAssetDocument::Open(std::move(decoded.Value()), Id<FractureSourceRevision>(12), Id<FractureDocumentSession>(99));
         REQUIRE(reopened.HasValue());
         CHECK_FALSE(reopened.Value().IsDirty());
         CHECK(reopened.Value().Snapshot().source->settings.seed == 42);
-        ErrorIs(reopened.Value().AcknowledgeSave(save.Value(), 13), FractureDocumentErrors::WrongDocument);
+        ErrorIs(reopened.Value().AcknowledgeSave(save.Value(), Id<FractureSourceRevision>(13)), FractureDocumentErrors::WrongDocument);
         auto stale = document.CaptureSave();
         REQUIRE(stale.HasValue());
         auto current = document.CaptureSave();
         REQUIRE(current.HasValue());
-        REQUIRE(document.AcknowledgeSave(current.Value(), 13).HasValue());
-        ErrorIs(document.AcknowledgeSave(stale.Value(), 14), FractureDocumentErrors::PublicationConflict);
+        REQUIRE(document.AcknowledgeSave(current.Value(), Id<FractureSourceRevision>(13)).HasValue());
+        ErrorIs(document.AcknowledgeSave(stale.Value(), Id<FractureSourceRevision>(14)), FractureDocumentErrors::PublicationConflict);
     }
 
     TEST_CASE("Fracture history budgets reject before mutation and evict oldest steps deterministically",
