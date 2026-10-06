@@ -8,7 +8,7 @@ namespace Horo::Runtime::Ui {
         if (!storage_ || storage_->stopped || storage_->collecting)
             return Result<bool>::Failure(MakeError(UiErrors::InstanceStateInvalid));
         // Updating eligibility requires the mutable publisher authority, never a const facade's borrowed state.
-        auto &publisher = storage_.PublisherPin();
+        const auto &publisher = storage_.PublisherPin();
         auto *canvas = publisher->current->Canvas(canvasId);
         if (!canvas || !canvas->layout || receipt.canvas != canvas->tree.Canvas() ||
             receipt.interactionRevision != canvas->layout->Descriptor().interaction)
