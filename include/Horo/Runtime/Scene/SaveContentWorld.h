@@ -41,7 +41,7 @@ namespace Horo::Runtime {
          * @details Accepted immutable captures may be encoded on worker threads after live Scene/native retirement.
          *          This method reads no live Scene/installation state and invokes no source callbacks; reader work is atomically bounded.
          */
-        [[nodiscard]] Result<FinalizedSaveArchive> ReSave(SaveArchiveHeader header, ArchiveFormatVersion version,
+        [[nodiscard]] Result<FinalizedSaveArchive> ReSave(const SaveArchiveHeader &header, ArchiveFormatVersion version,
                                                           const SaveArchiveReaderLimits &limits = {}) const;
 
     private:
@@ -56,6 +56,17 @@ namespace Horo::Runtime {
         SaveCaptureBarrierSnapshot barrier;
         std::optional<SaveContentSnapshot> capture;
         std::optional<Error> error;
+    };
+
+    /** @brief Inert requested capture metadata; neither construction nor copying admits callbacks or certifies a world.
+     * @details The content-owned world and existing barrier validate every field against their actual private authorities.
+     */
+    struct SaveContentCaptureRequest final {
+        RuntimePhase phase;                /**< Current host phase checked by the existing barrier. */
+        SaveRuntimeGeneration generation;  /**< Exact session, Scene and registry generations. */
+        CapturedStateId capturedState;     /**< Stable requested detached capture identity. */
+        CanonicalCaptureEpoch epoch;       /**< Coherent host logical epoch checked by registered authorities. */
+        RuntimeSaveCaptureLimits limits{}; /**< Finite coordinated capture bounds. */
     };
 
     /** @brief Actual published Scene ownership bound to its source/install proof; no cached borrowed SceneView survives a call. */
@@ -76,24 +87,18 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<SaveParticipantRegistration> RegisterRequirements(CanonicalStateParticipantRegistry &registry) const;
         /** @brief Polls the real host capture barrier with actual active Scene/source provenance and explicit degraded-world policy.
          * @param barrier Existing owner-thread quiescence authority with an admitted pending operation.
-         * @param phase Current runtime phase; the existing barrier enforces the lifecycle safe point.
-         * @param generation Actual session/Scene/registry generation, checked against this published Scene and registry snapshot.
-         * @param capturedState Stable requested capture identity.
-         * @param epoch Actual coherent host logical epoch, independently checked by the barrier's registered authorities.
+         * @param request Inert host phase, generation, identity, epoch and limits; all admitted against actual owner/barrier authority.
          * @param participants Actual pinned registry snapshot containing this world’s bound required declaration adapter.
          * @param policy Explicit project re-save policy; degraded denial occurs before any capture callback.
-         * @param limits Finite existing capture bounds.
          * @return Real barrier outcome and privately admitted immutable snapshot, or typed moved/stale/revoked/policy error.
          * @throws std::bad_alloc If preparing owned allocation-failure storage cannot complete, before any admission mutation.
          * @details Once failure storage is prepared, allocation faults return CanonicalCodecAllocationFailed without allocating
          *          during unwinding. World state, barrier admission and participant callbacks remain untouched by preparation failure.
          */
-        [[nodiscard]] Result<SaveContentCaptureOutcome> CaptureAtSafePoint(SaveCaptureBarrier &barrier, RuntimePhase phase,
-                                                                           SaveRuntimeGeneration generation, CapturedStateId capturedState,
-                                                                           CanonicalCaptureEpoch epoch,
+        [[nodiscard]] Result<SaveContentCaptureOutcome> CaptureAtSafePoint(SaveCaptureBarrier &barrier,
+                                                                           const SaveContentCaptureRequest &request,
                                                                            SaveParticipantRegistrySnapshot participants,
-                                                                           SaveDegradedWorldPolicy policy,
-                                                                           const RuntimeSaveCaptureLimits &limits = {}) const;
+                                                                           SaveDegradedWorldPolicy policy) const;
 
     private:
         friend class QueuedSavedSceneBootstrap;

@@ -126,13 +126,13 @@ namespace Horo::Runtime {
                     SaveChunkContentRequirement{std::move(chunk).Value(), static_cast<Assets::AssetChunkKind>(role.Value())});
             }
             if (kind == 2) {
-                auto module = SaveParticipantId::Parse(identity.Value());
-                if (module.HasError())
-                    return Result<Content>::Failure(module.ErrorValue());
+                auto installation = SaveParticipantId::Parse(identity.Value());
+                if (installation.HasError())
+                    return Result<Content>::Failure(installation.ErrorValue());
                 auto version = reader.ReadUInt32();
                 if (version.HasError())
                     return Result<Content>::Failure(version.ErrorValue());
-                return Result<Content>::Success(SaveModuleContentRequirement{std::move(module).Value(), version.Value()});
+                return Result<Content>::Success(SaveModuleContentRequirement{std::move(installation).Value(), version.Value()});
             }
             return Result<Content>::Failure(MakeError(SaveErrors::CaptureRecordInvalid));
         }

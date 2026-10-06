@@ -164,3 +164,44 @@ Known records keep actual supported decode/hash verification; the generic reader
 inspection and round-trip APIs remain strict. Content reconciliation and re-save
 use the same qualified source/candidate path and compare exact stored bytes and
 directory metadata. This path never permits dropping retained optional records.
+
+Implementation phases remain inside their owning targets: owner-thread capture
+admission is separate from detached snapshot assembly, while bounded writer
+layout admission precedes byte assembly and production readback. Publication
+validates the complete pending aggregate before transferring any root; extracting
+that validation does not introduce another publication gate or change retirement.
+The native content, container writer, Scene receipt and retained-content fixtures
+remain attached to their existing test executables with the same cases/assertions.
+
+
+### Hosted review correction
+
+`SaveContentWorld::CaptureAtSafePoint` now accepts one inert `SaveContentCaptureRequest` containing the actual host phase,
+session/Scene/registry generations, requested identity, coherent epoch and coordinated limits. The existing barrier,
+registry snapshot and explicit degraded-world policy remain separate arguments. Constructing this request does not
+admit work or certify a source: the same private published receipt, installation, registered adapters and barrier
+validate it before callbacks. All real fixture callers and the owning public-header consumer migrate together;
+stale/revoked generation, omitted owner, allocation failure and valid retry coverage stays intact.
+
+`SaveContentSnapshot::ReSave` borrows publication metadata by const reference and copies its owned working header only
+inside the existing protected allocation boundary. `InstalledSaveContent::Replace` and `Close` are const handle
+operations on the same shared owner authority; owner-thread serialization and generation revocation rules are unchanged.
+
+The actual foreign baseline decoder invocation has a nonthrowing boundary with owned failure storage prepared before
+entry. Only `DecodeBaseline` runs inside it. Allocation faults retain their distinct typed error; other standard and
+nonstandard foreign faults return the contract error. The allocating public preparation method remains ordinary;
+no failure handler constructs messages or transfers a partially prepared world.
+
+Production phase helpers retain the current reader work limits, authenticated opaque layout and stored-byte proofs.
+Separated fixture units stay registered to the same real test owners, retaining all original assertions.
+
+
+### Integration with merged restore composition
+
+The necessary merge of main `802ae070` retains HORO-1437's single aggregate commit gate and lifecycle reentrancy guard.
+The content-owned receipt is completed inside `AggregateTransfer::PublishPrepared`, after the actual active root changes,
+before save completion observers can run. The same prepared-publication path checks content dataset projections before
+candidate transfer, and rejection/cancellation/shutdown retire unpublished receipts while restore rollback retains its
+native and previous-world ownership. `SceneAggregate` retains both its restore composition and its typed dataset projection.
+There is no second `CommitDeferredChanges` implementation or alternate content publication path. Incoming restore graph,
+transaction, Gameplay source and linked public-consumer regressions join the full content qualification scope.

@@ -59,7 +59,7 @@ namespace Horo::Runtime::SaveContentDetail {
      *          native generation storage without reading its admission flags or issuing another native callback.
      */
     struct AcceptedCaptureSeal final {
-        AcceptedCaptureSeal(const std::shared_ptr<ReconciliationState> &source, RuntimeSaveCaptureProvenance admitted,
+        AcceptedCaptureSeal(const std::shared_ptr<ReconciliationState> &source, const RuntimeSaveCaptureProvenance &admitted,
                             SaveWorldId worldIdentity, SaveBaseSceneId baseIdentity)
             : provenance(admitted), project(source->sourceReader.Header().project), world(worldIdentity), baseScene(baseIdentity),
               sourceArchive(source, &source->sourceArchive), sourceReader(source, &source->sourceReader), opaque(source, &source->opaque),

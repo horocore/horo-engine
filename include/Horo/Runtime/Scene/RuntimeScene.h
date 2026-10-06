@@ -24,6 +24,37 @@ namespace Horo::Assets {
 namespace Horo::Runtime {
     class RuntimeScene;
     class RuntimeSceneView;
+    class IStagedRestoreAggregatePublication;
+
+    /**
+     * @brief Owned composite restore retained behind normal Scene preparation admission.
+     * @details Preparation touches only the unpublished candidate. Pending readiness cannot activate
+     *          the Scene. Commit reuses the original save operation cancellation gate and invokes the
+     *          supplied no-fail Scene transfer before operation completion becomes observable.
+     */
+    class SceneAggregateRestore {
+    public:
+        virtual ~SceneAggregateRestore() = default;
+        /** @brief Allocates exact identities and stages core values on the unpublished Scene.
+         * @param scene Actual candidate owned by the Scene service, borrowed until retirement.
+         * @return Success or a typed preparation failure with no active-state mutation. */
+        [[nodiscard]] virtual Result<void> PrepareScene(RuntimeScene &scene) = 0;
+        /** @brief Advances bounded detached restore preparation at the owner lifecycle boundary.
+         * @return Ready, still pending, or a typed failure requiring aggregate rollback. */
+        [[nodiscard]] virtual Result<bool> PrepareOwners() = 0;
+        /** @brief Revalidates current owner evidence immediately before the shared publication gate.
+         * @param active Current active Scene view, or absence at initial load.
+         * @return Success or typed stale/cancellation/reference failure before publication. */
+        [[nodiscard]] virtual Result<void> ValidatePublication(const RuntimeSceneView *active) const = 0;
+        /** @brief Publishes prepared roots through the original restore operation commit gate.
+         * @param sceneTransfer Service-owned no-fail Scene aggregate transfer.
+         * @return Success or a typed failure before any root has changed.
+         * @pre Every Scene and restore candidate has passed publication validation.
+         */
+        [[nodiscard]] virtual Result<void> Commit(IStagedRestoreAggregatePublication &sceneTransfer) = 0;
+        /** @brief Cancels and retires unpublished owned work without touching active state; repeated calls are harmless. */
+        virtual void Rollback() noexcept = 0;
+    };
 
     /** @brief Prepared-owner declaration of persistent dataset participation; runtime/backend world handles are not dataset IDs. */
     enum class SceneCanonicalDatasetProjection : std::uint8_t {
@@ -522,6 +553,16 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] Result<ScenePublicationReceipt> QueuePreparationWithPublicationCheck(
             RuntimeSceneDefinition definition, std::unique_ptr<ScenePublicationCheck> publicationCheck, RuntimeSceneConfig config = {});
+        /** @brief Queues a composite save restore through the existing exclusive Scene admission path.
+         * @param definition Validated compatible immutable authored defaults.
+         * @param restore Non-null owned restore composition, retained through pending preparation/rollback.
+         * @param config Generation retirement policy.
+         * @return Typed admission result; failed/pending owner preparation never publishes a partial Scene.
+         * @details Normal QueuePreparation callers retain their existing block preparation behavior.
+         */
+        [[nodiscard]] Result<void> QueuePreparationWithRestore(RuntimeSceneDefinition definition,
+                                                               std::unique_ptr<SceneAggregateRestore> restore,
+                                                               RuntimeSceneConfig config = {});
         /** @brief Queues active-scene unload; repeated unload with no pending transition is harmless. */
         [[nodiscard]] Result<void> QueueUnload();
         /** @brief Queues one structural batch against the current active scene. @param commands Batch consumed on success.
@@ -558,6 +599,8 @@ namespace Horo::Runtime {
         };
 
         struct Preparation;
+        struct AggregateTransfer;
+        struct LifecycleMutation;
 
         struct SceneAggregate final {
             SceneAggregate() = default;
@@ -569,6 +612,7 @@ namespace Horo::Runtime {
             std::unique_ptr<RuntimeScene> scene;
             std::vector<std::unique_ptr<SceneActivationCandidate>> candidates;
             SceneCanonicalDatasetProjection datasets{SceneCanonicalDatasetProjection::Absent};
+            std::unique_ptr<SceneAggregateRestore> restore; /**< Pins committed identity/fixup/module roots until Scene retirement. */
         };
 
         [[nodiscard]] Result<void> BeginPreparation(RuntimeSceneDefinition definition, RuntimeSceneConfig config);
@@ -584,6 +628,12 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> PrepareParticipants(const RuntimeSceneDefinition &definition);
         static void ShutdownCandidates(std::vector<std::unique_ptr<SceneActivationCandidate>> &candidates) noexcept;
         [[nodiscard]] Result<void> CommitDeferredChanges();
+        /** @brief Waits for owners and validates every candidate before any ownership transfer.
+         * @return Ready, pending, or the original typed preparation/validation failure. */
+        [[nodiscard]] Result<bool> PreparePendingPublication();
+        /** @brief Transfers all prepared roots and retains the retired aggregate through completion observers.
+         * @return Success or the original pre-transfer gate failure. */
+        [[nodiscard]] Result<void> PublishPendingAggregate();
         /** @brief Records rejection and retires unpublished candidates while retaining the authority through cleanup. */
         void RejectPendingPublication(Error error);
         /** @brief Retires only an unpublished queue receipt; already published identities remain immutable. */
@@ -596,6 +646,7 @@ namespace Horo::Runtime {
         std::unique_ptr<Preparation> preparation_;
         std::unique_ptr<ScenePublicationCheck> publicationCheck_;
         std::shared_ptr<ScenePublicationDetail::State> publicationReceipt_;
+        std::unique_ptr<SceneAggregateRestore> aggregateRestore_;
         std::optional<SceneCommandBuffer> structuralCommands_;
         std::optional<StructuralCommitResult> structuralResult_;
         std::optional<Error> operationError_;
@@ -606,5 +657,7 @@ namespace Horo::Runtime {
         TransitionKind transition_{TransitionKind::None};
         bool started_{};
         bool shutdown_{};
+        bool mutatingLifecycle_{}; /**< Rejects reentrant mutation during owned lifecycle callbacks and retirement. */
+        bool shutdownDeferred_{};  /**< Shutdown waits until the current scoped lifecycle mutation returns. */
     };
 }  // namespace Horo::Runtime

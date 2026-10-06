@@ -114,13 +114,15 @@ namespace Horo::Runtime {
          * @param provider New verified archive provider.
          * @param modules New exact-generation native receipts.
          * @return Success or typed identity/capacity/revocation error.
+         * @details A const handle retains the same shared owner authority; replacement remains serialized on its acquiring owner thread.
          */
         [[nodiscard]] Result<void> Replace(std::shared_ptr<const Assets::AssetArchiveProvider> provider,
-                                           std::vector<GameplayPersistenceInstallation> modules);
+                                           std::vector<GameplayPersistenceInstallation> modules) const;
         /** @brief Closes future admission on the owner thread; existing native/storage pins retire with accepted operations.
          * @pre Called on the acquiring runtime owner thread, serialized with module reload/shutdown and content replacement.
+         * @details Constness applies to the handle; this explicit operation closes its shared installation authority.
          */
-        void Close() noexcept;
+        void Close() const noexcept;
 
     private:
         friend class ReconciledSaveContent;

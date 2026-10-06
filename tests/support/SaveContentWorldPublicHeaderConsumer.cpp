@@ -18,3 +18,21 @@ static_assert(noexcept(std::declval<const Horo::Runtime::SaveContentSnapshot &>(
 static_assert(noexcept(std::declval<const Horo::Runtime::SaveContentWorld &>().Diagnostics()));
 static_assert(std::is_same_v<decltype(std::declval<const Horo::Runtime::SaveContentSnapshot &>().Diagnostics()),
                              std::span<const Horo::Runtime::SaveContentDiagnostic>>);
+
+static_assert(std::is_aggregate_v<Horo::Runtime::SaveContentCaptureRequest>);
+static_assert(std::is_trivially_copyable_v<Horo::Runtime::SaveContentCaptureRequest>);
+static_assert(std::is_same_v<
+              decltype(std::declval<const Horo::Runtime::SaveContentWorld &>().CaptureAtSafePoint(
+                  std::declval<Horo::Runtime::SaveCaptureBarrier &>(), std::declval<const Horo::Runtime::SaveContentCaptureRequest &>(),
+                  std::declval<Horo::Runtime::SaveParticipantRegistrySnapshot>(), Horo::Runtime::SaveDegradedWorldPolicy::Reject)),
+              Horo::Result<Horo::Runtime::SaveContentCaptureOutcome>>);
+static_assert(noexcept(std::declval<const Horo::Runtime::InstalledSaveContent &>().Close()));
+
+static_assert(
+    std::is_same_v<decltype(std::declval<const Horo::Runtime::SaveContentSnapshot &>().ReSave(
+                       std::declval<const Horo::Runtime::SaveArchiveHeader &>(), std::declval<Horo::Runtime::ArchiveFormatVersion>())),
+                   Horo::Result<Horo::Runtime::FinalizedSaveArchive>>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Runtime::InstalledSaveContent &>().Replace(
+                                 std::declval<std::shared_ptr<const Horo::Assets::AssetArchiveProvider>>(),
+                                 std::declval<std::vector<Horo::Runtime::GameplayPersistenceInstallation>>())),
+                             Horo::Result<void>>);

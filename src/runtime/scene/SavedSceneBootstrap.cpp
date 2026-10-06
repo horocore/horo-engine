@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <new>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -15,10 +16,56 @@ namespace Horo::Runtime {
             return Result<T>::Failure(MakeError(descriptor));
         }
 
+        /** @brief Qualifies the logical baseline declaration and exact installed artifact before host decoder entry. */
+        Result<const SaveContentDetail::ResolvedAsset *> ResolveBaselineArtifact(SaveContentDetail::ReconciliationState &state,
+                                                                                 const SavedSceneBootstrapDescriptor &descriptor,
+                                                                                 const Assets::AssetTypeId &requiredSceneAssetType) {
+            const auto baseline = Assets::AssetId::FromBytes(descriptor.baseScene.Bytes());
+            if (state.legacy &&
+                std::ranges::find(state.assets, baseline, &SaveContentDetail::ResolvedAsset::original) == state.assets.end()) {
+                auto resolved =
+                    SaveContentDetail::ResolveLegacyBaseline(state, {baseline, requiredSceneAssetType, descriptor.contentDigest});
+                if (resolved.HasError())
+                    return Result<const SaveContentDetail::ResolvedAsset *>::Failure(resolved.ErrorValue());
+            }
+            if (!state.legacy || !state.requirements.empty()) {
+                const bool declared = std::ranges::any_of(state.requirements, [&](const SaveContentRequirement &requirement) {
+                    const auto *asset = std::get_if<SaveAssetContentRequirement>(&requirement.content);
+                    return requirement.necessity == SaveContentNecessity::Required && asset && asset->asset == baseline &&
+                           asset->type == requiredSceneAssetType && asset->envelopeDigest == descriptor.contentDigest;
+                });
+                if (!declared)
+                    return Failure<const SaveContentDetail::ResolvedAsset *>(SceneErrors::SaveBootstrapIncompatible);
+            }
+            const auto resolved = std::ranges::find(state.assets, baseline, &SaveContentDetail::ResolvedAsset::original);
+            if (resolved == state.assets.end() || resolved->type != requiredSceneAssetType)
+                return Failure<const SaveContentDetail::ResolvedAsset *>(SceneErrors::SaveBootstrapAssetUnavailable);
+            // A substitution is admitted only by the sealed project mapping; the original durable digest remains in the descriptor.
+            if (resolved->installed == baseline && resolved->envelopeDigest != descriptor.contentDigest)
+                return Failure<const SaveContentDetail::ResolvedAsset *>(SceneErrors::SaveBootstrapIncompatible);
+            return Result<const SaveContentDetail::ResolvedAsset *>::Success(&*resolved);
+        }
+
         [[nodiscard]] bool HasDigestEvidence(const Sha256Digest &digest) noexcept {
             return std::ranges::any_of(digest.bytes, [](const std::uint8_t byte) {
                 return byte != 0;
             });
+        }
+
+        /** @brief Contains only the admitted foreign decoder invocation, moving preconstructed failure storage without allocating. */
+        Result<RuntimeSceneDefinition> InvokeBaselineDecoder(ISavedSceneBaselineDecoder &decoder,
+                                                             const SavedSceneBaselineDecodeInput &input,
+                                                             Result<RuntimeSceneDefinition> allocationFailure,
+                                                             Result<RuntimeSceneDefinition> contractFailure) noexcept {
+            static_assert(std::is_nothrow_move_constructible_v<Result<RuntimeSceneDefinition>>);
+            static_assert(std::is_nothrow_move_constructible_v<Error>);
+            try {
+                return decoder.DecodeBaseline(input);
+            } catch (const std::bad_alloc &) {
+                return allocationFailure;
+            } catch (...) {
+                return contractFailure;
+            }
         }
     }  // namespace
 
@@ -136,10 +183,10 @@ namespace Horo::Runtime {
             return Failure<SaveContentWorld>(SaveErrors::RestoreActivationStale);
         if (receipt.Value().datasets != SceneCanonicalDatasetProjection::Absent)
             return Failure<SaveContentWorld>(SceneErrors::SaveBootstrapDatasetUnsupported);
-        const auto current = state_->service->ActiveScene();
-        if (!current || current->RuntimeId() != receipt.Value().scene ||
-            current->StructuralRevision() != receipt.Value().structuralRevision ||
-            current->DefinitionId() != state_->descriptor.definition || current->DefinitionRevision() != state_->descriptor.revision)
+        if (const auto current = state_->service->ActiveScene(); !current || current->RuntimeId() != receipt.Value().scene ||
+                                                                 current->StructuralRevision() != receipt.Value().structuralRevision ||
+                                                                 current->DefinitionId() != state_->descriptor.definition ||
+                                                                 current->DefinitionRevision() != state_->descriptor.revision)
             return Failure<SaveContentWorld>(SaveErrors::RestoreActivationStale);
         state_->boundScene = receipt.Value().scene;
         consumed_ = true;
@@ -157,38 +204,21 @@ namespace Horo::Runtime {
         if (!decoder)
             return Failure<PreparedSavedSceneBootstrap>(SceneErrors::SaveBootstrapDecoderUnavailable);
         auto &state = *content.state_;
-        const auto &header = state.sourceReader.Header();
-        if (header.world != descriptor.world || header.baseScene != descriptor.baseScene || header.slot != descriptor.transition.slot ||
+        if (const auto &header = state.sourceReader.Header();
+            header.world != descriptor.world || header.baseScene != descriptor.baseScene || header.slot != descriptor.transition.slot ||
             header.slotGeneration != descriptor.transition.generation)
             return Failure<PreparedSavedSceneBootstrap>(SceneErrors::SaveBootstrapIncompatible);
-        const auto baseline = Assets::AssetId::FromBytes(descriptor.baseScene.Bytes());
         try {
-            if (state.legacy &&
-                std::ranges::find(state.assets, baseline, &SaveContentDetail::ResolvedAsset::original) == state.assets.end()) {
-                auto resolved =
-                    SaveContentDetail::ResolveLegacyBaseline(state, {baseline, requiredSceneAssetType, descriptor.contentDigest});
-                if (resolved.HasError())
-                    return Result<PreparedSavedSceneBootstrap>::Failure(resolved.ErrorValue());
-            }
-            if (!state.legacy || !state.requirements.empty()) {
-                const bool declared = std::ranges::any_of(state.requirements, [&](const SaveContentRequirement &requirement) {
-                    const auto *asset = std::get_if<SaveAssetContentRequirement>(&requirement.content);
-                    return requirement.necessity == SaveContentNecessity::Required && asset && asset->asset == baseline &&
-                           asset->type == requiredSceneAssetType && asset->envelopeDigest == descriptor.contentDigest;
-                });
-                if (!declared)
-                    return Failure<PreparedSavedSceneBootstrap>(SceneErrors::SaveBootstrapIncompatible);
-            }
-            const auto resolved = std::ranges::find(state.assets, baseline, &SaveContentDetail::ResolvedAsset::original);
-            if (resolved == state.assets.end() || resolved->type != requiredSceneAssetType)
-                return Failure<PreparedSavedSceneBootstrap>(SceneErrors::SaveBootstrapAssetUnavailable);
-            // A substitution is admitted only by the sealed project mapping; the original durable digest remains in the descriptor.
-            if (resolved->installed == baseline && resolved->envelopeDigest != descriptor.contentDigest)
-                return Failure<PreparedSavedSceneBootstrap>(SceneErrors::SaveBootstrapIncompatible);
+            auto artifact = ResolveBaselineArtifact(state, descriptor, requiredSceneAssetType);
+            if (artifact.HasError())
+                return Result<PreparedSavedSceneBootstrap>::Failure(artifact.ErrorValue());
+            const auto *resolved = artifact.Value();
             const SavedSceneBaselineDecodeInput input{descriptor, resolved->artifact};
-            auto decoded = decoder->DecodeBaseline(input);
+            auto allocationFailure = Failure<RuntimeSceneDefinition>(SaveErrors::RestoreAllocationFailed);
+            auto contractFailure = Failure<RuntimeSceneDefinition>(SaveErrors::RestoreAdapterContractInvalid);
+            auto decoded = InvokeBaselineDecoder(*decoder, input, std::move(allocationFailure), std::move(contractFailure));
             if (decoded.HasError())
-                return Result<PreparedSavedSceneBootstrap>::Failure(decoded.ErrorValue());
+                return Result<PreparedSavedSceneBootstrap>::Failure(std::move(decoded).ErrorValue());
             if (auto admission = content.ValidateAdmission(); admission.HasError())
                 return Result<PreparedSavedSceneBootstrap>::Failure(admission.ErrorValue());
             auto definition = std::move(decoded).Value();
@@ -201,9 +231,6 @@ namespace Horo::Runtime {
                 PreparedSavedSceneBootstrap{std::move(descriptor), resolved->installed, std::move(definition), std::move(content)});
         } catch (const std::bad_alloc &) {
             return Failure<PreparedSavedSceneBootstrap>(SaveErrors::RestoreAllocationFailed);
-        } catch (...) {
-            // The admitted host decoder is a foreign boundary; no exception may prepare or publish a partial world.
-            return Failure<PreparedSavedSceneBootstrap>(SaveErrors::RestoreAdapterContractInvalid);
         }
     }
 }  // namespace Horo::Runtime

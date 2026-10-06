@@ -64,6 +64,23 @@ namespace Horo::Runtime::SceneContentTest {
 
         explicit Fixture(bool mounted = true, Assets::AssetTypeId type = SceneType(), std::vector<std::uint8_t> payload = {7, 3},
                          std::optional<Assets::AssetId> replacement = {}) {
+            auto source = CookSource(std::move(type), std::move(payload));
+            MountSource(mounted, std::move(source), replacement);
+            WriteSourceArchive();
+            // This fixture deliberately exercises the explicitly trusted semantic-schema1 migration path.
+            policy.legacy = SaveLegacyContentPolicy::ValidateBaselineOnly;
+            policy.compatibility = {.archiveVersions = {{V<ArchiveFormatVersion>(), V<ArchiveFormatVersion>()}, {}},
+                                    .saveSchemaVersions = {{V<SaveSchemaVersion>(), V<SaveSchemaVersion>()}, {}},
+                                    .productVersions = {{V<ProductSaveCompatibilityVersion>(), V<ProductSaveCompatibilityVersion>()}, {}}};
+        }
+
+        struct CookedSource final {
+            Assets::AssetCookArtifact artifact;
+            std::vector<std::uint8_t> bytes;
+        };
+
+        /** @brief Builds the actual baseline envelope and freezes its logical expected digest. */
+        CookedSource CookSource(Assets::AssetTypeId type, std::vector<std::uint8_t> payload) {
             const auto asset = Assets::AssetId::FromBytes(descriptor.baseScene.Bytes());
             const auto target = AssetCookTargetId::Parse("headless-null").Value();
             Assets::AssetCookArtifact artifact;
@@ -75,9 +92,11 @@ namespace Horo::Runtime::SceneContentTest {
             auto cooked = Assets::EncodeCookedArtifact(artifact);
             REQUIRE(cooked.HasValue());
             descriptor.contentDigest = ComputeSha256(std::as_bytes(std::span{cooked.Value()}));
-            const auto core = Assets::AssetChunkId::Parse("core").Value();
-            const auto optional = Assets::AssetChunkId::Parse("scene").Value();
-            const auto coreAsset = Assets::AssetId::FromBytes(Id<SaveBaseSceneId>(99).Bytes());
+            return {std::move(artifact), std::move(cooked).Value()};
+        }
+
+        /** @brief Produces independent core cooked bytes used by the actual selected chunk dependency. */
+        Assets::AssetArchiveInput CookCoreAsset(const Assets::AssetId coreAsset, const AssetCookTargetId &target) const {
             Assets::AssetCookArtifact coreArtifact;
             coreArtifact.id = coreAsset;
             coreArtifact.type = Assets::AssetTypeId::Parse("core.mesh").Value();
@@ -86,10 +105,21 @@ namespace Horo::Runtime::SceneContentTest {
             coreArtifact.payloadDigest = ComputeSha256(std::as_bytes(std::span{coreArtifact.payload}));
             auto coreBytes = Assets::EncodeCookedArtifact(coreArtifact);
             REQUIRE(coreBytes.HasValue());
+            return {coreAsset, std::move(coreBytes).Value()};
+        }
+
+        /** @brief Mounts the real selected cooked chunks, including an explicit compatible physical substitution. */
+        void MountSource(const bool mounted, CookedSource source, const std::optional<Assets::AssetId> replacement) {
+            const auto asset = source.artifact.id;
+            const auto target = source.artifact.target;
+            const auto core = Assets::AssetChunkId::Parse("core").Value();
+            const auto optional = Assets::AssetChunkId::Parse("scene").Value();
+            const auto coreAsset = Assets::AssetId::FromBytes(Id<SaveBaseSceneId>(99).Bytes());
+            auto coreInput = CookCoreAsset(coreAsset, target);
             std::vector coreAssets{coreAsset};
             std::optional<std::vector<std::uint8_t>> replacementBytes;
             if (replacement) {
-                auto replacementArtifact = artifact;
+                auto replacementArtifact = source.artifact;
                 replacementArtifact.id = *replacement;
                 auto encoded = Assets::EncodeCookedArtifact(replacementArtifact);
                 REQUIRE(encoded.HasValue());
@@ -106,8 +136,7 @@ namespace Horo::Runtime::SceneContentTest {
                                                                  .dependencies = {core}}};
             auto plan = Assets::AssetChunkPlan::Create(chunks);
             REQUIRE(plan.HasValue());
-            std::vector inputs{Assets::AssetArchiveInput{asset, std::move(cooked).Value()},
-                               Assets::AssetArchiveInput{coreAsset, std::move(coreBytes).Value()}};
+            std::vector inputs{Assets::AssetArchiveInput{asset, std::move(source.bytes)}, std::move(coreInput)};
             if (replacement)
                 inputs.push_back({*replacement, std::move(*replacementBytes)});
             auto package = Assets::BuildAssetArchive(plan.Value(), target, inputs);
@@ -121,6 +150,11 @@ namespace Horo::Runtime::SceneContentTest {
             auto owner = InstalledSaveContent::Create(provider, {});
             REQUIRE(owner.HasValue());
             installed = std::move(owner).Value();
+        }
+
+        /** @brief Writes the declared baseline through the production writer and independent reader-admitted archive ownership. */
+        void WriteSourceArchive() {
+            const auto asset = Assets::AssetId::FromBytes(descriptor.baseScene.Bytes());
             const auto participant = SaveContentRequirementsParticipant();
             const SaveContentRequirement requirement{participant, SaveContentNecessity::Required,
                                                      SaveAssetContentRequirement{asset, SceneType(), descriptor.contentDigest}};
@@ -161,11 +195,6 @@ namespace Horo::Runtime::SceneContentTest {
             REQUIRE(written.HasValue());
             const auto finalized = written.Value().Bytes();
             archive.bytes = std::make_shared<const std::vector<std::byte>>(finalized.begin(), finalized.end());
-            // This fixture deliberately exercises the explicitly trusted semantic-schema1 migration path.
-            policy.legacy = SaveLegacyContentPolicy::ValidateBaselineOnly;
-            policy.compatibility = {.archiveVersions = {{V<ArchiveFormatVersion>(), V<ArchiveFormatVersion>()}, {}},
-                                    .saveSchemaVersions = {{V<SaveSchemaVersion>(), V<SaveSchemaVersion>()}, {}},
-                                    .productVersions = {{V<ProductSaveCompatibilityVersion>(), V<ProductSaveCompatibilityVersion>()}, {}}};
         }
 
         Result<ReconciledSaveContent> Reconcile() {

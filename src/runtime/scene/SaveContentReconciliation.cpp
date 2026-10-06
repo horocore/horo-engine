@@ -4,7 +4,9 @@
 #include "SaveContentInternal.h"
 
 #include <algorithm>
+#include <format>
 #include <new>
+#include <type_traits>
 
 namespace Horo::Runtime {
     namespace {
@@ -20,8 +22,8 @@ namespace Horo::Runtime {
                 return Result<void>::Failure(MakeError(SaveErrors::OperationCancelled));
             if (owner->closed || !generation || owner->current != generation)
                 return Result<void>::Failure(MakeError(SaveErrors::RestoreActivationStale));
-            for (const auto &module : generation->modules)
-                if (!module.CanAdmit())
+            for (const auto &installation : generation->modules)
+                if (!installation.CanAdmit())
                     return Result<void>::Failure(MakeError(SaveErrors::RestoreActivationStale));
             return Result<void>::Success();
         }
@@ -30,7 +32,7 @@ namespace Horo::Runtime {
         Result<std::optional<Assets::AssetCookArtifact>> ResolveAsset(State &state, const SaveAssetContentRequirement &required) {
             const auto &provider = *state.installed->provider;
             const auto length = provider.StoredByteLength(required.asset);
-            if (!length)
+            if (!length.has_value())
                 return Result<std::optional<Assets::AssetCookArtifact>>::Success(std::nullopt);
             if (*length > state.policy.maximumContentReadBytes - state.readBytes)
                 return Result<std::optional<Assets::AssetCookArtifact>>::Failure(MakeError(SceneErrors::AssetBudgetExceeded));
@@ -58,8 +60,8 @@ namespace Horo::Runtime {
             if (artifact.HasError())
                 return Result<bool>::Failure(artifact.ErrorValue());
             if (artifact.Value()) {
-                state.assets.push_back(
-                    {required.asset, required.asset, required.type, required.envelopeDigest, std::move(*artifact.Value())});
+                state.assets.emplace_back(required.asset, required.asset, required.type, required.envelopeDigest,
+                                          *std::move(artifact).Value());
                 return Result<bool>::Success(true);
             }
             const auto replacement = std::ranges::find(state.policy.substitutions, required.asset, &SaveAssetContentSubstitution::original);
@@ -74,8 +76,8 @@ namespace Horo::Runtime {
                 return Result<bool>::Failure(resolved.ErrorValue());
             if (!resolved.Value())
                 return Result<bool>::Success(false);
-            state.assets.push_back(
-                {required.asset, substituted.asset, substituted.type, substituted.envelopeDigest, std::move(*resolved.Value())});
+            state.assets.emplace_back(required.asset, substituted.asset, substituted.type, substituted.envelopeDigest,
+                                      *std::move(resolved).Value());
             diagnostic.disposition = SaveContentDisposition::Substituted;
             diagnostic.remedy = SaveContentRemedy::ReviewApprovedSubstitution;
             diagnostic.replacement = substituted.asset;
@@ -83,7 +85,7 @@ namespace Horo::Runtime {
             return Result<bool>::Success(true);
         }
 
-        /** @brief Resolves exact mounted chunk selection or an actual frozen module registration, never authored availability. */
+        /** @brief Resolves exact mounted chunk selection or an actual frozen installation registration, never authored availability. */
         Result<bool> ResolveRequirement(State &state, const SaveContentRequirement &required, SaveContentDiagnostic &diagnostic) {
             if (const auto *asset = std::get_if<SaveAssetContentRequirement>(&required.content))
                 return ResolveAssetRequirement(state, *asset, diagnostic);
@@ -93,24 +95,24 @@ namespace Horo::Runtime {
                     return definition.id == chunk->chunk && definition.kind == chunk->kind;
                 }));
             }
-            const auto &module = std::get<SaveModuleContentRequirement>(required.content);
+            const auto &installation = std::get<SaveModuleContentRequirement>(required.content);
             return Result<bool>::Success(std::ranges::any_of(state.installed->modules, [&](const auto &receipt) {
                 return receipt.CanAdmit() && receipt.Descriptor().participant.participant == required.owner &&
-                       receipt.Descriptor().moduleId == module.module && receipt.Descriptor().moduleVersion == module.version;
+                       receipt.Descriptor().moduleId == installation.module && receipt.Descriptor().moduleVersion == installation.version;
             }));
         }
 
         /** @brief Adds exact declared identity and a safe remedy at the content admission boundary. */
         Error MissingContentError(const SaveContentRequirement &requirement) {
-            std::string identity;
-            if (const auto *asset = std::get_if<SaveAssetContentRequirement>(&requirement.content))
-                identity = "asset=" + asset->asset.ToString() + "; type=" + asset->type.Value();
-            else if (const auto *chunk = std::get_if<SaveChunkContentRequirement>(&requirement.content))
-                identity = "chunk=" + chunk->chunk.Value() + "; kind=" + std::to_string(static_cast<unsigned>(chunk->kind));
-            else {
-                const auto &module = std::get<SaveModuleContentRequirement>(requirement.content);
-                identity = "module=" + module.module.Value() + "; version=" + std::to_string(module.version);
-            }
+            const auto identity = std::visit([](const auto &content) {
+                using Content = std::remove_cvref_t<decltype(content)>;
+                if constexpr (std::is_same_v<Content, SaveAssetContentRequirement>)
+                    return std::format("asset={}; type={}", content.asset.ToString(), content.type.Value());
+                else if constexpr (std::is_same_v<Content, SaveChunkContentRequirement>)
+                    return std::format("chunk={}; kind={}", content.chunk.Value(), static_cast<unsigned>(content.kind));
+                else
+                    return std::format("module={}; version={}", content.module.Value(), content.version);
+            }, requirement.content);
             auto error = MakeError(SceneErrors::SaveBootstrapAssetUnavailable);
             error.diagnostics.push_back(
                 {DiagnosticCode{"scene.save_content.install_compatible"},
@@ -124,18 +126,19 @@ namespace Horo::Runtime {
 
         /** @brief Requires a declared optional archive owner and an explicit non-dropping project disposition. */
         Result<void> RecordAbsence(State &state, SaveContentDiagnostic &diagnostic) {
+            using enum SaveOptionalContentAbsence;
             const auto &required = diagnostic.requirement;
             const auto &participants = state.sourceReader.Manifest().participants;
             const auto owner = std::ranges::find(participants, required.owner, &SaveManifestParticipant::participant);
             const auto policy = std::ranges::find(state.policy.optionalOwners, required.owner, &SaveOptionalContentPolicy::owner);
             if (required.necessity == SaveContentNecessity::Required || owner == participants.end() || owner->required ||
-                policy == state.policy.optionalOwners.end() || policy->absence == SaveOptionalContentAbsence::Reject)
+                policy == state.policy.optionalOwners.end() || policy->absence == Reject)
                 return Result<void>::Failure(MissingContentError(required));
-            if (policy->absence != SaveOptionalContentAbsence::Preserve && policy->absence != SaveOptionalContentAbsence::Quarantine)
+            if (policy->absence != Preserve && policy->absence != Quarantine)
                 return Result<void>::Failure(MakeError(SaveErrors::RestoreContextInvalid));
             diagnostic.remedy = SaveContentRemedy::PreserveOpaqueData;
-            diagnostic.disposition = policy->absence == SaveOptionalContentAbsence::Preserve ? SaveContentDisposition::Preservable
-                                                                                             : SaveContentDisposition::Quarantined;
+            diagnostic.disposition =
+                policy->absence == Preserve ? SaveContentDisposition::Preservable : SaveContentDisposition::Quarantined;
             if (std::ranges::find(state.quarantinedOwners, required.owner) == state.quarantinedOwners.end())
                 state.quarantinedOwners.push_back(required.owner);
             state.degraded = true;
@@ -145,8 +148,7 @@ namespace Horo::Runtime {
         /** @brief Authenticates complete schema2 state before installed-content work or host decoding; legacy semantics need explicit
          * trust. */
         Result<void> ValidateCanonicalSource(State &state) {
-            const auto schema = state.sourceReader.Manifest().saveSchemaVersion.Value();
-            if (schema == 1) {
+            if (const auto schema = state.sourceReader.Manifest().saveSchemaVersion.Value(); schema == 1) {
                 return state.policy.legacy == SaveLegacyContentPolicy::ValidateBaselineOnly
                            ? Result<void>::Success()
                            : Result<void>::Failure(MakeError(SaveErrors::MigrationSourceUnsupported));
@@ -186,6 +188,7 @@ namespace Horo::Runtime {
 
         /** @brief Validates finite trusted decisions; duplicate identities cannot choose policy by traversal order. */
         Result<void> ValidateProjectPolicy(const SaveContentProjectPolicy &policy) {
+            using enum SaveOptionalContentAbsence;
             if (policy.maximumContentReadBytes == 0 || policy.maximumPreservedBytes == 0 ||
                 policy.optionalOwners.size() > MaximumSaveParticipantCount ||
                 policy.substitutions.size() > MaximumSaveContentRequirements ||
@@ -194,8 +197,7 @@ namespace Horo::Runtime {
             for (std::size_t index = 0; index < policy.optionalOwners.size(); ++index) {
                 const auto &entry = policy.optionalOwners[index];
                 if (!entry.owner.IsValid() || (index != 0 && !(policy.optionalOwners[index - 1].owner < entry.owner)) ||
-                    (entry.absence != SaveOptionalContentAbsence::Reject && entry.absence != SaveOptionalContentAbsence::Preserve &&
-                     entry.absence != SaveOptionalContentAbsence::Quarantine))
+                    (entry.absence != Reject && entry.absence != Preserve && entry.absence != Quarantine))
                     return Result<void>::Failure(MakeError(SaveErrors::RestoreContextInvalid));
             }
             for (std::size_t index = 0; index < policy.substitutions.size(); ++index) {
@@ -213,8 +215,8 @@ namespace Horo::Runtime {
         /** @brief Resolves every declaration before any callback; absence policy cannot weaken required owner semantics. */
         Result<void> ResolveDeclarations(State &state) {
             const auto &participants = state.sourceReader.Manifest().participants;
-            for (const auto &module : state.installed->modules) {
-                const auto &descriptor = module.Descriptor().participant;
+            for (const auto &installation : state.installed->modules) {
+                const auto &descriptor = installation.Descriptor().participant;
                 if (descriptor.scope == SaveParticipantScope::PersistentWorld &&
                     std::ranges::find(participants, descriptor.participant, &SaveManifestParticipant::participant) != participants.end())
                     return Result<void>::Failure(MakeError(SceneErrors::SaveBootstrapDatasetUnsupported));
@@ -252,11 +254,11 @@ namespace Horo::Runtime {
         Result<void> PreserveOpaqueOwners(State &state) {
             state.preservationPolicy = state.policy.compatibility;
             auto &participants = state.preservationPolicy.participants;
-            std::erase_if(participants, [&](const SaveParticipantCompatibility &entry) {
+            std::erase_if(participants, [&state](const SaveParticipantCompatibility &entry) {
                 if (std::ranges::binary_search(state.quarantinedOwners, entry.participant))
                     return true;
                 const auto directory = state.sourceReader.Directory().Entries();
-                return std::ranges::any_of(state.canonicalLayout, [&](const SaveSceneCanonicalLayoutEntry &tag) {
+                return std::ranges::any_of(state.canonicalLayout, [&directory, &entry](const SaveSceneCanonicalLayoutEntry &tag) {
                     if (tag.representation != SaveSceneCanonicalRepresentation::Opaque)
                         return false;
                     const auto source = std::ranges::lower_bound(directory, tag.record, {}, &SaveChunkDirectoryEntry::record);
@@ -265,14 +267,14 @@ namespace Horo::Runtime {
             });
             if (!state.legacy) {
                 const auto builtin = SaveContentRequirementsParticipant();
-                std::erase_if(participants, [&](const SaveParticipantCompatibility &entry) {
+                std::erase_if(participants, [&builtin](const SaveParticipantCompatibility &entry) {
                     return entry.participant == builtin;
                 });
                 const auto version = ParticipantSchemaVersion::Create(1).Value();
                 participants.push_back({builtin, {{version, version}, {}}, true, {}});
                 if (!state.canonicalLayout.empty()) {
                     const auto layoutOwner = SaveSceneCanonicalLayoutParticipant();
-                    std::erase_if(participants, [&](const SaveParticipantCompatibility &entry) {
+                    std::erase_if(participants, [&layoutOwner](const SaveParticipantCompatibility &entry) {
                         return entry.participant == layoutOwner;
                     });
                     participants.push_back({layoutOwner, {{version, version}, {}}, true, {}});
@@ -281,9 +283,10 @@ namespace Horo::Runtime {
             }
             // Reconciliation retains every optional unknown owner; this path never spends drop permission.
             state.preservationPolicy.droppableUnknownParticipants.clear();
-            const auto decision = EvaluateSaveCompatibility(state.sourceReader.Preamble().archiveFormatVersion, state.sourceReader.Header(),
-                                                            state.sourceReader.Manifest(), state.preservationPolicy);
-            if (decision.disposition != SaveCompatibilityDisposition::DirectRead)
+            if (const auto decision =
+                    EvaluateSaveCompatibility(state.sourceReader.Preamble().archiveFormatVersion, state.sourceReader.Header(),
+                                              state.sourceReader.Manifest(), state.preservationPolicy);
+                decision.disposition != SaveCompatibilityDisposition::DirectRead)
                 return Result<void>::Failure(MakeError(SaveErrors::MigrationSourceUnsupported));
             auto opaque = [&]() {
                 if (state.canonicalLayout.empty())

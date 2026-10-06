@@ -14,22 +14,23 @@ namespace Horo::Runtime {
             using Generation = std::shared_ptr<const SaveContentDetail::InstalledGeneration>;
             if (!provider || !provider->Target().IsValid() || generation == 0 || modules.size() > MaximumSaveParticipantCount)
                 return Result<Generation>::Failure(MakeError(SaveErrors::RestoreContextInvalid));
-            for (const auto &module : modules)
-                if (!module.CanAdmit())
+            for (const auto &installation : modules)
+                if (!installation.CanAdmit())
                     return Result<Generation>::Failure(MakeError(SaveErrors::RestoreActivationStale));
-            std::ranges::sort(modules, {}, [](const GameplayPersistenceInstallation &module) {
-                return module.Descriptor().participant.participant;
+            std::ranges::sort(modules, {}, [](const GameplayPersistenceInstallation &installation) {
+                return installation.Descriptor().participant.participant;
             });
             for (std::size_t index = 0; index < modules.size(); ++index) {
-                const auto &module = modules[index];
-                if (!module.CanAdmit())
+                const auto &installation = modules[index];
+                if (!installation.CanAdmit())
                     return Result<Generation>::Failure(MakeError(SaveErrors::RestoreActivationStale));
-                if (index != 0 && modules[index - 1].Descriptor().participant.participant == module.Descriptor().participant.participant)
+                if (index != 0 &&
+                    modules[index - 1].Descriptor().participant.participant == installation.Descriptor().participant.participant)
                     return Result<Generation>::Failure(MakeError(SaveErrors::RestoreParticipantInvalid));
                 for (std::size_t prior = 0; prior < index; ++prior)
-                    if (modules[prior].Descriptor().moduleId == module.Descriptor().moduleId &&
-                        (!modules[prior].SameGeneration(module) ||
-                         modules[prior].Descriptor().moduleVersion != module.Descriptor().moduleVersion))
+                    if (modules[prior].Descriptor().moduleId == installation.Descriptor().moduleId &&
+                        (!modules[prior].SameGeneration(installation) ||
+                         modules[prior].Descriptor().moduleVersion != installation.Descriptor().moduleVersion))
                         return Result<Generation>::Failure(MakeError(SaveErrors::RestoreParticipantInvalid));
             }
             return Result<Generation>::Success(
@@ -63,7 +64,7 @@ namespace Horo::Runtime {
 
     /** @copydoc InstalledSaveContent::Replace */
     Result<void> InstalledSaveContent::Replace(std::shared_ptr<const Assets::AssetArchiveProvider> provider,
-                                               std::vector<GameplayPersistenceInstallation> modules) {
+                                               std::vector<GameplayPersistenceInstallation> modules) const {
         if (state_->ownerThread != std::this_thread::get_id() || state_->closed ||
             state_->current->generation == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(SaveErrors::RestoreActivationStale));
@@ -79,7 +80,7 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc InstalledSaveContent::Close */
-    void InstalledSaveContent::Close() noexcept {
+    void InstalledSaveContent::Close() const noexcept {
         state_->closed = true;
     }
 }  // namespace Horo::Runtime

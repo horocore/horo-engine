@@ -23,18 +23,17 @@ namespace Horo::Runtime {
 
         /** @brief Requires closed ordered classifications and the mandatory self-known entry. */
         Result<void> ValidateLayout(std::span<const SaveSceneCanonicalLayoutEntry> entries) {
+            using enum SaveSceneCanonicalRepresentation;
             if (entries.empty() || entries.size() > MaximumRuntimeSaveCaptureRecords)
                 return Result<void>::Failure(MakeError(SaveErrors::CaptureRecordInvalid));
             bool hasSelf = false;
             for (std::size_t index = 0; index < entries.size(); ++index) {
                 const auto &entry = entries[index];
-                if (!entry.record.IsValid() ||
-                    (entry.representation != SaveSceneCanonicalRepresentation::Known &&
-                     entry.representation != SaveSceneCanonicalRepresentation::Opaque) ||
+                if (!entry.record.IsValid() || (entry.representation != Known && entry.representation != Opaque) ||
                     (index != 0 && !(entries[index - 1].record < entry.record)))
                     return Result<void>::Failure(MakeError(SaveErrors::CaptureRecordInvalid));
                 if (entry.record == SaveSceneCanonicalLayoutRecord()) {
-                    if (entry.representation != SaveSceneCanonicalRepresentation::Known)
+                    if (entry.representation != Known)
                         return Result<void>::Failure(MakeError(SaveErrors::CaptureRecordInvalid));
                     hasSelf = true;
                 }
@@ -139,7 +138,7 @@ namespace Horo::Runtime {
                     return Result<SaveSceneCanonicalRecord>::Failure(selected.ErrorValue());
                 if (!selected.Value())
                     return Result<SaveSceneCanonicalRecord>::Failure(MakeError(SaveErrors::RestoreParticipantIncomplete));
-                decoded.push_back(std::move(*selected.Value()));
+                decoded.push_back(*std::move(selected).Value());
                 return Result<SaveSceneCanonicalRecord>::Success({entry.record, std::span<const std::byte>{decoded.back()}});
             }
         };
@@ -153,9 +152,9 @@ namespace Horo::Runtime {
                 if (layout[index].record != directory[index].record)
                     return Result<void>::Failure(MakeError(SaveErrors::RestoreParticipantInvalid));
             const auto &participants = archive.Manifest().participants;
-            const auto owner =
-                std::ranges::find(participants, SaveSceneCanonicalLayoutParticipant(), &SaveManifestParticipant::participant);
-            if (owner == participants.end() || !owner->required || owner->schemaVersion.Value() != 1 || owner->chunks.size() != 1 ||
+            if (const auto owner =
+                    std::ranges::find(participants, SaveSceneCanonicalLayoutParticipant(), &SaveManifestParticipant::participant);
+                owner == participants.end() || !owner->required || owner->schemaVersion.Value() != 1 || owner->chunks.size() != 1 ||
                 owner->chunks.front() != SaveSceneCanonicalLayoutRecord())
                 return Result<void>::Failure(MakeError(SaveErrors::RestoreParticipantInvalid));
             return Result<void>::Success();
@@ -198,6 +197,27 @@ namespace Horo::Runtime {
             (void)writer.WriteSequence(records);
             return std::move(writer).Finalize();
         }
+
+        /** @brief Reads and validates the required self-classified layout before reconstructing owner records. */
+        Result<std::vector<SaveSceneCanonicalLayoutEntry>> ReadArchiveLayout(const ValidatedSaveArchive &archive) {
+            using Entries = std::vector<SaveSceneCanonicalLayoutEntry>;
+            const auto directory = archive.Directory().Entries();
+            const auto self = std::ranges::lower_bound(directory, SaveSceneCanonicalLayoutRecord(), {}, &SaveChunkDirectoryEntry::record);
+            if (self == directory.end() || self->record != SaveSceneCanonicalLayoutRecord() || self->decodedByteLength > (1U << 20U))
+                return Result<Entries>::Failure(MakeError(SaveErrors::RestoreParticipantInvalid));
+            auto selected = archive.SelectChunk(self->record);
+            if (selected.HasError())
+                return Result<Entries>::Failure(selected.ErrorValue());
+            if (!selected.Value())
+                return Result<Entries>::Failure(MakeError(SaveErrors::RestoreParticipantIncomplete));
+            auto layout = DecodeSaveSceneCanonicalLayout(*selected.Value());
+            if (layout.HasError())
+                return Result<Entries>::Failure(layout.ErrorValue());
+            if (auto valid = ValidateArchiveLayout(archive, layout.Value()); valid.HasError())
+                return Result<Entries>::Failure(valid.ErrorValue());
+            return layout;
+        }
+
     }  // namespace
 
     /** @copydoc SaveSceneCanonicalLayoutParticipant */
@@ -277,20 +297,10 @@ namespace Horo::Runtime {
             maximumBytes > std::numeric_limits<std::size_t>::max())
             return Result<Entries>::Failure(MakeError(SaveErrors::MigrationSourceUnsupported));
         try {
-            const auto directory = archive.Directory().Entries();
-            const auto self = std::ranges::lower_bound(directory, SaveSceneCanonicalLayoutRecord(), {}, &SaveChunkDirectoryEntry::record);
-            if (self == directory.end() || self->record != SaveSceneCanonicalLayoutRecord() || self->decodedByteLength > (1U << 20U))
-                return Result<Entries>::Failure(MakeError(SaveErrors::RestoreParticipantInvalid));
-            auto selected = archive.SelectChunk(self->record);
-            if (selected.HasError())
-                return Result<Entries>::Failure(selected.ErrorValue());
-            if (!selected.Value())
-                return Result<Entries>::Failure(MakeError(SaveErrors::RestoreParticipantIncomplete));
-            auto layout = DecodeSaveSceneCanonicalLayout(*selected.Value());
+            auto layout = ReadArchiveLayout(archive);
             if (layout.HasError())
-                return Result<Entries>::Failure(layout.ErrorValue());
-            if (auto valid = ValidateArchiveLayout(archive, layout.Value()); valid.HasError())
-                return Result<Entries>::Failure(valid.ErrorValue());
+                return layout;
+            const auto directory = archive.Directory().Entries();
             ArchiveCanonicalRecords storage{{}, maximumBytes};
             storage.decoded.reserve(directory.size());
             std::vector<std::vector<SaveSceneCanonicalRecord>> records;
@@ -313,7 +323,7 @@ namespace Horo::Runtime {
                         return Result<Entries>::Failure(value.ErrorValue());
                     records.back().push_back(std::move(value).Value());
                 }
-                participants.push_back({owner.participant, owner.schemaVersion, records.back()});
+                participants.emplace_back(owner.participant, owner.schemaVersion, records.back());
             }
             auto encoded = EncodeSaveSceneCanonicalState(archive.Header(), participants, maximumBytes);
             if (encoded.HasError())

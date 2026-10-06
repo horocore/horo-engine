@@ -1,3 +1,4 @@
+#include "AllocationProbe.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "Horo/Runtime/Scene/SavedSceneBootstrap.h"
@@ -7,6 +8,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -26,6 +28,32 @@ namespace Horo::Runtime {
         }
 
         using SceneContentTest::Definition;
+
+        /** @brief Keeps allocation rejection armed across the actual foreign callback and its typed boundary translation. */
+        class FaultDecoder final : public ISavedSceneBaselineDecoder {
+        public:
+            enum class Fault {
+                Allocation,
+                Standard,
+                NonStandard
+            };
+            Fault fault{Fault::Allocation};
+            std::optional<Tests::AllocationProbe::ScopedFailure> rejection;
+            std::runtime_error standardFailure{"Foreign fixture failure"};
+            std::size_t allocationCount{};
+            std::size_t calls{};
+
+            Result<RuntimeSceneDefinition> DecodeBaseline(const SavedSceneBaselineDecodeInput &) override {
+                ++calls;
+                rejection.emplace();
+                allocationCount = Tests::AllocationProbe::Count();
+                if (fault == Fault::Allocation)
+                    throw std::bad_alloc{};
+                if (fault == Fault::Standard)
+                    throw standardFailure;
+                throw 42;
+            }
+        };
 
         SavedSceneBootstrapDescriptor Descriptor() {
             return {.world = Id<SaveWorldId>(1),
@@ -137,6 +165,39 @@ namespace Horo::Runtime {
             auto missingSpawn = fixture.descriptor;
             missingSpawn.spawnAnchor = SceneObjectId{99};
             RequireCode(fixture.Prepare(missingSpawn), "scene.save_bootstrap.spawn_missing");
+        }
+
+        TEST_CASE("Foreign baseline decoder faults use owned typed storage without allocation or world publication",
+                  "[runtime][scene][save_bootstrap][allocation][foreign]") {
+            SceneContentTest::Fixture fixture;
+            auto service = std::make_shared<RuntimeSceneService>();
+            REQUIRE(service->Startup(fixture.cancellation.Token()).HasValue());
+            REQUIRE(service->QueuePreparation(Definition(42, 1)).HasValue());
+            REQUIRE(service->OnPhase(RuntimePhase::CommitDeferredLifecycleChanges, Context(fixture.cancellation.Token())).HasValue());
+            const auto scene = service->ActiveScene()->RuntimeId();
+            FaultDecoder decoder;
+            SECTION("allocation failure") {
+                decoder.fault = FaultDecoder::Fault::Allocation;
+            }
+            SECTION("standard foreign failure") {
+                decoder.fault = FaultDecoder::Fault::Standard;
+            }
+            SECTION("nonstandard foreign failure") {
+                decoder.fault = FaultDecoder::Fault::NonStandard;
+            }
+            auto proof = fixture.Reconcile();
+            REQUIRE(proof.HasValue());
+            auto prepared = PrepareSavedSceneBootstrap(fixture.descriptor, SceneAssetType(), std::move(proof).Value(), &decoder);
+            const auto allocations = Tests::AllocationProbe::Count();
+            decoder.rejection.reset();
+            REQUIRE(prepared.HasError());
+            CHECK(allocations == decoder.allocationCount);
+            CHECK(decoder.calls == 1);
+            CHECK(prepared.ErrorValue().code.Value() == (decoder.fault == FaultDecoder::Fault::Allocation
+                                                             ? SaveErrors::RestoreAllocationFailed.code.Value()
+                                                             : SaveErrors::RestoreAdapterContractInvalid.code.Value()));
+            CHECK(service->ActiveScene()->RuntimeId() == scene);
+            CHECK(fixture.Prepare().HasValue());
         }
 
         TEST_CASE("Malformed and stale restore evidence preserves the active scene and exact publication ownership",

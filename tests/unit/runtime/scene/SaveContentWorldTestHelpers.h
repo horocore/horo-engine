@@ -56,6 +56,12 @@ namespace Horo::Runtime::SceneContentWorldTest {
                 source.provider = std::move(provider);
             if (!installations.empty() || replacedProvider)
                 REQUIRE(source.installed->Replace(source.provider, std::move(installations)).HasValue());
+            PublishSourceWorld();
+            AdmitCaptureOwners(std::move(nativeBindings));
+        }
+
+        /** @brief Uses the actual content-owned queue and publication receipt before binding a captureable world. */
+        void PublishSourceWorld() {
             REQUIRE(service->Startup(source.cancellation.Token()).HasValue());
             auto prepared = source.Prepare();
             if (prepared.HasError()) {
@@ -75,6 +81,10 @@ namespace Horo::Runtime::SceneContentWorldTest {
             auto bound = queued.BindPublishedWorld();
             REQUIRE(bound.HasValue());
             world = std::move(bound).Value();
+        }
+
+        /** @brief Pins actual registry owners and publishes each owner's coherent barrier epoch. */
+        void AdmitCaptureOwners(std::vector<NativeBinding> nativeBindings) {
             REQUIRE(world->RegisterRequirements(registry).HasValue());
             CanonicalStateParticipantDescriptor descriptor{.participant = SaveParticipantId::Parse("project.state").Value(),
                                                            .schemaVersion = SceneContentTest::V<ParticipantSchemaVersion>(),
@@ -114,8 +124,12 @@ namespace Horo::Runtime::SceneContentWorldTest {
 
         SaveContentSnapshot Capture(std::uint8_t identity = 12, SaveDegradedWorldPolicy policy = SaveDegradedWorldPolicy::Reject) {
             REQUIRE(barrier->Request(91, generation).HasValue());
-            auto captured = world->CaptureAtSafePoint(*barrier, RuntimePhase::CommitDeferredLifecycleChanges, generation,
-                                                      SceneTest::Id<CapturedStateId>(identity), {.value = 41}, participants, policy);
+            auto captured = world->CaptureAtSafePoint(*barrier,
+                                                      SaveContentCaptureRequest{.phase = RuntimePhase::CommitDeferredLifecycleChanges,
+                                                                                .generation = generation,
+                                                                                .capturedState = SceneTest::Id<CapturedStateId>(identity),
+                                                                                .epoch = {.value = 41}},
+                                                      participants, policy);
             if (captured.HasError()) {
                 INFO("content capture admission: " << captured.ErrorValue().code.Value() << ": " << captured.ErrorValue().message);
                 REQUIRE(captured.HasValue());

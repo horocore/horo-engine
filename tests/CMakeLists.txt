@@ -1204,6 +1204,7 @@ target_compile_definitions(HoroCinematicRuntimeTests PRIVATE
 add_dependencies(HoroCinematicRuntimeTests HoroTestGameModule)
 add_executable(HoroGameModuleHostTests
         unit/gameplay/GameModuleHostTests.cpp
+        unit/gameplay/GameModuleContentPersistenceTests.cpp
 )
 target_include_directories(HoroGameModuleHostTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 target_compile_features(HoroGameModuleHostTests PRIVATE cxx_std_20)
@@ -2648,6 +2649,7 @@ target_compile_features(HoroRuntimeSaveArchiveFinalizationTests PRIVATE cxx_std_
 target_link_libraries(HoroRuntimeSaveArchiveFinalizationTests PRIVATE HoroEngine::Runtime)
 add_executable(HoroRuntimeSaveArchiveReaderTests
         unit/runtime/save/SaveArchiveReaderTests.cpp
+        unit/runtime/save/SaveArchiveContainerWriterTests.cpp
         unit/runtime/save/SaveArchiveRecordStagingTests.cpp
 )
 target_compile_features(HoroRuntimeSaveArchiveReaderTests PRIVATE cxx_std_20)
@@ -2716,6 +2718,24 @@ add_executable(HoroRuntimeSaveableComponentStateTests
 )
 target_compile_features(HoroRuntimeSaveableComponentStateTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeSaveableComponentStateTests PRIVATE HoroEngine::RuntimeScene)
+add_executable(HoroRuntimeRestoreReferenceTests
+        unit/runtime/scene/SceneRestoreBundleTests.cpp
+        unit/runtime/scene/RestoreReferenceGraphTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeRestoreReferenceTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeRestoreReferenceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroRuntimeRestoreReferenceTests PRIVATE HoroEngine::RuntimeScene HoroEngine::GameplayRuntime)
+add_executable(HoroRestoreReferenceApiPublicHeaderConsumer support/RestoreReferenceApiPublicHeaderConsumer.cpp)
+target_compile_features(HoroRestoreReferenceApiPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroRestoreReferenceApiPublicHeaderConsumer PRIVATE HoroEngine::GameplayApi)
+add_test(NAME HoroRestoreReferenceApiPublicHeaderConsumer COMMAND HoroRestoreReferenceApiPublicHeaderConsumer)
+set_tests_properties(HoroRestoreReferenceApiPublicHeaderConsumer PROPERTIES LABELS "unit;save;headless")
+add_executable(HoroSceneRestoreBundlePublicHeaderConsumer support/SceneRestoreBundlePublicHeaderConsumer.cpp)
+target_compile_features(HoroSceneRestoreBundlePublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroSceneRestoreBundlePublicHeaderConsumer PRIVATE HoroEngine::RuntimeScene)
+add_test(NAME HoroSceneRestoreBundlePublicHeaderConsumer COMMAND HoroSceneRestoreBundlePublicHeaderConsumer)
+set_tests_properties(HoroSceneRestoreBundlePublicHeaderConsumer PROPERTIES LABELS "unit;save;headless")
 add_executable(HoroRuntimeSaveStorageAdapterTests
         unit/runtime/save/SaveStorageAdapterTests.cpp
 )
@@ -2791,6 +2811,7 @@ add_executable(HoroRuntimeSceneTests
         unit/runtime/scene/PhysicsSceneComponentsTests.cpp
         unit/runtime/scene/RuntimeSceneLifecycleTests.cpp
         unit/runtime/scene/RuntimeSceneTests.cpp
+        unit/runtime/scene/RuntimeScenePublicationReceiptTests.cpp
         unit/runtime/scene/RuntimeSceneGroupReferenceTests.cpp
 )
 target_sources(HoroRuntimeScenePublicHeaderConsumer PRIVATE support/AudioScenePublicContract.cpp)
@@ -2806,9 +2827,11 @@ add_executable(HoroRuntimeSavedSceneBootstrapTests
         unit/runtime/scene/SavedSceneBootstrapTests.cpp
         unit/runtime/scene/SaveContentRequirementsTests.cpp
         unit/runtime/scene/SaveContentWorldTests.cpp
+        unit/runtime/scene/SaveContentRetentionTests.cpp
         support/AllocationProbe.cpp
 )
 target_compile_features(HoroRuntimeSavedSceneBootstrapTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeSavedSceneBootstrapTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeSavedSceneBootstrapTests PRIVATE HoroEngine::RuntimeScene)
 add_executable(HoroAssetRegistryTests
         unit/runtime/assets/AssetRegistryTests.cpp
@@ -3528,6 +3551,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroRuntimeSaveParticipationTests
         HoroRuntimePersistentEntityIdentityTests
         HoroRuntimeSaveableComponentStateTests
+        HoroRuntimeRestoreReferenceTests
         HoroRuntimeSaveStorageAdapterTests
         HoroRuntimeSaveStoragePolicyTests
         HoroRuntimeSaveOperationArbiterTests

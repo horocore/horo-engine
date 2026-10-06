@@ -890,6 +890,14 @@ commit gate: its own readiness cannot trigger early automatic scene activation w
 a required gameplay participant is still Pending. A host lacking that integration
 rejects composite restore rather than applying the scene first.
 
+`SceneRestoreBundle` supplies the Scene-owned implementation through
+`QueuePreparationWithRestore`. It uses the original staged restore transaction's
+scoped aggregate publication gate. Archive/session composition supplies validated
+source receipts and live generation authority; reference-bearing prepared owners
+consume the resolved context after all identity allocation and state application.
+The [reference-fixup migration](../../migrations/HORO-1437_restore_reference_fixups.md)
+records the owning targets, compatibility behavior, bounds and required regressions.
+
 At CommitDeferredLifecycleChanges, under the exclusive owner mutation boundary,
 revalidate the operation cancellation gate, expected session/scene incarnation,
 source/archive and participant/asset registry revisions, and all Prepared acknowledgements.
