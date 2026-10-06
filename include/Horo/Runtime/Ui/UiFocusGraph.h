@@ -16,6 +16,7 @@
 
 namespace Horo::Runtime::Ui {
     class UiLayoutSnapshot;
+    class UiElementTree;
     inline constexpr std::uint32_t MaximumUiFocusNodes = 4'096;
     inline constexpr std::uint32_t MaximumUiFocusModalDepth = 64;
     inline constexpr std::uint32_t MaximumUiFocusRestorationDepth = 64;
@@ -168,6 +169,7 @@ namespace Horo::Runtime::Ui {
         std::uint32_t modalCapacity{};                   /**< Maximum nested modal scopes. */
         std::uint32_t restorationCapacity{};             /**< Maximum stable restoration entries. */
         UiFocusWrapPolicy wrap{UiFocusWrapPolicy::None}; /**< Cardinal fallback wrap; authored links always take precedence. */
+        std::uint32_t previousModalIncarnation{};        /**< Initial EVER-issued high-water mark; Reload never resets it. */
 
         /** @brief Validates owner evidence and every finite graph bound. @return Whether creation is safe. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -265,8 +267,15 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Returns exact immutable owner/player/layer evidence. @return Borrowed graph context. */
         [[nodiscard]] const UiFocusOwnerContext &Owner() const noexcept;
+        /** @brief Verifies every actual graph node against its exact retained tree and authored parent.
+         * @param tree Active owner tree. @return Success or typed source/handle/lifecycle failure; no mutation or allocation.
+         */
+        [[nodiscard]] Result<void> ValidateOwner(const UiElementTree &tree) const;
+
         /** @brief Returns graph lifecycle state. @return Active, Retiring, or Stopped. */
         [[nodiscard]] UiFocusGraphState State() const noexcept;
+        /** @brief Returns the modal incarnation high-water mark, including popped and retired modal handles. @return Last issued value. */
+        [[nodiscard]] std::uint32_t LastIssuedModalIncarnation() const noexcept;
         /** @brief Returns current focus and modal state without allocating. @return Snapshot or lifecycle failure. */
         [[nodiscard]] Result<UiFocusSnapshot> Snapshot() const;
         /**

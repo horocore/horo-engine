@@ -60,10 +60,12 @@ namespace Horo::Runtime::Ui {
         /**
          * @brief Creates the sole element-slot allocator for one exact owner generation.
          * @param ownership Active owner.
+         * @param previousIssuedSlot Owner-retained EVER-reserved high-water mark; zero starts a new ownership namespace.
+         * The service must transfer its entire burned history when reinitializing an allocator, never just live slots.
          * @return Allocator or error.
          * @pre Called exactly once by the Runtime UI service that issued ownership.
          */
-        [[nodiscard]] static Result<UiElementSlotAllocator> Create(UiOwnershipGeneration ownership);
+        [[nodiscard]] static Result<UiElementSlotAllocator> Create(UiOwnershipGeneration ownership, std::uint32_t previousIssuedSlot = 0);
         /** @brief Transfers the remaining owner-wide slot namespace. @param other Allocator to invalidate and transfer. */
         UiElementSlotAllocator(UiElementSlotAllocator &&other) noexcept;
         UiElementSlotAllocator &operator=(UiElementSlotAllocator &&other) = delete;
@@ -218,6 +220,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiRuntimeTreeRevision Revision() const noexcept;
         /** @brief Returns resident element count. @return Bounded current count. */
         [[nodiscard]] std::uint32_t Size() const noexcept;
+        /** @brief Returns the allocator-issued namespace, including every reserved unused/tombstoned slot.
+         * @return Immutable range while retained, or a lifecycle failure after shutdown.
+         */
+        [[nodiscard]] Result<UiElementSlotRange> ReservedSlots() const;
         /** @brief Returns the exact root. @return Root record or lifecycle failure after shutdown. */
         [[nodiscard]] Result<UiElementRecord> Root() const;
         /** @brief Resolves a stable authored identity in the current generation. @param id Stable identity. @return Exact handle. */
