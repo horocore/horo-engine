@@ -29,8 +29,7 @@ namespace Horo::Application {
                 size > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max()))
                 return Result<void>::Failure(MakeError(Navigation::NavigationErrors::NavMeshArtifactCorrupt));
             // is_symlink updates the same error owner; preserve this second filesystem failure check.
-            const bool symlink = std::filesystem::is_symlink(path, error);
-            if (symlink || error)
+            if (const bool symlink = std::filesystem::is_symlink(path, error); symlink || error)
                 return Result<void>::Failure(MakeError(Navigation::NavigationErrors::NavMeshArtifactCorrupt));
             std::ifstream file{path, std::ios::binary};
             if (!file)
