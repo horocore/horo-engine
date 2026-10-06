@@ -322,6 +322,17 @@ Screen-space UI is resolved after world rendering unless a render graph pass
 explicitly composes it earlier. World-space UI produces normal render instances
 and participates in visibility and depth policy declared by the canvas.
 
+## Responsive Presentation Profiles
+
+[Responsive Presentation Profiles](responsive-presentation-profiles.md) is the
+single proposed decision source for constraints plus finite typed layout variants,
+deterministic aspect/form-factor/input/split-view selection and neutral fallback.
+It owns that decision's limits, per-attachment publication, errors and source/cook
+migration; this document does not duplicate its selector or precedence rules.
+Profiles preserve the existing semantic tree and ownership and supply effective
+layout styles to the ordinary layout engine. The proposal does not claim profile
+selection or the complete RuntimeUiService is implemented on current main.
+
 ## Element Tree And Layout
 
 UI content is a retained tree:

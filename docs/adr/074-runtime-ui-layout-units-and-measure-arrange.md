@@ -39,6 +39,11 @@ scrolling and focus-driven bring-into-view requests. Later tickets may add
 container features and RTL, but they must preserve this precedence and snapshot
 model or explicitly revise this ADR.
 
+[Responsive Presentation Profiles](../architecture/runtime/responsive-presentation-profiles.md)
+is the single proposed authority for RUI-002.9's finite responsive layout variants
+and per-attachment selection. It selects effective typed styles before this ADR's
+ordinary measure/arrange; it does not replace constraint precedence or ownership.
+
 ## Decision
 
 ### 1. RuntimeUiService owns logical layout
