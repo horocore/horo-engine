@@ -18,8 +18,8 @@ namespace {
 
     /** @brief Generates a strict actual lock with independent source/version and the supplied intent commitment. */
     ValidatedPackageLockfileV1 Lock(const Sha256Digest hash, const std::string_view version = "1.2.0",
-                                    const std::string_view source = "horo.public") {
-        const auto package = HoroPackageId::Parse("com.horo.assets").Value();
+                                    const std::string_view source = "horo.public", const std::string_view packageName = "com.horo.assets") {
+        const auto package = HoroPackageId::Parse(packageName).Value();
         const auto parsedVersion = PackageVersion::Parse(version).Value();
         const auto parsedSource = HoroPackageSourceId::Parse(source).Value();
         const auto artifact = ComputeSha256(std::as_bytes(std::span{"artifact", 8}));
@@ -59,9 +59,13 @@ TEST_CASE("Portable request independently checks lock source version and roots",
         CHECK(intent.Value().ValidateLock(Lock(intent.Value().Digest(), "2.0.0")).HasError());
     }
     SECTION("missing required root") {
-        auto empty = ValidatedPackageLockfileV1::Generate({}, {}, intent.Value().Digest(), {});
-        REQUIRE(empty.HasValue());
-        CHECK(intent.Value().ValidateLock(empty.Value()).HasError());
+        REQUIRE(intent.Value().ValidateLock(Lock(intent.Value().Digest())).HasValue());
+        // Keep the original intent commitment: rejection must come from root binding, not a stale hash or invalid empty lock.
+        const auto differentRoot = Lock(intent.Value().Digest(), "1.2.0", "horo.public", "com.horo.other");
+        REQUIRE(differentRoot.RequestHash() == intent.Value().Digest());
+        REQUIRE(differentRoot.Roots().size() == 1);
+        CHECK(differentRoot.Roots().front().package == HoroPackageId::Parse("com.horo.other").Value());
+        CHECK(intent.Value().ValidateLock(differentRoot).HasError());
     }
 }
 
