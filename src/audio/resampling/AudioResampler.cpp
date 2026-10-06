@@ -71,6 +71,9 @@ namespace Horo::Audio {
         std::uint32_t needed{};
         std::uint32_t padding{};
         double fraction{};
+        double step{};
+        double targetStep{};
+        std::uint32_t pitchRamp{};
         bool draining{};
         bool seenInput{};
 
@@ -87,6 +90,8 @@ namespace Horo::Audio {
             needed = plan.Taps() / 2 + 1;
             padding = plan.Taps();
             fraction = 0.0;
+            step = targetStep = plan.InputStep();
+            pitchRamp = 0;
             draining = false;
             seenInput = false;
         }
@@ -166,7 +171,11 @@ namespace Horo::Audio {
                     SafeSample(kernel.Evaluate(samples, oldest, fraction), progress.sanitizedSamples);
             });
             ++progress.produced;
-            const double advanced = fraction + plan.InputStep();
+            if (pitchRamp != 0) {
+                step += (targetStep - step) / pitchRamp;
+                --pitchRamp;
+            }
+            const double advanced = fraction + step;
             needed = static_cast<std::uint32_t>(advanced);
             fraction = advanced - needed;
         }
@@ -196,6 +205,22 @@ namespace Horo::Audio {
     AudioResampler::AudioResampler(AudioResampler &&) noexcept = default;
     /** @copydoc AudioResampler::operator= */
     AudioResampler &AudioResampler::operator=(AudioResampler &&) noexcept = default;
+
+    /** @copydoc AudioResampler::SetLinearPitch */
+    bool AudioResampler::SetLinearPitch(const double pitch, const std::uint32_t rampFrames) noexcept {
+        if (!state_ || !std::isfinite(pitch) || pitch < 0.125 || pitch > 8.0 || rampFrames > 16384)
+            return false;
+        const auto &descriptor = state_->plan.Descriptor();
+        const double step = static_cast<double>(descriptor.inputRate) / descriptor.outputRate * pitch;
+        if (descriptor.stage != AudioResamplerStage::ClipToMix || descriptor.quality != AudioResamplerQuality::Linear ||
+            step < 1.0 / 64.0 || step > 64.0)
+            return false;
+        state_->targetStep = step;
+        state_->pitchRamp = rampFrames;
+        if (rampFrames == 0)
+            state_->step = step;
+        return true;
+    }
 
     /** @copydoc AudioResampler::Reset */
     void AudioResampler::Reset() noexcept {

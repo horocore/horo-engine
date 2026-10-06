@@ -480,6 +480,7 @@ horo_configure_target_header_boundary(HoroAudioCook PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAudioDsp PUBLIC_HEADERS
     Horo/Audio/AudioDSPNode.h
     Horo/Audio/CoreAudioDSPNode.h
+    Horo/Audio/CoreStereoSpatialRenderer.h
     Horo/Audio/AudioResampler.h
 )
 
