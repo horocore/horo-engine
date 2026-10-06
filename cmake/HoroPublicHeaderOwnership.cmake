@@ -758,6 +758,10 @@ horo_configure_target_header_boundary(HoroTerrainApi PUBLIC_HEADERS
     Horo/Terrain/TerrainErrors.h
     Horo/Terrain/TerrainFoliageRegistry.h
     Horo/Terrain/TerrainIdentity.h
+    Horo/Terrain/TerrainMaterial.h
+)
+horo_configure_target_header_boundary(HoroTerrainRender PUBLIC_HEADERS
+    Horo/TerrainRender/TerrainMaterialBinding.h
 )
 horo_configure_target_header_boundary(HoroTerrainImport PUBLIC_HEADERS
     Horo/Terrain/TerrainSourceImport.h

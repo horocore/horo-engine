@@ -1430,6 +1430,7 @@ add_library(HoroTerrainApi STATIC
         runtime/terrain/api/TerrainErrors.cpp
         runtime/terrain/api/TerrainFoliageRegistry.cpp
         runtime/terrain/api/TerrainIdentity.cpp
+        runtime/terrain/api/TerrainMaterial.cpp
 )
 add_library(HoroEngine::TerrainApi ALIAS HoroTerrainApi)
 target_compile_features(HoroTerrainApi PUBLIC cxx_std_20)
@@ -1455,6 +1456,13 @@ add_library(HoroTerrainCook STATIC
 add_library(HoroEngine::TerrainCook ALIAS HoroTerrainCook)
 target_compile_features(HoroTerrainCook PUBLIC cxx_std_20)
 target_link_libraries(HoroTerrainCook PUBLIC HoroEngine::TerrainImport)
+add_library(HoroTerrainRender STATIC
+        runtime/terrain/render/TerrainMaterialBinding.cpp
+)
+add_library(HoroEngine::TerrainRender ALIAS HoroTerrainRender)
+target_compile_features(HoroTerrainRender PUBLIC cxx_std_20)
+target_link_libraries(HoroTerrainRender PUBLIC HoroEngine::TerrainApi HoroEngine::RenderApi)
+
 add_library(HoroTerrainRuntime STATIC
         runtime/terrain/runtime/TerrainAsyncJobs.cpp
 )
