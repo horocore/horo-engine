@@ -111,24 +111,29 @@ namespace Horo::Audio {
         }
 
         /** @brief Compare bounded sample ranges without pointer ordering across allocations. */
-        bool Overlap(const void *left, const std::uint64_t leftBytes, const void *right, const std::uint64_t rightBytes) noexcept {
+        bool Overlap(const std::uintptr_t left, const std::uint64_t leftBytes, const std::uintptr_t right,
+                     const std::uint64_t rightBytes) noexcept {
             if (leftBytes == 0 || rightBytes == 0)
                 return false;
-            const auto a = reinterpret_cast<std::uintptr_t>(left);
-            const auto b = reinterpret_cast<std::uintptr_t>(right);
-            return a <= b ? b - a < leftBytes : a - b < rightBytes;
+            return left <= right ? right - left < leftBytes : left - right < rightBytes;
+        }
+
+        /** @brief Use a total address representation solely for validating borrowed sample ranges. */
+        std::uintptr_t SampleAddress(const float *sample) noexcept {
+            return reinterpret_cast<std::uintptr_t>(sample);
         }
 
         /** @brief Validate all call memory before either stream history or samples change. */
         bool ValidBuffers(const AudioResamplerInput input, const AudioResamplerOutput output, const AudioResamplerDescriptor &descriptor,
-                          const void *owner, const std::size_t ownerBytes) noexcept {
+                          const CoreStereoSpatialRenderer &owner) noexcept {
             if (input.planes.size() != descriptor.channels || output.planes.size() != 2 ||
                 input.frames > descriptor.maximumOutputFrames * 64U + 2 || output.capacity > descriptor.maximumOutputFrames)
                 return false;
             const auto valid = [&](const auto plane, const std::uint32_t frames) {
                 return plane.size() >= frames &&
                        (frames == 0 || (plane.data() != nullptr && reinterpret_cast<std::uintptr_t>(plane.data()) % 64 == 0)) &&
-                       !Overlap(plane.data(), static_cast<std::uint64_t>(frames) * sizeof(float), owner, ownerBytes);
+                       !Overlap(SampleAddress(plane.data()), static_cast<std::uint64_t>(frames) * sizeof(float),
+                                reinterpret_cast<std::uintptr_t>(&owner), sizeof(owner));
             };
             for (const auto plane : input.planes)
                 if (!valid(plane, input.frames))
@@ -138,12 +143,12 @@ namespace Horo::Audio {
                 if (!valid(plane, output.capacity))
                     return false;
                 for (const auto source : input.planes)
-                    if (Overlap(plane.data(), static_cast<std::uint64_t>(output.capacity) * sizeof(float), source.data(),
-                                static_cast<std::uint64_t>(input.frames) * sizeof(float)))
+                    if (Overlap(SampleAddress(plane.data()), static_cast<std::uint64_t>(output.capacity) * sizeof(float),
+                                SampleAddress(source.data()), static_cast<std::uint64_t>(input.frames) * sizeof(float)))
                         return false;
                 for (std::size_t earlier = 0; earlier < channel; ++earlier)
-                    if (Overlap(plane.data(), static_cast<std::uint64_t>(output.capacity) * sizeof(float), output.planes[earlier].data(),
-                                static_cast<std::uint64_t>(output.capacity) * sizeof(float)))
+                    if (Overlap(SampleAddress(plane.data()), static_cast<std::uint64_t>(output.capacity) * sizeof(float),
+                                SampleAddress(output.planes[earlier].data()), static_cast<std::uint64_t>(output.capacity) * sizeof(float)))
                         return false;
             }
             return true;
@@ -235,7 +240,7 @@ namespace Horo::Audio {
         auto prepared = PrepareAudioStereoSpatialTarget(copied, threeD ? listener : nullptr, settings, descriptor_.channels);
         if (prepared.HasError())
             return Result<void>::Failure(prepared.ErrorValue());
-        const auto next = prepared.Value();
+        const auto &next = prepared.Value();
         // Pitch admission is transactional. Reset cannot precede a potentially rejected rate/pitch combination.
         if (!converter_.SetLinearPitch(next.pitch, teleport || changedIdentity ? 0 : settings.smoothingFrames))
             return Result<void>::Failure(MakeError(AudioErrors::ResamplerInvalid));
@@ -268,12 +273,27 @@ namespace Horo::Audio {
         remaining_ = 0;
     }
 
+    /** @copydoc CoreStereoSpatialRenderer::EmitStereo */
+    void CoreStereoSpatialRenderer::EmitStereo(const AudioResamplerOutput output, AudioResamplerProgress &progress) noexcept {
+        if (remaining_ != 0) {
+            const float remaining = static_cast<float>(remaining_);
+            for (std::size_t coefficient = 0; coefficient < matrix_.size(); ++coefficient)
+                matrix_[coefficient] += (target_.matrix[coefficient] - matrix_[coefficient]) / remaining;
+            --remaining_;
+        }
+        const double left = outputCells_[0].samples[0];
+        const double right = descriptor_.channels == 2 ? outputCells_[1].samples[0] : 0.0;
+        output.planes[0][progress.produced] = SafeOutput(left * matrix_[0] + right * matrix_[1], progress.sanitizedSamples);
+        output.planes[1][progress.produced] = SafeOutput(left * matrix_[2] + right * matrix_[3], progress.sanitizedSamples);
+        ++progress.produced;
+    }
+
     /** @copydoc CoreStereoSpatialRenderer::Process */
     AudioResamplerProgress CoreStereoSpatialRenderer::Process(const AudioResamplerInput input, const AudioResamplerOutput output) noexcept {
         using enum AudioResamplerStatus;
         if (!initialized_ || !converter_.Plan())
             return {.status = InvalidState};
-        if (!ValidBuffers(input, output, descriptor_, this, sizeof(*this)))
+        if (!ValidBuffers(input, output, descriptor_, *this))
             return {.status = InvalidBuffer};
         std::array<std::span<const float>, 2> inputs;
         std::array<std::span<float>, 2> outputs;
@@ -293,18 +313,8 @@ namespace Horo::Audio {
                                                    {{outputs.data(), descriptor_.channels}, 1});
             progress.consumed += result.consumed;
             progress.sanitizedSamples += result.sanitizedSamples;
-            if (result.produced != 0) {
-                if (remaining_ != 0) {
-                    for (std::size_t coefficient = 0; coefficient < matrix_.size(); ++coefficient)
-                        matrix_[coefficient] += (target_.matrix[coefficient] - matrix_[coefficient]) / remaining_;
-                    --remaining_;
-                }
-                const double left = outputCells_[0].samples[0];
-                const double right = descriptor_.channels == 2 ? outputCells_[1].samples[0] : 0.0;
-                output.planes[0][progress.produced] = SafeOutput(left * matrix_[0] + right * matrix_[1], progress.sanitizedSamples);
-                output.planes[1][progress.produced] = SafeOutput(left * matrix_[2] + right * matrix_[3], progress.sanitizedSamples);
-                ++progress.produced;
-            }
+            if (result.produced != 0)
+                EmitStereo(output, progress);
             if (result.status == Complete || result.status == InvalidState || result.status == InvalidBuffer ||
                 (result.status == InputNeeded && progress.consumed == input.frames)) {
                 progress.status = result.status;

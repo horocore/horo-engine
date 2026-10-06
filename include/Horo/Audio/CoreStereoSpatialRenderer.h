@@ -104,6 +104,11 @@ namespace Horo::Audio {
 
     private:
         explicit CoreStereoSpatialRenderer(AudioResampler converter, const AudioResamplerDescriptor &descriptor) noexcept;
+        /** @brief Advance one gain ramp and write one already resampled stereo frame.
+         * @param output Admitted borrowed destination.
+         * @param progress Exact frame cursor and sanitization counter, advanced by one frame.
+         */
+        void EmitStereo(AudioResamplerOutput output, AudioResamplerProgress &progress) noexcept;
         AudioResampler converter_;
         AudioResamplerDescriptor descriptor_;
         AudioStereoSpatialTarget target_;

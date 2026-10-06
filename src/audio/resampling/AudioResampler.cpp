@@ -90,7 +90,8 @@ namespace Horo::Audio {
             needed = plan.Taps() / 2 + 1;
             padding = plan.Taps();
             fraction = 0.0;
-            step = targetStep = plan.InputStep();
+            targetStep = plan.InputStep();
+            step = targetStep;
             pitchRamp = 0;
             draining = false;
             seenInput = false;
