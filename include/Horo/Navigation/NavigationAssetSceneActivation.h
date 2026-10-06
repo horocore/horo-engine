@@ -65,6 +65,7 @@ namespace Horo::Navigation {
      * construction preserves the prior world. Publication swaps an already finalized lifecycle; old candidate
      * Shutdown revokes only its own world. Existing NavigationWorldReadLease pins its backend and immutable tile
      * allocations across cache eviction, replacement and shutdown; revoked work must obey lease cancellation.
+     * An absent explicit host factory reports CapabilityUnavailable; factory failures preserve their original typed error.
      */
     class NavigationAssetSceneActivationParticipant final : public Runtime::SceneActivationParticipant {
     public:
