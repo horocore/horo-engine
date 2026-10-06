@@ -74,6 +74,19 @@ namespace Horo::TerrainRender {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Requires the exact declared cooked target/artifact/pass before material allocation. */
+        [[nodiscard]] Result<void> ValidateCookedVariant(const TerrainMaterialBindingRequest &request,
+                                                         const Render::ShaderPermutationKey &key) {
+            const auto &variant = request.variant;
+            if (variant.key != key || (variant.expectedArtifact == Sha256Digest{}) ||
+                variant.artifact.artifactKey != variant.expectedArtifact || variant.artifact.payload.empty() ||
+                variant.artifact.payload.size() > 64U * 1024U * 1024U || !variant.pipeline.IsValid() || variant.pass != request.pass ||
+                variant.target.backend != variant.artifact.backend || variant.target.payloadFormat != variant.artifact.payloadFormat ||
+                !request.shader.AdmitsTarget(variant.target))
+                return Result<void>::Failure(MakeError(TerrainMaterialBindingErrors::VariantUnavailable));
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc PreparedTerrainMaterialShader::Create */
@@ -192,12 +205,8 @@ namespace Horo::TerrainRender {
         if (resolved.HasError())
             return Result<TerrainMaterialBindingData>::Failure(resolved.ErrorValue());
         const auto &variant = request.variant;
-        if (variant.key != resolved.Value().key || (variant.expectedArtifact == Sha256Digest{}) ||
-            variant.artifact.artifactKey != variant.expectedArtifact || variant.artifact.payload.empty() ||
-            variant.artifact.payload.size() > 64U * 1024U * 1024U || !variant.pipeline.IsValid() || variant.pass != request.pass ||
-            variant.target.backend != variant.artifact.backend || variant.target.payloadFormat != variant.artifact.payloadFormat ||
-            !request.shader.AdmitsTarget(variant.target))
-            return Result<TerrainMaterialBindingData>::Failure(MakeError(TerrainMaterialBindingErrors::VariantUnavailable));
+        if (const auto cooked = ValidateCookedVariant(request, resolved.Value().key); cooked.HasError())
+            return Result<TerrainMaterialBindingData>::Failure(cooked.ErrorValue());
         try {
             auto selection = std::move(resolved).Value();
             TerrainMaterialBindingData candidate{.layers = request.layers.Data(),
