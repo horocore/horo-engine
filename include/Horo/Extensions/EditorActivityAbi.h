@@ -56,6 +56,8 @@ typedef struct HoroEditorActivityNode HoroEditorActivityNode;
 
 /** @brief Bounded immutable view snapshot; revisions strictly increase within an activation. */
 struct HoroEditorActivitySnapshot {
+    // Read across the C/C++ package boundary by CopyActivityForm in EditorActivityAbiConversion.cpp.
+    // cppcheck-suppress unusedStructMember
     uint32_t structSize;
     // Read across the C/C++ package boundary by CopyActivityForm and EditorActivitySession::Publish.
     // cppcheck-suppress unusedStructMember
@@ -83,6 +85,8 @@ struct HoroEditorActivityAction {
     uint32_t structSize;
     HoroExtensionStringView nodeId;
     HoroExtensionStringView actionId;
+    // Read across the C/C++ package boundary by Invoke in EditorActivityModule.c; populated from the admitted action revision by
+    // ExecuteAction. cppcheck-suppress unusedStructMember
     uint64_t revision;
     HoroExtensionCancellation cancellation;
 };
@@ -113,6 +117,8 @@ typedef struct HoroEditorActivityMessage HoroEditorActivityMessage;
 /** @brief Version-1 manifest-owned activity+panel binding; no host drawing callback or native object is exposed. */
 struct HoroEditorActivityDescriptor {
     uint32_t structSize;
+    // Read across the C/C++ package boundary by RegisterEditorActivityImpl in EditorActivitySession.cpp.
+    // cppcheck-suppress unusedStructMember
     uint32_t schemaVersion;
     HoroExtensionStringView activityId;
     HoroExtensionStringView drawerId;
@@ -159,7 +165,11 @@ struct HoroEditorActivitySessionApi {
     // Read across the C/C++ package boundary by horo_extension_load ABI negotiation in EditorActivityModule.c.
     // cppcheck-suppress unusedStructMember
     uint32_t supportedNodeMask;
+    // Read across the C/C++ package boundary by horo_extension_load and horo_test_activity_publish in EditorActivityModule.c.
+    // cppcheck-suppress unusedStructMember
     void *context;
+    // Read across the C/C++ package boundary by horo_extension_load and horo_test_activity_publish in EditorActivityModule.c.
+    // cppcheck-suppress unusedStructMember
     HoroExtensionStatus (*publish)(void *context, const HoroEditorActivitySnapshot *snapshot);
 };
 typedef struct HoroEditorActivitySessionApi HoroEditorActivitySessionApi;

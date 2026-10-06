@@ -186,6 +186,24 @@ namespace {
         CHECK(workspace.ViewModel().activeLeftPanelId == leftPanel);
     }
 
+    void CheckQueuedMoveRetirement(ExtensionActivityView &view, const std::shared_ptr<Extensions::EditorActivityHost> &host,
+                                   const Extensions::EditorSurfaceProviderIdentity &provider, Extensions::ExtensionManager &manager,
+                                   const RecordingRenderer &renderer) {
+        host->Update();
+        view.Update();
+        static_cast<void>(view.TakeNativePanelClear());
+        REQUIRE(view.QueueMove(provider, "fixture.activity", {Extensions::EditorActivitySide::Left, 0, 0}));
+        manager.UnloadExtension("fixture.package");
+        CHECK_FALSE(view.HasDrawer(Extensions::EditorActivitySide::Left));
+        host->Update();
+        view.Update();
+        CHECK(view.Count(false, 0) == 0);
+        CHECK(renderer.destroys == 1);
+        CHECK_FALSE(view.TakeNativePanelClear().has_value());
+        CHECK(renderer.creates == 1);
+        CHECK_FALSE(view.QueueMove(provider, "fixture.activity", {Extensions::EditorActivitySide::Left, 0, 0}));
+    }
+
     TEST_CASE("Actual activity GUI retains uploaded SVG textures across frames and withdraws them after provider retirement",
               "[unit][editor][Activity][ABI]") {
         Horo::Tests::EditorActivityPackage package;
@@ -225,18 +243,6 @@ namespace {
         CHECK(renderer.destroys == 0);
         CheckPlacementAndStaleMove(view, host, provider, workspace, leftPanel);
         CheckBottomMouseActivation(view, host, workspace, leftPanel);
-        host->Update();
-        view.Update();
-        static_cast<void>(view.TakeNativePanelClear());
-        REQUIRE(view.QueueMove(provider, "fixture.activity", {Extensions::EditorActivitySide::Left, 0, 0}));
-        manager.UnloadExtension("fixture.package");
-        CHECK_FALSE(view.HasDrawer(Extensions::EditorActivitySide::Left));
-        host->Update();
-        view.Update();
-        CHECK(view.Count(false, 0) == 0);
-        CHECK(renderer.destroys == 1);
-        CHECK_FALSE(view.TakeNativePanelClear().has_value());
-        CHECK(renderer.creates == 1);
-        CHECK_FALSE(view.QueueMove(provider, "fixture.activity", {Extensions::EditorActivitySide::Left, 0, 0}));
+        CheckQueuedMoveRetirement(view, host, provider, manager, renderer);
     }
 }  // namespace

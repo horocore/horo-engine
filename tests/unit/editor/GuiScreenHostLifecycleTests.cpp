@@ -122,20 +122,22 @@ namespace {
         return inventory;
     }
 
+    struct RemoveActivityInventory {
+        std::filesystem::path root;
+
+        ~RemoveActivityInventory() {
+            std::error_code error;
+            std::filesystem::remove_all(root, error);
+        }
+    };
+
     TEST_CASE("GUI inventory activation uses explicit artifact authority and revokes package surfaces on shutdown",
               "[unit][editor][Activity][ABI]") {
         Horo::Tests::EditorActivityPackage package;
         const auto installRoot = package.root.parent_path() / "horo107 GUI inventory";
         std::filesystem::remove_all(installRoot);
 
-        struct RemoveInventory {
-            std::filesystem::path root;
-
-            ~RemoveInventory() {
-                std::error_code error;
-                std::filesystem::remove_all(root, error);
-            }
-        } removeInventory{installRoot};
+        RemoveActivityInventory removeInventory{installRoot};
 
         auto inventory = InstallActivityInventory(installRoot, package.root);
         EngineDataBus engineEvents;
