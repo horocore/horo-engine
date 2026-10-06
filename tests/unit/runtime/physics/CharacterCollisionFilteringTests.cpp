@@ -88,13 +88,13 @@ namespace Horo::Character {
             auto first = FixedTick(1);
             first.query = probe.Context(active.world->Descriptor(), 1);
             REQUIRE(active.world->AdvanceFixedTick(first).HasValue());
-            REQUIRE(probe.calls == 1);
+            REQUIRE(probe.calls == 3);
             REQUIRE_FALSE(probe.seen[0].requiredLayer);
             probe.calls = 0;
             auto second = FixedTick(2);
             second.query = probe.Context(active.world->Descriptor(), 2);
             REQUIRE(active.world->AdvanceFixedTick(second).HasValue());
-            REQUIRE(probe.calls == 3);
+            REQUIRE(probe.calls == 5);
             for (std::size_t index{}; index < probe.calls; ++index)
                 REQUIRE(probe.seen[index].requiredLayer == Layer());
             REQUIRE(active.world->ControllerDescriptor(active.controller).Value().selectors.requiredLayer == Layer());

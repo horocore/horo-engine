@@ -581,6 +581,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/CharacterGroundingTests.cpp
         unit/runtime/physics/CharacterCollisionFilteringTests.cpp
         unit/runtime/physics/CharacterSlopeTests.cpp
+        unit/runtime/physics/CharacterAirborneTests.cpp
         unit/runtime/physics/CharacterShapeChangeTests.cpp
         unit/runtime/physics/CharacterMetricsTests.cpp
         unit/runtime/physics/CharacterWorldSettingsTests.cpp
@@ -1215,6 +1216,7 @@ add_dependencies(HoroGameModuleHostTests HoroTestGameModule)
 add_executable(HoroGameplayPhysicsTests unit/gameplay/GameplayPhysicsContextTests.cpp
     integration/gameplay/GameplayPhysicsHostTests.cpp
     integration/gameplay/GameplayCharacterSlopeTests.cpp
+    integration/gameplay/GameplayCharacterAirborneTests.cpp
     integration/gameplay/LuaPhysicsLifecycleTests.cpp)
 target_compile_features(HoroGameplayPhysicsTests PRIVATE cxx_std_20)
 target_include_directories(HoroGameplayPhysicsTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers" "${PROJECT_SOURCE_DIR}/tests/unit/runtime/physics")

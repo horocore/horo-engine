@@ -12,5 +12,8 @@ int main() {
     Horo::Character::CharacterControllerDescriptor descriptor;
     descriptor.steepSlopePolicy = Horo::Character::CharacterSteepSlopePolicy::Slide;
     descriptor.preserveHorizontalSpeedOnSlopes = true;
+    descriptor.jumpSpeedMetersPerSecond = 5.0F;
+    snapshot.movement.groundTransition = Horo::Character::CharacterGroundTransition::Landed;
+    snapshot.movement.jumpApplied = false;
     return Horo::Character::BuildCharacterGroundSurfaceFact(snapshot, descriptor).HasError() ? 0 : 1;
 }

@@ -171,6 +171,7 @@ namespace Horo::Character {
         std::uint32_t maximumContacts{16};
         CharacterCollisionSelectors selectors;                       /**< Initial movement, placement and clearance filter. */
         std::optional<Physics::PhysicsCapsuleShape> crouchedCapsule; /**< Same radius and lower cylindrical height than standing. */
+        float jumpSpeedMetersPerSecond{5.0F};                        /**< Finite nonnegative impulse along up; zero disables jumping. */
     };
 
     /** @brief Operation that may publish a new collision-root transform. */
@@ -447,6 +448,13 @@ namespace Horo::Character {
         CharacterMaterialSource materialSource{CharacterMaterialSource::Query}; /**< Fallback does not claim a collider binding. */
     };
 
+    /** @brief One committed change of support state; repeated contacts do not repeat a transition. */
+    enum class CharacterGroundTransition : std::uint8_t {
+        None,
+        LeftGround,
+        Landed,
+    };
+
     /**
      * @brief Owned bounded movement evidence for one committed controller tick.
      *
@@ -480,6 +488,8 @@ namespace Horo::Character {
         Math::Vec3 groundPoint{};                    /**< Selected support point; independent of retained contact capacity. */
         Math::Vec3 gravityVelocityMetersPerSecond{}; /**< Character-owned continuation; separate from achieved and gameplay velocity. */
         std::optional<CharacterShapeChangeResult> shapeChange; /**< Character-owned clearance outcome, never adapter authority. */
+        bool jumpApplied{}; /**< This tick consumed committed grounded state and applied the configured impulse. */
+        CharacterGroundTransition groundTransition{CharacterGroundTransition::None}; /**< Exactly one post-commit support fact. */
     };
 
     /**

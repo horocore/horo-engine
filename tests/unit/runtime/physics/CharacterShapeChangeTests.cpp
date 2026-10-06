@@ -314,7 +314,7 @@ namespace Horo::Character {
                 return Result<CharacterSweepProbeResult>::Success({});
             };
             REQUIRE(active.world->AdvanceFixedTick(input).HasValue());
-            REQUIRE(probe.calls == 3);
+            REQUIRE(probe.calls == 5);
             REQUIRE(probe.observed.radiusMeters == 0.6F);
             REQUIRE(probe.observed.cylindricalHalfHeightMeters == 0.3F);
             REQUIRE(active.world->ControllerLocomotionSnapshot(active.controller).Value().stance == CharacterStance::Custom);

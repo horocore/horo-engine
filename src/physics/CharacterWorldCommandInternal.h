@@ -239,8 +239,7 @@ namespace Horo::Character::Detail {
         descriptor.capsule = capsule;
         // The crouch profile is authored against standing geometry, not the temporary query capsule.
         descriptor.crouchedCapsule.reset();
-        const auto resolved = ResolveMovementResult(impl, command, previous.publication, input, descriptor,
-                                                    geometryChanged ? Math::Vec3{} : previous.gravityVelocity);
+        const auto resolved = ResolveMovementResult(impl, command, previous.publication, input, descriptor, previous.gravityVelocity);
         if (resolved.HasError())
             return Result<CharacterMovementResult>::Failure(resolved.ErrorValue());
         CharacterMovementResult movement = std::move(resolved).Value();
@@ -248,6 +247,9 @@ namespace Horo::Character::Detail {
         if (geometryChanged && !input.query.sweep) {
             ClearGroundEvidence(movement, descriptor.up);
         }
+        movement.groundTransition = movement.grounded == previous.publication.grounded
+                                        ? CharacterGroundTransition::None
+                                        : (movement.grounded ? CharacterGroundTransition::Landed : CharacterGroundTransition::LeftGround);
         return Result<CharacterMovementResult>::Success(std::move(movement));
     }
 
