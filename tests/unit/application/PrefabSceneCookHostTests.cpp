@@ -555,6 +555,53 @@ TEST_CASE("Invalid dynamic root selection preserves the current complete generat
     fixture.AssertRetained(first.Value().generation);
 }
 
+TEST_CASE("Host flattens nested and variant source closure without publishing source-only templates",
+          "[native][prefab-cook][host][template][composition]") {
+    HostFixture fixture;
+    const auto base = fixture.AddSpawnableRoot();
+    const auto limits = Prefab::PrefabLimitProfile::Create({}).Value();
+    const auto baseDocument = Prefab::PrefabDocument::Create({.projectVersion = fixture.version,
+                                                              .assetId = base,
+                                                              .objects = {{.localId = {0}, .name = "Second root"}}},
+                                                             limits);
+    REQUIRE(baseDocument.HasValue());
+    const auto canonical = baseDocument.Value().SerializeCanonical().Value();
+    const Prefab::PrefabSourceRevision revision{fixture.version, ComputeSha256(std::as_bytes(std::span{canonical}))};
+    Prefab::PrefabDocumentData root{.projectVersion = fixture.version,
+                                    .assetId = fixture.prefabId,
+                                    .objects = {{.localId = {0}, .name = "Dynamic root"}},
+                                    .referencedAssets = {base}};
+    std::size_t count{};
+    SECTION("nested") {
+        root.composition =
+            Prefab::PrefabComposition{.nestedPlacements = {{.placementLocalId = {7},
+                                                            .sourcePrefab = Prefab::PrefabAssetReference::Create(base).Value(),
+                                                            .authoredAgainst = revision}}};
+        count = 2;
+    }
+    SECTION("variant") {
+        root.objects.clear();
+        root.composition = Prefab::PrefabComposition{.variantParent = Prefab::PrefabAssetReference::Create(base).Value(),
+                                                     .variantAuthoredAgainst = revision};
+        count = 1;
+    }
+    const auto document = Prefab::PrefabDocument::Create(std::move(root), limits);
+    REQUIRE(document.HasValue());
+    fixture.WriteText("assets/hierarchy.prefab", document.Value().SerializeCanonical().Value());
+    fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    const auto cooked = fixture.Cook();
+    REQUIRE(cooked.HasValue());
+    CHECK(cooked.Value().generation.artifactCount == 3);
+    CHECK(GenerationArtifact(cooked.Value().generation, base).HasError());
+    const auto artifact = GenerationArtifact(cooked.Value().generation, fixture.prefabId);
+    REQUIRE(artifact.HasValue());
+    const auto prefab = Prefab::CookedPrefab::Parse(std::as_bytes(std::span{artifact.Value().payload}), fixture.prefabId, limits);
+    REQUIRE(prefab.HasValue());
+    CHECK(prefab.Value().GetObjectCount() == count);
+    CHECK(prefab.Value().Data().entities.back().provenance.sourceAsset == base);
+    CHECK(prefab.Value().Data().dependencies.empty());
+}
+
 TEST_CASE("Dynamic template cache binds actual changed resource envelopes without a registry replacement",
           "[native][prefab-cook][host][template]") {
     HostFixture fixture;

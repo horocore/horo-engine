@@ -13,7 +13,7 @@ namespace Horo::Application::PrefabCookDetail {
             std::vector<Assets::AssetId> dependencies;
         };
 
-        /** @brief Admits effective post-override member schemas using the same inert authority as static scene cooking. */
+        /** @brief Admits fully resolved member schemas using the same inert authority as static scene cooking. */
         Result<void> ValidateSchemas(const Prefab::CookedPrefabData &data, const TemplateCookState &state,
                                      const CancellationToken &cancellation) {
             for (const auto &entity : data.entities) {

@@ -25,7 +25,7 @@ No second host, registry, package resolver or publication authority is introduce
 
 Non-prefab resources and static cooked scenes enter the first unpublished
 candidate phase. The template phase uses the same captured resolver, validates
-post-override portable members through `PrefabCookSchemaContext`, and consumes
+resolved portable members through `PrefabCookSchemaContext`, and consumes
 only each root's complete resource closure from the exact staged envelope bytes.
 Its returned strategies own their payloads; borrowed candidate views expire at
 callback return. Templates, resources and scenes publish through one generation
@@ -66,7 +66,8 @@ Host coverage is in `HoroPrefabSceneCookHostTests` and
 `HoroPrefabCookPublicHeaderConsumer`. It covers shared scene/template/resource
 publication, actual generation-provider loading, cache reuse, canonical root
 order, changed selection and resource inputs under a stable registry revision,
-invalid roots, schema availability, exact payload bounds, cancellation/source
+invalid roots, nested/variant flattening, corrupt or foreign cached HPFB, schema
+availability, exact payload bounds, cancellation/source
 freshness/publication failure and the frozen release executor handoff.
 
 The independent six-target Release/headless validation passed 48/48 focused
