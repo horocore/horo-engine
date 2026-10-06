@@ -71,6 +71,12 @@ namespace Horo::WorldStreaming {
                 return operation_;
             }
 
+            std::uint64_t MaximumRetirementNanoseconds() const noexcept override {
+                return cost;
+            }
+
+            std::uint64_t cost{10};
+
             void RevokeAccess() noexcept override {
                 log_.revoked.push_back(requirement_.participant.Value());
             }
@@ -136,6 +142,10 @@ namespace Horo::WorldStreaming {
                 return operation_;
             }
 
+            std::uint64_t MaximumPublicationNanoseconds() const noexcept override {
+                return 10;
+            }
+
             void PublishPrepared() noexcept override {
                 log_.published = true;
             }
@@ -155,13 +165,18 @@ namespace Horo::WorldStreaming {
             receipts.push_back(std::make_unique<ActivationReceipt>(owner.Operation().Handle(), log));
             const std::array required{Requirement(1)};
             return StreamingCellActivationTransaction::Prepare({IdentityFrom<StreamingCellActivationId>(1), owner.Operation(), 1,
-                                                                StreamingCellActivationLifecycle::Active},
+                                                                StreamingCellActivationLifecycle::Active,
+                                                                IdentityFrom<StreamingSchedulerLedgerId>(1)},
                                                                required, std::move(receipts))
                 .Value();
         }
     }  // namespace
 
     TEST_CASE("Direction reversal retains leases and capacity until ordered exact retirement", "[unit][world_streaming][direction]") {
+        [[maybe_unused]] auto frameBudget =
+            StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                               IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                .Value();
         auto scheduler = Scheduler();
         const auto config = Config();
         ParticipantLog log;
@@ -176,7 +191,7 @@ namespace Horo::WorldStreaming {
         REQUIRE(log.revoked == std::vector<std::uint64_t>{30, 10});
         REQUIRE(owner.Operation().State() == StreamingCellOperationState::Retiring);
         RequireError(owner.Advance(late, StreamingCellOperationTransition::Complete), WorldStreamingErrors::CellDirectionStale);
-        REQUIRE(owner.PollRetirement().Value().State() == StreamingCellOperationState::Retiring);
+        REQUIRE(owner.PollRetirement(frameBudget, 0).Value().State() == StreamingCellOperationState::Retiring);
         REQUIRE(log.started == std::vector<std::uint64_t>{30});
         REQUIRE(log.leases == 2);
         REQUIRE(scheduler.ReservedCapacityUnits() == 5);
@@ -185,17 +200,20 @@ namespace Horo::WorldStreaming {
         Demand(owner, StreamingDesiredResidency::Activated);
         REQUIRE_FALSE(owner.RequiresFreshAttempt());
         dependent.ready = true;
-        REQUIRE(owner.PollRetirement().Value().State() == StreamingCellOperationState::Retiring);
+        REQUIRE(owner.PollRetirement(frameBudget, 0).Value().State() == StreamingCellOperationState::Retiring);
+        REQUIRE(log.started == std::vector<std::uint64_t>{30});
+        REQUIRE(log.destroyed == std::vector<std::uint64_t>{30});
+        REQUIRE(owner.PollRetirement(frameBudget, 0).Value().State() == StreamingCellOperationState::Retiring);
         REQUIRE(log.started == std::vector<std::uint64_t>{30, 10});
         REQUIRE(log.leases == 1);
         backing.ready = true;
-        REQUIRE(owner.PollRetirement().Value().Outcome() == StreamingCellOperationOutcome::Cancelled);
+        REQUIRE(owner.PollRetirement(frameBudget, 0).Value().Outcome() == StreamingCellOperationOutcome::Cancelled);
         REQUIRE(log.leases == 0);
         REQUIRE(scheduler.ReservedCapacityUnits() == 0);
         REQUIRE(owner.RequiresFreshAttempt());
         REQUIRE(owner.TakeTerminalResult().Value().Outcome() == StreamingCellOperationOutcome::Cancelled);
         RequireError(owner.TakeTerminalResult(), WorldStreamingErrors::CellDirectionLifecycleUnavailable);
-        RequireError(owner.PollRetirement(), WorldStreamingErrors::CellDirectionLifecycleUnavailable);
+        RequireError(owner.PollRetirement(frameBudget, 0), WorldStreamingErrors::CellDirectionLifecycleUnavailable);
         Participants freshParticipants;
         auto fresh = StreamingCellDirectionOwner::Create(scheduler, Config(StreamingCellOperationKind::Load, 2), freshParticipants).Value();
         Forward(fresh, StreamingCellOperationTransition::BeginPreparation);
@@ -205,6 +223,10 @@ namespace Horo::WorldStreaming {
 
     TEST_CASE("Direction retirement rejects stale acknowledgements and preserves domain errors and ownership",
               "[unit][world_streaming][direction][failure]") {
+        [[maybe_unused]] auto frameBudget =
+            StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                               IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                .Value();
         auto scheduler = Scheduler();
         const auto config = Config();
         ParticipantLog log;
@@ -213,23 +235,27 @@ namespace Horo::WorldStreaming {
         auto owner = StreamingCellDirectionOwner::Create(scheduler, config, participants).Value();
         Demand(owner, StreamingDesiredResidency::Unloaded);
         view.failPoll = true;
-        RequireError(owner.PollRetirement(), WorldStreamingErrors::CellAssetRequestUnavailable);
+        RequireError(owner.PollRetirement(frameBudget, 0), WorldStreamingErrors::CellAssetRequestUnavailable);
         view.failPoll = false;
         view.ready = true;
         view.staleRevision = true;
-        RequireError(owner.PollRetirement(), WorldStreamingErrors::CellDirectionStale);
+        RequireError(owner.PollRetirement(frameBudget, 0), WorldStreamingErrors::CellDirectionStale);
         view.staleRevision = false;
         view.staleFence = true;
-        RequireError(owner.PollRetirement(), WorldStreamingErrors::CellDirectionStale);
+        RequireError(owner.PollRetirement(frameBudget, 0), WorldStreamingErrors::CellDirectionStale);
         REQUIRE(scheduler.ReservedCount() == 1);
         REQUIRE(log.leases == 1);
         REQUIRE(log.started == std::vector<std::uint64_t>{1});
         view.staleFence = false;
-        REQUIRE(owner.PollRetirement().Value().IsTerminal());
+        REQUIRE(owner.PollRetirement(frameBudget, 0).Value().IsTerminal());
         REQUIRE(log.leases == 0);
     }
 
     TEST_CASE("Direction demand validation and participant admission are transactional", "[unit][world_streaming][direction][admission]") {
+        [[maybe_unused]] auto frameBudget =
+            StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                               IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                .Value();
         auto scheduler = Scheduler();
         auto config = Config();
         ParticipantLog log;
@@ -240,6 +266,10 @@ namespace Horo::WorldStreaming {
         REQUIRE(participants.size() == 2);
         REQUIRE(scheduler.ReservedCount() == 0);
         participants.pop_back();
+        view.cost = 0;
+        RequireError(StreamingCellDirectionOwner::Create(scheduler, config, participants), WorldStreamingErrors::CellDirectionInvalid);
+        REQUIRE(scheduler.ReservedCount() == 0);
+        view.cost = 10;
         auto extra = std::make_unique<Participant>(Requirement(2), config.operation.Handle(), log);
         participants.push_back(std::move(extra));
         config.maximumParticipants = 1;
@@ -275,11 +305,15 @@ namespace Horo::WorldStreaming {
         REQUIRE(log.revoked.empty());
         REQUIRE(owner.Interrupt(initial.Handle(), StreamingCellOperationTransition::Shutdown).HasValue());
         view.ready = true;
-        REQUIRE(owner.PollRetirement().Value().IsTerminal());
+        REQUIRE(owner.PollRetirement(frameBudget, 0).Value().IsTerminal());
     }
 
     TEST_CASE("Prepared activation rolls back on downward demand and cannot publish a late receipt",
               "[unit][world_streaming][direction][activation]") {
+        [[maybe_unused]] auto frameBudget =
+            StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                               IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                .Value();
         auto scheduler = Scheduler();
         const auto config = Config(StreamingCellOperationKind::Activate);
         ParticipantLog log;
@@ -290,18 +324,23 @@ namespace Horo::WorldStreaming {
         Forward(owner, StreamingCellOperationTransition::BeginActivation);
         auto transaction = Prepared(owner, log);
         Demand(owner, StreamingDesiredResidency::Loaded);
-        RequireError(owner.CommitActivation(transaction, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges),
+        RequireError(owner.CommitActivation(transaction, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges, frameBudget,
+                                            0),
                      WorldStreamingErrors::CellActivationLifecycleUnavailable);
         REQUIRE(log.rolledBack);
         REQUIRE_FALSE(log.published);
         REQUIRE(log.leases == 1);
         view.ready = true;
-        REQUIRE(owner.PollRetirement().Value().Outcome() == StreamingCellOperationOutcome::Cancelled);
+        REQUIRE(owner.PollRetirement(frameBudget, 0).Value().Outcome() == StreamingCellOperationOutcome::Cancelled);
         REQUIRE(owner.RequiresFreshAttempt());
     }
 
     TEST_CASE("Normal direction completion transfers successful participant lifetime and publishes once",
               "[unit][world_streaming][direction][activation]") {
+        [[maybe_unused]] auto frameBudget =
+            StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                               IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                .Value();
         auto scheduler = Scheduler();
         const auto config = Config(StreamingCellOperationKind::Activate);
         ParticipantLog log;
@@ -311,10 +350,11 @@ namespace Horo::WorldStreaming {
         Forward(owner, StreamingCellOperationTransition::BeginPreparation);
         Forward(owner, StreamingCellOperationTransition::BeginActivation);
         auto transaction = Prepared(owner, log);
-        RequireError(owner.CommitActivation(transaction, StreamingCellActivationCommitPoint::PreUpdate),
+        RequireError(owner.CommitActivation(transaction, StreamingCellActivationCommitPoint::PreUpdate, frameBudget, 0),
                      WorldStreamingErrors::CellActivationSafePointUnavailable);
         REQUIRE_FALSE(log.published);
-        REQUIRE(owner.CommitActivation(transaction, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges).HasValue());
+        REQUIRE(owner.CommitActivation(transaction, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges, frameBudget, 0)
+                    .HasValue());
         REQUIRE(log.published);
         REQUIRE(scheduler.ReservedCount() == 0);
         REQUIRE(owner.TakeTerminalResult().Value().Outcome() == StreamingCellOperationOutcome::Succeeded);
@@ -328,6 +368,10 @@ namespace Horo::WorldStreaming {
 
     TEST_CASE("Retirement never reverses and move shutdown and replacement retain the first outcome",
               "[unit][world_streaming][direction][lifecycle]") {
+        [[maybe_unused]] auto frameBudget =
+            StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                               IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                .Value();
         for (const auto reason : {StreamingCellOperationTransition::Cancel, StreamingCellOperationTransition::Fail,
                                   StreamingCellOperationTransition::Replace, StreamingCellOperationTransition::Shutdown}) {
             auto scheduler = Scheduler();
@@ -339,17 +383,17 @@ namespace Horo::WorldStreaming {
             REQUIRE(source.Interrupt(source.Operation().Handle(), reason).HasValue());
             const auto disposition = source.Operation().Outcome();
             auto owner = std::move(source);
-            RequireError(source.PollRetirement(), WorldStreamingErrors::CellDirectionLifecycleUnavailable);
+            RequireError(source.PollRetirement(frameBudget, 0), WorldStreamingErrors::CellDirectionLifecycleUnavailable);
             REQUIRE(owner.Interrupt(owner.Operation().Handle(), StreamingCellOperationTransition::Shutdown).HasValue());
             REQUIRE(owner.Operation().Outcome() == disposition);
             RequireError(owner.UpdateDemand(owner.Operation().Handle(), Revision(1), Revision(2), StreamingDesiredResidency::Activated),
                          WorldStreamingErrors::CellDirectionLifecycleUnavailable);
             scheduler.BeginShutdown();
             REQUIRE(scheduler.State() == StreamingSchedulerAdmissionState::Draining);
-            REQUIRE(owner.PollRetirement().Value().State() == StreamingCellOperationState::Retiring);
+            REQUIRE(owner.PollRetirement(frameBudget, 0).Value().State() == StreamingCellOperationState::Retiring);
             REQUIRE(log.leases == 1);
             view.ready = true;
-            REQUIRE(owner.PollRetirement().Value().Outcome() == disposition);
+            REQUIRE(owner.PollRetirement(frameBudget, 0).Value().Outcome() == disposition);
             REQUIRE(scheduler.State() == StreamingSchedulerAdmissionState::Closed);
             REQUIRE_FALSE(owner.RequiresFreshAttempt());
         }
@@ -362,14 +406,18 @@ namespace Horo::WorldStreaming {
         Forward(owner, StreamingCellOperationTransition::BeginRetirement);
         Demand(owner, StreamingDesiredResidency::Loaded);
         REQUIRE(owner.Operation().State() == StreamingCellOperationState::Retiring);
-        REQUIRE(owner.PollRetirement().Value().State() == StreamingCellOperationState::Retiring);
+        REQUIRE(owner.PollRetirement(frameBudget, 0).Value().State() == StreamingCellOperationState::Retiring);
         view.ready = true;
-        REQUIRE(owner.PollRetirement().Value().Outcome() == StreamingCellOperationOutcome::Succeeded);
+        REQUIRE(owner.PollRetirement(frameBudget, 0).Value().Outcome() == StreamingCellOperationOutcome::Succeeded);
         REQUIRE(owner.RequiresFreshAttempt());
     }
 
     TEST_CASE("Scheduler shutdown prevents prepared publication while exact cleanup remains routable",
               "[unit][world_streaming][direction][shutdown]") {
+        [[maybe_unused]] auto frameBudget =
+            StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                               IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                .Value();
         auto scheduler = Scheduler();
         const auto config = Config(StreamingCellOperationKind::Activate);
         ParticipantLog log;
@@ -380,17 +428,22 @@ namespace Horo::WorldStreaming {
         Forward(owner, StreamingCellOperationTransition::BeginActivation);
         auto transaction = Prepared(owner, log);
         scheduler.BeginShutdown();
-        RequireError(owner.CommitActivation(transaction, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges),
+        RequireError(owner.CommitActivation(transaction, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges, frameBudget,
+                                            0),
                      WorldStreamingErrors::CellActivationLifecycleUnavailable);
         REQUIRE(log.rolledBack);
         REQUIRE_FALSE(log.published);
         REQUIRE(owner.Interrupt(owner.Operation().Handle(), StreamingCellOperationTransition::Shutdown).HasValue());
         view.ready = true;
-        REQUIRE(owner.PollRetirement().Value().Outcome() == StreamingCellOperationOutcome::Shutdown);
+        REQUIRE(owner.PollRetirement(frameBudget, 0).Value().Outcome() == StreamingCellOperationOutcome::Shutdown);
         REQUIRE(scheduler.State() == StreamingSchedulerAdmissionState::Closed);
     }
 
     TEST_CASE("Retired direction evidence cannot change a successor residency generation", "[unit][world_streaming][direction][fencing]") {
+        [[maybe_unused]] auto frameBudget =
+            StreamingOwnerFrameBudget::Create({IdentityFrom<StreamingSchedulerLedgerId>(1), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                               IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                .Value();
         auto scheduler = Scheduler(2, 10);
         const auto authority = TestSupport::WorldOwner();
         auto residency = StreamingCellStateLedger::Create({authority, 2}).Value();
@@ -414,12 +467,147 @@ namespace Horo::WorldStreaming {
         auto fresh = StreamingCellDirectionOwner::Create(scheduler, freshConfig, freshParticipants).Value();
         REQUIRE(residency.Apply(authority, fresh.Operation()).Value().state == StreamingCellState::Loading);
         view.ready = true;
-        REQUIRE(old.PollRetirement().Value().IsTerminal());
+        REQUIRE(old.PollRetirement(frameBudget, 0).Value().IsTerminal());
         REQUIRE(residency.Apply(authority, old.Operation()).Value().state == StreamingCellState::Unloaded);
         REQUIRE(residency.Resolve(authority, fresh.Operation().Handle().fence).Value().state == StreamingCellState::Loading);
         Forward(fresh, StreamingCellOperationTransition::BeginPreparation);
         Forward(fresh, StreamingCellOperationTransition::Complete);
         REQUIRE(residency.Apply(authority, fresh.Operation()).Value().state == StreamingCellState::Resident);
+    }
+
+    TEST_CASE("Retirement resumes across bounded frames without releasing pending charges or batching destruction",
+              "[unit][world_streaming][direction][frame_budget]") {
+        for (const auto reason : {StreamingCellOperationTransition::Cancel, StreamingCellOperationTransition::Fail,
+                                  StreamingCellOperationTransition::Replace, StreamingCellOperationTransition::Shutdown}) {
+            auto scheduler = Scheduler();
+            const auto config = Config();
+            ParticipantLog log;
+            Participants participants;
+            Add(participants, log, config, 30).ready = true;
+            Add(participants, log, config, 10).ready = true;
+            auto owner = StreamingCellDirectionOwner::Create(scheduler, config, participants).Value();
+            REQUIRE(owner.Interrupt(owner.Operation().Handle(), reason).HasValue());
+            scheduler.BeginShutdown();
+            auto limits = StreamingOwnerFrameLimits{scheduler.Owner(), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                    IdentityFrom<StreamingOwnerFrameId>(1), 10, 1};
+            auto frame = StreamingOwnerFrameBudget::Create(limits).Value();
+            REQUIRE(owner.PollRetirement(frame, 0).Value().State() == StreamingCellOperationState::Retiring);
+            REQUIRE(log.started == std::vector<std::uint64_t>{30});
+            REQUIRE(log.destroyed == std::vector<std::uint64_t>{30});
+            REQUIRE(log.leases == 1);
+            REQUIRE(scheduler.ReservedCapacityUnits() == 5);
+            REQUIRE(owner.PollRetirement(frame, 0).Value().State() == StreamingCellOperationState::Retiring);
+            REQUIRE(log.started == std::vector<std::uint64_t>{30});
+            auto successor = std::move(owner);
+            limits.frame = IdentityFrom<StreamingOwnerFrameId>(2);
+            auto nextFrame = StreamingOwnerFrameBudget::Create(limits).Value();
+            REQUIRE(successor.PollRetirement(nextFrame, 0).Value().IsTerminal());
+            REQUIRE(log.started == std::vector<std::uint64_t>{30, 10});
+            REQUIRE(log.destroyed == std::vector<std::uint64_t>{30, 10});
+            REQUIRE(log.leases == 0);
+            REQUIRE(scheduler.ReservedCapacityUnits() == 0);
+            REQUIRE(scheduler.State() == StreamingSchedulerAdmissionState::Closed);
+            REQUIRE(nextFrame.ConsumedUnits() == 1);
+        }
+    }
+
+    TEST_CASE("One shared frame prevents both cross-cell activation and retirement from bypassing its ceiling",
+              "[unit][world_streaming][direction][frame_budget]") {
+        auto scheduler = Scheduler(2, 10);
+        const auto retiringConfig = Config(StreamingCellOperationKind::Retire);
+        const auto activatingConfig = Config(StreamingCellOperationKind::Activate, 2);
+        ParticipantLog retiredLog;
+        ParticipantLog activeLog;
+        Participants retiredParticipants;
+        Participants activeParticipants;
+        Add(retiredParticipants, retiredLog, retiringConfig, 1).ready = true;
+        Add(activeParticipants, activeLog, activatingConfig, 1);
+        auto retiring = StreamingCellDirectionOwner::Create(scheduler, retiringConfig, retiredParticipants).Value();
+        auto activating = StreamingCellDirectionOwner::Create(scheduler, activatingConfig, activeParticipants).Value();
+        Forward(retiring, StreamingCellOperationTransition::BeginRetirement);
+        Forward(activating, StreamingCellOperationTransition::BeginPreparation);
+        Forward(activating, StreamingCellOperationTransition::BeginActivation);
+        auto transaction = Prepared(activating, activeLog);
+        auto limits = StreamingOwnerFrameLimits{scheduler.Owner(), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                IdentityFrom<StreamingOwnerFrameId>(1), 10, 1};
+        auto frame = StreamingOwnerFrameBudget::Create(limits).Value();
+        auto foreignLimits = limits;
+        foreignLimits.owner = IdentityFrom<StreamingSchedulerLedgerId>(2);
+        auto foreign = StreamingOwnerFrameBudget::Create(foreignLimits).Value();
+        RequireError(activating.CommitActivation(transaction, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges, foreign,
+                                                 0),
+                     WorldStreamingErrors::OwnerFrameStale);
+        REQUIRE_FALSE(activeLog.published);
+        REQUIRE(foreign.ConsumedUnits() == 0);
+        REQUIRE(retiring.PollRetirement(frame, 0).Value().IsTerminal());
+        RequireError(activating.CommitActivation(transaction, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges, frame, 0),
+                     WorldStreamingErrors::OwnerFrameDeferred);
+        REQUIRE_FALSE(activeLog.published);
+        REQUIRE(transaction.State() == StreamingCellActivationState::Prepared);
+        REQUIRE(scheduler.ReservedCapacityUnits() == 5);
+        limits.frame = IdentityFrom<StreamingOwnerFrameId>(2);
+        auto nextFrame = StreamingOwnerFrameBudget::Create(limits).Value();
+        REQUIRE(activating.CommitActivation(transaction, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges, nextFrame, 0)
+                    .HasValue());
+        REQUIRE(activeLog.published);
+        REQUIRE(scheduler.ReservedCapacityUnits() == 0);
+        auto resident = activating.TakeSucceededParticipants().Value();
+        REQUIRE(resident.size() == 1);
+    }
+
+    TEST_CASE("Pending and failed retirement polls consume work without proving cleanup",
+              "[unit][world_streaming][direction][frame_budget][failure]") {
+        auto scheduler = Scheduler();
+        const auto config = Config();
+        ParticipantLog log;
+        Participants participants;
+        auto &participant = Add(participants, log, config, 1);
+        auto owner = StreamingCellDirectionOwner::Create(scheduler, config, participants).Value();
+        REQUIRE(owner.Interrupt(owner.Operation().Handle(), StreamingCellOperationTransition::Shutdown).HasValue());
+        auto limits = StreamingOwnerFrameLimits{scheduler.Owner(), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                IdentityFrom<StreamingOwnerFrameId>(1), 10, 1};
+        auto frame = StreamingOwnerFrameBudget::Create(limits).Value();
+        participant.failPoll = true;
+        RequireError(owner.PollRetirement(frame, 0), WorldStreamingErrors::CellAssetRequestUnavailable);
+        REQUIRE(frame.ConsumedUnits() == 1);
+        REQUIRE(log.leases == 1);
+        REQUIRE(scheduler.ReservedCount() == 1);
+        participant.failPoll = false;
+        participant.ready = true;
+        REQUIRE(owner.PollRetirement(frame, 0).Value().State() == StreamingCellOperationState::Retiring);
+        REQUIRE(log.destroyed.empty());
+        limits.frame = IdentityFrom<StreamingOwnerFrameId>(2);
+        auto nextFrame = StreamingOwnerFrameBudget::Create(limits).Value();
+        REQUIRE(owner.PollRetirement(nextFrame, 0).Value().IsTerminal());
+        REQUIRE(log.started == std::vector<std::uint64_t>{1});
+        REQUIRE(log.destroyed == std::vector<std::uint64_t>{1});
+    }
+
+    TEST_CASE("Foreign frame and oversized retirement step invoke no callbacks or resource release",
+              "[unit][world_streaming][direction][frame_budget][failure]") {
+        auto scheduler = Scheduler();
+        const auto config = Config();
+        ParticipantLog log;
+        Participants participants;
+        auto &participant = Add(participants, log, config, 1);
+        participant.cost = 20;
+        auto owner = StreamingCellDirectionOwner::Create(scheduler, config, participants).Value();
+        REQUIRE(owner.Interrupt(owner.Operation().Handle(), StreamingCellOperationTransition::Cancel).HasValue());
+        auto limits = StreamingOwnerFrameLimits{IdentityFrom<StreamingSchedulerLedgerId>(2), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                IdentityFrom<StreamingOwnerFrameId>(1), 10, 1};
+        auto foreign = StreamingOwnerFrameBudget::Create(limits).Value();
+        RequireError(owner.PollRetirement(foreign, 0), WorldStreamingErrors::OwnerFrameStale);
+        limits.owner = scheduler.Owner();
+        auto small = StreamingOwnerFrameBudget::Create(limits).Value();
+        RequireError(owner.PollRetirement(small, 0), WorldStreamingErrors::OwnerFrameCapacityExceeded);
+        REQUIRE(log.started.empty());
+        REQUIRE(log.destroyed.empty());
+        REQUIRE(log.leases == 1);
+        REQUIRE(scheduler.ReservedCount() == 1);
+        limits.maximumNanoseconds = 20;
+        auto barrier = StreamingOwnerFrameBudget::Create(limits).Value();
+        participant.ready = true;
+        REQUIRE(owner.PollRetirement(barrier, 0).Value().IsTerminal());
     }
 
 }  // namespace Horo::WorldStreaming

@@ -93,6 +93,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroWorldStreamingPublicHeaderConsumer PRIVATE support/StreamingOwnerFramePublicContract.cpp)
 
 execute_process(
         COMMAND "${Python3_EXECUTABLE}" -c "import pytest; print(pytest.__version__)"
@@ -1084,6 +1085,7 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/StreamingCellArtifactTests.cpp
         unit/runtime/world_streaming/StreamingCellAssetRequestTests.cpp
         unit/runtime/world_streaming/WorldPackageChunkAssignmentTests.cpp
+        unit/runtime/world_streaming/StreamingOwnerFrameBudgetTests.cpp
         unit/runtime/world_streaming/StreamingCellActivationTests.cpp
         unit/runtime/world_streaming/StreamingCellDirectionTests.cpp
         unit/runtime/world_streaming/StreamingCellStateTests.cpp

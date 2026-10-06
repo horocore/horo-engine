@@ -654,6 +654,33 @@ sub-caps, leaving 320 MiB for general/other-provider work. These are baseline po
 values, not a guarantee of frame timing or a rendering-tier gate. Each task unit is
 bounded; the time target stops starting new units, not preempts a native call.
 
+`StreamingOwnerFrameBudget` is the mandatory WST-003.8 owner-work ledger shared
+across all cells and current/retiring partition incarnations of one scheduler
+lifetime. The host issues one typed policy revision and monotonic frame identity,
+a positive work-time target and a unit-count ceiling. Every publication or
+retirement unit consumes that same unique ledger before callbacks begin;
+conservative charges and immediately sampled monotonic elapsed service time both
+bound admission. Pending/error polls remain charged, and a moved budget closes
+its source. Resource reservation accounting remains with the canonical scheduler.
+
+Activation receipts declare immutable positive publication bounds. Their complete
+checked sum is one atomic commit unit; frame exhaustion retains the prepared
+transaction and returns `OwnerFrameDeferred`. Partial publication over several
+frames is forbidden. Heavy preparation remains detached, and rollback performs
+bounded revocation/transfer to the admitted retirement owner rather than hidden
+synchronous heavy destruction. An oversized indivisible mandatory unit returns
+`OwnerFrameCapacityExceeded` and requires an explicit host barrier or work split.
+
+`StreamingCellDirectionOwner::PollRetirement` starts at most one admitted participant
+step per call and retains its dependency index/begun flag across frames and moves.
+A step includes begin, one non-blocking poll and exact-acknowledged adapter
+destruction. Heavy cleanup must be resumable inside the poll or native-affinity
+work, never deferred into a destructor. Frame deferral invokes no callbacks;
+stale/error evidence cannot release reservations. Cancellation, replacement,
+failure and shutdown retain the same continuation and ordered acknowledgements.
+Hosts and external adapters migrate through the
+[owner-frame migration guide](../../guides/world-streaming-owner-frame-migration.md).
+
 Providers may evict disposable local cache/LOD entries within their allowance but
 cannot discard activation-critical resources beneath an Active cell. They request
 cell eviction or an admitted fallback transition through the authority. Navigation

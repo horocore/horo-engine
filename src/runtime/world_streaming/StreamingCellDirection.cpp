@@ -38,7 +38,8 @@ namespace Horo::WorldStreaming {
                 return Internal::Failure<void>(WorldStreamingErrors::CellDirectionCapacityExceeded);
             for (std::size_t index{}; index < participants.size(); ++index) {
                 const auto &participant = participants[index];
-                if (!participant || !participant->Requirement().participant.IsValid() || !participant->Requirement().revision.IsValid())
+                if (!participant || !participant->Requirement().participant.IsValid() || !participant->Requirement().revision.IsValid() ||
+                    participant->MaximumRetirementNanoseconds() == 0)
                     return Internal::Failure<void>(WorldStreamingErrors::CellDirectionInvalid);
                 if (participant->Operation() != config.operation.Handle())
                     return Internal::Failure<void>(WorldStreamingErrors::CellDirectionStale);
@@ -123,7 +124,8 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingCellDirectionOwner::CommitActivation */
     Result<void> StreamingCellDirectionOwner::CommitActivation(StreamingCellActivationTransaction &transaction,
-                                                               const StreamingCellActivationCommitPoint point) {
+                                                               const StreamingCellActivationCommitPoint point,
+                                                               StreamingOwnerFrameBudget &budget, const std::uint64_t elapsedNanoseconds) {
         using enum StreamingCellActivationLifecycle;
         const auto lifecycle = scheduler_ && scheduler_->State() == StreamingSchedulerAdmissionState::Accepting && !demandClosed_ &&
                                        reservation_ && operation_.State() == StreamingCellOperationState::Activating
@@ -133,7 +135,9 @@ namespace Horo::WorldStreaming {
             transaction.Rollback();
             return Internal::Failure<void>(WorldStreamingErrors::CellActivationLifecycleUnavailable);
         }
-        if (const auto committed = transaction.Commit(operation_, point, lifecycle); committed.HasError())
+        if (budget.Limits().owner != scheduler_->Owner())
+            return Internal::Failure<void>(WorldStreamingErrors::OwnerFrameStale);
+        if (const auto committed = transaction.Commit(operation_, point, lifecycle, budget, elapsedNanoseconds); committed.HasError())
             return committed;
         auto next = scheduler_->Advance(*reservation_, StreamingCellOperationTransition::Complete);
         if (next.HasError())
@@ -175,15 +179,24 @@ namespace Horo::WorldStreaming {
     /** @copydoc StreamingCellDirectionOwner::RevokeParticipants */
     void StreamingCellDirectionOwner::RevokeParticipants() const noexcept {
         for (const auto &participant : participants_)
-            participant->RevokeAccess();
+            if (participant)
+                participant->RevokeAccess();
     }
 
     /** @copydoc StreamingCellDirectionOwner::PollRetirement */
-    Result<StreamingCellOperation> StreamingCellDirectionOwner::PollRetirement() {
+    Result<StreamingCellOperation> StreamingCellDirectionOwner::PollRetirement(StreamingOwnerFrameBudget &budget,
+                                                                               const std::uint64_t elapsedNanoseconds) {
         if (!scheduler_ || operation_.State() != StreamingCellOperationState::Retiring)
             return Internal::Failure<StreamingCellOperation>(WorldStreamingErrors::CellDirectionLifecycleUnavailable);
-        while (nextRetirement_ < participants_.size()) {
-            const auto &participant = participants_[nextRetirement_];
+        if (budget.Limits().owner != scheduler_->Owner())
+            return Internal::Failure<StreamingCellOperation>(WorldStreamingErrors::OwnerFrameStale);
+        if (nextRetirement_ < participants_.size()) {
+            auto &participant = participants_[nextRetirement_];
+            const auto admitted = budget.TryConsume(scheduler_->Owner(), participant->MaximumRetirementNanoseconds(), elapsedNanoseconds);
+            if (admitted.HasError())
+                return Result<StreamingCellOperation>::Failure(admitted.ErrorValue());
+            if (!admitted.Value())
+                return Result<StreamingCellOperation>::Success(operation_);
             if (!retirementStarted_) {
                 participant->BeginRetirement();
                 retirementStarted_ = true;
@@ -195,8 +208,11 @@ namespace Horo::WorldStreaming {
                 return Result<StreamingCellOperation>::Success(operation_);
             if (const auto &ack = *polled.Value(); ack.operation != operation_.Handle() || ack.participant != participant->Requirement())
                 return Internal::Failure<StreamingCellOperation>(WorldStreamingErrors::CellDirectionStale);
+            participant.reset();
             ++nextRetirement_;
             retirementStarted_ = false;
+            if (nextRetirement_ < participants_.size())
+                return Result<StreamingCellOperation>::Success(operation_);
         }
         auto next = scheduler_->Advance(*reservation_, StreamingCellOperationTransition::AcknowledgeRetirement);
         if (next.HasError())
