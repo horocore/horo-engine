@@ -1014,6 +1014,52 @@ historical data only; new dispatch after spawn/despawn must use the next
 post-commit publication. Detailed sight/occlusion and sense scheduling remain
 separate Perception/Physics responsibilities.
 
+The concrete `HoroEngine::AISightIntegration` target owns the scheduled sight
+kernel in `Horo/AI/PerceptionSight.h`. It depends on `AISceneIntegration` and
+canonical, backend-neutral `Physics`; core `HoroAI` acquires no Physics dependency.
+The host owns one `PerceptionSight` per listener/configuration lifetime and calls
+`Begin` with the current candidate snapshot, explicit Physics capability, local
+origin, scene generation, completed tick and publication revision. The kernel
+reads the frozen listener position from that same snapshot, expands broadphase
+range for bounded eye/aim offsets, then applies inclusive radius, cone and height
+tests before admitting an owned canonical LOS batch. Sight's occlusion channel
+contains blockers rather than target colliders; non-blocking overlap hits cannot
+hide a farther blocker. No native solver type or backend discovery is exposed.
+
+All listeners in a fixed tick share the host's remaining LOS allowance. Admission
+charges successful rays only. Candidate truncation, query truncation and exhausted
+budgets remain explicit unknown evidence: they neither establish occlusion nor
+advance gain/loss confirmations. Results describe the returned candidate set;
+omitted candidates are not confirmed misses. History and work arrays are fixed at
+128 candidates/rays, with 32 Physics hits per ray and a 4096-hit aggregate ceiling.
+The canonical Physics capability constructs its existing owned command/completion
+storage once per admitted sensing window; idle, history and successful polling
+paths allocate no sight storage. Typed failure construction may allocate diagnostics.
+
+Physics processes batches on its owner lane before the next tick/publication.
+`Poll` validates current Scene/listener/source incarnations, candidate revision,
+Physics world/capability identity, scene generation, completed tick and publication
+before committing visibility. Every completion entry validates hit counts, filter
+and broadphase evidence, world identities, geometry and ordering; malformed or
+failed batches close terminally without admitting empty hits as visibility.
+Consecutive confirmed samples drive configured gain/loss hysteresis; repeated
+polls cannot advance it. The listener must lie within 1024 meters per axis of the
+explicit Physics origin. Global millimeter separations are computed before float
+conversion, including near signed-64-bit global limits.
+
+Policy changes, listener replacement, disable and unload call `Reset` at the
+sensing safe point, canceling outstanding work and clearing history. Destruction
+also cancels; retained batch state never retains a Scene or native Physics world.
+The kernel stages copied sight observations only; blackboard synchronization,
+multi-sense scheduling and product host composition retain their existing owners.
+
+Migration: hosts opting into sight link `HoroEngine::AISightIntegration`, bind the
+visibility channel and canonical capability, supply the exact current Physics
+publication to every poll, and reset before policy/lifecycle changes. Existing
+broadphase callers remain source-compatible; the additive `ListenerPosition`
+accessor removes a competing host-supplied listener-position authority. Generated
+AI/Scene/sight public-header consumers and `HoroAISightTests` cover this boundary.
+
 Every built-in sense has an explicit authority, timing owner, and underlying
 query seam:
 

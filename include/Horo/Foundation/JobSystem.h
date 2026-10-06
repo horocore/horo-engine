@@ -130,12 +130,74 @@ namespace Horo {
     /** @brief Checks the exact Foundation cancellation identity, including its owning domain. @return True only for job.cancelled. */
     [[nodiscard]] bool IsJobCancelled(const Error &error) noexcept;
 
+    /** @brief Coarse queue class; each class preserves submission order. */
+    enum class JobPriority : std::uint8_t {
+        Interactive,
+        Normal,
+        Background
+    };
+
+    /** @brief Submission requirement, independent of priority and queue policy. */
+    enum class JobRequirement : std::uint8_t {
+        Required, /**< At capacity, Shed returns QueueFull rather than classifying this work as expendable. */
+        Optional  /**< Explicit permission to shed this incoming job when its queue uses Shed and is full. */
+    };
+
+    /** @brief Full-queue behavior; Shed drops only submissions explicitly marked Optional, never accepted work. */
+    enum class JobOverloadPolicy : std::uint8_t {
+        Reject,
+        Block,
+        Shed
+    };
+
+    /** @brief Host-declared producer role used to enforce submit-side waiting rules. */
+    enum class JobProducerRole : std::uint8_t {
+        MainEditor,
+        RenderOwner,
+        TransportOwner,
+        Worker,
+        IoService,
+        ExternalUnknown,
+        NonCritical
+    };
+
+    /**
+     * @brief Host/test-owned thread scope granting bounded admission waits only to non-critical producers.
+     * Scheduler callbacks cannot block even inside this scope. Nested scopes cannot widen an outer restriction.
+     * @pre Construct and destroy on the same thread in stack order; feature callbacks must not grant themselves permissions.
+     */
+    class JobProducerScope final {
+    public:
+        /** @brief Installs a producer role. @param role Host-selected role for this thread. */
+        explicit JobProducerScope(JobProducerRole role) noexcept;
+        /** @brief Restores the enclosing producer permission. */
+        ~JobProducerScope();
+        JobProducerScope(const JobProducerScope &) = delete;
+        JobProducerScope &operator=(const JobProducerScope &) = delete;
+        JobProducerScope(JobProducerScope &&) = delete;
+        JobProducerScope &operator=(JobProducerScope &&) = delete;
+
+    private:
+        friend class JobSystem;
+        [[nodiscard]] static std::optional<bool> &BlockingPermission() noexcept;
+        std::optional<bool> previousPermission_;
+    };
+
+    /** @brief One priority queue's immutable admission policy; Shed does not declare the entire class optional. */
+    struct JobQueueConfig final {
+        std::optional<std::size_t> capacity; /**< Absent uses the global maximum; zero disables admission to this class. */
+        JobOverloadPolicy overloadPolicy{JobOverloadPolicy::Reject};
+        Duration blockTimeout{}; /**< Block requires a positive finite deadline and a NonCritical producer scope. */
+    };
+
     /** @brief Submission metadata retained by the job system. */
     struct JobDescriptor {
         CancellationToken parentCancellation;                  /**< Optional parent operation cancellation. */
         std::optional<OperationId> operationId;                /**< Optional explicit application operation correlation only. */
         TaskGroupId taskGroupId;                               /**< Optional structured-work correlation, replaced by TaskGroup. */
         std::optional<ConfigurationSnapshotRef> configuration; /**< Explicit immutable submission configuration. */
+        JobPriority priority{JobPriority::Normal};             /**< FIFO class, serviced by a stable starvation-safe 4:2:1 cycle. */
+        JobRequirement requirement{JobRequirement::Required};  /**< Required by default; Optional permits shedding at capacity. */
     };
 
     /** @brief Fixed scheduling limits for one JobSystem instance. */
@@ -143,6 +205,17 @@ namespace Horo {
         std::size_t workerCount = 1;
         std::size_t maxQueuedJobs = 1024;
         std::size_t maxRetainedTerminalJobs = 1024;
+        std::array<JobQueueConfig, 3> priorityQueues{}; /**< Interactive, Normal, Background; global maxQueuedJobs still applies. */
+        std::size_t maxWaitingProducers = 64;           /**< Global bounded count of producers permitted to await admission. */
+    };
+
+    /** @brief Bounded admission facts; counters count rejected submissions, independently of job-store retention. */
+    struct JobAdmissionSnapshot final {
+        std::array<std::size_t, 3> queued{};
+        std::size_t waitingProducers{};
+        std::array<std::uint64_t, 3> rejected{};
+        std::array<std::uint64_t, 3> shed{};
+        std::array<std::uint64_t, 3> timedOut{};
     };
 
     /** @brief Defines how queued work is treated during shutdown. */
@@ -273,6 +346,8 @@ namespace Horo {
         [[nodiscard]] std::optional<JobStoreSnapshot> SnapshotIfChanged(std::uint64_t knownRevision) const;
         /** @brief Returns the immutable worker count configured for this scheduler. */
         [[nodiscard]] std::size_t WorkerCount() const noexcept;
+        /** @brief Returns linearized queue pressure and cumulative overload counters. @return An owned fixed-size snapshot. */
+        [[nodiscard]] JobAdmissionSnapshot AdmissionSnapshot() const;
         /** @brief Stops submissions, then drains or cooperatively cancels work and joins all workers. */
         void Shutdown(ShutdownPolicy policy) const;
 
