@@ -44,6 +44,8 @@ namespace Horo::Tests {
 
         /** @brief Returns retained build output for E2E failure diagnostics. */
         [[nodiscard]] std::string BuildDiagnosticText() const;
+        /** @brief Checks the published native artifact against the current source and host toolchain inputs. */
+        [[nodiscard]] bool IsGameplayBuildUpToDate(const std::filesystem::path &projectRoot) const;
 
         /** @brief Returns the active top-level route. */
         [[nodiscard]] Editor::GuiRouteKind ActiveRoute() const noexcept;
