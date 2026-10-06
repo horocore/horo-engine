@@ -1,7 +1,8 @@
 #include "host/OpenXRNativeSession.h"
 
+#include "host/OpenXRNativeNames.h"
+
 #include <algorithm>
-#include <cstring>
 #include <exception>
 #include <string>
 
@@ -42,6 +43,15 @@ namespace Horo::XR::OpenXRInternal {
         template <std::size_t Size> std::string_view NativeName(const char (&name)[Size]) noexcept {
             const auto end = std::find(name, name + Size, '\0');
             return end == name + Size ? std::string_view{} : std::string_view{name, static_cast<std::size_t>(end - name)};
+        }
+
+        /** @brief Copies a validated policy name into bounded owner storage, including its explicit terminator. */
+        bool CopyPolicyName(std::string_view name, std::span<char> destination) noexcept {
+            if (!ValidName(name, destination.size()))
+                return false;
+            std::ranges::copy(name, destination.first(name.size()).begin());
+            destination[name.size()] = '\0';
+            return true;
         }
 
         /** @brief Validates a selected API's binding tag without importing any platform graphics headers. */
@@ -262,8 +272,8 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported, "Required API layer is absent"));
         if (layerCount_ == layerNames_.size())
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        std::memcpy(layerNames_[layerCount_].data(), name.data(), name.size());
-        layerNames_[layerCount_][name.size()] = '\0';
+        if (!CopyPolicyName(name, layerNames_[layerCount_]))
+            return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         layers_[layerCount_] = layerNames_[layerCount_].data();
         ++layerCount_;
         return Result<void>::Success();
@@ -312,8 +322,8 @@ namespace Horo::XR::OpenXRInternal {
                             : Result<void>::Success();
         if (extensionCount_ == extensionNames_.size())
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        std::memcpy(extensionNames_[extensionCount_].data(), name.data(), name.size());
-        extensionNames_[extensionCount_][name.size()] = '\0';
+        if (!CopyPolicyName(name, extensionNames_[extensionCount_]))
+            return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         extensions_[extensionCount_] = extensionNames_[extensionCount_].data();
         ++extensionCount_;
         return Result<void>::Success();
@@ -325,8 +335,8 @@ namespace Horo::XR::OpenXRInternal {
         if (current.HasError())
             return current;
         XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
-        std::strcpy(info.applicationInfo.applicationName, "Horo Engine");
-        std::strcpy(info.applicationInfo.engineName, "Horo Engine");
+        CopyNativeLiteral(info.applicationInfo.applicationName, "Horo Engine");
+        CopyNativeLiteral(info.applicationInfo.engineName, "Horo Engine");
         const auto version = request.preflight.LoaderApiVersion();
         if (version.major != 1 || version.minor > XR_VERSION_MINOR(XR_CURRENT_API_VERSION))
             return Result<void>::Failure(

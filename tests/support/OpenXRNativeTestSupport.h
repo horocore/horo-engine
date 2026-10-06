@@ -1,12 +1,12 @@
 #pragma once
 
+#include "OpenXRNativeNames.h"
 #include "OpenXRNativeSession.h"
 #include "support/TypedIdentityTestSupport.h"
 
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
-#include <cstring>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
@@ -57,7 +57,7 @@ namespace Horo::Tests::OpenXR {
         static XRAPI_ATTR XrResult XRAPI_CALL Layers(std::uint32_t capacity, std::uint32_t *count, XrApiLayerProperties *properties) {
             *count = active->advertiseLayer ? 1U : 0U;
             if (capacity && *count) {
-                std::strcpy(properties[0].layerName, "XR_APILAYER_TEST");
+                CopyNativeLiteral(properties[0].layerName, "XR_APILAYER_TEST");
                 properties[0].specVersion = XR_MAKE_VERSION(1, 1, 0);
                 properties[0].layerVersion = 1;
             }
@@ -69,7 +69,10 @@ namespace Horo::Tests::OpenXR {
             *count = active->extensionCount;
             if (capacity && *count <= capacity) {
                 for (std::uint32_t index = 0; index < *count; ++index) {
-                    std::strcpy(properties[index].extensionName, layer ? "XR_TEST_layer_extension" : "XR_KHR_vulkan_enable2");
+                    if (layer)
+                        CopyNativeLiteral(properties[index].extensionName, "XR_TEST_layer_extension");
+                    else
+                        CopyNativeLiteral(properties[index].extensionName, "XR_KHR_vulkan_enable2");
                     properties[index].extensionVersion = 1;
                     if (active->malformedExtension)
                         properties[index].type = XR_TYPE_UNKNOWN;
