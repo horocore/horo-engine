@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../save/SaveGameplayPersistenceTestUtils.h"
+#include "AllocationProbe.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Gameplay/GameplayRegistrationRuntime.h"
 #include "Horo/Runtime/Scene/SceneRestoreBundle.h"
@@ -47,6 +48,15 @@ namespace Horo::Runtime::RestoreTest {
     /** @brief Foreign project failure deliberately outside the standard exception hierarchy. */
     struct ForeignProjectFixupFailure final {};
 
+    inline void InjectForeignBoundaryFault(const unsigned fault) {
+        if (fault == 1)
+            throw std::bad_alloc{};
+        if (fault == 2)
+            throw ForeignProjectFixupFailure{};
+        if (fault == 3)
+            throw std::runtime_error{"foreign boundary fixture fault"};
+    }
+
     struct ProjectState final {
         std::vector<SaveRestoreReferenceResult> active;
         std::uint64_t candidateScene{};
@@ -56,6 +66,9 @@ namespace Horo::Runtime::RestoreTest {
         bool throwFixup{};
         bool throwAllocation{};
         bool throwNonStandard{};
+        bool failFailureTranslationAllocation{};
+        std::optional<Tests::AllocationProbe::ScopedFailure> failureTranslation;
+        std::size_t allocationCountAtFault{};
     };
 
     class ProjectCandidate final : public IPreparedGameplayPersistenceState {
@@ -64,6 +77,10 @@ namespace Horo::Runtime::RestoreTest {
 
         Result<void> FixupRuntimeReferences(const SaveRestoreReferenceView &references) override {
             if (state_.throwFixup) {
+                if (state_.failFailureTranslationAllocation) {
+                    state_.failureTranslation.emplace(0);
+                    state_.allocationCountAtFault = Tests::AllocationProbe::Count();
+                }
                 if (state_.throwAllocation)
                     throw std::bad_alloc{};
                 if (state_.throwNonStandard)
@@ -119,6 +136,7 @@ namespace Horo::Runtime::RestoreTest {
     };
 
     struct ComponentState final {
+        unsigned prepareFault{};
         EntityRef entity;
         PersistentEntityId linked;
         std::uint32_t value{};
@@ -178,6 +196,7 @@ namespace Horo::Runtime::RestoreTest {
 
         Result<std::unique_ptr<IPreparedSaveableComponentState>> PrepareApply(EntityRef entity,
                                                                               CanonicalValueReader source) const override {
+            InjectForeignBoundaryFault(state_.prepareFault);
             const auto value = source.ReadUInt32();
             if (value.HasError())
                 return Result<std::unique_ptr<IPreparedSaveableComponentState>>::Failure(value.ErrorValue());
@@ -205,6 +224,7 @@ namespace Horo::Runtime::RestoreTest {
     };
 
     struct PreparationControl final {
+        unsigned sourceFault{};
         bool ready{};
         unsigned cancelled{};
     };
@@ -257,6 +277,7 @@ namespace Horo::Runtime::RestoreTest {
               control_(std::move(control)) {}
 
         Result<std::optional<SceneRestorePreparedOwners>> TakeReady(RuntimeSceneView) override {
+            InjectForeignBoundaryFault(control_->sourceFault);
             if (operation_->ObserveCancellation() == SaveCancellationObservation::Cancelled) {
                 const auto snapshot = operation_->Handle().Snapshot();
                 return Result<std::optional<SceneRestorePreparedOwners>>::Failure(

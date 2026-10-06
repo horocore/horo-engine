@@ -2658,8 +2658,10 @@ target_link_libraries(HoroRuntimeSaveableComponentStateTests PRIVATE HoroEngine:
 add_executable(HoroRuntimeRestoreReferenceTests
         unit/runtime/scene/SceneRestoreBundleTests.cpp
         unit/runtime/scene/RestoreReferenceGraphTests.cpp
+        support/AllocationProbe.cpp
 )
 target_compile_features(HoroRuntimeRestoreReferenceTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeRestoreReferenceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroRuntimeRestoreReferenceTests PRIVATE HoroEngine::RuntimeScene HoroEngine::GameplayRuntime)
 add_executable(HoroRestoreReferenceApiPublicHeaderConsumer support/RestoreReferenceApiPublicHeaderConsumer.cpp)
 target_compile_features(HoroRestoreReferenceApiPublicHeaderConsumer PRIVATE cxx_std_20)

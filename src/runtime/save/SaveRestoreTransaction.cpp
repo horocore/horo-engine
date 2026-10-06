@@ -7,6 +7,7 @@
 #include <exception>
 #include <new>
 #include <ranges>
+#include <type_traits>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -330,7 +331,21 @@ namespace Horo::Runtime {
                                            index);
                 prepared.emplace_back(requirements_[index], projection);
             }
-            auto resolved = referenceResolver_->Resolve(context_, prepared);
+            static_assert(std::is_nothrow_move_constructible_v<Result<SaveRestoreReferenceContext>>);
+            // Construct both errors before resolver entry. Unwinding and returning a foreign failure cannot allocate.
+            auto resolved = [this, &prepared,
+                             allocationFailure =
+                                 Result<SaveRestoreReferenceContext>::Failure(MakeError(SaveErrors::RestoreAllocationFailed)),
+                             callbackFailure = Result<SaveRestoreReferenceContext>::Failure(
+                                 MakeError(SaveErrors::RestoreAdapterContractInvalid))]() mutable noexcept {
+                try {
+                    return referenceResolver_->Resolve(context_, prepared);
+                } catch (const std::bad_alloc &) {
+                    return std::move(allocationFailure);
+                } catch (...) {
+                    return std::move(callbackFailure);
+                }
+            }();
             if (resolved.HasError())
                 return FailPreparation(resolved.ErrorValue(), StagedRestorePhase::FixupReferences, requirements_.size());
             if (const auto generation = resolved.Value().Generation(); generation.registry != context_.registryGeneration ||
@@ -346,10 +361,6 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {
             return FailPreparation(MakeError(SaveErrors::RestoreAllocationFailed), StagedRestorePhase::FixupReferences,
-                                   requirements_.size());
-        } catch (...) {
-            // Module-owned resolvers may throw non-standard exceptions; rollback must still precede any activation.
-            return FailPreparation(MakeError(SaveErrors::RestoreAdapterContractInvalid), StagedRestorePhase::FixupReferences,
                                    requirements_.size());
         }
     }

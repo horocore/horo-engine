@@ -144,43 +144,65 @@ namespace Horo::Runtime {
 
         TEST_CASE("Component payload fixups publish with actual Scene and Gameplay owners through one gate",
                   "[unit][runtime][scene][save][restore][references]") {
-            Fixture fixture;
-            ComponentState component;
-            Gameplay::ComponentRegistry types;
-            REQUIRE(types.Register({.typeId = ComponentType(), .schemaVersion = 1, .displayName = "Links"}).HasValue());
-            REQUIRE(types.Freeze().HasValue());
-            const std::array requirements{SaveableComponentRequirement{ComponentType(), SaveableComponentPresence::Required}};
-            const std::array<std::shared_ptr<const ISaveableComponentStateAdapter>, 1> adapters{
-                std::make_shared<ComponentAdapter>(component)};
-            auto registry = SaveableComponentAdapterRegistry::Create(types, requirements, adapters);
-            REQUIRE(registry.HasValue());
-            auto request = fixture.Request();
-            request.componentAdapters = std::make_shared<SaveableComponentAdapterRegistry>(std::move(registry).Value());
-            CanonicalValueWriter writer;
-            REQUIRE(writer.WriteUInt32(73).HasValue());
-            const auto encoded = std::move(writer).Finalize().Value();
-            const RestoreComponentReference source{Target(1), ComponentType()};
-            request.nodes.push_back(source);
-            request.references.push_back(
-                {.identity = 3, .owner = fixture.adapter->Descriptor().participant.participant, .source = source, .target = Target(2)});
-            request.components.push_back({.record = {.entity = Id<PersistentEntityId>(1),
-                                                     .generation = {1},
-                                                     .type = ComponentType(),
-                                                     .schemaVersion = 1,
-                                                     .payload = {encoded.Bytes().begin(), encoded.Bytes().end()}},
-                                          .owner = fixture.adapter->Descriptor().participant.participant,
-                                          .references = {{3}}});
-            fixture.control->ready = true;
-            fixture.Queue(std::move(request));
-            fixture.Pump();
-            REQUIRE_FALSE(fixture.service.TakeOperationError());
-            REQUIRE(fixture.service.ActiveScene()->Get(component.entity).HasValue());
-            CHECK(component.value == 73);
-            CHECK(component.linked == Id<PersistentEntityId>(2));
-            CHECK(component.fixed == 1);
-            CHECK(component.published == 1);
-            CHECK(fixture.project->state.published == 1);
-            CHECK(fixture.operation.Snapshot()->IsTerminal());
+            for (const unsigned fault : {0U, 1U, 2U, 3U}) {
+                Fixture fixture;
+                const auto oldScene = fixture.service.ActiveScene()->RuntimeId();
+                ComponentState component;
+                component.prepareFault = fault;
+                Gameplay::ComponentRegistry types;
+                REQUIRE(types.Register({.typeId = ComponentType(), .schemaVersion = 1, .displayName = "Links"}).HasValue());
+                REQUIRE(types.Freeze().HasValue());
+                const std::array requirements{SaveableComponentRequirement{ComponentType(), SaveableComponentPresence::Required}};
+                const std::array<std::shared_ptr<const ISaveableComponentStateAdapter>, 1> adapters{
+                    std::make_shared<ComponentAdapter>(component)};
+                auto registry = SaveableComponentAdapterRegistry::Create(types, requirements, adapters);
+                REQUIRE(registry.HasValue());
+                auto request = fixture.Request();
+                request.componentAdapters = std::make_shared<SaveableComponentAdapterRegistry>(std::move(registry).Value());
+                CanonicalValueWriter writer;
+                REQUIRE(writer.WriteUInt32(73).HasValue());
+                const auto encoded = std::move(writer).Finalize().Value();
+                const RestoreComponentReference source{Target(1), ComponentType()};
+                request.nodes.push_back(source);
+                request.references.push_back(
+                    {.identity = 3, .owner = fixture.adapter->Descriptor().participant.participant, .source = source, .target = Target(2)});
+                request.components.push_back({.record = {.entity = Id<PersistentEntityId>(1),
+                                                         .generation = {1},
+                                                         .type = ComponentType(),
+                                                         .schemaVersion = 1,
+                                                         .payload = {encoded.Bytes().begin(), encoded.Bytes().end()}},
+                                              .owner = fixture.adapter->Descriptor().participant.participant,
+                                              .references = {{3}}});
+                fixture.control->ready = true;
+                if (fault != 0) {
+                    auto producer =
+                        CreateSaveOperation({.operation = 1437, .kind = SaveOperationKind::Load, .maximumCompletionCallbacks = 4}).Value();
+                    fixture.operation = producer.Handle();
+                    auto source = std::make_unique<OwnerSource>(fixture.adapter, *fixture.snapshot, std::move(producer), fixture.control);
+                    auto bundle = SceneRestoreBundle::Create(std::move(request), std::move(source), fixture.authority);
+                    REQUIRE(bundle.HasValue());
+                    const auto rejected =
+                        fixture.service.QueuePreparationWithRestore(Definition(2, fixture.entityCount), std::move(bundle).Value());
+                    REQUIRE(rejected.HasError());
+                    const auto &expected = fault == 1 ? SaveErrors::RestoreAllocationFailed : SaveErrors::RestoreAdapterContractInvalid;
+                    CHECK(rejected.ErrorValue().code.Value() == expected.code.Value());
+                    CHECK(fixture.service.ActiveScene()->RuntimeId() == oldScene);
+                    CHECK(component.published == 0);
+                    CHECK(fixture.project->state.published == 0);
+                    CHECK(fixture.operation.Snapshot()->IsTerminal());
+                    continue;
+                }
+                fixture.Queue(std::move(request));
+                fixture.Pump();
+                REQUIRE_FALSE(fixture.service.TakeOperationError());
+                REQUIRE(fixture.service.ActiveScene()->Get(component.entity).HasValue());
+                CHECK(component.value == 73);
+                CHECK(component.linked == Id<PersistentEntityId>(2));
+                CHECK(component.fixed == 1);
+                CHECK(component.published == 1);
+                CHECK(fixture.project->state.published == 1);
+                CHECK(fixture.operation.Snapshot()->IsTerminal());
+            }
         }
 
         TEST_CASE("Cancellation and live generation changes discard pending restore without changing active roots",
@@ -335,6 +357,75 @@ namespace Horo::Runtime {
                 CHECK(error->code.Value() == expected.code.Value());
                 CHECK(fixture.service.ActiveScene()->RuntimeId() == old);
                 CHECK(fixture.project->state.published == 0);
+                CHECK(fixture.operation.Snapshot()->IsTerminal());
+            }
+        }
+
+        TEST_CASE("Gameplay foreign fixup translation returns owned failure without allocating while the allocator rejects new work",
+                  "[unit][runtime][scene][save][restore][references]") {
+            class NoDependencies final : public ICanonicalRestoreDependencyLookup {
+            public:
+                const ICanonicalRestorePreparedState *Find(const SaveParticipantId &) const noexcept override {
+                    return nullptr;
+                }
+            } dependencies;
+
+            for (const bool allocationFault : {false, true}) {
+                Fixture fixture;
+                const auto &descriptor = fixture.adapter->Descriptor();
+                const auto records = fixture.snapshot->Records();
+                REQUIRE(records.size() == 1);
+                auto staged =
+                    fixture.adapter->StageRestore(descriptor.participant.schemaVersion, descriptor.record, records.front().Segment(0));
+                REQUIRE(staged.HasValue());
+                auto receipt = std::move(staged).Value();
+                const auto context = fixture.Request().context;
+                REQUIRE(receipt->Decode(context).HasValue());
+                REQUIRE(receipt->Validate(context).HasValue());
+                REQUIRE(receipt->Instantiate(context).HasValue());
+                REQUIRE(receipt->ApplyState(dependencies).HasValue());
+                auto &state = fixture.project->state;
+                state.throwFixup = true;
+                state.throwAllocation = allocationFault;
+                state.throwNonStandard = !allocationFault;
+                state.failFailureTranslationAllocation = true;
+                std::optional<Result<void>> translated;
+                bool escaped{};
+                try {
+                    translated.emplace(receipt->FixupReferences(dependencies, {}));
+                } catch (...) {
+                    escaped = true;
+                }
+                const auto allocationsAfterReturn = Tests::AllocationProbe::Count();
+                state.failureTranslation.reset();
+                REQUIRE_FALSE(escaped);
+                REQUIRE(translated);
+                REQUIRE(translated->HasError());
+                CHECK(allocationsAfterReturn == state.allocationCountAtFault);
+                const auto &expected = allocationFault ? SaveErrors::RestoreAllocationFailed : SaveErrors::LifecycleCallbackFailed;
+                CHECK(translated->ErrorValue().code.Value() == expected.code.Value());
+                CHECK(state.published == 0);
+                receipt->RollbackPrepared();
+            }
+        }
+
+        TEST_CASE("Foreign owner source faults retain the sole producer and unpublished scene until normal rollback",
+                  "[unit][runtime][scene][save][restore][references]") {
+            for (const unsigned fault : {1U, 2U, 3U}) {
+                Fixture fixture;
+                const auto old = fixture.service.ActiveScene()->RuntimeId();
+                fixture.control->sourceFault = fault;
+                fixture.control->ready = true;
+                fixture.Queue(fixture.Request());
+                fixture.Pump();
+                const auto error = fixture.service.TakeOperationError();
+                REQUIRE(error);
+                const auto &expected = fault == 1 ? SaveErrors::RestoreAllocationFailed : SaveErrors::RestoreAdapterContractInvalid;
+                CHECK(error->code.Value() == expected.code.Value());
+                CHECK(fixture.service.ActiveScene()->RuntimeId() == old);
+                CHECK(fixture.project->state.prepared == 0);
+                CHECK(fixture.project->state.published == 0);
+                CHECK(fixture.control->cancelled == 1);
                 CHECK(fixture.operation.Snapshot()->IsTerminal());
             }
         }

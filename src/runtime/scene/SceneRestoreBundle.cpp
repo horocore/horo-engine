@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <new>
 #include <tuple>
+#include <type_traits>
 
 namespace Horo::Runtime {
     namespace {
@@ -274,22 +275,27 @@ namespace Horo::Runtime {
             scene.View().DefinitionRevision() != state.request.revision)
             return Failure<void>(SaveErrors::RestoreContextInvalid);
         state.scene = &scene;
-        try {
-            if (const auto removed = state.ApplyTombstones(); removed.HasError())
-                return removed;
-            if (const auto mapped = state.BindIdentities(); mapped.HasError())
-                return mapped;
-            if (const auto applied = state.ApplyTransforms(); applied.HasError())
-                return applied;
-            if (const auto prepared = state.PrepareComponents(); prepared.HasError())
-                return prepared;
-            return Result<void>::Success();
-        } catch (const std::bad_alloc &) {
-            return Failure<void>(SaveErrors::RestoreAllocationFailed);
-        } catch (...) {
-            // Component adapters may throw non-standard exceptions; the unpublished Scene must remain rollback-owned.
-            return Failure<void>(SaveErrors::RestoreAdapterContractInvalid);
-        }
+        static_assert(std::is_nothrow_move_constructible_v<Result<void>>);
+        // Allocate fallback errors before invoking native owners; catch paths only move owned results.
+        return [&state, allocationFailure = Failure<void>(SaveErrors::RestoreAllocationFailed),
+                callbackFailure = Failure<void>(SaveErrors::RestoreAdapterContractInvalid)]() mutable noexcept {
+            try {
+                if (const auto removed = state.ApplyTombstones(); removed.HasError())
+                    return removed;
+                if (const auto mapped = state.BindIdentities(); mapped.HasError())
+                    return mapped;
+                if (const auto applied = state.ApplyTransforms(); applied.HasError())
+                    return applied;
+                if (const auto prepared = state.PrepareComponents(); prepared.HasError())
+                    return prepared;
+                return Result<void>::Success();
+
+            } catch (const std::bad_alloc &) {
+                return std::move(allocationFailure);
+            } catch (...) {
+                return std::move(callbackFailure);
+            }
+        }();
     }
 
     /** @copydoc SceneRestoreBundle::PrepareOwners */
@@ -308,29 +314,37 @@ namespace Horo::Runtime {
                 return Result<bool>::Failure(*snapshot->terminalError);
             return Failure<bool>(SaveErrors::RestoreTransitionInvalid);
         }
-        try {
-            auto ready = state.source->TakeReady(state.scene->View());
-            if (ready.HasError())
-                return Result<bool>::Failure(ready.ErrorValue());
-            if (!ready.Value())
-                return Result<bool>::Success(false);
-            auto owners = *std::move(ready).Value();
-            auto transaction = StagedRestoreTransaction::Create(state.request.context, std::move(owners.operation),
-                                                                state.request.participants, std::move(owners.receipts));
-            if (transaction.HasError())
-                return Result<bool>::Failure(transaction.ErrorValue());
-            state.transaction = std::move(transaction).Value();
-            if (const auto bound = state.transaction->SetReferenceResolver(std::make_unique<State::Resolver>(state)); bound.HasError())
-                return Result<bool>::Failure(bound.ErrorValue());
-            if (const auto prepared = state.transaction->Prepare(); prepared.HasError())
-                return Result<bool>::Failure(prepared.ErrorValue());
-            return Result<bool>::Success(true);
-        } catch (const std::bad_alloc &) {
-            return Failure<bool>(SaveErrors::RestoreAllocationFailed);
-        } catch (...) {
-            // The source/resolver may throw non-standard exceptions; sole producer and candidates remain rollback-owned.
-            return Failure<bool>(SaveErrors::RestoreAdapterContractInvalid);
-        }
+        static_assert(std::is_nothrow_move_constructible_v<Result<bool>>);
+        static_assert(std::is_nothrow_move_constructible_v<SaveOperationController>);
+        static_assert(std::is_nothrow_move_constructible_v<SceneRestorePreparedOwners>);
+        static_assert(std::is_nothrow_move_constructible_v<Result<std::optional<SceneRestorePreparedOwners>>>);
+        // Allocate fallback errors before invoking native owners; catch paths only move owned results.
+        return [&state, allocationFailure = Failure<bool>(SaveErrors::RestoreAllocationFailed),
+                callbackFailure = Failure<bool>(SaveErrors::RestoreAdapterContractInvalid)]() mutable noexcept {
+            try {
+                auto ready = state.source->TakeReady(state.scene->View());
+                if (ready.HasError())
+                    return Result<bool>::Failure(ready.ErrorValue());
+                if (!ready.Value())
+                    return Result<bool>::Success(false);
+                auto owners = *std::move(ready).Value();
+                auto transaction = StagedRestoreTransaction::Create(state.request.context, std::move(owners.operation),
+                                                                    state.request.participants, std::move(owners.receipts));
+                if (transaction.HasError())
+                    return Result<bool>::Failure(transaction.ErrorValue());
+                state.transaction = std::move(transaction).Value();
+                if (const auto bound = state.transaction->SetReferenceResolver(std::make_unique<State::Resolver>(state)); bound.HasError())
+                    return Result<bool>::Failure(bound.ErrorValue());
+                if (const auto prepared = state.transaction->Prepare(); prepared.HasError())
+                    return Result<bool>::Failure(prepared.ErrorValue());
+                return Result<bool>::Success(true);
+
+            } catch (const std::bad_alloc &) {
+                return std::move(allocationFailure);
+            } catch (...) {
+                return std::move(callbackFailure);
+            }
+        }();
     }
 
     /** @copydoc SceneRestoreBundle::ValidatePublication */

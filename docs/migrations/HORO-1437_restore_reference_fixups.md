@@ -106,3 +106,20 @@ absence rollback, legacy-owner rejection, real component payload fixups, real co
 asset loading, active Gameplay services and lifetime pins, operation completion and
 pending shutdown. The suite and affected existing Scene/save/Gameplay regressions
 must pass before delivery. No test execution is claimed by this document alone.
+
+## Foreign callback failure translation
+
+Gameplay fixups, Scene component preparation and native-owner preparation now
+construct owned typed failure results before entering foreign code. Their immediate
+invocation boundaries are genuinely nonthrowing: successful result moves and the
+actual sole-producer/receipt transfers are checked as nonthrowing, and exception
+handlers only move prepared failures. Allocation faults retain their distinct typed
+category; standard and non-standard foreign faults remain contained. Public methods
+still permit preflight allocation failure and retain the existing rollback ownership.
+
+Reference resolution uses this boundary only around the actual resolver invocation.
+Generation validation, error mapping and `FailPreparation` remain outside; allocating
+terminal-error copies are not incorrectly declared nonthrowing. No public ABI or
+rollback ordering changes. Regression coverage injects all three foreign fault types
+at component/source/resolver boundaries and rejects allocator work during a real
+Gameplay receipt fixup's failure translation, with no publication or lost producer.
