@@ -62,55 +62,8 @@ namespace Horo::Editor {
                         error = "workspace surfaces invalid";
                         return std::nullopt;
                     }
-                    std::size_t bytes{};
-                    while (!Take(']')) {
-                        if (layout.surfaces.size() >= MaximumSurfaceEntries)
-                            return std::nullopt;
-                        WorkspaceSurfaceState surface;
-                        std::uint32_t open{}, focused{}, visible{};
-                        if (!ObjectStart() || !KeyedString("id", surface.id) || !Comma() ||
-                            !KeyedString("extension", surface.extensionId) || !Comma() || !KeyedString("module", surface.moduleId) ||
-                            !Comma() || !Key("open") || !UInt(open) || !Comma() || !Key("focused") || !UInt(focused) || !Comma() ||
-                            !Key("visible") || !UInt(visible) || !Comma() || !Key("state") || !Take('[') || open > 1 || focused > open ||
-                            visible > 1 || surface.id.empty() || surface.extensionId.empty() || surface.moduleId.empty() ||
-                            surface.id.size() > 256 || surface.extensionId.size() > 256 || surface.moduleId.size() > 256)
-                            return std::nullopt;
-                        while (!Take(']')) {
-                            std::uint32_t byte{};
-                            if (!UInt(byte) || byte > 255 || surface.state.size() >= MaximumSurfaceStateBytes ||
-                                ++bytes > MaximumTotalSurfaceStateBytes)
-                                return std::nullopt;
-                            surface.state.push_back(static_cast<std::uint8_t>(byte));
-                            if (!Take(',')) {
-                                if (!Take(']'))
-                                    return std::nullopt;
-                                break;
-                            }
-                        }
-                        if (Take(',')) {
-                            std::uint32_t side{}, group{}, order{};
-                            if (layout.schemaVersion < 3 || !Key("placement") || !ObjectStart() || !Key("side") || !UInt(side) ||
-                                !Comma() || !Key("group") || !UInt(group) || !Comma() || !Key("order") || !UInt(order) || !ObjectEnd() ||
-                                side > 2 || group > 2 || order >= MaximumSurfaceEntries)
-                                return std::nullopt;
-                            surface.activityPlacement = WorkspaceActivityPlacement{static_cast<WorkspaceActivitySide>(side),
-                                                                                   static_cast<std::uint8_t>(group), order};
-                        }
-                        if (!ObjectEnd())
-                            return std::nullopt;
-                        surface.open = open != 0;
-                        surface.focused = focused != 0;
-                        surface.visible = visible != 0;
-                        for (const auto &existing : layout.surfaces)
-                            if (existing.id == surface.id)
-                                return std::nullopt;
-                        layout.surfaces.push_back(std::move(surface));
-                        if (!Take(',')) {
-                            if (!Take(']'))
-                                return std::nullopt;
-                            break;
-                        }
-                    }
+                    if (!ParseSurfaces(layout))
+                        return std::nullopt;
                 }
                 if (!ObjectEnd())
                     return std::nullopt;
@@ -130,6 +83,67 @@ namespace Horo::Editor {
         private:
             std::string_view m_text;
             std::size_t m_pos = 0;
+
+            /** @brief Parses one bounded surface including optional schema-3 placement without publishing workspace state. */
+            bool ParseSurface(WorkspaceSurfaceState &surface, std::size_t &bytes, const std::uint32_t schemaVersion) {
+                std::uint32_t open{}, focused{}, visible{};
+                if (!ObjectStart() || !KeyedString("id", surface.id) || !Comma() || !KeyedString("extension", surface.extensionId) ||
+                    !Comma() || !KeyedString("module", surface.moduleId) || !Comma() || !Key("open") || !UInt(open) || !Comma() ||
+                    !Key("focused") || !UInt(focused) || !Comma() || !Key("visible") || !UInt(visible) || !Comma() || !Key("state") ||
+                    !Take('[') || open > 1 || focused > open || visible > 1 || surface.id.empty() || surface.extensionId.empty() ||
+                    surface.moduleId.empty() || surface.id.size() > 256 || surface.extensionId.size() > 256 ||
+                    surface.moduleId.size() > 256)
+                    return false;
+                while (!Take(']')) {
+                    std::uint32_t byte{};
+                    if (!UInt(byte) || byte > 255 || surface.state.size() >= MaximumSurfaceStateBytes ||
+                        ++bytes > MaximumTotalSurfaceStateBytes)
+                        return false;
+                    surface.state.push_back(static_cast<std::uint8_t>(byte));
+                    if (!Take(',')) {
+                        if (!Take(']'))
+                            return false;
+                        break;
+                    }
+                }
+                if (Take(',')) {
+                    std::uint32_t side{}, group{}, order{};
+                    if (schemaVersion < 3 || !Key("placement") || !ObjectStart() || !Key("side") || !UInt(side) || !Comma() ||
+                        !Key("group") || !UInt(group) || !Comma() || !Key("order") || !UInt(order) || !ObjectEnd() || side > 2 ||
+                        group > 2 || order >= MaximumSurfaceEntries)
+                        return false;
+                    surface.activityPlacement =
+                        WorkspaceActivityPlacement{static_cast<WorkspaceActivitySide>(side), static_cast<std::uint8_t>(group), order};
+                }
+                if (!ObjectEnd())
+                    return false;
+                surface.open = open != 0;
+                surface.focused = focused != 0;
+                surface.visible = visible != 0;
+                return true;
+            }
+
+            /** @brief Parses the finite surface list and rejects duplicate identities before the caller validates the document. */
+            bool ParseSurfaces(WorkspaceLayout &layout) {
+                std::size_t bytes{};
+                while (!Take(']')) {
+                    if (layout.surfaces.size() >= MaximumSurfaceEntries)
+                        return false;
+                    WorkspaceSurfaceState surface;
+                    if (!ParseSurface(surface, bytes, layout.schemaVersion))
+                        return false;
+                    for (const auto &existing : layout.surfaces)
+                        if (existing.id == surface.id)
+                            return false;
+                    layout.surfaces.push_back(std::move(surface));
+                    if (!Take(',')) {
+                        if (!Take(']'))
+                            return false;
+                        break;
+                    }
+                }
+                return true;
+            }
 
             void Skip() {
                 while (m_pos < m_text.size() &&

@@ -89,6 +89,39 @@ namespace {
         jobs.Shutdown(ShutdownPolicy::Cancel);
     }
 
+    void CheckInventoryActivityShutdown(GuiScreenHost &host, Extensions::ExtensionInventory &inventory, const bool admitted) {
+        auto &activities = host.Services().Get<Extensions::EditorActivityHost>();
+        activities.Update();
+        const auto entry =
+            std::ranges::find(inventory.Entries(), std::string{"fixture.package"}, &Extensions::ExtensionInventoryEntry::packageId);
+        REQUIRE(entry != inventory.Entries().end());
+        CHECK(entry->runtimeActive == admitted);
+        if (admitted) {
+            REQUIRE(activities.Prepared().size() == 1);
+            const auto provider = activities.Prepared().front().surface.descriptor.provider;
+            REQUIRE(activities.Registry().ToggleActivity(provider, "fixture.activity").HasValue());
+            activities.Update();
+            CHECK(activities.Prepared().front().surface.focused);
+        } else {
+            CHECK(activities.Prepared().empty());
+            CHECK(entry->activationFailure.reason == Extensions::ExtensionActivationFailureReason::HostLoadFailed);
+            CHECK_FALSE(entry->loadError.empty());
+        }
+        const auto &registry = activities.Registry();  // Host retains the activity authority until its destructor.
+        host.Shutdown();
+        CHECK(host.Services().Empty());
+        CHECK(registry.Snapshot().empty());
+        CHECK(registry.MoveActivity({"fixture.package", "fixture.module", 1}, "fixture.activity", {}).HasError());
+    }
+
+    Extensions::ExtensionInventory InstallActivityInventory(const std::filesystem::path &root, const std::filesystem::path &package) {
+        Extensions::ExtensionInventory inventory{root};
+        REQUIRE(inventory.InstallFromDirectory(package).HasValue());
+        REQUIRE(inventory.SetEnabled("fixture.package", true).HasValue());
+        REQUIRE(inventory.SetTrusted("fixture.package", true).HasValue());
+        return inventory;
+    }
+
     TEST_CASE("GUI inventory activation uses explicit artifact authority and revokes package surfaces on shutdown",
               "[unit][editor][Activity][ABI]") {
         Horo::Tests::EditorActivityPackage package;
@@ -104,10 +137,7 @@ namespace {
             }
         } removeInventory{installRoot};
 
-        Extensions::ExtensionInventory inventory{installRoot};
-        REQUIRE(inventory.InstallFromDirectory(package.root).HasValue());
-        REQUIRE(inventory.SetEnabled("fixture.package", true).HasValue());
-        REQUIRE(inventory.SetTrusted("fixture.package", true).HasValue());
+        auto inventory = InstallActivityInventory(installRoot, package.root);
         EngineDataBus engineEvents;
         EditorDataBus editorEvents;
         Input::InputRouter input;
@@ -143,28 +173,7 @@ namespace {
                            nullptr,
                            nullptr,
                            std::move(gate)};
-        auto &activities = host.Services().Get<Extensions::EditorActivityHost>();
-        activities.Update();
-        const auto entry =
-            std::ranges::find(inventory.Entries(), std::string{"fixture.package"}, &Extensions::ExtensionInventoryEntry::packageId);
-        REQUIRE(entry != inventory.Entries().end());
-        CHECK(entry->runtimeActive == admitted);
-        if (admitted) {
-            REQUIRE(activities.Prepared().size() == 1);
-            const auto provider = activities.Prepared().front().surface.descriptor.provider;
-            REQUIRE(activities.Registry().ToggleActivity(provider, "fixture.activity").HasValue());
-            activities.Update();
-            CHECK(activities.Prepared().front().surface.focused);
-        } else {
-            CHECK(activities.Prepared().empty());
-            CHECK(entry->activationFailure.reason == Extensions::ExtensionActivationFailureReason::HostLoadFailed);
-            CHECK_FALSE(entry->loadError.empty());
-        }
-        const auto &registry = activities.Registry();  // Host retains the activity authority until its destructor.
-        host.Shutdown();
-        CHECK(host.Services().Empty());
-        CHECK(registry.Snapshot().empty());
-        CHECK(registry.MoveActivity({"fixture.package", "fixture.module", 1}, "fixture.activity", {}).HasError());
+        CheckInventoryActivityShutdown(host, inventory, admitted);
         jobs.Shutdown(ShutdownPolicy::Cancel);
     }
 

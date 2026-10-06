@@ -11,21 +11,12 @@ namespace Horo::Extensions::Detail {
         return output.find('\0') == std::string::npos;
     }
 
-    /** @copydoc CopyActivityForm */
-    Result<EditorUiForm> CopyActivityForm(const HoroEditorActivitySnapshot &snapshot, const std::string_view drawerId,
-                                          const std::string_view titleKey) {
-        const auto invalid = [] {
-            return Result<EditorUiForm>::Failure(MakeError(ExtensionErrors::EditorUiFormInvalid));
-        };
-        if (snapshot.structSize < sizeof(HoroEditorActivitySnapshot) || snapshot.schemaVersion != HORO_EDITOR_ACTIVITY_SCHEMA_VERSION ||
-            snapshot.revision == 0 || (snapshot.presentationFlags & ~(HORO_EDITOR_ACTIVITY_HIDDEN | HORO_EDITOR_ACTIVITY_DISABLED)) != 0 ||
-            snapshot.nodeCount > 256 || (snapshot.nodeCount != 0 && snapshot.nodes == nullptr))
-            return invalid();
-        EditorUiForm form{.id = {std::string{drawerId}}, .title = {EditorUiTextKind::LocalizationKey, std::string{titleKey}}};
-        form.nodes.reserve(snapshot.nodeCount);
-        std::size_t textBytes{};
-        for (std::uint32_t index = 0; index < snapshot.nodeCount; ++index) {
-            const auto &input = snapshot.nodes[index];
+    namespace {
+        /** @brief Copies one bounded ABI node while charging its text to the complete snapshot budget. */
+        Result<EditorUiNode> CopyNode(const HoroEditorActivityNode &input, std::size_t &textBytes) {
+            const auto invalid = [] {
+                return Result<EditorUiNode>::Failure(MakeError(ExtensionErrors::EditorUiFormInvalid));
+            };
             EditorUiNodeBase base;
             std::string text;
             std::string action;
@@ -48,27 +39,45 @@ namespace Horo::Extensions::Detail {
                 case HORO_EDITOR_ACTIVITY_TEXT:
                     if (!action.empty())
                         return invalid();
-                    form.nodes.push_back({EditorUiTextNode{std::move(base), std::move(content)}});
-                    break;
+                    return Result<EditorUiNode>::Success({EditorUiTextNode{std::move(base), std::move(content)}});
                 case HORO_EDITOR_ACTIVITY_LABEL:
                     if (!action.empty())
                         return invalid();
-                    form.nodes.push_back({EditorUiLabelNode{std::move(base), std::move(content)}});
-                    break;
+                    return Result<EditorUiNode>::Success({EditorUiLabelNode{std::move(base), std::move(content)}});
                 case HORO_EDITOR_ACTIVITY_ACTION:
                     if (!content.value.empty() || action.empty())
                         return invalid();
-                    form.nodes.push_back({EditorUiActionNode{.base = std::move(base), .action = {std::move(action)}}});
-                    break;
+                    return Result<EditorUiNode>::Success({EditorUiActionNode{.base = std::move(base), .action = {std::move(action)}}});
                 default:
                     if (!action.empty() || !content.value.empty())
                         return invalid();
-                    form.nodes.push_back(
+                    return Result<EditorUiNode>::Success(
                         {EditorUiContainerNode{.base = std::move(base),
                                                .layout = input.kind == HORO_EDITOR_ACTIVITY_GROUP ? EditorUiLayoutKind::Group
                                                                                                   : EditorUiLayoutKind::Stack}});
-                    break;
             }
+        }
+    }  // namespace
+
+    /** @copydoc CopyActivityForm */
+    Result<EditorUiForm> CopyActivityForm(const HoroEditorActivitySnapshot &snapshot, const std::string_view drawerId,
+                                          const std::string_view titleKey) {
+        const auto invalid = [] {
+            return Result<EditorUiForm>::Failure(MakeError(ExtensionErrors::EditorUiFormInvalid));
+        };
+        if (snapshot.structSize < sizeof(HoroEditorActivitySnapshot) || snapshot.schemaVersion != HORO_EDITOR_ACTIVITY_SCHEMA_VERSION ||
+            snapshot.revision == 0 || (snapshot.presentationFlags & ~(HORO_EDITOR_ACTIVITY_HIDDEN | HORO_EDITOR_ACTIVITY_DISABLED)) != 0 ||
+            snapshot.nodeCount > 256 || (snapshot.nodeCount != 0 && snapshot.nodes == nullptr))
+            return invalid();
+        EditorUiForm form{.id = {std::string{drawerId}}, .title = {EditorUiTextKind::LocalizationKey, std::string{titleKey}}};
+        form.nodes.reserve(snapshot.nodeCount);
+        std::size_t textBytes{};
+        for (std::uint32_t index = 0; index < snapshot.nodeCount; ++index) {
+            const auto &input = snapshot.nodes[index];
+            auto node = CopyNode(input, textBytes);
+            if (node.HasError())
+                return Result<EditorUiForm>::Failure(node.ErrorValue());
+            form.nodes.push_back(std::move(node).Value());
         }
         if (const auto valid = ValidateEditorUiForm(form); valid.HasError())
             return Result<EditorUiForm>::Failure(valid.ErrorValue());

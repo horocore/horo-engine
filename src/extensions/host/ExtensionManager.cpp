@@ -504,6 +504,13 @@ namespace Horo::Extensions {
             return ResolveExtensionModules(manifest, CurrentHostEnvironment(profile, views));
         }
 
+        /** @brief Publishes admitted editor and importer contributions within the single activation rollback authority. */
+        [[nodiscard]] Result<void> CommitHostContributions(ExtensionActivationTransaction &transaction,
+                                                           Assets::AssetImporterCatalog *catalog) {
+            if (auto editor = CommitEditorActivities(transaction.Lifetimes()); editor.HasError())
+                return editor;
+            return CommitContributions(transaction.Contributions(), catalog);
+        }
     }  // namespace
 
     /** @copydoc ExtensionManager::ExtensionManager */
@@ -572,9 +579,7 @@ namespace Horo::Extensions {
         auto platformPublication = PublishPlatformClaim(std::move(platformCandidates), m_platformProviderCommit);
         if (platformPublication.HasError())
             return Result<std::string>::Failure(transaction.Rollback(platformPublication.ErrorValue()));
-        if (auto editorCommitted = CommitEditorActivities(transaction.Lifetimes()); editorCommitted.HasError())
-            return Result<std::string>::Failure(transaction.Rollback(editorCommitted.ErrorValue()));
-        if (auto committed = CommitContributions(transaction.Contributions(), m_importerCatalog); committed.HasError())
+        if (auto committed = CommitHostContributions(transaction, m_importerCatalog); committed.HasError())
             return Result<std::string>::Failure(transaction.Rollback(committed.ErrorValue()));
 
         // Preallocated node/vector storage and noexcept transparent hashing make this ownership

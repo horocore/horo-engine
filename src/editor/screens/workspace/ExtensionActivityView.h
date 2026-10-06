@@ -51,6 +51,14 @@ namespace Horo::Editor {
             Extensions::EditorActivityPlacement target;
         };
 
+        /** @brief Applies a queued move only while its exact retained projection and provider remain live. */
+        void ApplyPendingMove();
+        /** @brief Refreshes copied localization and transfers texture ownership at the owner Update boundary. */
+        [[nodiscard]] Entry PrepareEntry(const Extensions::EditorActivityProjection &projection, const std::string &locale);
+        /** @brief Presents localized destination and insertion actions for one retained control. */
+        void DrawPlacementMenu(const Entry &entry, std::size_t group);
+        /** @brief Presents durable user visibility choices for the current activity rail. */
+        void DrawVisibilityMenu(bool right);
         void AcceptMove(Extensions::EditorActivityPlacement placement);
         [[nodiscard]] std::int32_t GroupSize(Extensions::EditorActivitySide side, std::uint8_t group) const noexcept;
 

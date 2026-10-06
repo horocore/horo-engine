@@ -37,8 +37,14 @@ enum HoroEditorActivityPresentationFlags {
 
 /** @brief Borrowed standard form node; strings and array memory are copied before returning. */
 struct HoroEditorActivityNode {
+    // Read across the C/C++ package boundary by CopyActivityForm/CopyNode in EditorActivityAbiConversion.cpp.
+    // cppcheck-suppress unusedStructMember
     uint32_t structSize;
+    // Read across the C/C++ package boundary by CopyActivityForm/CopyNode in EditorActivityAbiConversion.cpp.
+    // cppcheck-suppress unusedStructMember
     uint32_t kind;
+    // Read across the C/C++ package boundary by CopyActivityForm/CopyNode in EditorActivityAbiConversion.cpp.
+    // cppcheck-suppress unusedStructMember
     uint32_t flags;
     HoroExtensionStringView id;
     HoroExtensionStringView parent;
@@ -51,11 +57,23 @@ typedef struct HoroEditorActivityNode HoroEditorActivityNode;
 /** @brief Bounded immutable view snapshot; revisions strictly increase within an activation. */
 struct HoroEditorActivitySnapshot {
     uint32_t structSize;
+    // Read across the C/C++ package boundary by CopyActivityForm and EditorActivitySession::Publish.
+    // cppcheck-suppress unusedStructMember
     uint32_t schemaVersion;
+    // Read across the C/C++ package boundary by CopyActivityForm and EditorActivitySession::Publish.
+    // cppcheck-suppress unusedStructMember
     uint64_t revision;
+    // Read across the C/C++ package boundary by CopyActivityForm and EditorActivitySession::Publish.
+    // cppcheck-suppress unusedStructMember
     uint32_t presentationFlags;
+    // Read across the C/C++ package boundary by CopyActivityForm and EditorActivitySession::Publish.
+    // cppcheck-suppress unusedStructMember
     uint32_t badgeCount;
+    // Read across the C/C++ package boundary by CopyActivityForm in EditorActivityAbiConversion.cpp.
+    // cppcheck-suppress unusedStructMember
     const HoroEditorActivityNode *nodes;
+    // Read across the C/C++ package boundary by CopyActivityForm and EditorActivitySession::Publish.
+    // cppcheck-suppress unusedStructMember
     uint32_t nodeCount;
 };
 typedef struct HoroEditorActivitySnapshot HoroEditorActivitySnapshot;
@@ -72,7 +90,11 @@ typedef struct HoroEditorActivityAction HoroEditorActivityAction;
 
 /** @brief Bounded result sink borrowed by a scheduled module action; publication occurs later on the owner lane. */
 struct HoroEditorActivitySnapshotSink {
+    // Read across the C/C++ package boundary by Invoke in the external C package action callback.
+    // cppcheck-suppress unusedStructMember
     void *context;
+    // Read across the C/C++ package boundary by Invoke in the external C package; initialized by the host action pump.
+    // cppcheck-suppress unusedStructMember
     HoroExtensionStatus (*publish)(void *context, const HoroEditorActivitySnapshot *snapshot);
 };
 typedef struct HoroEditorActivitySnapshotSink HoroEditorActivitySnapshotSink;
@@ -97,14 +119,30 @@ struct HoroEditorActivityDescriptor {
     HoroExtensionStringView labelKey;
     HoroExtensionStringView tooltipKey;
     HoroExtensionStringView iconResource;
+    // Read across the C/C++ package boundary by RegisterEditorActivityImpl in EditorActivitySession.cpp.
+    // cppcheck-suppress unusedStructMember
     uint32_t side;
+    // Read across the C/C++ package boundary by RegisterEditorActivityImpl in EditorActivitySession.cpp.
+    // cppcheck-suppress unusedStructMember
     uint32_t group;
+    // Read across the C/C++ package boundary by RegisterEditorActivityImpl in EditorActivitySession.cpp.
+    // cppcheck-suppress unusedStructMember
     int32_t order;
+    // Read across the C/C++ package boundary by RegisterEditorActivityImpl in EditorActivitySession.cpp.
+    // cppcheck-suppress unusedStructMember
     uint32_t openByDefault;
     HoroEditorActivitySnapshot initialSnapshot;
+    // Read across the C/C++ package boundary by CopyMessages in EditorActivitySession.cpp.
+    // cppcheck-suppress unusedStructMember
     const HoroEditorActivityMessage *messages;
+    // Read across the C/C++ package boundary by RegisterEditorActivityImpl in EditorActivitySession.cpp.
+    // cppcheck-suppress unusedStructMember
     uint32_t messageCount;
+    // Read across the C/C++ package boundary by RegisterEditorActivityImpl and ExecuteAction in the host session/action sources.
+    // cppcheck-suppress unusedStructMember
     void *moduleContext;
+    // Read across the C/C++ package boundary by RegisterEditorActivityImpl in EditorActivitySession.cpp.
+    // cppcheck-suppress unusedStructMember
     HoroEditorActivityActionFunc invokeAction;
 };
 typedef struct HoroEditorActivityDescriptor HoroEditorActivityDescriptor;
@@ -115,7 +153,11 @@ typedef struct HoroEditorActivityDescriptor HoroEditorActivityDescriptor;
  */
 struct HoroEditorActivitySessionApi {
     uint32_t structSize;
+    // Read across the C/C++ package boundary by horo_extension_load ABI negotiation in EditorActivityModule.c.
+    // cppcheck-suppress unusedStructMember
     uint32_t sessionVersion;
+    // Read across the C/C++ package boundary by horo_extension_load ABI negotiation in EditorActivityModule.c.
+    // cppcheck-suppress unusedStructMember
     uint32_t supportedNodeMask;
     void *context;
     HoroExtensionStatus (*publish)(void *context, const HoroEditorActivitySnapshot *snapshot);

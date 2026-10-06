@@ -73,6 +73,10 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_load(const HoroExtensio
                                                      .invokeAction = Invoke};
     session = (HoroEditorActivitySessionApi){.structSize = sizeof(HoroEditorActivitySessionApi)};
     const HoroExtensionStatus status = host->registerEditorActivity(host->hostContext, &descriptor, &session);
+    if (status == HORO_EXTENSION_SUCCESS &&
+        (session.structSize < sizeof(HoroEditorActivitySessionApi) || session.sessionVersion != HORO_EDITOR_ACTIVITY_SESSION_VERSION ||
+         (session.supportedNodeMask & (1U << HORO_EDITOR_ACTIVITY_ACTION)) == 0 || !session.context || !session.publish))
+        return HORO_EXTENSION_ERROR_VERSION_MISMATCH;
     *module = (HoroExtensionModuleApi){.structSize = sizeof(HoroExtensionModuleApi),
                                        .moduleId = TEXT("fixture.module"),
                                        .moduleVersion = TEXT("1.0.0")};

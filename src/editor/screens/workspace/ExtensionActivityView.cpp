@@ -24,9 +24,8 @@ namespace Horo::Editor {
                     renderer_->DestroyTexture(entry.texture);
     }
 
-    void ExtensionActivityView::Update() {
-        if (!host_)
-            return;
+    /** @copydoc ExtensionActivityView::ApplyPendingMove */
+    void ExtensionActivityView::ApplyPendingMove() {
         if (const auto move = std::exchange(pendingMove_, std::nullopt)) {
             if (move->source.owner == reinterpret_cast<std::uintptr_t>(this) && move->source.revision == revision_ &&
                 revision_ == host_->Registry().Revision()) {
@@ -40,6 +39,104 @@ namespace Horo::Editor {
             }
             host_->Update();
         }
+    }
+
+    /** @copydoc ExtensionActivityView::PrepareEntry */
+    ExtensionActivityView::Entry ExtensionActivityView::PrepareEntry(const Extensions::EditorActivityProjection &projection,
+                                                                     const std::string &locale) {
+        const auto previous = std::ranges::find_if(entries_, [&projection](const auto &entry) {
+            return entry.projection.surface.descriptor.id == projection.surface.descriptor.id &&
+                   entry.projection.surface.descriptor.provider == projection.surface.descriptor.provider;
+        });
+        Entry entry{.projection = projection};
+        entry.token = previous != entries_.end() ? previous->token : nextToken_++;
+        if (previous != entries_.end()) {
+            entry.texture = std::exchange(previous->texture, 0);
+            entry.focusPending = previous->focusPending ||
+                                 (projection.surface.focused &&
+                                  (!previous->projection.surface.focused || !previous->projection.surface.open ||
+                                   previous->projection.surface.descriptor.activity->side != projection.surface.descriptor.activity->side));
+        } else {
+            entry.focusPending = projection.surface.focused;
+            if (renderer_ && projection.icon) {
+                const auto &icon = *projection.icon;
+                if (auto uploaded = renderer_->CreateTexture({icon.width, icon.height, icon.pixels}); uploaded.HasValue())
+                    entry.texture = uploaded.Value();
+            }
+        }
+        if (projection.surface.open &&
+            (previous == entries_.end() || !previous->projection.surface.open ||
+             previous->projection.surface.descriptor.activity->side != projection.surface.descriptor.activity->side))
+            nativePanelClear_[static_cast<std::size_t>(projection.surface.descriptor.activity->side)] = entry.token;
+        const auto &descriptor = projection.surface.descriptor;
+        entry.label = host_->LocalizedText(descriptor.provider, descriptor.labelLocalizationKey, locale);
+        entry.tooltip = host_->LocalizedText(descriptor.provider, descriptor.tooltipLocalizationKey, locale);
+        if (projection.surface.form) {
+            for (const auto &node : projection.surface.form->nodes) {
+                const auto &base = Extensions::EditorUiNodeBaseOf(node);
+                std::string text{host_->LocalizedText(descriptor.provider, base.label.value, locale)};
+                std::visit([&](const auto &typed) {
+                    if constexpr (requires { typed.text; }) {
+                        text = typed.text.kind == Extensions::EditorUiTextKind::TechnicalText
+                                   ? typed.text.value
+                                   : std::string{host_->LocalizedText(descriptor.provider, typed.text.value, locale)};
+                    }
+                }, node.payload);
+                entry.nodeText.push_back(std::move(text));
+            }
+        }
+        return entry;
+    }
+
+    /** @copydoc ExtensionActivityView::DrawPlacementMenu */
+    void ExtensionActivityView::DrawPlacementMenu(const Entry &entry, const std::size_t group) {
+        const auto &surface = entry.projection.surface;
+        if (ImGui::BeginPopupContextItem("##Placement")) {
+            for (std::size_t side = 0; side < moveLabels_.size(); ++side)
+                if (Ui::Button({.label = moveLabels_[side].c_str(), .font = context_.theme.fonts.sans})) {
+                    const auto destination = static_cast<Extensions::EditorActivitySide>(side);
+                    static_cast<void>(QueueMove(surface.descriptor.provider, surface.descriptor.id,
+                                                {destination, static_cast<std::uint8_t>(group),
+                                                 GroupSize(destination, static_cast<std::uint8_t>(group))}));
+                    ImGui::CloseCurrentPopup();
+                }
+            if (Ui::Button({.label = moveEarlierLabel_.c_str(), .enabled = entry.ordinal > 0, .font = context_.theme.fonts.sans})) {
+                static_cast<void>(QueueMove(surface.descriptor.provider, surface.descriptor.id,
+                                            {surface.descriptor.activity->side, static_cast<std::uint8_t>(group), entry.ordinal - 1}));
+                ImGui::CloseCurrentPopup();
+            }
+            if (Ui::Button({.label = moveLaterLabel_.c_str(),
+                            .enabled = entry.ordinal + 1 < GroupSize(surface.descriptor.activity->side, static_cast<std::uint8_t>(group)),
+                            .font = context_.theme.fonts.sans})) {
+                static_cast<void>(QueueMove(surface.descriptor.provider, surface.descriptor.id,
+                                            {surface.descriptor.activity->side, static_cast<std::uint8_t>(group), entry.ordinal + 2}));
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    /** @copydoc ExtensionActivityView::DrawVisibilityMenu */
+    void ExtensionActivityView::DrawVisibilityMenu(const bool right) {
+        if (ImGui::BeginPopupContextWindow("##ExtensionActivities", ImGuiPopupFlags_MouseButtonRight)) {
+            for (const auto &entry : entries_) {
+                const auto &surface = entry.projection.surface;
+                if ((surface.descriptor.activity->side == Extensions::EditorActivitySide::Right) != right)
+                    continue;
+                bool visible = surface.activity.visible;
+                ImGui::PushID(surface.descriptor.id.c_str());
+                if (Ui::CheckboxControl(entry.label.c_str(), &visible, context_.theme.fonts))
+                    static_cast<void>(host_->Registry().SetActivityVisibility(surface.descriptor.id, visible));
+                ImGui::PopID();
+            }
+            ImGui::EndPopup();
+        }
+    }
+
+    void ExtensionActivityView::Update() {
+        if (!host_)
+            return;
+        ApplyPendingMove();
         const auto revision = host_->Registry().Revision();
         const auto &locale = context_.settings.settings.languageTag;
         if (revision == revision_ && locale == locale_)
@@ -47,49 +144,7 @@ namespace Horo::Editor {
         std::vector<Entry> next;
         next.reserve(host_->Prepared().size());
         for (const auto &projection : host_->Prepared()) {
-            const auto previous = std::ranges::find_if(entries_, [&projection](const auto &entry) {
-                return entry.projection.surface.descriptor.id == projection.surface.descriptor.id &&
-                       entry.projection.surface.descriptor.provider == projection.surface.descriptor.provider;
-            });
-            Entry entry{.projection = projection};
-            entry.token = previous != entries_.end() ? previous->token : nextToken_++;
-            if (previous != entries_.end()) {
-                entry.texture = std::exchange(previous->texture, 0);
-                entry.focusPending =
-                    previous->focusPending ||
-                    (projection.surface.focused &&
-                     (!previous->projection.surface.focused || !previous->projection.surface.open ||
-                      previous->projection.surface.descriptor.activity->side != projection.surface.descriptor.activity->side));
-            } else {
-                entry.focusPending = projection.surface.focused;
-                if (renderer_ && projection.icon) {
-                    const auto &icon = *projection.icon;
-                    if (auto uploaded = renderer_->CreateTexture({icon.width, icon.height, icon.pixels}); uploaded.HasValue())
-                        entry.texture = uploaded.Value();
-                }
-            }
-            if (projection.surface.open &&
-                (previous == entries_.end() || !previous->projection.surface.open ||
-                 previous->projection.surface.descriptor.activity->side != projection.surface.descriptor.activity->side))
-                nativePanelClear_[static_cast<std::size_t>(projection.surface.descriptor.activity->side)] = entry.token;
-            const auto &descriptor = projection.surface.descriptor;
-            entry.label = host_->LocalizedText(descriptor.provider, descriptor.labelLocalizationKey, locale);
-            entry.tooltip = host_->LocalizedText(descriptor.provider, descriptor.tooltipLocalizationKey, locale);
-            if (projection.surface.form) {
-                for (const auto &node : projection.surface.form->nodes) {
-                    const auto &base = Extensions::EditorUiNodeBaseOf(node);
-                    std::string text{host_->LocalizedText(descriptor.provider, base.label.value, locale)};
-                    std::visit([&](const auto &typed) {
-                        if constexpr (requires { typed.text; }) {
-                            text = typed.text.kind == Extensions::EditorUiTextKind::TechnicalText
-                                       ? typed.text.value
-                                       : std::string{host_->LocalizedText(descriptor.provider, typed.text.value, locale)};
-                        }
-                    }, node.payload);
-                    entry.nodeText.push_back(std::move(text));
-                }
-            }
-            next.push_back(std::move(entry));
+            next.push_back(PrepareEntry(projection, locale));
         }
         if (renderer_)
             for (const auto &old : entries_)
@@ -207,30 +262,7 @@ namespace Horo::Editor {
                 ImGui::EndDragDropSource();
             }
             AcceptMove({surface.descriptor.activity->side, static_cast<std::uint8_t>(group), entry.ordinal});
-            if (ImGui::BeginPopupContextItem("##Placement")) {
-                for (std::size_t side = 0; side < moveLabels_.size(); ++side)
-                    if (Ui::Button({.label = moveLabels_[side].c_str(), .font = context_.theme.fonts.sans})) {
-                        const auto destination = static_cast<Extensions::EditorActivitySide>(side);
-                        static_cast<void>(QueueMove(surface.descriptor.provider, surface.descriptor.id,
-                                                    {destination, static_cast<std::uint8_t>(group),
-                                                     GroupSize(destination, static_cast<std::uint8_t>(group))}));
-                        ImGui::CloseCurrentPopup();
-                    }
-                if (Ui::Button({.label = moveEarlierLabel_.c_str(), .enabled = entry.ordinal > 0, .font = context_.theme.fonts.sans})) {
-                    static_cast<void>(QueueMove(surface.descriptor.provider, surface.descriptor.id,
-                                                {surface.descriptor.activity->side, static_cast<std::uint8_t>(group), entry.ordinal - 1}));
-                    ImGui::CloseCurrentPopup();
-                }
-                if (Ui::Button(
-                        {.label = moveLaterLabel_.c_str(),
-                         .enabled = entry.ordinal + 1 < GroupSize(surface.descriptor.activity->side, static_cast<std::uint8_t>(group)),
-                         .font = context_.theme.fonts.sans})) {
-                    static_cast<void>(QueueMove(surface.descriptor.provider, surface.descriptor.id,
-                                                {surface.descriptor.activity->side, static_cast<std::uint8_t>(group), entry.ordinal + 2}));
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
-            }
+            DrawPlacementMenu(entry, group);
             ImGui::PopID();
             origin.y += 32.0F;
         }
@@ -242,19 +274,7 @@ namespace Horo::Editor {
             AcceptMove({side, static_cast<std::uint8_t>(group), GroupSize(side, static_cast<std::uint8_t>(group))});
             ImGui::PopID();
         }
-        if (ImGui::BeginPopupContextWindow("##ExtensionActivities", ImGuiPopupFlags_MouseButtonRight)) {
-            for (const auto &entry : entries_) {
-                const auto &surface = entry.projection.surface;
-                if ((surface.descriptor.activity->side == Extensions::EditorActivitySide::Right) != right)
-                    continue;
-                bool visible = surface.activity.visible;
-                ImGui::PushID(surface.descriptor.id.c_str());
-                if (Ui::CheckboxControl(entry.label.c_str(), &visible, context_.theme.fonts))
-                    static_cast<void>(host_->Registry().SetActivityVisibility(surface.descriptor.id, visible));
-                ImGui::PopID();
-            }
-            ImGui::EndPopup();
-        }
+        DrawVisibilityMenu(right);
         return changed;
     }
 

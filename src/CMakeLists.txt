@@ -2289,6 +2289,7 @@ add_library(HoroExtensions STATIC
         extensions/host/EditorSurfaceContext.cpp
         extensions/host/EditorActivityAbiConversion.cpp
         extensions/host/EditorActivitySession.cpp
+        extensions/host/EditorActivityAction.cpp
         extensions/host/EditorSurfaceRegistry.cpp
         extensions/host/EditorSurfaceRegistryOperations.cpp
         extensions/host/EditorSurfaceRegistryPersistence.cpp

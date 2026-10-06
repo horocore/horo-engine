@@ -53,6 +53,10 @@ add_test(NAME HoroExtensionSdkExternalConsumerTest
         "-DCMAKE_GENERATOR=${CMAKE_GENERATOR}"
         "-DCMAKE_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
         "-DCMAKE_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+        "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
+        "-DCMAKE_LINKER=${CMAKE_LINKER}"
+        "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}"
+        "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
         -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunExtensionSdkConsumerTest.cmake")
 set_tests_properties(HoroExtensionSdkExternalConsumerTest PROPERTIES
     LABELS "extensions;sdk;cmake")
@@ -2924,6 +2928,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/EditorActivityHostTests.cpp
         unit/extensions/EditorSurfaceContextTests.cpp
         unit/extensions/EditorSurfaceRegistryTests.cpp
+        unit/extensions/EditorActivityRegistryTests.cpp
         unit/extensions/EditorCommandRegistryTests.cpp
         unit/extensions/EditorUiFormTests.cpp
         unit/extensions/ExtensionManagerTests.cpp
@@ -2938,6 +2943,10 @@ add_executable(HoroExtensionManagerTests
 )
 add_library(HoroEditorActivityFixture MODULE fixtures/extensions/EditorActivityModule.c)
 target_compile_features(HoroEditorActivityFixture PRIVATE c_std_11)
+# MSVC requires explicit opt-in for the C11 atomics used by the deterministic cancellation barrier.
+if (MSVC AND CMAKE_C_COMPILER_ID STREQUAL "MSVC")
+    target_compile_options(HoroEditorActivityFixture PRIVATE /experimental:c11atomics)
+endif ()
 set_target_properties(HoroEditorActivityFixture PROPERTIES C_EXTENSIONS OFF)
 target_link_libraries(HoroEditorActivityFixture PRIVATE HoroEngine::Extensions)
 add_dependencies(HoroExtensionManagerTests HoroEditorActivityFixture)

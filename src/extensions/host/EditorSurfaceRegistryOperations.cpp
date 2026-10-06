@@ -56,6 +56,64 @@ namespace Horo::Extensions {
             }
             return true;
         }
+
+        /** @brief Admits a provider-owned pair and its pending persisted state before any registry publication. */
+        [[nodiscard]] const ErrorCodeDescriptor *ActivityRegistrationError(EditorSurfaceRegistryState &state,
+                                                                           const EditorSurfaceDescriptor &descriptor,
+                                                                           const EditorSurfaceProviderKey &provider,
+                                                                           const PendingSurfaceState *pending) {
+            if (descriptor.activity.has_value()) {
+                const auto drawer = FindSurface(state, descriptor.activity->drawerId);
+                if (drawer == nullptr || drawer->descriptor.kind != EditorSurfaceKind::Panel ||
+                    drawer->descriptor.provider != descriptor.provider ||
+                    EffectiveStatus(state, *drawer) != EditorSurfaceProviderStatus::Active ||
+                    std::ranges::any_of(state.surfaces, [&descriptor](const auto &candidate) {
+                    return candidate->descriptor.activity.has_value() &&
+                           candidate->descriptor.activity->drawerId == descriptor.activity->drawerId;
+                }))
+                    return &ExtensionErrors::EditorSurfaceRegistryInvalid;
+            }
+
+            if (pending != nullptr && (!SameProvider(pending->entry.provider, provider) || pending->persistence != descriptor.persistence))
+                return &ExtensionErrors::EditorSurfaceRegistryInvalid;
+            if (pending && pending->entry.activityPlacement && !descriptor.activity)
+                return &ExtensionErrors::EditorSurfaceRegistryStateInvalid;
+            if (descriptor.activity.has_value()) {
+                const auto drawer = FindSurface(state, descriptor.activity->drawerId);
+                const auto side =
+                    pending && pending->entry.activityPlacement ? pending->entry.activityPlacement->side : descriptor.activity->side;
+                const bool open = pending ? pending->entry.open : descriptor.openByDefault;
+                const bool focused = pending && pending->entry.focused;
+                if (pending &&
+                    (drawer->desiredOpen != open || drawer->desiredFocused != focused || (open && !pending->entry.activityVisible)))
+                    return &ExtensionErrors::EditorSurfaceRegistryStateInvalid;
+                if (open && std::ranges::any_of(state.surfaces, [side](const auto &candidate) {
+                    return candidate->descriptor.activity.has_value() && candidate->desiredOpen &&
+                           ActivityPlacementOf(*candidate).side == side;
+                }))
+                    return &ExtensionErrors::EditorSurfaceRegistryStateInvalid;
+            }
+            return nullptr;
+        }
+
+        /** @brief Copies the bounded peer set in stable insertion order before a placement transaction mutates state. */
+        [[nodiscard]] std::vector<std::shared_ptr<EditorSurfaceState>> CollectActivityPeers(const EditorSurfaceRegistryState &state,
+                                                                                            const EditorActivitySide side,
+                                                                                            const std::uint8_t group) {
+            std::vector<std::shared_ptr<EditorSurfaceState>> peers;
+            peers.reserve(state.surfaces.size());
+            for (const auto &candidate : state.surfaces)
+                if (candidate->descriptor.activity && ActivityPlacementOf(*candidate).side == side &&
+                    ActivityPlacementOf(*candidate).group == group)
+                    peers.push_back(candidate);
+            std::ranges::sort(peers, [](const auto &left, const auto &right) {
+                const auto a = ActivityPlacementOf(*left).order;
+                const auto b = ActivityPlacementOf(*right).order;
+                return std::tie(a, left->descriptor.id) < std::tie(b, right->descriptor.id);
+            });
+            return peers;
+        }
+
     }  // namespace
 
     /** @copydoc EditorSurfaceRegistry::Register */
@@ -81,36 +139,9 @@ namespace Horo::Extensions {
         if (state_->surfaces.size() >= state_->limits.maximumSurfaces)
             return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryCapacityExceeded);
 
-        if (descriptor.activity.has_value()) {
-            const auto drawer = FindSurface(*state_, descriptor.activity->drawerId);
-            if (drawer == nullptr || drawer->descriptor.kind != EditorSurfaceKind::Panel ||
-                drawer->descriptor.provider != descriptor.provider ||
-                EffectiveStatus(*state_, *drawer) != EditorSurfaceProviderStatus::Active ||
-                std::ranges::any_of(state_->surfaces, [&descriptor](const auto &candidate) {
-                return candidate->descriptor.activity.has_value() &&
-                       candidate->descriptor.activity->drawerId == descriptor.activity->drawerId;
-            }))
-                return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryInvalid);
-        }
-
         const PendingSurfaceState *pending = FindPending(*state_, surfaceId);
-        if (pending != nullptr && (!SameProvider(pending->entry.provider, provider) || pending->persistence != descriptor.persistence))
-            return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryInvalid);
-        if (pending && pending->entry.activityPlacement && !descriptor.activity)
-            return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
-        if (descriptor.activity.has_value()) {
-            const auto drawer = FindSurface(*state_, descriptor.activity->drawerId);
-            const auto side =
-                pending && pending->entry.activityPlacement ? pending->entry.activityPlacement->side : descriptor.activity->side;
-            const bool open = pending ? pending->entry.open : descriptor.openByDefault;
-            const bool focused = pending && pending->entry.focused;
-            if (pending && (drawer->desiredOpen != open || drawer->desiredFocused != focused || (open && !pending->entry.activityVisible)))
-                return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
-            if (open && std::ranges::any_of(state_->surfaces, [side](const auto &candidate) {
-                return candidate->descriptor.activity.has_value() && candidate->desiredOpen && ActivityPlacementOf(*candidate).side == side;
-            }))
-                return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
-        }
+        if (const auto *error = ActivityRegistrationError(*state_, descriptor, provider, pending))
+            return FailureValue<EditorSurfaceRegistration>(*error);
         if (!HasPreservationCapacity(*state_) ||
             (pending == nullptr && state_->surfaces.size() >= state_->limits.maximumWorkspaceEntries - state_->pending.size()))
             return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryCapacityExceeded);
@@ -267,21 +298,7 @@ namespace Horo::Extensions {
         if (destination.side > EditorActivitySide::Bottom || destination.group > 2 || destination.order < 0)
             return Failure(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
         const auto source = ActivityPlacementOf(*surface);
-        const auto collect = [this](const EditorActivitySide side, const std::uint8_t group) {
-            std::vector<std::shared_ptr<EditorSurfaceState>> peers;
-            peers.reserve(state_->surfaces.size());
-            for (const auto &candidate : state_->surfaces)
-                if (candidate->descriptor.activity && ActivityPlacementOf(*candidate).side == side &&
-                    ActivityPlacementOf(*candidate).group == group)
-                    peers.push_back(candidate);
-            std::ranges::sort(peers, [](const auto &left, const auto &right) {
-                const auto a = ActivityPlacementOf(*left).order;
-                const auto b = ActivityPlacementOf(*right).order;
-                return std::tie(a, left->descriptor.id) < std::tie(b, right->descriptor.id);
-            });
-            return peers;
-        };
-        auto targetPeers = collect(destination.side, destination.group);
+        auto targetPeers = CollectActivityPeers(*state_, destination.side, destination.group);
         if (static_cast<std::size_t>(destination.order) > targetPeers.size())
             return Failure(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
         std::size_t insertion = static_cast<std::size_t>(destination.order);
@@ -290,7 +307,7 @@ namespace Horo::Extensions {
                 --insertion;
             targetPeers.erase(found);
         }
-        auto sourcePeers = collect(source.side, source.group);
+        auto sourcePeers = CollectActivityPeers(*state_, source.side, source.group);
         std::erase(sourcePeers, surface);
         targetPeers.insert(targetPeers.begin() + static_cast<std::ptrdiff_t>(insertion), surface);
         // Every allocation and slot check precedes publication; the following bounded mutation cannot fail.
