@@ -46,6 +46,52 @@ namespace Horo::Editor {
         ErrorIs(DecodeFractureAssetSource(std::vector<std::byte>(MaximumFractureSourceBytes + 1)), FractureDocumentErrors::LimitExceeded);
     }
 
+    TEST_CASE("Fracture source wire rejects hostile counts booleans and floating encodings before open", "[unit][editor][fracture][wire]") {
+        const auto encoded = EncodeFractureAssetSource(Source());
+        REQUIRE(encoded.HasValue());
+        auto bytes = encoded.Value();
+        // Schema 1 fixture: fixed source settings precede the zero-site count at byte 166.
+        SECTION("oversized site count") {
+            for (std::size_t index = 166; index < 170; ++index)
+                bytes[index] = std::byte{255};
+        }
+        SECTION("site count cannot fit remaining bytes") {
+            bytes[166] = std::byte{};
+            bytes[167] = std::byte{4};  // 1,024 sites are in the envelope, but absent in this capture.
+        }
+        SECTION("malformed chunk boolean") {
+            bytes[194] = std::byte{2};
+        }
+        SECTION("noncanonical negative zero UV") {
+            for (std::size_t index = 150; index < 158; ++index)
+                bytes[index] = std::byte{};
+            bytes[157] = std::byte{128};
+        }
+        SECTION("nonfinite UV bits") {
+            bytes[156] = std::byte{240};
+            bytes[157] = std::byte{127};
+        }
+        ErrorIs(DecodeFractureAssetSource(bytes), FractureDocumentErrors::InvalidSource);
+    }
+
+    TEST_CASE("Fracture source admits the exact high-tier chunk envelope with bounded portable output",
+              "[unit][editor][fracture][ceiling]") {
+        auto source = Source();
+        source.settings.tier = DestructionFeatureTier::High;
+        source.chunks.clear();
+        source.contacts.clear();
+        for (std::uint64_t id = 1; id <= DestructionHardLimits::ChunksPerDestructible; ++id)
+            source.chunks.push_back({Id<DestructionChunkId>(id), {}, 0, true, true});
+        const auto encoded = EncodeFractureAssetSource(source);
+        REQUIRE(encoded.HasValue());
+        CHECK(encoded.Value().size() < MaximumFractureSourceBytes);
+        const auto decoded = DecodeFractureAssetSource(encoded.Value());
+        REQUIRE(decoded.HasValue());
+        CHECK(decoded.Value() == source);
+        source.settings.tier = DestructionFeatureTier::Standard;
+        ErrorIs(ValidateFractureAssetSource(source), FractureDocumentErrors::LimitExceeded);
+    }
+
     TEST_CASE("Fracture source validates exact references stable ordering capabilities and finite policy",
               "[unit][editor][fracture][validation]") {
         auto source = Source();
