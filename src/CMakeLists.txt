@@ -561,6 +561,13 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiFocusSpatialNavigation.cpp
         runtime/ui/UiControls.cpp
         runtime/ui/UiControlStateMachine.cpp
+        runtime/ui/UiControlStateMachineReload.cpp
+        runtime/ui/UiHotReload.cpp
+        runtime/ui/UiHotReloadGeneration.cpp
+        runtime/ui/UiHotReloadValidation.cpp
+        runtime/ui/UiHotReloadReconciliation.cpp
+        runtime/ui/UiHotReloadSource.cpp
+        runtime/ui/UiHotReloadPresentation.cpp
         runtime/ui/UiControlStateMachineInput.cpp
         runtime/ui/UiLayout.cpp
         runtime/ui/UiLayoutClipping.cpp
