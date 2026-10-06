@@ -11,7 +11,7 @@ without sharing any owner-work accounting. The new contract bounds both paths.
 `StreamingCellDirectionOwner::CommitActivation`, and
 `StreamingCellDirectionOwner::PollRetirement` now require one shared
 `StreamingOwnerFrameBudget` and a monotonic elapsed-service-time sample. There is no
-unbudgeted overload. Existing activation/direction tests migrate in this change;
+unbudgeted overload. Existing activation/direction/asset-request tests migrate in this change;
 the repository currently has no concrete Scene/provider receipt implementation.
 Out-of-tree host adapters must implement the new positive immutable work-cost
 methods on activation receipts and retirement participants.
