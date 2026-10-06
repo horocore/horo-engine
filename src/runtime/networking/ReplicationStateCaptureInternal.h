@@ -2,7 +2,9 @@
 
 #include "Horo/Network/ReplicationStateCapture.h"
 
+#include <optional>
 #include <thread>
+#include <type_traits>
 
 namespace Horo::Network {
     namespace Detail {
@@ -17,6 +19,29 @@ namespace Horo::Network {
 
     /** @brief Prepared pools retain their allocation until owner-thread shutdown, including revoked external pins. */
     struct ReplicationStateCapture::Impl final {
+        /** @brief Allocation-free foreign invocation outcome; typed error construction occurs outside this noexcept boundary. */
+        struct NativeCaptureAttempt final {
+            enum class Fault : std::uint8_t {
+                None,
+                Capacity,
+                Foreign
+            };
+            NativeCaptureAttempt() noexcept = default;
+            NativeCaptureAttempt(const NativeCaptureAttempt &) = delete;
+            NativeCaptureAttempt &operator=(const NativeCaptureAttempt &) = delete;
+            NativeCaptureAttempt(NativeCaptureAttempt &&) noexcept = default;
+            NativeCaptureAttempt &operator=(NativeCaptureAttempt &&) noexcept = default;
+            std::optional<Result<bool>> result;
+            Fault fault{Fault::None};
+        };
+
+        static_assert(std::is_nothrow_default_constructible_v<NativeCaptureAttempt>);
+        static_assert(std::is_nothrow_move_constructible_v<Result<bool>>);
+        static_assert(std::is_nothrow_destructible_v<Result<bool>>);
+        static_assert(std::is_nothrow_move_constructible_v<std::optional<Result<bool>>>);
+        static_assert(std::is_nothrow_move_constructible_v<NativeCaptureAttempt>);
+        static_assert(std::is_nothrow_destructible_v<NativeCaptureAttempt>);
+
         struct Target final {
             ReplicationCaptureTarget binding;
             std::vector<Detail::ReplicationPreparedCaptureField> fields;
@@ -56,6 +81,8 @@ namespace Horo::Network {
         void Reconcile(TickWork &work);
         void ServeHints(TickWork &work);
         void Schedule(TickWork &work);
+        [[nodiscard]] NativeCaptureAttempt InvokeCaptureTarget(Target &target, const ReplicationWorldCaptureRead &world, std::uint64_t tick,
+                                                               const CancellationToken &cancellation) const noexcept;
         [[nodiscard]] Result<bool> CaptureSafely(Target &target, const ReplicationWorldCaptureRead &world, std::uint64_t tick,
                                                  const CancellationToken &cancellation) const;
         [[nodiscard]] Result<bool> Publish(Target &target, ReplicationCapturedState &candidate,

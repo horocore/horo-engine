@@ -209,17 +209,30 @@ namespace Horo::Network {
         return Result<ReplicationCaptureReport>::Success(std::move(work.report));
     }
 
-    /** @brief Keeps plugin exceptions inside one candidate's atomic failure boundary. */
+    /** @brief Invokes one foreign candidate without allocating fault diagnostics or allowing exceptions to cross the boundary. */
+    ReplicationStateCapture::Impl::NativeCaptureAttempt ReplicationStateCapture::Impl::InvokeCaptureTarget(
+        Target &target, const ReplicationWorldCaptureRead &worldRead, const std::uint64_t tick,
+        const CancellationToken &cancellation) const noexcept {
+        NativeCaptureAttempt attempt;
+        try {
+            attempt.result.emplace(CaptureTarget(target, worldRead, tick, cancellation));
+        } catch (const std::bad_alloc &) {
+            attempt.fault = NativeCaptureAttempt::Fault::Capacity;
+        } catch (...) {
+            // Foreign callbacks may throw non-std types. Only a fixed status is produced inside this nonthrowing boundary.
+            attempt.fault = NativeCaptureAttempt::Fault::Foreign;
+        }
+        return attempt;
+    }
+
+    /** @brief Maps the allocation-free foreign outcome to existing typed errors outside the noexcept invocation boundary. */
     Result<bool> ReplicationStateCapture::Impl::CaptureSafely(Target &target, const ReplicationWorldCaptureRead &worldRead,
                                                               const std::uint64_t tick, const CancellationToken &cancellation) const {
-        try {
-            return CaptureTarget(target, worldRead, tick, cancellation);
-        } catch (const std::bad_alloc &) {
-            return Fail<bool>(ReplicationCaptureErrors::Capacity);
-        } catch (...) {
-            // Foreign owner/codec callbacks may throw non-std types. This boundary preserves the last complete snapshot.
-            return Fail<bool>(ReplicationCaptureErrors::CallbackFault);
-        }
+        auto attempt = InvokeCaptureTarget(target, worldRead, tick, cancellation);
+        if (attempt.result.has_value())
+            return std::move(*attempt.result);
+        return Fail<bool>(attempt.fault == NativeCaptureAttempt::Fault::Capacity ? ReplicationCaptureErrors::Capacity
+                                                                                 : ReplicationCaptureErrors::CallbackFault);
     }
 
     /** @brief Bounds scheduling after every owner or codec callback. */
