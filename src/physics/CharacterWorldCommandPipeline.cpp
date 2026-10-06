@@ -74,22 +74,23 @@ namespace Horo::Character {
         }
 
         if (auto queueLock = impl_->synchronization.TryLockCommands(); queueLock.owns_lock()) {
-            const auto registryLock = impl_->synchronization.LockRegistry();
-            if (const auto valid = Detail::ValidateLockedAdmission(*impl_, request); valid.HasError()) {
-                impl_->rejectedCommands.fetch_add(1);
-                return Result<CharacterCommandAdmission>::Failure(valid.ErrorValue());
-            }
-            if (impl_->fastPath.Commands().size() >= impl_->settings.Values().capacities.maximumQueuedCommands) {
-                impl_->commandOverflowCount.fetch_add(1);
-                return rejected(CharacterCommandAdmissionStatus::RejectedFull);
-            }
+            if (const auto registryLock = impl_->synchronization.TryLockRegistry(); registryLock.owns_lock()) {
+                if (const auto valid = Detail::ValidateLockedAdmission(*impl_, request); valid.HasError()) {
+                    impl_->rejectedCommands.fetch_add(1);
+                    return Result<CharacterCommandAdmission>::Failure(valid.ErrorValue());
+                }
+                if (impl_->fastPath.Commands().size() >= impl_->settings.Values().capacities.maximumQueuedCommands) {
+                    impl_->commandOverflowCount.fetch_add(1);
+                    return rejected(CharacterCommandAdmissionStatus::RejectedFull);
+                }
 
-            impl_->fastPath.Commands().push_back(request);
-            const auto depth = static_cast<std::uint32_t>(impl_->fastPath.Commands().size());
-            impl_->pendingCommands.store(depth);
-            impl_->maximumCommandDepth.store(std::max(depth, impl_->maximumCommandDepth.load()));
-            impl_->admittedCommands.fetch_add(1);
-            return Result<CharacterCommandAdmission>::Success({CharacterCommandAdmissionStatus::Deferred, depth});
+                impl_->fastPath.Commands().push_back(request);
+                const auto depth = static_cast<std::uint32_t>(impl_->fastPath.Commands().size());
+                impl_->pendingCommands.store(depth);
+                impl_->maximumCommandDepth.store(std::max(depth, impl_->maximumCommandDepth.load()));
+                impl_->admittedCommands.fetch_add(1);
+                return Result<CharacterCommandAdmission>::Success({CharacterCommandAdmissionStatus::Deferred, depth});
+            }
         }
         return rejected(CharacterCommandAdmissionStatus::RejectedBusy);
     }
