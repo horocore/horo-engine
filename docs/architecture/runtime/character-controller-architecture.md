@@ -351,12 +351,51 @@ If no valid ground is found, the character is airborne.
 Slopes within `slopeLimitDegrees` are walkable. Slopes above the limit block
 movement unless the character is sliding down.
 
-Options:
+The runtime descriptor owns `preserveHorizontalSpeedOnSlopes` (default true)
+and typed `CharacterSteepSlopePolicy::{Stop, Slide}` (default Stop). Walkable
+blocking normals lift remaining displacement along the descriptor's `up` axis,
+preserving its entire horizontal vector rather than normalizing an orthogonal
+projection. Golden ramp qualification allows 0.001 m/s error in each horizontal
+velocity component, including the exact slope-limit boundary. The normal cosine
+classification tolerance is 0.00001. Normals effectively perpendicular to `up`
+never enter the division used by ramp lifting.
 
-- `preventSlidingOnWalkableSlopes` — apply counter-force along slope normal
-- `slideDownSteepSlopes` — apply gravity along the steep surface
-- `preserveHorizontalSpeedOnSlopes` — adjust velocity to maintain requested
-  ground-plane speed
+Non-walkable upward-facing normals remove horizontal motion into the steep face
+before resolving any downward component. This cannot create ascent from horizontal
+intent; contour and downhill travel remain available. Conflicting simultaneous
+planes fail closed when a later projection violates an earlier blocking plane.
+No speed restoration scales a wall-clipped vector back through an obstacle.
+
+Stop adds no automatic surface drift. Slide uses the committed Character-owned
+`gravityVelocityMetersPerSecond` from the locomotion snapshot, distinct from
+caller-owned desired velocity and displacement-derived achieved velocity. It
+projects prior gravity velocity and descriptor gravity onto the steep face,
+computes `nextVelocity = priorVelocity + tangentGravity * fixedDelta`, and sweeps
+`0.5 * (priorVelocity + nextVelocity) * fixedDelta`. Repeated ticks retain actual
+acceleration; unobstructed planar reference cases agree across equal-duration
+fixed-tick partitions within 0.00001 m and 0.00001 m/s. This continuation is
+observable, finite-validated, staged with the movement result and committed only
+with the whole tick, following ADR-092. It introduces no separate slide accumulator.
+
+Slide starts only when the nearest downward blocking evidence is steep and within
+skin width. Upward tangent gravity cannot produce a climb. Any blocking slide sweep resets gravity continuation, so obstructed displacement
+cannot accumulate pressure independently of the contact-retention capacity. Motion
+still slides against the canonical blocking normals. Continuation also resets on
+walkable support, lost steep evidence, Stop, jump/upward commands, actual capsule
+change, and teleport. Failed
+ticks preserve the prior snapshot and gravity continuation. Ordinary airborne
+free-fall and jump integration belong to CHR-002.5; they must compose this same
+Character-owned velocity field rather than introducing another state authority.
+
+Slide displacement uses the same collision sweeps and remaining movement-iteration
+budget, including for sub-minimum ordinary movement distances. Zero ordinary
+movement consumes no movement iteration. A required slide with no remaining
+movement iterations rejects the entire candidate tick with `CapacityExceeded`,
+which preserves the committed state. The shared query budget includes both support
+probes. A steep surface does not publish grounded or
+platform support, and the reducer never snaps through the nearest steep face to a
+deeper walkable surface. Failed queries or shutdown discard all candidate motion
+before publication.
 
 ## Step Handling
 

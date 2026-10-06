@@ -73,6 +73,9 @@ namespace Horo::Character {
                 !IsFiniteNonNegative(descriptor.minimumMoveDistanceMeters) || !IsFiniteNonNegative(descriptor.maximumStepHeightMeters) ||
                 !IsFiniteNonNegative(descriptor.maximumSlopeDegrees) || descriptor.maximumSlopeDegrees > 90)
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
+            if (descriptor.steepSlopePolicy != CharacterSteepSlopePolicy::Stop &&
+                descriptor.steepSlopePolicy != CharacterSteepSlopePolicy::Slide)
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
             if (descriptor.maximumContacts == 0 || descriptor.maximumContacts > MaximumCharacterContacts)
                 return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded));
             return Result<void>::Success();
@@ -126,8 +129,9 @@ namespace Horo::Character {
         /** @brief Checks movement metadata before flags, capacities and surface evidence. */
         [[nodiscard]] Result<void> ValidateResultMetadata(const CharacterMovementResult &result) {
             if (result.tick == 0 || result.sequence == 0 || !Math::IsFinite(result.finalPosition) || !IsUnit(result.finalHeading) ||
-                !Math::IsFinite(result.achievedVelocityMetersPerSecond) || !IsUnit(result.up) ||
-                !std::isfinite(result.groundSlopeDegrees) || result.groundSlopeDegrees < 0 || result.groundSlopeDegrees > 180)
+                !Math::IsFinite(result.achievedVelocityMetersPerSecond) || !Math::IsFinite(result.gravityVelocityMetersPerSecond) ||
+                !IsUnit(result.up) || !std::isfinite(result.groundSlopeDegrees) || result.groundSlopeDegrees < 0 ||
+                result.groundSlopeDegrees > 180)
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid, "Movement result metadata is invalid."));
             if (result.shapeChange.has_value()) {
                 using enum CharacterShapeChangeStatus;

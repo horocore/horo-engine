@@ -103,3 +103,26 @@ Gameplay queries; Character enables it and always excludes triggers. Copied hits
 now include nonnegative penetration depth for bounded recovery. Existing consumers
 that do not inspect it retain their previous behavior. Generic visitors over
 `PhysicsQueryGeometry` must handle the two inline capsule alternatives.
+
+## Slope policy
+
+Existing descriptors default to horizontal ramp-speed preservation and steep Stop.
+This deliberately changes the former unconditional orthogonal projection: horizontal
+commands no longer lose speed on walkable ramps or acquire uphill travel beyond the
+slope limit. Set `preserveHorizontalSpeedOnSlopes = false` to retain orthogonal
+projection on walkable surfaces. Steep safety remains enabled in both modes.
+
+Gameplay/controller authoring selects `CharacterSteepSlopePolicy::Slide` explicitly
+for deterministic gravity-tangent acceleration across committed fixed ticks. The
+additive `CharacterMovementResult::gravityVelocityMetersPerSecond` is the single
+Character-owned gravity continuation required by ADR-092. It passes by value in
+existing locomotion snapshots and must be populated finitely by custom result
+producers (default zero remains valid). Gameplay desired velocity and achieved
+velocity are separate quantities; neither is reused as the gravity accumulator.
+Teleport resets locomotion, failed ticks preserve committed state, and actual
+capsule changes restart gravity continuation. Future CHR-002.5 ordinary gravity and
+jump integration must compose this field rather than add another accumulator.
+Unknown policy discriminators fail descriptor admission.
+The descriptor remains owned by Physics and passes unchanged through CharacterWorld
+creation; no native or Gameplay dependencies or header ownership changes are needed.
+Custom result producers remain responsible for coherent ground evidence.
