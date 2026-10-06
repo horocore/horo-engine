@@ -265,6 +265,20 @@ namespace {
         return Result<AssetCookArtifact>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
     }
 
+    /** @brief Produces another structurally valid template while retaining the original requested source/cache identity. */
+    void ReplaceTemplatePayload(AssetCookArtifact &artifact) {
+        const auto limits = Prefab::PrefabLimitProfile::Create({}).Value();
+        auto decoded = Prefab::CookedPrefab::Parse(std::as_bytes(std::span{artifact.payload}), artifact.id, limits);
+        REQUIRE(decoded.HasValue());
+        auto data = decoded.Value().Data();
+        data.entities[1].localTransform.translation.y = 99;
+        auto replacement = Prefab::CookedPrefab::Create(std::move(data), limits);
+        REQUIRE(replacement.HasValue());
+        artifact.payload.clear();
+        for (const auto byte : replacement.Value().Bytes())
+            artifact.payload.push_back(std::to_integer<std::uint8_t>(byte));
+    }
+
     /** @brief Prepares the host-produced template through the existing generation and asynchronous provider path. */
     void AssertProviderTemplate(HostFixture &fixture, const AssetCookGeneration &generation, const Sha256Digest &digest) {
         FilesystemAssetProvider bytes{generation.generationRoot};
@@ -607,6 +621,32 @@ TEST_CASE("Dynamic candidate failures retain the prior generation at the common 
     fixture.request.assets.publicationFiles = files;
     REQUIRE(fixture.Cook(cancelled.Token()).HasError());
     CHECK(files->observed);
+    fixture.AssertRetained(first.Value().generation);
+}
+
+TEST_CASE("Dynamic cache admission rejects corrupt and valid but different HPFB payloads under the requested key",
+          "[native][prefab-cook][host][template][cache]") {
+    HostFixture fixture;
+    fixture.request.runtimePrefabRoots = {fixture.prefabId};
+    const auto first = fixture.Cook();
+    REQUIRE(first.HasValue());
+    auto original = GenerationArtifact(first.Value().generation, fixture.prefabId);
+    REQUIRE(original.HasValue());
+    auto poisoned = std::move(original).Value();
+    SECTION("HPFB integrity differs despite a valid outer envelope") {
+        poisoned.payload.back() ^= 1U;
+    }
+    SECTION("another valid template is not the expected output") {
+        ReplaceTemplatePayload(poisoned);
+    }
+    poisoned.payloadDigest = ComputeSha256(std::as_bytes(std::span{poisoned.payload}));
+    const auto envelope = EncodeCookedArtifact(poisoned);
+    REQUIRE(envelope.HasValue());
+    TempDir poisonedCache;
+    AssetCookCache cache{poisonedCache.path};
+    REQUIRE(cache.Store({poisoned.cacheKeyDigest}, envelope.Value(), {}).HasValue());
+    fixture.request.assets.cacheRoot = poisonedCache.path;
+    REQUIRE(fixture.Cook().HasError());
     fixture.AssertRetained(first.Value().generation);
 }
 
