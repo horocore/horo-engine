@@ -42,7 +42,7 @@ namespace Horo::Physics::Detail {
                         return Result<void>::Failure(created.ErrorValue());
                     native = std::move(created).Value();
                 }
-                const ShapeHandle handle{owner, {batch.world->scene.nextShapeSlot++, 1}};
+                const ShapeHandle handle{owner, {batch.world->nextResourceSlot++, 1}};
                 batch.shapes.push_back({.handle = handle, .shape = std::move(native)});
                 batch.shapeHandles.push_back(handle);
             }
@@ -70,12 +70,76 @@ namespace Horo::Physics::Detail {
             return Result<void>::Success();
         }
 
+        /** @brief Validates bounded copied collider evidence without allocating native resources. */
+        [[nodiscard]] Result<void> ValidateColliderEvidence(const PhysicsSceneCollisionBinding &binding) {
+            if (binding.colliders.size() > 256)
+                return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+            for (const auto &collider : binding.colliders) {
+                if (collider.subshape && !collider.subshape->IsValid())
+                    return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
+                if (const auto pose = ValidatePhysicsPose(collider.localPose); pose.HasError())
+                    return Result<void>::Failure(pose.ErrorValue());
+                if (collider.materials.size() > 64)
+                    return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+                for (const auto &material : collider.materials)
+                    if (!material.asset.IsValid() || material.assetGeneration == 0 || !material.slot.IsValid())
+                        return Result<void>::Failure(MakeError(PhysicsErrors::MaterialDescriptorInvalid));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves one exact captured profile and its motion eligibility before native allocation. */
+        [[nodiscard]] Result<JPH::ObjectLayer> ResolveSceneObjectLayer(const CanonicalWorld &world,
+                                                                       const PhysicsSceneBodyDescriptor &descriptor) {
+            if (!descriptor.collision.has_value()) {
+                const auto requested = descriptor.body.continuousCollision.mode.value_or(world.continuousCollision.policy.defaultMode);
+                if (requested == PhysicsDefaultMotionQuality::LinearCast && descriptor.body.motion == PhysicsMotionType::Dynamic &&
+                    !descriptor.sensor)
+                    return Result<JPH::ObjectLayer>::Failure(
+                        MakeError(PhysicsErrors::CapabilityUnavailable,
+                                  "LinearCast requires an installed collision schema and an exact body profile."));
+                return Result<JPH::ObjectLayer>::Success(JPH::ObjectLayer{0});
+            }
+            if (const auto evidence = ValidateColliderEvidence(*descriptor.collision); evidence.HasError())
+                return Result<JPH::ObjectLayer>::Failure(evidence.ErrorValue());
+            if (!world.simulation.binding.schema)
+                return Result<JPH::ObjectLayer>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+            const auto profile = world.simulation.binding.schema->ResolveProfile(descriptor.collision->profile);
+            if (profile.HasError())
+                return Result<JPH::ObjectLayer>::Failure(profile.ErrorValue());
+            const auto layers = std::span{world.simulation.layers.data(), world.simulation.layerCount};
+            const auto layer = std::ranges::find(layers, profile.Value()->layer, &CollisionLayerDefinition::id);
+            if (layer == layers.end())
+                return Result<JPH::ObjectLayer>::Failure(MakeError(PhysicsErrors::DescriptorInvalid));
+            const bool admitted = descriptor.body.motion == PhysicsMotionType::Static      ? layer->admitsStatic
+                                  : descriptor.body.motion == PhysicsMotionType::Kinematic ? layer->admitsKinematic
+                                                                                           : layer->admitsDynamic;
+            if (!admitted || (descriptor.sensor && !layer->admitsOverlap))
+                return Result<JPH::ObjectLayer>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
+            if (!profile.Value()->simulationEnabled) {
+                const auto requested = descriptor.body.continuousCollision.mode.value_or(world.continuousCollision.policy.defaultMode);
+                if (requested == PhysicsDefaultMotionQuality::LinearCast && descriptor.body.motion == PhysicsMotionType::Dynamic &&
+                    !descriptor.sensor)
+                    return Result<JPH::ObjectLayer>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+                return Result<JPH::ObjectLayer>::Success(JPH::ObjectLayer{0});
+            }
+            return Result<JPH::ObjectLayer>::Success(static_cast<JPH::ObjectLayer>(std::distance(layers.begin(), layer) + 1));
+        }
+
         /** @brief Prepares native admission settings without allocating or activating a body. */
         [[nodiscard]] Result<JPH::BodyCreationSettings> PrepareSceneBodySettings(const PhysicsSceneBodyDescriptor &descriptor,
-                                                                                 const CanonicalSceneShapeRecord &shape) {
+                                                                                 const CanonicalSceneShapeRecord &shape,
+                                                                                 const CanonicalWorld &world) {
+            const auto quality =
+                ResolveCanonicalMotionQuality(world.continuousCollision.policy, descriptor.body, *shape.shape, descriptor.sensor);
+            if (quality.HasError())
+                return Result<JPH::BodyCreationSettings>::Failure(quality.ErrorValue());
+            const auto layer = ResolveSceneObjectLayer(world, descriptor);
+            if (layer.HasError())
+                return Result<JPH::BodyCreationSettings>::Failure(layer.ErrorValue());
             JPH::BodyCreationSettings settings(shape.shape.GetPtr(), ToNativePoint(descriptor.body.pose.translation),
                                                ToNative(descriptor.body.pose.rotation), ToNativeMotion(descriptor.body.motion),
-                                               JPH::ObjectLayer{0});
+                                               layer.Value());
             settings.mLinearVelocity = ToNative(descriptor.body.linearVelocity);
             settings.mAngularVelocity = ToNative(descriptor.body.angularVelocity);
             settings.mLinearDamping = descriptor.body.motionSafety.linearDampingPerSecond;
@@ -84,6 +148,7 @@ namespace Horo::Physics::Detail {
             settings.mMaxAngularVelocity = descriptor.body.motionSafety.maximumAngularSpeed;
             settings.mAllowedDOFs = ToNativeAllowedDOFs(descriptor.body.motionSafety.lockedAxes);
             settings.mIsSensor = descriptor.sensor;
+            settings.mMotionQuality = quality.Value();
             // Reserve native motion storage for future static -> moving safe-point transitions.
             settings.mAllowDynamicOrKinematic = !shape.shape->MustBeStatic();
             if (const Result<void> mass = ApplyCanonicalMassPolicy(settings, descriptor.body.mass); mass.HasError())
@@ -111,9 +176,10 @@ namespace Horo::Physics::Detail {
                     shape = std::to_address(residentShape);
                 if (!shape)
                     return Result<void>::Failure(MakeError(PhysicsErrors::HandleStale));
-                auto settings = PrepareSceneBodySettings(descriptor, *shape);
+                auto settings = PrepareSceneBodySettings(descriptor, *shape, canonical);
                 if (settings.HasError())
                     return Result<void>::Failure(settings.ErrorValue());
+                auto ownedCollision = descriptor.collision;
                 auto &bodyInterface = canonical.native.system->GetBodyInterface();
                 const JPH::Body *body = bodyInterface.CreateBody(settings.Value());
                 if (!body)
@@ -123,14 +189,16 @@ namespace Horo::Physics::Detail {
                     bodyInterface.DestroyBody(nativeId);
                     return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
                 }
-                const BodyHandle identity{batch.owner, {canonical.scene.nextBodySlot++, 1}};
+                const BodyHandle identity{batch.owner, {canonical.nextResourceSlot++, 1}};
                 batch.records.push_back({.handle = identity,
                                          .nativeBody = nativeId,
                                          .pose = descriptor.body.pose,
                                          .policy = descriptor.body,
+                                         .sensor = descriptor.sensor,
                                          .motionStorageReserved = descriptor.body.motion != PhysicsMotionType::Static ||
                                                                   settings.Value().mAllowDynamicOrKinematic,
-                                         .sceneEntity = descriptor.sceneEntity});
+                                         .sceneEntity = descriptor.sceneEntity,
+                                         .collision = std::move(ownedCollision)});
                 batch.handles.push_back(identity);
                 batch.nativeBodies.push_back(nativeId);
                 if (descriptor.body.motion != PhysicsMotionType::Static && descriptor.initialActivity == PhysicsInitialBodyActivity::Awake)
@@ -140,6 +208,22 @@ namespace Horo::Physics::Detail {
         }
 
     }  // namespace
+
+    /** @copydoc ResolveCanonicalMotionQuality */
+    Result<JPH::EMotionQuality> ResolveCanonicalMotionQuality(const PhysicsContinuousCollisionPolicy &policy,
+                                                              const PhysicsBodyDescriptor &body, const JPH::Shape &shape,
+                                                              const bool sensor) {
+        const bool eligible =
+            body.motion == PhysicsMotionType::Dynamic && !sensor && std::isfinite(shape.GetInnerRadius()) && shape.GetInnerRadius() > 0.0F;
+        const auto requested =
+            body.continuousCollision.mode.value_or(eligible ? policy.defaultMode : PhysicsDefaultMotionQuality::Discrete);
+        if (requested > PhysicsDefaultMotionQuality::LinearCast || (requested == PhysicsDefaultMotionQuality::LinearCast && !eligible))
+            return Result<JPH::EMotionQuality>::Failure(
+                MakeError(PhysicsErrors::OperationUnsupported,
+                          "Linear CCD requires a non-sensor dynamic shape with positive inner radius."));
+        return Result<JPH::EMotionQuality>::Success(requested == PhysicsDefaultMotionQuality::LinearCast ? JPH::EMotionQuality::LinearCast
+                                                                                                         : JPH::EMotionQuality::Discrete);
+    }
 
     /** @copydoc ApplyCanonicalMassPolicy */
     [[nodiscard]] Result<void> ApplyCanonicalMassPolicy(JPH::BodyCreationSettings &settings, const PhysicsMassPolicy &mass) {
@@ -168,7 +252,7 @@ namespace Horo::Physics::Detail {
         auto &canonical = *static_cast<CanonicalWorld *>(world.value);
         if (!canonical.pendingBodyBatch.expired())
             return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::InvalidState));
-        if (canonical.scene.nextBodySlot == std::numeric_limits<std::uint32_t>::max() ||
+        if (canonical.nextResourceSlot == std::numeric_limits<std::uint32_t>::max() ||
             canonical.scene.bodies.size() >= canonical.scene.maximumBodies)
             return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         if (const Result<void> valid = ValidatePhysicsBodyDescriptor(descriptor.body, owner); valid.HasError())
@@ -181,7 +265,7 @@ namespace Horo::Physics::Detail {
         });
         if (shape == canonical.scene.shapes.end())
             return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::HandleStale));
-        auto prepared = PrepareSceneBodySettings(descriptor, *shape);
+        auto prepared = PrepareSceneBodySettings(descriptor, *shape, canonical);
         if (prepared.HasError())
             return Result<BodyHandle>::Failure(prepared.ErrorValue());
         const auto &settings = prepared.Value();
@@ -189,6 +273,7 @@ namespace Horo::Physics::Detail {
         const bool awake =
             descriptor.body.motion != PhysicsMotionType::Static && descriptor.initialActivity == PhysicsInitialBodyActivity::Awake;
         const JPH::EActivation activation = awake ? JPH::EActivation::Activate : JPH::EActivation::DontActivate;
+        auto ownedCollision = descriptor.collision;
         const JPH::BodyID nativeBody = canonical.native.system->GetBodyInterface().CreateAndAddBody(settings, activation);
         if (nativeBody.IsInvalid())
             return Result<BodyHandle>::Failure(
@@ -199,15 +284,19 @@ namespace Horo::Physics::Detail {
             return Result<BodyHandle>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         }
 
-        const std::uint32_t slot = canonical.scene.nextBodySlot++;
+        const std::uint32_t slot = canonical.nextResourceSlot++;
         const BodyHandle identity{owner, {slot, 1}};
         canonical.scene.bodies.emplace_back(
             CanonicalSceneBodyRecord{.handle = identity,
                                      .nativeBody = nativeBody,
                                      .pose = descriptor.body.pose,
                                      .policy = descriptor.body,
+                                     .sensor = descriptor.sensor,
                                      .motionStorageReserved =
-                                         descriptor.body.motion != PhysicsMotionType::Static || settings.mAllowDynamicOrKinematic});
+                                         descriptor.body.motion != PhysicsMotionType::Static || settings.mAllowDynamicOrKinematic,
+                                     .sceneEntity = descriptor.sceneEntity,
+                                     .collision = std::move(ownedCollision)});
+        canonical.scene.nativeBodyIndices[nativeBody.GetIndex()] = canonical.scene.bodies.size() - 1;
         return Result<BodyHandle>::Success(identity);
     }
 
@@ -225,9 +314,9 @@ namespace Horo::Physics::Detail {
             (!groupBodies.empty() && !descriptors.empty()))
             return BatchResult::Failure(MakeError(PhysicsErrors::InvalidState));
         if (bodyCount > canonical.scene.maximumBodies - canonical.scene.bodies.size() ||
-            bodyCount > std::numeric_limits<std::uint32_t>::max() - canonical.scene.nextBodySlot ||
+            bodyCount + shapes.size() > std::numeric_limits<std::uint32_t>::max() - canonical.nextResourceSlot ||
             shapes.size() > canonical.scene.maximumShapes - canonical.scene.shapes.size() ||
-            shapes.size() > std::numeric_limits<std::uint32_t>::max() - canonical.scene.nextShapeSlot)
+            shapes.size() > std::numeric_limits<std::uint32_t>::max() - canonical.nextResourceSlot)
             return BatchResult::Failure(MakeError(PhysicsErrors::CapacityExceeded));
         auto prepared = std::make_shared<CanonicalSceneBodyBatchState>();
         prepared->records.reserve(bodyCount);

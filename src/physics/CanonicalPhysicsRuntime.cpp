@@ -46,6 +46,35 @@
 #include <utility>
 
 namespace Horo::Physics::Detail {
+    namespace {
+        /** @brief Compiles only validated enabled layers before installing native callback adapters. */
+        Result<void> CompileSimulationTable(CanonicalWorld &world, const PhysicsWorldSimulationBinding &simulation) {
+            if (static_cast<bool>(simulation.schema) != (simulation.generation != 0))
+                return Result<void>::Failure(
+                    MakeError(PhysicsErrors::DescriptorInvalid, "Collision schema owner and generation must be supplied together."));
+            world.simulation.binding = simulation;
+            if (simulation.schema) {
+                for (const auto &layer : simulation.schema->Layers()) {
+                    if (!layer.enabled)
+                        continue;
+                    if (world.simulation.layerCount == world.simulation.layers.size())
+                        return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+                    world.simulation.layers[world.simulation.layerCount++] = layer;
+                }
+                const auto layers = std::span{world.simulation.layers.data(), world.simulation.layerCount};
+                for (std::size_t first = 0; first < layers.size(); ++first) {
+                    for (std::size_t second = 0; second < layers.size(); ++second) {
+                        const auto response = simulation.schema->ResolvePair(layers[first].id, layers[second].id);
+                        if (response.HasError())
+                            return Result<void>::Failure(response.ErrorValue());
+                        world.simulation.responses[(first + 1) * CanonicalSimulationTable::RowCount + second + 1] = response.Value();
+                    }
+                }
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     CanonicalRuntime::~CanonicalRuntime() {
         ActiveDiagnosticInbox().store(nullptr);
         if (typesRegistered)
@@ -66,8 +95,8 @@ namespace Horo::Physics::Detail {
 
     CanonicalWorld::CanonicalWorld(CanonicalRuntime &runtime, const std::uint32_t maximumBodies, const std::uint32_t maximumFixtures,
                                    const std::uint32_t maximumShapes, const std::uint32_t maximumConstraints)
-        : owner(runtime), contactListener(*this), scene(maximumBodies, maximumShapes, maximumConstraints),
-          query(maximumFixtures, maximumBodies) {
+        : owner(runtime), objectVsBroadPhase(simulation), objectPairs(simulation), contactListener(*this),
+          scene(maximumBodies, maximumShapes, maximumConstraints), query(maximumFixtures, maximumBodies) {
         ++owner.resources.worlds;
         query.fixtures.reserve(query.maximumFixtures);
         scene.shapes.reserve(scene.maximumShapes);
@@ -82,6 +111,7 @@ namespace Horo::Physics::Detail {
             for (const CanonicalSceneConstraintRecord &constraint : scene.constraints)
                 native.system->RemoveConstraint(constraint.constraint.GetPtr());
             auto &bodyInterface = native.system->GetBodyInterface();
+            std::ranges::fill(scene.nativeBodyIndices, std::numeric_limits<std::size_t>::max());
             for (const CanonicalSceneBodyRecord &body : scene.bodies) {
                 bodyInterface.RemoveBody(body.nativeBody);
                 bodyInterface.DestroyBody(body.nativeBody);
@@ -184,7 +214,8 @@ namespace Horo::Physics::Detail {
 
     /** @copydoc CreateCanonicalWorld */
     Result<CanonicalWorldHandle> CreateCanonicalWorld(const CanonicalRuntimeHandle runtime, const PhysicsWorldSettings &settings,
-                                                      const CanonicalFailurePoint failurePoint) {
+                                                      const CanonicalFailurePoint failurePoint,
+                                                      const PhysicsWorldSimulationBinding &simulation) {
         if (runtime.value == nullptr)
             return Result<CanonicalWorldHandle>::Failure(MakeError(PhysicsErrors::InvalidState));
         if (settings.Values().world.capacity.maximumBodies == 0)
@@ -198,6 +229,8 @@ namespace Horo::Physics::Detail {
         auto world = std::make_unique<CanonicalWorld>(*static_cast<CanonicalRuntime *>(runtime.value), values.maximumBodies,
                                                       settings.Values().budgets.maximumShapes, settings.Values().budgets.maximumShapes,
                                                       settings.Values().world.capacity.maximumConstraints);
+        if (const auto compiled = CompileSimulationTable(*world, simulation); compiled.HasError())
+            return Result<CanonicalWorldHandle>::Failure(compiled.ErrorValue());
         world->native.scratch = std::make_unique<JPH::TempAllocatorImpl>(static_cast<std::size_t>(values.scratchBytes));
         ++world->owner.resources.scratchAllocators;
         if (failurePoint == CanonicalFailurePoint::ScratchCreated)
@@ -212,6 +245,9 @@ namespace Horo::Physics::Detail {
         world->native.system->Init(values.maximumBodies, 1, values.maximumBodyPairs, values.maximumContactConstraints,
                                    world->broadPhaseLayers, world->objectVsBroadPhase, world->objectPairs);
         world->native.system->SetPhysicsSettings(values.solver);
+        world->continuousCollision.policy = {settings.Values().step.defaultMotionQuality,
+                                             settings.Values().step.linearCastThresholdFraction,
+                                             settings.Values().step.linearCastPenetrationFraction};
         world->native.system->SetGravity(values.gravity);
         world->native.system->SetContactListener(&world->contactListener);
         if (failurePoint == CanonicalFailurePoint::SystemInitialized)

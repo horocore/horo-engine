@@ -152,7 +152,8 @@ namespace Horo::Physics::Detail {
     void DestroyCanonicalRuntime(CanonicalRuntimeHandle runtime) noexcept;
     /** @brief Builds one isolated native world from an already validated snapshot. */
     [[nodiscard]] Result<CanonicalWorldHandle> CreateCanonicalWorld(CanonicalRuntimeHandle runtime, const PhysicsWorldSettings &settings,
-                                                                    CanonicalFailurePoint failurePoint = CanonicalFailurePoint::None);
+                                                                    CanonicalFailurePoint failurePoint = CanonicalFailurePoint::None,
+                                                                    const PhysicsWorldSimulationBinding &simulation = {});
     /** @brief Releases one native world in reverse dependency order. */
     void DestroyCanonicalWorld(CanonicalWorldHandle world) noexcept;
     /** @brief Runs and joins one serial native fixed step before returning to publication code.
@@ -221,6 +222,15 @@ namespace Horo::Physics::Detail {
                                                                                    std::size_t &cursor) noexcept;
     /** @brief Avoids suppressing an unrelated query fixture that shares a separately issued body slot. */
     [[nodiscard]] bool CanonicalQueryFixtureUsesBodyHandle(CanonicalWorldHandle world, BodyHandle body) noexcept;
+    /** @brief Validates a complete CCD world replacement before any native mutation. */
+    [[nodiscard]] Result<void> ValidateCanonicalContinuousCollision(CanonicalWorldHandle world,
+                                                                    const PhysicsContinuousCollisionPolicy &policy);
+    /** @brief Applies admitted policy at the joined owner pre-step safe point and wakes/reconciles affected bodies. */
+    [[nodiscard]] Result<void> ApplyCanonicalContinuousCollision(CanonicalWorldHandle world,
+                                                                 const PhysicsContinuousCollisionPolicy &policy);
+    /** @brief Copies effective world policy and its lifetime-scoped revision without native references. */
+    [[nodiscard]] Result<PhysicsContinuousCollisionObservation> ReadCanonicalContinuousCollision(CanonicalWorldHandle world);
+
     /** @brief Removes a corrupt resident body and every attached native constraint at the owner-thread post-step safe point. */
     void QuarantineCanonicalSceneBody(CanonicalWorldHandle world, BodyHandle body, const CanonicalRetirementSink &sink) noexcept;
     /** @brief Marks one resident body as corrupt for deterministic containment tests without feeding NaN to Jolt. */

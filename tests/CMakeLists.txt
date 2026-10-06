@@ -588,6 +588,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsActivationTests.cpp
         unit/runtime/physics/PhysicsBodyDescriptorTests.cpp
         unit/runtime/physics/PhysicsBodyDynamicsTests.cpp
+        unit/runtime/physics/PhysicsContinuousCollisionTests.cpp
         unit/runtime/physics/PhysicsCollisionSchemaTests.cpp
         unit/runtime/physics/PhysicsConstraintDescriptorTests.cpp
         unit/runtime/physics/PhysicsCompoundCookTests.cpp
@@ -1244,6 +1245,10 @@ add_test(NAME HoroGameplayPhysicsSdkContract COMMAND ${CMAKE_COMMAND}
     "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/physics_sdk_contract"
     "-DHOST_CONSUMER=$<TARGET_FILE:HoroGameplayPhysicsSdkHostConsumer>"
     "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+    "-DCMAKE_LINKER=${CMAKE_LINKER}"
+    "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}"
+    "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}"
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
     "-DGENERATOR=${CMAKE_GENERATOR}"
     "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
     "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"

@@ -83,6 +83,10 @@ namespace Horo::Physics {
     Result<void> ValidatePhysicsAuthoredBodyDescriptor(const PhysicsAuthoredBodyDescriptor &descriptor) {
         if (descriptor.motion > PhysicsMotionType::Dynamic)
             return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Unknown authored body motion mode."));
+        if (descriptor.continuousCollision.mode && (*descriptor.continuousCollision.mode > PhysicsDefaultMotionQuality::LinearCast ||
+                                                    (*descriptor.continuousCollision.mode == PhysicsDefaultMotionQuality::LinearCast &&
+                                                     descriptor.motion != PhysicsMotionType::Dynamic)))
+            return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Explicit linear CCD requires dynamic motion."));
         if (const auto mass = ValidateMassPolicy(descriptor.motion, descriptor.mass); mass.HasError())
             return mass;
         return ValidateInitialVelocity(descriptor.motion, descriptor.initialLinearVelocity, descriptor.initialAngularVelocity,
@@ -100,7 +104,8 @@ namespace Horo::Physics {
                                        authored.mass,
                                        authored.initialLinearVelocity,
                                        authored.initialAngularVelocity,
-                                       authored.motionSafety};
+                                       authored.motionSafety,
+                                       authored.continuousCollision};
         if (const auto runtime = ValidatePhysicsBodyDescriptor(resolved, expectedWorld); runtime.HasError())
             return Result<PhysicsBodyDescriptor>::Failure(runtime.ErrorValue());
         return Result<PhysicsBodyDescriptor>::Success(std::move(resolved));
@@ -114,6 +119,10 @@ namespace Horo::Physics {
             return pose;
         if (descriptor.motion > PhysicsMotionType::Dynamic)
             return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Unknown body motion mode."));
+        if (descriptor.continuousCollision.mode && (*descriptor.continuousCollision.mode > PhysicsDefaultMotionQuality::LinearCast ||
+                                                    (*descriptor.continuousCollision.mode == PhysicsDefaultMotionQuality::LinearCast &&
+                                                     descriptor.motion != PhysicsMotionType::Dynamic)))
+            return Result<void>::Failure(MakeError(PhysicsErrors::OperationUnsupported, "Explicit linear CCD requires dynamic motion."));
         if (const auto mass = ValidateMassPolicy(descriptor.motion, descriptor.mass); mass.HasError())
             return mass;
         return ValidateInitialVelocity(descriptor.motion, descriptor.linearVelocity, descriptor.angularVelocity, descriptor.motionSafety);

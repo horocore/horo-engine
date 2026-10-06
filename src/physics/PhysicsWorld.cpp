@@ -95,10 +95,32 @@ namespace Horo::Physics {
             return Result<void>::Success();
         }
 
+        /** @brief Admit one complete world CCD replacement in the same bounded canonical command queue. */
+        [[nodiscard]] Result<void> ValidateContinuousCollisionAdmission(const auto &impl, const PhysicsStructuralCommand &command) {
+            if (!command.continuousCollision)
+                return Result<void>::Success();
+            if (impl.stepping || command.bodyMutation || Detail::HasPendingCanonicalSceneBodies(impl.native))
+                return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+            if (command.order.commandKind != PhysicsStructuralCommandKind::Change ||
+                command.order.targetKind != PhysicsCommandTargetKind::World || command.order.targetIdentity != impl.identity.Value())
+                return Result<void>::Failure(MakeError(PhysicsErrors::CommandOrderInvalid));
+            if (const auto valid = Detail::ValidateCanonicalContinuousCollision(impl.native, *command.continuousCollision);
+                valid.HasError())
+                return valid;
+            for (std::uint32_t index = 0; index < impl.commandCount; ++index) {
+                const auto &existing = impl.CommandAt(index);
+                if (existing.continuousCollision && existing.order.simulationTick == command.order.simulationTick)
+                    return Result<void>::Failure(MakeError(PhysicsErrors::CommandOrderInvalid));
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Validates command identity and complete mutation intent before queue transfer. */
         [[nodiscard]] Result<void> ValidateQueuedCommand(const auto &impl, const PhysicsStructuralCommand &command) {
             if (const auto valid = ValidatePhysicsCommandOrderKey(command.order); valid.HasError())
                 return valid;
+            if (const auto ccd = ValidateContinuousCollisionAdmission(impl, command); ccd.HasError())
+                return ccd;
             if (const auto mutation = ValidateBodyMutationAdmission(impl, command); mutation.HasError())
                 return mutation;
             if (const auto completed = impl.stepping ? impl.activeTick : impl.publication.Snapshot().completedTick;
@@ -114,6 +136,11 @@ namespace Horo::Physics {
             using enum PhysicsTickPhase;
             for (std::uint32_t index = 0; index < eligible; ++index) {
                 const auto &command = impl.CommandAt(index);
+                if (command.continuousCollision) {
+                    if (const auto valid = Detail::ValidateCanonicalContinuousCollision(impl.native, *command.continuousCollision);
+                        valid.HasError())
+                        return valid;
+                }
                 if (!command.bodyMutation)
                     continue;
                 if (const auto resolved = Detail::ResolveCanonicalBodyMutation(impl.native, impl.identity, *command.bodyMutation);
@@ -123,6 +150,13 @@ namespace Horo::Physics {
             Detail::ObservePhase(input, ApplyDeferredPreStep);
             for (std::uint32_t index = 0; index < eligible; ++index) {
                 const auto &command = impl.CommandAt(index);
+                if (command.continuousCollision) {
+                    if (const auto changed = Detail::ApplyCanonicalContinuousCollision(impl.native, *command.continuousCollision);
+                        changed.HasError()) {
+                        impl.Fail(changed.ErrorValue(), input.sceneGeneration, input.simulationTick);
+                        return changed;
+                    }
+                }
                 if (!command.bodyMutation)
                     continue;
                 if (const auto changed = Detail::ApplyCanonicalBodyMutation(impl.native, impl.identity, *command.bodyMutation);
@@ -196,7 +230,8 @@ namespace Horo::Physics {
     }
 
     /** @copydoc PhysicsRuntime::PrepareWorld */
-    Result<std::unique_ptr<PhysicsWorld>> PhysicsRuntime::PrepareWorld(const PhysicsWorldSettings &settings) {
+    Result<std::unique_ptr<PhysicsWorld>> PhysicsRuntime::PrepareWorld(const PhysicsWorldSettings &settings,
+                                                                       const PhysicsWorldSimulationBinding &simulation) {
         if (impl_->ownerThread != std::this_thread::get_id())
             return Result<std::unique_ptr<PhysicsWorld>>::Failure(MakeError(PhysicsErrors::ThreadAffinityViolation));
         if (const std::array admissionConditions{
@@ -204,11 +239,14 @@ namespace Horo::Physics {
             };
             !std::ranges::all_of(admissionConditions, std::identity{}))
             return Result<std::unique_ptr<PhysicsWorld>>::Failure(MakeError(PhysicsErrors::InvalidState));
+        if (static_cast<bool>(simulation.schema) != (simulation.generation != 0))
+            return Result<std::unique_ptr<PhysicsWorld>>::Failure(
+                MakeError(PhysicsErrors::DescriptorInvalid, "Collision schema owner and generation must be supplied together."));
         try {
             using enum PhysicsWorldState;
             auto worldImpl = std::make_unique<PhysicsWorld::Impl>(impl_, settings);
             if (impl_->mode == PhysicsRuntimeMode::Canonical) {
-                const auto created = Detail::CreateCanonicalWorld(impl_->native, settings);
+                const auto created = Detail::CreateCanonicalWorld(impl_->native, settings, Detail::CanonicalFailurePoint::None, simulation);
                 if (created.HasError()) {
                     worldImpl->state = Failed;
                     return Result<std::unique_ptr<PhysicsWorld>>::Failure(created.ErrorValue());
@@ -270,7 +308,8 @@ namespace Horo::Physics {
         const auto canonicalWorld =
             static_cast<std::uint8_t>(impl_->mode == PhysicsRuntimeMode::Canonical) *
             static_cast<std::uint8_t>(capability == WorldCreation || capability == RigidBodies || capability == ImmutableShapes ||
-                                      capability == Constraints || capability == ImmediateQueries || capability == BodyMutation);
+                                      capability == Constraints || capability == ImmediateQueries || capability == BodyMutation ||
+                                      capability == ContinuousCollision);
         const auto ready = static_cast<std::uint8_t>(impl_->state == PhysicsRuntimeState::Ready);
         return static_cast<PhysicsCapabilitySupport>(static_cast<std::uint8_t>(PhysicsCapabilitySupport::Unsupported) +
                                                      canonicalWorld * (1U + ready));

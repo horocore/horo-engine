@@ -619,6 +619,70 @@ commands are valid and the latter policy never creates an implicit wake transiti
 Unknown modes, stale handles, wrong scene/tick affinity, non-finite inputs and values
 outside the CanonicalV1 command bounds fail before solver mutation.
 
+## Continuous Collision And Tunnelling
+
+CanonicalV1 admits `Discrete` and `LinearCast` motion quality. The latter uses the
+pinned solver's actual integrated linear displacement, not an estimated pre-step
+velocity or a renderer delta. The initial world default and dimensionless inner-radius
+threshold/maximum-penetration fractions belong to `PhysicsStepPolicy`: defaults are
+`Discrete`, `0.75` and `0.25`; admitted fractions are finite in `(0, 1]`. Native
+penetration is also capped by the existing penetration slop. No angular sweep is
+provided: fast rotation, sensors, kinematic motion, and shapes without a positive
+inner radius are outside the CCD support claim.
+
+`PhysicsBodyContinuousCollision` owns an optional mode override. Absence inherits the
+world default for eligible dynamic, non-sensor shapes; other inherited bodies stay
+explicitly discrete. An explicit `LinearCast` request on an ineligible body fails with
+`OperationUnsupported` before native body allocation or mutation. Unknown modes also
+fail. Per-body thresholds are unavailable: the threshold is one world-owned policy,
+not an approximation based on a copied velocity. Analytic, admitted positive-inner-radius
+shapes and compounds use the same native eligibility proof; static-only cooked shapes
+retain their separate shape/motion admission contract.
+
+A body mode replacement uses the existing tick-addressed `PhysicsBodyMutation`,
+including an empty override to restore inheritance. Effective world mode/threshold
+replacement uses `PhysicsStructuralCommand::continuousCollision` on an exact
+`Change/World` key. A command cannot carry both payloads. Only one world replacement
+per tick is admitted. Both paths use the bounded existing command queue, exact world,
+scene, tick and producer ordering; no second scheduler or settings registry exists.
+All eligible commands revalidate before the first pre-step native mutation. The owner
+applies them between joined native steps, never from a contact callback. Changing
+mode wakes affected moving bodies and invalidates their native contact cache; changing
+world fractions wakes/reconciles every affected CCD body. Body handles and current
+poses/velocities are retained. Constrained body policy edits keep the existing explicit
+unsupported reconciliation result. A pending detached body preparation must complete
+before a world replacement or fixed step can execute.
+
+`ReadContinuousCollision` copies effective policy and a world-lifetime revision;
+`ReadSceneBodyReconciliation` also copies the native effective mode. The original
+`PhysicsWorldSettings` snapshot and identity remain immutable. Effective revision
+advances once for a changed world policy, not an identical request. Reads require the
+owner lane outside stepping and fail after teardown; Null/omitted compositions cannot
+fabricate policy evidence. Runtime commands and effective policy are required inputs
+for future checkpoint compatibility, not replacements for an immutable initial-settings
+identity or a complete determinism receipt.
+
+The canonical thin-wall regression advances a 0.2-m-wide body at 400 m/s through a
+0.05-m-thick static obstacle at 60 Hz. Discrete motion tunnels; `LinearCast` resolves
+the encounter. Repeated identical native runs compare exact copied state within
+ADR-088's `SameMachineDiagnostic` tier only; they do not promote cross-platform or
+whole-product rollback support. A 24-pair Release workload measures only the native
+fixed step (construction/readback/assertions excluded), reports the actual totals and
+ratio, and gates CCD cost at at most 32 times that discrete fixture baseline. The
+budget is a fixture-specific qualification guard, not a frame-wide performance claim.
+
+Migration: world settings canonical encoding advances from schema 2 (34 words) to
+schema 3 (36 words), including both CCD fractions. Old settings/checkpoint identity
+must not be reinterpreted as schema 3; hosts rebuild from validated settings and
+requalify exact fingerprints. Existing discrete defaults are behavior-preserving.
+Body descriptors, mutation envelopes, reconciliation and the capability array gain
+additive owned fields/`ContinuousCollision`; binary consumers must rebuild, and
+exhaustive capability consumers must add the new value. The new public header has
+one existing Physics target owner and installed consumer coverage. Durable Scene
+schemas are unchanged: their existing conversion inherits the world default; this
+change does not add a stringly editor authoring property or invent a persistence
+version for the portable descriptor.
+
 ## Sleeping, Activation And Island Observations
 
 Scene-body creation now defaults moving bodies to `PhysicsInitialBodyActivity::Awake`.
@@ -854,6 +918,59 @@ typed diagnostics rather than using the project's authoring default.
 Semantic schema changes build complete candidate tables and publish atomically at
 the Physics pre-step safe point. Bodies retain typed IDs plus schema generation,
 and every debug/event/query projection translates private indices back to Horo IDs.
+
+### Captured Simulation Composition And CCD Migration
+
+`PhysicsRuntime::PrepareWorld(settings, PhysicsWorldSimulationBinding)` explicitly
+captures one `shared_ptr<const NormalizedCollisionSchema>` and its nonzero generation.
+An absent owner requires generation zero and deliberately leaves simulation closed.
+The existing one-argument call remains this closed composition; it does not install
+an authoring default or claim CCD contact support. Application composition supplies
+the validated Project schema. Scene activation captures the same binding in
+`PhysicsSceneActivationSettings::simulation`, checks its generation against the
+activation authority, and propagates exact authored collider profiles into bodies.
+Existing compiled clients must rebuild for the extended preparation signature; the
+source default argument preserves only explicit closed-world composition. Changing
+the schema requires preparing a replacement detached Scene/world; the
+current implementation does not mutate the captured table in place.
+
+`PhysicsSceneBodyDescriptor::collision` selects one exact profile, hence its one
+project layer, and owns optional collider metadata. The initial canonical compound
+realization rejects mixed profiles and mixed sensor/solid contributors. A primitive
+analytic collider has no authored subresource identity. Resolved material references
+without generation evidence remain explicitly absent in the native projection;
+neither native child ordinals nor asset hashes manufacture authored identities.
+Caller-supplied retained material evidence requires an exact nonzero generation.
+Replacing a body shape that retains authored collider metadata requires detached
+recreation with a fresh binding, preserving the old body on rejection. An eligible
+positive LinearCast request on a missing or simulation-disabled binding
+fails before body publication, including body and world safe-point transitions.
+
+The private adapter compiles at most 64 layer rows plus a reserved rejecting row
+zero. Callback lookups use immutable bounded arrays, with no allocation, locks or
+ambient schema registration. Ignore rejects contact; Overlap uses native sensor
+settings; Block retains native solver response. Layer motion/sensor eligibility is
+checked before allocation and again on a motion transition.
+
+Scene shapes, scene bodies and query fixtures share one world-owned never-reused
+slot issuer. Failed preparation burns slots instead of allowing stale attachment
+aliases. Resident body indices retain full native IDs and Horo world generations;
+retirement invalidates indices before destruction. Private query views borrow those
+records, immutable table and shapes only during a joined synchronous world operation.
+They cannot outlive the operation or bypass publication/shutdown fencing. The private
+simulation view supplies exact profile/channel lookup, query-enabled policy, native
+row-to-layer translation and captured filter generation. Unknown profile/channel
+lookups return absence. A valid query-disabled profile returns Ignore. Captured filter
+generation is independent of fixture inventory/query publication revisions.
+
+For an installed Project table, mixed Scene and legacy fixture queries must validate
+the required channel and contributor profile against that one authority before
+collection; unknown IDs reject the operation without partial results. The deliberately
+uninstalled fixture composition retains explicit fixture metadata for its existing
+qualification seam, without claiming Project-table authority. The current canonical query collector remains fixture-only; Scene query projection
+is a separate consumer of this foundation, not claimed by CCD qualification. The body's retained `sensor` flag
+means actual body sensor intent; a pair-specific Overlap response does not manufacture
+a permanent sensor property or authored child/material identity.
 
 ## Determinism
 

@@ -91,9 +91,11 @@ namespace Horo::Physics::Detail {
             sink.Retire(retired);
         }
         auto &interface = canonical.native.system->GetBodyInterface();
+        canonical.scene.nativeBodyIndices[found->nativeBody.GetIndex()] = std::numeric_limits<std::size_t>::max();
         interface.RemoveBody(found->nativeBody);
         interface.DestroyBody(found->nativeBody);
         canonical.scene.bodies.erase(found);
+        RebuildCanonicalSceneBodyIndices(canonical);
         ++canonical.query.querySchemaGeneration;
         sink.Retire(body);
     }

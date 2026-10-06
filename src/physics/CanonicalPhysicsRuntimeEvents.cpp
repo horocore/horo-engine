@@ -58,6 +58,46 @@ namespace Horo::Physics::Detail {
             return PhysicsEventMaterial{.asset = material->asset, .assetGeneration = material->assetGeneration, .slot = material->slot};
         }
 
+        struct ContactEndpointEvidence final {
+            PhysicsEventEndpoint endpoint;
+            std::optional<PhysicsEventMaterial> material;
+        };
+
+        /** @brief Copies exact fixture or indexed resident identity; unknown IDs remain closed. */
+        [[nodiscard]] std::optional<ContactEndpointEvidence> ResolveContactEndpoint(const CanonicalWorld &world, const JPH::Body &native,
+                                                                                    const JPH::SubShapeID subshape) noexcept {
+            if (const auto *fixture = FindFixture(world, native.GetID())) {
+                const auto *child = ResolveCanonicalFixtureChild(*fixture, subshape);
+                if (std::holds_alternative<PhysicsCompoundShapeDescriptor>(fixture->descriptor.shape) && child == nullptr)
+                    return std::nullopt;
+                return ContactEndpointEvidence{ToEventEndpoint(world, *fixture, child),
+                                               ToEventMaterial(child == nullptr ? fixture->descriptor.material : child->material)};
+            }
+            const auto nativeIndex = native.GetID().GetIndex();
+            if (nativeIndex >= world.scene.nativeBodyIndices.size())
+                return std::nullopt;
+            const auto index = world.scene.nativeBodyIndices[nativeIndex];
+            if (index >= world.scene.bodies.size())
+                return std::nullopt;
+            const auto &record = world.scene.bodies[index];
+            const auto row = native.GetObjectLayer();
+            if (record.nativeBody != native.GetID() || !record.handle.IsValid() || !record.collision || row == 0 ||
+                row > world.simulation.layerCount)
+                return std::nullopt;
+            const auto *profile = world.simulation.Profile(record.collision->profile);
+            if (!profile || !profile->lifecycleEventsEnabled)
+                return std::nullopt;
+            PhysicsEventEndpoint endpoint{.body = record.handle,
+                                          .shape = record.policy.shape,
+                                          .layer = world.simulation.Layer(row),
+                                          .profile = record.collision->profile,
+                                          .filterSchemaGeneration = world.simulation.SchemaGeneration()};
+            // A compound's native path is not an authored ID. Only exact single-contributor evidence is unambiguous here.
+            if (record.collision->colliders.size() == 1)
+                endpoint.subshape = record.collision->colliders.front().subshape;
+            return ContactEndpointEvidence{endpoint, std::nullopt};
+        }
+
         /** @brief Orders point identity independently of an optional estimated impulse. */
         [[nodiscard]] bool PointGeometryLess(const PhysicsContactPoint &left, const PhysicsContactPoint &right) noexcept {
             return std::tie(left.positionOnFirst, left.positionOnSecond, left.normal, left.penetrationDepthMeters) <
@@ -133,7 +173,8 @@ namespace Horo::Physics::Detail {
     JPH::ValidateResult CanonicalContactListener::OnContactValidate(const JPH::Body &body1, const JPH::Body &body2, JPH::RVec3Arg,
                                                                     const JPH::CollideShapeResult &) {
         const std::uint64_t key = CollisionPairKey(body1.GetID(), body2.GetID());
-        return std::ranges::binary_search(world_.scene.disabledJointCollisionPairs, key)
+        return world_.simulation.Response(body1.GetObjectLayer(), body2.GetObjectLayer()) == SimulationPairResponse::Ignore ||
+                       std::ranges::binary_search(world_.scene.disabledJointCollisionPairs, key)
                    ? JPH::ValidateResult::RejectAllContactsForThisBodyPair
                    : JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
     }
@@ -141,12 +182,16 @@ namespace Horo::Physics::Detail {
     /** @copydoc CanonicalContactListener::OnContactAdded */
     void CanonicalContactListener::OnContactAdded(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
                                                   JPH::ContactSettings &settings) {
+        settings.mIsSensor = settings.mIsSensor ||
+                             world_.simulation.Response(body1.GetObjectLayer(), body2.GetObjectLayer()) == SimulationPairResponse::Overlap;
         Emit(body1, body2, manifold, settings);
     }
 
     /** @copydoc CanonicalContactListener::OnContactPersisted */
     void CanonicalContactListener::OnContactPersisted(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
                                                       JPH::ContactSettings &settings) {
+        settings.mIsSensor = settings.mIsSensor ||
+                             world_.simulation.Response(body1.GetObjectLayer(), body2.GetObjectLayer()) == SimulationPairResponse::Overlap;
         Emit(body1, body2, manifold, settings);
     }
 
@@ -156,25 +201,18 @@ namespace Horo::Physics::Detail {
         const ContactCaptureRoute *route = world_.contactRoute.load(std::memory_order::seq_cst);
         if (route == nullptr || route->Sink().append == nullptr || route->Sink().context == nullptr)
             return;
-        const auto *fixture1 = FindFixture(world_, body1.GetID());
-        const auto *fixture2 = FindFixture(world_, body2.GetID());
-        if (fixture1 == nullptr || fixture2 == nullptr)
-            return;
-        const PhysicsCompoundChild *child1 = ResolveCanonicalFixtureChild(*fixture1, manifold.mSubShapeID1);
-        const PhysicsCompoundChild *child2 = ResolveCanonicalFixtureChild(*fixture2, manifold.mSubShapeID2);
-        if ((std::holds_alternative<PhysicsCompoundShapeDescriptor>(fixture1->descriptor.shape) && child1 == nullptr) ||
-            (std::holds_alternative<PhysicsCompoundShapeDescriptor>(fixture2->descriptor.shape) && child2 == nullptr))
+        const auto first = ResolveContactEndpoint(world_, body1, manifold.mSubShapeID1);
+        const auto second = ResolveContactEndpoint(world_, body2, manifold.mSubShapeID2);
+        if (!first || !second)
             return;
         const PhysicsContactSummary contact = CopyContactSummary(body1, body2, manifold, settings);
         if (contact.pointCount == 0)
             return;
         const PhysicsContactObservation observation{.simulationTick = route->SimulationTick(),
-                                                    .first = ToEventEndpoint(world_, *fixture1, child1),
-                                                    .second = ToEventEndpoint(world_, *fixture2, child2),
-                                                    .firstMaterial = ToEventMaterial(child1 == nullptr ? fixture1->descriptor.material
-                                                                                                       : child1->material),
-                                                    .secondMaterial = ToEventMaterial(child2 == nullptr ? fixture2->descriptor.material
-                                                                                                        : child2->material),
+                                                    .first = first->endpoint,
+                                                    .second = second->endpoint,
+                                                    .firstMaterial = first->material,
+                                                    .secondMaterial = second->material,
                                                     .contact = contact,
                                                     .sensor = settings.mIsSensor};
         static_cast<void>(route->Sink().append(route->Sink().context, observation));

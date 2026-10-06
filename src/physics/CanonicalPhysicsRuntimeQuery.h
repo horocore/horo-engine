@@ -43,7 +43,15 @@ namespace Horo::Physics::Detail {
         std::array<PhysicsQueryHit, MaximumPhysicsQueryHits> queryCandidates{};
     };
 
-    /** @brief Narrow query view over world-owned native and stable fixture state. */
+    struct CanonicalWorld;
+    struct CanonicalSceneBodyRecord;
+    struct CanonicalSceneShapeRecord;
+    struct CanonicalSimulationTable;
+
+    /** @brief Narrow query view over world-owned native and stable fixture state.
+     * @details All spans and table references borrow the joined synchronous world operation. The owner
+     * prevents publication, retirement and shutdown until the operation returns; callers cannot retain this view.
+     */
     struct CanonicalQueryAccess final {
         JPH::PhysicsSystem &system;
         std::vector<CanonicalQueryFixtureRecord> &fixtures;
@@ -53,7 +61,23 @@ namespace Horo::Physics::Detail {
         std::uint32_t &nextFixtureGeneration;
         std::uint64_t &querySchemaGeneration;
         CanonicalQueryStorage &storage;
+        std::span<const CanonicalSceneBodyRecord> sceneBodies;
+        std::span<const std::size_t> nativeSceneBodyIndices;
+        const CanonicalSimulationTable &simulation;
+        std::span<const CanonicalSceneShapeRecord> sceneShapes;
     };
+
+    /** @brief Borrows one joined world operation's resident records, native indices and immutable simulation authority.
+     * @param world Live owner whose operation prevents publication, retirement and shutdown throughout use.
+     * @return Non-owning synchronous access; neither the result nor its spans may escape the joined operation.
+     */
+    [[nodiscard]] CanonicalQueryAccess MakeQueryAccess(CanonicalWorld &world);
+
+    /** @brief Resolves an indexed resident body only for the exact native ID and Horo world generation.
+     * @return Borrow valid only during the access view's joined synchronous operation, or null for stale/foreign IDs.
+     */
+    [[nodiscard]] const CanonicalSceneBodyRecord *ResolveCanonicalSceneBody(const CanonicalQueryAccess &access, PhysicsWorldId owner,
+                                                                            JPH::BodyID nativeBody) noexcept;
 
     /** @brief Creates one validated native shape/body through the private query view. */
     [[nodiscard]] Result<PhysicsQueryFixture> CreateCanonicalQueryFixtureFromAccess(CanonicalQueryAccess &access, PhysicsWorldId owner,
