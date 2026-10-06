@@ -111,17 +111,16 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc LoadNavMeshAsset */
-    Result<LoadedNavMeshAsset> LoadNavMeshAsset(const Assets::AssetRegistrySnapshot &registry, const Assets::IAssetProvider &provider,
-                                                const Assets::AssetId id, const AssetCookTargetId &target, Assets::AssetPayloadCache &cache,
-                                                const CancellationToken &cancellation, const NavMeshAssetLimits &limits,
-                                                const NavMeshAssetContentExpectation *expectation) {
-        const auto *record = registry.Find(id);
+    Result<LoadedNavMeshAsset> LoadNavMeshAsset(const NavMeshAssetSource &source, const Assets::AssetId id, const AssetCookTargetId &target,
+                                                Assets::AssetPayloadCache &cache, const CancellationToken &cancellation,
+                                                const NavMeshAssetLimits &limits, const NavMeshAssetContentExpectation *expectation) {
+        const auto *record = source.registry.Find(id);
         if (!record)
             return Result<LoadedNavMeshAsset>::Failure(MakeError(NavigationErrors::NoNavigationData));
-        const auto bytes = provider.Load(id, cancellation);
+        const auto bytes = source.provider.Load(id, cancellation);
         if (bytes.HasError())
             return Result<LoadedNavMeshAsset>::Failure(bytes.ErrorValue());
-        return LoadNavMeshAsset(Assets::AssetDependency{record->id, record->type}, registry.Revision(), bytes.Value(), target, cache,
+        return LoadNavMeshAsset(Assets::AssetDependency{record->id, record->type}, source.registry.Revision(), bytes.Value(), target, cache,
                                 limits, expectation);
     }
 }  // namespace Horo::Navigation

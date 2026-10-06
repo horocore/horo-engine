@@ -193,8 +193,7 @@ namespace Horo::Navigation {
             for (const auto &dependency : definition.AssetDependencies()) {
                 if (dependency.expectedType.Value() != Assets::NavMeshAssetTypeName)
                     continue;
-                const auto resolved = ResolveAsset(dependency.id, scene, state, assets);
-                if (resolved.HasError())
+                if (const auto resolved = ResolveAsset(dependency.id, scene, state, assets); resolved.HasError())
                     return Result<void>::Failure(resolved.ErrorValue());
                 if (std::ranges::none_of(surfaces, [&dependency](const auto &surface) {
                     return surface.definition == dependency.id;

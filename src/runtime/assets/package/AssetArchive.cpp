@@ -434,7 +434,7 @@ namespace Horo::Assets {
         std::ranges::sort(contents.assets, {}, &ParsedArchiveAsset::id);
         for (auto &asset : contents.assets) {
             entries.emplace_back(asset.id, asset.offset, asset.size);
-            members.push_back({asset.id, std::move(asset.type)});
+            members.emplace_back(asset.id, std::move(asset.type));
         }
         return Result<AssetArchiveProvider>::Success(
             AssetArchiveProvider{std::vector<std::uint8_t>(bytes.begin(), bytes.end()), std::move(entries),

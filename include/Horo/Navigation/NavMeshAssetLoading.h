@@ -76,9 +76,16 @@ namespace Horo::Navigation {
                                                               Assets::AssetPayloadCache &cache, const NavMeshAssetLimits &limits = {},
                                                               const NavMeshAssetContentExpectation *expectation = nullptr);
 
+    /** @brief Borrow the host-selected metadata snapshot and provider for one synchronous load call.
+     * @details Both referenced owners must remain alive throughout the call. This view owns no provider,
+     * schedules no work and is never retained by the loader or its returned copied preparation value. */
+    struct NavMeshAssetSource final {
+        const Assets::AssetRegistrySnapshot &registry; /**< Exact metadata incarnation used before provider I/O. */
+        const Assets::IAssetProvider &provider;        /**< Host-selected source; no provider discovery or fallback. */
+    };
+
     /** @brief Resolve via the canonical provider, using a captured registry snapshot and cooperative cancellation.
-     * @param registry Captured canonical asset metadata.
-     * @param provider Editor/filesystem or packaged/archive provider selected by the host.
+     * @param source Borrowed captured registry and host-selected provider; both owners outlive this synchronous call.
      * @param id Exact definition AssetId.
      * @param target Expected cook target.
      * @param cache Owner-thread immutable allocation cache.
@@ -86,8 +93,7 @@ namespace Horo::Navigation {
      * @param limits Qualified decode ceilings.
      * @param expectation Optional exact release evidence, with no legacy fallback when present.
      * @return Prepared value or original provider/typed navigation failure. */
-    [[nodiscard]] Result<LoadedNavMeshAsset> LoadNavMeshAsset(const Assets::AssetRegistrySnapshot &registry,
-                                                              const Assets::IAssetProvider &provider, Assets::AssetId id,
+    [[nodiscard]] Result<LoadedNavMeshAsset> LoadNavMeshAsset(const NavMeshAssetSource &source, Assets::AssetId id,
                                                               const AssetCookTargetId &target, Assets::AssetPayloadCache &cache,
                                                               const CancellationToken &cancellation, const NavMeshAssetLimits &limits = {},
                                                               const NavMeshAssetContentExpectation *expectation = nullptr);

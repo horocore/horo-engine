@@ -690,6 +690,20 @@ provider and owned per-AssetId expectations. A policy-permitted unsigned candida
 is policy-admitted, not authenticated signed content. Signature implementations,
 trust roots and application verification policy stay with their existing owners.
 
+The provider-loading overload of `LoadNavMeshAsset` takes one borrowed
+`NavMeshAssetSource { registry, provider }` instead of separate registry/provider
+parameters. Both owners must outlive its synchronous invocation; the source view
+is never stored or scheduled, and the returned preparation owns copied metadata
+and tile leases. Existing callers migrate
+`LoadNavMeshAsset(registry, provider, id, ...)` to
+`LoadNavMeshAsset({registry, provider}, id, ...)` and rebuild against the changed
+C++ signature. There is one provider-loading signature; no compatibility overload
+creates another admission authority. Lookup, provider cancellation and canonical
+decode retain their original order. The encoded-metadata overload is unchanged.
+The release smoke probe now borrows constructor limits by const reference only
+while copying them into its owned policy; source callers are unchanged and binary
+consumers rebuild.
+
 `LoadNavMeshAsset` accepts an optional exact release expectation. Presence requires
 matching complete HNS2 policy and actual envelope bytes before any tile-cache
 admission; a warm cache cannot satisfy stale or changed evidence. Scene activation
