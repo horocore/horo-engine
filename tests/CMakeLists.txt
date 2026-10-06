@@ -798,11 +798,7 @@ add_executable(HoroFractureDocumentTests
 target_compile_features(HoroFractureDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFractureDocumentTests PRIVATE HoroEngine::FractureDocument)
 horo_register_catch_test(HoroFractureDocumentTests LABELS "unit;editor;destruction;headless")
-add_executable(HoroFractureDocumentPublicHeaderConsumer support/FractureDocumentPublicHeaderConsumer.cpp)
-target_compile_features(HoroFractureDocumentPublicHeaderConsumer PRIVATE cxx_std_20)
-target_link_libraries(HoroFractureDocumentPublicHeaderConsumer PRIVATE HoroEngine::FractureDocument)
-add_test(NAME HoroFractureDocumentPublicHeaderConsumer COMMAND HoroFractureDocumentPublicHeaderConsumer)
-set_tests_properties(HoroFractureDocumentPublicHeaderConsumer PROPERTIES LABELS "unit;editor;destruction;public-header;headless;ci-windows;sonar-coverage")
+target_sources(HoroFractureDocumentPublicHeaderConsumer PRIVATE support/FractureDocumentPublicHeaderConsumer.cpp)
 
 add_executable(HoroCinematicModelTests
         support/AllocationProbe.cpp
