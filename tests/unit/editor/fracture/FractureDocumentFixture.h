@@ -45,7 +45,7 @@ namespace Horo::Editor::FractureTest {
     inline FractureAssetDocument Document(FractureDocumentHistoryLimits limits = {}) {
         auto opened = FractureAssetDocument::Open(Source(), Id<FractureSourceRevision>(11), Id<FractureDocumentSession>(12), limits);
         REQUIRE(opened.HasValue());
-        return std::move(opened.Value());
+        return std::move(opened).Value();
     }
 
     inline FractureDocumentEditContext Context(const FractureAssetDocument &document) {

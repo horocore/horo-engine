@@ -164,11 +164,12 @@ namespace Horo::Editor {
         auto decoded = DecodeFractureAssetSource(save.Value().Bytes());
         REQUIRE(decoded.HasValue());
         auto reopened =
-            FractureAssetDocument::Open(std::move(decoded.Value()), Id<FractureSourceRevision>(12), Id<FractureDocumentSession>(99));
+            FractureAssetDocument::Open(std::move(decoded).Value(), Id<FractureSourceRevision>(12), Id<FractureDocumentSession>(99));
         REQUIRE(reopened.HasValue());
-        CHECK_FALSE(reopened.Value().IsDirty());
-        CHECK(reopened.Value().Snapshot().source->settings.seed == 42);
-        ErrorIs(reopened.Value().AcknowledgeSave(save.Value(), Id<FractureSourceRevision>(13)), FractureDocumentErrors::WrongDocument);
+        auto reopenedDocument = std::move(reopened).Value();
+        CHECK_FALSE(reopenedDocument.IsDirty());
+        CHECK(reopenedDocument.Snapshot().source->settings.seed == 42);
+        ErrorIs(reopenedDocument.AcknowledgeSave(save.Value(), Id<FractureSourceRevision>(13)), FractureDocumentErrors::WrongDocument);
         auto stale = document.CaptureSave();
         REQUIRE(stale.HasValue());
         auto current = document.CaptureSave();

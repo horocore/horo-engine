@@ -252,10 +252,10 @@ namespace Horo::Editor {
             std::vector<HistoryEntry> history(history_.begin() + static_cast<std::ptrdiff_t>(first),
                                               history_.begin() + static_cast<std::ptrdiff_t>(cursor_));
             const auto nextState = FractureDocumentStateId::Create(nextState_).Value();
-            history.push_back({std::move(inverse), std::move(copied.Value()), state_, nextState, cost});
+            history.push_back({std::move(inverse), std::move(copied).Value(), state_, nextState, cost});
             if (context.cancellation.IsCancellationRequested())
                 return Result<FractureDocumentChange>::Failure(MakeError(FractureDocumentErrors::Cancelled));
-            source_ = std::move(candidate.Value());
+            source_ = std::move(candidate).Value();
             history_ = std::move(history);
             cursor_ = history_.size();
             state_ = nextState;
@@ -284,7 +284,7 @@ namespace Horo::Editor {
                 return Result<FractureDocumentChange>::Failure(candidate.ErrorValue());
             if (context.cancellation.IsCancellationRequested())
                 return Result<FractureDocumentChange>::Failure(MakeError(FractureDocumentErrors::Cancelled));
-            source_ = std::move(candidate.Value());
+            source_ = std::move(candidate).Value();
             state_ = redo ? entry.afterState : entry.beforeState;
             cursor_ = redo ? cursor_ + 1 : cursor_ - 1;
             revision_ = FractureDocumentRevision::Create(revision_.Value() + 1).Value();
@@ -314,7 +314,7 @@ namespace Horo::Editor {
         FractureDocumentSave save;
         save.snapshot_ = Snapshot();
         save.expectedSourceRevision_ = sourceRevision_;
-        save.bytes_ = std::move(bytes.Value());
+        save.bytes_ = std::move(bytes).Value();
         return Result<FractureDocumentSave>::Success(std::move(save));
     }
 

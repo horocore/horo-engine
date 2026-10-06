@@ -283,11 +283,13 @@ namespace Horo::Editor {
         settings.sites.resize(DestructionHardLimits::ChunksPerDestructible + 1);
         ErrorIs(document.Apply({{SetFractureSettings{settings}}}, Context(document)), FractureDocumentErrors::LimitExceeded);
         CHECK(document.Snapshot().source == before.source);
-        REQUIRE(document.Apply({{PutFractureMaterial{{1, Asset(11), Digest(12)}}}, Context(document)).HasValue());
-            REQUIRE(document.Apply({{RemoveFractureMaterial{1}}}, Context(document)).HasValue());
-            REQUIRE(document.Undo(Context(document)).HasValue());
-            CHECK(document.Snapshot().source->materials.size() == 2);
-            REQUIRE(document.Redo(Context(document)).HasValue());
-            CHECK(document.Snapshot().source->materials.size() == 1);
+        const FractureSourceMaterial material{1, Asset(11), Digest(12)};
+        const FractureSourcePatch addition{{PutFractureMaterial{material}}};
+        REQUIRE(document.Apply(addition, Context(document)).HasValue());
+        REQUIRE(document.Apply({{RemoveFractureMaterial{1}}}, Context(document)).HasValue());
+        REQUIRE(document.Undo(Context(document)).HasValue());
+        CHECK(document.Snapshot().source->materials.size() == 2);
+        REQUIRE(document.Redo(Context(document)).HasValue());
+        CHECK(document.Snapshot().source->materials.size() == 1);
     }
-    }
+}  // namespace Horo::Editor

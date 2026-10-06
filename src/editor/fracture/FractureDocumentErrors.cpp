@@ -2,7 +2,7 @@
 
 namespace Horo::Editor::FractureDocumentErrors {
     namespace {
-        constexpr ErrorDomain Domain{"editor.fracture"};
+        const ErrorDomainId Domain{"editor.fracture"};
     }
 
     const ErrorCodeDescriptor
