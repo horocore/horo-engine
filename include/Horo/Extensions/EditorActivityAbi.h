@@ -118,6 +118,8 @@ typedef struct HoroEditorActivityMessage HoroEditorActivityMessage;
 
 /** @brief Version-1 manifest-owned activity+panel binding; no host drawing callback or native object is exposed. */
 struct HoroEditorActivityDescriptor {
+    // RegisterEditorActivityImpl validates this prefix before reading the descriptor.
+    // cppcheck-suppress unusedStructMember
     uint32_t structSize;
     // Read across the C/C++ package boundary by RegisterEditorActivityImpl in EditorActivitySession.cpp.
     // cppcheck-suppress unusedStructMember
