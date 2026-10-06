@@ -1,3 +1,4 @@
+#include "../../support/OwnedTestDirectory.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 
 #include <array>
@@ -178,7 +179,8 @@ namespace {
     }
 
     TEST_CASE("Catalog File Loader Parses Resource Format", "[unit][editor]") {
-        const auto path = std::filesystem::temp_directory_path() / "horo-localization-test.json";
+        const Horo::Tests::OwnedTestDirectory directory{"localization catalog"};
+        const auto path = directory.Path() / "horo-localization-test.json";
         {
             std::ofstream output(path);
             output

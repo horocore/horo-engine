@@ -5,6 +5,7 @@
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
+#include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Editor/ProjectCreationService.h"
@@ -20,10 +21,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <memory>
-
-namespace Horo::Editor::Theme {
-    struct Fonts;
-}
+#include <type_traits>
 
 namespace {
     using namespace Horo;
@@ -38,6 +36,11 @@ namespace {
     class RecordingScreen final : public GuiScreen {
     public:
         explicit RecordingScreen(ScreenStats &stats) : stats_(stats) {}
+
+        RecordingScreen(const RecordingScreen &) = delete;
+        RecordingScreen &operator=(const RecordingScreen &) = delete;
+        RecordingScreen(RecordingScreen &&) = delete;
+        RecordingScreen &operator=(RecordingScreen &&) = delete;
 
         ~RecordingScreen() override {
             ++stats_.destructions;
@@ -122,22 +125,13 @@ namespace {
         return inventory;
     }
 
-    struct RemoveActivityInventory {
-        std::filesystem::path root;
-
-        ~RemoveActivityInventory() {
-            std::error_code error;
-            std::filesystem::remove_all(root, error);
-        }
-    };
+    static_assert(!std::is_copy_constructible_v<RecordingScreen> && !std::is_move_constructible_v<RecordingScreen>);
 
     TEST_CASE("GUI inventory activation uses explicit artifact authority and revokes package surfaces on shutdown",
               "[unit][editor][Activity][ABI]") {
         Horo::Tests::EditorActivityPackage package;
-        const auto installRoot = package.root.parent_path() / "horo107 GUI inventory";
-        std::filesystem::remove_all(installRoot);
-
-        RemoveActivityInventory removeInventory{installRoot};
+        const Horo::Tests::OwnedTestDirectory inventoryDirectory{"horo107 GUI inventory"};
+        const auto &installRoot = inventoryDirectory.Path();
 
         auto inventory = InstallActivityInventory(installRoot, package.root);
         EngineDataBus engineEvents;
@@ -149,7 +143,7 @@ namespace {
         ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
         EditorSettingsService settings{DefaultEditorSettings(), configuration, editorEvents, localization};
         EditorModalHost modals{editorEvents, input};
-        const Theme::Fonts &fonts = *reinterpret_cast<const Theme::Fonts *>(static_cast<std::uintptr_t>(1));
+        const Theme::Fonts fonts{};
         ThemeContext theme{fonts};
         EditorSettingsSnapshot settingsSnapshot = settings.Snapshot();
         EditorGuiContext gui{engineEvents, editorEvents, localization, theme, settingsSnapshot};
@@ -189,7 +183,7 @@ namespace {
         ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
         EditorSettingsService settings{DefaultEditorSettings(), configuration, editorEvents, localization};
         EditorModalHost modals{editorEvents, input};
-        const Theme::Fonts &fonts = *reinterpret_cast<const Theme::Fonts *>(static_cast<std::uintptr_t>(1));
+        const Theme::Fonts fonts{};
         ThemeContext theme{fonts};
         EditorSettingsSnapshot settingsSnapshot = settings.Snapshot();
         EditorGuiContext gui{engineEvents, editorEvents, localization, theme, settingsSnapshot};

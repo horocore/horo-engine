@@ -1,10 +1,55 @@
+#include "../../support/OwnedTestDirectory.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
+#include <fstream>
+#include <type_traits>
 
 using namespace Horo::Editor;
+
+static_assert(!std::is_copy_constructible_v<Horo::Tests::OwnedTestDirectory> &&
+              !std::is_move_constructible_v<Horo::Tests::OwnedTestDirectory>);
+static_assert(!std::is_copy_constructible_v<SplitNode> && std::is_nothrow_move_constructible_v<SplitNode>);
+static_assert(std::is_nothrow_move_constructible_v<LayoutNode> && std::is_nothrow_move_assignable_v<LayoutNode>);
+
+TEST_CASE("Split children transfer exclusive ownership into the layout variant", "[unit][editor][persistence][ownership]") {
+    SplitNode split;
+    split.first = std::make_unique<LayoutNode>(PanelNode{"first", "first.panel"});
+    split.second = std::make_unique<LayoutNode>(PanelNode{"second", "second.panel"});
+    const auto *first = split.first.get();
+    const auto *second = split.second.get();
+    LayoutNode node{std::move(split)};
+    CHECK_FALSE(split.first);
+    CHECK_FALSE(split.second);
+    LayoutNode transferred{std::move(node)};
+    const auto &owned = std::get<SplitNode>(transferred.value);
+    CHECK(owned.first.get() == first);
+    CHECK(owned.second.get() == second);
+    const auto &released = std::get<SplitNode>(node.value);
+    CHECK_FALSE(released.first);
+    CHECK_FALSE(released.second);
+}
+
+TEST_CASE("File fixtures exclusively own independent directories and cleanup cannot erase a sibling", "[unit][editor][filesystem]") {
+    const Horo::Tests::OwnedTestDirectory survivor{"workspace fixture"};
+    const auto marker = survivor.Path() / "retained.json";
+    {
+        std::ofstream output{marker};
+        output << "retained";
+        REQUIRE(output.good());
+    }
+    std::filesystem::path retired;
+    {
+        const Horo::Tests::OwnedTestDirectory other{"workspace fixture"};
+        retired = other.Path();
+        REQUIRE(retired != survivor.Path());
+        REQUIRE(std::filesystem::is_directory(retired));
+    }
+    CHECK_FALSE(std::filesystem::exists(retired));
+    CHECK(std::filesystem::is_regular_file(marker));
+}
 
 TEST_CASE("Workspace Layout Persistence Tests", "[unit][editor]") {
     WorkspacePanelHost host;
@@ -27,7 +72,8 @@ TEST_CASE("Workspace Layout Persistence Tests", "[unit][editor]") {
     REQUIRE((!error.empty()));
     REQUIRE((!WorkspaceLayoutPersistence::Deserialize("not json", &error)));
 
-    const auto path = std::filesystem::temp_directory_path() / "horo_workspace_layout_test.json";
+    const Horo::Tests::OwnedTestDirectory directory{"workspace persistence"};
+    const auto path = directory.Path() / "horo_workspace_layout_test.json";
     REQUIRE((WorkspaceLayoutPersistence::Save(path, host.Layout(), &error)));
     REQUIRE((WorkspaceLayoutPersistence::Load(path, &error).has_value()));
     REQUIRE((host.RestoreLayout(path, &error)));
@@ -81,7 +127,8 @@ TEST_CASE("Workspace serialization accepts registry state bounds without unbound
     const auto restored = WorkspaceLayoutPersistence::Deserialize(encoded);
     REQUIRE(restored);
     CHECK(restored->surfaces == host.Layout().surfaces);
-    const auto path = std::filesystem::temp_directory_path() / "horo107 bounded workspace.json";
+    const Horo::Tests::OwnedTestDirectory directory{"bounded workspace persistence"};
+    const auto path = directory.Path() / "horo107 bounded workspace.json";
     REQUIRE(WorkspaceLayoutPersistence::Save(path, host.Layout()));
     host.Layout().surfaces[128].state.push_back(1);
     CHECK(WorkspaceLayoutPersistence::Serialize(host.Layout()).empty());

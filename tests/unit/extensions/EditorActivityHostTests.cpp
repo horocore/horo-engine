@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <thread>
+#include <type_traits>
 
 namespace Horo::Extensions::Tests {
     namespace {
@@ -123,10 +124,19 @@ namespace Horo::Extensions::Tests {
         struct ReleaseBarrier {
             void (*release)(std::uint32_t);
 
+            explicit ReleaseBarrier(void (*callback)(std::uint32_t)) : release(callback) {}
+
+            ReleaseBarrier(const ReleaseBarrier &) = delete;
+            ReleaseBarrier &operator=(const ReleaseBarrier &) = delete;
+            ReleaseBarrier(ReleaseBarrier &&) = delete;
+            ReleaseBarrier &operator=(ReleaseBarrier &&) = delete;
+
             ~ReleaseBarrier() {
                 release(0);
             }
         };
+
+        static_assert(!std::is_copy_constructible_v<ReleaseBarrier> && !std::is_move_constructible_v<ReleaseBarrier>);
 
         hold(1);
         ReleaseBarrier release{hold};
