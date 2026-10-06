@@ -81,6 +81,16 @@ namespace Horo::Physics {
         PhysicsPose pose;
     };
 
+    /** @brief Analytic capsule overlap without admitting a resident body or shape.
+     * The capsule axis follows the finite unit up vector. Collection, filtering, hit bounds,
+     * world/scene affinity and capability revocation are identical to resident overlap queries.
+     */
+    struct PhysicsCapsuleOverlapQuery final {
+        PhysicsCapsuleShape capsule;
+        Math::Vec3 position;
+        Math::Vec3 up{0, 1, 0};
+    };
+
     /** @brief Point test in the world's current origin frame. */
     struct PhysicsPointQuery final {
         Math::Vec3 point;
@@ -93,7 +103,8 @@ namespace Horo::Physics {
         Block,
     };
 
-    using PhysicsQueryGeometry = std::variant<PhysicsRayQuery, PhysicsSweepQuery, PhysicsOverlapQuery, PhysicsPointQuery>;
+    using PhysicsQueryGeometry =
+        std::variant<PhysicsRayQuery, PhysicsSweepQuery, PhysicsOverlapQuery, PhysicsPointQuery, PhysicsCapsuleOverlapQuery>;
 
     /**
      * @brief Owned inert query request targeting one exact world and scene generation.

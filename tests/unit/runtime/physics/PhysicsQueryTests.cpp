@@ -1,3 +1,4 @@
+#include "AllocationProbe.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsQuery.h"
 #include "Horo/Physics/PhysicsWorld.h"
@@ -81,6 +82,36 @@ namespace Horo::Physics {
         REQUIRE_FALSE(PhysicsQueryChannelId::Parse("00000000-0000-0000-0000-000000000000").HasValue());
         static_assert(!std::is_same_v<CollisionLayerId, CollisionProfileId>);
         static_assert(!std::is_convertible_v<CollisionLayerId, PhysicsQueryChannelId>);
+    }
+
+    TEST_CASE("Analytic capsule overlap rejects malformed geometry before native construction", "[physics][query][descriptor]") {
+        auto descriptor = RayDescriptor();
+        PhysicsCapsuleOverlapQuery capsule{{0.5F, 0.5F}, {1, 2, 3}, {1, 0, 0}};
+        descriptor.geometry = capsule;
+        REQUIRE(ValidatePhysicsQueryDescriptor(descriptor, World(), 9).HasValue());
+        SECTION("zero radius") {
+            capsule.capsule.radiusMeters = 0;
+        }
+        SECTION("zero cylindrical height") {
+            capsule.capsule.cylindricalHalfHeightMeters = 0;
+        }
+        SECTION("non-finite height") {
+            capsule.capsule.cylindricalHalfHeightMeters = std::numeric_limits<float>::infinity();
+        }
+        SECTION("invalid up") {
+            capsule.up = {0, 2, 0};
+        }
+        SECTION("non-finite position") {
+            capsule.position.z = std::numeric_limits<float>::quiet_NaN();
+        }
+        SECTION("outside origin envelope") {
+            capsule.position.y = MaximumPhysicsLocalHalfExtentMeters + 1;
+        }
+        SECTION("outside shape envelope") {
+            capsule.capsule.radiusMeters = MaximumPhysicsLocalHalfExtentMeters;
+        }
+        descriptor.geometry = capsule;
+        REQUIRE(ValidatePhysicsQueryDescriptor(descriptor, World(), 9).HasError());
     }
 
     TEST_CASE("Physics query descriptors validate all backend-neutral geometry alternatives", "[physics][query][descriptor]") {
@@ -404,6 +435,35 @@ namespace Horo::Physics {
         REQUIRE(world->DestroyQueryFixture(ignored).HasValue());
         REQUIRE(world->DestroyQueryFixture(trigger).HasValue());
         REQUIRE(world->DestroyQueryFixture(included).HasValue());
+    }
+
+    TEST_CASE("Canonical analytic capsule overlap honors arbitrary up and exact generation filters", "[physics][query][native]") {
+        auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+        auto world = runtime->PrepareWorld(Test::SmallWorldSettings()).Value();
+        const auto identity = PhysicsWorldId::Create(704).Value();
+        REQUIRE(world->Activate(identity).HasValue());
+        auto targetDescriptor = QueryFixture({1.2F, 0, 0});
+        targetDescriptor.shape = PhysicsBoxShape{{0.1F, 0.1F, 0.1F}};
+        const auto target = world->CreateQueryFixture(targetDescriptor).Value();
+        AdvanceOneTick(*world);
+        std::array<PhysicsQueryHit, 1> hits{};
+        auto descriptor =
+            QueryDescriptor(identity, PhysicsCapsuleOverlapQuery{{0.25F, 1.0F}, {}, {1, 0, 0}}, PhysicsQueryCollection::Any, 1);
+        const auto before = Tests::AllocationProbe::Count();
+        const auto result = world->Query(descriptor, hits);
+        const auto after = Tests::AllocationProbe::Count();
+        REQUIRE(result.HasValue());
+        REQUIRE(after == before);
+        REQUIRE(result.Value().hitCount == 1);
+        REQUIRE(hits.front().body == target.body);
+        descriptor.geometry = PhysicsCapsuleOverlapQuery{{0.25F, 1.0F}, {}, {0, 1, 0}};
+        REQUIRE(world->Query(descriptor, hits).Value().hitCount == 0);
+        descriptor.geometry = PhysicsCapsuleOverlapQuery{{0.25F, 1.0F}, {}, {1, 0, 0}};
+        descriptor.filter.excludedBody = target.body;
+        REQUIRE(world->Query(descriptor, hits).Value().hitCount == 0);
+        descriptor.filter.excludedBody.reset();
+        REQUIRE(world->DestroyQueryFixture(target).HasValue());
+        REQUIRE(world->Query(descriptor, hits).Value().hitCount == 0);
     }
 
     TEST_CASE("Canonical immediate point overlap and sweep queries project stable hits", "[physics][query][native]") {

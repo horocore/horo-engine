@@ -72,3 +72,27 @@ suppress presentation; lookup cannot alter movement or reinterpret copied old
 material generations after reload or shutdown. Physical references are not
 semantic surface IDs. The ADR-181 semantic producer/catalog remains a separate
 unimplemented prerequisite; do not infer surfaces from material names or media.
+
+## Bottom-preserving resize (CHR-003.2)
+
+Named stance and explicit capsule replacements now preserve the bottom point along
+the descriptor's owned up axis. The collision-root center shifts by the difference
+in capsule total half-extents. This intentionally replaces the CHR-003.1 center-fixed
+behavior without adding a second resize authority or changing request layout.
+Consumers of `CharacterMovementRequest` must read the committed transform and
+effective capsule together; do not retain the pre-resize center for Scene or camera
+publication. Achieved velocity describes locomotion and excludes the resize shift.
+Clearance checks the shifted candidate, including shrink, before any publication.
+Blocked/invalid outcomes keep the previous capsule, stance and resize center; query
+failure aborts the entire attempted tick. Keep never retries a blocked Stand.
+
+For production clearance, acquire `CharacterClearanceQuery` from the host's
+`GameplayPhysicsContext::AcquireCharacterClearance` (or capture a directly
+host-admitted Physics capability). Supply the exact operation expectations and
+Physics publication revision, then keep the returned adapter stationary while
+passing its `Context()` to the synchronous Character call. Its query constructs an
+analytic capsule without installing fixture bodies. Revocation and world retirement
+remain capability failures; never replace them with a clear fallback. It supplies
+no penetration recovery for an overlapping spawn. The new header belongs solely
+to `HoroEngine::Physics`; clients of the extended `PhysicsQueryGeometry` variant
+must rebuild and account for the analytic alternative in exhaustive visitors.

@@ -85,7 +85,7 @@ namespace Horo::Character {
         Custom
     };
 
-    /** @brief Instantaneous capsule replacement at the command's fixed tick; the center root stays fixed. */
+    /** @brief Instantaneous capsule replacement at the command's fixed tick; the bottom stays fixed along the owned up axis. */
     struct CharacterShapeChangeRequest final {
         Physics::PhysicsCapsuleShape capsule;
     };
@@ -161,6 +161,8 @@ namespace Horo::Character {
      *
      * The adapter owns native query traversal and must reduce its evidence before returning. Character
      * consumes only the stable overlap count and one deterministic depenetration displacement.
+     * Clearance-only probes may return zero recovery for a blocker; overlapping spawn recovery
+     * requires a finite non-zero displacement.
      */
     struct CharacterOverlapProbeResult final {
         std::uint32_t overlapCount{};

@@ -984,6 +984,7 @@ target_compile_features(HoroAudioMetrics PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngine::Foundation)
 
 add_library(HoroPhysics STATIC
+        physics/CharacterClearanceQuery.cpp
         physics/CharacterControllerContracts.cpp
         physics/CharacterDiagnostics.cpp
         physics/CharacterErrors.cpp

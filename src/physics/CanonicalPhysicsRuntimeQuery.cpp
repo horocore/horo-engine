@@ -241,6 +241,17 @@ namespace Horo::Physics::Detail {
                                                              JPH::RVec3::sZero(), collectors.overlap, {}, {}, bodyFilter);
         }
 
+        /** @brief Uses a stack-owned analytic capsule with the existing bounded world collectors. */
+        void CollectCapsuleOverlapQuery(const CanonicalQueryAccess &access, const PhysicsCapsuleOverlapQuery &query,
+                                        CanonicalQueryCollectors &collectors, const QueryBodyFilter &bodyFilter) {
+            const JPH::CapsuleShape capsule{query.capsule.cylindricalHalfHeightMeters, query.capsule.radiusMeters};
+            const auto rotation = JPH::Quat::sFromTo(JPH::Vec3::sAxisY(), ToNative(query.up));
+            const auto transform =
+                JPH::RMat44::sRotationTranslation(rotation, JPH::RVec3(query.position.x, query.position.y, query.position.z));
+            access.system.GetNarrowPhaseQuery().CollideShape(&capsule, JPH::Vec3::sOne(), transform, JPH::CollideShapeSettings{},
+                                                             JPH::RVec3::sZero(), collectors.overlap, {}, {}, bodyFilter);
+        }
+
         void CollectSweepQuery(const CanonicalQueryAccess &access, const PhysicsSweepQuery &query,
                                const CanonicalQueryFixtureRecord &source, CanonicalQueryCollectors &collectors,
                                const QueryBodyFilter &bodyFilter) {
@@ -266,6 +277,8 @@ namespace Horo::Physics::Detail {
                     CollectPointQuery(access, query, collectors, bodyFilter);
                 else if constexpr (std::is_same_v<Query, PhysicsOverlapQuery>)
                     CollectOverlapQuery(access, query, *source, collectors, bodyFilter);
+                else if constexpr (std::is_same_v<Query, PhysicsCapsuleOverlapQuery>)
+                    CollectCapsuleOverlapQuery(access, query, collectors, bodyFilter);
                 else {
                     static_assert(std::is_same_v<Query, PhysicsSweepQuery>);
                     CollectSweepQuery(access, query, *source, collectors, bodyFilter);
@@ -393,7 +406,8 @@ namespace Horo::Physics::Detail {
                 return AppendRayQueryHits(access, descriptor, *ray, collectors.ray, candidates, candidateCount);
             if (const auto *point = std::get_if<PhysicsPointQuery>(&descriptor.geometry))
                 return AppendPointQueryHits(access, descriptor, *point, collectors.point, candidates, candidateCount);
-            if (std::holds_alternative<PhysicsOverlapQuery>(descriptor.geometry))
+            if (std::holds_alternative<PhysicsOverlapQuery>(descriptor.geometry) ||
+                std::holds_alternative<PhysicsCapsuleOverlapQuery>(descriptor.geometry))
                 return AppendContactQueryHits(access, descriptor, collectors.overlap, candidates, candidateCount, [](const auto &) {
                     return 0.0F;
                 });

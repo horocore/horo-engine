@@ -39,11 +39,19 @@ namespace Horo::Character::Detail {
                    Physics::MaximumPhysicsLocalHalfExtentMeters;
     }
 
+    /** @brief Shifts the center along the owned up axis to retain the capsule bottom. */
+    [[nodiscard]] Math::Vec3 BottomPreservingPosition(const Math::Vec3 position, const Math::Vec3 up,
+                                                      const Physics::PhysicsCapsuleShape current,
+                                                      const Physics::PhysicsCapsuleShape target) noexcept {
+        const float currentExtent = current.radiusMeters + current.cylindricalHalfHeightMeters;
+        const float targetExtent = target.radiusMeters + target.cylindricalHalfHeightMeters;
+        return position + up * (targetExtent - currentExtent);
+    }
+
     /** @brief Probes candidate clearance once, preserving original query errors and stopping on shutdown. */
     [[nodiscard]] Result<bool> ProbeShapeClearance(auto &impl, const CharacterMovementRequest &command,
-                                                   const CharacterFixedTickInput &input, const CharacterTransformPublication &previous,
-                                                   const CharacterControllerDescriptor &authored,
-                                                   const Physics::PhysicsCapsuleShape target) {
+                                                   const CharacterFixedTickInput &input, const CharacterControllerDescriptor &authored,
+                                                   const Physics::PhysicsCapsuleShape target, const Math::Vec3 position) {
         if (const auto budget = ReserveTickQuery(impl); budget.HasError())
             return Result<bool>::Failure(budget.ErrorValue());
         if (const auto valid = ValidateQueryContext(impl, input.query, input.tick); valid.HasError())
@@ -53,7 +61,7 @@ namespace Horo::Character::Detail {
                                                         authored.characterWorld,
                                                         authored.physicsWorld,
                                                         target,
-                                                        previous.position,
+                                                        position,
                                                         authored.up,
                                                         authored.collisionProfile,
                                                         authored.queryChannel,
@@ -63,8 +71,13 @@ namespace Horo::Character::Detail {
         const auto probe = input.query.overlap(input.query.context, probeRequest);
         if (const auto continuation = ValidateTickQueryContinuation(impl, probe); continuation.HasError())
             return Result<bool>::Failure(continuation.ErrorValue());
-        if (const auto valid = ValidateCharacterOverlapProbeResult(probe.Value()); valid.HasError())
-            return Result<bool>::Failure(valid.ErrorValue());
+        if (!Math::IsFinite(probe.Value().recoveryDisplacement))
+            return Result<bool>::Failure(MakeError(CharacterErrors::PlacementInvalid));
+        // Clearance consumes blocking presence only; a blocked candidate needs no recovery vector.
+        if (probe.Value().overlapCount == 0) {
+            if (const auto valid = ValidateCharacterOverlapProbeResult(probe.Value()); valid.HasError())
+                return Result<bool>::Failure(valid.ErrorValue());
+        }
         return Result<bool>::Success(probe.Value().overlapCount == 0);
     }
 
@@ -81,7 +94,12 @@ namespace Horo::Character::Detail {
         if (!target.has_value() || !IsShapeChangeGeometrySupported(target->capsule))
             return Result<CharacterShapeChangeResult>::Success(result);
         if (!SameCapsule(current, target->capsule)) {
-            const auto clear = ProbeShapeClearance(impl, command, input, previous, authored, target->capsule);
+            const auto position = BottomPreservingPosition(previous.position, authored.up, current, target->capsule);
+            if (const auto valid = ValidatePlacementDisplacement(previous.position, position,
+                                                                 impl.settings.Values().work.maximumDisplacementMetersPerTick);
+                valid.HasError())
+                return Result<CharacterShapeChangeResult>::Failure(valid.ErrorValue());
+            const auto clear = ProbeShapeClearance(impl, command, input, authored, target->capsule, position);
             if (clear.HasError())
                 return Result<CharacterShapeChangeResult>::Failure(clear.ErrorValue());
             if (!clear.Value()) {

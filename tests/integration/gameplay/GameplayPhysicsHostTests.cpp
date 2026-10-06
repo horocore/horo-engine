@@ -3,6 +3,7 @@
 #include "GameplayWorldComposition.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "PhysicsTestUtils.h"
 
@@ -242,5 +243,106 @@ TEST_CASE("World failure invalidates retained clients and batches while world st
     Physics::Test::RequireError(pending.Poll(), PhysicsErrors::CapabilityStale);
     runtime.reset();
     jobs.Shutdown(ShutdownPolicy::Cancel);
+}
+
+TEST_CASE("Gameplay-authorized canonical clearance preserves Character feet beneath a moving ceiling", "[gameplay-physics][host][stance]") {
+    using namespace Horo::Character;
+    auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
+    auto scene = Scene();
+    auto physics = World(*runtime, 1);
+    auto gameplay = GameplayWorldComposition::Create(*scene, physics.get(), 1, Native()).Value();
+    const auto channel = PhysicsQueryChannelId::Parse("12345678-1234-4234-8234-123456789abc").Value();
+    const auto profile = CollisionProfileId::Parse("12345678-1234-4234-8234-123456789abd").Value();
+    const auto layer = CollisionLayerId::Parse("12345678-1234-4234-8234-123456789abc").Value();
+    const auto fixture = [&](const PhysicsQueryFixtureShape &shape, const Math::Vec3 position,
+                             const PhysicsQueryFixtureResponse response = PhysicsQueryFixtureResponse::Block) {
+        return physics
+            ->CreateQueryFixture({.shape = shape,
+                                  .pose = {.translation = position, .rotation = Math::Quaternion::Identity()},
+                                  .layer = layer,
+                                  .profile = profile,
+                                  .channel = channel,
+                                  .response = response})
+            .Value();
+    };
+    const auto floor = fixture(PhysicsBoxShape{{5, 0.25F, 5}}, {0, -0.27F, 0});
+    auto ceiling = fixture(PhysicsBoxShape{{5, 0.25F, 5}}, {0, 2.5F, 0});
+    auto character = CharacterWorld::Prepare({1, physics->Identity(), 1, 1}, CharacterWorldSettings::Capture({}).Value()).Value();
+    const auto &world = character->Descriptor();
+    CharacterControllerDescriptor descriptor;
+    descriptor.sceneGeneration = 1;
+    descriptor.characterWorld = world.identity;
+    descriptor.physicsWorld = physics->Identity();
+    descriptor.collisionRootPosition = {0, 1, 0};
+    descriptor.collisionProfile = profile;
+    descriptor.queryChannel = channel;
+    descriptor.crouchedCapsule = PhysicsCapsuleShape{0.5F, 0.25F};
+    descriptor.defaultMaterial = {Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value(), 1,
+                                  PhysicsMaterialSlotId::FromValue(1)};
+    const auto handle = character->CreateController(descriptor).Value();
+    REQUIRE(character->Activate().HasValue());
+    const auto clearance = [&](const std::uint64_t tick) {
+        return gameplay->PhysicsContext()->AcquireCharacterClearance("game.tests", 7,
+                                                                     {world.sceneGeneration, world.identity, world.physicsWorld,
+                                                                      world.collisionFilterGeneration, world.originGeneration, tick,
+                                                                      physics->PublishedTick().publicationRevision});
+    };
+    auto spawnQuery = clearance(0).Value();
+    REQUIRE(character->SpawnController(handle, spawnQuery.Context()).HasValue());
+    const auto advance = [&](const std::uint64_t tick, const CharacterStanceIntent stance) {
+        REQUIRE(character->QueueMovementCommand({.controller = handle, .tick = tick, .sequence = tick, .stance = stance}).HasValue());
+        auto query = clearance(tick).Value();
+        return character->AdvanceFixedTick(
+            {.tick = tick, .sceneGeneration = 1, .fixedDelta = Duration::FromNanoseconds(16'666'667), .query = query.Context()});
+    };
+    REQUIRE(advance(1, CharacterStanceIntent::Crouch).HasValue());
+    REQUIRE(character->ControllerTransform(handle).Value().position.y == 0.75F);
+    REQUIRE(physics->DestroyQueryFixture(ceiling).HasValue());
+    ceiling = fixture(PhysicsBoxShape{{5, 0.25F, 5}}, {0, 1.85F, 0});
+    for (std::uint64_t tick = 2; tick <= 8; ++tick) {
+        REQUIRE(advance(tick, CharacterStanceIntent::Stand).HasValue());
+        const auto snapshot = character->ControllerLocomotionSnapshot(handle).Value();
+        REQUIRE(snapshot.movement.shapeChange->status == CharacterShapeChangeStatus::Blocked);
+        REQUIRE(snapshot.stance == CharacterStance::Crouched);
+        REQUIRE(snapshot.transform.position.y == 0.75F);
+    }
+    REQUIRE(physics->DestroyQueryFixture(ceiling).HasValue());
+    ceiling = fixture(PhysicsBoxShape{{5, 0.25F, 5}}, {0, 2.5F, 0});
+    REQUIRE(advance(9, CharacterStanceIntent::Stand).HasValue());
+    REQUIRE(character->ControllerTransform(handle).Value().position.y == 1.0F);
+    REQUIRE(character->ControllerLocomotionSnapshot(handle).Value().stance == CharacterStance::Standing);
+    REQUIRE(physics->DestroyQueryFixture(ceiling).HasValue());
+    ceiling = fixture(PhysicsBoxShape{{5, 0.25F, 5}}, {0, 1.5F, 0});
+    REQUIRE(advance(10, CharacterStanceIntent::Crouch).HasValue());
+    REQUIRE(character->ControllerLocomotionSnapshot(handle).Value().movement.shapeChange->status == CharacterShapeChangeStatus::Blocked);
+    REQUIRE(character->ControllerTransform(handle).Value().position.y == 1.0F);
+    REQUIRE(physics->DestroyQueryFixture(ceiling).HasValue());
+    ceiling = fixture(PhysicsBoxShape{{5, 0.25F, 5}}, {0, 2.5F, 0});
+    // A retained production adapter must fail before resized publication on retirement.
+    auto retained = clearance(11).Value();
+    SECTION("module retirement") {
+        gameplay->Shutdown();
+    }
+    SECTION("Physics world shutdown") {
+        physics->Shutdown();
+    }
+    SECTION("stale Physics publication") {
+        REQUIRE(physics->AdvanceFixedTick({.simulationTick = 2, .sceneGeneration = 1, .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                    .HasValue());
+    }
+    REQUIRE(character->QueueMovementCommand({.controller = handle, .tick = 11, .sequence = 11, .stance = CharacterStanceIntent::Crouch})
+                .HasValue());
+    REQUIRE(character
+                ->AdvanceFixedTick(
+                    {.tick = 11, .sceneGeneration = 1, .fixedDelta = Duration::FromNanoseconds(16'666'667), .query = retained.Context()})
+                .HasError());
+    REQUIRE(character->PublishedTick().completedTick == 10);
+    REQUIRE(character->ControllerTransform(handle).Value().position.y == 1.0F);
+    character->Shutdown();
+    gameplay->Shutdown();
+    if (physics->State() == PhysicsWorldState::ActiveSolver) {
+        REQUIRE(physics->DestroyQueryFixture(ceiling).HasValue());
+        REQUIRE(physics->DestroyQueryFixture(floor).HasValue());
+    }
 }
 #endif
