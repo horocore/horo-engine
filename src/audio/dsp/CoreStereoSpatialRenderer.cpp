@@ -265,6 +265,28 @@ namespace Horo::Audio {
         return target_;
     }
 
+    /** @copydoc CoreStereoSpatialRenderer::ApplyPreparedTarget */
+    bool CoreStereoSpatialRenderer::ApplyPreparedTarget(const AudioStereoSpatialTarget &target, const std::uint32_t smoothingFrames,
+                                                        const bool resetHistory) noexcept {
+        if (smoothingFrames > 16384 || !std::isfinite(target.pitch) || target.pitch < 0.125 || target.pitch > 8.0 ||
+            !std::ranges::all_of(target.matrix, [](const float coefficient) {
+            return std::isfinite(coefficient);
+        }))
+            return false;
+        if (!converter_.SetLinearPitch(target.pitch, resetHistory ? 0 : smoothingFrames))
+            return false;
+        if (resetHistory) {
+            converter_.Reset();
+            (void)converter_.SetLinearPitch(target.pitch);
+        }
+        target_ = target;
+        remaining_ = resetHistory || !initialized_ ? 0 : smoothingFrames;
+        if (remaining_ == 0)
+            matrix_ = target_.matrix;
+        initialized_ = true;
+        return true;
+    }
+
     /** @copydoc CoreStereoSpatialRenderer::Reset */
     void CoreStereoSpatialRenderer::Reset() noexcept {
         converter_.Reset();

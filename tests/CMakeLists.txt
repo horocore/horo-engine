@@ -500,6 +500,17 @@ target_include_directories(HoroAudioPlaybackTests PRIVATE ${PROJECT_SOURCE_DIR}/
 target_compile_features(HoroAudioPlaybackTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioPlaybackTests PRIVATE HoroEngine::AudioPlayback HoroEngine::AudioCommands HoroEngine::AudioNull)
 horo_register_catch_test(HoroAudioPlaybackTests LABELS "unit;audio;headless")
+target_sources(HoroAudioVoiceRenderPublicHeaderConsumer PRIVATE support/AudioVoiceRenderPublicContract.cpp)
+add_executable(HoroAudioVoiceRenderTests
+    support/AllocationProbe.cpp
+    unit/runtime/audio/AudioVoiceRenderRuntimeTests.cpp
+    unit/runtime/audio/AudioVoiceRenderStreamTests.cpp
+    unit/runtime/audio/AudioVoiceRenderNullTests.cpp
+    unit/runtime/audio/AudioVoiceRenderTestFixture.h)
+target_include_directories(HoroAudioVoiceRenderTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_compile_features(HoroAudioVoiceRenderTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAudioVoiceRenderTests PRIVATE HoroEngine::AudioVoiceRender HoroEngine::AudioNull)
+horo_register_catch_test(HoroAudioVoiceRenderTests LABELS "unit;audio;headless;realtime-safety")
 target_sources(HoroAudioDspPublicHeaderConsumer PRIVATE support/CoreStereoSpatialPublicContract.cpp)
 add_executable(HoroCoreAudioDspTests
     support/AllocationProbe.cpp

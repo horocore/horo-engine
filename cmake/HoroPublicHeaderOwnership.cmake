@@ -488,6 +488,9 @@ horo_configure_target_header_boundary(HoroAudioPlayback PUBLIC_HEADERS
     Horo/Audio/AudioVoicePlayback.h
     Horo/Audio/AudioRepeatedPlayback.h
 )
+horo_configure_target_header_boundary(HoroAudioVoiceRender PUBLIC_HEADERS
+    Horo/Audio/AudioVoiceRenderRuntime.h
+)
 horo_configure_target_header_boundary(HoroAudioMemory PUBLIC_HEADERS
     Horo/Audio/AudioMemory.h
 )

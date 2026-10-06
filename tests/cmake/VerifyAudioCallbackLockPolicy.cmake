@@ -11,6 +11,8 @@ foreach(source IN ITEMS
         src/audio/commands/AudioCommandBuffer.cpp
         src/audio/dsp/CoreStereoSpatialRenderer.cpp
         include/Horo/Audio/CoreStereoSpatialRenderer.h
+        include/Horo/Audio/AudioVoiceRenderRuntime.h
+        src/audio/playback/AudioVoiceRenderRuntime.cpp
         src/audio/resampling/AudioResampler.cpp
         src/audio/resampling/ResamplerKernel.h
         src/audio/resampling/ResamplerKernel.cpp

@@ -970,6 +970,12 @@ add_library(HoroEngine::AudioMixer ALIAS HoroAudioMixer)
 target_compile_features(HoroAudioMixer PUBLIC cxx_std_20)
 target_link_libraries(HoroAudioMixer PUBLIC HoroEngine::AudioDsp HoroEngine::AudioCommands)
 
+add_library(HoroAudioVoiceRender STATIC
+        audio/playback/AudioVoiceRenderRuntime.cpp)
+add_library(HoroEngine::AudioVoiceRender ALIAS HoroAudioVoiceRender)
+target_compile_features(HoroAudioVoiceRender PUBLIC cxx_std_20)
+target_link_libraries(HoroAudioVoiceRender PUBLIC HoroEngine::AudioPlayback HoroEngine::AudioMixer)
+
 add_library(HoroAudioMetrics STATIC
         audio/metrics/AudioMetricExtraction.cpp
         audio/metrics/AudioMetrics.cpp
