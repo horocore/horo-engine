@@ -167,6 +167,29 @@ cell Scene domain. A host must not use it to replace an unrelated aggregate Scen
 or claim multi-cell merge support. Already published cell eviction and aggregate
 World Streaming activation remain under their existing owner transactions.
 
+### Runtime data-layer membership and filtering
+
+`RuntimeSceneCellLayers` (WST-004.8) transfers one complete cell baseline and owns
+only canonical stable entity/layer edges plus exact layer classification references.
+Membership and manifest flags are source-revisioned cook facts; mounted owner tokens
+and layer states remain runtime input. Encoding validates complete topology,
+canonical references and mandatory count/storage ceilings before transfer.
+
+`FilterRuntimeSceneCellLayers` joins complete target-policy and layer-state snapshots.
+Unconditional entities survive; a multi-layer entity survives exactly once when any
+member layer is target-included and Activated. Other states cannot activate content.
+Selection preserves authored order and passes the existing Scene builder, so removing
+a required parent/reference fails rather than rewriting it. Complete baseline asset
+requirements remain conservative, including opaque gameplay requirements.
+
+`QueueRuntimeSceneCellLayers` uses the existing detached Scene preparation path and
+retains an owned copy of exact content, owner, policy and every layer-state fence.
+The shared explicit host authority checks all evidence plus current cell fencing and
+provider/reservation readiness at admission and safe-point commit. Replacement,
+failure, cancellation, unload and shutdown keep ordinary Scene transaction semantics.
+Neither encoding nor filtering owns live state or changes ADR-023 wire formats.
+See [migration details](../../guides/runtime-scene-cell-layers-migration.md).
+
 ## Model Boundary
 
 ```text

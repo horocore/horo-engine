@@ -1593,6 +1593,7 @@ target_link_libraries(HoroWorldStreaming PUBLIC HoroEngine::Foundation HoroEngin
 # Scene owns CoreEcs baseline semantics; this host-composed seam leaves streaming policy and ECS targets independent.
 add_library(HoroSceneCellPayload STATIC
         runtime/scene/RuntimeSceneCellPayload.cpp
+        runtime/scene/RuntimeSceneCellLayers.cpp
         runtime/scene/RuntimeSceneCellPayloadErrors.cpp
 )
 add_library(HoroEngine::SceneCellPayload ALIAS HoroSceneCellPayload)
