@@ -20,7 +20,7 @@ namespace Horo::Prefab {
         }
 
         Assets::AssetRecord Record(std::uint16_t id, std::string_view type) {
-            const auto path = "assets/item" + std::to_string(id);
+            const auto path = "assets/item" + std::to_string(id) + (type == "core.prefab" ? ".prefab" : ".obj");
             return {Test::Asset(id), Type(type), ProjectPath::Parse(path).Value(), ProjectPath::Parse(path + ".horo").Value()};
         }
 
@@ -245,9 +245,10 @@ namespace Horo::Prefab {
         REQUIRE(previous.HasValue());
         auto resource = Assets::DecodeCookedArtifact(fixture.resource);
         REQUIRE(resource.HasValue());
-        resource.Value().payload = {4, 5, 6};
-        resource.Value().payloadDigest = ComputeSha256(std::as_bytes(std::span(resource.Value().payload)));
-        fixture.resource = Assets::EncodeCookedArtifact(resource.Value()).Value();
+        auto artifact = std::move(resource).Value();
+        artifact.payload = {4, 5, 6};
+        artifact.payloadDigest = ComputeSha256(std::as_bytes(std::span(artifact.payload)));
+        fixture.resource = Assets::EncodeCookedArtifact(artifact).Value();
         auto changed = fixture.Cook();
         REQUIRE(changed.HasValue());
         CHECK(previous.Value().Data().dependencies[0].artifactDigest != changed.Value().Data().dependencies[0].artifactDigest);
