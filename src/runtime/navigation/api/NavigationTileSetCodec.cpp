@@ -59,6 +59,35 @@ namespace Horo::Navigation {
             return reader.Raw(partitions * 16);
         }
 
+        /** @brief Decode canonical ordered tile ownership while charging every retained allocation to the byte ceiling. */
+        [[nodiscard]] Result<void> ReadTiles(TileArtifactInternal::Reader &reader, NavigationCookedTileSet &set, const std::size_t count,
+                                             const std::size_t maximumBytes) {
+            using namespace TileArtifactInternal;
+            set.tiles.reserve(count);
+            std::size_t storage = sizeof(set) + set.tiles.capacity() * sizeof(std::shared_ptr<const NavigationCookedTile>);
+            if (storage > maximumBytes)
+                return Failure<void>(NavigationErrors::CapacityExceeded);
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto content = reader.Digest();
+                const auto size = reader.Integer(8);
+                if (size > maximumBytes)
+                    return Failure<void>(NavigationErrors::CapacityExceeded);
+                const auto tileBytes = reader.Raw(static_cast<std::size_t>(size));
+                if (ComputeSha256(std::as_bytes(tileBytes)) != content)
+                    return Failure<void>(NavigationErrors::NavMeshArtifactCorrupt);
+                auto tile = NavigationCookedTile::Decode(tileBytes);
+                if (tile.HasError())
+                    return Result<void>::Failure(tile.ErrorValue());
+                if (!set.tiles.empty() && set.tiles.back()->Key() >= tile.Value()->Key())
+                    return Failure<void>(NavigationErrors::NavMeshArtifactCorrupt);
+                if (tile.Value()->StorageBytes() > maximumBytes - storage)
+                    return Failure<void>(NavigationErrors::CapacityExceeded);
+                storage += tile.Value()->StorageBytes();
+                set.tiles.push_back(std::move(tile).Value());
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Proves serialized release closure equals the actual decoded canonical tile partitions. */
         void VerifyPartitionClosure(const std::span<const std::uint8_t> bytes, const NavigationCookedTileSet &set) {
             TileArtifactInternal::Reader reader(bytes);
@@ -131,28 +160,8 @@ namespace Horo::Navigation {
             const auto count = reader.Count(NavMeshArtifactLimits::MaximumTiles, 40);
             if (count == 0 || !Present(set.inputFingerprint))
                 return Failure<NavigationCookedTileSet>(NavigationErrors::NavMeshArtifactCorrupt);
-            set.tiles.reserve(count);
-            std::size_t storage = sizeof(set) + set.tiles.capacity() * sizeof(std::shared_ptr<const NavigationCookedTile>);
-            if (storage > maximumBytes)
-                return Failure<NavigationCookedTileSet>(NavigationErrors::CapacityExceeded);
-            for (std::size_t i = 0; i < count; ++i) {
-                const auto content = reader.Digest();
-                const auto size = reader.Integer(8);
-                if (size > maximumBytes)
-                    return Failure<NavigationCookedTileSet>(NavigationErrors::CapacityExceeded);
-                const auto tileBytes = reader.Raw(static_cast<std::size_t>(size));
-                if (ComputeSha256(std::as_bytes(tileBytes)) != content)
-                    return Failure<NavigationCookedTileSet>(NavigationErrors::NavMeshArtifactCorrupt);
-                auto tile = NavigationCookedTile::Decode(tileBytes);
-                if (tile.HasError())
-                    return Result<NavigationCookedTileSet>::Failure(tile.ErrorValue());
-                if (!set.tiles.empty() && set.tiles.back()->Key() >= tile.Value()->Key())
-                    return Failure<NavigationCookedTileSet>(NavigationErrors::NavMeshArtifactCorrupt);
-                if (tile.Value()->StorageBytes() > maximumBytes - storage)
-                    return Failure<NavigationCookedTileSet>(NavigationErrors::CapacityExceeded);
-                storage += tile.Value()->StorageBytes();
-                set.tiles.push_back(std::move(tile).Value());
-            }
+            if (const auto tiles = ReadTiles(reader, set, count, maximumBytes); tiles.HasError())
+                return Result<NavigationCookedTileSet>::Failure(tiles.ErrorValue());
             if (!reader.Empty())
                 return Failure<NavigationCookedTileSet>(NavigationErrors::NavMeshArtifactCorrupt);
             if (set.provenance)

@@ -84,6 +84,26 @@ namespace Horo::Application {
                 {entry.assetId, entry.artifactHash, set.Value().provenance->compatibility, *set.Value().provenance->projectProfile});
         }
 
+        /** @brief Project all promoted members into owned archive inputs without rebuilding any artifact. */
+        [[nodiscard]] Result<std::vector<Assets::AssetArchiveInput>> PrepareArchiveInputs(Assets::AssetCookGenerationContents &contents,
+                                                                                          PreparedNavigationReleaseContent &result,
+                                                                                          const AssetCookTargetId &target,
+                                                                                          const Assets::AssetCookLimits &cookLimits) {
+            std::vector<Assets::AssetArchiveInput> inputs;
+            inputs.reserve(contents.entries.size());
+            for (std::size_t index = 0; index < contents.entries.size(); ++index) {
+                const auto &entry = contents.entries[index];
+                if (entry.assetType.Value() == Assets::NavMeshAssetTypeName) {
+                    auto expectation = ReadExpectation(entry, contents.artifacts[index], target, cookLimits);
+                    if (expectation.HasError())
+                        return Result<std::vector<Assets::AssetArchiveInput>>::Failure(expectation.ErrorValue());
+                    result.expectations.push_back(std::move(expectation).Value());
+                }
+                inputs.push_back({entry.assetId, std::move(contents.artifacts[index])});
+            }
+            return Result<std::vector<Assets::AssetArchiveInput>>::Success(std::move(inputs));
+        }
+
         /** @brief Canonical minimal manifest closure pins full policy through exact immutable envelope hashes. */
         [[nodiscard]] Release::ReleaseManifestExtension Evidence(const PreparedNavigationReleaseContent &content,
                                                                  const AssetCookTargetId &target,
@@ -141,21 +161,12 @@ namespace Horo::Application {
                 return Result<PreparedNavigationReleaseContent>::Failure(MakeError(Navigation::NavigationErrors::CapacityExceeded));
             PreparedNavigationReleaseContent result;
             result.expectations.reserve(navigationCount);
-            std::vector<Assets::AssetArchiveInput> inputs;
-            inputs.reserve(contents.entries.size());
-            for (std::size_t index = 0; index < contents.entries.size(); ++index) {
-                const auto &entry = contents.entries[index];
-                if (entry.assetType.Value() == Assets::NavMeshAssetTypeName) {
-                    auto expectation = ReadExpectation(entry, contents.artifacts[index], generation.target, cookLimits);
-                    if (expectation.HasError())
-                        return Result<PreparedNavigationReleaseContent>::Failure(expectation.ErrorValue());
-                    result.expectations.push_back(std::move(expectation).Value());
-                }
-                inputs.push_back({entry.assetId, std::move(contents.artifacts[index])});
-            }
+            auto inputs = PrepareArchiveInputs(contents, result, generation.target, cookLimits);
+            if (inputs.HasError())
+                return Result<PreparedNavigationReleaseContent>::Failure(inputs.ErrorValue());
             if (!FitsActualEvidence(result.expectations, generation.target, product))
                 return Result<PreparedNavigationReleaseContent>::Failure(MakeError(Navigation::NavigationErrors::CapacityExceeded));
-            auto archive = Assets::BuildAssetArchive(plan, generation.target, inputs, limits);
+            auto archive = Assets::BuildAssetArchive(plan, generation.target, inputs.Value(), limits);
             if (archive.HasError())
                 return Result<PreparedNavigationReleaseContent>::Failure(archive.ErrorValue());
             result.archive = std::move(archive).Value();

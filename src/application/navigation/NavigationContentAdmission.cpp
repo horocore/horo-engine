@@ -80,6 +80,37 @@ namespace Horo::Application {
             return index == content.expectations.size();
         }
 
+        /** @brief Validate the finite owned evidence record before any typed parsing or provider load. */
+        [[nodiscard]] bool HasContentRecordShape(const Json &entry) {
+            return entry.is_object() && entry.size() == 6 && entry.contains("asset") && entry.contains("envelope") &&
+                   entry["asset"].is_string() && entry["envelope"].is_string() && entry.contains("provider") && entry.contains("schemas") &&
+                   entry.contains("settings") && entry.contains("profile") && entry["provider"].is_string() &&
+                   entry["schemas"].is_string() && entry["settings"].is_string() && entry["profile"].is_object() &&
+                   entry["profile"].size() == 3 && entry["profile"].contains("id") && entry["profile"].contains("revision") &&
+                   entry["profile"].contains("fingerprint") && entry["profile"]["id"].is_number_unsigned() &&
+                   entry["profile"]["revision"].is_number_unsigned() && entry["profile"]["fingerprint"].is_number_unsigned();
+        }
+
+        /** @brief Admit ordered declared records against actual owned artifact policy before publishing content. */
+        [[nodiscard]] Result<void> ReadContentExpectations(const Json &entries, AdmittedNavigationReleaseContent &result,
+                                                           const AssetCookTargetId &target, const Assets::AssetArchiveLimits &limits) {
+            for (const auto &entry : entries) {
+                if (!HasContentRecordShape(entry))
+                    return Result<void>::Failure(MakeError(Navigation::NavigationErrors::NavMeshArtifactCorrupt));
+                const auto id = Assets::AssetId::Parse(entry["asset"].get_ref<const std::string &>());
+                const auto digest = ParseSha256(entry["envelope"].get_ref<const std::string &>());
+                if (id.HasError() || digest.HasError() || (!result.expectations.empty() && id.Value() <= result.expectations.back().id))
+                    return Result<void>::Failure(MakeError(Navigation::NavigationErrors::NavMeshArtifactCorrupt));
+                auto policy = ReadPolicy(result.provider, id.Value(), digest.Value(), target, limits);
+                if (policy.HasError())
+                    return Result<void>::Failure(policy.ErrorValue());
+                if (entry != NavigationContentDetail::ContentRecord(policy.Value()))
+                    return Result<void>::Failure(MakeError(Navigation::NavigationErrors::NavMeshArtifactCorrupt));
+                result.expectations.push_back(std::move(policy).Value());
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Strict bounded canonical extension shape; unknown fields cannot acquire authority. */
         [[nodiscard]] bool MatchesExtension(const Json &json, const Release::ReleaseManifestExtension &extension,
                                             const AssetCookTargetId &target, const Release::DistributionProductKind product,
@@ -119,30 +150,8 @@ namespace Horo::Application {
                 return Result<AdmittedNavigationReleaseContent>::Failure(opened.ErrorValue());
             AdmittedNavigationReleaseContent result{std::move(opened).Value(), {}};
             result.expectations.reserve(json["assets"].size());
-            for (const auto &entry : json["assets"]) {
-                if (!entry.is_object() || entry.size() != 6 || !entry.contains("asset") || !entry.contains("envelope") ||
-                    !entry["asset"].is_string() || !entry["envelope"].is_string() || !entry.contains("provider") ||
-                    !entry.contains("schemas") || !entry.contains("settings") || !entry.contains("profile") ||
-                    !entry["provider"].is_string() || !entry["schemas"].is_string() || !entry["settings"].is_string() ||
-                    !entry["profile"].is_object() || entry["profile"].size() != 3 || !entry["profile"].contains("id") ||
-                    !entry["profile"].contains("revision") || !entry["profile"].contains("fingerprint") ||
-                    !entry["profile"]["id"].is_number_unsigned() || !entry["profile"]["revision"].is_number_unsigned() ||
-                    !entry["profile"]["fingerprint"].is_number_unsigned())
-                    return Result<AdmittedNavigationReleaseContent>::Failure(
-                        MakeError(Navigation::NavigationErrors::NavMeshArtifactCorrupt));
-                const auto id = Assets::AssetId::Parse(entry["asset"].get_ref<const std::string &>());
-                const auto digest = ParseSha256(entry["envelope"].get_ref<const std::string &>());
-                if (id.HasError() || digest.HasError() || (!result.expectations.empty() && id.Value() <= result.expectations.back().id))
-                    return Result<AdmittedNavigationReleaseContent>::Failure(
-                        MakeError(Navigation::NavigationErrors::NavMeshArtifactCorrupt));
-                auto policy = ReadPolicy(result.provider, id.Value(), digest.Value(), target, limits);
-                if (policy.HasError())
-                    return Result<AdmittedNavigationReleaseContent>::Failure(policy.ErrorValue());
-                if (entry != NavigationContentDetail::ContentRecord(policy.Value()))
-                    return Result<AdmittedNavigationReleaseContent>::Failure(
-                        MakeError(Navigation::NavigationErrors::NavMeshArtifactCorrupt));
-                result.expectations.push_back(std::move(policy).Value());
-            }
+            if (const auto admitted = ReadContentExpectations(json["assets"], result, target, limits); admitted.HasError())
+                return Result<AdmittedNavigationReleaseContent>::Failure(admitted.ErrorValue());
             if (!MatchesNavigationClosure(result, target))
                 return Result<AdmittedNavigationReleaseContent>::Failure(MakeError(Navigation::NavigationErrors::NavMeshArtifactCorrupt));
             return Result<AdmittedNavigationReleaseContent>::Success(std::move(result));
