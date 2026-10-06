@@ -861,6 +861,27 @@ target_link_libraries(HoroNavMeshAssetPublicHeaderConsumer PRIVATE HoroEngine::N
 add_test(NAME HoroNavMeshAssetPublicHeaderConsumer COMMAND HoroNavMeshAssetPublicHeaderConsumer)
 set_tests_properties(HoroNavMeshAssetPublicHeaderConsumer PROPERTIES LABELS "unit;navigation;headless;public_headers")
 
+add_executable(HoroNavigationContentPublicConsumer support/NavigationContentPublicConsumer.cpp)
+target_compile_features(HoroNavigationContentPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroNavigationContentPublicConsumer PRIVATE HoroEngine::NavigationContentIntegration)
+add_test(NAME HoroNavigationContentPublicConsumer COMMAND HoroNavigationContentPublicConsumer)
+set_tests_properties(HoroNavigationContentPublicConsumer PROPERTIES LABELS "unit;navigation;headless;public_headers")
+
+if(NOT HORO_BUILD_NAVIGATION_RECAST_DETOUR)
+    add_executable(HoroNavigationPortableContentTests unit/application/navigation/NavigationPortableContentTests.cpp)
+    target_compile_features(HoroNavigationPortableContentTests PRIVATE cxx_std_20)
+    target_include_directories(HoroNavigationPortableContentTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_link_libraries(HoroNavigationPortableContentTests PRIVATE HoroEngine::NavigationContentIntegration
+            HoroEngine::NavigationRecastDetour HoroEngine::Platform HoroEngine::AudioCook HoroEngine::UpdateDownload miniz)
+    horo_register_catch_test(HoroNavigationPortableContentTests LABELS "unit;navigation;headless;content;package;portable")
+endif()
+
+add_executable(HoroNavigationReleasePolicyTests unit/application/navigation/NavigationReleasePolicyTests.cpp)
+target_compile_features(HoroNavigationReleasePolicyTests PRIVATE cxx_std_20)
+target_include_directories(HoroNavigationReleasePolicyTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroNavigationReleasePolicyTests PRIVATE HoroEngine::NavigationContentIntegration HoroEngine::Platform HoroEngine::UpdateDownload nlohmann_json::nlohmann_json miniz)
+horo_register_catch_test(HoroNavigationReleasePolicyTests LABELS "unit;navigation;headless;content;package")
+
 add_executable(HoroNavigationApiTests
         support/navigation/DeterministicNavigationProvider.cpp
         unit/runtime/navigation/NavMeshDataTests.cpp
@@ -936,6 +957,13 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_include_directories(HoroNavigationRecastDetourTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_link_libraries(HoroNavigationRecastDetourTests PRIVATE HoroEngine::NavigationRecastDetour)
     horo_register_catch_test(HoroNavigationRecastDetourTests LABELS "unit;navigation;headless;provider")
+    add_executable(HoroNavigationNativeContentTests unit/application/navigation/NavigationNativeContentTests.cpp)
+    target_compile_features(HoroNavigationNativeContentTests PRIVATE cxx_std_20)
+    target_include_directories(HoroNavigationNativeContentTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_link_libraries(HoroNavigationNativeContentTests PRIVATE HoroEngine::NavigationContentIntegration HoroEngine::NavigationBakeService
+            HoroEngine::NavigationRecastDetour HoroEngine::Platform HoroEngine::AudioCook HoroEngine::UpdateDownload miniz)
+    horo_register_catch_test(HoroNavigationNativeContentTests LABELS "unit;navigation;headless;content;package;native")
+
     add_executable(HoroNavigationAssetLoadingTests unit/runtime/navigation/NavMeshAssetLoadingTests.cpp)
     target_compile_features(HoroNavigationAssetLoadingTests PRIVATE cxx_std_20)
     target_include_directories(HoroNavigationAssetLoadingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)

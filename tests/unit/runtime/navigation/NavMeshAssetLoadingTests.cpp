@@ -6,6 +6,7 @@
 #include "PublicationOperationId.h"
 #include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavMeshAssetTestFixtures.h"
+#include "navigation/NavigationContentPolicyFixture.h"
 #include "navigation/NavigationRuntimeTestFixtures.h"
 
 #include <algorithm>
@@ -442,5 +443,49 @@ namespace Horo::Navigation {
         REQUIRE(stale.HasError());
         REQUIRE(stale.ErrorValue().code.Value() == NavigationErrors::StaleSnapshot.code.Value());
         REQUIRE(harness.participant->Acquire().Value().Descriptor() == current.Descriptor());
+    }
+
+    TEST_CASE("Warm immutable tile cache cannot satisfy changed or revoked release expectations",
+              "[unit][navigation][navmesh_asset][content][cache]") {
+        auto cache = Assets::AssetPayloadCache::Create(8, 16384);
+        REQUIRE(cache.HasValue());
+        const auto set = TestSupport::EmptyContent();
+        const auto bytes = TestSupport::ContentEnvelope(set, Asset(), Target());
+        REQUIRE(set.provenance.has_value());
+        REQUIRE(set.provenance->projectProfile.has_value());
+        NavMeshAssetContentExpectation expected{Asset(), ComputeSha256(std::as_bytes(std::span{bytes})), set.provenance->compatibility,
+                                                *set.provenance->projectProfile};
+        const Assets::AssetDependency metadata{Asset(), Type()};
+        auto first = LoadNavMeshAsset(metadata, {1}, bytes, Target(), *cache.Value(), {}, &expected);
+        REQUIRE(first.HasValue());
+        REQUIRE(!first.Value().tileBytes.empty());
+        const auto resident = cache.Value()->Snapshot().residentEntries;
+        auto stale = expected;
+        stale.projectProfile = TestSupport::ContentProfile(18);
+        TestSupport::RequireError(LoadNavMeshAsset(metadata, {1}, bytes, Target(), *cache.Value(), {}, &stale),
+                                  NavigationErrors::NavMeshArtifactCorrupt);
+        CHECK(cache.Value()->Snapshot().residentEntries == resident);
+        stale = expected;
+        stale.compatibility.provider = Digest(99);
+        TestSupport::RequireError(LoadNavMeshAsset(metadata, {1}, bytes, Target(), *cache.Value(), {}, &stale),
+                                  NavigationErrors::NavMeshArtifactCorrupt);
+        CHECK(cache.Value()->Snapshot().residentEntries == resident);
+        stale = expected;
+        stale.id = Asset(true);
+        TestSupport::RequireError(LoadNavMeshAsset(metadata, {1}, bytes, Target(), *cache.Value(), {}, &stale),
+                                  NavigationErrors::NavMeshArtifactCorrupt);
+        CHECK(cache.Value()->Snapshot().residentEntries == resident);
+        auto changed = set;
+        changed.provenance->projectProfile = TestSupport::ContentProfile(18);
+        const auto changedBytes = TestSupport::ContentEnvelope(changed, Asset(), Target());
+        NavMeshAssetContentExpectation changedExpectation{Asset(), ComputeSha256(std::as_bytes(std::span{changedBytes})),
+                                                          changed.provenance->compatibility, *changed.provenance->projectProfile};
+        auto second = LoadNavMeshAsset(metadata, {1}, changedBytes, Target(), *cache.Value(), {}, &changedExpectation);
+        REQUIRE(second.HasValue());
+        REQUIRE(!second.Value().tileBytes.empty());
+        CHECK(first.Value().tileBytes.front().SharesAllocationWith(second.Value().tileBytes.front()));
+        CHECK(first.Value().cookedContentDigest != second.Value().cookedContentDigest);
+        CHECK_FALSE(first.Value().contentProvenance->projectProfile->MatchesAuthority(*second.Value().contentProvenance->projectProfile));
+        CHECK(cache.Value()->Snapshot().residentEntries == resident);
     }
 }  // namespace Horo::Navigation

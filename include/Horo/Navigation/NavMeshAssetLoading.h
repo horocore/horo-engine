@@ -8,6 +8,7 @@
 #include "Horo/Assets/AssetPayloadCache.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Assets/NavMeshAssetType.h"
+#include "Horo/Navigation/NavigationTileArtifact.h"
 #include "Horo/Navigation/NavigationTileDescriptor.h"
 
 namespace Horo::Navigation {
@@ -17,6 +18,15 @@ namespace Horo::Navigation {
         NavigationAgentProfileId profile;
         NavigationCookedTileDescriptor descriptor;
         std::vector<std::shared_ptr<const NavigationCookedTile>> tiles;
+    };
+
+    /** @brief Verified release expectation copied from immutable promoted content and its authenticated manifest.
+     * @details This is host evidence, never reconstructed from live geometry or a provider revision. */
+    struct NavMeshAssetContentExpectation final {
+        Assets::AssetId id;
+        Sha256Digest cookedContentDigest;
+        NavigationTileBakeCompatibility compatibility;
+        NavigationProjectProfile projectProfile;
     };
 
     /** @brief Exact canonical provenance and temporary decoded preparation storage with shared tile byte pins. */
@@ -37,6 +47,8 @@ namespace Horo::Navigation {
         Sha256Digest cookedContentDigest;
         Sha256Digest sourceDigest;
         Sha256Digest cacheKeyDigest;
+        std::optional<NavigationCookedContentProvenance>
+            contentProvenance; /**< Owned decoded evidence; empty only for explicit legacy content. */
         std::vector<LoadedNavMeshPartition> partitions;
         std::vector<Assets::AssetPayloadLease> tileBytes;
     };
@@ -55,12 +67,14 @@ namespace Horo::Navigation {
      * @param target Host-selected cook target; mismatches never fall back to another target.
      * @param cache AssetPipeline allocation owner, mutated only on its owner thread.
      * @param limits Qualified envelope/canonical tile closure ceilings.
+     * @param expectation Optional exact release evidence; presence requires complete matching HNS2 before cache admission.
      * @return Fully prepared value or original envelope/typed navigation error; no world is published.
      * @note A failed capacity admission may warm the byte cache; it cannot mutate a navigation world. */
     [[nodiscard]] Result<LoadedNavMeshAsset> LoadNavMeshAsset(const Assets::AssetDependency &metadata,
                                                               Assets::AssetRegistryRevision registryRevision,
                                                               std::span<const std::uint8_t> encoded, const AssetCookTargetId &target,
-                                                              Assets::AssetPayloadCache &cache, const NavMeshAssetLimits &limits = {});
+                                                              Assets::AssetPayloadCache &cache, const NavMeshAssetLimits &limits = {},
+                                                              const NavMeshAssetContentExpectation *expectation = nullptr);
 
     /** @brief Resolve via the canonical provider, using a captured registry snapshot and cooperative cancellation.
      * @param registry Captured canonical asset metadata.
@@ -70,9 +84,11 @@ namespace Horo::Navigation {
      * @param cache Owner-thread immutable allocation cache.
      * @param cancellation Provider I/O cancellation token.
      * @param limits Qualified decode ceilings.
+     * @param expectation Optional exact release evidence, with no legacy fallback when present.
      * @return Prepared value or original provider/typed navigation failure. */
     [[nodiscard]] Result<LoadedNavMeshAsset> LoadNavMeshAsset(const Assets::AssetRegistrySnapshot &registry,
                                                               const Assets::IAssetProvider &provider, Assets::AssetId id,
                                                               const AssetCookTargetId &target, Assets::AssetPayloadCache &cache,
-                                                              const CancellationToken &cancellation, const NavMeshAssetLimits &limits = {});
+                                                              const CancellationToken &cancellation, const NavMeshAssetLimits &limits = {},
+                                                              const NavMeshAssetContentExpectation *expectation = nullptr);
 }  // namespace Horo::Navigation

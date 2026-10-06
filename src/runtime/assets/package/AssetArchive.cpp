@@ -245,6 +245,7 @@ namespace Horo::Assets {
 
         struct ParsedArchiveAsset {
             AssetId id;
+            AssetTypeId type;
             std::size_t offset{};
             std::size_t size{};
         };
@@ -274,7 +275,7 @@ namespace Horo::Assets {
                 decoded.HasError() || decoded.Value().id != id || decoded.Value().type != type.Value() ||
                 decoded.Value().target != expectedTarget)
                 return Result<ParsedArchiveAsset>::Failure(MakeError(InvalidArchive));
-            return Result<ParsedArchiveAsset>::Success({id, offset, static_cast<std::size_t>(byteCount)});
+            return Result<ParsedArchiveAsset>::Success({id, std::move(type).Value(), offset, static_cast<std::size_t>(byteCount)});
         }
 
         struct ParsedArchiveContents final {
@@ -375,8 +376,10 @@ namespace Horo::Assets {
     }
 
     AssetArchiveProvider::AssetArchiveProvider(std::vector<std::uint8_t> bytes, std::vector<Entry> entries,
-                                               std::vector<AssetChunkDefinition> chunks)
-        : bytes_(std::move(bytes)), entries_(std::move(entries)), chunks_(std::move(chunks)) {}
+                                               std::vector<AssetChunkDefinition> chunks, std::vector<AssetArchiveMember> members,
+                                               AssetCookTargetId target)
+        : bytes_(std::move(bytes)), entries_(std::move(entries)), chunks_(std::move(chunks)), members_(std::move(members)),
+          target_(std::move(target)) {}
 
     /** @copydoc AssetArchiveProvider::Open */
     Result<AssetArchiveProvider> AssetArchiveProvider::Open(const std::span<const std::uint8_t> bytes,
@@ -423,14 +426,20 @@ namespace Horo::Assets {
             AssetChunkPlan::Create(parsed.Value().chunks, {.maximumChunks = limits.maximumChunks, .maximumAssets = limits.maximumAssets});
         if (plan.HasError())
             return Result<AssetArchiveProvider>::Failure(MakeError(InvalidArchive));
+        auto contents = std::move(parsed).Value();
         std::vector<Entry> entries;
-        entries.reserve(parsed.Value().assets.size());
-        for (const auto &asset : parsed.Value().assets)
+        entries.reserve(contents.assets.size());
+        std::vector<AssetArchiveMember> members;
+        members.reserve(contents.assets.size());
+        std::ranges::sort(contents.assets, {}, &ParsedArchiveAsset::id);
+        for (auto &asset : contents.assets) {
             entries.emplace_back(asset.id, asset.offset, asset.size);
-        std::ranges::sort(entries, {}, &Entry::id);
+            members.push_back({asset.id, std::move(asset.type)});
+        }
         return Result<AssetArchiveProvider>::Success(
             AssetArchiveProvider{std::vector<std::uint8_t>(bytes.begin(), bytes.end()), std::move(entries),
-                                 std::vector<AssetChunkDefinition>{plan.Value().Chunks().begin(), plan.Value().Chunks().end()}});
+                                 std::vector<AssetChunkDefinition>{plan.Value().Chunks().begin(), plan.Value().Chunks().end()},
+                                 std::move(members), expectedTarget});
     }
 
     /** @copydoc AssetArchiveProvider::OpenSelected */
@@ -458,8 +467,21 @@ namespace Horo::Assets {
         std::erase_if(provider.entries_, [&visible](const Entry &entry) {
             return !std::ranges::binary_search(visible, entry.id);
         });
+        std::erase_if(provider.members_, [&visible](const AssetArchiveMember &member) {
+            return !std::ranges::binary_search(visible, member.id);
+        });
         provider.chunks_ = {};
         return Result<AssetArchiveProvider>::Success(std::move(provider));
+    }
+
+    /** @copydoc AssetArchiveProvider::Members */
+    std::span<const AssetArchiveMember> AssetArchiveProvider::Members() const noexcept {
+        return members_;
+    }
+
+    /** @copydoc AssetArchiveProvider::Target */
+    const AssetCookTargetId &AssetArchiveProvider::Target() const noexcept {
+        return target_;
     }
 
     Result<bool> AssetArchiveProvider::Exists(const AssetId id, const CancellationToken &cancellation) const {
