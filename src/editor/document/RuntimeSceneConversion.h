@@ -7,6 +7,7 @@
 
 #include "Horo/Prefab/PrefabSourceResolver.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
+#include "Horo/Scene/SceneRuntimeConversion.h"
 #include "editor/document/SceneDocument.h"
 
 #include <optional>
@@ -24,24 +25,10 @@ namespace Horo::Editor {
                                                                                         Runtime::SceneDefinitionId sceneId);
 
     /** @brief One immutable editor projection of an authored prefab placement. */
-    struct ScenePrefabInstanceProjection final {
-        ScenePrefabInstance authored;
-        std::optional<Prefab::EffectivePrefabCandidate> expanded;
-        std::optional<Error> failure;
-
-        /** @brief Reports whether this placement is retained for repair but not runtime-valid. */
-        [[nodiscard]] bool IsBroken() const noexcept {
-            return failure.has_value();
-        }
-    };
+    using ScenePrefabInstanceProjection = SceneSource::ScenePrefabInstanceProjection;
 
     /** @brief Complete detached prefab projection for one scene-document snapshot. */
-    struct ScenePrefabProjection final {
-        std::vector<ScenePrefabInstanceProjection> instances;
-
-        /** @brief Reports whether any authored placement failed required expansion. */
-        [[nodiscard]] bool HasBrokenInstances() const noexcept;
-    };
+    using ScenePrefabProjection = SceneSource::ScenePrefabProjection;
 
     /**
      * @brief Resolves every authored placement into a repairable immutable editor projection.

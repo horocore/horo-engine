@@ -184,6 +184,16 @@ namespace Horo::AI {
         }
     }
 
+    /** @copydoc PerceptionSpatialSnapshot::ListenerPosition */
+    Result<Math::WorldCoordinate64> PerceptionSpatialSnapshot::ListenerPosition(const Runtime::EntityRef listener) const {
+        if (!listener.IsValid() || listener.runtime != scene_)
+            return Result<Math::WorldCoordinate64>::Failure(MakeError(AIErrors::PerceptionSpatialInvalid));
+        const auto found = std::ranges::lower_bound(listeners_, listener, {}, &PerceptionSpatialListener::entity);
+        if (found == listeners_.end() || found->entity != listener)
+            return Result<Math::WorldCoordinate64>::Failure(MakeError(AIErrors::PerceptionSpatialListenerMissing));
+        return Result<Math::WorldCoordinate64>::Success(found->position);
+    }
+
     /** @copydoc PerceptionSpatialSnapshot::Query */
     Result<PerceptionSpatialResult> PerceptionSpatialSnapshot::Query(const PerceptionSpatialQuery &query) const {
         if (!query.listener.IsValid() || query.listener.runtime != scene_ || !query.sense.IsValid() || query.visibleLayers == 0 ||

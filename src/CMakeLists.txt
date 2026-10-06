@@ -27,6 +27,7 @@ add_library(HoroFoundation STATIC
         foundation/diagnostics/OperationHistory.cpp
         foundation/data_bus/DataBus.cpp
         foundation/jobs/JobSystem.cpp
+        foundation/jobs/JobAdmission.cpp
         foundation/config/Configuration.cpp
         foundation/diagnostics/DiagnosticsEngine.cpp
         foundation/paths/PathUtils.cpp
@@ -202,6 +203,7 @@ add_library(HoroPackages STATIC
         packages/cache/PackageCache.cpp
         packages/resolver/PackageDependencyResolver.cpp
         packages/resolver/PackageLockfile.cpp
+        packages/resolver/PackageRequest.cpp
         packages/validation/PackagePath.cpp
         packages/validation/PackageArchive.cpp
         packages/validation/PackageFileManifest.cpp
@@ -781,6 +783,7 @@ add_library(HoroAssets STATIC
         runtime/assets/cooker/AssetCookStorageRead.cpp
         runtime/assets/cooker/AssetCookStorageRecovery.cpp
         runtime/assets/cooker/AssetCookService.cpp
+        runtime/assets/cooker/AssetCookInputSnapshot.cpp
         runtime/assets/cooker/AssetCookTransaction.cpp
         runtime/assets/importer/AssetImporterCatalog.cpp
         runtime/assets/importer/AssetImportMetadata.cpp
@@ -1139,6 +1142,11 @@ add_library(HoroAISceneIntegration STATIC
 add_library(HoroEngine::AISceneIntegration ALIAS HoroAISceneIntegration)
 target_compile_features(HoroAISceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroAISceneIntegration PUBLIC HoroEngine::AI HoroEngine::RuntimeScene)
+
+add_library(HoroAISightIntegration STATIC runtime/ai/integration/PerceptionSight.cpp)
+add_library(HoroEngine::AISightIntegration ALIAS HoroAISightIntegration)
+target_compile_features(HoroAISightIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroAISightIntegration PUBLIC HoroEngine::AISceneIntegration HoroEngine::Physics)
 
 add_library(HoroGameplayPerceptionIntegration STATIC gameplay/runtime/PerceptionEventSource.cpp)
 add_library(HoroEngine::GameplayPerceptionIntegration ALIAS HoroGameplayPerceptionIntegration)
@@ -1930,6 +1938,22 @@ target_link_libraries(HoroSceneSourceCodecInternal INTERFACE
         HoroEngine::SceneSource nlohmann_json::nlohmann_json
 )
 
+# Shared headless conversion owner. Editor is a downstream snapshot adapter, not a cook dependency.
+add_library(HoroSceneRuntimeConversion STATIC scene/source/SceneRuntimeConversion.cpp)
+add_library(HoroEngine::SceneRuntimeConversion ALIAS HoroSceneRuntimeConversion)
+target_compile_features(HoroSceneRuntimeConversion PUBLIC cxx_std_20)
+target_link_libraries(HoroSceneRuntimeConversion
+        PUBLIC HoroEngine::SceneSource HoroEngine::PrefabSceneExpansion HoroEngine::RuntimeScene
+        PRIVATE HoroSceneSourceCodecInternal nlohmann_json::nlohmann_json
+)
+
+add_library(HoroSceneCook STATIC scene/cook/CookedSceneDefinition.cpp)
+add_library(HoroEngine::SceneCook ALIAS HoroSceneCook)
+target_compile_features(HoroSceneCook PUBLIC cxx_std_20)
+target_include_directories(HoroSceneCook PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
+target_link_libraries(HoroSceneCook PUBLIC HoroEngine::RuntimeScene
+        PRIVATE HoroSceneSourceCodecInternal nlohmann_json::nlohmann_json)
+
 add_library(HoroEditorModel STATIC
         editor/data_bus/EditorDataBus.cpp
         editor/update/UpdateExperienceSession.cpp
@@ -1952,6 +1976,7 @@ target_include_directories(HoroEditorModel
 )
 target_link_libraries(HoroEditorModel
         PUBLIC
+        HoroEngine::SceneRuntimeConversion
         HoroEngine::SceneSourceModel
         HoroEngine::Foundation
         HoroEngine::AI
@@ -2414,4 +2439,17 @@ endif ()
 
 # Apply the build-tree public/private include contract only after every optional
 # production target has been declared.
+add_library(HoroPrefabCookHost STATIC
+        application/assets/PrefabCookSchemaContext.cpp
+        application/assets/PrefabSceneCookHost.cpp
+        application/assets/PrefabSceneCookCapture.cpp
+        application/assets/PrefabSceneCookCatalog.cpp
+        application/assets/PrefabSceneCookState.h)
+add_library(HoroEngine::PrefabCookHost ALIAS HoroPrefabCookHost)
+target_compile_features(HoroPrefabCookHost PUBLIC cxx_std_20)
+target_link_libraries(HoroPrefabCookHost
+        PUBLIC HoroEngine::Application HoroEngine::Assets HoroEngine::EditorServices
+               HoroPackageSecurity HoroEngine::PrefabAuthoring HoroEngine::SceneCook
+        PRIVATE HoroEngine::SceneRuntimeConversion nlohmann_json::nlohmann_json)
+
 include(HoroPublicHeaderOwnership)

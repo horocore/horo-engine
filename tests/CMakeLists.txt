@@ -148,6 +148,7 @@ add_executable(HoroPackageValidationTests
     unit/packages/PackageInstallTests.cpp
     unit/packages/PackageDependencyResolverTests.cpp
     unit/packages/PackageLockfileTests.cpp
+    unit/packages/PackageRequestTests.cpp
     unit/packages/PackagePathTests.cpp
     unit/packages/PackageArchiveTests.cpp
     unit/packages/PackageCacheTests.cpp
@@ -684,6 +685,17 @@ target_link_libraries(HoroAITests PRIVATE HoroEngine::AI HoroEngine::AISceneInte
 horo_register_catch_test(HoroAITests LABELS "unit;ai;headless")
 target_include_directories(HoroAITests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 
+add_executable(HoroAISightTests
+        support/AllocationProbe.cpp
+        unit/runtime/ai/PerceptionSightTests.cpp
+        unit/runtime/ai/PerceptionSightBatchTests.cpp
+        unit/runtime/ai/PerceptionSightTestSupport.h)
+target_compile_features(HoroAISightTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAISightTests PRIVATE HoroEngine::AISightIntegration)
+target_include_directories(HoroAISightTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_compile_definitions(HoroAISightTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
+horo_register_catch_test(HoroAISightTests LABELS "unit;ai;sight;headless")
+
 add_executable(HoroAnimationApiTests
         unit/runtime/animation/AnimationCompressionTests.cpp
         unit/runtime/animation/AnimationClipTests.cpp
@@ -1131,6 +1143,22 @@ target_compile_features(HoroPrefabTemplateCookPublicHeaderConsumer PRIVATE cxx_s
 target_link_libraries(HoroPrefabTemplateCookPublicHeaderConsumer PRIVATE HoroEngine::PrefabAuthoring)
 add_test(NAME HoroPrefabTemplateCookPublicHeaderConsumer COMMAND HoroPrefabTemplateCookPublicHeaderConsumer)
 set_tests_properties(HoroPrefabTemplateCookPublicHeaderConsumer PROPERTIES LABELS "unit;prefab;headless")
+
+add_executable(HoroSceneRuntimeConversionTests unit/scene/SceneRuntimeConversionTests.cpp unit/scene/CookedSceneDefinitionTests.cpp)
+target_compile_features(HoroSceneRuntimeConversionTests PRIVATE cxx_std_20)
+target_link_libraries(HoroSceneRuntimeConversionTests PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook)
+horo_register_catch_test(HoroSceneRuntimeConversionTests LABELS "unit;scene;prefab;headless")
+
+add_executable(HoroPrefabCookPublicHeaderConsumer support/PrefabCookPublicHeaderConsumer.cpp)
+add_executable(HoroPrefabSceneCookHostTests unit/application/PrefabSceneCookHostTests.cpp unit/application/PrefabCookSchemaContextTests.cpp)
+target_compile_features(HoroPrefabSceneCookHostTests PRIVATE cxx_std_20)
+target_include_directories(HoroPrefabSceneCookHostTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PrefabCookHost HoroEngine::SceneSource nlohmann_json::nlohmann_json miniz)
+horo_register_catch_test(HoroPrefabSceneCookHostTests LABELS "unit;prefab;headless;host")
+target_compile_features(HoroPrefabCookPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabCookPublicHeaderConsumer PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook HoroEngine::Assets HoroEngine::PrefabCookHost)
+add_test(NAME HoroPrefabCookPublicHeaderConsumer COMMAND HoroPrefabCookPublicHeaderConsumer)
+set_tests_properties(HoroPrefabCookPublicHeaderConsumer PROPERTIES LABELS "unit;prefab;headless;public_headers")
 
 add_executable(HoroCookedPrefabTests unit/runtime/prefab/CookedPrefabTests.cpp)
 target_compile_features(HoroCookedPrefabTests PRIVATE cxx_std_20)
@@ -2077,10 +2105,27 @@ target_compile_features(HoroFoundationValidationResultTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationValidationResultTests PRIVATE HoroEngine::Foundation)
 add_executable(HoroFoundationJobSystemTests
         unit/foundation/JobSystemTests.cpp
+        unit/foundation/JobAdmissionTests.cpp
+        unit/foundation/JobAdmissionTelemetryTests.cpp
+        support/AllocationProbe.cpp
 )
 
 target_compile_features(HoroFoundationJobSystemTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationJobSystemTests PRIVATE HoroEngine::Foundation)
+# Explicit diagnostic target: run the same admission regressions through the joining fallback on a jthread-capable host.
+# Excluded from ALL and CTest discovery so ordinary builds do not silently add another test/build stream.
+add_executable(HoroJobAdmissionThreadFallbackTests EXCLUDE_FROM_ALL
+        unit/foundation/JobAdmissionTests.cpp
+        unit/foundation/JobAdmissionTelemetryTests.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroJobAdmissionThreadFallbackTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroJobAdmissionThreadFallbackTests PRIVATE HORO_JOB_TEST_FORCE_THREAD_FALLBACK=1)
+target_link_libraries(HoroJobAdmissionThreadFallbackTests PRIVATE HoroEngine::Foundation Catch2::Catch2WithMain)
+add_executable(HoroJobAdmissionPublicHeaderConsumer support/JobAdmissionPublicHeaderConsumer.cpp)
+target_compile_features(HoroJobAdmissionPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroJobAdmissionPublicHeaderConsumer PRIVATE HoroEngine::Foundation)
+add_test(NAME HoroJobAdmissionPublicHeaderConsumer COMMAND HoroJobAdmissionPublicHeaderConsumer)
+set_tests_properties(HoroJobAdmissionPublicHeaderConsumer PROPERTIES LABELS "unit;foundation;jobs;headless;public_headers")
 add_executable(HoroPlatformTests
         unit/foundation/PlatformTests.cpp
         unit/foundation/PlatformPublicationLockTests.cpp
@@ -2884,6 +2929,7 @@ target_include_directories(HoroAssetCookOutputTests PRIVATE ${PROJECT_SOURCE_DIR
 add_executable(HoroAssetCookServiceTests
         unit/runtime/assets/AssetCookServiceTests.cpp
         unit/runtime/assets/AssetCookServicePublicationTests.cpp
+        unit/runtime/assets/AssetCookInputSnapshotTests.cpp
 )
 target_compile_features(HoroAssetCookServiceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAssetCookServiceTests PRIVATE HoroEngine::Assets HoroEngine::Foundation HoroEngine::Platform)
