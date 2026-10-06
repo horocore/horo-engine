@@ -112,6 +112,19 @@ indexes. Duplicate, missing, malformed or type-incompatible IDs reject the
 candidate. Runtime focus, hover, press, capture, animation cursor, layout boxes and
 renderer resources are not authoring data.
 
+Modal activation slots identify their actual retained modal-root element namespace,
+not nesting depth. A graph-wide EVER-issued incarnation counter distinguishes
+repeated/deep activations; popping and graph reload do not reset it. Route
+activation slots identify their never-reused stack namespace, with an EVER-issued
+activation incarnation. Complete asset reload requires that stack namespace to
+be backed by the allocator-issued canvas-root element slot. These reservations
+include unused and tombstoned capacity, and remain burned after cancellation,
+retirement and final lease drain. Exhaustion refuses new admission before
+mutating the active generation. This prevents a raw old popped modal/route
+handle from aliasing a replacement owner even when the semantic player/layer
+scope stays the same; a coordinator publication fence alone cannot provide that
+invariant. See [Runtime UI hot reload migration](../guides/runtime-ui-hot-reload-migration.md).
+
 ### 4. Scope and instance lifecycle are explicit transactions
 
 The service state and each scope/instance use named generations and states:

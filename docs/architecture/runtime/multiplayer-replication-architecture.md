@@ -253,6 +253,73 @@ cancels candidates and drains snapshot/owner-view pins before owner destruction.
 Advancing any identity generation immediately invalidates old snapshots and baselines;
 data for a destroyed or reused logical identity is never preserved as a fallback.
 
+### Prepared committed capture composition
+
+`ReplicationStateCapture::Prepare` is the load-time composition boundary. It pins
+one immutable serializer/schema generation and exact object/source bindings,
+validates finite target/field/byte budgets, and allocates every typed snapshot
+slot and container backing buffer before capture admission. A target that cannot
+fit one tick's field/byte budget is rejected during preparation rather than
+being deferred forever. Owners implement `ICommittedReplicationSource` with an
+owner-thread read scope that exposes only committed canonical state. Capture
+writers are noncopyable call-scoped borrows; adapters never retain them or their
+output storage. Adapter reads and canonical equality must not allocate, block,
+throw, or retain references to values on this path.
+
+The coordinator and Scene adapter retain factory-only admission. Their keyed
+constructors support standard allocation factories, but the private nonaggregate
+key cannot be created by a public consumer, including with `{}`. `Prepare` and
+`Create` remain the only supported construction entry points; no caller migration
+or bypass of descriptor validation is admitted. Capture limits are borrowed as a
+const reference only during preparation, and Scene post-commit capture borrows
+the lifecycle read API as const.
+
+Read and capture guards are noncopyable and nonmovable, so each successful owner
+read closes exactly once. A misbehaving native owner or codec may throw a foreign
+exception outside the ordinary nonthrowing adapter contract. The candidate fault
+boundary intentionally catches all such types after handling allocation failure
+first, reports a typed callback fault, and preserves the prior complete snapshot.
+It does not retain exception text or silently publish a partially written slot.
+
+The host uses `AcquireCaptureRead` at `NetworkFlush` instead of the diagnostic
+`Acquire`/`AcquireFor` mapping-copy view for capture. This prepared read pins the
+world record and reads only immutable identity facts and atomic revocation/
+mapping-revision evidence across threads. Selective object resolution remains
+owner-thread only. Every successful mapping mutation revokes earlier reads and
+snapshot eligibility without consulting retired mutable mapping storage.
+Pause rejects new acquisition while preserving already admitted reads and snapshot
+identity for the unchanged world, matching the existing worker-lease contract.
+`DescriptorFor` borrows copied inert codec metadata from a pinned serializer
+registry; adapter-owned mutable descriptor objects are never a second source of
+truth. Replace the complete coordinator when schemas, codecs, owner modules or
+the target set change, closing the old generation before admitting the new one.
+
+`SceneReplicationCommitSource` is the concrete typed Scene adapter for declared
+translation fields. The host passes the actual complete Scene command transaction
+to `CommitSimulationTick`, then calls `CaptureAfterCommit` at `NetworkFlush`.
+The latter derives its tick from the successful transaction, rather than taking
+an independently supplied tick. Its ordinary RuntimeScene view revision fences
+all Scene mutation paths: a direct Scene commit during a read invalidates the
+candidate, including mutations from a codec callback after extraction. The
+adapter copies values while the view is current; snapshots retain no ECS view.
+The existing NetworkRuntime-to-RuntimeScene dependency owns this composition;
+NetworkApi remains Scene-implementation neutral.
+
+Pool ownership persists across latest-pin replacement, `Shutdown`, and external
+pin release. Shutdown closes admission and revokes snapshots without reclaiming
+pool or module storage on a callback/frame path. The host waits for
+`CanReclaim` on the owner thread after all external snapshot pins and read scopes
+drain, then destroys the coordinator at a quiescent boundary before unloading
+owners/codecs. Destruction with outstanding external pins violates this host
+lifetime precondition. Changed values publish a complete immutable pin once per
+tick; equal values reuse the prior pin and its original capture tick. Dirty hints
+carry no values. A prepared coalesced index ring requests earlier capture within
+finite work limits; each tick reserves rotating reconciliation before hint work,
+so continuous dirty traffic cannot starve lost-hint recovery. Per-target tick
+evidence prevents duplicate extraction/publication. Owner or codec exceptions
+fail only the private candidate with a dedicated typed callback fault (allocation
+failures use capacity), and successful owner reads close exactly once.
+
 ## Wire Records and Compatibility
 
 Every replication state record contains:

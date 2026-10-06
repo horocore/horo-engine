@@ -313,7 +313,9 @@ namespace Horo {
     /** @brief Bounded worker queue with owned, joinable worker threads. */
     class JobSystem {
     public:
-        explicit JobSystem(JobSystemConfig config = {});
+        /** @brief Copies immutable scheduler configuration before creating owned worker threads.
+         * @param config Borrowed only during construction; later caller changes cannot affect scheduler policy. */
+        explicit JobSystem(const JobSystemConfig &config = {});
         ~JobSystem();
         JobSystem(const JobSystem &) = delete;
         JobSystem &operator=(const JobSystem &) = delete;
@@ -331,11 +333,12 @@ namespace Horo {
         [[nodiscard]] Result<JobHandle> SubmitResult(JobDescriptor descriptor, JobFunction work) const;
         /**
          * @brief Queues context-aware work after freezing all descriptor and diagnostic context.
-         * @param descriptor Explicit cancellation, correlation and configuration inputs.
+         * @param descriptor Explicit cancellation, correlation and configuration inputs, copied synchronously before admission.
          * @param work Owned callback receiving read-only captured context and progress control.
          * @return Move-only accepted-job handle or a typed admission failure. Rejection creates no record.
+         * @details No caller descriptor reference is retained during bounded admission waits or queued execution.
          */
-        [[nodiscard]] Result<JobHandle> SubmitContext(JobDescriptor descriptor, ContextJobFunction work) const;
+        [[nodiscard]] Result<JobHandle> SubmitContext(const JobDescriptor &descriptor, ContextJobFunction work) const;
         /** @brief Requests cooperative cancellation; a still-queued job becomes terminal immediately. */
         [[nodiscard]] Result<void> RequestCancel(JobId id) const;
         /** @brief Returns the latest state for an accepted job. */

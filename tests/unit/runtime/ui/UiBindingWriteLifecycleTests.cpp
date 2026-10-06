@@ -3,6 +3,91 @@
 #include <catch2/generators/catch_generators.hpp>
 
 namespace Horo::Runtime::Ui::BindingWriteTests {
+    TEST_CASE("Reload draft compatibility uses actual provider permission and committed target evidence", "[runtime_ui][binding][reload]") {
+        Fixture fixture;
+        auto source = fixture.Store();
+        auto authority = fixture.Authority(0);
+        fixture.Admit(source, 10, authority);
+        auto oldTree = std::move(fixture.tree);
+        std::array<UiElementDescriptor, 7> elements{};
+        for (std::size_t i = 0; i < elements.size(); ++i)
+            elements[i] = {Stable<UiElementId>(static_cast<std::uint8_t>(i + 1)), i == 0 ? UiElementId{} : Stable<UiElementId>(1)};
+        fixture.tree = Take(UiElementTree::Create(fixture.slots,
+                                                  {oldTree.Instance(),
+                                                   oldTree.Canvas(),
+                                                   oldTree.SourceDocument(),
+                                                   Rev<UiDocumentRevision>(2),
+                                                   Rev<UiRuntimeTreeRevision>(2),
+                                                   {8, 8, 8}},
+                                                  elements));
+        auto replacement = fixture.Store();
+        fixture.Admit(replacement, 10, authority);
+        CHECK(replacement.ReloadCompatible(source, oldTree, fixture.tree, Stable<UiElementId>(2)));
+        auto layout = fixture.Layout();
+        const std::array changes{UiBindingPropertyUpdate{0, true}};
+        const std::array batches{UiBindingChangeBatch{fixture.provider, fixture.schema.Version(), Rev<UiBindingSnapshotRevision>(1),
+                                                      Rev<UiBindingSnapshotRevision>(2), changes}};
+        REQUIRE(replacement.Apply(fixture.tree, batches, layout).HasValue());
+        CHECK_FALSE(replacement.ReloadCompatible(source, oldTree, fixture.tree, Stable<UiElementId>(2)));
+    }
+
+    TEST_CASE("Reload revokes binding admission before deferred authority abandonment", "[runtime_ui][binding][write][reload]") {
+        WriteSession fixture;
+        auto authority = fixture.Authority(0);
+        fixture.Admit(fixture.store, 10, authority);
+        fixture.QueueCurrentChange();
+        const auto before = WriteAllocations().load();
+        const auto closed = fixture.store.CloseReloadAdmission();
+        const auto after = WriteAllocations().load();
+        REQUIRE(closed.HasValue());
+        CHECK(before == after);
+        CHECK(fixture.state->abandons == 0);
+        CHECK(fixture.store.ValidateOwner(fixture.tree).HasError());
+        std::array<UiBindingWriteResult, 1> outcomes;
+        CHECK(fixture.store.DrainWriteResults(outcomes).Value() == 0);
+        REQUIRE(fixture.store.DrainReloadRetirement().HasValue());
+        CHECK(fixture.state->abandons == 1);
+        CHECK(fixture.store.DrainWriteResults(outcomes).Value() == 1);
+        CHECK(outcomes[0].disposition == UiBindingWriteDisposition::Cancelled);
+        CHECK(outcomes[0].cancellation == UiBindingWriteCancellationReason::OwnerRetired);
+        REQUIRE(fixture.store.DrainReloadRetirement().HasValue());
+        fixture.store.Shutdown();
+        CHECK(fixture.state->abandons == 1);
+    }
+
+    TEST_CASE("Deferred reload retirement pins producer code through reentrant abandonment and shutdown",
+              "[runtime_ui][binding][write][reload][leases]") {
+        WriteSession fixture;
+        auto authority = fixture.Authority(0);
+        authority->disposition = UiBindingWriteDisposition::Pending;
+        authority->reentrantStore = &fixture.store;
+        authority->abandonRetires = true;
+        fixture.Admit(fixture.store, 10, authority);
+        fixture.QueueCurrentChange();
+        REQUIRE(Process(fixture.store, fixture.tree, fixture.layout).disposition == UiBindingWriteDisposition::Pending);
+        const std::weak_ptr<TypedAuthority> producer = authority;
+        authority.reset();
+        REQUIRE(fixture.store.CloseReloadAdmission().HasValue());
+        CHECK_FALSE(producer.expired());
+        CHECK(fixture.state->abandons == 0);
+        SECTION("explicit drain before shutdown") {
+            REQUIRE(fixture.store.DrainReloadRetirement().HasValue());
+            CHECK(fixture.state->abandons == 1);
+            CHECK_FALSE(producer.expired());
+            CHECK(fixture.state->destroyed == 0);
+        }
+        SECTION("shutdown owns an undrained deferred callback") {
+            CHECK(fixture.state->prepares == 1);
+        }
+        fixture.store.Shutdown();
+        CHECK(producer.expired());
+        CHECK(fixture.state->destroyed == 1);
+        CHECK(fixture.state->abandons == 1);
+        CHECK(fixture.state->commits == 0);
+        fixture.store.Shutdown();
+        CHECK(fixture.state->abandons == 1);
+    }
+
     TEST_CASE("Provider rejection cancellation and error preserve committed values and exact terminal evidence",
               "[runtime_ui][binding][write][feedback]") {
         WriteSession fixture;

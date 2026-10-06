@@ -70,6 +70,16 @@ consumption of the extended header through its staged target boundary. The
 job tests cover per-class/global saturation, disabled capacities, weighted FIFO,
 role enforcement, cancellation ancestry, shutdown, waiter caps and telemetry.
 
+`JobSystem` construction and `SubmitContext` now accept configuration/descriptor
+by const reference and synchronously copy it into owned state before thread
+creation or admission. Ordinary lvalue, temporary and `std::move` call sites
+remain source-compatible; rvalue descriptor binding does not consume the caller's
+descriptor. No caller reference survives admission or execution. Explicit
+constructor/member-function pointer signatures and precompiled users must be
+updated/rebuilt. `Submit` and `SubmitResult` retain their by-value descriptor move
+sinks, and callbacks still transfer by value/move; no callback ownership or
+cancellation policy is changed.
+
 Test thread ownership uses `OwnedJobTestThread.h`, which selects `std::jthread`
 only when the standard library advertises `__cpp_lib_jthread`. Libraries without
 that feature retain explicitly joined `std::thread` ownership; neither branch
