@@ -57,7 +57,7 @@ namespace Horo::Network {
         void ServeHints(TickWork &work);
         void Schedule(TickWork &work);
         [[nodiscard]] Result<bool> CaptureSafely(Target &target, const ReplicationWorldCaptureRead &world, std::uint64_t tick,
-                                                 const CancellationToken &cancellation);
+                                                 const CancellationToken &cancellation) const;
         [[nodiscard]] Result<bool> Publish(Target &target, ReplicationCapturedState &candidate,
                                            const std::shared_ptr<ReplicationCapturedState> &slot, const ReplicationWorldCaptureRead &world,
                                            const ReplicationCommittedRead &read) const;

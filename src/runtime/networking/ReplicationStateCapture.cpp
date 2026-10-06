@@ -211,7 +211,7 @@ namespace Horo::Network {
 
     /** @brief Keeps plugin exceptions inside one candidate's atomic failure boundary. */
     Result<bool> ReplicationStateCapture::Impl::CaptureSafely(Target &target, const ReplicationWorldCaptureRead &worldRead,
-                                                              const std::uint64_t tick, const CancellationToken &cancellation) {
+                                                              const std::uint64_t tick, const CancellationToken &cancellation) const {
         try {
             return CaptureTarget(target, worldRead, tick, cancellation);
         } catch (const std::bad_alloc &) {
