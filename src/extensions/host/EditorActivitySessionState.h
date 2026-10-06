@@ -159,5 +159,6 @@ namespace Horo::Extensions {
     };
 
     /** @brief Applies ready copied results and schedules the next admitted action on the owner lane. */
-    void PumpEditorActivityAction(EditorActivitySession &session, JobSystem &jobs, const std::shared_ptr<EditorActivitySession> &owner);
+    void PumpEditorActivityAction(EditorActivitySession &session, const JobSystem &jobs,
+                                  const std::shared_ptr<EditorActivitySession> &owner);
 }  // namespace Horo::Extensions

@@ -117,6 +117,25 @@ namespace Horo::Extensions {
             });
         }
 
+        /** @brief Resolves staged workspace placement without mutating the registered descriptor. */
+        [[nodiscard]] EditorActivitySide RestoredActivitySide(const SurfaceRestoreState &entry) {
+            const auto &activity = *entry.surface->descriptor.activity;
+            return entry.activityPlacement
+                .value_or(EditorActivityPlacement{activity.side, activity.group, entry.surface->descriptor.placement.order})
+                .side;
+        }
+
+        /** @brief Checks exact paired state before any staged restore is published. */
+        [[nodiscard]] bool ValidRestoredPair(const SurfaceRestoreState &candidate,
+                                             const std::vector<SurfaceRestoreState> &restoredSurfaces) {
+            const auto drawer = std::ranges::find_if(restoredSurfaces, [&candidate](const SurfaceRestoreState &entry) {
+                return entry.surface->descriptor.id == candidate.surface->descriptor.activity->drawerId;
+            });
+            return drawer != restoredSurfaces.end() && drawer->desiredOpen == candidate.desiredOpen &&
+                   drawer->surface->descriptor.provider == candidate.surface->descriptor.provider &&
+                   candidate.desiredFocused == drawer->desiredFocused;
+        }
+
         /** @brief Proves visibility, paired focus and same-side exclusivity for the staged atomic restore. */
         [[nodiscard]] bool ValidRestoredActivities(const std::vector<SurfaceRestoreState> &restoredSurfaces) {
             for (std::size_t index = 0; index < restoredSurfaces.size(); ++index) {
@@ -126,27 +145,14 @@ namespace Horo::Extensions {
                 if (candidate.desiredOpen &&
                     (!candidate.activityVisible || !candidate.surface->activity.visible || !candidate.surface->activity.enabled))
                     return false;
-                const auto drawer = std::ranges::find_if(restoredSurfaces, [&candidate](const SurfaceRestoreState &entry) {
-                    return entry.surface->descriptor.id == candidate.surface->descriptor.activity->drawerId;
-                });
-                if (drawer == restoredSurfaces.end() || drawer->desiredOpen != candidate.desiredOpen ||
-                    drawer->surface->descriptor.provider != candidate.surface->descriptor.provider ||
-                    candidate.desiredFocused != drawer->desiredFocused)
+                if (!ValidRestoredPair(candidate, restoredSurfaces))
                     return false;
-                for (std::size_t previous = 0; previous < index; ++previous) {
-                    const auto &other = restoredSurfaces[previous];
-                    if (candidate.desiredOpen && other.desiredOpen && other.surface->descriptor.activity.has_value() &&
-                        other.activityPlacement
-                                .value_or(EditorActivityPlacement{other.surface->descriptor.activity->side,
-                                                                  other.surface->descriptor.activity->group,
-                                                                  other.surface->descriptor.placement.order})
-                                .side == candidate.activityPlacement
-                                             .value_or(EditorActivityPlacement{candidate.surface->descriptor.activity->side,
-                                                                               candidate.surface->descriptor.activity->group,
-                                                                               candidate.surface->descriptor.placement.order})
-                                             .side)
-                        return false;
-                }
+                if (candidate.desiredOpen &&
+                    std::any_of(restoredSurfaces.begin(), restoredSurfaces.begin() + index, [&candidate](const SurfaceRestoreState &other) {
+                    return other.desiredOpen && other.surface->descriptor.activity.has_value() &&
+                           RestoredActivitySide(other) == RestoredActivitySide(candidate);
+                }))
+                    return false;
             }
             return true;
         }

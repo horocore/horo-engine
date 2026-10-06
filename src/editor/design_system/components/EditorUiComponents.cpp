@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -40,14 +41,16 @@ namespace Horo::Editor::Ui {
             draw->AddRectFilled({x, minimum.y + 3.0F}, {x + 2.0F, maximum.y - 3.0F}, Theme::U32(Theme::Accent()));
         }
         if (props.badgeCount != 0) {
-            char badge[4]{};
-            if (props.badgeCount > 99)
-                std::snprintf(badge, sizeof(badge), "99+");
-            else
-                std::snprintf(badge, sizeof(badge), "%u", props.badgeCount);
+            std::array<char, 4> badge{};
+            if (props.badgeCount > 99) {
+                badge = {'9', '9', '+', '\0'};
+            } else {
+                // At most two digits leave the zero-initialized terminator intact.
+                static_cast<void>(std::to_chars(badge.data(), badge.data() + 2, props.badgeCount));
+            }
             const auto saved = ImGui::GetCursorScreenPos();
             ImGui::SetCursorScreenPos({maximum.x - ScaledLayoutValue(22.0F), minimum.y});
-            Badge({.label = badge, .tone = BadgeTone::Neutral, .size = BadgeSize::Small}, fonts);
+            Badge({.label = badge.data(), .tone = BadgeTone::Neutral, .size = BadgeSize::Small}, fonts);
             ImGui::SetCursorScreenPos(saved);
         }
         ImGui::EndDisabled();

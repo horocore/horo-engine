@@ -16,6 +16,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <type_traits>
+
+static_assert(!std::is_copy_constructible_v<Horo::Editor::ExtensionActivityView>);
+static_assert(!std::is_copy_assignable_v<Horo::Editor::ExtensionActivityView>);
+static_assert(!std::is_move_constructible_v<Horo::Editor::ExtensionActivityView>);
+static_assert(!std::is_move_assignable_v<Horo::Editor::ExtensionActivityView>);
 
 namespace {
     using namespace Horo;

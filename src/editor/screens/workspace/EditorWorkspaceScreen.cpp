@@ -498,8 +498,7 @@ namespace Horo::Editor {
                     return;
                 const auto path = std::filesystem::path{controller_->ViewModel().projectRoot} / ".horo" / "editor_workspace.json";
                 Extensions::EditorSurfaceWorkspaceState state{.schemaVersion = Extensions::EditorSurfaceRegistry::WorkspaceSchemaVersion};
-                std::error_code existsError;
-                if (std::filesystem::exists(path, existsError)) {
+                if (std::error_code existsError; std::filesystem::exists(path, existsError)) {
                     std::string error;
                     const auto layout = WorkspaceLayoutPersistence::Load(path, &error);
                     if (!layout) {
@@ -547,12 +546,12 @@ namespace Horo::Editor {
                         placement = WorkspaceActivityPlacement{static_cast<WorkspaceActivitySide>(surface.activityPlacement->side),
                                                                surface.activityPlacement->group,
                                                                static_cast<std::uint32_t>(surface.activityPlacement->order)};
-                    layout.surfaces.push_back({surface.surfaceId, surface.provider.extensionId, surface.provider.moduleId, surface.open,
-                                               surface.focused, surface.activityVisible, surface.opaqueState, placement});
+                    layout.surfaces.emplace_back(surface.surfaceId, surface.provider.extensionId, surface.provider.moduleId, surface.open,
+                                                 surface.focused, surface.activityVisible, surface.opaqueState, placement);
                 }
                 std::string error;
-                const auto path = std::filesystem::path{controller_->ViewModel().projectRoot} / ".horo" / "editor_workspace.json";
-                if (!WorkspaceLayoutPersistence::Save(path, layout, &error))
+                if (const auto path = std::filesystem::path{controller_->ViewModel().projectRoot} / ".horo" / "editor_workspace.json";
+                    !WorkspaceLayoutPersistence::Save(path, layout, &error))
                     LOG_WARN("editor.workspace", "Cannot save workspace state: %s", error.c_str());
                 workspacePersistenceAdmitted_ = false;
             }

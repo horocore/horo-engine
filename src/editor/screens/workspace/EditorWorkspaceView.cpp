@@ -1173,9 +1173,12 @@ namespace Horo::Editor {
         ImGui::SetCursorScreenPos(itemMin);
         ImGui::PushID(panelId.c_str());
         if (ImGui::InvisibleButton("##ActivityItem", ImVec2(geometry.cellWidth, geometry.cellHeight))) {
-            m_extensions.Close(panelArea == WorkspaceDockArea::Right    ? Extensions::EditorActivitySide::Right
-                               : panelArea == WorkspaceDockArea::Bottom ? Extensions::EditorActivitySide::Bottom
-                                                                        : Extensions::EditorActivitySide::Left);
+            auto extensionSide = Extensions::EditorActivitySide::Left;
+            if (panelArea == WorkspaceDockArea::Right)
+                extensionSide = Extensions::EditorActivitySide::Right;
+            else if (panelArea == WorkspaceDockArea::Bottom)
+                extensionSide = Extensions::EditorActivitySide::Bottom;
+            m_extensions.Close(extensionSide);
             outCommand.command = EditorWorkspaceViewCommand::ChangeActivePanel;
             outCommand.targetIndex = ActivityBarAreaIndex(panelArea);
             outCommand.stringPayload = isActive && !activeInBottomSplit && !activeInSideSplit ? std::string{} : panelId;

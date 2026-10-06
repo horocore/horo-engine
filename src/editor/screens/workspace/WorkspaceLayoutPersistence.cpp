@@ -86,7 +86,9 @@ namespace Horo::Editor {
 
             /** @brief Parses one bounded surface including optional schema-3 placement without publishing workspace state. */
             bool ParseSurface(WorkspaceSurfaceState &surface, std::size_t &bytes, const std::uint32_t schemaVersion) {
-                std::uint32_t open{}, focused{}, visible{};
+                std::uint32_t open{};
+                std::uint32_t focused{};
+                std::uint32_t visible{};
                 if (!ObjectStart() || !KeyedString("id", surface.id) || !Comma() || !KeyedString("extension", surface.extensionId) ||
                     !Comma() || !KeyedString("module", surface.moduleId) || !Comma() || !Key("open") || !UInt(open) || !Comma() ||
                     !Key("focused") || !UInt(focused) || !Comma() || !Key("visible") || !UInt(visible) || !Comma() || !Key("state") ||
@@ -96,9 +98,11 @@ namespace Horo::Editor {
                     return false;
                 while (!Take(']')) {
                     std::uint32_t byte{};
-                    if (!UInt(byte) || byte > 255 || surface.state.size() >= MaximumSurfaceStateBytes ||
-                        ++bytes > MaximumTotalSurfaceStateBytes)
+                    if (!UInt(byte))
                         return false;
+                    if (byte > 255 || surface.state.size() >= MaximumSurfaceStateBytes || bytes >= MaximumTotalSurfaceStateBytes)
+                        return false;
+                    ++bytes;
                     surface.state.push_back(static_cast<std::uint8_t>(byte));
                     if (!Take(',')) {
                         if (!Take(']'))
@@ -107,7 +111,9 @@ namespace Horo::Editor {
                     }
                 }
                 if (Take(',')) {
-                    std::uint32_t side{}, group{}, order{};
+                    std::uint32_t side{};
+                    std::uint32_t group{};
+                    std::uint32_t order{};
                     if (schemaVersion < 3 || !Key("placement") || !ObjectStart() || !Key("side") || !UInt(side) || !Comma() ||
                         !Key("group") || !UInt(group) || !Comma() || !Key("order") || !UInt(order) || !ObjectEnd() || side > 2 ||
                         group > 2 || order >= MaximumSurfaceEntries)
@@ -529,8 +535,7 @@ namespace Horo::Editor {
 
     std::optional<WorkspaceLayout> WorkspaceLayoutPersistence::Load(const std::filesystem::path &path, std::string *error) {
         std::error_code sizeError;
-        const auto size = std::filesystem::file_size(path, sizeError);
-        if (sizeError || size > MaximumWorkspaceDocumentBytes) {
+        if (const auto size = std::filesystem::file_size(path, sizeError); sizeError || size > MaximumWorkspaceDocumentBytes) {
             if (error)
                 *error = "workspace document unavailable or exceeds limit";
             return std::nullopt;

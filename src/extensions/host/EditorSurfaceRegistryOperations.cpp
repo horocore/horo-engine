@@ -21,40 +21,69 @@ namespace Horo::Extensions {
             return Result<Value>::Failure(detail.empty() ? MakeError(descriptor) : MakeError(descriptor, std::string{detail}));
         }
 
+        /** @brief Admits text only through the existing technical-text or context localization policy. */
+        [[nodiscard]] bool AllowsText(const EditorSurfaceContext &context, const EditorUiText &text) {
+            return text.value.empty() || text.kind == EditorUiTextKind::TechnicalText ||
+                   context.Allows(EditorSurfaceLocalizationKey{text.value});
+        }
+
+        /** @brief Checks each typed payload's permissions without invoking providers or mutating registry state. */
+        [[nodiscard]] bool AllowsPayload(const EditorSurfaceContext &context, const EditorUiNodePayload &payload) {
+            return std::visit([&context]<typename T>(const T &typed) {
+                bool admitted = true;
+                if constexpr (requires { typed.action; })
+                    admitted = context.Allows(EditorSurfaceCommandId{typed.action.value});
+                if constexpr (requires { typed.binding; })
+                    admitted = admitted && context.Allows(EditorSurfaceStateKey{typed.binding.value});
+                if constexpr (requires { typed.text; })
+                    admitted = admitted && AllowsText(context, typed.text);
+                if constexpr (requires { typed.message; })
+                    admitted = admitted && AllowsText(context, typed.message) && context.Allows(EditorSurfaceDiagnosticCode{typed.code});
+                if constexpr (requires { typed.placeholder; })
+                    admitted = admitted && AllowsText(context, typed.placeholder);
+                if constexpr (requires { typed.options; }) {
+                    for (const auto &option : typed.options)
+                        admitted = admitted && AllowsText(context, option.label);
+                }
+                return admitted;
+            }, payload);
+        }
+
         /** @brief Admits form text and interactions only through the exact surface context allowlists. */
         [[nodiscard]] bool AllowsForm(const EditorSurfaceContext &context, const EditorUiForm &form) {
-            const auto allowsText = [&context](const EditorUiText &text) {
-                return text.value.empty() || text.kind == EditorUiTextKind::TechnicalText ||
-                       context.Allows(EditorSurfaceLocalizationKey{text.value});
-            };
-            if (!allowsText(form.title) || !allowsText(form.description))
+            if (!AllowsText(context, form.title) || !AllowsText(context, form.description))
                 return false;
             for (const auto &node : form.nodes) {
-                const auto &base = EditorUiNodeBaseOf(node);
-                if (!allowsText(base.label) || !allowsText(base.description) || !allowsText(base.accessibleLabel))
+                if (const auto &base = EditorUiNodeBaseOf(node); !AllowsText(context, base.label) ||
+                                                                 !AllowsText(context, base.description) ||
+                                                                 !AllowsText(context, base.accessibleLabel))
                     return false;
-                const bool allowed = std::visit([&context, &allowsText]<typename T>(const T &typed) {
-                    bool admitted = true;
-                    if constexpr (requires { typed.action; })
-                        admitted = context.Allows(EditorSurfaceCommandId{typed.action.value});
-                    if constexpr (requires { typed.binding; })
-                        admitted = admitted && context.Allows(EditorSurfaceStateKey{typed.binding.value});
-                    if constexpr (requires { typed.text; })
-                        admitted = admitted && allowsText(typed.text);
-                    if constexpr (requires { typed.message; })
-                        admitted = admitted && allowsText(typed.message) && context.Allows(EditorSurfaceDiagnosticCode{typed.code});
-                    if constexpr (requires { typed.placeholder; })
-                        admitted = admitted && allowsText(typed.placeholder);
-                    if constexpr (requires { typed.options; }) {
-                        for (const auto &option : typed.options)
-                            admitted = admitted && allowsText(option.label);
-                    }
-                    return admitted;
-                }, node.payload);
-                if (!allowed)
+                if (!AllowsPayload(context, node.payload))
                     return false;
             }
             return true;
+        }
+
+        /** @brief Validates staged paired open/focus and destination exclusivity after drawer ownership admission. */
+        [[nodiscard]] const ErrorCodeDescriptor *ActivityInitialStateError(EditorSurfaceRegistryState &state,
+                                                                           const EditorSurfaceDescriptor &descriptor,
+                                                                           const PendingSurfaceState *pending) {
+            if (descriptor.activity.has_value()) {
+                const auto drawer = FindSurface(state, descriptor.activity->drawerId);
+                const auto side =
+                    pending && pending->entry.activityPlacement ? pending->entry.activityPlacement->side : descriptor.activity->side;
+                const bool open = pending ? pending->entry.open : descriptor.openByDefault;
+                if (const bool focused = pending && pending->entry.focused;
+                    pending &&
+                    (drawer->desiredOpen != open || drawer->desiredFocused != focused || (open && !pending->entry.activityVisible)))
+                    return &ExtensionErrors::EditorSurfaceRegistryStateInvalid;
+                if (open && std::ranges::any_of(state.surfaces, [side](const auto &candidate) {
+                    return candidate->descriptor.activity.has_value() && candidate->desiredOpen &&
+                           ActivityPlacementOf(*candidate).side == side;
+                }))
+                    return &ExtensionErrors::EditorSurfaceRegistryStateInvalid;
+            }
+            return nullptr;
         }
 
         /** @brief Admits a provider-owned pair and its pending persisted state before any registry publication. */
@@ -78,22 +107,7 @@ namespace Horo::Extensions {
                 return &ExtensionErrors::EditorSurfaceRegistryInvalid;
             if (pending && pending->entry.activityPlacement && !descriptor.activity)
                 return &ExtensionErrors::EditorSurfaceRegistryStateInvalid;
-            if (descriptor.activity.has_value()) {
-                const auto drawer = FindSurface(state, descriptor.activity->drawerId);
-                const auto side =
-                    pending && pending->entry.activityPlacement ? pending->entry.activityPlacement->side : descriptor.activity->side;
-                const bool open = pending ? pending->entry.open : descriptor.openByDefault;
-                const bool focused = pending && pending->entry.focused;
-                if (pending &&
-                    (drawer->desiredOpen != open || drawer->desiredFocused != focused || (open && !pending->entry.activityVisible)))
-                    return &ExtensionErrors::EditorSurfaceRegistryStateInvalid;
-                if (open && std::ranges::any_of(state.surfaces, [side](const auto &candidate) {
-                    return candidate->descriptor.activity.has_value() && candidate->desiredOpen &&
-                           ActivityPlacementOf(*candidate).side == side;
-                }))
-                    return &ExtensionErrors::EditorSurfaceRegistryStateInvalid;
-            }
-            return nullptr;
+            return ActivityInitialStateError(state, descriptor, pending);
         }
 
         /** @brief Applies pending workspace intent or the admitted default to a detached surface before publication. */
@@ -107,6 +121,26 @@ namespace Horo::Extensions {
             surface.opaqueState = pending->entry.opaqueState;
             surface.activityUserVisible = pending->entry.activityVisible;
             surface.activityPlacement = pending->entry.activityPlacement;
+        }
+
+        /** @brief Withdraws a paired activity/drawer while the caller holds the registry owner lock. */
+        void CloseActivityPair(EditorSurfaceRegistryState &state, EditorSurfaceState &activity) {
+            activity.desiredOpen = false;
+            activity.desiredFocused = false;
+            if (const auto drawer = FindSurface(state, activity.descriptor.activity->drawerId)) {
+                drawer->desiredOpen = false;
+                drawer->desiredFocused = false;
+            }
+        }
+
+        /** @brief Enforces destination exclusivity without allocations after placement admission. */
+        void CloseActivityPeers(EditorSurfaceRegistryState &state, const EditorActivitySide side,
+                                const EditorSurfaceState *retained = nullptr) {
+            for (const auto &candidate : state.surfaces) {
+                if (candidate.get() == retained || !candidate->descriptor.activity || ActivityPlacementOf(*candidate).side != side)
+                    continue;
+                CloseActivityPair(state, *candidate);
+            }
         }
 
         /** @brief Copies the bounded peer set in stable insertion order before a placement transaction mutates state. */
@@ -270,16 +304,7 @@ namespace Horo::Extensions {
         const auto drawer = FindSurface(*state_, surface->descriptor.activity->drawerId);
         ++state_->revision;
         const bool close = surface->desiredOpen && drawer->desiredOpen;
-        for (const auto &candidate : state_->surfaces) {
-            if (!candidate->descriptor.activity.has_value() || ActivityPlacementOf(*candidate).side != ActivityPlacementOf(*surface).side)
-                continue;
-            candidate->desiredOpen = false;
-            candidate->desiredFocused = false;
-            if (const auto previous = FindSurface(*state_, candidate->descriptor.activity->drawerId); previous != nullptr) {
-                previous->desiredOpen = false;
-                previous->desiredFocused = false;
-            }
-        }
+        CloseActivityPeers(*state_, ActivityPlacementOf(*surface).side);
         surface->desiredOpen = !close;
         surface->desiredFocused = !close;
         drawer->desiredOpen = !close;
@@ -324,16 +349,7 @@ namespace Horo::Extensions {
             targetPeers[index]->activityPlacement =
                 EditorActivityPlacement{destination.side, destination.group, static_cast<std::int32_t>(index)};
         if (surface->desiredOpen)
-            for (const auto &candidate : state_->surfaces) {
-                if (candidate == surface || !candidate->descriptor.activity || ActivityPlacementOf(*candidate).side != destination.side)
-                    continue;
-                candidate->desiredOpen = false;
-                candidate->desiredFocused = false;
-                if (const auto drawer = FindSurface(*state_, candidate->descriptor.activity->drawerId)) {
-                    drawer->desiredOpen = false;
-                    drawer->desiredFocused = false;
-                }
-            }
+            CloseActivityPeers(*state_, destination.side, surface.get());
         ++state_->revision;
         return Result<void>::Success();
     }
@@ -345,7 +361,7 @@ namespace Horo::Extensions {
         auto lock = state_->Lock();
         if (state_->shutdown)
             return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryShutdown);
-        const std::shared_ptr<EditorSurfaceState> surface = FindSurface(*state_, surfaceId);
+        const auto surface = FindSurface(*state_, surfaceId);
         if (surface == nullptr) {
             if (const PendingSurfaceState *pending = FindPending(*state_, surfaceId); pending != nullptr)
                 return ProviderFailure(ConfiguredStatus(*state_, pending->entry.provider));

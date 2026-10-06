@@ -111,8 +111,8 @@ namespace Horo::Extensions::ManifestValidation {
         std::size_t start = 0;
         while (start <= value.size()) {
             const std::size_t end = value.find('.', start);
-            const auto segment = value.substr(start, end == std::string_view::npos ? value.size() - start : end - start);
-            if (!validSegment(segment))
+            if (const auto segment = value.substr(start, end == std::string_view::npos ? value.size() - start : end - start);
+                !validSegment(segment))
                 return false;
             if (end == std::string_view::npos)
                 return true;

@@ -57,8 +57,8 @@ namespace Horo::Extensions {
             const auto path = fs::canonical(componentPath, error);
             if (error)
                 return invalid();
-            const auto contained = path.lexically_relative(root);
-            if (contained.empty() || contained.is_absolute() || *contained.begin() == "..")
+            if (const auto contained = path.lexically_relative(root);
+                contained.empty() || contained.is_absolute() || *contained.begin() == "..")
                 return invalid();
             const auto size = fs::file_size(path, error);
             if (error || size == 0 || size > 64U * 1024U)
@@ -115,7 +115,7 @@ namespace Horo::Extensions {
         if (descriptor->initialSnapshot.nodeCount > 256 ||
             (descriptor->initialSnapshot.nodeCount != 0 && descriptor->initialSnapshot.nodes == nullptr))
             return HORO_EXTENSION_ERROR_INVALID_ARGS;
-        session->drawer.localization.push_back({session->activity.surface.labelLocalizationKey});
+        session->drawer.localization.emplace_back(session->activity.surface.labelLocalizationKey);
         for (std::uint32_t index = 0; index < descriptor->initialSnapshot.nodeCount && index < 256; ++index) {
             const auto &node = descriptor->initialSnapshot.nodes[index];
             std::string action;
@@ -125,11 +125,11 @@ namespace Horo::Extensions {
                 !Detail::CopyActivityText(node.text, text, 4096))
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
             if (!action.empty())
-                session->drawer.commands.push_back({std::move(action)});
+                session->drawer.commands.emplace_back(std::move(action));
             if (!label.empty())
-                session->drawer.localization.push_back({std::move(label)});
+                session->drawer.localization.emplace_back(std::move(label));
             if (!text.empty() && (node.flags & HORO_EDITOR_ACTIVITY_TEXT_TECHNICAL) == 0)
-                session->drawer.localization.push_back({std::move(text)});
+                session->drawer.localization.emplace_back(std::move(text));
         }
         auto &keys = session->drawer.localization;
         std::ranges::sort(keys, {}, &EditorSurfaceLocalizationKey::value);
@@ -146,10 +146,10 @@ namespace Horo::Extensions {
         std::size_t messageBytes{};
         for (std::uint32_t index = 0; index < descriptor->messageCount; ++index) {
             EditorActivitySession::Message message;
-            const auto &input = descriptor->messages[index];
-            if (!Detail::CopyActivityText(input.locale, message.locale, 32) || !Detail::CopyActivityText(input.key, message.key, 128) ||
-                !Detail::CopyActivityText(input.value, message.value, 4096) || message.locale.empty() || message.key.empty() ||
-                message.value.empty())
+            if (const auto &input = descriptor->messages[index]; !Detail::CopyActivityText(input.locale, message.locale, 32) ||
+                                                                 !Detail::CopyActivityText(input.key, message.key, 128) ||
+                                                                 !Detail::CopyActivityText(input.value, message.value, 4096) ||
+                                                                 message.locale.empty() || message.key.empty() || message.value.empty())
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
             messageBytes += message.locale.size() + message.key.size() + message.value.size();
             if (messageBytes > 64U * 1024U || std::ranges::any_of(session->messages, [&message](const auto &existing) {
@@ -221,9 +221,18 @@ namespace Horo::Extensions {
             try {
                 load.error = MakeError(ExtensionErrors::ContributionRejected, "Editor activity ABI publication was rejected.");
             } catch (...) {
-            }  // Preserve the sticky rejection even if diagnostics cannot allocate.
+                // The typed ABI failure and sticky rejection remain authoritative when diagnostics cannot allocate.
+                return status;
+            }
         }
         return status;
+    }
+
+    /** @brief Rolls back the entire admitted batch after a failed commit, before returning the original error. */
+    static void RevokeEditorActivities(const std::span<const std::shared_ptr<ExtensionModuleLifetime>> lifetimes) noexcept {
+        for (const auto &owner : lifetimes)
+            for (const auto &candidate : owner->editorActivities)
+                candidate->Revoke();
     }
 
     /** @copydoc CommitEditorActivities */
@@ -231,9 +240,7 @@ namespace Horo::Extensions {
         for (const auto &lifetime : lifetimes) {
             for (const auto &session : lifetime->editorActivities) {
                 if (const auto committed = session->Commit(); committed.HasError()) {
-                    for (const auto &owner : lifetimes)
-                        for (const auto &candidate : owner->editorActivities)
-                            candidate->Revoke();
+                    RevokeEditorActivities(lifetimes);
                     return committed;
                 }
             }
@@ -254,12 +261,11 @@ namespace Horo::Extensions {
     bool EditorActivityHost::IsLive(const EditorSurfaceProviderIdentity &provider) const noexcept {
         if (state_->shutdown)
             return false;
-        for (const auto &weak : state_->sessions)
-            if (const auto session = weak.lock(); session && session->committed && !session->revoked &&
-                                                  session->activity.surface.provider == provider && session->admission &&
-                                                  session->admission->ActivationLease().IsUsable())
-                return true;
-        return false;
+        return std::ranges::any_of(state_->sessions, [&provider](const auto &weak) {
+            const auto session = weak.lock();
+            return session && session->committed && !session->revoked && session->activity.surface.provider == provider &&
+                   session->admission && session->admission->ActivationLease().IsUsable();
+        });
     }
 
     std::span<const EditorActivityProjection> EditorActivityHost::Prepared() const noexcept {
@@ -286,6 +292,18 @@ namespace Horo::Extensions {
         return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected));
     }
 
+    /** @brief Finds the committed owner of a captured activity projection without invoking provider code. */
+    static std::shared_ptr<EditorActivitySession> ProjectionOwner(const std::vector<std::weak_ptr<EditorActivitySession>> &sessions,
+                                                                  const EditorSurfaceSnapshot &surface) {
+        for (const auto &weak : sessions) {
+            if (const auto session = weak.lock(); session && session->committed && !session->revoked &&
+                                                  session->activity.surface.provider == surface.descriptor.provider &&
+                                                  session->activity.surface.id == surface.descriptor.id)
+                return session;
+        }
+        return nullptr;
+    }
+
     void EditorActivityHost::Update() {
         for (const auto &weak : state_->sessions)
             if (const auto session = weak.lock())
@@ -298,19 +316,15 @@ namespace Horo::Extensions {
         for (auto &surface : snapshots) {
             if (!surface.descriptor.activity)
                 continue;
-            for (const auto &weak : state_->sessions) {
-                if (const auto session = weak.lock(); session && session->committed && !session->revoked &&
-                                                      session->activity.surface.provider == surface.descriptor.provider &&
-                                                      session->activity.surface.id == surface.descriptor.id) {
-                    const auto drawer = std::ranges::find_if(snapshots, [&surface](const auto &candidate) {
-                        return candidate.descriptor.id == surface.descriptor.activity->drawerId &&
-                               candidate.descriptor.provider == surface.descriptor.provider;
-                    });
-                    surface.form = drawer != snapshots.end() ? drawer->form : std::nullopt;
-                    state_->prepared.push_back({std::move(surface), session->icon, session->revision});
-                    break;
-                }
-            }
+            const auto session = ProjectionOwner(state_->sessions, surface);
+            if (!session)
+                continue;
+            const auto drawer = std::ranges::find_if(snapshots, [&surface](const auto &candidate) {
+                return candidate.descriptor.id == surface.descriptor.activity->drawerId &&
+                       candidate.descriptor.provider == surface.descriptor.provider;
+            });
+            surface.form = drawer != snapshots.end() ? drawer->form : std::nullopt;
+            state_->prepared.emplace_back(std::move(surface), session->icon, session->revision);
         }
         std::ranges::sort(state_->prepared, [](const auto &left, const auto &right) {
             const auto &a = left.surface.descriptor;
@@ -324,15 +338,15 @@ namespace Horo::Extensions {
     std::string_view EditorActivityHost::LocalizedText(const EditorSurfaceProviderIdentity &provider, const std::string_view key,
                                                        const std::string_view locale) const noexcept {
         for (const auto &weak : state_->sessions) {
-            if (const auto session = weak.lock();
-                session && session->committed && !session->revoked && session->activity.surface.provider == provider) {
-                for (const auto &message : session->messages)
-                    if (message.key == key && message.locale == locale)
-                        return message.value;
-                for (const auto &message : session->messages)
-                    if (message.key == key && message.locale == "en-US")
-                        return message.value;
-            }
+            const auto session = weak.lock();
+            if (!session || !session->committed || session->revoked || session->activity.surface.provider != provider)
+                continue;
+            for (const auto &message : session->messages)
+                if (message.key == key && message.locale == locale)
+                    return message.value;
+            for (const auto &message : session->messages)
+                if (message.key == key && message.locale == "en-US")
+                    return message.value;
         }
         return key;
     }

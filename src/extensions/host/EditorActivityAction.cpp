@@ -85,7 +85,7 @@ namespace Horo::Extensions {
             return Result<void>::Success();
         }
 
-        void PumpAction(EditorActivitySession &session, JobSystem &jobs, const std::shared_ptr<EditorActivitySession> &owner) {
+        void PumpAction(EditorActivitySession &session, const JobSystem &jobs, const std::shared_ptr<EditorActivitySession> &owner) {
             if (session.revoked || !session.committed)
                 return;
             PublishCompletedAction(session);
@@ -107,9 +107,8 @@ namespace Horo::Extensions {
             result->revision = session.revision;
             const auto invoke = session.invoke;
             void *const moduleContext = session.moduleContext;
-            auto accepted = jobs.SubmitResult({},
-                                              [lease, result, action = std::move(action), invoke,
-                                               moduleContext](const CancellationToken &cancellation) -> Result<void> {
+            auto accepted = jobs.SubmitResult({}, [lease, result, action = std::move(action), invoke,
+                                                   moduleContext](const CancellationToken &cancellation) {
                 return ExecuteAction(result, action, invoke, moduleContext, cancellation);
             });
             if (accepted.HasValue()) {
@@ -120,7 +119,8 @@ namespace Horo::Extensions {
     }  // namespace
 
     /** @copydoc PumpEditorActivityAction */
-    void PumpEditorActivityAction(EditorActivitySession &session, JobSystem &jobs, const std::shared_ptr<EditorActivitySession> &owner) {
+    void PumpEditorActivityAction(EditorActivitySession &session, const JobSystem &jobs,
+                                  const std::shared_ptr<EditorActivitySession> &owner) {
         PumpAction(session, jobs, owner);
     }
 }  // namespace Horo::Extensions

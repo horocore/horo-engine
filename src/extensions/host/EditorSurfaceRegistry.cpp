@@ -53,8 +53,8 @@ namespace Horo::Extensions {
         }
 
         [[nodiscard]] bool IsSupportedPersistentSurface(const EditorSurfaceDescriptor &descriptor) {
-            return (descriptor.kind == EditorSurfaceKind::Panel || descriptor.kind == EditorSurfaceKind::Tab ||
-                    descriptor.kind == EditorSurfaceKind::ActivityItem) &&
+            using enum EditorSurfaceKind;
+            return (descriptor.kind == Panel || descriptor.kind == Tab || descriptor.kind == ActivityItem) &&
                    descriptor.persistence != EditorSurfacePersistence::None;
         }
 

@@ -16,6 +16,10 @@ namespace Horo::Editor {
     public:
         ExtensionActivityView(const EditorGuiContext &context, Extensions::EditorActivityHost *host, IEditorGuiRenderer *renderer);
         ~ExtensionActivityView();
+        ExtensionActivityView(const ExtensionActivityView &) = delete;
+        ExtensionActivityView &operator=(const ExtensionActivityView &) = delete;
+        ExtensionActivityView(ExtensionActivityView &&) = delete;
+        ExtensionActivityView &operator=(ExtensionActivityView &&) = delete;
         void Update();
         /** @brief Queues a generation-bound placement command; publication occurs at the next owner Update. */
         [[nodiscard]] bool QueueMove(const Extensions::EditorSurfaceProviderIdentity &provider, std::string_view id,
@@ -55,10 +59,18 @@ namespace Horo::Editor {
         void ApplyPendingMove();
         /** @brief Refreshes copied localization and transfers texture ownership at the owner Update boundary. */
         [[nodiscard]] Entry PrepareEntry(const Extensions::EditorActivityProjection &projection, const std::string &locale);
+        /** @brief Transfers unique texture ownership and tracks opening/focus transitions before retiring the old projection. */
+        void PrepareResources(Entry &entry, Entry *previous);
+        /** @brief Copies provider-localized node text during the owner update phase. */
+        void PrepareNodeText(Entry &entry, const std::string &locale);
+        /** @brief Draws the admitted form using retained text and queues typed actions without invoking providers. */
+        void DrawForm(const Entry &entry);
         /** @brief Presents localized destination and insertion actions for one retained control. */
         void DrawPlacementMenu(const Entry &entry, std::size_t group);
         /** @brief Presents durable user visibility choices for the current activity rail. */
         void DrawVisibilityMenu(bool right);
+        /** @brief Applies a typed activity toggle and queues native-panel withdrawal only after successful admission. */
+        [[nodiscard]] bool ActivateEntry(const Entry &entry);
         void AcceptMove(Extensions::EditorActivityPlacement placement);
         [[nodiscard]] std::int32_t GroupSize(Extensions::EditorActivitySide side, std::uint8_t group) const noexcept;
 

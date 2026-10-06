@@ -24,6 +24,21 @@ namespace Horo::Extensions::Tests {
             CHECK(RasterizeEditorSvgIcon("<svg width='24' height='24'><path d='M0 0 L" + number + " 2'/></svg>").HasError());
     }
 
+    TEST_CASE("SVG admission phases reject incomplete tags and retain aggregate geometry budgets", "[Extensions][Activity][Svg]") {
+        for (const std::string_view malformed :
+             {"<", "<svg width", "<svg width=", "<svg width='24", "<svg width='24'/", "<svg width='24' height='24'></svg",
+              "<svg viewBox='0 0 24'/>", "<svg viewBox='0 0 24 24 1'/>"})
+            CHECK(RasterizeEditorSvgIcon(malformed).HasError());
+        std::string points;
+        for (std::size_t index = 0; index < 2050; ++index)
+            points += "0 ";
+        CHECK(RasterizeEditorSvgIcon("<svg width='24' height='24'><polyline points='" + points + "'/></svg>").HasError());
+        std::string path;
+        for (std::size_t index = 0; index < 256; ++index)
+            path += "M0 0";
+        CHECK(RasterizeEditorSvgIcon("<svg width='24' height='24'><path d='" + path + "'/></svg>").HasValue());
+    }
+
     TEST_CASE("SVG icons reject active external recursive and oversized resources before decoding",
               "[Extensions][EditorSurface][Activity][Svg]") {
         for (const std::string body :

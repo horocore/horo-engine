@@ -96,48 +96,56 @@ namespace Horo::Extensions {
                     continue;
                 }
                 if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
-                    if (!path || std::string_view{"MLHVCSQTAZz"}.find(c) == std::string_view::npos || ++commands > kMaximumPathCommands)
+                    if (!path || std::string_view{"MLHVCSQTAZz"}.find(c) == std::string_view::npos)
                         return false;
+                    if (commands >= kMaximumPathCommands)
+                        return false;
+                    ++commands;
                     ++cursor;
                     continue;
                 }
                 double number{};
-                if (!Number(value, cursor, number) || std::abs(number) > 1024.0 || ++numbers > kMaximumNumbers)
+                if (!Number(value, cursor, number))
                     return false;
+                if (std::abs(number) > 1024.0 || numbers >= kMaximumNumbers)
+                    return false;
+                ++numbers;
             }
             return true;
         }
 
-        /** @brief Applies attribute-specific scalar and viewport bounds after finite geometry admission. */
-        [[nodiscard]] bool ScalarAttribute(const std::string_view name, const std::string_view value) {
-            if (name == "viewBox") {
-                std::array<double, 4> bounds{};
-                std::size_t cursor = 0;
-                for (double &bound : bounds) {
-                    while (cursor < value.size() && (Space(value[cursor]) || value[cursor] == ','))
-                        ++cursor;
-                    if (!Number(value, cursor, bound))
-                        return false;
-                }
-                while (cursor < value.size() && Space(value[cursor]))
+        /** @brief Validates exactly four finite view-box values and positive render dimensions. */
+        [[nodiscard]] bool ViewBoxAttribute(const std::string_view value) {
+            std::array<double, 4> bounds{};
+            std::size_t cursor = 0;
+            for (double &bound : bounds) {
+                while (cursor < value.size() && (Space(value[cursor]) || value[cursor] == ','))
                     ++cursor;
-                return cursor == value.size() && bounds[2] >= 1.0 && bounds[3] >= 1.0;
-            }
-            if (name == "stroke-width") {
-                double width{};
-                std::size_t cursor = 0;
-                return Number(value, cursor, width) && cursor == value.size() && width >= 0.0 && width <= 64.0;
-            }
-            if (name != "d" && name != "points" && name != "viewBox") {
-                double scalar{};
-                std::size_t cursor = 0;
-                if (!Number(value, cursor, scalar) || cursor != value.size())
-                    return false;
-                if ((name == "opacity" || name == "fill-opacity" || name == "stroke-opacity" || name == "stop-opacity" ||
-                     name == "offset") &&
-                    (scalar < 0.0 || scalar > 1.0))
+                if (!Number(value, cursor, bound))
                     return false;
             }
+            while (cursor < value.size() && Space(value[cursor]))
+                ++cursor;
+            return cursor == value.size() && bounds[2] >= 1.0 && bounds[3] >= 1.0;
+        }
+
+        /** @brief Applies bounded scalar semantics after the common finite-number admission. */
+        [[nodiscard]] bool ScalarAttribute(const std::string_view name, const std::string_view value) {
+            if (name == "viewBox")
+                return ViewBoxAttribute(value);
+            if (name == "d" || name == "points")
+                return true;
+            double scalar{};
+            std::size_t cursor = 0;
+            if (!Number(value, cursor, scalar))
+                return false;
+            if (cursor != value.size())
+                return false;
+            if (name == "stroke-width")
+                return scalar >= 0.0 && scalar <= 64.0;
+            constexpr std::array opacityNames{"opacity", "fill-opacity", "stroke-opacity", "stop-opacity", "offset"};
+            if (std::ranges::find(opacityNames, name) != opacityNames.end())
+                return scalar >= 0.0 && scalar <= 1.0;
             return true;
         }
 
@@ -184,6 +192,37 @@ namespace Horo::Extensions {
             return ScalarAttribute(name, value);
         }
 
+        /** @brief Consumes one attribute name and separator without copying XML storage. */
+        [[nodiscard]] bool AttributeName(const std::string_view svg, std::size_t &cursor, std::string_view &name) {
+            const std::size_t start = cursor;
+            while (cursor < svg.size() && !Space(svg[cursor]) && svg[cursor] != '=')
+                ++cursor;
+            name = svg.substr(start, cursor - start);
+            while (cursor < svg.size() && Space(svg[cursor]))
+                ++cursor;
+            if (cursor == svg.size() || svg[cursor] != '=')
+                return false;
+            ++cursor;
+            return true;
+        }
+
+        /** @brief Admits a quoted attribute only through the static profile allowlist. */
+        [[nodiscard]] bool AttributeValue(const std::string_view svg, std::size_t &cursor, const std::string_view name,
+                                          std::size_t &numbers, std::size_t &commands) {
+            while (cursor < svg.size() && Space(svg[cursor]))
+                ++cursor;
+            if (cursor == svg.size() || (svg[cursor] != '\'' && svg[cursor] != '"'))
+                return false;
+            const char quote = svg[cursor++];
+            const auto end = svg.find(quote, cursor);
+            if (end == std::string_view::npos)
+                return false;
+            if (!Attribute(name, svg.substr(cursor, end - cursor), numbers, commands))
+                return false;
+            cursor = end + 1;
+            return true;
+        }
+
         /** @brief Copies no XML data; admits at most 24 unique supported attributes on the current tag. */
         [[nodiscard]] bool Attributes(const std::string_view svg, std::size_t &cursor, std::size_t &numbers, std::size_t &commands) {
             std::size_t attributes = 0;
@@ -195,27 +234,15 @@ namespace Horo::Extensions {
                     return false;
                 if (svg[cursor] == '>' || svg[cursor] == '/')
                     break;
-                const std::size_t nameStart = cursor;
-                while (cursor < svg.size() && !Space(svg[cursor]) && svg[cursor] != '=')
-                    ++cursor;
-                const auto name = svg.substr(nameStart, cursor - nameStart);
-                while (cursor < svg.size() && Space(svg[cursor]))
-                    ++cursor;
+                std::string_view name;
+                if (!AttributeName(svg, cursor, name))
+                    return false;
                 if (attributes == names.size() ||
-                    std::ranges::find(names.begin(), names.begin() + attributes, name) != names.begin() + attributes ||
-                    cursor == svg.size() || svg[cursor++] != '=')
+                    std::ranges::find(names.begin(), names.begin() + attributes, name) != names.begin() + attributes)
                     return false;
                 names[attributes++] = name;
-                while (cursor < svg.size() && Space(svg[cursor]))
-                    ++cursor;
-                if (cursor == svg.size() || (svg[cursor] != '\'' && svg[cursor] != '"'))
+                if (!AttributeValue(svg, cursor, name, numbers, commands))
                     return false;
-                const char quote = svg[cursor++];
-                const std::size_t valueStart = cursor;
-                const auto end = svg.find(quote, cursor);
-                if (end == std::string_view::npos || !Attribute(name, svg.substr(valueStart, end - valueStart), numbers, commands))
-                    return false;
-                cursor = end + 1;
             }
             return true;
         }
@@ -228,21 +255,22 @@ namespace Horo::Extensions {
 
         /** @brief Skips only bounded comments and the initial XML declaration, rejecting malformed terminators. */
         [[nodiscard]] XmlMisc Miscellaneous(const std::string_view svg, std::size_t &cursor, const bool root) {
+            using enum XmlMisc;
             if (svg.substr(cursor).starts_with("!--")) {
                 const auto end = svg.find("-->", cursor + 3);
                 if (end == std::string_view::npos)
-                    return XmlMisc::Invalid;
+                    return Invalid;
                 cursor = end + 3;
-                return XmlMisc::Consumed;
+                return Consumed;
             }
             if (svg[cursor] == '?' && !root) {
                 const auto end = svg.find("?>", cursor);
                 if (end == std::string_view::npos || !svg.substr(cursor, end - cursor).starts_with("?xml "))
-                    return XmlMisc::Invalid;
+                    return Invalid;
                 cursor = end + 2;
-                return XmlMisc::Consumed;
+                return Consumed;
             }
-            return XmlMisc::None;
+            return None;
         }
 
         /** @brief Closes exactly the current XML element and marks completion only when the root stack becomes empty. */
@@ -250,8 +278,11 @@ namespace Horo::Extensions {
                                     std::vector<std::string_view> &stack, bool &rootClosed) {
             while (cursor < svg.size() && Space(svg[cursor]))
                 ++cursor;
-            if (stack.empty() || stack.back() != tag || cursor == svg.size() || svg[cursor++] != '>')
+            if (stack.empty() || stack.back() != tag || cursor == svg.size())
                 return false;
+            if (svg[cursor] != '>')
+                return false;
+            ++cursor;
             stack.pop_back();
             if (stack.empty())
                 rootClosed = true;
@@ -268,8 +299,11 @@ namespace Horo::Extensions {
             const bool empty = svg[cursor] == '/';
             if (empty)
                 ++cursor;
-            if (cursor == svg.size() || svg[cursor++] != '>')
+            if (cursor == svg.size())
                 return false;
+            if (svg[cursor] != '>')
+                return false;
+            ++cursor;
             if (!empty) {
                 if (stack.size() == kMaximumDepth)
                     return false;
@@ -279,50 +313,65 @@ namespace Horo::Extensions {
             return true;
         }
 
+        /** @brief Owns the finite XML stack and aggregate geometry budgets for one activation-time admission. */
+        struct SvgAdmissionState final {
+            std::vector<std::string_view> stack;
+            std::size_t cursor{};
+            std::size_t elements{};
+            std::size_t numbers{};
+            std::size_t commands{};
+            bool root{};
+            bool rootClosed{};
+        };
+
+        /** @brief Admits exactly one supported opening/closing element without publishing decoder state. */
+        [[nodiscard]] bool SvgElement(const std::string_view svg, SvgAdmissionState &state) {
+            constexpr std::array tags{"svg",  "g",        "defs",    "path",           "rect",           "circle", "ellipse",
+                                      "line", "polyline", "polygon", "linearGradient", "radialGradient", "stop"};
+            const bool close = svg[state.cursor] == '/';
+            if (close)
+                ++state.cursor;
+            const std::size_t start = state.cursor;
+            while (state.cursor < svg.size() &&
+                   ((svg[state.cursor] >= 'a' && svg[state.cursor] <= 'z') || (svg[state.cursor] >= 'A' && svg[state.cursor] <= 'Z')))
+                ++state.cursor;
+            const auto tag = svg.substr(start, state.cursor - start);
+            if (tag.empty() || std::ranges::find(tags, tag) == tags.end())
+                return false;
+            if (close)
+                return CloseTag(svg, state.cursor, tag, state.stack, state.rootClosed);
+            if (state.elements >= kMaximumElements || state.rootClosed || (!state.root && tag != "svg") || (state.root && tag == "svg"))
+                return false;
+            ++state.elements;
+            state.root = true;
+            return OpenTag(svg, state.cursor, tag, state.stack, state.rootClosed, state.numbers, state.commands);
+        }
+
         /** @brief Validates XML structure and the finite static icon profile before invoking LunaSVG. */
         [[nodiscard]] bool ValidateSvg(const std::string_view svg) {
             if (svg.empty() || svg.size() > kMaximumBytes || svg.find('\0') != std::string_view::npos)
                 return false;
-            constexpr std::array tags{"svg",  "g",        "defs",    "path",           "rect",           "circle", "ellipse",
-                                      "line", "polyline", "polygon", "linearGradient", "radialGradient", "stop"};
-            std::vector<std::string_view> stack;
-            stack.reserve(kMaximumDepth);
-            std::size_t cursor = 0, elements = 0, numbers = 0, commands = 0;
-            bool root = false;
-            bool rootClosed = false;
-            while (cursor < svg.size()) {
-                while (cursor < svg.size() && Space(svg[cursor]))
-                    ++cursor;
-                if (cursor == svg.size())
+            SvgAdmissionState state;
+            state.stack.reserve(kMaximumDepth);
+            while (state.cursor < svg.size()) {
+                while (state.cursor < svg.size() && Space(svg[state.cursor]))
+                    ++state.cursor;
+                if (state.cursor == svg.size())
                     break;
-                if (svg[cursor++] != '<' || cursor == svg.size())
+                if (svg[state.cursor] != '<')
                     return false;
-                const auto misc = Miscellaneous(svg, cursor, root);
+                ++state.cursor;
+                if (state.cursor == svg.size())
+                    return false;
+                const auto misc = Miscellaneous(svg, state.cursor, state.root);
                 if (misc == XmlMisc::Invalid)
                     return false;
                 if (misc == XmlMisc::Consumed)
                     continue;
-                const bool close = svg[cursor] == '/';
-                if (close)
-                    ++cursor;
-                const std::size_t start = cursor;
-                while (cursor < svg.size() && ((svg[cursor] >= 'a' && svg[cursor] <= 'z') || (svg[cursor] >= 'A' && svg[cursor] <= 'Z')))
-                    ++cursor;
-                const auto tag = svg.substr(start, cursor - start);
-                if (tag.empty() || std::ranges::find(tags, tag) == tags.end())
-                    return false;
-                if (close) {
-                    if (!CloseTag(svg, cursor, tag, stack, rootClosed))
-                        return false;
-                    continue;
-                }
-                if (++elements > kMaximumElements || rootClosed || (!root && tag != "svg") || (root && tag == "svg"))
-                    return false;
-                root = true;
-                if (!OpenTag(svg, cursor, tag, stack, rootClosed, numbers, commands))
+                if (!SvgElement(svg, state))
                     return false;
             }
-            return root && rootClosed && stack.empty();
+            return state.root && state.rootClosed && state.stack.empty();
         }
     }  // namespace
 

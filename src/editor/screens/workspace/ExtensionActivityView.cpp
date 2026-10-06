@@ -26,19 +26,21 @@ namespace Horo::Editor {
 
     /** @copydoc ExtensionActivityView::ApplyPendingMove */
     void ExtensionActivityView::ApplyPendingMove() {
-        if (const auto move = std::exchange(pendingMove_, std::nullopt)) {
-            if (move->source.owner == reinterpret_cast<std::uintptr_t>(this) && move->source.revision == revision_ &&
-                revision_ == host_->Registry().Revision()) {
-                const auto entry = std::ranges::find(entries_, move->source.token, &Entry::token);
-                if (entry != entries_.end() && host_->IsLive(entry->projection.surface.descriptor.provider)) {
-                    const auto moved = host_->Registry().MoveActivity(entry->projection.surface.descriptor.provider,
-                                                                      entry->projection.surface.descriptor.id, move->target);
-                    if (moved.HasValue() && entry->projection.surface.open)
-                        nativePanelClear_[static_cast<std::size_t>(move->target.side)] = entry->token;
-                }
+        const auto move = std::exchange(pendingMove_, std::nullopt);
+        if (!move)
+            return;
+        if (move->source.owner == reinterpret_cast<std::uintptr_t>(this) && move->source.revision == revision_ &&
+            revision_ == host_->Registry().Revision()) {
+            const auto entry = std::ranges::find(entries_, move->source.token, &Entry::token);
+            if (entry != entries_.end() && host_->IsLive(entry->projection.surface.descriptor.provider)) {
+                const auto moved = host_->Registry().MoveActivity(entry->projection.surface.descriptor.provider,
+                                                                  entry->projection.surface.descriptor.id, move->target);
+                if (moved.HasValue() && entry->projection.surface.open)
+                    nativePanelClear_[static_cast<std::size_t>(move->target.side)] = entry->token;
             }
-            host_->Update();
         }
+        // Even rejected/stale commands pump the existing owner update boundary.
+        host_->Update();
     }
 
     /** @copydoc ExtensionActivityView::PrepareEntry */
@@ -49,43 +51,55 @@ namespace Horo::Editor {
                    entry.projection.surface.descriptor.provider == projection.surface.descriptor.provider;
         });
         Entry entry{.projection = projection};
-        entry.token = previous != entries_.end() ? previous->token : nextToken_++;
-        if (previous != entries_.end()) {
+        PrepareResources(entry, previous != entries_.end() ? &*previous : nullptr);
+        const auto &descriptor = projection.surface.descriptor;
+        entry.label = host_->LocalizedText(descriptor.provider, descriptor.labelLocalizationKey, locale);
+        entry.tooltip = host_->LocalizedText(descriptor.provider, descriptor.tooltipLocalizationKey, locale);
+        PrepareNodeText(entry, locale);
+        return entry;
+    }
+
+    /** @copydoc ExtensionActivityView::PrepareResources */
+    void ExtensionActivityView::PrepareResources(Entry &entry, Entry *previous) {
+        entry.token = previous != nullptr ? previous->token : nextToken_++;
+        if (previous != nullptr) {
             entry.texture = std::exchange(previous->texture, 0);
-            entry.focusPending = previous->focusPending ||
-                                 (projection.surface.focused &&
-                                  (!previous->projection.surface.focused || !previous->projection.surface.open ||
-                                   previous->projection.surface.descriptor.activity->side != projection.surface.descriptor.activity->side));
+            entry.focusPending =
+                previous->focusPending ||
+                (entry.projection.surface.focused &&
+                 (!previous->projection.surface.focused || !previous->projection.surface.open ||
+                  previous->projection.surface.descriptor.activity->side != entry.projection.surface.descriptor.activity->side));
         } else {
-            entry.focusPending = projection.surface.focused;
-            if (renderer_ && projection.icon) {
-                const auto &icon = *projection.icon;
+            entry.focusPending = entry.projection.surface.focused;
+            if (renderer_ && entry.projection.icon) {
+                const auto &icon = *entry.projection.icon;
                 if (auto uploaded = renderer_->CreateTexture({icon.width, icon.height, icon.pixels}); uploaded.HasValue())
                     entry.texture = uploaded.Value();
             }
         }
-        if (projection.surface.open &&
-            (previous == entries_.end() || !previous->projection.surface.open ||
-             previous->projection.surface.descriptor.activity->side != projection.surface.descriptor.activity->side))
-            nativePanelClear_[static_cast<std::size_t>(projection.surface.descriptor.activity->side)] = entry.token;
-        const auto &descriptor = projection.surface.descriptor;
-        entry.label = host_->LocalizedText(descriptor.provider, descriptor.labelLocalizationKey, locale);
-        entry.tooltip = host_->LocalizedText(descriptor.provider, descriptor.tooltipLocalizationKey, locale);
-        if (projection.surface.form) {
-            for (const auto &node : projection.surface.form->nodes) {
+        if (entry.projection.surface.open &&
+            (previous == nullptr || !previous->projection.surface.open ||
+             previous->projection.surface.descriptor.activity->side != entry.projection.surface.descriptor.activity->side))
+            nativePanelClear_[static_cast<std::size_t>(entry.projection.surface.descriptor.activity->side)] = entry.token;
+    }
+
+    /** @copydoc ExtensionActivityView::PrepareNodeText */
+    void ExtensionActivityView::PrepareNodeText(Entry &entry, const std::string &locale) {
+        if (entry.projection.surface.form) {
+            for (const auto &node : entry.projection.surface.form->nodes) {
                 const auto &base = Extensions::EditorUiNodeBaseOf(node);
-                std::string text{host_->LocalizedText(descriptor.provider, base.label.value, locale)};
+                std::string text{host_->LocalizedText(entry.projection.surface.descriptor.provider, base.label.value, locale)};
                 std::visit([&](const auto &typed) {
                     if constexpr (requires { typed.text; }) {
-                        text = typed.text.kind == Extensions::EditorUiTextKind::TechnicalText
-                                   ? typed.text.value
-                                   : std::string{host_->LocalizedText(descriptor.provider, typed.text.value, locale)};
+                        text =
+                            typed.text.kind == Extensions::EditorUiTextKind::TechnicalText
+                                ? typed.text.value
+                                : std::string{host_->LocalizedText(entry.projection.surface.descriptor.provider, typed.text.value, locale)};
                     }
                 }, node.payload);
                 entry.nodeText.push_back(std::move(text));
             }
         }
-        return entry;
     }
 
     /** @copydoc ExtensionActivityView::DrawPlacementMenu */
@@ -158,8 +172,8 @@ namespace Horo::Editor {
         });
         std::int32_t ordinal{};
         for (std::size_t index = 0; index < next.size(); ++index) {
-            const auto &activity = *next[index].projection.surface.descriptor.activity;
-            if (index == 0 || activity.side != next[index - 1].projection.surface.descriptor.activity->side ||
+            if (const auto &activity = *next[index].projection.surface.descriptor.activity;
+                index == 0 || activity.side != next[index - 1].projection.surface.descriptor.activity->side ||
                 activity.group != next[index - 1].projection.surface.descriptor.activity->group)
                 ordinal = 0;
             next[index].ordinal = ordinal++;
@@ -195,22 +209,21 @@ namespace Horo::Editor {
     }
 
     void ExtensionActivityView::AcceptMove(const Extensions::EditorActivityPlacement placement) {
-        if (ImGui::BeginDragDropTarget()) {
-            if (const auto *payload = ImGui::AcceptDragDropPayload("HORO_EXTENSION_ACTIVITY")) {
-                if (payload->DataSize == sizeof(DragPayload)) {
-                    DragPayload source;
-                    std::memcpy(&source, payload->Data, sizeof(source));
-                    if (source.owner == reinterpret_cast<std::uintptr_t>(this) && source.revision == revision_)
-                        pendingMove_ = PendingMove{source, placement};
-                }
-            }
-            ImGui::EndDragDropTarget();
+        if (!ImGui::BeginDragDropTarget())
+            return;
+        if (const auto *payload = ImGui::AcceptDragDropPayload("HORO_EXTENSION_ACTIVITY");
+            payload && payload->DataSize == sizeof(DragPayload)) {
+            DragPayload source;
+            std::memcpy(&source, payload->Data, sizeof(source));
+            if (source.owner == reinterpret_cast<std::uintptr_t>(this) && source.revision == revision_)
+                pendingMove_ = PendingMove{source, placement};
         }
+        ImGui::EndDragDropTarget();
     }
 
     std::optional<Extensions::EditorActivitySide> ExtensionActivityView::TakeNativePanelClear() noexcept {
         for (std::size_t side = 0; side < nativePanelClear_.size(); ++side) {
-            if (const auto token = std::exchange(nativePanelClear_[side], std::nullopt)) {
+            if (const auto token = std::exchange(nativePanelClear_[side], std::nullopt); token.has_value()) {
                 const auto entry = std::ranges::find(entries_, *token, &Entry::token);
                 if (entry != entries_.end() && host_ && host_->IsLive(entry->projection.surface.descriptor.provider))
                     return static_cast<Extensions::EditorActivitySide>(side);
@@ -227,6 +240,16 @@ namespace Horo::Editor {
                    surface.descriptor.activity->group == group &&
                    (surface.descriptor.activity->side == Extensions::EditorActivitySide::Right) == right;
         }));
+    }
+
+    /** @copydoc ExtensionActivityView::ActivateEntry */
+    bool ExtensionActivityView::ActivateEntry(const Entry &entry) {
+        const auto &surface = entry.projection.surface;
+        const auto toggled = host_->Registry().ToggleActivity(surface.descriptor.provider, surface.descriptor.id);
+        if (toggled.HasError())
+            return false;
+        nativePanelClear_[static_cast<std::size_t>(surface.descriptor.activity->side)] = entry.token;
+        return true;
     }
 
     bool ExtensionActivityView::DrawItems(const bool right, const std::size_t group, ImVec2 origin, const float width, const float bottom) {
@@ -250,10 +273,7 @@ namespace Horo::Editor {
                                     .indicatorOnRight = right,
                                     .badgeCount = surface.activity.badgeCount},
                                    context_.theme.fonts)) {
-                if (host_->Registry().ToggleActivity(surface.descriptor.provider, surface.descriptor.id).HasValue()) {
-                    nativePanelClear_[static_cast<std::size_t>(surface.descriptor.activity->side)] = entry.token;
-                    changed = true;
-                }
+                changed = ActivateEntry(entry) || changed;
             }
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoDisableHover)) {
                 const DragPayload source{reinterpret_cast<std::uintptr_t>(this), entry.token, revision_};
@@ -293,6 +313,31 @@ namespace Horo::Editor {
                 static_cast<void>(host_->Registry().Close(entry.projection.surface.descriptor.id));
     }
 
+    /** @copydoc ExtensionActivityView::DrawForm */
+    void ExtensionActivityView::DrawForm(const Entry &entry) {
+        const auto &surface = entry.projection.surface;
+        if (!surface.form)
+            return;
+        for (std::size_t index = 0; index < surface.form->nodes.size(); ++index) {
+            const auto &node = surface.form->nodes[index];
+            const auto &base = Extensions::EditorUiNodeBaseOf(node);
+            ImGui::PushID(base.id.value.c_str());
+            if (const auto *action = std::get_if<Extensions::EditorUiActionNode>(&node.payload)) {
+                if (Ui::Button({.label = entry.nodeText[index].c_str(),
+                                .enabled = base.enabled,
+                                .font = context_.theme.fonts.sans,
+                                .style = {.width = Ui::StyleWidth::FillAvailable}}))
+                    static_cast<void>(host_->QueueAction(surface.descriptor.provider, surface.descriptor.id, base.id.value,
+                                                         action->action.value, entry.projection.revision));
+            } else if (std::holds_alternative<Extensions::EditorUiContainerNode>(node.payload)) {
+                if (!entry.nodeText[index].empty())
+                    Ui::SectionTitle(entry.nodeText[index].c_str(), context_.theme.fonts);
+            } else
+                Ui::Hint(entry.nodeText[index].c_str(), context_.theme.fonts);
+            ImGui::PopID();
+        }
+    }
+
     void ExtensionActivityView::DrawDrawer(const Extensions::EditorActivitySide side, const ImVec2 position, const ImVec2 size) {
         if (size.x <= 0 || size.y <= 0)
             return;
@@ -309,9 +354,11 @@ namespace Horo::Editor {
                 entry.focusPending = false;
             }
             ImGui::PushID(surface.descriptor.id.c_str());
-            const char *window = side == Extensions::EditorActivitySide::Left    ? "##ExtensionLeftDrawer"
-                                 : side == Extensions::EditorActivitySide::Right ? "##ExtensionRightDrawer"
-                                                                                 : "##ExtensionBottomDrawer";
+            const char *window = "##ExtensionBottomDrawer";
+            if (side == Extensions::EditorActivitySide::Left)
+                window = "##ExtensionLeftDrawer";
+            else if (side == Extensions::EditorActivitySide::Right)
+                window = "##ExtensionRightDrawer";
             ImGui::Begin(window, nullptr,
                          ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoSavedSettings);
@@ -319,26 +366,7 @@ namespace Horo::Editor {
             ImGui::SameLine((std::max)(0.0F, ImGui::GetWindowContentRegionMax().x - Ui::ScaledLayoutValue(28.0F)));
             if (Ui::IconCloseButton("##CloseDrawer", {24, 24}))
                 static_cast<void>(host_->Registry().Close(surface.descriptor.id));
-            if (surface.form) {
-                for (std::size_t index = 0; index < surface.form->nodes.size(); ++index) {
-                    const auto &node = surface.form->nodes[index];
-                    const auto &base = Extensions::EditorUiNodeBaseOf(node);
-                    ImGui::PushID(base.id.value.c_str());
-                    if (const auto *action = std::get_if<Extensions::EditorUiActionNode>(&node.payload)) {
-                        if (Ui::Button({.label = entry.nodeText[index].c_str(),
-                                        .enabled = base.enabled,
-                                        .font = context_.theme.fonts.sans,
-                                        .style = {.width = Ui::StyleWidth::FillAvailable}}))
-                            static_cast<void>(host_->QueueAction(surface.descriptor.provider, surface.descriptor.id, base.id.value,
-                                                                 action->action.value, entry.projection.revision));
-                    } else if (std::holds_alternative<Extensions::EditorUiContainerNode>(node.payload)) {
-                        if (!entry.nodeText[index].empty())
-                            Ui::SectionTitle(entry.nodeText[index].c_str(), context_.theme.fonts);
-                    } else
-                        Ui::Hint(entry.nodeText[index].c_str(), context_.theme.fonts);
-                    ImGui::PopID();
-                }
-            }
+            DrawForm(entry);
             ImGui::End();
             ImGui::PopID();
         }
