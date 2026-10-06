@@ -413,6 +413,18 @@ Step down:
 - if a valid ground is found, snap to it
 - preserve momentum if the drop is significant
 
+The CHR-002.4 implementation uses `maximumStepHeightMeters` as the maximum
+physical rise and downward snap, excluding the maintained skin gap. A zero limit
+disables ascent and drop snapping while retaining touching-floor classification.
+A blocked lower-capsule contact first verifies touching walkable support, then
+casts upward, forward and downward. The nearest blocking landing must be walkable,
+its actual surface elevation must fit the height limit, and the complete landing
+capsule must pass overlap clearance. Rejected candidates leave ordinary movement
+unchanged; rounded lower contacts cannot manufacture uphill projection after a
+failed step. All casts and clearance probes consume the shared fixed-tick query
+budget and propagate malformed evidence, capacity and lifecycle failure before
+publication. No native Character controller or unbounded retry participates.
+
 Step behavior is configurable:
 
 - `maxStepHeight`

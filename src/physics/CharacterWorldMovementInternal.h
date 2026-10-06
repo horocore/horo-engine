@@ -295,7 +295,7 @@ namespace Horo::Character::Detail {
 
     /** @brief Computes the bounded downward probe length from the controller's snap policy. */
     [[nodiscard]] float GroundProbeDistance(const CharacterControllerDescriptor &descriptor) noexcept {
-        const float snapDistance = std::max(descriptor.skinWidthMeters, descriptor.maximumStepHeightMeters);
+        const float snapDistance = descriptor.maximumStepHeightMeters + descriptor.skinWidthMeters;
         return snapDistance + descriptor.skinWidthMeters + GroundDistanceTolerance;
     }
 
@@ -304,7 +304,7 @@ namespace Horo::Character::Detail {
                                                                    const CharacterControllerDescriptor &descriptor) {
         const float slopeRadians = descriptor.maximumSlopeDegrees * Math::Pi / 180.0F;
         const float walkableCosine = std::cos(slopeRadians);
-        const float snapDistance = std::max(descriptor.skinWidthMeters, descriptor.maximumStepHeightMeters);
+        const float snapDistance = descriptor.maximumStepHeightMeters + descriptor.skinWidthMeters;
         for (std::uint32_t index{}; index < evidence.hitCount; ++index) {
             const CharacterSweepHit &hit = evidence.hits[index];
             if (!IsBlockingSweepHit(hit, descriptor) || hit.distanceMeters > snapDistance + GroundDistanceTolerance ||
@@ -393,6 +393,130 @@ namespace Horo::Character::Detail {
         return Result<void>::Success();
     }
 
+    /** @brief Executes a budgeted step cast, validating copied evidence and owner liveness before reduction. */
+    [[nodiscard]] Result<CharacterSweepProbeResult> ProbeStep(auto &impl, const CharacterMovementRequest &command,
+                                                              const CharacterFixedTickInput &input,
+                                                              const CharacterControllerDescriptor &descriptor, const Math::Vec3 position,
+                                                              const Math::Vec3 direction, const float distance,
+                                                              const std::uint32_t iteration) {
+        const CharacterSweepProbeRequest request{command.controller,
+                                                 impl.descriptor.sceneGeneration,
+                                                 impl.descriptor.identity,
+                                                 impl.descriptor.physicsWorld,
+                                                 descriptor.capsule,
+                                                 position,
+                                                 descriptor.up,
+                                                 direction,
+                                                 distance,
+                                                 descriptor.collisionProfile,
+                                                 descriptor.queryChannel,
+                                                 iteration,
+                                                 descriptor.selectors};
+        if (const auto budget = ReserveTickQuery(impl); budget.HasError())
+            return Result<CharacterSweepProbeResult>::Failure(budget.ErrorValue());
+        if (input.metrics != nullptr)
+            ++input.metrics->snapshot.queries;
+        auto probe = input.query.sweep(input.query.context, request);
+        if (const auto valid = ValidateTickQueryContinuation(impl, probe); valid.HasError())
+            return Result<CharacterSweepProbeResult>::Failure(valid.ErrorValue());
+        auto evidence = std::move(probe).Value();
+        if (const auto valid = ValidateCharacterSweepProbeResult(evidence, request); valid.HasError())
+            return Result<CharacterSweepProbeResult>::Failure(valid.ErrorValue());
+        std::ranges::sort(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, SweepHitLess);
+        return Result<CharacterSweepProbeResult>::Success(std::move(evidence));
+    }
+
+    /** @brief Tries a complete clear up/forward/down path without mutating the ordinary movement on rejection. */
+    [[nodiscard]] Result<bool> TryCapsuleStep(auto &impl, CharacterMovementResult &result, const CharacterMovementRequest &command,
+                                              const CharacterFixedTickInput &input, const CharacterControllerDescriptor &descriptor,
+                                              SweepMotionState &motion) {
+        const auto rejected = Result<bool>::Success(false);
+        if (descriptor.maximumStepHeightMeters <= 0.0F || !MaySnapToGround(command, descriptor.up))
+            return rejected;
+        const float vertical = Math::Dot(motion.remaining, descriptor.up);
+        if (vertical > GroundDistanceTolerance)
+            return rejected;
+        const Math::Vec3 horizontal = motion.remaining - descriptor.up * vertical;
+        const float distance = Math::Length(horizontal);
+        if (distance <= descriptor.minimumMoveDistanceMeters)
+            return rejected;
+        const Math::Vec3 down = -descriptor.up;
+        // Starting contact is mandatory: an airborne character cannot use a side hit as a stair.
+        const auto ground = ProbeStep(impl, command, input, descriptor, motion.position, down,
+                                      descriptor.skinWidthMeters + GroundDistanceTolerance, motion.iteration);
+        if (ground.HasError())
+            return Result<bool>::Failure(ground.ErrorValue());
+        const auto groundBlock = SelectNearestSweepBlock(ground.Value(), down, descriptor.skinWidthMeters, descriptor);
+        const float cosine = std::cos(descriptor.maximumSlopeDegrees * Math::Pi / 180.0F);
+        if (!groundBlock.blocked || groundBlock.nearest > descriptor.skinWidthMeters + GroundDistanceTolerance)
+            return rejected;
+        const auto support = SelectGroundHit(ground.Value(), descriptor);
+        if (!support.has_value() || support->distanceMeters > groundBlock.nearest + GroundDistanceTolerance)
+            return rejected;
+        const float lift = descriptor.maximumStepHeightMeters;
+        const auto up = ProbeStep(impl, command, input, descriptor, motion.position, descriptor.up, lift + descriptor.skinWidthMeters,
+                                  motion.iteration);
+        if (up.HasError())
+            return Result<bool>::Failure(up.ErrorValue());
+        if (SelectNearestSweepBlock(up.Value(), descriptor.up, lift + descriptor.skinWidthMeters, descriptor).blocked)
+            return rejected;
+        const Math::Vec3 raised = motion.position + descriptor.up * lift;
+        const auto forward = ProbeStep(impl, command, input, descriptor, raised, horizontal / distance,
+                                       distance + descriptor.skinWidthMeters, motion.iteration);
+        if (forward.HasError())
+            return Result<bool>::Failure(forward.ErrorValue());
+        if (SelectNearestSweepBlock(forward.Value(), horizontal / distance, distance + descriptor.skinWidthMeters, descriptor).blocked)
+            return rejected;
+        const Math::Vec3 advanced = raised + horizontal;
+        const auto landing = ProbeStep(impl, command, input, descriptor, advanced, down,
+                                       lift + descriptor.skinWidthMeters + GroundDistanceTolerance, motion.iteration);
+        if (landing.HasError())
+            return Result<bool>::Failure(landing.ErrorValue());
+        const auto block = SelectNearestSweepBlock(landing.Value(), down, lift + descriptor.skinWidthMeters, descriptor);
+        if (!block.blocked)
+            return rejected;
+        const auto floor = SelectGroundHit(landing.Value(), descriptor);
+        if (!floor.has_value() || floor->distanceMeters > block.nearest + GroundDistanceTolerance ||
+            !IsWalkableGroundNormal(floor->normal, descriptor.up, cosine))
+            return rejected;
+        const float descent = std::max(0.0F, floor->distanceMeters - descriptor.skinWidthMeters);
+        const Math::Vec3 candidate = advanced + down * descent;
+        const float rise = Math::Dot(candidate - motion.position, descriptor.up);
+        // Check the actual contacted surface too: a rounded capsule can touch a high ledge
+        // while its root remains below the obstacle's top.
+        const float bottom = descriptor.capsule.cylindricalHalfHeightMeters + descriptor.capsule.radiusMeters;
+        const float surfaceRise = Math::Dot(floor->point - motion.position, descriptor.up) + bottom + descriptor.skinWidthMeters;
+        if (rise <= GroundDistanceTolerance || rise > lift + GroundDistanceTolerance || surfaceRise > lift + GroundDistanceTolerance)
+            return rejected;
+        const CharacterOverlapProbeRequest clearance{command.controller,
+                                                     impl.descriptor.sceneGeneration,
+                                                     impl.descriptor.identity,
+                                                     impl.descriptor.physicsWorld,
+                                                     descriptor.capsule,
+                                                     candidate,
+                                                     descriptor.up,
+                                                     descriptor.collisionProfile,
+                                                     descriptor.queryChannel,
+                                                     motion.iteration,
+                                                     descriptor.selectors};
+        if (const auto budget = ReserveTickQuery(impl); budget.HasError())
+            return Result<bool>::Failure(budget.ErrorValue());
+        if (input.metrics != nullptr)
+            ++input.metrics->snapshot.queries;
+        const auto overlap = input.query.overlap(input.query.context, clearance);
+        if (const auto valid = ValidateTickQueryContinuation(impl, overlap); valid.HasError())
+            return Result<bool>::Failure(valid.ErrorValue());
+        if (const auto valid = ValidateCharacterOverlapProbeResult(overlap.Value()); valid.HasError())
+            return Result<bool>::Failure(valid.ErrorValue());
+        if (overlap.Value().overlapCount != 0)
+            return rejected;
+        motion.position = candidate;
+        motion.remaining = {};
+        result.collisions = result.collisions | CharacterCollisionFlags::Step;
+        PublishGroundSupport(result, *floor, descriptor, descent);
+        return Result<bool>::Success(true);
+    }
+
     /** @brief Resolves one bounded sweep query and returns whether another iteration may continue. */
     [[nodiscard]] Result<bool> ResolveCapsuleSweepIteration(auto &impl, CharacterMovementResult &result,
                                                             const CharacterMovementRequest &command, const CharacterFixedTickInput &input,
@@ -434,10 +558,34 @@ namespace Horo::Character::Detail {
             motion.remaining = {};
             return Result<bool>::Success(false);
         }
+        const float lowerCenter = -descriptor.capsule.cylindricalHalfHeightMeters;
+        const bool lowObstacle =
+            std::ranges::any_of(evidence.hits.begin(), evidence.hits.begin() + evidence.hitCount, [&](const CharacterSweepHit &hit) {
+            return IsBlockingSweepHit(hit, descriptor) && hit.distanceMeters <= selection.nearest + GroundDistanceTolerance &&
+                   Math::Dot(hit.normal, direction) < -GroundNormalTolerance &&
+                   Math::Dot(hit.point - motion.position, descriptor.up) <= lowerCenter + GroundDistanceTolerance;
+        });
+        if (lowObstacle) {
+            const auto step = TryCapsuleStep(impl, result, command, input, descriptor, motion);
+            if (step.HasError())
+                return Result<bool>::Failure(step.ErrorValue());
+            if (step.Value())
+                return Result<bool>::Success(false);
+        }
         const float seconds = static_cast<float>(input.fixedDelta.ToNanoseconds()) / 1'000'000'000.0F;
         const float maximumAscent =
             std::max(0.0F, Math::Dot(command.desiredVelocityMetersPerSecond.value_or(Math::Vec3{}), descriptor.up)) * seconds;
         ApplySweepBlock(result, evidence, descriptor, direction, selection.nearest, maximumAscent, motion);
+        if (lowObstacle && Math::Dot(motion.remaining, descriptor.up) > maximumAscent) {
+            motion.remaining -= descriptor.up * (Math::Dot(motion.remaining, descriptor.up) - maximumAscent);
+            // Flattening a curved contact projection may point back into the obstacle.
+            for (std::uint32_t index{}; index < evidence.hitCount; ++index) {
+                const auto &hit = evidence.hits[index];
+                if (IsBlockingSweepHit(hit, descriptor) && hit.distanceMeters <= selection.nearest + GroundDistanceTolerance &&
+                    Math::Dot(motion.remaining, hit.normal) < -GroundNormalTolerance)
+                    motion.remaining = {};
+            }
+        }
         return Result<bool>::Success(true);
     }
 
