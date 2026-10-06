@@ -54,9 +54,9 @@ namespace Horo::Extensions {
             if (!AllowsText(context, form.title) || !AllowsText(context, form.description))
                 return false;
             return std::ranges::all_of(form.nodes, [&context](const auto &node) {
-                const auto &base = EditorUiNodeBaseOf(node);
-                if (!AllowsText(context, base.label) || !AllowsText(context, base.description) ||
-                    !AllowsText(context, base.accessibleLabel))
+                if (const auto &base = EditorUiNodeBaseOf(node); !AllowsText(context, base.label) ||
+                                                                 !AllowsText(context, base.description) ||
+                                                                 !AllowsText(context, base.accessibleLabel))
                     return false;
                 return AllowsPayload(context, node.payload);
             });
@@ -132,7 +132,7 @@ namespace Horo::Extensions {
         }
 
         /** @brief Enforces destination exclusivity without allocations after placement admission. */
-        void CloseActivityPeers(EditorSurfaceRegistryState &state, const EditorActivitySide side,
+        void CloseActivityPeers(const EditorSurfaceRegistryState &state, const EditorActivitySide side,
                                 const EditorSurfaceState *retained = nullptr) {
             for (const auto &candidate : state.surfaces) {
                 if (candidate.get() == retained || !candidate->descriptor.activity || ActivityPlacementOf(*candidate).side != side)
@@ -329,7 +329,7 @@ namespace Horo::Extensions {
         auto targetPeers = CollectActivityPeers(*state_, destination.side, destination.group);
         if (static_cast<std::size_t>(destination.order) > targetPeers.size())
             return Failure(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
-        std::size_t insertion = static_cast<std::size_t>(destination.order);
+        auto insertion = static_cast<std::size_t>(destination.order);
         if (const auto found = std::ranges::find(targetPeers, surface); found != targetPeers.end()) {
             if (static_cast<std::size_t>(found - targetPeers.begin()) < insertion)
                 --insertion;
