@@ -162,6 +162,8 @@ typedef struct HoroEditorActivityDescriptor HoroEditorActivityDescriptor;
  * @details Reset/revocation makes publication fail closed. No worker may call publish; scheduled action results use their borrowed sink.
  */
 struct HoroEditorActivitySessionApi {
+    // Admission and the C package fixture validate this prefix before accessing the session table.
+    // cppcheck-suppress unusedStructMember
     uint32_t structSize;
     // Read across the C/C++ package boundary by horo_extension_load ABI negotiation in EditorActivityModule.c.
     // cppcheck-suppress unusedStructMember
