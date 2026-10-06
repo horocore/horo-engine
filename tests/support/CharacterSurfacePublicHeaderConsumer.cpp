@@ -3,6 +3,7 @@
 #include <type_traits>
 
 static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterGroundSurfaceFact>);
+static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterCollisionSelectors>);
 static_assert(std::is_trivially_copyable_v<Horo::Character::CharacterSurfaceContact>);
 
 int main() {

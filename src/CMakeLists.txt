@@ -980,6 +980,7 @@ target_link_libraries(HoroAudioMetrics PUBLIC HoroEngine::AudioCommands HoroEngi
 
 add_library(HoroPhysics STATIC
         physics/CharacterControllerContracts.cpp
+        physics/CharacterPhysicsQueryAdapter.cpp
         physics/CharacterDiagnostics.cpp
         physics/CharacterErrors.cpp
         physics/CharacterMetrics.cpp
