@@ -1629,6 +1629,7 @@ add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabDocumentSerialization.cpp
         runtime/prefab/PrefabSceneIdentityRemap.cpp
         runtime/prefab/PrefabSourceResolver.cpp
+        runtime/prefab/PrefabTemplateCook.cpp
 )
 add_library(HoroEngine::PrefabAuthoring ALIAS HoroPrefabAuthoring)
 target_compile_features(HoroPrefabAuthoring PUBLIC cxx_std_20)

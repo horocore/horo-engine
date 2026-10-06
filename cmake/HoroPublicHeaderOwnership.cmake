@@ -847,6 +847,7 @@ Horo/Prefab/PrefabDependencyGraph.h
     Horo/Prefab/PrefabDocument.h
     Horo/Prefab/PrefabSceneIdentityRemap.h
     Horo/Prefab/PrefabSourceResolver.h
+    Horo/Prefab/PrefabTemplateCook.h
 )
 
 horo_configure_target_header_boundary(HoroSceneCellPayload PUBLIC_HEADERS

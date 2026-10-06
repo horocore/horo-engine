@@ -1,5 +1,6 @@
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Prefab/PrefabErrors.h"
+#include "Horo/Prefab/PrefabTemplateCook.h"
 #include "Horo/Prefab/PrefabTemplateProvider.h"
 #include "PrefabTestUtils.h"
 
@@ -433,5 +434,41 @@ namespace Horo::Prefab {
         fixture.Commit();
         CHECK(fixture.scenes.ActiveScene()->SlotCount() == 0);
         CHECK(fixture.scenes.TakeOperationError().has_value());
+    }
+
+    TEST_CASE("Source cooked template prepares through the existing immutable provider", "[prefab][provider][template-cook]") {
+        Fixture fixture;
+        PrefabDocumentData source;
+        source.projectVersion = Application::ParseHoroVersion("1.2.3").Value();
+        source.assetId = Test::Asset();
+        source.objects = {{.localId = {0}, .name = "Root"}, {.localId = {7}, .parentLocalId = LocalObjectId{0}, .name = "Child"}};
+        source.objects[1].localTransform.translation = {4, 5, 6};
+        source.referencedAssets = {Test::Asset(2)};
+        auto document = PrefabDocument::Create(std::move(source), Profile());
+        REQUIRE(document.HasValue());
+        const auto canonical = document.Value().SerializeCanonical().Value();
+        const PrefabSourceRevision revision{document.Value().Data().projectVersion,
+                                            ComputeSha256(std::as_bytes(std::span(canonical.data(), canonical.size())))};
+        auto sources = BuildPrefabSourceResolverSnapshot(fixture.registry.Snapshot(), {{std::move(document).Value(), revision}}, Profile());
+        REQUIRE(sources.HasValue());
+        const PrefabTemplateCookResource resource{Test::Asset(2), fixture.dependency};
+        auto cooked =
+            CookPrefabTemplate(sources.Value(), fixture.registry.Snapshot(), Test::Asset(), std::span{&resource, 1}, Target(), Profile());
+        REQUIRE(cooked.HasValue());
+        std::vector<std::uint8_t> payload;
+        for (const auto byte : cooked.Value().Bytes())
+            payload.push_back(std::to_integer<std::uint8_t>(byte));
+        fixture.root = Envelope(Test::Asset(), "core.prefab", std::move(payload));
+        fixture.bytes.memory.Insert(Test::Asset(), fixture.root);
+        auto lease = fixture.Ready();
+        REQUIRE(lease.Template() != nullptr);
+        CHECK(lease.Template()->Data() == cooked.Value().Data());
+        REQUIRE(lease.Dependencies().size() == 1);
+        CHECK(lease.Dependencies()[0].metadata.id == Test::Asset(2));
+        REQUIRE(fixture.provider.QueuePreparedGroup(lease, std::vector<Runtime::RuntimeComponentSet>(2)).HasValue());
+        fixture.Commit();
+        CHECK(fixture.scenes.ActiveScene()->SlotCount() == 2);
+        fixture.provider.Shutdown();
+        CHECK(lease.Template()->Data() == cooked.Value().Data());
     }
 }  // namespace Horo::Prefab
