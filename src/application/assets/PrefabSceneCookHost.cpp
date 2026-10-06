@@ -3,6 +3,36 @@
 #include <algorithm>
 
 namespace Horo::Application {
+    namespace {
+        /** @brief Selects resources and explicit template roots without changing captured source closure or revision authority. */
+        Result<Assets::AssetRegistrySnapshot> SelectRuntimeRecords(const Assets::AssetCookInputSnapshot &inputs,
+                                                                   const std::span<const Assets::AssetId> runtimeRoots) {
+            std::vector<Assets::AssetRecord> runtimeRecords;
+            for (const auto &record : inputs.Registry().Records()) {
+                if (record.type.Value() != "core.prefab" || std::ranges::find(runtimeRoots, record.id) != runtimeRoots.end())
+                    runtimeRecords.push_back(record);
+            }
+            Assets::AssetRegistry selected;
+            if (selected.Publish(std::move(runtimeRecords)).status != Assets::AssetRegistryBuildStatus::Complete)
+                return Result<Assets::AssetRegistrySnapshot>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+            return Result<Assets::AssetRegistrySnapshot>::Success(selected.Snapshot());
+        }
+
+        /** @brief Borrows capture authorities only during the joined cook; rechecks the live registry and host before publication. */
+        Result<void> ValidateCurrentHost(const PrefabSceneCookRequest &request, const Assets::AssetRegistry &registry,
+                                         const ProjectCompatibilityInspector &compatibility, const PrefabCookDetail::HostCapture &capture,
+                                         const CancellationToken &cancellation, const Release::ReleaseExecutionPlan *releasePlan,
+                                         const Assets::AssetRegistryRevision capturedRevision) {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
+            if (registry.Snapshot().Revision() != capturedRevision)
+                return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Stale));
+            if (auto verified = PrefabCookDetail::VerifyHost(request, capture, compatibility, releasePlan); verified.HasError())
+                return verified;
+            return request.assets.validateHostInputs ? request.assets.validateHostInputs() : Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc PrefabSceneCookHost::PrefabSceneCookHost */
     PrefabSceneCookHost::PrefabSceneCookHost(JobSystem &jobs, std::shared_ptr<const Assets::CookerCatalogSnapshot> catalog,
                                              const Assets::AssetRegistry &registry, const ProjectCompatibilityInspector &compatibility,
@@ -51,28 +81,16 @@ namespace Horo::Application {
         auto composed = PrefabCookDetail::PrepareCatalog(request, host.Value(), *inputs, limits.Value(), *catalog_, cancellation);
         if (composed.HasError())
             return Result<Assets::AssetCookReport>::Failure(composed.ErrorValue());
-        std::vector<Assets::AssetRecord> runtimeRecords;
-        for (const auto &record : inputs->Registry().Records()) {
-            if (record.type.Value() != "core.prefab" ||
-                std::ranges::find(request.runtimePrefabRoots, record.id) != request.runtimePrefabRoots.end())
-                runtimeRecords.push_back(record);
-        }
-        Assets::AssetRegistry selected;
-        if (selected.Publish(std::move(runtimeRecords)).status != Assets::AssetRegistryBuildStatus::Complete)
-            return Result<Assets::AssetCookReport>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+        auto selected = SelectRuntimeRecords(*inputs, request.runtimePrefabRoots);
+        if (selected.HasError())
+            return Result<Assets::AssetCookReport>::Failure(selected.ErrorValue());
         Assets::AssetCookRequest cook = request.assets;
-        cook.registry = selected.Snapshot();
+        cook.registry = std::move(selected).Value();
         cook.pinnedInputs = inputs;
         cook.dependentPhase = composed.Value().templates;
         // Capture references are synchronous: AssetCook joins all accepted work before returning, and projectLease outlives it.
         cook.validateHostInputs = [this, &request, &host, &cancellation, releasePlan, capturedRevision] {
-            if (cancellation.IsCancellationRequested())
-                return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Cancelled));
-            if (registry_.Snapshot().Revision() != capturedRevision)
-                return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Stale));
-            if (auto verified = PrefabCookDetail::VerifyHost(request, host.Value(), compatibility_, releasePlan); verified.HasError())
-                return verified;
-            return request.assets.validateHostInputs ? request.assets.validateHostInputs() : Result<void>::Success();
+            return ValidateCurrentHost(request, registry_, compatibility_, host.Value(), cancellation, releasePlan, capturedRevision);
         };
         Assets::AssetCookService operation{jobs_, composed.Value().catalog};
         return operation.Cook(cook, cancellation);

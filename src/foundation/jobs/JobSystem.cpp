@@ -397,8 +397,9 @@ namespace Horo {
         }
     }
 
-    JobSystem::JobSystem(const JobSystemConfig config) : m_state(std::make_shared<State>(config)) {
-        for (std::size_t index = 0; index < config.workerCount; ++index)
+    /** @copydoc JobSystem::JobSystem */
+    JobSystem::JobSystem(const JobSystemConfig &config) : m_state(std::make_shared<State>(config)) {
+        for (std::size_t index = 0; index < m_state->config.workerCount; ++index)
             m_state->workers.emplace_back([state = m_state] {
                 activeSchedulerIdentity = state->schedulerIdentity;
                 RunWorker(state);
@@ -486,14 +487,15 @@ namespace Horo {
     }
 
     /** @copydoc JobSystem::SubmitContext */
-    Result<JobHandle> JobSystem::SubmitContext(JobDescriptor descriptor, ContextJobFunction work) const {
-        const auto priority = static_cast<std::size_t>(descriptor.priority);
-        if (const auto validated = m_state->ValidateAdmission(priority, descriptor.requirement); validated.HasError())
+    Result<JobHandle> JobSystem::SubmitContext(const JobDescriptor &descriptor, ContextJobFunction work) const {
+        const JobDescriptor ownedDescriptor{descriptor};
+        const auto priority = static_cast<std::size_t>(ownedDescriptor.priority);
+        if (const auto validated = m_state->ValidateAdmission(priority, ownedDescriptor.requirement); validated.HasError())
             return Result<JobHandle>::Failure(validated.ErrorValue());
         const auto &queueConfig = m_state->config.priorityQueues[priority];
         ContextJobFunction releasedWork;
         bool overloaded = false;
-        auto admitted = m_state->Admit(descriptor, std::move(work), priority, overloaded, releasedWork);
+        auto admitted = m_state->Admit(ownedDescriptor, std::move(work), priority, overloaded, releasedWork);
         releasedWork = {};
         if (overloaded && Telemetry::Runtime::IsEventEnabled("foundation.jobs", Log::Level::Warn)) {
             const std::array<Telemetry::Field, 4> fields{

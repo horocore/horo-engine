@@ -105,3 +105,20 @@ TEST_CASE("Portable package intent applies duplicate byte source and root bounds
         input["dependencies"]["com.horo.p" + std::to_string(index)] = {{"source", "horo.public"}, {"version", "*"}};
     CHECK(ValidatedPackageRequest::Parse(input.dump()).HasError());
 }
+
+TEST_CASE("Package intent preserves its distinct key ceiling and sticky nested duplicate rejection", "[packages][request]") {
+    const std::string sourceName(128U, 's');
+    Json input{{"sources", {{sourceName, {{"kind", "public-registry"}, {"registry", "official"}}}}}, {"dependencies", Json::object()}};
+    REQUIRE(ValidatedPackageRequest::Parse(input.dump()).HasValue());
+    input["sources"][sourceName + 's'] = input["sources"][sourceName];
+    CHECK(ValidatedPackageRequest::Parse(input.dump()).HasError());
+    CHECK(ValidatedPackageRequest::Parse(
+              R"({"sources":{"horo.public":{"kind":"public-registry","registry":"official","registry":"official"}},"dependencies":{}})")
+              .HasError());
+    auto deep = Json::object();
+    for (int depth = 0; depth < 12; ++depth)
+        deep = {{"nested", std::move(deep)}};
+    input = Intent();
+    input["sources"]["horo.public"]["registry"] = std::move(deep);
+    CHECK(ValidatedPackageRequest::Parse(input.dump()).HasError());
+}

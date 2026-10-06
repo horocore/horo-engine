@@ -243,20 +243,25 @@ namespace {
     }
 
     TEST_CASE("Queued Job Keeps Submission Configuration After Caller Advances", "[unit][foundation][jobs][configuration]") {
-        Horo::JobSystem jobs{Horo::JobSystemConfig{.workerCount = 0, .maxQueuedJobs = 1, .maxRetainedTerminalJobs = 1}};
+        Horo::JobSystemConfig config{.workerCount = 0, .maxQueuedJobs = 1, .maxRetainedTerminalJobs = 1};
+        Horo::JobSystem jobs{config};
+        config.maxQueuedJobs = 0;
         Horo::ConfigurationSnapshot active = BuildConfiguration(23);
         Horo::ConfigurationRevision observed{};
-        auto submitted = jobs.SubmitContext({.configuration = active}, [&](const Horo::JobExecutionContext &context) {
+        Horo::JobDescriptor descriptor{.operationId = Horo::OperationId{42}, .configuration = active};
+        auto submitted = jobs.SubmitContext(descriptor, [&](const Horo::JobExecutionContext &context) {
             observed = context.Configuration()->Revision();
             return Horo::Result<void>::Success();
         });
         REQUIRE(submitted.HasValue());
         active = BuildConfiguration(24);
+        descriptor = {.operationId = Horo::OperationId{99}, .configuration = active, .priority = Horo::JobPriority::Background};
         REQUIRE(submitted.Value()
                     .Wait({.waitPolicy = Horo::WaitPolicy::MainThreadPumpAllowed, .timeout = Horo::Duration::FromMilliseconds(100)})
                     .HasValue());
         REQUIRE(observed == 23);
         REQUIRE(submitted.Value().Snapshot()->configurationRevision == 23);
+        REQUIRE(submitted.Value().Snapshot()->operationId == Horo::OperationId{42});
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
     }
 

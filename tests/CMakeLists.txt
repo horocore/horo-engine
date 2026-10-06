@@ -1152,7 +1152,11 @@ horo_register_catch_test(HoroSceneRuntimeConversionTests LABELS "unit;scene;pref
 add_executable(HoroPrefabCookPublicHeaderConsumer support/PrefabCookPublicHeaderConsumer.cpp)
 add_executable(HoroPrefabSceneCookHostTests unit/application/PrefabSceneCookHostTests.cpp unit/application/PrefabCookSchemaContextTests.cpp)
 target_compile_features(HoroPrefabSceneCookHostTests PRIVATE cxx_std_20)
-target_include_directories(HoroPrefabSceneCookHostTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+# Shared AssetCook test fixtures compile their builtin registration helper even
+# when the host test selects SettingsCooker. Keep that test-only boundary narrow.
+target_include_directories(HoroPrefabSceneCookHostTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/support
+        ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin)
 target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PrefabCookHost HoroEngine::PrefabRuntime HoroEngine::SceneSource nlohmann_json::nlohmann_json miniz)
 horo_register_catch_test(HoroPrefabSceneCookHostTests LABELS "unit;prefab;headless;host")
 target_compile_features(HoroPrefabCookPublicHeaderConsumer PRIVATE cxx_std_20)

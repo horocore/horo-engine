@@ -783,6 +783,7 @@ add_library(HoroAssets STATIC
         runtime/assets/cooker/AssetCookStorageRead.cpp
         runtime/assets/cooker/AssetCookStorageRecovery.cpp
         runtime/assets/cooker/AssetCookService.cpp
+        runtime/assets/cooker/AssetCookPreparation.cpp
         runtime/assets/cooker/AssetCookInputSnapshot.cpp
         runtime/assets/cooker/AssetCookTransaction.cpp
         runtime/assets/importer/AssetImporterCatalog.cpp

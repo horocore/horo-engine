@@ -28,7 +28,7 @@ namespace {
         std::size_t selectorWrites{};
 
         Result<void> WriteDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes) override {
-            auto written = native.WriteDurable(path, bytes);
+            auto written = NativePublicationFiles::WriteDurable(path, bytes);
             if (written.HasValue() && path.filename() == "current.json")
                 ++selectorWrites;
             if (written.HasValue() && path.filename() == "current.json" && !observed) {
@@ -426,16 +426,31 @@ TEST_CASE("Host retains project mutation authority and checks final selector fai
     fixture.AssertRetained(first.Value().generation);
 }
 
+namespace {
+    /** @brief Keeps the exact preflight plan and its observed input facts together for both real release consumers. */
+    struct HostReleaseInputs final {
+        Release::ReleasePreflightFacts facts;
+        Release::ReleasePreflightOutcome preflight;
+    };
+
+    /** @brief Admits real project roots and empty dependency-lock identity once, preserving the matching facts for later checks. */
+    HostReleaseInputs PrepareHostRelease(const HostFixture &fixture) {
+        auto request = ReleaseTestFixtures::Request();
+        request.projectRoot = fixture.project.dir.path;
+        request.outputRoot = fixture.cooked.path;
+        auto facts = ReleaseTestFixtures::Facts(request);
+        facts.dependencyLockDigest = ComputeSha256(std::span<const std::byte>{});
+        auto preflight = Release::PreflightRelease(request, facts);
+        REQUIRE(preflight.plan.has_value());
+        return {std::move(facts), std::move(preflight)};
+    }
+}  // namespace
+
 TEST_CASE("Release cook handoff pins the actual generation and rejects changed frozen inputs", "[native][prefab-cook][host][release]") {
     HostFixture fixture;
-    auto request = ReleaseTestFixtures::Request();
-    request.projectRoot = fixture.project.dir.path;
-    request.outputRoot = fixture.cooked.path;
-    auto facts = ReleaseTestFixtures::Facts(request);
-    facts.dependencyLockDigest = ComputeSha256(std::span<const std::byte>{});
-    const auto preflight = Release::PreflightRelease(request, facts);
-    REQUIRE(preflight.plan.has_value());
-    ReleaseTestFixtures::FixedReleaseFacts current{facts};
+    const auto release = PrepareHostRelease(fixture);
+    const auto &preflight = release.preflight;
+    ReleaseTestFixtures::FixedReleaseFacts current{release.facts};
     auto host = fixture.MakeHost();
     const auto handed = host.CookForRelease(*preflight.plan, current, fixture.request, {});
     REQUIRE(handed.HasValue());
@@ -462,14 +477,9 @@ TEST_CASE("Release executor packages the concrete static prefab cook generation"
         fixture.request.runtimePrefabRoots = {fixture.prefabId};
     }
     SECTION("static only retains the existing inventory") {}
-    auto request = ReleaseTestFixtures::Request();
-    request.projectRoot = fixture.project.dir.path;
-    request.outputRoot = fixture.cooked.path;
-    auto facts = ReleaseTestFixtures::Facts(request);
-    facts.dependencyLockDigest = ComputeSha256(std::span<const std::byte>{});
-    const auto preflight = Release::PreflightRelease(request, facts);
-    REQUIRE(preflight.plan.has_value());
-    ReleaseTestFixtures::FixedReleaseFacts current{facts};
+    const auto release = PrepareHostRelease(fixture);
+    const auto &preflight = release.preflight;
+    ReleaseTestFixtures::FixedReleaseFacts current{release.facts};
     HostReleaseStages stages{fixture, *preflight.plan, current};
     Release::ReleaseJobTracker tracker{{1}, {2}, 3, {false, false}};
     const auto result = Release::ReleasePipelineExecutor{}.Execute(tracker, {7}, *preflight.plan, current, stages, {});
@@ -745,44 +755,53 @@ TEST_CASE("Dynamic template payload ceilings accept the exact encoded boundary a
     fixture.AssertRetained(exact.Value().generation);
 }
 
+namespace {
+    constexpr std::string_view packageIntentBytes =
+        R"({"sources":{"horo.public":{"kind":"public-registry","registry":"official"}},"dependencies":{"com.horo.assets":{"source":"horo.public","version":"1.0.0"}}})";
+
+    /** @brief Installs current canonical intent/lock plus independently verified immutable archive evidence for host capture. */
+    std::shared_ptr<Packages::PackageRestoreGraph> InstallVerifiedPackage(HostFixture &fixture) {
+        const auto intent = Packages::ValidatedPackageRequest::Parse(packageIntentBytes);
+        REQUIRE(intent.HasValue());
+        auto archive = Packages::ValidatedPackageArchive::Verify(Horo::Tests::Packages::ValidPackageArchiveBytes());
+        REQUIRE(archive.HasValue());
+        const auto package = Packages::HoroPackageId::Parse("com.horo.assets").Value();
+        const auto version = Packages::PackageVersion::Parse("1.0.0").Value();
+        const auto source = Packages::HoroPackageSourceId::Parse("horo.public").Value();
+        const Packages::PackageResolutionPlan plan{{{package, version, source, archive.Value().Digest(), {}}}};
+        const Packages::PackageLockArtifact evidence{package,
+                                                     version,
+                                                     source,
+                                                     archive.Value().Digest(),
+                                                     archive.Value().PackageManifestDigest(),
+                                                     archive.Value().Manifest().Digest(),
+                                                     1,
+                                                     {},
+                                                     {"assets"}};
+        const auto lock = Packages::ValidatedPackageLockfileV1::Generate(plan, std::span{&package, 1U}, intent.Value().Digest(),
+                                                                         std::span{&evidence, 1U});
+        REQUIRE(lock.HasValue());
+        auto graph = std::make_shared<Packages::PackageRestoreGraph>();
+        graph->requestHash = intent.Value().Digest();
+        graph->platform = {"linux", "x64", "horo-sdk-2"};
+        graph->packages.push_back({lock.Value().Packages().front(),
+                                   std::make_shared<const Packages::ValidatedPackageArchive>(std::move(archive).Value()),
+                                   false,
+                                   {}});
+        fixture.request.restoredPackages = graph;
+        fixture.WriteText(".horo/packages.json", packageIntentBytes);
+        fixture.WriteText(".horo/packages.lock", lock.Value().SerializeCanonical());
+        return graph;
+    }
+}  // namespace
+
 TEST_CASE("Host package capture binds current intent lock and verified archive", "[native][prefab-cook][host][packages]") {
     HostFixture fixture;
-    const std::string bytes =
-        R"({"sources":{"horo.public":{"kind":"public-registry","registry":"official"}},"dependencies":{"com.horo.assets":{"source":"horo.public","version":"1.0.0"}}})";
-    const auto intent = Packages::ValidatedPackageRequest::Parse(bytes);
-    REQUIRE(intent.HasValue());
-    auto archive = Packages::ValidatedPackageArchive::Verify(Horo::Tests::Packages::ValidPackageArchiveBytes());
-    REQUIRE(archive.HasValue());
-    const auto package = Packages::HoroPackageId::Parse("com.horo.assets").Value();
-    const auto version = Packages::PackageVersion::Parse("1.0.0").Value();
-    const auto source = Packages::HoroPackageSourceId::Parse("horo.public").Value();
-    const Packages::PackageResolutionPlan plan{{{package, version, source, archive.Value().Digest(), {}}}};
-    const Packages::PackageLockArtifact evidence{package,
-                                                 version,
-                                                 source,
-                                                 archive.Value().Digest(),
-                                                 archive.Value().PackageManifestDigest(),
-                                                 archive.Value().Manifest().Digest(),
-                                                 1,
-                                                 {},
-                                                 {"assets"}};
-    const auto lock =
-        Packages::ValidatedPackageLockfileV1::Generate(plan, std::span{&package, 1U}, intent.Value().Digest(), std::span{&evidence, 1U});
-    REQUIRE(lock.HasValue());
-    auto graph = std::make_shared<Packages::PackageRestoreGraph>();
-    graph->requestHash = intent.Value().Digest();
-    graph->platform = {"linux", "x64", "horo-sdk-2"};
-    graph->packages.push_back({lock.Value().Packages().front(),
-                               std::make_shared<const Packages::ValidatedPackageArchive>(std::move(archive).Value()),
-                               false,
-                               {}});
-    fixture.request.restoredPackages = graph;
-    fixture.WriteText(".horo/packages.json", bytes);
-    fixture.WriteText(".horo/packages.lock", lock.Value().SerializeCanonical());
+    auto graph = InstallVerifiedPackage(fixture);
     const auto first = fixture.Cook();
     REQUIRE(first.HasValue());
     SECTION("intent changed") {
-        auto changed = nlohmann::json::parse(bytes);
+        auto changed = nlohmann::json::parse(packageIntentBytes);
         changed["dependencies"]["com.horo.assets"]["version"] = "2.0.0";
         fixture.WriteText(".horo/packages.json", changed.dump());
     }

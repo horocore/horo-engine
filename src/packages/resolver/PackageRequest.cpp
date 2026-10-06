@@ -1,12 +1,11 @@
 #include "Horo/Packages/PackageRequest.h"
 
 #include "Horo/Packages/PackagePath.h"
+#include "PackageJsonGuard.h"
 #include "PackageValidation.h"
 
-#include <array>
 #include <functional>
 #include <nlohmann/json.hpp>
-#include <set>
 
 namespace Horo::Packages {
     namespace {
@@ -17,28 +16,6 @@ namespace Horo::Packages {
         const ErrorCodeDescriptor Stale{ErrorDomainId{"packages.request"}, ErrorCode{"packages.request.stale"}, ErrorSeverity::Error,
                                         "Package lock does not match current portable intent.",
                                         "Resolve and review the current request before cooking."};
-
-        /** @brief Bounds parser depth, key/value sizes and duplicate-key state before admission. */
-        struct Guard final {
-            std::array<std::set<std::string>, 12> keys;
-            bool valid{true};
-
-            bool operator()(const int depth, const Json::parse_event_t event, const Json &value) {
-                if (depth < 0 || static_cast<std::size_t>(depth) >= keys.size() - 1) {
-                    valid = false;
-                    return false;
-                }
-                const auto index = static_cast<std::size_t>(depth);
-                if (event == Json::parse_event_t::object_start)
-                    keys[index + 1].clear();
-                if (event == Json::parse_event_t::key)
-                    valid =
-                        valid && value.get_ref<const std::string &>().size() <= 128 && keys[index].insert(value.get<std::string>()).second;
-                if (event == Json::parse_event_t::value && value.is_string())
-                    valid = valid && value.get_ref<const std::string &>().size() <= 1024;
-                return valid;
-            }
-        };
 
         /** @brief Requires an exact shape with explicitly supported optional fields only. */
         bool Fields(const Json &value, const std::initializer_list<std::string_view> required,
@@ -178,9 +155,9 @@ namespace Horo::Packages {
         if (bytes.empty() || bytes.size() > 1024U * 1024U)
             return Result<ValidatedPackageRequest>::Failure(MakeError(Invalid));
         try {
-            Guard guard;
+            Detail::PackageJsonGuard guard{128U};
             auto root = Json::parse(bytes, std::ref(guard));
-            if (!guard.valid || !Fields(root, {"sources", "dependencies"}, {"schemaVersion"}) || !root["sources"].is_object() ||
+            if (!guard.IsValid() || !Fields(root, {"sources", "dependencies"}, {"schemaVersion"}) || !root["sources"].is_object() ||
                 root["sources"].size() > 128 || !root["dependencies"].is_object() || root["dependencies"].size() > 512 ||
                 (root.contains("schemaVersion") && (!root["schemaVersion"].is_number_unsigned() || root["schemaVersion"] != 1)))
                 return Result<ValidatedPackageRequest>::Failure(MakeError(Invalid));
