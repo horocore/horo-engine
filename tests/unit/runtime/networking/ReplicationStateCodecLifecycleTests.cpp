@@ -96,4 +96,23 @@ namespace Horo::Network {
         REQUIRE_FALSE(fixture.decoded.IsCurrent());
         REQUIRE(std::get<double>(fixture.decoded.Fields()[0].value) == 1.0);
     }
+
+    TEST_CASE("Encoding owns acknowledgement evidence across caller retirement inside a codec callback", "[network][state-codec]") {
+        CodecFixture fixture;
+        fixture.capture.Capture(2, 2.0);
+        auto acknowledged = Ack(fixture.first, *fixture.codec);
+        fixture.capture.codec->context = &acknowledged;
+        fixture.capture.codec->onCompare = [](void *context) {
+            auto &callerEvidence = *static_cast<ReplicationAcknowledgedBaseline *>(context);
+            callerEvidence.state.reset();
+            ++callerEvidence.descriptorGeneration;
+        };
+        const auto result = fixture.codec->Encode(fixture.capture.Pin(), acknowledged);
+        REQUIRE(result.HasValue());
+        REQUIRE_FALSE(acknowledged.state);
+        REQUIRE(result.Value()[5] == std::byte{1});
+        const auto decoded = fixture.codec->Decode(result.Value(), Object(), &fixture.decoded);
+        REQUIRE(decoded.HasValue());
+        REQUIRE(std::get<double>(decoded.Value().Fields()[0].value) == 2.0);
+    }
 }  // namespace Horo::Network

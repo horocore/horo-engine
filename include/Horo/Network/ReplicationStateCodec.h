@@ -96,7 +96,25 @@ namespace Horo::Network {
      * access. Shutdown precedes session/module retirement and invalidates decoded baselines.
      */
     class ReplicationStateCodec final {
+        struct ConstructionKey final {
+        private:
+            friend class ReplicationStateCodec;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Factory-only constructor admitted by an unforgeable private key. @internal
+         * @param key Private admission created after validating the complete projection.
+         * @param serializers Exact immutable serializer generation.
+         * @param recipient Admitted client role and object occurrence.
+         * @param generation Positive negotiated descriptor generation.
+         * @param limits Validated finite work and storage limits.
+         * @param projection Complete canonical field visibility projection.
+         * @param fingerprint Prepared projection identity.
+         */
+        ReplicationStateCodec(ConstructionKey key, std::shared_ptr<const ReplicationSerializerRegistry> serializers,
+                              ReplicationRoleBinding recipient, std::uint64_t generation, ReplicationStateCodecLimits limits,
+                              std::vector<FieldId> projection, const Sha256Digest &fingerprint);
         /** @brief Validates finite limits and pins the complete serializer generation.
          * @param serializers Exact negotiated schema projection and codecs.
          * @param recipient Exact host-admitted client object role and ownership publication.
@@ -121,7 +139,7 @@ namespace Horo::Network {
          * @return Canonical complete bytes or typed error; source and baseline are unchanged.
          */
         [[nodiscard]] Result<std::vector<std::byte>> Encode(ReplicationCapturedStatePin source,
-                                                            ReplicationAcknowledgedBaseline baseline = {},
+                                                            const ReplicationAcknowledgedBaseline &baseline = {},
                                                             const CancellationToken &cancellation = {});
         /** @brief Validates complete framing before decoding any field, then privately reconstructs state.
          * @param wire Bounded complete record, borrowed only until return.
@@ -134,7 +152,7 @@ namespace Horo::Network {
                                                              const ReplicationDecodedState *baseline = nullptr,
                                                              const CancellationToken &cancellation = {});
         /** @brief Closes admission permanently on the owner thread; repeated calls are safe. */
-        void Shutdown() noexcept;
+        void Shutdown() const noexcept;
 
         /** @brief Returns the immutable field projection bound into records and acknowledgements.
          * @return Canonical visibility/record-kind digest, never mutation authority.
@@ -149,10 +167,6 @@ namespace Horo::Network {
         }
 
     private:
-        /** @brief Takes ownership of a completely validated immutable projection and its module pins. */
-        ReplicationStateCodec(std::shared_ptr<const ReplicationSerializerRegistry> serializers, ReplicationRoleBinding recipient,
-                              std::uint64_t generation, ReplicationStateCodecLimits limits, std::vector<FieldId> projection,
-                              Sha256Digest fingerprint);
         /** @brief Checks owner affinity, permanent session closure and caller cancellation. */
         [[nodiscard]] Result<void> Admit(const CancellationToken &cancellation) const;
         /** @brief Fences captured authority and exact composed immutable schema/session/object occurrence. */

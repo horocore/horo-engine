@@ -8,7 +8,12 @@ namespace Horo::Network {
     namespace {
         /** @brief Header transaction identity validated before any field work. */
         struct Header final {
-            std::uint64_t delta{}, tick{}, revision{}, baselineTick{}, baselineRevision{}, count{};
+            std::uint64_t delta{};
+            std::uint64_t tick{};
+            std::uint64_t revision{};
+            std::uint64_t baselineTick{};
+            std::uint64_t baselineRevision{};
+            std::uint64_t count{};
         };
 
         /** @brief Parses closed version-one framing and exact negotiated identity. */
@@ -34,7 +39,10 @@ namespace Horo::Network {
                                     const ReplicationSchemaDescriptor &schema) {
             std::uint64_t previous{};
             for (std::uint64_t index{}; index < count; ++index) {
-                std::uint64_t id{}, type{}, codec{}, length{};
+                std::uint64_t id{};
+                std::uint64_t type{};
+                std::uint64_t codec{};
+                std::uint64_t length{};
                 if (!reader.Read(4, id) || !reader.Read(4, type) || !reader.Read(4, codec) || !reader.Read(4, length) || id <= previous)
                     return Fail<void>(ReplicationStateErrors::Invalid);
                 previous = id;
@@ -51,7 +59,10 @@ namespace Horo::Network {
 
         /** @brief Extracts already-validated tagged bytes for one bounded codec call. */
         std::pair<FieldId, ReplicationEncodedValue> ReadField(Reader &reader) {
-            std::uint64_t id{}, type{}, codec{}, length{};
+            std::uint64_t id{};
+            std::uint64_t type{};
+            std::uint64_t codec{};
+            std::uint64_t length{};
             static_cast<void>(reader.Read(4, id));
             static_cast<void>(reader.Read(4, type));
             static_cast<void>(reader.Read(4, codec));
@@ -104,7 +115,7 @@ namespace Horo::Network {
                     return Fail<std::vector<ReplicationCapturedField>>(ReplicationStateErrors::Stale);
                 found->value = std::move(value).Value();
             } else {
-                fields.push_back({field, std::move(value).Value()});
+                fields.emplace_back(field, std::move(value).Value());
             }
         }
         return Result<std::vector<ReplicationCapturedField>>::Success(std::move(fields));

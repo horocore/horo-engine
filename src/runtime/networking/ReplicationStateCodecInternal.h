@@ -51,7 +51,7 @@ namespace Horo::Network::StateCodecDetail {
         bool &operating;
 
         explicit OperationGuard(bool &value) noexcept : operating(value) {
-            operating = true;
+            value = true;
         }
 
         OperationGuard(const OperationGuard &) = delete;

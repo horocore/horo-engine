@@ -372,6 +372,9 @@ recipient role revision and projection fingerprint. A missing, expired, future o
 full projected state. A delta uses canonical comparison, so equivalent quantization
 buckets do not generate changed field bytes. Neither loss nor duplicate encoding or
 decoding mutates the captured canonical source.
+Acknowledgement input is a call-scoped const borrow; encoding first copies its finite
+identity and shared pin so a reentrant callback cannot invalidate caller-owned evidence
+that the operation is still using.
 
 Version-one state framing uses little-endian integers, independent of native
 layout. The 172-byte header contains `HRS1:u32, version:u8, delta:u8, reserved:u16`,
@@ -410,6 +413,8 @@ to use the added API. `HoroNetworkModePublicHeaderConsumer` covers ownership vis
 and factory-only construction. `HoroReplicationStateCodecTests` exercises actual Scene
 commit/capture/codec flow, malformed framing, projection/quantization, loss, duplication,
 stale identities, cancellation and shutdown; owner mutation remains separately owned.
+The standard allocation factory uses an unforgeable private construction key; public
+consumers cannot invoke that constructor with `{}` to bypass `Create` validation.
 
 NetworkRuntime decodes a complete record into a bounded typed apply command. It
 validates session, role, authority, object lifecycle and schema before queueing the

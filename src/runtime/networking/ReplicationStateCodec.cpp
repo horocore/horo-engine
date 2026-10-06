@@ -94,18 +94,18 @@ namespace Horo::Network {
             }
             const auto fingerprint = ComputeSha256(identity);
             return Result<std::unique_ptr<ReplicationStateCodec>>::Success(
-                std::unique_ptr<ReplicationStateCodec>{new ReplicationStateCodec{std::move(serializers), recipient, descriptorGeneration,
-                                                                                 limits, std::move(projection), fingerprint}});
+                std::make_unique<ReplicationStateCodec>(ConstructionKey{}, std::move(serializers), recipient, descriptorGeneration, limits,
+                                                        std::move(projection), fingerprint));
         } catch (const std::bad_alloc &) {
             return Fail<std::unique_ptr<ReplicationStateCodec>>(ReplicationStateErrors::Capacity);
         }
     }
 
     /** @copydoc ReplicationStateCodec::ReplicationStateCodec */
-    ReplicationStateCodec::ReplicationStateCodec(std::shared_ptr<const ReplicationSerializerRegistry> serializers,
+    ReplicationStateCodec::ReplicationStateCodec(ConstructionKey, std::shared_ptr<const ReplicationSerializerRegistry> serializers,
                                                  ReplicationRoleBinding recipient, const std::uint64_t generation,
                                                  const ReplicationStateCodecLimits limits, std::vector<FieldId> projection,
-                                                 const Sha256Digest fingerprint)
+                                                 const Sha256Digest &fingerprint)
         : serializers_(std::move(serializers)), recipient_(std::move(recipient)), generation_(generation), limits_(limits),
           admission_(std::make_shared<std::atomic_bool>(true)), owner_(std::this_thread::get_id()), projection_(std::move(projection)),
           fingerprint_(fingerprint) {
@@ -125,7 +125,7 @@ namespace Horo::Network {
     }
 
     /** @copydoc ReplicationStateCodec::Shutdown */
-    void ReplicationStateCodec::Shutdown() noexcept {
+    void ReplicationStateCodec::Shutdown() const noexcept {
         if (owner_ == std::this_thread::get_id())
             admission_->store(false);
     }

@@ -61,7 +61,7 @@ namespace Horo::Network {
 
     /** @copydoc ReplicationStateCodec::Encode */
     Result<std::vector<std::byte>> ReplicationStateCodec::Encode(ReplicationCapturedStatePin source,
-                                                                 ReplicationAcknowledgedBaseline baseline,
+                                                                 const ReplicationAcknowledgedBaseline &baseline,
                                                                  const CancellationToken &cancellation) {
         if (const auto admitted = Admit(cancellation); admitted.HasError())
             return Result<std::vector<std::byte>>::Failure(admitted.ErrorValue());
@@ -69,22 +69,23 @@ namespace Horo::Network {
             return Fail<std::vector<std::byte>>(ReplicationStateErrors::Invalid);
         if (!CurrentSource(source))
             return Fail<std::vector<std::byte>>(ReplicationStateErrors::Stale);
+        const ReplicationAcknowledgedBaseline acknowledged = baseline;  // Pins callback lifetime independently of the caller's borrow.
         OperationGuard guard{operating_};
-        const bool delta = UsableBaseline(source, baseline);
+        const bool delta = UsableBaseline(source, acknowledged);
         try {
             std::vector<std::byte> wire;
             wire.reserve(wireCapacity_);
-            AppendHeader(wire, source, delta ? &baseline : nullptr);
+            AppendHeader(wire, source, delta ? &acknowledged : nullptr);
             std::uint32_t count{};
             for (const auto field : projection_) {
-                const auto encoded = EncodeField(field, source, delta ? &baseline : nullptr, cancellation);
+                const auto encoded = EncodeField(field, source, delta ? &acknowledged : nullptr, cancellation);
                 if (encoded.HasError())
                     return Result<std::vector<std::byte>>::Failure(encoded.ErrorValue());
                 if (!encoded.Value())
                     continue;
                 const auto &bytes = encoded.Value()->canonicalBytes;
-                const auto remaining = limits_.maximumWireBytes - wire.size();
-                if (remaining < FieldHeaderBytes || bytes.size() > remaining - FieldHeaderBytes)
+                if (const auto remaining = limits_.maximumWireBytes - wire.size();
+                    remaining < FieldHeaderBytes || bytes.size() > remaining - FieldHeaderBytes)
                     return Fail<std::vector<std::byte>>(ReplicationStateErrors::Capacity);
                 Append(wire, field.Value(), 4);
                 Append(wire, encoded.Value()->valueType.Value(), 4);
